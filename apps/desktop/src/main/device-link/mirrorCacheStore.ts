@@ -705,8 +705,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    *  - 两个进程各自清不同设备时,会各读同一份旧 session-list、各写"除我之外的全部",
    *    后写的那次把对方刚移除的设备恢复回来 —— 两边都报成功(review: codex P1)。
    *
-   * 所以落盘写入与清理统一在这把锁里做(实现见 crossProcessLock:pid + 心跳 + 存活判定,
-   * 只接管确实死掉的持有者)。拿不到锁时:
+   * 所以落盘写入与清理统一在 ordinary/advisory 档跨进程锁里做(用 PID 存活、mtime 心跳
+   * 与 acquisition nonce 保护接管/释放)。这里的 advisory 是锁证明档位，不是允许无锁写入；
+   * 缓存自己的屏障决定拿不到锁时如何安全降级:
    *  - **写入**直接跳过(缓存是纯优化,少写一次远好过在别人清理途中写回明文);
    *  - **清理**照常进行(删除是安全方向),并保留清理收尾的二次扫描兜底。
    */

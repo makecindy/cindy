@@ -29,6 +29,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
+        'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
+        'newChat.modelSelector.trigger.agent.codex': 'Codex',
+        'effortLevels.high': '最高',
       };
       return translations[key] ?? options?.defaultValue ?? key;
     },
@@ -221,13 +224,17 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
   }),
 }));
 
+// selectVisibleModels 只喂 trigger 的 currentModel(分组列表另有来源),既有用例一律按
+// 空清单跑 —— trigger 显示占位符。pill 形态的用例需要一个**真实模型名 + 档位**才能验,
+// 故走 hoisted ref 逐用例开洞,默认值不动,既有用例行为逐字节不变。
+const visibleModelsRef = vi.hoisted(() => ({ models: [] as unknown[] }));
 vi.mock('@/lib/providerModels', () => ({
   providerMonogram: (name: string) => name.slice(0, 1).toUpperCase(),
   isChatBridgedCodexProvider: () => false,
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: string | null }) =>
     agentKind ?? 'claude-code',
-  selectVisibleModels: () => [],
+  selectVisibleModels: () => visibleModelsRef.models,
 }));
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
@@ -257,6 +264,7 @@ beforeEach(() => {
   floatingUiMocks.size.mockClear();
   floatingUiMocks.useFloating.mockClear();
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+  visibleModelsRef.models = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
   };
@@ -372,6 +380,15 @@ describe('ModelSelector provider groups', () => {
     expect(within(anthropicGroup).getByText('Sonnet 4.6')).toBeTruthy();
     expect(within(dashscopeGroup).getByText('qwen3.7-plus')).toBeTruthy();
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
+  });
+
+  it('hides effort summaries when the entry only supports selecting a model id', async () => {
+    renderSelector({ configurationEnabled: false });
+    await openDropdown();
+
+    const popover = screen.getByTestId('model-options-popover');
+    expect(within(popover).queryByTitle('high')).toBeNull();
+    expect(within(popover).queryByTitle('medium')).toBeNull();
   });
 
   it('keeps the create-agent secondary panel at the original left/center position with layout coordinates', async () => {
@@ -713,5 +730,78 @@ describe('ModelSelector provider groups', () => {
     const popover = screen.getByTestId('model-options-popover');
     const heading = within(popover).getByText(/A Very Long Provider Name/);
     expect(heading.className).toContain('truncate');
+  });
+});
+
+/**
+ * composer pill 的引擎表达(model-selector-unified §1.1,Chris 2026-08-12 裁决 / bug7)。
+ *
+ * 旧形态把 harness 名字写成文本前缀:「Codex · GPT-5.6-Luna · 最高」—— 三段并列,
+ * 用户第一眼读到的是 harness 而不是模型。新形态只在 composer 生效:模型名在前,
+ * 引擎小标与深度档字挨在一起收尾;其余 7 个入口(scheduler / IM / Hook / Subagent /
+ * Worker / GhostErrand / 设置)不传 engineMarkVendor,展示逐像素不变。
+ */
+describe('ModelSelector composer pill 引擎小标', () => {
+  const triggerOf = (): HTMLElement => screen.getByRole('button', { name: /Select model/ });
+
+  /** 让 trigger 拿到真实的模型名与档位(默认 harness 恒是占位符,见 visibleModelsRef)。 */
+  const withRealModel = (): void => {
+    visibleModelsRef.models = [
+      {
+        id: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'high',
+        contextWindow: 200000,
+      },
+    ];
+  };
+
+  it('传 engineMarkVendor 时用小标取代 harness 名字文本', () => {
+    renderSelector({
+      engineMarkVendor: 'codex',
+      agentIdentity: { vendorKey: 'codex', state: 'current' },
+    });
+    const trigger = triggerOf();
+    expect(trigger.querySelector('[data-composer-engine-mark="codex"]')).toBeTruthy();
+    // 名字文本不再出现在 pill 上(但仍留在 title / aria-label 里,读屏与 hover 不丢信息)。
+    expect(trigger.textContent).not.toContain('Codex');
+    expect(trigger.getAttribute('title')).toContain('Codex');
+    expect(trigger.getAttribute('aria-label')).toContain('Codex');
+  });
+
+  it('小标紧跟模型名之后、深度档字之前(图标与档字成组收尾)', () => {
+    withRealModel();
+    renderSelector({
+      engineMarkVendor: 'codex',
+      agentIdentity: { vendorKey: 'codex', state: 'current' },
+    });
+    const trigger = triggerOf();
+    const mark = trigger.querySelector('[data-composer-engine-mark="codex"]') as HTMLElement;
+    const modelName = within(trigger).getByText('Opus 4.8');
+    const effort = within(trigger).getByText('最高');
+    // Node.DOCUMENT_POSITION_FOLLOWING = 4
+    expect(modelName.compareDocumentPosition(mark) & 4).toBeTruthy();
+    expect(mark.compareDocumentPosition(effort) & 4).toBeTruthy();
+  });
+
+  it('窄工具条下先截模型名,小标与档字保留', () => {
+    withRealModel();
+    renderSelector({
+      engineMarkVendor: 'codex',
+      agentIdentity: { vendorKey: 'codex', state: 'current' },
+      compactToolbar: true,
+    });
+    const trigger = triggerOf();
+    expect(trigger.querySelector('[data-composer-engine-mark="codex"]')).toBeTruthy();
+    expect(within(trigger).getByText('最高')).toBeTruthy();
+    expect(within(trigger).getByText('Opus 4.8').className).toContain('truncate');
+  });
+
+  it('不传 engineMarkVendor 的入口维持名字文本形态(其余 7 个消费者不受影响)', () => {
+    renderSelector({ agentIdentity: { vendorKey: 'codex', state: 'current' } });
+    const trigger = triggerOf();
+    expect(trigger.querySelector('[data-composer-engine-mark]')).toBeNull();
+    expect(trigger.textContent).toContain('Codex');
   });
 });

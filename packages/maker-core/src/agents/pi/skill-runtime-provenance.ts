@@ -4,15 +4,18 @@ import type { PiRuntimeCommand } from '../../types/pi-runtime-capabilities.js';
 
 /**
  * Return the exact explicit --skill directory proven by pinned Pi provenance.
- * Both fields must agree; accepting either independently lets malformed runtime
- * data mark the wrong discovered project skill loaded.
+ * Pi v0.83 reports explicit local skills as `temporary` for Cindy's staged
+ * launch snapshots; direct `--skill` paths report `project` on Windows and
+ * `temporary` on macOS. Both values are accepted because the runtime
+ * provenance is path-scoped; accepting either independently still lets
+ * malformed data mark the wrong discovered project skill as loaded.
  */
 export function piExplicitSkillRuntimePath(command: PiRuntimeCommand): string | null {
   const baseDir = command.sourceInfo.baseDir;
   const skillFile = command.sourceInfo.path;
   if (
     command.source !== 'skill'
-    || command.sourceInfo.scope !== 'temporary'
+    || (command.sourceInfo.scope !== 'temporary' && command.sourceInfo.scope !== 'project')
     || command.sourceInfo.source !== 'local'
     || typeof baseDir !== 'string'
     || typeof skillFile !== 'string'

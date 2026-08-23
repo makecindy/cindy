@@ -6,6 +6,7 @@ import * as QRCode from 'qrcode';
 
 import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -382,20 +383,26 @@ export function MobileDownloadDialog({
           }}
         >
           <Dialog.Close asChild>
-            <button
-              ref={closeActionRef}
-              type="button"
-              aria-label={t('sidebar.mobileDownload.close')}
-              className={cn(
-                'absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full',
-                'text-[var(--confirm-desc)] transition-colors',
-                'hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)]',
-                'active:scale-[0.98]',
-                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              )}
+            <Tip
+              text={t('sidebar.mobileDownload.close')}
+              side="bottom"
+              contentClassName="z-[10001]"
             >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
+              <button
+                ref={closeActionRef}
+                type="button"
+                aria-label={t('sidebar.mobileDownload.close')}
+                className={cn(
+                  'absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full',
+                  'text-[var(--confirm-desc)] transition-colors',
+                  'hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)]',
+                  'active:scale-[0.98]',
+                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                )}
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Tip>
           </Dialog.Close>
 
           <div className="flex flex-col items-center text-center">

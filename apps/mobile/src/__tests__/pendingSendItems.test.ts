@@ -9,7 +9,9 @@
 import { describe, expect, it } from 'vitest';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
 import {
+  buildMobileMessageListExtraData,
   buildPendingSendItems,
+  isPendingSendItemSelected,
   pendingSendItemKey,
   pendingSendSpins,
   type MobilePendingSendActions,
@@ -186,6 +188,26 @@ describe('buildPendingSendItems', () => {
 });
 
 describe('pending_send 渲染接线', () => {
+  it('changes the list refresh signal and exposes queue actions when a bubble is selected', () => {
+    const [item] = build({
+      queue: [queued('selected')],
+      presentationByClientId: new Map([['selected', {
+        actions: {
+          remove: { disabled: false, disabledReason: null },
+          edit: { disabled: false, disabledReason: null },
+          steer: { disabled: false, disabledReason: null },
+        },
+        hint: null,
+      }]]),
+    });
+    const collapsed = buildMobileMessageListExtraData(null, false);
+    const expanded = buildMobileMessageListExtraData(item.clientId, false);
+
+    expect(expanded).not.toEqual(collapsed);
+    expect(isPendingSendItemSelected(item, collapsed.pendingSendSelectedClientId)).toBe(false);
+    expect(isPendingSendItemSelected(item, expanded.pendingSendSelectedClientId)).toBe(true);
+  });
+
   it('keeps pendingSend on the renderer actions object', async () => {
     // 回归防线:MessageRenderer 的 actions 是显式组装的 useMemo。漏掉这一项时 props 和
     // 类型都还对(interface 上有、JSX 也传了),但 actions.pendingSend 是 undefined,渲染
@@ -200,16 +222,30 @@ describe('pending_send 渲染接线', () => {
     const actionsEnd = source.indexOf('viewportLayout.contentWidth,\n  ]);', actionsStart);
     const actionsBlock = source.slice(actionsStart, actionsEnd);
     expect(actionsBlock).toContain('pendingSend,');
+    expect(source).toContain('buildMobileMessageListExtraData(');
+    expect(source).toContain('extraData={messageListExtraData}');
     // 渲染分支存在,且 items 的联合类型里有这一支。
     expect(source).toContain("case 'pending_send':");
     expect(source).toContain('actions={actions.pendingSend}');
     const bubbleSource = readFileSync(
       resolvePath(process.cwd(), 'src/session/PendingSendBubble.tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     expect(bubbleSource).toContain('<SentInlineAtomBody');
     expect(bubbleSource).toContain('interactiveAtoms={false}');
     expect(bubbleSource).toContain('maxVisibleLines={selected ? undefined : 6}');
+    // 徽标与正文必须属于同一个 Pressable，点击用户直觉中的左侧状态图标也能展开条目。
+    const bubblePressableStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
+    const bubblePressableEnd = bubbleSource.indexOf('\n        </Pressable>', bubblePressableStart);
+    const bubblePressable = bubbleSource.slice(bubblePressableStart, bubblePressableEnd);
+    expect(bubblePressableStart).toBeGreaterThan(-1);
+    expect(bubbleSource.indexOf('testID={`pendingSend.badge.${item.phase}`}')).toBeLessThan(bubblePressableStart);
+    expect(bubblePressable).toContain('hitSlop={{ left: iconSize.xl + spacing.sm }}');
+    const actionPillStart = bubbleSource.indexOf('  actionPill: {');
+    const actionPillEnd = bubbleSource.indexOf('\n  },', actionPillStart);
+    const actionPillStyle = bubbleSource.slice(actionPillStart, actionPillEnd);
+    expect(actionPillStart).toBeGreaterThan(-1);
+    expect(actionPillStyle).toContain('minHeight: 44');
     // 粘贴时已上传到媒体总仓的图(cindy-media://blobs/…)本地没有文件,气泡要靠远端取件
     // 才有缩略图 —— 漏传 resolver 就只能画空占位格。
     expect(source).toContain('resolveRemoteMedia={actions.onResolveRemoteMedia}');

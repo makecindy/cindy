@@ -1,6 +1,6 @@
 import type { Session } from '@/lib/ccAgent.types';
 
-import type { FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
+import type { FilterProjectOrder, FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import { sessionActivityMs } from './dateSessionGrouping';
 import type { ProjectNode } from './projectGrouping';
@@ -11,13 +11,14 @@ function toMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+/**
+ * 会话排序。旧 'time'(最早优先)2026-08-12 用户裁决删除,时间排序只保留最近活动
+ * 在前一档(recency,由调用方的既有顺序承载),这里对所有档位都保持入参序。
+ */
 export function sortSessionsForSidebar(
   sessions: readonly Session[],
-  sortBy: FilterSortBy,
+  _sortBy: FilterSortBy,
 ): Session[] {
-  if (sortBy === 'time') {
-    return sessions.slice().sort((a, b) => sessionActivityMs(a) - sessionActivityMs(b));
-  }
   return sessions.slice();
 }
 
@@ -25,24 +26,14 @@ export function sortProjectsForSidebar(
   projects: readonly ProjectNode[],
   sortBy: FilterSortBy,
   manualProjectOrder: readonly string[],
+  projectOrder: FilterProjectOrder = 'activity',
 ): ProjectNode[] {
   const withSortedSessions = projects.map((project) => ({
     ...project,
     sessions: sortSessionsForSidebar(project.sessions, sortBy),
   }));
 
-  if (sortBy === 'time') {
-    return withSortedSessions.sort((a, b) => toMs(a.latestActivityAt) - toMs(b.latestActivityAt));
-  }
-  if (sortBy === 'alphabetic') {
-    return withSortedSessions.sort((a, b) =>
-      a.displayName.localeCompare(b.displayName, undefined, {
-        numeric: true,
-        sensitivity: 'base',
-      }),
-    );
-  }
-  if (sortBy === 'manual') {
+  if (projectOrder === 'custom') {
     const normalizedOrder = normalizeManualProjectOrder(
       manualProjectOrder,
       projects.map((project) => project.projectKey),

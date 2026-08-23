@@ -18,15 +18,26 @@ vi.mock('../localDb/ipc/messages.js', () => ({
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
   broadcastMessageRow: vi.fn(),
   createMessage: vi.fn(async () => ({}) as unknown),
+  findVisibleToolUseMessageByAliases: vi.fn(async () => null),
   patchMessageAgentMetaWithResult: vi.fn(async (_sessionId, _clientId, patch) => ({
     previous: {},
     next: patch,
   })),
   updateMessageContent: vi.fn(async () => ({}) as unknown),
 }));
+vi.mock('../localDb/subagentRuns.js', () => ({
+  getSubagentRunDetail: vi.fn(async () => null),
+}));
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
+vi.mock('../localDb/codexPlanState.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../localDb/codexPlanState.js')>()),
+  markCodexPlanInterrupted: vi.fn(async () => undefined),
+  writeCodexPlanTerminal: vi.fn(async () => undefined),
+  writeCodexPlanUpdate: vi.fn(async () => undefined),
 }));
 
 const { mockSend } = vi.hoisted(() => ({ mockSend: vi.fn() }));
@@ -48,15 +59,23 @@ import {
   broadcastMessageAgentMetaUpdate,
   broadcastMessageRow,
   createMessage,
+  findVisibleToolUseMessageByAliases,
   patchMessageAgentMetaWithResult,
   updateMessageContent,
 } from '../localDb/ipc/messages.js';
+import { getSubagentRunDetail } from '../localDb/subagentRuns.js';
+import {
+  markCodexPlanInterrupted,
+  writeCodexPlanTerminal,
+  writeCodexPlanUpdate,
+} from '../localDb/codexPlanState.js';
 import {
   recordMediaToolResult,
   __resetMediaToolResultPoolForTesting,
 } from '../mcp-integrations/mediaToolResultFallback.js';
 import {
   onToolUseEvent,
+  onAgentTaskUpdateEvent,
   persistCodexPlanOnDone,
   persistCodexPlanOnTerminalError,
   onToolResultEvent,
@@ -93,6 +112,13 @@ const SUMMARY = 'tool finished';
 // 落库走 writeChain microtask,断言前 flush 一个宏任务边界把队列排空。
 const flushWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
 const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.any(Function) });
+const terminalSubagentObservation = (taskId: string, parentToolUseId?: string) => ({
+  subagentObservation: {
+    kind: 'terminal',
+    logicalSubagentId: taskId,
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+  },
+});
 
 describe('Codex done completion boundary', () => {
   it('only treats successful terminal data as a completed turn', () => {
@@ -106,12 +132,129 @@ describe('Codex done completion boundary', () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValue(null);
+  vi.mocked(getSubagentRunDetail).mockResolvedValue(null);
   ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
 });
 
 describe('update_plan tool_use persistence', () => {
+  it('persists native Codex plan state without relying on the session agent cache', async () => {
+    noteSessionAgentKind(SESSION, 'codex');
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-state',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Persist state', status: 'in_progress' }] },
+      },
+      null,
+    );
+    await flushWrites();
+
+    expect(writeCodexPlanUpdate).toHaveBeenCalledWith(SESSION, {
+      turnId: 'turn-state',
+      plan: [{ step: 'Persist state', status: 'in_progress' }],
+    });
+  });
+
+  it('does not restore a queued plan update after /clear advances the session boundary', async () => {
+    noteSessionAgentKind(SESSION, 'codex');
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-before-clear',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Old plan', status: 'in_progress' }] },
+      },
+      null,
+    );
+    noteSessionClearBoundary(SESSION, Date.now());
+
+    await flushWrites();
+
+    expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a late old-turn plan update that arrives after /clear', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      noteTurnStarted(SESSION);
+      noteSessionAgentKind(SESSION, 'codex');
+
+      nowSpy.mockReturnValue(1_700_000_001_000);
+      noteSessionClearBoundary(SESSION, Date.now());
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:late-old-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Late old plan', status: 'in_progress' }] },
+        },
+        null,
+      );
+
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('rejects an old-turn plan update without a token after a new turn has started', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      noteTurnStarted(SESSION, 1);
+      noteSessionAgentKind(SESSION, 'codex');
+
+      nowSpy.mockReturnValue(1_700_000_001_000);
+      noteSessionClearBoundary(SESSION, Date.now());
+      resetTurnPersistState(SESSION);
+
+      nowSpy.mockReturnValue(1_700_000_002_000);
+      noteTurnStarted(SESSION, 2);
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:late-replaced-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Late replaced plan', status: 'in_progress' }] },
+        },
+        null,
+        'turn',
+      );
+
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:current-replacement-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Current plan', status: 'in_progress' }] },
+        },
+        null,
+        'turn',
+        undefined,
+        2,
+      );
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).toHaveBeenCalledWith(SESSION, {
+        turnId: 'current-replacement-turn',
+        plan: [{ step: 'Current plan', status: 'in_progress' }],
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('updates the existing tool_use row when Codex repeats update_plan with the same toolUseId', async () => {
     const firstPersistId = onToolUseEvent(
       SESSION,
@@ -190,7 +333,7 @@ describe('update_plan tool_use persistence', () => {
     );
   });
 
-  it('seals a successful turn plan as-is so reload cannot resurrect it', async () => {
+  it('keeps a successful turn with open plan steps available for reconciliation', async () => {
     const persistId = onToolUseEvent(
       SESSION,
       {
@@ -216,6 +359,14 @@ describe('update_plan tool_use persistence', () => {
     })).toBe(true);
 
     await flushWrites();
+    expect(writeCodexPlanTerminal).toHaveBeenCalledWith(SESSION, {
+      turnId: 'turn-1',
+      plan: [
+        { step: 'Inspect', status: 'completed' },
+        { step: 'Start dev', status: 'in_progress' },
+      ],
+      state: 'interrupted',
+    });
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       persistId,
@@ -329,6 +480,9 @@ describe('update_plan tool_use persistence', () => {
     expect(persistCodexPlanOnTerminalError(SESSION, 'turn-current')).toBe(true);
     await flushWrites();
 
+    expect(markCodexPlanInterrupted).toHaveBeenCalledTimes(1);
+    expect(markCodexPlanInterrupted).toHaveBeenCalledWith(SESSION, 'turn-current');
+
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       currentPersistId,
@@ -340,6 +494,13 @@ describe('update_plan tool_use persistence', () => {
       expect.anything(),
       expect.objectContaining({ toolUseId: 'plan:turn-old' }),
     );
+  });
+
+  it('does not mutate durable plan state when an id-less error has no owned plan turn', async () => {
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(false);
+    await flushWrites();
+
+    expect(markCodexPlanInterrupted).not.toHaveBeenCalled();
   });
 
   it('carries repeated update_plan snapshots into the terminal write', async () => {
@@ -431,6 +592,11 @@ describe('update_plan tool_use persistence', () => {
     })).toBe(true);
 
     await flushWrites();
+    expect(writeCodexPlanTerminal).toHaveBeenCalledWith(SESSION, {
+      turnId: 'turn-complete',
+      plan: [{ step: 'Ship', status: 'completed' }],
+      state: 'sealed',
+    });
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       persistId,
@@ -555,6 +721,390 @@ describe('update_plan tool_use persistence', () => {
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(2);
     expect(updateMessageContent).not.toHaveBeenCalled();
+  });
+});
+
+describe('agent task terminal persistence', () => {
+  it.each(['failed', 'stopped'] as const)(
+    'patches a %s terminal state onto the originating tool_use row',
+    async (status) => {
+      const persistId = onToolUseEvent(
+        SESSION,
+        { toolUseId: 'toolu-agent-1', toolName: 'Agent', input: { prompt: 'Inspect auth' } },
+        { uuid: 'sdk-message-1' },
+      );
+
+      expect(onAgentTaskUpdateEvent(SESSION, {
+        taskId: 'agent-1',
+        parentToolUseId: 'toolu-agent-1',
+        status,
+        ...terminalSubagentObservation('agent-1', 'toolu-agent-1'),
+      })).toBe(true);
+
+      await flushWrites();
+      expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+        SESSION,
+        persistId,
+        { agentTaskStatus: status },
+      );
+      expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+        SESSION,
+        persistId,
+        ownerScopeState.scope,
+      );
+    },
+  );
+
+  it('does not persist running progress updates', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-running', toolName: 'Task', input: {} },
+      null,
+    );
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-running',
+      parentToolUseId: 'toolu-agent-running',
+      status: 'running',
+    })).toBe(false);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+    expect(findVisibleToolUseMessageByAliases).not.toHaveBeenCalled();
+  });
+
+  it('waits for a terminal observation before persisting Codex completion', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'codex-spawn-control', toolName: 'collab:spawn', input: {} },
+      null,
+    );
+    await flushWrites();
+    vi.clearAllMocks();
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-spawn-control',
+      parentToolUseId: 'codex-spawn-control',
+      status: 'completed',
+      summary: 'Spawn control item completed',
+    })).toBe(false);
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-spawn-control',
+      parentToolUseId: 'codex-spawn-control',
+      status: 'running',
+      subagentObservation: {
+        kind: 'progress',
+        logicalSubagentId: 'codex-spawn-control',
+        parentToolUseId: 'codex-spawn-control',
+      },
+    })).toBe(false);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+    expect(findVisibleToolUseMessageByAliases).not.toHaveBeenCalled();
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-spawn-control',
+      parentToolUseId: 'codex-spawn-control',
+      status: 'completed',
+      ...terminalSubagentObservation('codex-spawn-control', 'codex-spawn-control'),
+    })).toBe(true);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      { agentTaskStatus: 'completed' },
+    );
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledTimes(1);
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not carry an unmarked Codex completion into a later tool row', async () => {
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-completion-before-tool',
+      parentToolUseId: 'codex-completion-before-tool',
+      status: 'completed',
+      summary: 'Spawn control item completed',
+    })).toBe(false);
+
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'codex-completion-before-tool',
+        toolName: 'collab:spawn',
+        input: {},
+      },
+      null,
+    );
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        agentMeta: null,
+      }),
+      broadcastGuard(),
+    );
+    expect(findVisibleToolUseMessageByAliases).not.toHaveBeenCalled();
+  });
+
+  it('learns a taskId alias from running progress for a later terminal-only update', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-alias', toolName: 'Agent', input: {} },
+      null,
+    );
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-alias',
+      parentToolUseId: 'toolu-agent-alias',
+      status: 'running',
+    })).toBe(false);
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-alias',
+      status: 'failed',
+      ...terminalSubagentObservation('agent-alias'),
+    })).toBe(true);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      { agentTaskStatus: 'failed' },
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      ownerScopeState.scope,
+    );
+  });
+
+  it('rehydrates a persisted tool row when process-local task linkage is missing', async () => {
+    vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValueOnce({
+      clientId: 'persisted-agent-row',
+      toolUseId: 'toolu-agent-rehydrated',
+    });
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-rehydrated',
+      parentToolUseId: 'toolu-agent-rehydrated',
+      status: 'stopped',
+      ...terminalSubagentObservation('agent-rehydrated', 'toolu-agent-rehydrated'),
+    })).toBe(true);
+
+    await flushWrites();
+    expect(findVisibleToolUseMessageByAliases).toHaveBeenCalledWith(SESSION, [
+      'toolu-agent-rehydrated',
+      'agent-rehydrated',
+    ]);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      'persisted-agent-row',
+      { agentTaskStatus: 'stopped' },
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      'persisted-agent-row',
+      ownerScopeState.scope,
+    );
+  });
+
+  it('rehydrates a taskId-only terminal update through the durable Subagent alias', async () => {
+    vi.mocked(findVisibleToolUseMessageByAliases).mockImplementation(async (_sessionId, aliases) =>
+      aliases.includes('toolu-agent-by-task-id')
+        ? {
+            clientId: 'persisted-agent-row-by-task-id',
+            toolUseId: 'toolu-agent-by-task-id',
+          }
+        : null,
+    );
+    vi.mocked(getSubagentRunDetail).mockResolvedValue({
+      parentToolUseId: 'toolu-agent-by-task-id',
+    } as Awaited<ReturnType<typeof getSubagentRunDetail>>);
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'claude-code',
+      taskId: 'agent-runtime-id-only',
+      status: 'failed',
+      ...terminalSubagentObservation('agent-runtime-id-only'),
+    })).toBe(true);
+
+    await flushWrites();
+    expect(getSubagentRunDetail).toHaveBeenCalledWith(
+      SESSION,
+      'claude-code',
+      'agent-runtime-id-only',
+    );
+    expect(findVisibleToolUseMessageByAliases).toHaveBeenNthCalledWith(2, SESSION, [
+      'agent-runtime-id-only',
+      'toolu-agent-by-task-id',
+    ]);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      'persisted-agent-row-by-task-id',
+      { agentTaskStatus: 'failed' },
+    );
+  });
+
+  it('does not restore a persisted task link when session clear wins the lookup race', async () => {
+    let markLookupStarted!: () => void;
+    let releaseLookup!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => { markLookupStarted = resolve; });
+    const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+    vi.mocked(findVisibleToolUseMessageByAliases).mockImplementationOnce(async () => {
+      markLookupStarted();
+      await lookupGate;
+      return {
+        clientId: 'persisted-agent-row-before-clear',
+        toolUseId: 'toolu-agent-rehydrate-clear-race',
+      };
+    });
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-rehydrate-clear-race',
+      parentToolUseId: 'toolu-agent-rehydrate-clear-race',
+      status: 'completed',
+      ...terminalSubagentObservation(
+        'agent-rehydrate-clear-race',
+        'toolu-agent-rehydrate-clear-race',
+      ),
+    })).toBe(true);
+    await lookupStarted;
+    noteSessionClearBoundary(SESSION, Date.now());
+    releaseLookup();
+    await flushWrites();
+
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('carries a terminal update that arrives before its tool_use into the initial row', async () => {
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-early',
+      parentToolUseId: 'toolu-agent-early',
+      status: 'stopped',
+      ...terminalSubagentObservation('agent-early', 'toolu-agent-early'),
+    })).toBe(true);
+
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-early', toolName: 'Agent', input: { prompt: 'Inspect auth' } },
+      { uuid: 'sdk-message-early' },
+    );
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'tool_use',
+        agentMeta: {
+          uuid: 'sdk-message-early',
+          agentTaskStatus: 'stopped',
+        },
+      }),
+      broadcastGuard(),
+    );
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+  });
+
+  it('does not patch a pre-clear tool row when its terminal update arrives late', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-before-clear', toolName: 'Agent', input: {} },
+      null,
+    );
+    noteSessionClearBoundary(SESSION, Date.now());
+
+    onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-before-clear',
+      parentToolUseId: 'toolu-agent-before-clear',
+      status: 'completed',
+      ...terminalSubagentObservation('agent-before-clear', 'toolu-agent-before-clear'),
+    });
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not patch or rebroadcast a terminal update queued before session clear', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-queued-before-clear', toolName: 'Agent', input: {} },
+      null,
+    );
+    await flushWrites();
+    vi.clearAllMocks();
+
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const blockingWrite = enqueueDurableWrite('agent-task-clear-race', () => writeGate);
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-queued-before-clear',
+      parentToolUseId: 'toolu-agent-queued-before-clear',
+      status: 'failed',
+      ...terminalSubagentObservation(
+        'agent-queued-before-clear',
+        'toolu-agent-queued-before-clear',
+      ),
+    })).toBe(true);
+    noteSessionClearBoundary(SESSION, Date.now());
+
+    releaseWrite();
+    await blockingWrite;
+    await flushWrites();
+
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not rebroadcast when session clear happens during the terminal patch', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-patching-at-clear', toolName: 'Agent', input: {} },
+      null,
+    );
+    await flushWrites();
+    vi.clearAllMocks();
+
+    let markPatchStarted!: () => void;
+    let releasePatch!: () => void;
+    const patchStarted = new Promise<void>((resolve) => { markPatchStarted = resolve; });
+    const patchGate = new Promise<void>((resolve) => { releasePatch = resolve; });
+    vi.mocked(patchMessageAgentMetaWithResult).mockImplementationOnce(
+      async (_sessionId, _clientId, patch) => {
+        markPatchStarted();
+        await patchGate;
+        return { previous: {}, next: patch };
+      },
+    );
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-patching-at-clear',
+      parentToolUseId: 'toolu-agent-patching-at-clear',
+      status: 'stopped',
+      ...terminalSubagentObservation(
+        'agent-patching-at-clear',
+        'toolu-agent-patching-at-clear',
+      ),
+    })).toBe(true);
+    await patchStarted;
+    noteSessionClearBoundary(SESSION, Date.now());
+    releasePatch();
+    await flushWrites();
+
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledTimes(1);
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -1596,6 +2146,28 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     expect(consumeLastAssistantPersistId(SESSION)).toBe(persistId);
   });
 
+  it('does not persist a leaked Grok stop token as the last assistant', async () => {
+    const first = onAssistantTextEvent(SESSION, { text: '现有 reviewer 空闲。', isFinal: true }, null);
+    const leaked = onAssistantTextEvent(SESSION, { text: '<|eos|>', isFinal: true }, null);
+    await flushWrites();
+    expect(leaked).toBeUndefined();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(consumeLastAssistantPersistId(SESSION)).toBe(first);
+  });
+
+  it('keeps an embedded stop token when it arrives as a later streaming delta', async () => {
+    onAssistantTextEvent(SESSION, { text: 'The token is ', isFinal: false }, null);
+    onAssistantTextEvent(SESSION, { text: '<|eos|>', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ content: 'The token is <|eos|>' }),
+      expect.anything(),
+    );
+  });
+
   it('同 turn 多条 assistant → 取到最后一条的 persistId', () => {
     onAssistantTextEvent(SESSION, { text: 'first', isFinal: true }, null);
     onToolUseEvent(SESSION, { toolUseId: 'tu_seq', toolName: 'Bash', input: {} }, null);
@@ -1628,6 +2200,40 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
   it('无 assistant 文本(纯 tool 轮)→ undefined', () => {
     onToolUseEvent(SESSION, { toolUseId: 'tu_only', toolName: 'Bash', input: {} }, null);
     expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
+  });
+
+  it('missing-session lost-terminal seal does not concatenate the next turn onto leftover stream text', async () => {
+    const deadId = onAssistantTextEvent(
+      SESSION,
+      { text: 'dead-turn-fragment', isFinal: false },
+      null,
+    );
+    expect(deadId).toEqual(expect.any(String));
+
+    // Same persist boundary as reconcileSessionTurnIdle's missing lookup.
+    flushAssistantBlock(SESSION, null);
+    consumeLastAssistantPersistId(SESSION);
+    consumeLastTopLevelAssistantPersistId(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const nextId = onAssistantTextEvent(
+      SESSION,
+      { text: 'next-turn-only', isFinal: false },
+      null,
+    );
+    expect(nextId).not.toBe(deadId);
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter((c) => (c[1] as { role?: string }).role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+    expect(assistantCreates[0]?.[1]).toEqual(
+      expect.objectContaining({ clientId: deadId, content: 'dead-turn-fragment' }),
+    );
+    expect(assistantCreates[1]?.[1]).toEqual(
+      expect.objectContaining({ clientId: nextId, content: 'next-turn-only' }),
+    );
   });
 
   it('clearSessionPersistState 清理追踪(session 关闭防泄漏)', () => {

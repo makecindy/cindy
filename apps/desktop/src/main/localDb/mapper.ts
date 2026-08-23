@@ -84,6 +84,8 @@ export type SessionRowWithCount = SessionRow & {
 
 /** preview 最大长度（字符）。渲染端 3 行 line-clamp 之外的兜底硬上限。 */
 const PREVIEW_MAX_CHARS = 140;
+/** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
+const PREVIEW_CONTENT_BOUND_CHARS = 4096;
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -119,6 +121,36 @@ export function extractMessagePreview(
   const collapsed = text.replace(/\s+/g, ' ').trim();
   if (!collapsed) return null;
   return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
+}
+
+/**
+ * Bound oversized serialized message bodies before they enter the mapper.
+ * Truncate the extracted text, then re-encode, so JSON objects stay valid and
+ * `extractMessagePreview` still sees `.text` instead of a cut-off document.
+ */
+export function boundSerializedMessageContent(
+  raw: string | null | undefined,
+  maxChars = PREVIEW_CONTENT_BOUND_CHARS,
+): string | null | undefined {
+  if (raw == null || raw.length <= maxChars) return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'string') {
+      return JSON.stringify(parsed.slice(0, maxChars));
+    }
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as { text?: unknown };
+      if (typeof record.text === 'string') {
+        return JSON.stringify({
+          ...record,
+          text: record.text.length > maxChars ? record.text.slice(0, maxChars) : record.text,
+        });
+      }
+    }
+    return raw;
+  } catch {
+    return raw.slice(0, maxChars);
+  }
 }
 
 /**
@@ -189,7 +221,10 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
     _count: { messages: row.messageCount },
-    preview: extractMessagePreview(row.latestMessageContent, row.latestMessageRole),
+    preview: extractMessagePreview(
+      boundSerializedMessageContent(row.latestMessageContent),
+      row.latestMessageRole,
+    ),
     summary: row.summary ?? null,
   };
 }

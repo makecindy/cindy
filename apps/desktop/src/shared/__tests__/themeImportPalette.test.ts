@@ -179,6 +179,13 @@ describe('theme-import 模板 · key 集合与既有 builtin 主题一致', () =
   ])('资源用量类别色 "%s" 不被外部主题导入改写', (id) => {
     expect(isProtectedToken(id)).toBe(true);
   });
+
+  it.each(['pr-open-on-light', 'pr-open-on-dark'])(
+    '侧栏 PR open 绿 "%s" 不被外部主题导入改写',
+    (id) => {
+      expect(isProtectedToken(id)).toBe(true);
+    },
+  );
 });
 
 describe.each([

@@ -977,6 +977,58 @@ describe('maker SEND transaction', () => {
     expect(lazySession.send).toHaveBeenCalled();
   });
 
+  it('activates a forked Pi business session once with the latest DB route on its first send', async () => {
+    const lazySession = createSession({
+      id: 'forked-pi-session',
+      agentKind: 'pi',
+      workDir: 'D:\\forked-pi',
+    });
+    const reconcileCreateOptsWithDb = vi.fn(async (_sessionId, createOpts) => {
+      createOpts.agentKind = 'pi';
+      createOpts.model = 'gpt-5.5';
+      createOpts.providerId = 'xd';
+      createOpts.resumeSessionId = 'pi-fork-jsonl';
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      reconcileCreateOptsWithDb,
+      bootstrapSession: vi.fn(async () => ({
+        session: lazySession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const staleCreateOpts: MakerSessionCreateOpts = {
+      id: 'forked-pi-session',
+      agentKind: 'pi',
+      workingDir: 'D:\\forked-pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      resumeSessionId: 'stale-pi-session',
+    };
+
+    await expect(
+      transaction.sendToAgentAccepted('forked-pi-session', 'first fork message', staleCreateOpts),
+    ).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(reconcileCreateOptsWithDb).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'forked-pi-session',
+      agentKind: 'pi',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      resumeSessionId: 'pi-fork-jsonl',
+    }));
+    expect(deps.broadcastSessionCreated).toHaveBeenCalledOnce();
+    expect(lazySession.send).toHaveBeenCalledOnce();
+    expect(lazySession.send).toHaveBeenCalledWith('first fork message', expect.anything());
+  });
+
   it('returns lazy-create failure without dispatching when bootstrap fails', async () => {
     const { deps } = createDeps({
       getSession: vi.fn(() => undefined),
@@ -1421,7 +1473,7 @@ describe('session-agent-switch handoff injection', () => {
 
   it('计划对账段命中时前置进 wire payload,落库内容保持用户原文', async () => {
     const { deps, session } = createDeps({
-      peekPlanReconcileNote: vi.fn(async () => 'RECONCILE-NOTE'),
+      peekPlanReconcileNote: vi.fn(async () => ({ note: 'RECONCILE-NOTE' })),
     });
     const transaction = createMakerSendTransaction(deps);
 
@@ -1441,7 +1493,7 @@ describe('session-agent-switch handoff injection', () => {
     const { deps, session } = createDeps({
       peekPendingHandoff: vi.fn(async () => 'HANDOFF-TEXT'),
       consumePendingHandoff: vi.fn(),
-      peekPlanReconcileNote: vi.fn(async () => 'RECONCILE-NOTE'),
+      peekPlanReconcileNote: vi.fn(async () => ({ note: 'RECONCILE-NOTE' })),
     });
     const transaction = createMakerSendTransaction(deps);
 
@@ -1455,7 +1507,7 @@ describe('session-agent-switch handoff injection', () => {
   });
 
   it('内部派发(scheduler / 自动续跑)不注入对账', async () => {
-    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const peekPlanReconcileNote = vi.fn(async () => ({ note: 'RECONCILE-NOTE' }));
     const { deps, session } = createDeps({ peekPlanReconcileNote });
     const transaction = createMakerSendTransaction(deps);
 
@@ -1507,7 +1559,7 @@ describe('session-agent-switch handoff injection', () => {
   });
 
   it('按信封里的 slash 范围区分控制指令与绝对路径开头的真实提问', async () => {
-    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const peekPlanReconcileNote = vi.fn(async () => ({ note: 'RECONCILE-NOTE' }));
     const { deps, session } = createDeps({ peekPlanReconcileNote });
     const transaction = createMakerSendTransaction(deps);
 
@@ -1565,7 +1617,7 @@ describe('session-agent-switch handoff injection', () => {
   });
 
   it('计划对账覆盖仅附件轮次(正文空,带图片/文件)', async () => {
-    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const peekPlanReconcileNote = vi.fn(async () => ({ note: 'RECONCILE-NOTE' }));
     const { deps, session } = createDeps({ peekPlanReconcileNote });
     const transaction = createMakerSendTransaction(deps);
 
@@ -1594,6 +1646,72 @@ describe('session-agent-switch handoff injection', () => {
 
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {});
     expect(session.send).toHaveBeenCalledWith({ type: 'user', content: '新消息' }, expect.anything());
+  });
+
+  it('仅在 sealed 保护已被 vendor accepted 后消费', async () => {
+    const consumeSealedPlanReconcileNote = vi.fn(async () => undefined);
+    const { deps } = createDeps({
+      peekPlanReconcileNote: vi.fn(async () => ({
+        note: 'COMPLETED-GUARD',
+        sealedTurnId: 'turn-sealed',
+      })),
+      consumeSealedPlanReconcileNote,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, undefined, {
+      persistUserMessage: { clientId: 'guard-accepted', content: '继续' },
+    });
+
+    expect(consumeSealedPlanReconcileNote).toHaveBeenCalledWith('session-1', 'turn-sealed');
+  });
+
+  it('vendor 未 accepted 时保留 sealed 保护供重试', async () => {
+    const consumeSealedPlanReconcileNote = vi.fn(async () => undefined);
+    const session = createSession({
+      send: vi.fn(async () => ({ accepted: false, reason: 'cancelled-before-dispatch' }) as SessionSendResult),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      peekPlanReconcileNote: vi.fn(async () => ({
+        note: 'COMPLETED-GUARD',
+        sealedTurnId: 'turn-sealed',
+      })),
+      consumeSealedPlanReconcileNote,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, undefined, {
+      persistUserMessage: { clientId: 'guard-rejected', content: '继续' },
+    });
+
+    expect(consumeSealedPlanReconcileNote).not.toHaveBeenCalled();
+  });
+
+  it('vendor 抛错时保留 sealed 保护供重试', async () => {
+    const consumeSealedPlanReconcileNote = vi.fn(async () => undefined);
+    const session = createSession({
+      send: vi.fn(async () => {
+        throw new Error('vendor unavailable');
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      peekPlanReconcileNote: vi.fn(async () => ({
+        note: 'COMPLETED-GUARD',
+        sealedTurnId: 'turn-sealed',
+      })),
+      consumeSealedPlanReconcileNote,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, undefined, {
+        persistUserMessage: { clientId: 'guard-error', content: '继续' },
+      }),
+    ).rejects.toThrow('vendor unavailable');
+
+    expect(consumeSealedPlanReconcileNote).not.toHaveBeenCalled();
   });
 
   it('lazy-create 前调用 reconcileCreateOptsWithDb 以 DB 行校正 createOpts', async () => {
@@ -1695,5 +1813,37 @@ describe('session-agent-switch handoff injection', () => {
     expect(persisted?.content).toBe('PR #193 heartbeat prompt');
     // 5. accepted 之后才消费交接(未派发则保留下次重试)。
     expect(consumePendingHandoff).toHaveBeenCalledWith('session-1');
+  });
+
+  it('overflow prepare 在 getSession 之前；peek 不再关掉发送目标', async () => {
+    const callOrder: string[] = [];
+    let unhealthy = true;
+    const fresh = createSession();
+    const { deps } = createDeps({
+      prepareUnhealthySession: vi.fn(async () => {
+        callOrder.push('prepare');
+        unhealthy = false;
+      }),
+      getSession: vi.fn(() => {
+        callOrder.push('getSession');
+        return unhealthy ? createSession({ getStatus: () => 'closed' as const }) : fresh;
+      }),
+      peekPendingHandoff: vi.fn(async () => {
+        callOrder.push('peek');
+        return 'OVERFLOW-HANDOFF';
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, {
+      agentKind: 'codex',
+      workingDir: '/tmp/w',
+    });
+
+    expect(callOrder.indexOf('prepare')).toBeGreaterThanOrEqual(0);
+    expect(callOrder.indexOf('prepare')).toBeLessThan(callOrder.indexOf('getSession'));
+    expect(callOrder.indexOf('getSession')).toBeLessThan(callOrder.indexOf('peek'));
+    expect(fresh.send).toHaveBeenCalledTimes(1);
+    const sent = vi.mocked(fresh.send).mock.calls[0]?.[0] as { content: string };
+    expect(sent.content).toContain('OVERFLOW-HANDOFF');
   });
 });

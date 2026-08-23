@@ -160,6 +160,8 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // (状态卡两处都渲染),按单一 sessionId 路由会漏一边 → 按账号级并入 `sessions` topic
   // (低频状态机事件,量极小)。
   'learn:event',
+  // 被控端项目手动顺序变化:无 sessionId,并入 sessions topic 随设备列表订阅到达。
+  'sidebar-settings:project-order-changed',
 ]);
 
 /** 从 unknown payload 安全读一个字符串字段。 */

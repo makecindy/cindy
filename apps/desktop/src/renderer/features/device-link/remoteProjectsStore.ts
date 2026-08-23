@@ -795,6 +795,16 @@ const actions = {
     recompute();
   },
 
+  /**
+   * 撤回一次远程标题预览。远端会话已建、但首条消息没交出去时调用 —— 权威标题
+   * 仍是哨兵,叠加层会一直把没发出去的话顶在空会话上。
+   */
+  clearPendingTitlePreview(sessionId: string): void {
+    if (!sessionId || !pendingTitlePreview.has(sessionId)) return;
+    dropTitleOverlay(sessionId);
+    recompute();
+  },
+
   /** 测试专用:清空标题预览叠加层。 */
   __resetPendingTitlePreviewForTest(): void {
     pendingTitlePreview.clear();
@@ -1047,4 +1057,16 @@ export const remoteProjectsStore = { ...actions, subscribe, subscribeRename };
 /** 便捷导出:传输层只关心 origin 判定。 */
 export function getSessionDeviceId(sessionId: string): string | undefined {
   return actions.getSessionDeviceId(sessionId);
+}
+
+/**
+ * 同步读:该设备的 shard 是否**明确标记为断线**。给周期性远程调用(如 PR 状态
+ * 刷新)做"注定失败就别发"的前置判断。语义刻意收窄成三值里只认一种:
+ *   - 'disconnected' → true(断线快照仍在侧栏展示,正是要跳过的长离线场景);
+ *   - 'connected' 或 shard 不存在 → false(不知道就照常尝试,fail-open——
+ *     shard 尚未建立时不能把首次查询吞掉,设备已移除时会话行随之消失、
+ *     消费者自然注销,不需要这里兜)。
+ */
+export function isRemoteDeviceMarkedDisconnected(deviceId: string): boolean {
+  return shards.get(deviceId)?.connectionStatus === 'disconnected';
 }

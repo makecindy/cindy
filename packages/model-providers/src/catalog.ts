@@ -2,15 +2,17 @@
  * 目录运行时校验(parseCatalog)+ presets 清洗排序。
  *
  * 2026-07-19 起 bundled 目录由 `builtin.ts` 组装:内置供应商身份卡是 TS 常量,
- * `catalog/providers.json`(v2)只承载 xai 静态清单 + presets 模板——它仍是
+ * `catalog/providers.json`(v2)承载 xAI 的离线 fallback 元数据 + presets 模板——它仍是
  * ① OSS `cfg/providers.json` 的发布物 ② dev 直读的仓库文件。anthropic/openai/xd
  * 的模型清单运行时动态注入(见 apps/desktop maker-host active-catalog),不再进目录文件。
+ * xAI 登录后同样由账号 `/v1/models` 决定成员；此处静态段只在尚无成功账号快照时救急，
+ * 并为已发现成员补上下文、价格、能力与路由。
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
 import { parseModelRegistry } from './modelAccessValidator.js';
 
-import { PI_REASONING_EFFORTS } from './types.js';
+import { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
 import type {
   Catalog,
   Provider,
@@ -19,6 +21,7 @@ import type {
   Effort,
   ProviderPreset,
   PresetSortRegion,
+  ProviderModelRouteConfig,
 } from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
@@ -34,6 +37,43 @@ function isWireProtocol(value: unknown): value is (typeof WIRE_PROTOCOLS)[number
   return typeof value === 'string' && (WIRE_PROTOCOLS as readonly string[]).includes(value);
 }
 
+function isWireProtocolAllowedForAgent(
+  agent: AgentKind,
+  value: unknown,
+): value is (typeof WIRE_PROTOCOLS)[number] {
+  return isWireProtocol(value) && (agent !== 'claude-code' || value === 'anthropic-messages');
+}
+
+function isValidModelRoute(
+  agent: AgentKind,
+  runtimeBaseUrl: unknown,
+  value: unknown,
+): value is ProviderModelRouteConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const route = value as Record<string, unknown>;
+  if (
+    typeof route.baseUrl !== 'string' ||
+    route.baseUrl.trim().length === 0 ||
+    !isWireProtocolAllowedForAgent(agent, route.wireProtocol)
+  ) return false;
+  try {
+    const runtimeUrl = new URL(String(runtimeBaseUrl));
+    const routeUrl = new URL(route.baseUrl);
+    if (
+      (runtimeUrl.protocol !== 'http:' && runtimeUrl.protocol !== 'https:') ||
+      (routeUrl.protocol !== 'http:' && routeUrl.protocol !== 'https:') ||
+      runtimeUrl.username ||
+      runtimeUrl.password ||
+      routeUrl.username ||
+      routeUrl.password ||
+      routeUrl.origin !== runtimeUrl.origin
+    ) return false;
+  } catch {
+    return false;
+  }
+  return route.requestPath === undefined || isProviderRequestPath(route.requestPath);
+}
+
 function isAgentKind(v: unknown): v is AgentKind {
   return typeof v === 'string' && (AGENT_KINDS as readonly string[]).includes(v);
 }
@@ -42,21 +82,38 @@ function isEffort(v: unknown): v is Effort {
   return typeof v === 'string' && (EFFORTS as readonly string[]).includes(v);
 }
 
+function isPiModelApi(v: unknown): boolean {
+  return typeof v === 'string' && (PI_MODEL_APIS as readonly string[]).includes(v);
+}
+
 function hasValidPresetReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): boolean {
-  const hasCapability = model.reasoning !== undefined || model.reasoningEfforts !== undefined;
+  const hasCapability =
+    model.reasoning !== undefined
+    || model.reasoningEfforts !== undefined
+    || model.reasoningDefaultEffort !== undefined;
   if (!hasCapability) return true;
   if (agent !== 'pi' || typeof model.reasoning !== 'boolean') return false;
-  if (model.reasoning !== true) return model.reasoningEfforts === undefined;
+  if (model.reasoning !== true) {
+    return model.reasoningEfforts === undefined && model.reasoningDefaultEffort === undefined;
+  }
   if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) return false;
   const efforts = model.reasoningEfforts;
-  return (
+  const effortsValid = (
     efforts.every(
       (effort) =>
         typeof effort === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(effort),
     ) && new Set(efforts).size === efforts.length
+  );
+  if (!effortsValid) return false;
+  return (
+    model.reasoningDefaultEffort === undefined
+    || (
+      typeof model.reasoningDefaultEffort === 'string'
+      && efforts.includes(model.reasoningDefaultEffort)
+    )
   );
 }
 
@@ -82,9 +139,23 @@ function validateAccess(p: Provider): void {
 }
 
 /** 轻量校验一个 model 条目的必需字段。 */
-function validateModel(m: CatalogModel, providerId: string): void {
+function validateModel(
+  m: CatalogModel,
+  providerId: string,
+  agent: AgentKind,
+  runtimeBaseUrl: unknown,
+): void {
   assert(typeof m.id === 'string' && m.id.length > 0, `model.id missing in provider '${providerId}'`);
   assert(typeof m.name === 'string' && m.name.length > 0, `model.name missing for '${m.id}'`);
+  if (m.piApi !== undefined) {
+    assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
+  }
+  if (m.route !== undefined) {
+    assert(
+      isValidModelRoute(agent, runtimeBaseUrl, m.route),
+      `model.route invalid for '${m.id}' in provider '${providerId}'`,
+    );
+  }
   assert(typeof m.contextWindow === 'number' && m.contextWindow > 0, `model.contextWindow invalid for '${m.id}'`);
   assert(Array.isArray(m.efforts), `model.efforts must be array for '${m.id}'`);
   assert(m.efforts.every(isEffort), `model.efforts has invalid value for '${m.id}'`);
@@ -267,6 +338,12 @@ function validateProvider(p: Provider): void {
         `provider '${p.id}' routing[${agent}].requestPath invalid`,
       );
     }
+    if (routing.supportsResponsesCustomTools !== undefined) {
+      assert(
+        typeof routing.supportsResponsesCustomTools === 'boolean',
+        `provider '${p.id}' routing[${agent}].supportsResponsesCustomTools must be boolean`,
+      );
+    }
     // modelPrefixes（路由服务范围）提供了就必须是命名空间前缀形态（`xai/` 这类,以 `/` 结尾）——
     // 结构上保证 claude-* 等裸 wire model 永远不会命中,防止把 scope 声明成误伤辅助请求的形状。
     if (routing.modelPrefixes !== undefined) {
@@ -283,7 +360,7 @@ function validateProvider(p: Provider): void {
     }
     const list = p.models[agent];
     assert(Array.isArray(list), `provider '${p.id}' declares agent '${agent}' but no models[${agent}]`);
-    for (const m of list) validateModel(m, p.id);
+    for (const m of list) validateModel(m, p.id, agent, routing.upstream);
   }
   // 约束：若声明了 titleModel（标题 oneShot 用的最经济模型），它必须存在于本供应商任一
   // agent 的模型清单里 —— 防把不存在 / 拼错的 id 配进去导致运行时静默起不出标题。
@@ -321,7 +398,12 @@ function validateProvider(p: Provider): void {
 function validateMediaModels(
   providerId: string,
   modelsField: string,
-  models: { id: string; name: string }[] | undefined,
+  models: Array<{
+    id: string;
+    name: string;
+    modalities?: { input: string[]; output: string[] };
+    officialDocs?: string;
+  }> | undefined,
   defaultsField: string,
   defaults: { standard: string; draft?: string; best?: string } | undefined,
 ): void {
@@ -334,6 +416,44 @@ function validateMediaModels(
       assert(typeof m.name === 'string' && m.name.length > 0, `provider '${providerId}' ${modelsField} '${m.id}' missing name`);
       assert(!seen.has(m.id), `provider '${providerId}' ${modelsField} has duplicate id '${m.id}'`);
       seen.add(m.id);
+      if (m.modalities !== undefined) {
+        assert(
+          m.modalities && typeof m.modalities === 'object' && !Array.isArray(m.modalities),
+          `provider '${providerId}' ${modelsField} '${m.id}' modalities must be an object`,
+        );
+        for (const key of ['input', 'output'] as const) {
+          const values = m.modalities[key];
+          assert(
+            Array.isArray(values) && values.length > 0 && values.length <= 16,
+            `provider '${providerId}' ${modelsField} '${m.id}' modalities.${key} must be a non-empty bounded array`,
+          );
+          assert(
+            values.every(
+              (value) =>
+                typeof value === 'string' &&
+                value.length > 0 &&
+                value.length <= 64 &&
+                value.trim() === value,
+            ) && new Set(values).size === values.length,
+            `provider '${providerId}' ${modelsField} '${m.id}' modalities.${key} contains invalid values`,
+          );
+        }
+      }
+      if (m.officialDocs !== undefined) {
+        let valid = false;
+        if (typeof m.officialDocs === 'string' && m.officialDocs.length <= 2_048) {
+          try {
+            const url = new URL(m.officialDocs);
+            valid = url.protocol === 'https:' && !url.username && !url.password;
+          } catch {
+            valid = false;
+          }
+        }
+        assert(
+          valid,
+          `provider '${providerId}' ${modelsField} '${m.id}' officialDocs must be https`,
+        );
+      }
     }
   }
   if (defaults !== undefined) {
@@ -413,6 +533,7 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       const mm = m as Record<string, unknown>;
       if (typeof mm.id !== 'string' || mm.id.length === 0) return false;
       if (typeof mm.name !== 'string' || mm.name.length === 0) return false;
+      if (mm.piApi !== undefined && !isPiModelApi(mm.piApi)) return false;
       if (
         mm.contextWindow !== undefined
         && (typeof mm.contextWindow !== 'number' || !Number.isFinite(mm.contextWindow) || mm.contextWindow <= 0)
@@ -429,6 +550,10 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;
     }
     if (r.baseUrlEditable !== undefined && typeof r.baseUrlEditable !== 'boolean') return false;
+    if (
+      r.piCatalogProviderId !== undefined
+      && (agent !== 'pi' || typeof r.piCatalogProviderId !== 'string' || !/^[a-z0-9-]+$/.test(r.piCatalogProviderId))
+    ) return false;
     // modelsUrl / requestPath 不在此淘汰整条——非法值由 sanitizePresets 剥字段。
   }
   return true;
@@ -445,6 +570,40 @@ function isHttpUrl(v: unknown): boolean {
   }
 }
 
+function httpUrl(v: unknown): URL | null {
+  if (!isHttpUrl(v)) return null;
+  return new URL(v as string);
+}
+
+function normalizedEndpointUrl(value: unknown): string | null {
+  const url = httpUrl(value);
+  if (!url) return null;
+  url.hash = '';
+  url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+  return url.toString();
+}
+
+/**
+ * Compatibility for catalog data generated before explicit Pi wireProtocol was shipped.
+ * Those entries copied the exact Claude/Anthropic endpoint into runtimes.pi. Equality with the
+ * Claude runtime is the authority here; a different Pi URL remains unconfigured and fail-closed.
+ */
+function isLegacyAnthropicPiRuntime(
+  preset: ProviderPreset,
+  agent: AgentKind,
+  runtime: NonNullable<ProviderPreset['runtimes'][AgentKind]>,
+): boolean {
+  if (agent !== 'pi' || runtime.wireProtocol !== undefined) return false;
+  const claudeRuntime = preset.runtimes['claude-code'];
+  if (
+    !claudeRuntime ||
+    (claudeRuntime.wireProtocol !== undefined &&
+      claudeRuntime.wireProtocol !== 'anthropic-messages')
+  ) return false;
+  const piEndpoint = normalizedEndpointUrl(runtime.baseUrl);
+  return piEndpoint !== null && piEndpoint === normalizedEndpointUrl(claudeRuntime.baseUrl);
+}
+
 /**
  * runtime.modelsUrl 非法（非 http(s) URL）时剥掉该字段、保留预设本体——OSS 推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
@@ -454,6 +613,21 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
   const runtimes: ProviderPreset['runtimes'] = {};
   for (const [agent, rt] of Object.entries(p.runtimes) as [AgentKind, ProviderPreset['runtimes'][AgentKind] & object][]) {
     let next = rt;
+    if (isLegacyAnthropicPiRuntime(p, agent, next)) {
+      next = { ...next, wireProtocol: 'anthropic-messages' };
+      changed = true;
+    }
+    const models = next.models.map((model) => {
+      if (model.route === undefined || isValidModelRoute(agent, next.baseUrl, model.route)) {
+        return model;
+      }
+      const { route: _drop, ...rest } = model;
+      changed = true;
+      return rest;
+    });
+    if (models.some((model, index) => model !== next.models[index])) {
+      next = { ...next, models };
+    }
     if (next.modelsUrl !== undefined && !isHttpUrl(next.modelsUrl)) {
       const { modelsUrl: _drop, ...rest } = next;
       next = rest;
@@ -463,6 +637,43 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
       const { requestPath: _drop, ...rest } = next;
       next = rest;
       changed = true;
+    }
+    if (next.modelDiscovery !== undefined) {
+      const runtimeUrl = httpUrl(next.baseUrl);
+      const sources = Array.isArray(next.modelDiscovery)
+        ? next.modelDiscovery.filter((candidate) => {
+            if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+            const source = candidate as unknown as Record<string, unknown>;
+            const sourceUrl = httpUrl(source.baseUrl);
+            if (!runtimeUrl || !sourceUrl || sourceUrl.origin !== runtimeUrl.origin) return false;
+            if (!isWireProtocol(source.wireProtocol)) return false;
+            if (agent === 'claude-code' && source.wireProtocol !== 'anthropic-messages') {
+              return false;
+            }
+            if (
+              source.modelsUrl !== undefined &&
+              (!isHttpUrl(source.modelsUrl) ||
+                httpUrl(source.modelsUrl)?.origin !== sourceUrl.origin)
+            ) {
+              return false;
+            }
+            return (
+              source.requestPath === undefined || isProviderRequestPath(source.requestPath)
+            );
+          })
+        : [];
+      if (
+        !Array.isArray(next.modelDiscovery) ||
+        sources.length !== next.modelDiscovery.length
+      ) {
+        changed = true;
+      }
+      if (sources.length > 0) {
+        next = { ...next, modelDiscovery: sources };
+      } else {
+        const { modelDiscovery: _drop, ...rest } = next;
+        next = rest;
+      }
     }
     runtimes[agent] = next;
   }

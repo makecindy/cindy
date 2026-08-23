@@ -402,11 +402,11 @@ export function WorkdirBrowseRoute() {
         await sessionService.patchMeta(id, { title: newTitle });
       } catch (err) {
         log.error('[session rename] doc mode', err);
-        toast.error('重命名失败');
+        toast.error(t('ccAgent.sidebar.renameFailed'));
         if (oldTitle !== undefined) sessionsHook.patchLocal(id, { title: oldTitle });
       }
     },
-    [sessionsHook],
+    [sessionsHook, t],
   );
 
   // 关闭最后一个 tab / 关闭无邻居的 active tab → 清空 ?file= + 清空 selectedFile，

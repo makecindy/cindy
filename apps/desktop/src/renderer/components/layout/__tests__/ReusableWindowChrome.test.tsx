@@ -7,6 +7,9 @@ import type { RsbWindowContext } from '../../../../shared/rightSidebarWindow';
 const mocks = vi.hoisted(() => ({
   controlsMounts: 0,
   sidebarVisibilityListener: null as ((payload: { visible: boolean }) => void) | null,
+  sidebarTabHandoffListener: null as
+    | ((handoff: import('../../../../shared/rightSidebarWindow').RsbWindowTabHandoff) => void)
+    | null,
   ghostVisibilityListener: null as ((payload: { visible: boolean }) => void) | null,
   ghostMinimizeListener: null as (() => void) | null,
   ghostMinimizeEnabled: true,
@@ -16,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   sidebarLightboxMounts: 0,
   sidebarLightboxMountId: undefined as number | undefined,
   initGlobalListeners: vi.fn(),
+  importTabSnapshot: vi.fn(),
   minimizeGhostPanel: vi.fn(),
   restoreGhostPanel: vi.fn(),
 }));
@@ -67,6 +71,8 @@ vi.mock('@/features/right-sidebar/lib/executeSidebarCommand', () => ({
 vi.mock('@/features/right-sidebar/store', () => ({
   closeTab: vi.fn(),
   getBucket: () => ({ activeTabId: null }),
+  getTabSnapshot: vi.fn(() => null),
+  importTabSnapshot: mocks.importTabSnapshot,
 }));
 vi.mock('@/cindy-brain/ghostPanels', () => ({
   ensureGhostPanelsRegistered: vi.fn(),
@@ -143,6 +149,7 @@ describe('reusable auxiliary window chrome', () => {
     vi.clearAllMocks();
     mocks.controlsMounts = 0;
     mocks.sidebarVisibilityListener = null;
+    mocks.sidebarTabHandoffListener = null;
     mocks.ghostVisibilityListener = null;
     mocks.ghostMinimizeListener = null;
     mocks.ghostMinimizeEnabled = true;
@@ -165,6 +172,10 @@ describe('reusable auxiliary window chrome', () => {
             }),
           ),
           onContextChanged: vi.fn(() => vi.fn()),
+          onTabHandoff: vi.fn((listener) => {
+            mocks.sidebarTabHandoffListener = listener;
+            return vi.fn();
+          }),
           rendererReady: vi.fn(() => Promise.resolve()),
           presentationReady: vi.fn(() => Promise.resolve()),
           onVisibilityChanged: vi.fn((listener) => {
@@ -223,6 +234,29 @@ describe('reusable auxiliary window chrome', () => {
     });
   });
 
+  it('subscribes to tab handoff before reporting presentation ready', async () => {
+    const snapshot = {
+      sessionId: 'session-a',
+      tabs: [{ id: 'tab-a', kind: 'web-browser', state: { url: 'about:blank' } }],
+      activeTabId: 'tab-a',
+      persistable: false as const,
+    };
+    window.electronAPI.rightSidebarWindow.presentationReady = vi.fn(async () => {
+      mocks.sidebarTabHandoffListener?.({ snapshots: [snapshot] });
+    });
+
+    render(<SidebarWindowLayout />);
+
+    await waitFor(() => expect(mocks.importTabSnapshot).toHaveBeenCalledWith(snapshot));
+    expect(
+      (window.electronAPI.rightSidebarWindow.onTabHandoff as ReturnType<typeof vi.fn>).mock
+        .invocationCallOrder[0],
+    ).toBeLessThan(
+      (window.electronAPI.rightSidebarWindow.presentationReady as ReturnType<typeof vi.fn>).mock
+        .invocationCallOrder[0],
+    );
+  });
+
   it('remounts ghost-panel controls when the cached window is hidden', async () => {
     render(<GhostPanelWindowLayout />);
     const controlsBeforeHide = screen.getByTestId('window-controls');
@@ -239,7 +273,7 @@ describe('reusable auxiliary window chrome', () => {
     render(<GhostPanelWindowLayout />);
 
     const mergeBack = screen.getByRole('button', { name: 'rightSidebar.window.mergeBack' });
-    expect(mergeBack.getAttribute('title')).toBe('rightSidebar.window.mergeBack');
+    expect(mergeBack.getAttribute('title')).toBeNull();
     expect(mergeBack.textContent).not.toContain('rightSidebar.window.mergeBack');
     fireEvent.click(mergeBack);
 
@@ -249,7 +283,7 @@ describe('reusable auxiliary window chrome', () => {
     );
   });
 
-  it('minimizes a detached plugin window into the main-window Ghost bubble', async () => {
+  it('minimizes a detached plugin window through the main-window restore flow', async () => {
     render(<GhostPanelWindowLayout />);
 
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.minimize' }));

@@ -42,13 +42,21 @@ export interface ComposerTextPadding {
   top: number;
 }
 
-export function composerTextPaddingForPlatform(platform: ComposerTextPlatform): ComposerTextPadding {
-  const opticalOffset = platform === 'ios' ? COMPOSER_TEXT_OPTICAL_OFFSET_Y : 0;
+export function composerTextPaddingForPlatform(
+  platform: ComposerTextPlatform,
+  options: { optical?: boolean } = {},
+): ComposerTextPadding {
+  const opticalOffset = options.optical !== false && platform === 'ios'
+    ? COMPOSER_TEXT_OPTICAL_OFFSET_Y
+    : 0;
   return {
     bottom: COMPOSER_TEXT_VERTICAL_PADDING - opticalOffset,
     top: COMPOSER_TEXT_VERTICAL_PADDING + opticalOffset,
   };
 }
+
+/** 收起单行与 34pt + / 麦克风并排时用几何居中，不再做 iOS 光学下移。 */
+export const COMPOSER_TEXT_GEOMETRIC_PADDING = composerTextPaddingForPlatform('default');
 
 // Node-side consumers and the existing iOS WebView tests use iOS as the
 // canonical reference. React Native consumers import the platform adapter.

@@ -6,8 +6,13 @@ import {
   type AgentKind,
 } from '@cindy/maker-core';
 
-import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
+import { claudeToolSearchMode } from './claude-behavior-flags.js';
+import {
+  CODEX_GATEWAY_PROVIDER_ID,
+  CODEX_OPENAI_COMPACT_PROVIDER_ID,
+} from './codex-gateway-config.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
+import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
 
 export interface ShouldCloseSessionForCredentialSwitchInput {
   agentKind: AgentKind;
@@ -21,6 +26,11 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * provider-oauth 依赖 proxy 做供应商 OAuth 注入和 model rewrite；未知状态按 false 处理。
    */
   currentCodexProxyActive?: boolean | null;
+  /**
+   * 当前 Codex thread 由 app-server 的 start/resume 响应确认的 model provider。
+   * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
+   */
+  currentCodexThreadModelProviderId?: string | null;
   /**
    * 当前本地 Codex app-server spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * 用于把隐式来源(resolveAgentCredentialMode 解析出 undefined)落到实际凭证家族,
@@ -125,6 +135,51 @@ function normalizeProviderId(providerId: string | null | undefined): string | nu
   return trimmed || null;
 }
 
+/**
+ * app-server 已确认的 Codex thread provider 是否与指定路由期望的身份冲突。
+ *
+ * 调用方可把「下一目标路由」传进来判断是否需要重建，也可把「当前 provider store
+ * 路由」传进来区分 store/thread 已经错配，避免把仅需关闭单个 thread 的修复扩大成
+ * shared-host 凭证切换。
+ */
+export function isCodexThreadModelProviderIdentityMismatch(
+  input: ShouldCloseSessionForCredentialSwitchInput,
+): boolean {
+  if (
+    input.remoteHostId ||
+    input.agentKind !== 'codex' ||
+    input.currentCodexProxyActive !== true
+  ) {
+    return false;
+  }
+
+  const nextProviderId = normalizeProviderId(input.nextProviderId);
+  const nextMode = resolveAgentCredentialMode({
+    agentKind: input.agentKind,
+    providerId: nextProviderId,
+    model: input.nextModel,
+  });
+  const effectiveNextMode = nextMode ?? credentialFamilyFromAuthInjection(input.codexAuthInjection);
+  const expectedThreadModelProviderId =
+    effectiveNextMode === 'oauth-bearer'
+      ? CODEX_OPENAI_COMPACT_PROVIDER_ID
+      : effectiveNextMode !== undefined
+        ? CODEX_GATEWAY_PROVIDER_ID
+        : null;
+  const actualThreadModelProviderId = normalizeProviderId(
+    input.currentCodexThreadModelProviderId,
+  );
+  const actualThreadIdentityKnown =
+    actualThreadModelProviderId === CODEX_OPENAI_COMPACT_PROVIDER_ID ||
+    actualThreadModelProviderId === CODEX_GATEWAY_PROVIDER_ID;
+
+  return (
+    actualThreadIdentityKnown &&
+    expectedThreadModelProviderId !== null &&
+    actualThreadModelProviderId !== expectedThreadModelProviderId
+  );
+}
+
 function isLocalSession(session: LocalAgentSession): boolean {
   return !session.remoteHostId;
 }
@@ -178,6 +233,16 @@ export function shouldCloseSessionForCredentialSwitch(
     model: input.nextModel,
   });
 
+  // Tool Search 是 Claude 子进程的 spawn-time env。跨越上游 capability 边界时即使
+  // provider-oauth 凭证家族可复用，也必须重建本会话，不能把旧 flag 热切到新来源。
+  if (
+    input.agentKind === 'claude-code' &&
+    claudeToolSearchMode(currentProviderId, currentMode) !==
+      claudeToolSearchMode(nextProviderId, nextMode)
+  ) {
+    return true;
+  }
+
   // ── 远端压缩身份边界(codex, proxy-active)────────────────────────────────
   // oauth spawn 的订阅直连 thread 以 OpenAI 身份 provider 创建(codex 据此走
   // OpenAI 远端压缩),而 provider 身份是 thread 级冻结、settings/update 改不了;
@@ -191,6 +256,13 @@ export function shouldCloseSessionForCredentialSwitch(
     const fallbackFamily = credentialFamilyFromAuthInjection(input.codexAuthInjection);
     const effCurrent = currentMode ?? fallbackFamily;
     const effNext = nextMode ?? fallbackFamily;
+
+    // provider store 可能先于运行时切换被 UI/持久层覆盖。此时仅比较 currentMode/nextMode
+    // 会把两边误判为同一家族，并在仍绑定 cindy_openai 的 thread 上热切 DeepSeek/xAI/XD。
+    // start/resume 响应才是 thread 身份的事实源；与目标身份不一致就必须 close + resume。
+    if (isCodexThreadModelProviderIdentityMismatch(input)) {
+      return true;
+    }
     const mayTouchRemoteCompaction =
       effCurrent === 'oauth-bearer' || effNext === 'oauth-bearer' ||
       effCurrent === undefined || effNext === undefined;

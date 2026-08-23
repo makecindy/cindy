@@ -28,6 +28,15 @@ import {
   type WdaRunningInstance,
 } from '@cindy/ios-simulator-runtime';
 import { IOSSimulatorToolRegistry, registerIOSSimulatorTools } from '@cindy/mcps';
+// The host modules default their owner-boundary probe to
+// isAppSessionBoundaryPending(), which fails closed on an uncommitted owner.
+// These suites exercise simulator/ownership behavior, not boundary transitions;
+// owner-pending paths are covered by tests that pass explicit overrides.
+vi.mock('../../appSessionState.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return { ...actual, isAppSessionBoundaryPending: () => false };
+});
+
 import type { IOSSimulatorPublicRouteStatus } from '../../../shared/iosSimulatorIpc';
 import {
   cancelIOSSimulatorSessionOperations,
@@ -4265,6 +4274,15 @@ describe('iOS Simulator host', () => {
       get: vi.fn(() => running),
       start: vi.fn(),
       stop: vi.fn(async () => undefined),
+      diagnostics: vi.fn(() => ({
+        running: true,
+        logTail: '',
+        capabilityReport: null,
+        nativeSidecar: {
+          recoveryEligible: true,
+          admission: { launch: { allowed: true } },
+        } as never,
+      })),
       recoverNativeSidecar: vi.fn(async () => {
         selectedNativeDriver = recoveredNativeDriver;
         nativeAvailable = true;
@@ -4324,6 +4342,18 @@ describe('iOS Simulator host', () => {
     h264FramePump.snapshot.mockClear();
     framePump.snapshot.mockClear();
     await expect(host.getLatestFrame('session-a', route, 88)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INSTANCE_NOT_OWNED',
+    });
+    await expect(
+      host.retryNativeRoute('session-a', route, 88, 'viewer-token'),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INSTANCE_NOT_OWNED',
+    });
+    await expect(
+      host.retryNativeRoute('session-a', route, 77, 'stale-viewer-token'),
+    ).resolves.toMatchObject({
       ok: false,
       errorCode: 'INSTANCE_NOT_OWNED',
     });
@@ -4491,6 +4521,7 @@ describe('iOS Simulator host', () => {
       sessionId: 'session-a',
       instanceId: started.instanceId,
       generation: latestRoute.generation,
+      nativeRecoveryAvailable: true,
       stream: {
         adapter: 'wda',
         encoding: 'jpeg',
@@ -4505,6 +4536,7 @@ describe('iOS Simulator host', () => {
       data: { stream: { state: 'reconnecting' } },
     });
     expect(routeStatuses.at(-1)).toMatchObject({
+      nativeRecoveryAvailable: true,
       stream: {
         adapter: 'wda',
         encoding: 'jpeg',
@@ -4513,7 +4545,51 @@ describe('iOS Simulator host', () => {
       },
     });
 
+    driverManager.recoverNativeSidecar.mockImplementationOnce(async () => running);
+    await expect(
+      host.retryNativeRoute('session-a', latestRoute, 77, 'viewer-token'),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        nativeRecovered: false,
+        stream: { state: 'reconnecting' },
+      },
+    });
+    expect(driverManager.recoverNativeSidecar).toHaveBeenLastCalledWith(started.instanceId, {
+      rearm: true,
+    });
+    expect(framePump.setVisible).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    );
+    expect(h264FramePump.clear).toHaveBeenLastCalledWith(started.instanceId);
+    expect(routeStatuses.at(-1)).toMatchObject({
+      nativeRecoveryAvailable: true,
+      stream: {
+        adapter: 'wda',
+        encoding: 'jpeg',
+        state: 'reconnecting',
+        reasonCode: 'native-sidecar-unavailable',
+      },
+    });
+
     h264Snapshot = { ...h264Snapshot, state: 'connecting' };
+    await expect(
+      host.retryNativeRoute('session-a', latestRoute, 77, 'viewer-token'),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        nativeRecovered: true,
+        stream: { state: 'connecting' },
+      },
+    });
+    expect(driverManager.recoverNativeSidecar).toHaveBeenLastCalledWith(started.instanceId, {
+      rearm: true,
+    });
+    expect(h264FramePump.setVisible).toHaveBeenLastCalledWith(
+      expect.objectContaining({ driver: recoveredNativeDriver, visible: true }),
+    );
+
+    nativeAvailable = false;
     await expect(
       host.setViewerVisibility(
         'session-a',
@@ -4564,6 +4640,34 @@ describe('iOS Simulator host', () => {
     expect(driverManager.recoverNativeSidecar).toHaveBeenLastCalledWith(started.instanceId, {
       rearm: true,
     });
+
+    await expect(
+      host.setViewerVisibility(
+        'session-a',
+        latestRoute,
+        true,
+        'jpeg',
+        undefined,
+        77,
+        'viewer-reopened',
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    nativeAvailable = false;
+    framePump.setVisible.mockClear();
+    h264FramePump.setVisible.mockClear();
+    await expect(
+      host.retryNativeRoute('session-a', latestRoute, 77, 'viewer-reopened'),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        nativeRecovered: true,
+        stream: { instanceId: started.instanceId },
+      },
+    });
+    expect(framePump.setVisible).toHaveBeenLastCalledWith(
+      expect.objectContaining({ driver: wdaDriver, visible: true }),
+    );
+    expect(h264FramePump.setVisible).not.toHaveBeenCalled();
   });
 
   it('stops the embedded viewer when the exact external simulator is shut down', async () => {

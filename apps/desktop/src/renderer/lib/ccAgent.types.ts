@@ -4,6 +4,7 @@ import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
+import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -66,6 +67,8 @@ export interface CcMeta {
   durationApiMs?: number;
   totalCostUsd?: number;
   fastModeState?: string;
+  /** Host-persisted terminal lifecycle for the originating Agent/Task tool call. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
 
   /**
    * Host-side delivery marker. SDKs generally do not echo user steer messages in
@@ -299,8 +302,8 @@ export interface Session {
    */
   preview?: string | null;
   /**
-   * 任务现状一句话摘要（main/sessionTaskSummary.ts 在置顶会话 turn 结束时
-   * 经 oneShot 生成并落库）。卡片/rail flyout 优先展示它，无摘要回退 preview。
+   * 任务现状一句话摘要（main/sessionTaskSummary.ts 仅在置顶段为卡片模式时
+   * 为置顶会话生成）。卡片置顶行优先展示它，列表/文字模式只用 preview。
    */
   summary?: string | null;
 }

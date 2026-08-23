@@ -46,6 +46,64 @@
 export const REMOTE_SERVER_SCHEMA_VERSION = 'v1';
 export const REMOTE_INSTALL_ROOT = '$HOME/.xdt-server';
 
+/**
+ * 独立 bundled node 安装脚本 —— 供不需要完整 agent 安装链的组件复用
+ * (pi-manager 需要 node 跑 TS daemon, 轮 22:pi 独立化 —— node 不再依赖
+ * CC/CX 安装链先装)。与 bootstrap-script 的 ensure_node() 同源语义:
+ * 幂等(已装且可跑 → NODE_CACHED), 下载 nodejs.org 官方 tarball 到
+ * ~/.xdt-server/<ver>/node/, 与 CC/CX 共享同一目录不重复下载。
+ * stdout 每行带前缀(INSTALL_LOG 等), 失败退出码 6/7(与 bootstrap 对齐)。
+ */
+export const BUNDLED_NODE_INSTALL_SH = String.raw`#!/usr/bin/env bash
+set -u
+SERVER_VER="${'$'}{1:-v1}"
+NODE_VER="${'$'}{2:-22.13.0}"
+INSTALL_DIR="$HOME/.xdt-server/$SERVER_VER"
+NODE_DIR="$INSTALL_DIR/node"
+NODE_BIN="$NODE_DIR/bin/node"
+emit() { printf '%s\n' "$*"; }
+# 幂等:已装且可跑 → 跳过下载
+if [ -x "$NODE_BIN" ]; then
+  V="$("$NODE_BIN" -p 'process.versions.node' 2>/dev/null || echo '')"
+  if [ -n "$V" ]; then emit "NODE_CACHED $V"; exit 0; fi
+  rm -rf "$NODE_DIR"
+fi
+emit "NODE_INSTALL_START $NODE_VER"
+case "$(uname -s)" in
+  Darwin) OS_TAG="darwin" ;;
+  Linux)  OS_TAG="linux"  ;;
+  *)      emit "ERROR unsupported OS: $(uname -s)"; exit 6 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) ARCH_TAG="arm64" ;;
+  x86_64|amd64)  ARCH_TAG="x64"   ;;
+  *)             emit "ERROR unsupported arch: $(uname -m)"; exit 6 ;;
+esac
+BASE="node-v${'$'}{NODE_VER}-${'$'}{OS_TAG}-${'$'}{ARCH_TAG}"
+URL="https://nodejs.org/dist/v${'$'}{NODE_VER}/${'$'}{BASE}.tar.gz"
+TMP="$INSTALL_DIR/.node-dl-$$.tar.gz"
+mkdir -p "$INSTALL_DIR"
+DL=""
+if command -v curl >/dev/null 2>&1; then DL="curl"
+elif command -v wget >/dev/null 2>&1; then DL="wget"
+else emit "ERROR neither curl nor wget found; cannot download Node"; exit 7
+fi
+emit "NODE_DOWNLOAD $URL"
+if [ "$DL" = "curl" ]; then
+  curl -fSL --connect-timeout 15 -o "$TMP" "$URL" 2>/dev/null || { rm -f "$TMP"; emit "ERROR download failed ($DL)"; exit 7; }
+else
+  wget -q -O "$TMP" "$URL" 2>/dev/null || { rm -f "$TMP"; emit "ERROR download failed ($DL)"; exit 7; }
+fi
+if [ ! -s "$TMP" ]; then rm -f "$TMP"; emit "ERROR downloaded file is empty"; exit 7; fi
+emit "NODE_EXTRACT $BASE"
+mkdir -p "$NODE_DIR"
+tar -xzf "$TMP" -C "$NODE_DIR" --strip-components=1 2>/dev/null || { rm -f "$TMP"; emit "ERROR failed to extract tarball $BASE"; exit 7; }
+rm -f "$TMP"
+if [ ! -x "$NODE_BIN" ]; then emit "ERROR node binary missing after extract at $NODE_BIN"; exit 7; fi
+V="$("$NODE_BIN" -p 'process.versions.node' 2>/dev/null || echo '?')"
+emit "NODE_INSTALL_DONE $V"
+`;
+
 /** Bash snippet (read-only) used by probe script — reports bundled state. */
 export const PROBE_BUNDLED_NODE_SH = String.raw`if [ -x "$NODE_BIN" ]; then
   V="$("$NODE_BIN" -p 'process.versions.node' 2>/dev/null || echo '')"

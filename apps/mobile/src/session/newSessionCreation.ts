@@ -28,6 +28,7 @@
 import { useSyncExternalStore } from 'react';
 import * as ExpoCrypto from 'expo-crypto';
 import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -245,8 +246,12 @@ function attachFirstMessageSessionReferences(
 }
 
 function synthesizeSession(params: NewSessionCreationParams, draftOverride?: NewSessionDraft): RemoteSession {
+  const draft = draftOverride ?? params.draft;
   return {
-    ...sessionFromCreateResult({ sessionId: params.sessionId }, draftOverride ?? params.draft),
+    ...sessionFromCreateResult({ sessionId: params.sessionId }, {
+      ...draft,
+      attachments: params.attachments,
+    }),
     pendingLocalCreation: true,
   };
 }
@@ -264,6 +269,9 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
   );
   const session = synthesizeSession(params);
   remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, session);
+  if (session.title && session.title !== DEFAULT_DRAFT_SESSION_TITLE) {
+    remoteSessionStore.setPendingTitlePreview(params.sessionId, session.title);
+  }
   const queued = attachFirstMessageSessionReferences(buildQueuedTextMessage(
     session,
     params.draft.firstMessage,
@@ -308,6 +316,9 @@ export function retryNewSessionCreation(sessionId: string): void {
   // 重试前把乐观行 / 气泡恢复(返回编辑路径可能没走,行一般还在,upsert 幂等)。
   const session = synthesizeSession(task.params);
   remoteSessionStore.upsertDeviceSession(task.deviceId, task.deviceName, session);
+  if (session.title && session.title !== DEFAULT_DRAFT_SESSION_TITLE) {
+    remoteSessionStore.setPendingTitlePreview(sessionId, session.title);
+  }
   const queued = attachFirstMessageSessionReferences(buildQueuedTextMessage(
     session,
     task.draft.firstMessage,
@@ -332,6 +343,7 @@ export function dismissNewSessionCreation(sessionId: string, opts: { removeSynth
   if (opts.removeSyntheticRow) {
     remoteSessionStore.applySessionPatch(task.deviceId, sessionId, { status: 'deleted' });
     remoteSessionStore.setInputProjection(sessionId, null);
+    remoteSessionStore.clearPendingTitlePreview(sessionId);
   }
   emit();
 }
@@ -378,7 +390,7 @@ async function reconcileClaimedSessionForEdit(task: InternalTask): Promise<boole
   failTask(
     task,
     'enqueue-failed',
-    i18n.t('session.new.firstMessageNotSent'),
+    i18n.t('session.screen.firstMessageNotSent'),
   );
   return true;
 }
@@ -557,7 +569,13 @@ function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed'
     // 禁发标——弱网下 fresh getSession / 会话页 load 可能都还没成功,不清的话
     // 用户拿着回填草稿仍被禁发,只能干等 load(codex review P2)。
     remoteSessionStore.setInputProjection(task.sessionId, null);
-    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, { pendingLocalCreation: false });
+    remoteSessionStore.clearPendingTitlePreview(task.sessionId);
+    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, {
+      pendingLocalCreation: false,
+    });
+    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, {
+      title: DEFAULT_DRAFT_SESSION_TITLE,
+    });
   }
   emit();
 }
@@ -852,6 +870,7 @@ function cancelStaleOwnerTask(task: InternalTask): void {
   if (session && remoteSessionStore.getSessionDeviceId(task.sessionId) === task.deviceId) {
     remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, { status: 'deleted' });
     remoteSessionStore.setInputProjection(task.sessionId, null);
+    remoteSessionStore.clearPendingTitlePreview(task.sessionId);
   }
   emit();
 }

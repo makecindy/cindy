@@ -19,6 +19,9 @@ const powerMonitorGetSystemIdleTime = vi.fn(() => 600);
 const powerMonitorOn = vi.fn();
 const powerMonitorRemoveListener = vi.fn();
 const appGetVersion = vi.fn(() => '0.0.64');
+const appRelaunch = vi.fn();
+const appQuit = vi.fn();
+const appGetAppPath = vi.fn(() => path.join(TEST_ROOT, 'Cindy.app', 'Contents', 'Resources', 'app.asar'));
 const appIsInApplicationsFolder = vi.fn(() => true);
 const appGetPath = vi.fn((name: string) => {
   if (name === 'userData') return TEST_USER_DATA;
@@ -40,6 +43,9 @@ vi.mock('electron', () => ({
   app: {
     getVersion: appGetVersion,
     getPath: appGetPath,
+    relaunch: appRelaunch,
+    quit: appQuit,
+    getAppPath: appGetAppPath,
     isPackaged: true,
     isInApplicationsFolder: appIsInApplicationsFolder,
     moveToApplicationsFolder: vi.fn(),
@@ -70,10 +76,33 @@ vi.mock('../auto-update-settings-store', () => ({
   writeAutoRelaunchOnIdle: vi.fn(),
 }));
 
+const tryEnableUncustomizedBetaAtomic = vi.fn(async () => true);
+const writeEnableBeta = vi.fn(async () => undefined);
+const readUpdateChannelSettings = vi.fn(() => ({
+  enableBeta: false,
+  orgDefaultEnableBeta: false,
+}));
+
 vi.mock('../manifestService', () => ({
   fetchManifest,
   getBaseUrl,
   isDev,
+  clearCachedManifest: vi.fn(),
+}));
+
+vi.mock('../updateChannelStore', () => ({
+  readUpdateChannelSettings,
+  readUpdateChannelSettingsState: () => ({
+    value: readUpdateChannelSettings(),
+    isCustomized: false,
+    customizedKeys: [],
+    defaults: { enableBeta: false, orgDefaultEnableBeta: false },
+  }),
+  resetUpdateChannelSettings: () => ({ enableBeta: false, orgDefaultEnableBeta: false }),
+  writeEnableBeta,
+  tryEnableUncustomizedBetaAtomic,
+  isEnableBetaUserCustomized: () => false,
+  isBetaChannelEnabled: () => readUpdateChannelSettings().enableBeta === true,
 }));
 
 vi.mock('../downloader/index', () => ({
@@ -93,6 +122,22 @@ vi.mock('../downloader/index', () => ({
 vi.mock('../cindy-brain/index', () => ({
   getGhostNodeRuntimeBroker: () => ({ destroyAll: vi.fn() }),
 }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: () => ({
+      unref: vi.fn(),
+      on: vi.fn(),
+    }),
+  };
+});
+
+vi.mock('../security/trustedAppRenderer', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
+}));
+
 
 vi.mock('../logger', () => ({
   createLogger: () => ({
@@ -144,6 +189,8 @@ beforeEach(() => {
   powerMonitorRemoveListener.mockReset();
   appGetVersion.mockReset();
   appGetVersion.mockReturnValue('0.0.64');
+  appRelaunch.mockReset();
+  appQuit.mockReset();
   appIsInApplicationsFolder.mockReset();
   appIsInApplicationsFolder.mockReturnValue(true);
   appGetPath.mockReset();
@@ -158,6 +205,15 @@ beforeEach(() => {
   isDev.mockReset();
   isDev.mockReturnValue(false);
   download.mockReset();
+  tryEnableUncustomizedBetaAtomic.mockReset();
+  tryEnableUncustomizedBetaAtomic.mockResolvedValue(true);
+  writeEnableBeta.mockReset();
+  writeEnableBeta.mockResolvedValue(undefined);
+  readUpdateChannelSettings.mockReset();
+  readUpdateChannelSettings.mockReturnValue({
+    enableBeta: false,
+    orgDefaultEnableBeta: false,
+  });
   readAutoUpdateSettings.mockReset();
   readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
   logInfo.mockReset();
@@ -172,12 +228,12 @@ afterEach(() => {
   setPlatform(originalPlatform);
 });
 
-function updateManifest(version = '0.0.65') {
+function updateManifest(version = '0.0.65', hotfixFile?: string) {
   return {
     app: {
       version,
       hotfix: {
-        file: `app/darwin-arm64/xdt-maker-${version}.zip`,
+        file: hotfixFile ?? `app/darwin-arm64/xdt-maker-${version}.zip`,
         sha256: 'abc',
         size: 123,
       },
@@ -393,10 +449,13 @@ describe('startup update relaunch safety', () => {
   });
 
   /** Boots the startup flow (staging a patch) and hands back the live module. */
-  async function bootWithStagedPatch(options: { enabled?: boolean } = {}) {
+  async function bootWithStagedPatch(options: {
+    enabled?: boolean;
+    manifest?: ReturnType<typeof updateManifest>;
+  } = {}) {
     vi.useFakeTimers();
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: options.enabled ?? true });
-    fetchManifest.mockResolvedValue(updateManifest());
+    fetchManifest.mockResolvedValue(options.manifest ?? updateManifest());
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
       fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
       fs.writeFileSync(targetPath, 'update');
@@ -465,6 +524,669 @@ describe('startup update relaunch safety', () => {
       expect(service.getUpdateStatus()).toBe('ready');
       isDev.mockReturnValue(true);
       expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not clear the staged patch while busyProbe is still pending', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    try {
+      await probeStarted;
+      expect(service.getUpdateStatus()).toBe('ready');
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      expect(service.getUpdateStatus()).toBe('ready');
+    } finally {
+      releaseProbe?.(true);
+      service.stopUpdateService();
+    }
+  });
+
+  it('clears a matching relogin flag when the staged patch is discarded', async () => {
+    const service = await bootWithStagedPatch({ enabled: false });
+    const flagPath = path.join(TEST_USER_DATA, 'relogin-required.flag');
+    fs.writeFileSync(flagPath, JSON.stringify({ version: '0.0.65' }));
+    try {
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      expect(fs.existsSync(flagPath)).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('clears the deferred staged patch after a busy eligibility check settles', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      expect(service.getUpdateStatus()).toBe('ready');
+      releaseProbe?.(true);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('idle');
+      });
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('aborts auto-relaunch when the channel changes during eligibility', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      expect(service.getUpdateStatus()).toBe('ready');
+      releaseProbe?.(false);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('idle');
+      });
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('keeps a same-path newer patch after deferred channel-change clear', async () => {
+    const sharedHotfix = 'app/darwin-arm64/xdt-maker-hotfix.zip';
+    const service = await bootWithStagedPatch({
+      enabled: true,
+      manifest: updateManifest('0.0.65', sharedHotfix),
+    });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      expect(service.getUpdateStatus()).toBe('ready');
+      // 后续 ready 不要再挂住另一条 probe,否则延迟清理永远不会 flush。
+      service.setUpdateAutoRelaunchBusyProbe(() => true);
+
+      readUpdateChannelSettings.mockReturnValue({
+        enableBeta: true,
+        orgDefaultEnableBeta: true,
+      });
+      fetchManifest.mockResolvedValue(updateManifest('0.0.66', sharedHotfix));
+      await expect(service.checkForUpdate()).resolves.toBe('ready');
+      expect(service.getUpdateStatus()).toBe('ready');
+
+      const destPath = path.join(TEST_USER_DATA, 'updates', path.basename(sharedHotfix));
+      expect(fs.existsSync(destPath)).toBe(true);
+
+      releaseProbe?.(true);
+      await vi.waitFor(() => {
+        expect(
+          logInfo.mock.calls.some((call) =>
+            String(call[0]).includes('keeping newer staged patch after deferred channel-change clear'),
+          ),
+        ).toBe(true);
+      });
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(fs.existsSync(destPath)).toBe(true);
+      expect(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf-8')).toContain('0.0.66');
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('drops patch-info immediately so a channel relaunch cannot revive the old zip', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(false);
+
+      const relaunch = ipcHandlers.get('update-channel-relaunch');
+      expect(relaunch).toBeTypeOf('function');
+      relaunch?.({ sender: { id: 1 } });
+      expect(appRelaunch).toHaveBeenCalled();
+      expect(appQuit).toHaveBeenCalled();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(false);
+    } finally {
+      releaseProbe?.(true);
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not bump the channel epoch again when flushing during a same-path download', async () => {
+    const sharedHotfix = 'app/darwin-arm64/xdt-maker-hotfix.zip';
+    const service = await bootWithStagedPatch({
+      enabled: true,
+      manifest: updateManifest('0.0.65', sharedHotfix),
+    });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    let finishDownload: (() => void) | undefined;
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      await new Promise<void>((resolve) => {
+        finishDownload = resolve;
+      });
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'newer-update');
+      return { path: targetPath, size: 123 };
+    });
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      service.setUpdateAutoRelaunchBusyProbe(() => true);
+      readUpdateChannelSettings.mockReturnValue({
+        enableBeta: true,
+        orgDefaultEnableBeta: true,
+      });
+      fetchManifest.mockResolvedValue(updateManifest('0.0.66', sharedHotfix));
+      const checkPromise = service.checkForUpdate();
+      await vi.waitFor(() => {
+        expect(finishDownload).toBeTypeOf('function');
+      });
+      releaseProbe?.(true);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('superseding');
+      });
+      finishDownload?.();
+      await expect(checkPromise).resolves.toBe('ready');
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(
+        fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf-8'),
+      ).toContain('0.0.66');
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('invalidates an in-flight check when another instance changes the shared channel', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    try {
+      expect(service.getUpdateStatus()).toBe('ready');
+      readUpdateChannelSettings.mockReturnValue({
+        enableBeta: true,
+        orgDefaultEnableBeta: true,
+      });
+      await expect(service.checkForUpdate()).resolves.toBe('idle');
+      expect(service.getUpdateStatus()).toBe('idle');
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not restore a superseded patch after a channel change', async () => {
+    const { DownloadError } = await import('../downloader/index');
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    let failDownload: ((error: Error) => void) | undefined;
+    download.mockImplementation(() => new Promise((_, reject) => {
+      failDownload = reject;
+    }));
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      service.setUpdateAutoRelaunchBusyProbe(() => true);
+      readUpdateChannelSettings.mockReturnValue({
+        enableBeta: true,
+        orgDefaultEnableBeta: true,
+      });
+      fetchManifest.mockResolvedValue(updateManifest('0.0.66'));
+      const checkPromise = service.checkForUpdate();
+      await vi.waitFor(() => {
+        expect(failDownload).toBeTypeOf('function');
+      });
+      releaseProbe?.(true);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('superseding');
+      });
+      failDownload?.(new DownloadError('NETWORK', 'boom'));
+      await expect(checkPromise).resolves.toBe('idle');
+      expect(service.getUpdateStatus()).toBe('idle');
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('aborts a manual relaunch when a channel change is still deferred', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    try {
+      await probeStarted;
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+      await setHandler?.({ sender: { id: 1 } }, { enableBeta: true });
+      expect(service.getUpdateStatus()).toBe('ready');
+      const relaunch = ipcListeners.get('update-relaunch');
+      expect(relaunch).toBeTypeOf('function');
+      logInfo.mockClear();
+      relaunch?.({}, 'dark');
+      expect(logInfo.mock.calls.map((call) => String(call[0]))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('executeRelaunch() aborted'),
+        ]),
+      );
+      releaseProbe?.(false);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('idle');
+      });
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('invalidates the staged patch before the settings write settles', async () => {
+    const service = await bootWithStagedPatch({ enabled: false });
+    let releaseWrite: (() => void) | undefined;
+    writeEnableBeta.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          releaseWrite = () => resolve(undefined);
+        }),
+    );
+    try {
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      const writePromise = setHandler?.({ sender: { id: 1 } }, { enableBeta: true });
+      await vi.waitFor(() => {
+        expect(releaseWrite).toBeTypeOf('function');
+      });
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      releaseWrite?.();
+      await writePromise;
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('keeps the staged patch when an org-default write is rejected', async () => {
+    const service = await bootWithStagedPatch({ enabled: false });
+    tryEnableUncustomizedBetaAtomic.mockResolvedValue(false);
+    try {
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(false);
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('keeps a settings-page hold when a concurrent org-default write throws', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    let releaseWrite: (() => void) | undefined;
+    writeEnableBeta.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          releaseWrite = () => resolve(undefined);
+        }),
+    );
+    tryEnableUncustomizedBetaAtomic.mockRejectedValue(new Error('lock timeout'));
+    try {
+      await probeStarted;
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+      const writePromise = setHandler?.({ sender: { id: 1 } }, { enableBeta: true });
+      await vi.waitFor(() => {
+        expect(releaseWrite).toBeTypeOf('function');
+      });
+      await expect(service.enableUncustomizedBetaChannel()).rejects.toThrow('lock timeout');
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      releaseProbe?.(false);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('ready');
+      });
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      logInfo.mockClear();
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      expect(logInfo.mock.calls.map((call) => String(call[0]))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('executeRelaunch() aborted'),
+        ]),
+      );
+      expect(service.getUpdateStatus()).toBe('ready');
+      releaseWrite?.();
+      await writePromise;
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('idle');
+      });
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('applies a newer same-path patch after a deferred channel change', async () => {
+    const sharedHotfix = 'app/darwin-arm64/xdt-maker-hotfix.zip';
+    const service = await bootWithStagedPatch({
+      enabled: true,
+      manifest: updateManifest('0.0.65', sharedHotfix),
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(true);
+      service.setUpdateAutoRelaunchBusyProbe(() => true);
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+      readUpdateChannelSettings.mockReturnValue({
+        enableBeta: true,
+        orgDefaultEnableBeta: true,
+      });
+      fetchManifest.mockResolvedValue(updateManifest('0.0.66', sharedHotfix));
+      await expect(service.checkForUpdate()).resolves.toBe('ready');
+      expect(service.getUpdateStatus()).toBe('ready');
+      logInfo.mockClear();
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      expect(logInfo.mock.calls.map((call) => String(call[0])).join('\n')).not.toContain(
+        'executeRelaunch() aborted',
+      );
+      expect(logInfo.mock.calls.map((call) => String(call[0])).join('\n')).toContain(
+        'executeRelaunch() called',
+      );
+      expect(
+        fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf-8'),
+      ).toContain('0.0.66');
+    } finally {
+      exitSpy.mockRestore();
+      releaseProbe?.(true);
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not treat a failed settings write as a committed channel change', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    let rejectWrite: ((error: Error) => void) | undefined;
+    writeEnableBeta.mockImplementation(
+      () =>
+        new Promise<undefined>((_resolve, reject) => {
+          rejectWrite = reject;
+        }),
+    );
+    try {
+      await probeStarted;
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+      const writePromise = setHandler?.({ sender: { id: 1 } }, { enableBeta: true });
+      await vi.waitFor(() => {
+        expect(rejectWrite).toBeTypeOf('function');
+      });
+      rejectWrite?.(new Error('lock timeout'));
+      await expect(writePromise).rejects.toThrow();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      releaseProbe?.(true);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('ready');
+      });
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not treat a failed settings write as an external channel change', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    writeEnableBeta.mockRejectedValueOnce(new Error('lock timeout'));
+    try {
+      await probeStarted;
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+      await expect(setHandler?.({ sender: { id: 1 } }, { enableBeta: true })).rejects.toThrow();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      releaseProbe?.(true);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('ready');
+      });
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not let a failed settings write overwrite a committed observed channel', async () => {
+    const service = await bootWithStagedPatch({ enabled: false });
+    let releaseFirstWrite: (() => void) | undefined;
+    let rejectSecondWrite: ((error: Error) => void) | undefined;
+    let writeCalls = 0;
+    writeEnableBeta.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve, reject) => {
+          writeCalls += 1;
+          if (writeCalls === 1) {
+            releaseFirstWrite = () => resolve(undefined);
+            return;
+          }
+          rejectSecondWrite = reject;
+        }),
+    );
+    try {
+      const setHandler = ipcHandlers.get('update-channel-settings-set');
+      expect(setHandler).toBeTypeOf('function');
+      const firstWrite = setHandler?.({ sender: { id: 1 } }, { enableBeta: true });
+      const secondWrite = setHandler?.({ sender: { id: 1 } }, { enableBeta: true });
+      await vi.waitFor(() => {
+        expect(releaseFirstWrite).toBeTypeOf('function');
+        expect(rejectSecondWrite).toBeTypeOf('function');
+      });
+      readUpdateChannelSettings.mockReturnValue({
+        enableBeta: true,
+        orgDefaultEnableBeta: true,
+      });
+      releaseFirstWrite?.();
+      await firstWrite;
+      rejectSecondWrite?.(new Error('lock timeout'));
+      await expect(secondWrite).rejects.toThrow();
+      await expect(service.checkForUpdate()).resolves.toBe('ready');
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('invalidates the staged patch when another instance already enabled beta', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    tryEnableUncustomizedBetaAtomic.mockImplementation(async () => {
+      readUpdateChannelSettings.mockReturnValue({
+        enableBeta: true,
+        orgDefaultEnableBeta: true,
+      });
+      return false;
+    });
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).resolves.toBe(false);
+      expect(service.getUpdateStatus()).toBe('ready');
+      releaseProbe?.(false);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('idle');
+      });
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('releases a pending hold when the org-default write throws', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    let releaseProbe: ((busy: boolean) => void) | undefined;
+    const probeStarted = new Promise<void>((resolveStarted) => {
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            resolveStarted();
+            releaseProbe = resolveProbe;
+          }),
+      );
+    });
+    tryEnableUncustomizedBetaAtomic.mockRejectedValue(new Error('lock timeout'));
+    try {
+      await probeStarted;
+      await expect(service.enableUncustomizedBetaChannel()).rejects.toThrow('lock timeout');
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+      releaseProbe?.(true);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('ready');
+      });
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not apply a leftover patch after an offline channel change', async () => {
+    const updatesDir = path.join(TEST_USER_DATA, 'updates');
+    fs.mkdirSync(updatesDir, { recursive: true });
+    fs.writeFileSync(path.join(updatesDir, 'xdt-maker-0.0.65.zip'), 'update');
+    fs.writeFileSync(
+      path.join(updatesDir, 'patch-info.json'),
+      JSON.stringify({
+        version: '0.0.65',
+        fileName: 'xdt-maker-0.0.65.zip',
+        sha256: 'abc',
+        enableBeta: false,
+      }),
+    );
+    const flagPath = path.join(TEST_USER_DATA, 'relogin-required.flag');
+    fs.writeFileSync(flagPath, JSON.stringify({ version: '0.0.65' }));
+    readUpdateChannelSettings.mockReturnValue({
+      enableBeta: true,
+      orgDefaultEnableBeta: true,
+    });
+    fetchManifest.mockResolvedValue(null);
+    const service = await freshUpdateService('darwin');
+    service.initUpdateService();
+    try {
+      const handler = ipcHandlers.get('update-check-startup');
+      expect(handler).toBeTypeOf('function');
+      await expect(handler?.()).resolves.toMatchObject({
+        hasUpdate: false,
+        action: 'none',
+        error: 'manifest_failed',
+      });
+      expect(service.getUpdateStatus()).toBe('idle');
+      expect(fs.existsSync(path.join(updatesDir, 'patch-info.json'))).toBe(false);
+      expect(fs.existsSync(path.join(updatesDir, 'xdt-maker-0.0.65.zip'))).toBe(false);
+      expect(fs.existsSync(flagPath)).toBe(false);
     } finally {
       service.stopUpdateService();
     }

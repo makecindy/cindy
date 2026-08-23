@@ -182,9 +182,13 @@ describe('loginHandoff 接线(Provider/reporter 拓扑 + 清理,读源码断言)
     expect(loginSource).toContain("handoffDispatch?.({ type: 'panel-mounted' })");
     expect(stageSource).toContain("handoff?.dispatch({ type: 'assets-ready' })");
     // endpoint→OTA→auth 既有挂载顺序不变:OTA 上报在 RootAfterEndpoints、auth 桥在 AuthProvider 内
-    expect(layoutSource.indexOf('useStartupOtaGate()')).toBeLessThan(
-      layoutSource.indexOf('<AuthHandoffBridge />'),
-    );
+    const otaIndex = layoutSource.indexOf('useStartupOtaGate(');
+    const authBridgeIndex = layoutSource.indexOf('<AuthHandoffBridge />');
+    // 两处都必须真实存在(indexOf >= 0),否则顺序比较会因 -1 而空转;
+    // 再断言 OTA 调用先于 auth 桥挂载(与上文注释的既有顺序一致)。
+    expect(otaIndex).toBeGreaterThanOrEqual(0);
+    expect(authBridgeIndex).toBeGreaterThanOrEqual(0);
+    expect(otaIndex).toBeLessThan(authBridgeIndex);
   });
 
   it('reduced-motion:AccessibilityInfo 拉取 + 订阅,unmount 移除;直落终态由 Provider 收敛', () => {

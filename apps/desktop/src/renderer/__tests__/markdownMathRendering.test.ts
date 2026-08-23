@@ -32,7 +32,7 @@ function renderMath(markdown: string): string {
   return renderToStaticMarkup(
     createElement(ReactMarkdown, {
       remarkPlugins: [remarkGfm, remarkMath, remarkStrictInlineMath],
-      rehypePlugins: [[rehypeKatex, { strict: 'ignore' }]],
+      rehypePlugins: [[rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }]],
       children: normalizeMathDelimiters(markdown),
     }),
   );
@@ -86,10 +86,33 @@ describe('math rendering pipeline (remark-math + rehype-katex)', () => {
     expect(html).not.toContain('class="katex"');
   });
 
-  it('非法 LaTeX 不抛异常,渲染为错误标记', () => {
+  it('跨行 inline math 降级为正文,不触发 KaTeX', () => {
+    const html = renderMath('说明 $第一行\n第二行$ 结束');
+    expect(html).not.toContain('class="katex"');
+    expect(html).not.toContain('katex-error');
+    expect(html).toContain('第一行');
+    expect(html).toContain('第二行');
+  });
+
+  it('截图同形的非法 display LaTeX 保持正文色', () => {
+    const html = renderMath(String.raw`$$
+\boxed{\begin{array}{l}
+(\psi^{(0)},x_0) \xrightarrow{\text{流出}} \text{背景} \\
+\underset{\displaystyle \rotatebox[origin=c]{-90}{$\rightsquigarrow$}}{R_1}
+\end{array}}
+$$`);
+
+    expect(html).toContain('katex-error');
+    expect(html).toContain('\\rotatebox');
+    expect(html).toContain('style="color:inherit"');
+    expect(html).not.toContain('var(--error-fg)');
+  });
+
+  it('非法单行 LaTeX 保持正文色,不使用错误红 token', () => {
     const html = renderMath('$\\frac{$');
-    // rehype-katex 捕获解析错误,输出 katex-error 或原文,组件不崩
-    expect(typeof html).toBe('string');
+    expect(html).toContain('katex-error');
+    expect(html).toContain('style="color:inherit"');
+    expect(html).not.toContain('var(--error-fg)');
   });
 });
 

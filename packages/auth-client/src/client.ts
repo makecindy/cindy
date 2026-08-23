@@ -148,11 +148,17 @@ export class CindyAuthClient {
     return discovery;
   }
 
-  async requestCode(kind: VerificationKind, identifier: string): Promise<void> {
-    const body =
-      kind === "email"
-        ? { email: identifier, locale: this.options.locale }
-        : { phone: identifier, locale: this.options.locale };
+  async requestCode(
+    kind: VerificationKind,
+    identifier: string,
+    options: { captchaToken?: string } = {},
+  ): Promise<void> {
+    const body = {
+      ...(kind === "email" ? { email: identifier } : { phone: identifier }),
+      locale: this.options.locale,
+      // 仅有值时携带：旧 auth-server 的 zod 会忽略未知字段，但保持最小请求面。
+      ...(options.captchaToken ? { captchaToken: options.captchaToken } : {}),
+    };
     await this.request(
       `/api/auth/${kind}/request-code`,
       z.object({ status: z.literal("sent") }),

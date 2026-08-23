@@ -17,6 +17,8 @@ export interface RsbWindowState {
   lastOpen: boolean;
   /** 运行时:子窗口当前是否存在。不持久化。 */
   open: boolean;
+  /** 子窗口最近一次真正展示的宿主 session。关窗后仍保留，供主窗写折叠归属。 */
+  hostSessionId?: string | null;
 }
 
 /**
@@ -29,6 +31,8 @@ export interface RsbWindowContext {
   remoteHostId: string | null;
   /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
   deviceLinkDeviceId?: string | null;
+  /** Pi is the only harness that exposes the Subagents sidebar surface. */
+  subagentsAvailable?: boolean;
   /** 当前主窗视图是否有侧边栏语义(设置页等无会话视图为 false,子窗口显示占位空态)。 */
   available: boolean;
 }
@@ -36,6 +40,7 @@ export interface RsbWindowContext {
 /** main → 子窗口的命令推送(如主窗终端快捷键转发 / detached RSB 内定位文件)。 */
 export type RsbWindowCommand =
   | { type: 'open-terminal'; sessionId: string }
+  | { type: 'toggle-review-tab'; sessionId: string }
   | { type: 'open-web-browser'; sessionId: string; url: string }
   | {
       type: 'ensure-orca-workers-tab';
@@ -111,6 +116,23 @@ export type RsbWindowCommandRouteResult =
   | 'queued'
   | 'stale-context';
 
+/**
+ * 主 renderer 与分离侧栏 renderer 切换宿主时双向交接的内存态 tab 快照。
+ *
+ * 只用于 persistable=false 的 session。普通本地 session 的权威来源仍是
+ * SQLite，避免用子窗口里可能过期的 renderer 快照覆盖持久化真相。
+ */
+export interface RsbWindowTabSnapshot {
+  sessionId: string;
+  tabs: Array<{ id: string; kind: string; state: unknown }>;
+  activeTabId: string | null;
+  persistable: boolean;
+}
+
+export interface RsbWindowTabHandoff {
+  snapshots: RsbWindowTabSnapshot[];
+}
+
 // ── 预热/就绪/隐藏复用 IPC channel 常量 ──────────────────────────────
 // renderer → main(invoke)：轻量窗口根组件已经挂载(Renderer shell 可展示)。
 export const RSB_WINDOW_RENDERER_READY_CHANNEL = 'rsb-window:renderer-ready';
@@ -121,3 +143,5 @@ export const RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL = 'rsb-window:visibility-chan
 // renderer → main(invoke)：子窗口请求刷新 context(从 main 缓存拉最新值)。
 export const RSB_WINDOW_REFRESH_CONTEXT_CHANNEL = 'rsb-window:refresh-context';
 export const RSB_WINDOW_LOCALE_CHANGED_CHANNEL = 'rsb-window:locale-changed';
+/** main → 主 renderer：合并前交接不可持久化 session 的 tab 快照。 */
+export const RSB_WINDOW_TAB_HANDOFF_CHANNEL = 'maker:rsb-window:tab-handoff';

@@ -20,17 +20,19 @@ import {
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
+  ghostPermissionProjectionFingerprint,
+  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
   isOfficialGhostId,
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
-  unreviewedGhostPermissionItems,
   parseGhostPartition,
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
 } from '../ghost';
@@ -342,6 +344,152 @@ describe('ghost · 清单校验', () => {
       ...goodManifest(),
       locales: { en: 'locales/en.json', 'zh-TW': 'locales/zh-TW.json' },
     }).ok).toBe(false);
+  });
+
+  it('无 manual 时保持 origin/main 的 locale 路径兼容语义', () => {
+    expect(
+      validateGhostManifest({
+        ...goodManifest(),
+        entry: 'assets/main.js',
+        locales: { en: 'assets/main.js/en.json' },
+      }).ok,
+    ).toBe(true);
+
+    expect(
+      validateGhostManifest({
+        ...goodManifest(),
+        slots: ['panel', 'skill'],
+        locales: { en: 'skills/helper.json' },
+        skill: {
+          items: [
+            {
+              dir: 'skills/helper.json/subskill',
+              name: 'helper',
+              description: 'Help with example tasks.',
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('有 manual 时拒绝 manual 目录与 locale 路径任一方向嵌套', () => {
+    const withPaths = (localePath: string, manualDir: string) =>
+      validateGhostManifest({
+        ...goodManifest(),
+        locales: { en: localePath },
+        manual: {
+          items: [{ dir: manualDir, name: 'guide', description: 'Manual guide.' }],
+        },
+      });
+
+    expect(withPaths('manual/guide/en.json', 'manual/guide').ok).toBe(false);
+    expect(withPaths('content/en.json', 'content/en.json/manual').ok).toBe(false);
+  });
+
+  it('有意允许不同逻辑名称的 manual 单元使用祖先/后代目录', () => {
+    const items = [
+      { dir: 'manual', name: 'overview', description: 'Overview.' },
+      { dir: 'manual/advanced', name: 'advanced', description: 'Advanced topics.' },
+    ];
+
+    expect(validateGhostManifest({ ...goodManifest(), manual: { items } })).toMatchObject({
+      ok: true,
+      manifest: expect.objectContaining({ manual: { items } }),
+    });
+  });
+
+  it('manual 目录与声明文件路径任一方向嵌套时拒绝', () => {
+    const withManual = (manifest: Record<string, unknown>, dir: string) =>
+      validateGhostManifest({
+        ...manifest,
+        manual: { items: [{ dir, name: 'guide', description: 'Manual guide.' }] },
+      });
+    const declaredFileCases: Array<{
+      label: string;
+      manifest: Record<string, unknown>;
+      dir: string;
+    }> = [
+      { label: 'ghost.json', manifest: goodManifest(), dir: 'ghost.json' },
+      {
+        label: 'entry',
+        manifest: { ...goodManifest(), entry: 'manual/entry/main.js' },
+        dir: 'manual/entry',
+      },
+      {
+        label: 'icon',
+        manifest: { ...goodManifest(), icon: 'manual/icon/icon.png' },
+        dir: 'manual/icon',
+      },
+      {
+        label: 'settingsHtml',
+        manifest: { ...goodManifest(), settingsHtml: 'manual/settings/settings.html' },
+        dir: 'manual/settings',
+      },
+      {
+        label: 'panel.html',
+        manifest: {
+          ...goodManifest(),
+          panel: {
+            title: 'Hello',
+            html: 'manual/panel/panel.html',
+            minWidth: 240,
+            defaultFraction: 0.18,
+          },
+        },
+        dir: 'manual/panel',
+      },
+      {
+        label: 'node.entry',
+        manifest: {
+          ...goodManifest(),
+          slots: ['panel', 'node'],
+          node: { entry: 'manual/node/main.cjs', protocol: 'mcp-stdio' },
+        },
+        dir: 'manual/node',
+      },
+      {
+        label: 'node.entries',
+        manifest: {
+          ...goodManifest(),
+          slots: ['panel', 'node'],
+          node: {
+            entry: 'node/main.cjs',
+            entries: ['manual/node-extra/child.cjs'],
+            protocol: 'mcp-stdio',
+          },
+        },
+        dir: 'manual/node-extra',
+      },
+    ];
+
+    for (const { label, manifest, dir } of declaredFileCases) {
+      expect(withManual(manifest, dir), label).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('与插件声明文件路径'),
+      });
+    }
+
+    expect(
+      withManual({ ...goodManifest(), entry: 'assets/main.js' }, 'assets/main.js/manual'),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与插件声明文件路径'),
+    });
+    expect(
+      withManual({ ...goodManifest(), entry: 'Manual/Case/main.js' }, 'manual/case'),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与插件声明文件路径'),
+    });
+    expect(withManual({ ...goodManifest(), entry: 'src/main.js' }, 'manual/guide')).toMatchObject({
+      ok: true,
+      manifest: expect.objectContaining({
+        manual: {
+          items: [{ dir: 'manual/guide', name: 'guide', description: 'Manual guide.' }],
+        },
+      }),
+    });
   });
 
   it('locale description / whenToUse 共用本地协议包字符上限', () => {
@@ -2349,6 +2497,26 @@ describe('ghost · setup 就绪声明校验(使用前置检查,2026-07-21)', () 
     });
   });
 
+  it('Host 标准化清单可重复校验，但作者入口仍拒绝内部 setup 格式', () => {
+    const parsed = validateGhostManifest({
+      ...setupBase(),
+      setup: {
+        requires: [
+          { anyOf: ['secret:api_key_a'] },
+          { anyOf: ['connection:inst_conn', { kv: 'default_repo', label: '默认仓库' }] },
+        ],
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    expect(validateGhostManifest(parsed.manifest).ok).toBe(false);
+    const repeated = validateNormalizedGhostManifest(parsed.manifest);
+    expect(repeated.ok).toBe(true);
+    if (!repeated.ok) return;
+    expect(repeated.manifest).toEqual(parsed.manifest);
+  });
+
   it('不声明 setup 时清单不带该字段(缺省走宿主启发式)', () => {
     const result = validateGhostManifest(setupBase());
     expect(result.ok).toBe(true);
@@ -2610,6 +2778,42 @@ describe('ghost · network 详单校验', () => {
     ]) {
       expect(validateGhostManifest(withUrl(bad)).ok, String(bad)).toBe(false);
     }
+  });
+
+  it('ghostExternalLinkUrls 同时聚合 network secret 与 node secret binding 地址', () => {
+    const parsed = validateGhostManifest({
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'network', 'node'],
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            ...goodSecret(),
+            url: 'https://network.example.com/settings/keys',
+          },
+        ],
+      },
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'worker_token',
+            label: 'Worker Token',
+            methods: ['worker/run'],
+            url: 'https://node.example.com/settings/keys',
+          },
+        ],
+      },
+    });
+
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    if (!parsed.ok) return;
+    expect(ghostExternalLinkUrls(parsed.manifest)).toEqual([
+      'https://network.example.com/settings/keys',
+      'https://node.example.com/settings/keys',
+    ]);
   });
 
   it('secrets.source:login-email 收入清单;user 归一化省略;野值拒;login-email 带 url 拒', () => {
@@ -3874,5 +4078,85 @@ describe('ghost · skill 槽(捆绑 Agent Skills,2026-07-25)', () => {
     expect(diff.added.map((i) => i.key)).toContain('skill:alpha');
     expect(diff.removed.map((i) => i.key)).toContain('skill:alpha');
     expect(diff.unchanged.map((i) => i.key)).not.toContain('skill:alpha');
+  });
+});
+
+describe('ghostPermissionProjectionFingerprint', () => {
+  it('same-key/different-labelArgs 同时作废 baseline、diff 与真实包复核', () => {
+    const reviewed = validateGhostManifest({
+      ...goodChipManifest(),
+      panel: { title: '已审阅面板', html: 'panel.html', minWidth: 240 },
+    });
+    const actual = validateGhostManifest({
+      ...goodChipManifest(),
+      panel: { title: '实际下载面板', html: 'panel.html', minWidth: 240 },
+    });
+    expect(reviewed.ok && actual.ok).toBe(true);
+    if (!reviewed.ok || !actual.ok) return;
+
+    expect(ghostPermissionBaselineKey(reviewed.manifest)).not.toBe(
+      ghostPermissionBaselineKey(actual.manifest),
+    );
+    const diff = diffGhostPermissionItems(reviewed.manifest, actual.manifest);
+    expect(diff.added).toEqual([
+      expect.objectContaining({ key: expect.stringMatching(/^panel:/) }),
+    ]);
+    expect(diff.removed).toEqual([
+      expect.objectContaining({ key: expect.stringMatching(/^panel:/) }),
+    ]);
+    expect(diff.unchanged.some((item) => item.key.startsWith('panel:'))).toBe(false);
+    expect(
+      unreviewedGhostPermissionItems(reviewed.manifest, undefined, actual.manifest),
+    ).toEqual([expect.objectContaining({ key: expect.stringMatching(/^panel:/) })]);
+  });
+
+  it('same-key/different-detail 必须判不同(preview hosts / 工具描述都在 detail 侧)', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'preview'],
+      preview: { hosts: ['*.example.dev', 'localhost'] },
+    };
+    const a = validateGhostManifest(base);
+    // 同一个 key(preview 的 key 不随 hosts 变),hosts 换成别的域 —— 用户在确认卡
+    // 看到的授权范围完全不同,只比 key 的旧判据放行,指纹必须拒。
+    const b = validateGhostManifest({
+      ...base,
+      preview: { hosts: ['evil.example.com'] },
+    });
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    const keysA = ghostPermissionItems(a.manifest).map((i) => i.key).sort();
+    const keysB = ghostPermissionItems(b.manifest).map((i) => i.key).sort();
+    expect(keysA).toEqual(keysB); // 前提成立:key 集相同
+    expect(ghostPermissionProjectionFingerprint(a.manifest)).not.toBe(
+      ghostPermissionProjectionFingerprint(b.manifest),
+    );
+
+    // 工具描述(作者自由文本,经 detail 展示)漂移同样必须判不同。
+    const toolBase = {
+      ...goodChipManifest(),
+      slots: ['panel', 'model', 'tool'],
+      tools: [{ name: 'do_thing', description: '做点事' }],
+    };
+    const toolA = validateGhostManifest(toolBase);
+    const toolB = validateGhostManifest({
+      ...toolBase,
+      tools: [{ name: 'do_thing', description: '现在顺便读取你的邮箱' }],
+    });
+    expect(toolA.ok && toolB.ok).toBe(true);
+    if (!toolA.ok || !toolB.ok) return;
+    expect(ghostPermissionProjectionFingerprint(toolA.manifest)).not.toBe(
+      ghostPermissionProjectionFingerprint(toolB.manifest),
+    );
+  });
+
+  it('语义相同时指纹稳定(与字段/条目顺序无关)', () => {
+    const a = validateGhostManifest(goodChipManifest());
+    const b = validateGhostManifest(JSON.parse(JSON.stringify(goodChipManifest())));
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(ghostPermissionProjectionFingerprint(a.manifest)).toBe(
+      ghostPermissionProjectionFingerprint(b.manifest),
+    );
   });
 });

@@ -120,23 +120,18 @@ export const DL_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionar
 /**
  * 手机端拉取被控桌面的语音词典快照(只读)。
  *
- * 桌面之间的词典靠 push 帧对等同步,但手机在后台不维持 WebSocket、收不到 push,
- * 所以改为需要时主动拉一份。返回的是**只读投影**:词条文本 + 频次 + 别名,外加一个
+ * 桌面之间的词典靠 push 帧对等同步,手机不参与 CRDT 合并而只接收桌面主动推送的
+ * 只读投影;本 channel 保留作为旧版兼容和丢 push 时的主动刷新兜底。返回的是**只读投影**:
+ * 词条文本 + 频次 + 别名,外加一个
  * 版本向量(`stateVector`)供手机判断多台电脑的快照谁包含谁。化身、墓碑、抑制项、
  * 时钟都不外泄 —— 手机不参与合并,不持有可写状态,避免移动端词典分叉。
  *
  * 符合准入判据:不依赖 event.sender、无本机 UI 副作用、词典真相在被控端。
  *
- * ## 已知限制:与电脑之间的同步不一致
- *
- * invoke 属于 relay 的 CONTROL_KINDS,转发前会校验目标的 remoteControlEnabled;
- * 而电脑之间的词典同步走 push,不受该开关限制。结果是同一个功能有两套前提:用户
- * 开了「词典同步」后电脑之间就通了,手机却还要额外打开「允许同账号设备控制本机」
- * ——那个开关的语义是「允许别人操作我」,和「读一份词典」并不对应,用户撞上时基本
- * 猜不到该去开什么。
- *
- * 后续可改为推送:桌面在 presence 看到手机上线时主动 push 只读投影,零配置且与
- * 电脑之间同一条通道;本 channel 保留作为手机主动刷新的兜底。
+ * invoke 仍属于 relay 的 CONTROL_KINDS,转发前会校验目标的 remoteControlEnabled;
+ * 因此新版本优先使用独立的只读 push 快照通道,即使桌面关闭「允许被控」也能查看词典。
+ * 本 channel 保留用于旧版桌面兼容和 push 丢失后的主动刷新,不能把 REMOTE_DISABLED
+ * 当成“真的没有词条”。
  */
 export const DL_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
 
@@ -193,6 +188,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:set-effort',
   'maker:set-permission-mode',
   'maker:set-fast-mode',
+  // Pi 本机模型思考开关。runtime-only，无 session 列；老被控端无 handler →
+  // CHANNEL_NOT_ALLOWED，控制端按 capabilities.thinkingToggle 隐藏入口。
+  'maker:set-thinking-enabled',
   // 计划模式一级开关(runtime-only, 持久化经 dispatch persistRemoteSetting 回流)。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
@@ -231,6 +229,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // GET 只读 main 内存镜像；APPLY 只更新该 repo 的 future-session 偏好，不执行 git/fs。
   'maker:get-new-maker-worktree-branch-pref',
   'maker:apply-new-maker-worktree-branch-pref',
+  // 被控端侧栏项目顺序(显示偏好,真相在被控端 Main)。GET 只读;APPLY 写被控端
+  // owner 作用域快照。不用 `:set` 后缀(全局设置写禁模式)。老被控端无 handler
+  // → CHANNEL_NOT_ALLOWED → 控制端吞掉,回退本机/按时间。
+  'sidebar-settings:get-project-order',
+  'sidebar-settings:apply-project-order',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
@@ -245,9 +248,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',
-  // Read-only indexed task search for the remote Composer @ palette. Older
-  // controlled clients reject this channel and the controller falls back to
-  // the bounded legacy sessions:list projection.
+  // Read-only indexed task search for the remote Composer @ palette and the
+  // controller sidebar task search. Older controlled clients reject this
+  // channel and the controller falls back to the bounded legacy sessions:list
+  // projection.
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
@@ -343,6 +347,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:project-automation:remove-schedule',
   // —— Orca 协同(Lead 控多 Worker;在被控端进程内编排)——
   'maker:worker:create',
+  'maker:worker:dispatch-ui-assignment',
   'maker:worker:list',
   'maker:worker:switch-focus',
   'maker:worker:idle',
@@ -377,6 +382,13 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  // Durable PI Subagent truth and process handles live on the data-owning device.
+  // Reads and exact controls must execute there; the controller must never fall
+  // back to its own pi-agent-home for a remote task.
+  'local-db:subagent-runs:list',
+  'local-db:subagent-runs:detail',
+  'local-db:subagent-runs:transcript',
+  'maker:pi-subagent:control',
   // —— Goal(目标模式;goal 状态机在被控端 GoalController 执行才有意义)——
   'maker:goal:set',
   'maker:goal:clear',
@@ -572,6 +584,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'local-db:messages:deleted',
   // 被控端 terminal error 落库脏信号:控制端据此把已加载历史的远程会话标脏,下次打开重拉。
   'local-db:session:error-persisted',
+  // 被控端项目手动顺序变化:控制端 / 手机首页按被控端正本重排。
+  'sidebar-settings:project-order-changed',
   // 被控端「当前 New Maker 草稿」全量变更:被控端草稿 effort/fast/选中 等任意变化时广播,
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →
   // topics.ts 的 ACCOUNT_CHANNELS 把它并入 `sessions` topic(控制端按设备订阅 sessions)。
@@ -620,6 +634,9 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 10min,压缩恰好到预算上限时会先 INVOKE_TIMEOUT,被误判为「设备无响应」并
   // 可能触发 peer-link 恢复(codex P2)——同 desktop-cmd:run 模式加 1min 余量。
   'maker:compact-session': 11 * 60_000,
+  // 被控端先等 Lead history 最多 30s，再 resume/queue Worker；默认 30s 会与服务端
+  // deadline 对撞，把边沿成功误报成 DEVICE_LINK_TIMEOUT。留出派发和回程余量。
+  'maker:worker:dispatch-ui-assignment': 65_000,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

@@ -62,10 +62,8 @@ interface Props {
   initialDeviceId?: string | null;
   /**
    * 当前 draft 选中的 agent(由父层的 VendorSegmentedSwitcher 决定,dialog 不选 vendor)。
-   * Pi 是本地专属 agent:startSession 拒绝任何 remoteHostId(见 agents/pi/index.ts),
-   * 所以选中 Pi 时把 SSH 主机从可选目标里过滤掉 —— 用户根本选不到会建出「起不来的 SSH
-   * 会话」的目标(codex review P1)。device-link 不受影响:被控端跑自己的本地 Pi 进程,
-   * 不经 SSH remoteHostId。
+   * 轮 35 CRITICAL:Pi 已支持 SSH 远端(startSession 全量支持 remoteHostId)——
+   * 不再按 vendor 过滤 SSH 主机。device-link 不受影响:被控端跑自己的本地 Pi 进程。
    */
   agentVendor?: MakerVendor;
   /** vendor 不在 dialog 里选 —— 由父层根据当前 draft / segmented switcher 决定。 */
@@ -90,8 +88,8 @@ export function AddRemoteProjectDialog({
   // SSH「已有项目」数据源:本地 active 会话(按 host 过滤,见 sshExistingProjects)。
   const { sessions } = useCCSessions();
 
-  // 选中 Pi 时排除 SSH 主机:Pi 不支持 remoteHostId,选中即建出起不来的会话。
-  const excludeSsh = agentVendor === 'pi';
+  // 轮 35 CRITICAL 移除:Pi 已支持 SSH 远端 —— 不再排除 SSH 主机。
+  const excludeSsh = false;
   const targets = useMemo<RemoteTarget[]>(() => {
     const ssh: RemoteTarget[] = excludeSsh
       ? []
@@ -328,7 +326,9 @@ export function AddRemoteProjectDialog({
 
   const noTargets = targets.length === 0;
   // Pi 过滤掉 SSH 后无任何可用目标时,通用空态提示「加个 SSH 主机」是误导(Pi 用不了 SSH)。
-  const emptyIsPiSshFiltered = noTargets && excludeSsh && sshHosts.length > 0;
+  // 轮 36:excludeSsh 恒 false(Pi 支持 SSH 远端), 该分支已不可达 —— 保留
+  // 变量为 false 简化下游(空态文案只走通用 empty)。
+  const emptyIsPiSshFiltered = false;
 
   return (
     <Dialog.Root open={open} onOpenChange={busy ? undefined : onOpenChange}>

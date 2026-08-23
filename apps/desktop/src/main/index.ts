@@ -94,6 +94,7 @@ const devFlags = resolveDevCliFlags({
   isPackaged: app.isPackaged,
   envUserDataDir: process.env.XDT_USER_DATA_DIR,
   defaultUserDataDir: app.getPath('userData'),
+  appDataDir: app.getPath('appData'),
   envIsolated: process.env.XDT_ISOLATED,
   envIsolationName: process.env.XDT_ISOLATED_NAME,
   envUserDataDirEpoch: process.env.XDT_USER_DATA_DIR_EPOCH,
@@ -101,6 +102,24 @@ const devFlags = resolveDevCliFlags({
   envSchedulerPassive: process.env.XDT_SCHEDULER_PASSIVE,
   envEndpointsCdn: process.env.XDT_ENDPOINTS_CDN,
 });
+if (devFlags.isolatedOnProductionProfile) {
+  // isolated 身份会换独立 deviceId；正式 profile 上的 refresh token 属于正式版设备。
+  // 两者叠在同一目录 = 必然 DEVICE_MISMATCH，再删盘会把正式版踢下线(2026-08-16)。
+  // 报实际目标目录：可能是当前区域，也可能是另一地区的正式 profile。
+  const targetDir = devFlags.userDataDirOverride ?? app.getPath('userData');
+  stderr.write(
+    `[cindy] FATAL: --isolated cannot use the official Cindy profile (${targetDir}). ` +
+      'Use the default sandbox, --isolated=<name>, or a directory that is not an official userData.\n',
+  );
+  exit(1);
+}
+if (!app.isPackaged && devFlags.profileKind === 'production-shared') {
+  // 正式 profile 上的 unpackaged writer 不得应用 pending migration。
+  // 已合入 main、但安装包还没带上的序号会把安装版打挂（2026-08-16 schema 91）。
+  process.env.XDT_OFFICIAL_SHARED_PROFILE = '1';
+} else {
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+}
 if (devFlags.schedulerPassive) {
   // 统一收敛到 env:scheduler-host 只认 XDT_SCHEDULER_PASSIVE,不重复解析 argv。
   process.env.XDT_SCHEDULER_PASSIVE = '1';
@@ -109,7 +128,7 @@ if (devFlags.schedulerPassive) {
 if (shouldEnforcePassiveMigrationCompatibility({
   isPackaged: app.isPackaged,
   schedulerPassive: devFlags.schedulerPassive,
-  isolated: devFlags.isolated,
+  profileKind: devFlags.profileKind,
 })) {
   // 内部启动契约：共享 userData 的 passive dev 只能打开与当前 checkout migration
   // 完全一致的数据库，且不得自行迁移。localDb 在用户数据库首次打开时消费本标记。
@@ -228,8 +247,12 @@ if (devFlags.needsIsolatedDeviceId) {
     mode,
     region: CURRENT_CINDY_REGION,
     passive: devFlags.schedulerPassive,
-    isolated: Boolean(devFlags.userDataDirOverride),
+    isolated: devFlags.profileKind === 'isolated-sandbox',
+    isolationIntent: devFlags.isolated,
+    profileKind: devFlags.profileKind,
   });
+  // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
+  process.once('exit', cleanupDevInstance);
   app.once('will-quit', cleanupDevInstance);
 }
 

@@ -21,15 +21,22 @@ export function useMacFullscreen(): { isMac: boolean; isFullscreen: boolean } {
   useEffect(() => {
     if (!isMac) return;
     let cancelled = false;
-    window.electronAPI?.getFullscreenState?.().then((fs) => {
-      if (!cancelled) setIsFullscreen(fs);
-    });
-    const unsub = window.electronAPI?.onFullscreenChange((fs: boolean) => {
-      setIsFullscreen(fs);
-    });
+    const api = window.electronAPI;
+    if (typeof api?.getFullscreenState === 'function') {
+      void api.getFullscreenState().then((fs) => {
+        if (!cancelled) setIsFullscreen(fs);
+      });
+    }
+    // Older packaged preload scripts (or a renderer/preload mismatch during an
+    // update) may expose a missing or incompatible fullscreen bridge. The layout
+    // can safely fall back to the non-fullscreen spacing; it must not crash.
+    const unsub =
+      typeof api?.onFullscreenChange === 'function'
+        ? api.onFullscreenChange((fs: boolean) => setIsFullscreen(fs))
+        : undefined;
     return () => {
       cancelled = true;
-      unsub?.();
+      if (typeof unsub === 'function') unsub();
     };
   }, [isMac]);
 

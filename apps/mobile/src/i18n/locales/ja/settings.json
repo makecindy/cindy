@@ -37,6 +37,14 @@
     "checkFailedDetail": "更新の確認に失敗しました：{{detail}}",
     "checkFailed": "更新の確認に失敗しました。しばらくしてからもう一度お試しください。"
   },
+  "betaChannel": {
+    "title": "Beta チャンネル",
+    "description": "Beta チャンネルに参加すると、今後のクライアント更新を先行して受け取れます。",
+    "restartHint": "Beta チャンネルは再起動後に反映されます。アプリを再起動してください。",
+    "ok": "わかりました",
+    "saveFailed": "Beta チャンネル設定の保存に失敗しました",
+    "unavailable": "Beta チャンネルは利用できません。Beta 更新サーバーに接続できませんでした。"
+  },
   "notifications": {
     "sectionTitle": "通知",
     "taskDone": "タスク完了通知",

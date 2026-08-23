@@ -4,6 +4,8 @@
  * sessionTaskSummary.ts;这里锁住档位选择 / sanitize 截断 / 定时识别 / 素材判定 /
  * 内容抽取这些后续最容易被改坏、而 typecheck·db-validate 覆盖不到的判定。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   STALE_DEMOTE_MS,
@@ -19,6 +21,12 @@ import {
   pickTier,
   maxCharsForTier,
   hasSummarizableMaterial,
+  shouldGeneratePinnedCardSummary,
+  shouldVoidSummaryAfterGenerationAttempt,
+  nonCardTurnDisplayPatch,
+  sessionListPreviewPatch,
+  shouldForceGenerateOnClear,
+  shouldScheduleForceGenerateAfterInFlight,
 } from '../sessionTaskSummary.logic';
 
 describe('pickTier — 距今时间为主轴的档位选择', () => {
@@ -98,6 +106,202 @@ describe('hasSummarizableMaterial — 空草稿跳过', () => {
   });
 });
 
+describe('shouldGeneratePinnedCardSummary', () => {
+  it('只在置顶 + 活跃 + 卡片模式时生成', () => {
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: 1,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: 1,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: null,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'archived',
+        pinnedAt: 1,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldVoidSummaryAfterGenerationAttempt', () => {
+  it('成功写回则留下,即使随后切出卡片', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: true,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(false);
+  });
+  it('仍在卡片模式则不因失败作废', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: false,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+  });
+  it('未写回且已切出卡片 → 作废旧句子', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: false,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('shouldForceGenerateOnClear', () => {
+  it('切回卡片且没有生成在飞 → 可以 force 再生成', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(true);
+  });
+  it('仍在列表 → 不生成', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: false,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(false);
+  });
+  it('生成尚未 settle 时不得再入,否则 await 同一条 inFlight 死锁', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldScheduleForceGenerateAfterInFlight', () => {
+  it('切回卡片且生成仍在飞 → 结算后再 force,不在当前栈 await', () => {
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(true);
+  });
+  it('空闲或仍在列表 → 不预约', () => {
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: false,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('nonCardTurnDisplayPatch', () => {
+  it('列表结算必须同时清摘要并带上最新 preview', () => {
+    expect(nonCardTurnDisplayPatch('刚完成的回复')).toEqual({
+      summary: null,
+      preview: '刚完成的回复',
+    });
+    expect(nonCardTurnDisplayPatch(null)).toEqual({
+      summary: null,
+      preview: null,
+    });
+  });
+});
+
+describe('sessionListPreviewPatch', () => {
+  it('只补最近消息,不动摘要', () => {
+    expect(sessionListPreviewPatch('那就对上了')).toEqual({ preview: '那就对上了' });
+    expect(sessionListPreviewPatch(null)).toEqual({ preview: null });
+  });
+});
+
+describe('turn-done list preview refresh', () => {
+  it('回合结束后先刷新列表预览,再按需生成置顶摘要', () => {
+    const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'register.ts'), 'utf8');
+    const summarySource = readFileSync(resolve(__dirname, '..', 'sessionTaskSummary.ts'), 'utf8');
+    expect(registerSource).toContain('await refreshSessionListPreview(session.id);');
+    expect(registerSource).toContain('await maybeGenerateSessionTaskSummary(session.id, { force: true });');
+    expect(registerSource.indexOf('await refreshSessionListPreview(session.id);')).toBeLessThan(
+      registerSource.indexOf('await maybeGenerateSessionTaskSummary(session.id, { force: true });'),
+    );
+    expect(summarySource).toContain('export async function refreshSessionListPreview');
+    expect(summarySource).toContain('const ownerScope = captureOwnerScope();');
+    expect(summarySource).toContain('if (!isOwnerScopeCurrent(ownerScope)) return;');
+    expect(summarySource).toContain(
+      'broadcastSessionListPreview(sessionId, preview, ownerScope);',
+    );
+    expect(summarySource).toContain(
+      "import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';",
+    );
+  });
+
+  it('助手正文被改写后也刷新列表预览', () => {
+    const messagesSource = readFileSync(
+      resolve(__dirname, '..', 'localDb', 'ipc', 'messages.ts'),
+      'utf8',
+    );
+    const latestSource = readFileSync(
+      resolve(__dirname, '..', 'localDb', 'latestMessageText.ts'),
+      'utf8',
+    );
+    const updateStart = messagesSource.indexOf('export async function updateMessageContent');
+    const updateEnd = messagesSource.indexOf('function clampLimit', updateStart);
+    const updateBlock = messagesSource.slice(updateStart, updateEnd);
+    expect(updateBlock).toContain('const ownerScope = captureOwnerBroadcastScope();');
+    expect(updateBlock.indexOf('const ownerScope = captureOwnerBroadcastScope();')).toBeLessThan(
+      updateBlock.indexOf('.update(messages)'),
+    );
+    expect(updateBlock).toContain(
+      'await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);',
+    );
+    const broadcastStart = messagesSource.indexOf(
+      'async function maybeBroadcastSessionListPreview',
+    );
+    const broadcastEnd = messagesSource.indexOf('function isAutoResumeUserRow', broadcastStart);
+    const broadcastBlock = messagesSource.slice(broadcastStart, broadcastEnd);
+    expect(broadcastBlock).toContain('latest = await latestVisiblePreviewRow(sessionId);');
+    expect(broadcastBlock).toContain('if (latest?.clientId !== row.clientId) return;');
+    expect(broadcastBlock).toContain(
+      'preview: extractMessagePreview(row.content, row.role)',
+    );
+    expect(broadcastBlock).not.toContain('if (!preview) return;');
+    expect(latestSource).toContain('export async function latestVisiblePreviewRow');
+    expect(latestSource).toContain(
+      'or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt))',
+    );
+    expect(latestSource).toContain('const joinedMessageRowid = sql<number>`"messages"."rowid"`;');
+    expect(latestSource).toContain(
+      '.orderBy(desc(messages.createdAt), desc(joinedMessageRowid))',
+    );
+    expect(latestSource).toContain(
+      "CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1",
+    );
+  });
+});
+
 describe('sanitize — 去噪 + 句界截断', () => {
   it('短文本原样(去引号/折叠空白)', () => {
     expect(sanitize('"生成海报。"', SUMMARY_MAX_CHARS)).toBe('生成海报。');
@@ -151,15 +355,17 @@ describe('extractText — messages.content JSON → 纯文本', () => {
     const raw = JSON.stringify({
       text,
       quotesEncoded: true,
-      agentReferences: [{
-        kind: 'message',
-        start: text.indexOf(href),
-        end: text.indexOf(href) + href.length,
-        href,
-        sessionId: 'session-a',
-        messageClientId: 'message-a',
-        text: 'Target message body',
-      }],
+      agentReferences: [
+        {
+          kind: 'message',
+          start: text.indexOf(href),
+          end: text.indexOf(href) + href.length,
+          href,
+          sessionId: 'session-a',
+          messageClientId: 'message-a',
+          text: 'Target message body',
+        },
+      ],
     });
 
     const projected = extractText(raw, 'user');

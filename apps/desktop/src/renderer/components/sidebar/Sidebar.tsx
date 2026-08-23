@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 
 import type { SidebarPeekDrawerProps, SidebarPeekState } from '@/hooks/useSidebarPeek';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
-import { useFeatureSidebarUpper } from '@/features/feature-context';
+import { useFeatureSidebarUpper, useOwnsTopNavScrollableRows } from '@/features/feature-context';
 import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
@@ -45,6 +45,8 @@ interface SidebarProps {
   width?: number;
   /** Whether the user is currently dragging the resize handle. */
   isDragging?: boolean;
+  /** Keep feature state mounted while the sidebar remains visually hidden. */
+  forceMountFeatureContent?: boolean;
   /** Pointer-down handler for the resize handle. */
   onDragStart?: (e: React.PointerEvent) => void;
   /** Double-click handler to reset width to default. */
@@ -73,6 +75,7 @@ export function Sidebar({
   isRail = false,
   width,
   isDragging,
+  forceMountFeatureContent = false,
   onDragStart,
   onResetWidth,
   onOpenUpdateNotice,
@@ -81,6 +84,8 @@ export function Sidebar({
   peekDrawerProps,
 }: SidebarProps) {
   const upperContent = useFeatureSidebarUpper();
+  // 当前 Feature 是否自行渲染顶部导航的可滚动段(见 feature-context)。
+  const ownsTopNavScrollableRows = useOwnsTopNavScrollableRows();
   const { t } = useTranslation();
   // 顶部 chrome 行的 no-drag 洞要对齐 ChromeActions 浮层按钮簇的落点：
   // 按钮簇钉死左上角(mac 非全屏 78 让位红绿灯,其余 8),不随侧栏状态移动,
@@ -96,8 +101,11 @@ export function Sidebar({
   const isPeek = peekState != null;
   // 副窗口默认完全隐藏侧栏。此时不挂载任务列表及其搜索 Provider，避免开窗
   // 首帧为了不可见内容发起两份大列表查询；展开、rail 与 peek 都仍需完整内容。
+  // 新建任务页会强制保留 feature owner：目录恢复必须原子更新该 renderer 的
+  // hidden snapshot 与 Project filter，不能退回跨窗口共享存储的无 owner 读改写。
   // 主窗口保持原有常驻挂载语义，避免改变切换与缓存体验。
-  const shouldMountFeatureContent = !isSecondaryWindow() || !isCollapsed || isPeek;
+  const shouldMountFeatureContent =
+    forceMountFeatureContent || !isSecondaryWindow() || !isCollapsed || isPeek;
 
   // 离开 peek 的交换帧必须禁用宽度过渡:peekClosing → idle(收起)时,aside 带着
   // 上一帧的 width=展开宽 回流为流内 width=0,若 transition-[width] 还挂着,这次
@@ -113,14 +121,14 @@ export function Sidebar({
   // 拖拽中宽度直接跟手（useHorizontalResize 已把下限放宽到 railWidth）。
   // peek 抽屉恒用展开宽 —— peek 的语义就是「预览完整展开列表」。
   const visualWidth = isPeek
-    ? width ?? 260
+    ? (width ?? 260)
     : isCollapsed
       ? 0
       : isDragging
-        ? width ?? 260
+        ? (width ?? 260)
         : isRail
           ? RAIL_WIDTH
-          : width ?? 260;
+          : (width ?? 260);
 
   // 内容层宽度:与 visualWidth 唯一的区别是**收起态不归零** —— 收起/展开动画期间
   // 内容保持展开宽度被 aside 的 overflow-hidden 从右侧裁切,而不是跟随 aside 宽度
@@ -128,12 +136,12 @@ export function Sidebar({
   // 对齐 Codex 的「文字淡出的同时侧栏收起」手感(2026-07 用户定稿;与右栏
   // RightSidebar 的定宽内容层同一套路,规则 7)。
   const contentWidth = isPeek
-    ? width ?? 260
+    ? (width ?? 260)
     : isDragging
-      ? width ?? 260
+      ? (width ?? 260)
       : isRail
         ? RAIL_WIDTH
-        : width ?? 260;
+        : (width ?? 260);
 
   return (
     <aside
@@ -178,7 +186,7 @@ export function Sidebar({
         )}
         style={{ width: contentWidth }}
       >
-      {/* Top chrome 行: Sidebar 通顶后窗口左上角的空白 chrome 行（Codex 风格）。
+        {/* Top chrome 行: Sidebar 通顶后窗口左上角的空白 chrome 行（Codex 风格）。
           - mac 非全屏：红绿灯悬浮在本行左侧。
           - 折叠 + 菜单按钮**不在本行** —— 它们是 MainLayout 的 ChromeActions
             浮层（浮在本行之上），钉死左上角红绿灯旁,不随侧栏状态移动。
@@ -187,56 +195,58 @@ export function Sidebar({
             上可靠生效，浮层自身的 no-drag 不算数）。洞与按钮簇同坐标:
             mac 非全屏 78（红绿灯右侧）,mac 全屏 / Windows 8。
           - 不画下边框 —— 顶行与列表区是一块连续表面（对齐 Codex）。 */}
-      <div
-        // 46px 与 ContentHeader / ChromeActions 行高一致(红绿灯心 y=23 同轴)。
-        className="flex h-[46px] w-full shrink-0 items-center"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      >
         <div
-          aria-hidden
-          // 60px = 折叠按钮 28 + gap 4 + 菜单 28(ChromeActions 簇宽)。
-          className="h-full shrink-0"
-          style={
-            {
-              width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
-              marginLeft: chromeClusterX,
-              WebkitAppRegion: 'no-drag',
-            } as React.CSSProperties
-          }
-        />
-      </div>
+          // 46px 与 ContentHeader / ChromeActions 行高一致(红绿灯心 y=23 同轴)。
+          className="flex h-[46px] w-full shrink-0 items-center"
+          style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        >
+          <div
+            aria-hidden
+            // 60px = 折叠按钮 28 + gap 4 + 菜单 28(ChromeActions 簇宽)。
+            className="h-full shrink-0"
+            style={
+              {
+                width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                marginLeft: chromeClusterX,
+                WebkitAppRegion: 'no-drag',
+              } as React.CSSProperties
+            }
+          />
+        </div>
 
-      {/* ConversationSearchProvider:在顶部导航行(SidebarTopNav 的「搜索」行)与功能槽
+        {/* ConversationSearchProvider:在顶部导航行(SidebarTopNav 的「搜索」行)与功能槽
           (CCAgentSidebarUpper 的结果 overlay)这两个兄弟子树的共同祖先处,只实例化一次
           会话搜索状态,经 context 共享。外壳本身仍不感知搜索细节,只负责放置 Provider。 */}
-      {shouldMountFeatureContent && (
-        <ConversationSearchProvider>
-          {/* 顶部常驻动作/导航列表(新建 / 自动任务 / Skill / 搜索)。
+        {shouldMountFeatureContent && (
+          <ConversationSearchProvider>
+            {/* 顶部常驻动作/导航列表(新建 / 自动任务 / Skill / 搜索)。
               取代原 HorizontalTabbar:同级等权列表行,无单独项目 Tab。
               rail（收窄）态放不下,隐藏——rail 自身承担入口;展开后回归。
               完全隐藏态 w-0 自然裁掉。 */}
-          {!isRail && <SidebarTopNav />}
+            {/* 任务列表页把「新建」以外的行搬进自己的列表滚动区(向上滚一起滚走,
+              对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染常驻行。 */}
+            {!isRail && <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />}
 
-          {/* Upper: feature-injected content slot.
+            {/* Upper: feature-injected content slot.
               The current Feature Layout injects either an expanded or collapsed
               sidebar tree through the FeatureSidebarSlotContext. Shell renders
               whatever it's given. If no feature is active (e.g. /settings with
               the intentionally empty SettingsSidebarUpper), this simply leaves
               the upper area blank. */}
-          <div className="flex flex-1 flex-col overflow-hidden">{upperContent}</div>
-        </ConversationSearchProvider>
-      )}
+            <div className="flex flex-1 flex-col overflow-hidden">{upperContent}</div>
+          </ConversationSearchProvider>
+        )}
 
-      {/* Update banner: shown only when a verified update is ready
+        {/* Update banner: shown only when a verified update is ready
           peek 抽屉视同展开(否则横幅在抽屉里消失,与「预览完整列表」语义相悖)。 */}
-      <UpdateBanner
-        isCollapsed={(isCollapsed && !isPeek) || isRail}
-        onOpenVersionNotice={onOpenVersionNotice}
-      />
+        <UpdateBanner
+          isCollapsed={(isCollapsed && !isPeek) || isRail}
+          onOpenVersionNotice={onOpenVersionNotice}
+        />
 
-      {/* Bottom: User info (Shell-level, shared across all features)
+        {/* Bottom: User info (Shell-level, shared across all features)
           isCollapsed 在这里表达"窄布局"（rail 居中头像）；完全隐藏态 w-0 整体裁掉。 */}
-      <UserInfoSection isCollapsed={isRail} onOpenUpdateNotice={onOpenUpdateNotice} />
+        <UserInfoSection isCollapsed={isRail} onOpenUpdateNotice={onOpenUpdateNotice} />
       </div>
 
       {/* Resize handle — expanded 和 rail 态都保留（rail 靠拖拽进出，F1 / F6）。

@@ -40,6 +40,8 @@ import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resourc
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
+  AgentSessionTeardownOptions,
+  AgentSessionTeardownReason,
   BaseAgent,
   StartSessionOptions,
   OneShotOptions,
@@ -107,12 +109,23 @@ export interface MakerDeps {
    * (即跟改造前行为一致, native auto-memory 走自家)。
    */
   makerMemory?: MakerMemoryManager;
+  /**
+   * 可选: 视觉桥钩子（层 B）的全局默认。host 创建 Maker 时注入一次，所有
+   * createSession 自动带上；单个 createSession 的 visionBridge 优先。缺省不注入 =
+   * 零干扰（见 docs/vision-bridge-design.md 层 B）。
+   */
+  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
   agentKind: AgentKind;
   /** 可选：UI 显示用 */
   title?: string;
+  /**
+   * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在把用户贴图交给 agent 前
+   * 用视觉模型转成文字描述（见 docs/vision-bridge-design.md 层 B）。缺省不注入 = 零干扰。
+   */
+  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /** 可选：父会话 id，用于 fork / orchestration 等会话关系。 */
   parentSessionId?: string;
   /**
@@ -162,7 +175,12 @@ function canonicalPiRuntimePath(value: string): string {
   }
 }
 
-const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 250;
+// Windows realpath/stat calls can legitimately take longer than 250 ms under
+// concurrent CI or endpoint scanning even for a tiny skill tree. Keep the
+// entry budget as the complexity bound, but give the fail-closed fingerprint
+// enough wall-clock time to preserve an unchanged launch snapshot's loaded
+// status across supported platforms.
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 1_000;
 const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET = 2_048;
 
 async function fingerprintPiProjectSkillForPalette(
@@ -189,7 +207,34 @@ async function mergePiRuntimeSkillStatuses(
   result: ListAgentSkillsResult,
   manifest: PiRuntimeCapabilityManifest | undefined,
 ): Promise<ListAgentSkillsResult> {
-  if (manifest?.status !== 'loaded') return result;
+  // The global managed-package store can change while a task is running. An
+  // active Pi task must expose only its launch-time roster, never a fresh scan
+  // that makes a newly installed or renamed skill look executable mid-session.
+  const currentManagedSkills = result.skills.filter((skill) => skill.runtimeStatus === 'approved');
+  const nonManagedSkills = result.skills.filter((skill) => skill.runtimeStatus !== 'approved');
+  const managedSnapshot = manifest?.managedPackageSkills;
+  const managedSkills = managedSnapshot
+    ? managedSnapshot.map((skill) => ({
+        kind: 'agent-skill' as const,
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        source: 'skill' as const,
+        path: skill.sourcePath,
+        scope: 'user' as const,
+        enabled: true,
+        runtimeStatus: skill.runtimeCommandName ? 'loaded' as const : 'unknown' as const,
+        ...(skill.runtimeCommandName ? { runtimeCommandName: skill.runtimeCommandName } : {}),
+      }))
+    : currentManagedSkills.map((skill) => ({
+        ...skill,
+        runtimeStatus: 'unknown' as const,
+        runtimeCommandName: undefined,
+      }));
+  const sessionResult: ListAgentSkillsResult = {
+    ...result,
+    skills: [...nonManagedSkills, ...managedSkills],
+  };
+  if (manifest?.status !== 'loaded') return sessionResult;
   const loadedExplicitSkills = new Map<string, string>();
   const loadedLegacyProjectSkills = new Map<string, string>();
   const changedProjectSkills = new Map<string, string>();
@@ -242,14 +287,14 @@ async function mergePiRuntimeSkillStatuses(
     loadedExplicitSkills.size === 0
     && loadedLegacyProjectSkills.size === 0
     && changedProjectSkills.size === 0
-  ) return result;
+  ) return sessionResult;
   const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
     path: skillPath,
     message: 'Project skill changed after this Pi session started; restart the session to load the current version.',
   }));
   return {
-    ...result,
-    skills: result.skills.map((skill) => {
+    ...sessionResult,
+    skills: sessionResult.skills.map((skill) => {
       let runtimeCommandName: string | undefined;
       if (skill.scope === 'repo' && skill.path) {
         const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
@@ -266,7 +311,7 @@ async function mergePiRuntimeSkillStatuses(
         : skill;
     }),
     ...(changedSkillErrors.length > 0
-      ? { errors: [...(result.errors ?? []), ...changedSkillErrors] }
+      ? { errors: [...(sessionResult.errors ?? []), ...changedSkillErrors] }
       : {}),
   };
 }
@@ -295,6 +340,25 @@ interface CodexThreadClaimLease {
   release(): void;
 }
 
+/**
+ * What `Maker.shutdown` could not tear down.
+ *
+ * Additive and, until now, unobservable: shutdown collected per-session detach
+ * failures, logged them, and resolved anyway. A caller that hands the runtime to
+ * a different owner afterwards needs to know, because a PI session whose detach
+ * threw may still have a live process — and that process owns durable Subagent
+ * children holding BYOM credentials the outgoing account cannot revoke.
+ */
+export interface MakerShutdownReport {
+  sessionFailures: Array<{ sessionId: string; agentKind: AgentKind; error: unknown }>;
+}
+
+interface FailedHandleCleanup {
+  handle: AgentSessionHandle;
+  promise: Promise<void> | null;
+  onCleaned?: () => void;
+}
+
 export class Maker {
   protected readonly agents: Partial<Record<AgentKind, BaseAgent>>;
   protected readonly storage: SessionStorage;
@@ -311,6 +375,15 @@ export class Maker {
     string,
     { promise: Promise<Session> }
   >();
+  /** All create paths, including anonymous ids, that may still publish or quarantine a handle. */
+  private readonly pendingSessionCreations = new Set<Promise<Session>>();
+  /** Once shutdown starts, no new handle may race past its creation barrier. */
+  private shutdownStarted = false;
+  /**
+   * startSession 已返回、但 Session 尚未发布时 cleanup 失败的 handle。后续同 id
+   * create 必须先把它确认关闭，不能丢失所有权后再 spawn 一个并存进程。
+   */
+  private readonly failedHandleCleanups = new Map<string, FailedHandleCleanup>();
   /**
    * Codex 0.145 会忽略已加载 thread 的 thread/resume.config。不同 Cindy task
    * 若同时复用同一 native thread，后启动者会继续使用前一 Session 的 MCP URL，
@@ -329,10 +402,13 @@ export class Maker {
   private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
   public readonly makerMemory: MakerMemoryManager | undefined;
+  /** 视觉桥钩子（层 B）全局默认（可选）。见 MakerDeps.visionBridge。 */
+  protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
     this.storage = deps.storage;
+    this.visionBridge = deps.visionBridge;
     // 不 child 自己名字 — host 传进来的 logger 通常已经命名(如 'maker'),
     // 再 child 'maker' 会变成 'maker/maker'。host 自己决定 root scope 名字。
     this.logger = deps.logger;
@@ -399,6 +475,29 @@ export class Maker {
     };
   }
 
+  private async retryFailedHandleCleanup(
+    sessionId: string,
+    expectedEntry?: FailedHandleCleanup,
+  ): Promise<void> {
+    const entry = this.failedHandleCleanups.get(sessionId);
+    if (!entry || (expectedEntry && entry !== expectedEntry)) return;
+    // Startup-failure rollback, not an ownership change.
+    const cleanup = entry.promise ?? entry.handle.close({ reason: 'navigation' });
+    entry.promise = cleanup;
+    try {
+      await cleanup;
+    } catch (error) {
+      if (this.failedHandleCleanups.get(sessionId) === entry && entry.promise === cleanup) {
+        entry.promise = null;
+      }
+      throw error;
+    }
+    if (this.failedHandleCleanups.get(sessionId) === entry) {
+      this.failedHandleCleanups.delete(sessionId);
+      entry.onCleaned?.();
+    }
+  }
+
   /**
    * 创建一个新会话。
    *
@@ -407,8 +506,27 @@ export class Maker {
    * 继续聊"以及多个后台入口同时恢复同一会话的场景。
    */
   async createSession(opts: CreateSessionOptions): Promise<Session> {
+    if (this.shutdownStarted) {
+      throw new Error('Maker is shutting down; refusing to create a new session');
+    }
+    const creation = this.createSessionWhileRunning(opts);
+    this.pendingSessionCreations.add(creation);
+    try {
+      return await creation;
+    } finally {
+      this.pendingSessionCreations.delete(creation);
+    }
+  }
+
+  private async createSessionWhileRunning(opts: CreateSessionOptions): Promise<Session> {
     if (!opts.id) {
       return this.createSessionOnce(opts);
+    }
+
+    // Any handle that failed cleanup before publication still owns this
+    // business id. Confirm its shutdown before checking/starting live state.
+    if (this.failedHandleCleanups.has(opts.id)) {
+      await this.retryFailedHandleCleanup(opts.id);
     }
 
     // 进程内已经活着或正在启动的 session, 直接复用 (避免 spawn 第二个 SDK)。
@@ -523,7 +641,7 @@ export class Maker {
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
         onInvalidResumeSession:
-          opts.agentKind === 'claude-code'
+          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
             ? (expectedSdkSessionId) =>
                 this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
             : undefined,
@@ -546,7 +664,7 @@ export class Maker {
         }
       } catch (error) {
         try {
-          await handle.close();
+          await handle.close({ reason: 'navigation' });
         } catch (closeError) {
           this.logger.warn('failed to close Codex handle after thread claim conflict', {
             sessionId: id,
@@ -591,15 +709,28 @@ export class Maker {
         });
       }
     } catch (error) {
-      if (codexThreadClaim) {
-        try {
-          await handle.close();
-        } catch (closeError) {
-          this.logger.warn('failed to close Codex handle after session storage failure', {
-            sessionId: id,
-            error: String(closeError),
-          });
-        }
+      // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage
+      // 写失败时, 已启动的 agent handle(PI 远端 daemon session / CC / Codex)必须
+      // close, 否则 PI 无 codexThreadClaim 时 handle 不关, 远端 pi-manager session/
+      // MCP bridge 残留成「用户看不到、Maker 管不到」的半创建状态。
+      let cleanupFailed = false;
+      try {
+        await handle.close({ reason: 'navigation' });
+      } catch (closeError) {
+        cleanupFailed = true;
+        this.failedHandleCleanups.set(id, {
+          handle,
+          promise: null,
+          ...(codexThreadClaim
+            ? { onCleaned: () => codexThreadClaim?.release() }
+            : {}),
+        });
+        this.logger.warn('failed to close agent handle after session storage failure', {
+          sessionId: id,
+          error: String(closeError),
+        });
+      }
+      if (!cleanupFailed && codexThreadClaim) {
         codexThreadClaim.release();
       }
       throw error;
@@ -640,6 +771,8 @@ export class Maker {
       // 透传 remoteHostId 让 host 层在 hot path 上能 O(1) 判 local/remote
       // (不用每次 send 回 DB 读 SessionMeta — register.ts checkWorkDirExists 走这条)。
       remoteHostId: meta.remoteHostId ?? null,
+      // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
+      visionBridge: startOpts.visionBridge ?? this.visionBridge,
     });
 
     // 当 SDK 回填 sdkSessionId 时持久化
@@ -856,47 +989,91 @@ export class Maker {
    * 调用方:**只调一次**这个方法就够了。不需要再单独遍历 sessions。
    * 失败一律 swallow + 聚合日志, 不抛 (before-quit 阶段不能阻断退出流程)。
    */
-  async shutdown(): Promise<void> {
-    // snapshot 必须先做 (status listener 在 close 完成后会从 activeSessions 删条目,
-    // 不 snapshot 则迭代到一半 Map mutate)。
-    const sessSnapshot = Array.from(this.activeSessions.values());
+  async shutdown(opts?: { reason?: AgentSessionTeardownReason }): Promise<MakerShutdownReport> {
+    this.shutdownStarted = true;
+    // Fail closed: a caller that cannot name its boundary is treated as an
+    // account boundary, so adapters with detached, credential-holding children
+    // (Pi durable Subagents) always stop them rather than letting them run on
+    // into the next owner. The two real callers name themselves explicitly
+    // (`app-quit` from before-quit, `account-boundary` from logout/switch).
+    const teardown: AgentSessionTeardownOptions = { reason: opts?.reason ?? 'account-boundary' };
     const agentEntries = Object.entries(this.agents);
-
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
+    const sessionFailures: MakerShutdownReport['sessionFailures'] = [];
 
-    // shutdown() calls detach() directly instead of closeSession(), so record
-    // the explicit cause before any asynchronous close callback can run. This
-    // prevents app exit from looking like an unexpected provider rebuild and
-    // accidentally preserving an automatic retry lease.
-    for (const session of sessSnapshot) {
-      if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
-    }
+    // Snapshot current sessions before the creation barrier. Existing local
+    // Claude/PI processes must start terminating immediately; a stuck startup
+    // must not consume the entire host quit window before their detach begins.
+    const initialSessionSnapshot = Array.from(this.activeSessions.values());
+    const initialSessionIdentities = new Set(initialSessionSnapshot);
+    const queueSessionDetaches = (
+      sessions: readonly Session[],
+      phase: 'initial' | 'late',
+    ): Array<Promise<void>> => {
+      for (const session of sessions) {
+        if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+      }
+      return sessions.map((session) =>
+        Promise.resolve()
+          .then(() => session.detach(teardown))
+          .catch((e) => {
+            errors.push({ kind: `session-${phase}`, name: session.id, error: e });
+            // Reported, not just logged: a detach that threw may have left the
+            // agent's process alive, which the caller has to weigh before
+            // handing the runtime to someone else.
+            sessionFailures.push({ sessionId: session.id, agentKind: session.agentKind, error: e });
+          }),
+      );
+    };
 
-    // **agent.dispose 优先排队**: 微任务 ordering 不是强保证 (dispose 内部还有 await
-    // hostPromise 等 hop), 但先排队意味着 SIGTERM 那一步至少不会被 session-close
-    // 的工作排在后面。真正的 safety net 是下面 Promise.allSettled 永不抛 + lifecycle
-    // 6s 超时 (lifecycle.ts) — 即便某个 disposer hang, agent dispose 已经独立把
-    // SIGTERM 送进 event loop 了, 6s 内可靠送达。
-    // **同步抛防御**: 用 Promise.resolve().then 包一层, 防 dispose() 实现哪天换成
-    // sync function 然后同步抛 — 那种情况下裸 .catch() 自己也炸, 后续的 sessionCloses
-    // 根本来不及构造。
-    const agentDisposes = agentEntries.map(([kind, agent]) =>
+    // Queue agent-level process shutdown and the initial Session snapshot
+    // before waiting for session creation. PiAgent.dispose() owns its startup
+    // barrier; Session detach owns already-published local agent processes.
+    const initialAgentDisposes = agentEntries.map(([kind, agent]) =>
       Promise.resolve()
         .then(() => agent.dispose())
         .catch((e) => {
           errors.push({ kind: 'agent', name: kind, error: e });
         }),
     );
+    const initialSessionDetaches = queueSessionDetaches(initialSessionSnapshot, 'initial');
 
-    const sessionCloses = sessSnapshot.map((s) =>
-      Promise.resolve()
-        .then(() => s.detach())
+    // createSession registers its promise before yielding. Blocking new calls
+    // above makes this a stable barrier: after it settles, every handle started
+    // before shutdown is active, closed, or present in failedHandleCleanups.
+    const creationSnapshot = Array.from(this.pendingSessionCreations);
+    await Promise.allSettled(creationSnapshot);
+
+    const finalAgentDisposes = agentEntries.map(([kind, agent], index) =>
+      initialAgentDisposes[index]!
+        .then(() => agent.dispose())
         .catch((e) => {
-          errors.push({ kind: 'session', name: s.id, error: e });
+          errors.push({ kind: 'agent-final', name: kind, error: e });
         }),
     );
 
-    await Promise.allSettled([...agentDisposes, ...sessionCloses]);
+    // Only sessions published while the creation barrier was settling belong
+    // to the late pass. Identity filtering avoids detaching an initial Session
+    // twice when it remains in activeSessions until its first detach settles.
+    const lateSessionSnapshot = Array.from(this.activeSessions.values())
+      .filter((session) => !initialSessionIdentities.has(session));
+    const lateSessionDetaches = queueSessionDetaches(lateSessionSnapshot, 'late');
+    const failedHandleCleanupSnapshot = Array.from(this.failedHandleCleanups.entries());
+
+    const failedHandleCloses = failedHandleCleanupSnapshot.map(([sessionId, entry]) =>
+      Promise.resolve()
+        .then(() => this.retryFailedHandleCleanup(sessionId, entry))
+        .catch((e) => {
+          errors.push({ kind: 'unpublished-handle', name: sessionId, error: e });
+        }),
+    );
+
+    await Promise.allSettled([
+      ...initialSessionDetaches,
+      ...finalAgentDisposes,
+      ...failedHandleCloses,
+      ...lateSessionDetaches,
+    ]);
 
     if (errors.length > 0) {
       // Maker 没注入 logger; host 端 stdout 能看到 (before-quit 阶段, 不阻塞流程)
@@ -911,6 +1088,7 @@ export class Maker {
     } catch (e) {
       console.error('[Maker.shutdown] makerMemory.dispose failed', e);
     }
+    return { sessionFailures };
   }
 
   /** 获取某 agent 的能力声明（用于 UI 在创建 session 前就能查能力） */
@@ -939,7 +1117,17 @@ export class Maker {
     opts: ListAgentSkillsOptions & { sessionId?: string },
   ): Promise<ListAgentSkillsResult> {
     const { sessionId, ...agentOpts } = opts;
-    const result = await this.requireAgent(agentKind).listAgentSkills(agentOpts);
+    const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
+    const includeManagedPiPackages = agentKind === 'pi'
+      && (!sessionId || (
+        sessionMeta?.agentKind === 'pi'
+        && sessionMeta.reviewMode !== true
+        && !sessionMeta.remoteHostId
+      ));
+    const result = await this.requireAgent(agentKind).listAgentSkills({
+      ...agentOpts,
+      includeManagedPiPackages,
+    });
     if (agentKind !== 'pi' || !sessionId) return result;
     const session = this.getSession(sessionId);
     if (

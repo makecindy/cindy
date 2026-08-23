@@ -1030,6 +1030,50 @@ describe('message render todo grouping', () => {
       });
     });
 
+    it('does not let an old Task update carry later TaskCreate calls across a user boundary', () => {
+      const staleTask = tool(
+        'task-old',
+        'TaskCreate',
+        { subject: 'Old work' },
+        'create-old',
+      );
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-task-boundary',
+        content: '开始另一项工作',
+        createdAt: at(5),
+      };
+      const staleProgress = tool(
+        'task-old-progress',
+        'TaskUpdate',
+        { taskId: 'old', status: 'in_progress' },
+        'update-old',
+      );
+      const freshTask = tool(
+        'task-new',
+        'TaskCreate',
+        { subject: 'Current work' },
+        'create-new',
+      );
+
+      const latest = findLatestMessageTodoInsertion([
+        staleTask,
+        result('create-old', 'Task #old created successfully: Old work'),
+        newUserTurn,
+        // 指向旧 id 的更新可以合法穿过边界,但不能把 session 的所有权锚点
+        // 搬到新 turn,否则紧随其后的新 TaskCreate 会继续并入旧清单。
+        staleProgress,
+        freshTask,
+        result('create-new', 'Task #new created successfully: Current work'),
+      ]);
+
+      expect(latest).toMatchObject({
+        key: 'todo-task-new',
+        source: 'task',
+        todos: [{ content: 'Current work', status: 'pending' }],
+      });
+    });
+
     it('does not cut a session at synthetic user rows (auto-resume / scheduler)', () => {
       const staleTodo = tool('todo-live', 'TodoWrite', {
         todos: [
@@ -1341,6 +1385,87 @@ describe('message render todo grouping', () => {
       insertion: {
         todos: [{ content: 'Fix renderer', status: 'in_progress' }],
       },
+    });
+  });
+
+  it('resolves a new Task session after a real user boundary despite an older orphan update', () => {
+    const orphanUpdate = tool(
+      'old-task-update',
+      'TaskUpdate',
+      { taskId: 'old', status: 'in_progress' },
+      'update-old',
+    );
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-2',
+      content: 'Start a new plan',
+    };
+    const first = tool('new-task-1', 'TaskCreate', { subject: 'Inspect renderer' }, 'create-new-1');
+    const second = tool('new-task-2', 'TaskCreate', { subject: 'Run tests' }, 'create-new-2');
+
+    expect(getLatestMessageTodoState([
+      orphanUpdate,
+      newUserTurn,
+      first,
+      result('create-new-1', 'Task #new-1 created successfully: Inspect renderer'),
+      second,
+      result('create-new-2', 'Task #new-2 created successfully: Run tests'),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        key: 'todo-new-task-1',
+        todos: [
+          { content: 'Inspect renderer', status: 'pending' },
+          { content: 'Run tests', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('treats a visible real user row as the boundary of the first Task session in a paged window', () => {
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-1',
+      content: 'Start a plan',
+    };
+    const first = tool('task-1', 'TaskCreate', { subject: 'Inspect renderer' }, 'create-1');
+    const second = tool('task-2', 'TaskCreate', { subject: 'Run tests' }, 'create-2');
+
+    expect(getLatestMessageTodoState([
+      newUserTurn,
+      first,
+      result('create-1', 'Task #1 created successfully: Inspect renderer'),
+      second,
+      result('create-2', 'Task #2 created successfully: Run tests'),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        key: 'todo-task-1',
+        todos: [
+          { content: 'Inspect renderer', status: 'pending' },
+          { content: 'Run tests', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('keeps a first TaskGet unresolved when a visible user row does not prove the old plan is complete', () => {
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-1',
+      content: 'Continue the existing task',
+    };
+    const getExisting = tool('task-get', 'TaskGet', { taskId: 'old' }, 'get-old');
+
+    expect(getLatestMessageTodoState([
+      newUserTurn,
+      getExisting,
+      result('get-old', JSON.stringify({
+        task: { id: 'old', subject: 'Inspect renderer', status: 'in_progress' },
+      })),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      insertion: null,
+      isResolved: false,
     });
   });
 

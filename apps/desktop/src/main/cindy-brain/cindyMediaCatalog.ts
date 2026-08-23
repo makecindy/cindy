@@ -2,9 +2,9 @@
  * cindyMediaCatalog.ts — cindy 槽能力配置的纯派生(白名单 + 默认/档位选型)。
  * [PROTOCOL]: 变更时更新此头部,然后检查 CLAUDE.md
  *
- * 输入是 providers.json 运行时目录的供应商数组(与会话模型列表**同一获取来源**,
- * 见 maker-host/active-catalog 的 getActiveCatalog),输出图像 / 视频 / 向量各自的
- * 可选清单与默认选型。本文件**零模型字面量**:清单与默认全部来自目录。
+ * 输入是 active catalog 的供应商数组(与会话模型列表**同一获取来源**,
+ * 见 maker-host/active-catalog 的 getActiveCatalog)。其中 XD 媒体由 Gateway `/models`
+ * 动态投影，第三方媒体来自各 Provider 目录；本文件**零模型字面量**。
  *
  * 文件名留着 "Media" 是历史(2026-08-04 加入向量类目时未改名,避免一次纯改名
  * 的大 diff 冲掉 blame);三个类目共用同一套派生规则,差异只在读目录的哪个字段。
@@ -96,8 +96,8 @@ export function deriveCindyMediaConfig(
     // XD 声明的向量清单 —— 非 XD 供应商(远端目录可以给任何 provider 加这个字段)
     // 声明了也不能进白名单,否则会长出"界面可选、实际拿 XD 的凭证去计费"的型号,
     // 用户以为用的是自己填的 key(PR #1707 review)。
-    // 视频出于同一原因在非 Global 构建里整段隐藏;向量这条更严:任何区域都只认 XD,
-    // 因为它连"本区域能不能路由"都还谈不上。provider-aware 路由落地后再放开。
+    // 向量在任何区域都只认 XD,因为它连 provider-aware 路由都还没有。
+    // 地区政策由 Gateway 通过目录下发负责，客户端不按构建区域裁剪模型。
     if (kind === 'embed' && p.id !== EMBED_DISPATCH_PROVIDER_ID) continue;
     const list =
       kind === 'image' ? p.imageModels : kind === 'video' ? p.videoModels : p.embeddingModels;

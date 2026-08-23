@@ -202,6 +202,20 @@ function validateQuote(
   if (isNonNegativeFinite(quote.cacheCreatePerMtok)) {
     next.cacheCreatePerMtok = quote.cacheCreatePerMtok;
   }
+  if (quote.priority && typeof quote.priority === 'object') {
+    const priority: NonNullable<ModelPriceQuote['priority']> = {};
+    for (const field of [
+      'inputPerMtok',
+      'outputPerMtok',
+      'cacheReadPerMtok',
+      'cacheCreatePerMtok',
+    ] as const) {
+      if (isNonNegativeFinite(quote.priority[field])) priority[field] = quote.priority[field];
+    }
+    const bands = validateInputTokenPriceBands(quote.priority.inputTokenPriceBands);
+    if (bands) priority.inputTokenPriceBands = bands;
+    if (Object.keys(priority).length > 0) next.priority = priority;
+  }
   const inputTokenPriceBands = validateInputTokenPriceBands(quote.inputTokenPriceBands);
   if (inputTokenPriceBands) {
     next.inputTokenPriceBands = inputTokenPriceBands;

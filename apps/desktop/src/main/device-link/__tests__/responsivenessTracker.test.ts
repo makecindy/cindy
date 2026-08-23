@@ -17,6 +17,7 @@ import {
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
   createResponsivenessTracker,
+  isDeviceResponsivenessProbeEligible,
 } from '../responsivenessTracker';
 
 const DEV = 'device-under-test';
@@ -68,6 +69,48 @@ async function openBreaker(
 }
 
 describe('responsivenessTracker', () => {
+  it('重连清空 presence 后 unknown 仍允许单飞探测,明确 false 与其它硬门继续阻止', () => {
+    const base = {
+      relayOnline: true,
+      ownsRelay: true,
+      revoked: false,
+      locallyDisabled: false,
+    };
+
+    expect(isDeviceResponsivenessProbeEligible({
+      ...base,
+      presenceAvailable: undefined,
+    })).toBe(true);
+    expect(isDeviceResponsivenessProbeEligible({
+      ...base,
+      presenceAvailable: true,
+    })).toBe(true);
+    expect(isDeviceResponsivenessProbeEligible({
+      ...base,
+      presenceAvailable: false,
+    })).toBe(false);
+    expect(isDeviceResponsivenessProbeEligible({
+      ...base,
+      presenceAvailable: undefined,
+      relayOnline: false,
+    })).toBe(false);
+    expect(isDeviceResponsivenessProbeEligible({
+      ...base,
+      presenceAvailable: undefined,
+      ownsRelay: false,
+    })).toBe(false);
+    expect(isDeviceResponsivenessProbeEligible({
+      ...base,
+      presenceAvailable: undefined,
+      revoked: true,
+    })).toBe(false);
+    expect(isDeviceResponsivenessProbeEligible({
+      ...base,
+      presenceAvailable: undefined,
+      locallyDisabled: true,
+    })).toBe(false);
+  });
+
   it('成功请求直通,不改变状态', async () => {
     const h = harness();
     await expect(
@@ -191,6 +234,32 @@ describe('responsivenessTracker', () => {
       expect(h.tracker.isUnresponsive(DEV)).toBe(false);
     });
     expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false);
+  });
+
+  it('熔断已 open 时 relay 换代把 presence 从 false 清为 unknown,下一拍恢复单飞探测', async () => {
+    let presenceAvailable: boolean | undefined = false;
+    const h = harness({
+      isProbeEligible: () => isDeviceResponsivenessProbeEligible({
+        relayOnline: true,
+        ownsRelay: true,
+        presenceAvailable,
+        revoked: false,
+        locallyDisabled: false,
+      }),
+    });
+    await openBreaker(h);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS);
+
+    h.tracker.probeTick();
+    expect(h.probeInvoke).not.toHaveBeenCalled();
+
+    // client.onStatusChange 非 online 会清空当代 presence；server 不保证重放全量
+    // snapshot，所以同一台仍在线设备可能长期保持 unknown。这个状态必须允许
+    // breaker 自己控制的单飞 probe，而不能释放普通 guardInvoke 业务流量。
+    presenceAvailable = undefined;
+    h.tracker.probeTick();
+    await vi.waitFor(() => expect(h.probeInvoke).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(h.tracker.isUnresponsive(DEV)).toBe(false));
   });
 
   it('探测超时 → 保持 open 并加深退避(下个基础窗口不再探测)', async () => {
@@ -369,6 +438,9 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
     ).toBe('responded');
     expect(
       classifyDeviceSendFailure(new DeviceLinkError('VERSION_MISMATCH', 'v mismatch')),
+    ).toBe('responded');
+    expect(
+      classifyDeviceSendFailure(new DeviceLinkError('ACCESS_REVOKED', 'revoked')),
     ).toBe('responded');
     expect(
       classifyDeviceSendFailure(new DeviceLinkError('NOT_CONNECTED', 'lost')),

@@ -35,6 +35,8 @@ import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSideb
 import {
   closeTab,
   getBucket,
+  getTabSnapshot,
+  importTabSnapshot,
 } from '@/features/right-sidebar/store';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
@@ -58,6 +60,7 @@ interface SidebarWindowContext {
   workdir: string | null;
   remoteHostId: string | null;
   deviceLinkDeviceId?: string | null;
+  subagentsAvailable?: boolean;
   available: boolean;
 }
 
@@ -98,6 +101,11 @@ export function SidebarWindowLayout() {
       contextRevisionRef.current += 1;
       setCtx(next);
     });
+    // 必须早于 presentationReady() 注册：冷分离窗的主窗快照由 main 在
+    // presentation-ready 回调中投递，晚注册会丢掉这条一次性 handoff。
+    const offTabHandoff = window.electronAPI.rightSidebarWindow.onTabHandoff((handoff) => {
+      for (const snapshot of handoff.snapshots) importTabSnapshot(snapshot);
+    });
     // renderer-ready:Shell 已挂载,controller 可知 React 组件树就绪。
     void window.electronAPI.rightSidebarWindow.rendererReady().catch((err) => {
       log.warn('renderer-ready handshake failed', err);
@@ -105,6 +113,7 @@ export function SidebarWindowLayout() {
     return () => {
       cancelled = true;
       offCtx();
+      offTabHandoff();
     };
   }, []);
 
@@ -280,11 +289,12 @@ export function SidebarWindowLayout() {
           {/* 合并回主窗口:关偏好 + 关本窗,主窗恢复内嵌展开 */}
           <ChromeIconButton
             onClick={() => {
-              void window.electronAPI.rightSidebarWindow.setDetached(false).catch((err) => {
+              const snapshot = getTabSnapshot(interactiveSessionId);
+              const handoff = snapshot ? { snapshots: [snapshot] } : undefined;
+              void window.electronAPI.rightSidebarWindow.setDetached(false, handoff).catch((err) => {
                 log.warn('merge back failed', err);
               });
             }}
-            title={t('rightSidebar.window.mergeBack')}
             aria-label={t('rightSidebar.window.mergeBack')}
           >
             <PanelRight size={14} />
@@ -316,6 +326,7 @@ export function SidebarWindowLayout() {
           workdir={ctx?.workdir ?? ''}
           remoteHostId={ctx?.remoteHostId ?? null}
           deviceLinkDeviceId={ctx?.deviceLinkDeviceId}
+          subagentsAvailable={ctx?.subagentsAvailable}
           shellVisible={windowVisible}
           isMac={isMac}
         />

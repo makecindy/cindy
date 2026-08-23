@@ -631,6 +631,41 @@
       "when": 1786257834139,
       "tag": "0089_rich_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "6",
+      "when": 1786726026223,
+      "tag": "0090_distinguish_xai_provider_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "6",
+      "when": 1786794359638,
+      "tag": "0091_amazing_blur",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "6",
+      "when": 1786696564943,
+      "tag": "0092_fixed_zeigeist",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "6",
+      "when": 1787333855020,
+      "tag": "0093_parched_switch",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "6",
+      "when": 1787387261372,
+      "tag": "0094_repair_custom_provider_timestamps",
+      "breakpoints": true
     }
   ]
 }

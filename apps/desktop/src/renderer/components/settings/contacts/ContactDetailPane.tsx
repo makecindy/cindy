@@ -275,7 +275,9 @@ export function ContactDetailPane({ profile, groups, onChanged, onDelete }: Prop
           source: source.displayName,
           target: profile.displayName,
         }),
-        description: t('settings.contacts.merge.confirmDescription'),
+        description: t('settings.contacts.merge.confirmDescription', {
+          source: source.displayName,
+        }),
         confirmText: t('settings.contacts.merge.confirm'),
         cancelText: t('settings.contacts.deleteConfirm.cancel'),
       });
