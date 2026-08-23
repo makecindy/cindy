@@ -3667,6 +3667,39 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('畸形 link-close 仍交给业务层收口但不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.onFrame((env) => frames.push(env));
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        src: 'dev-a',
+        payload: {},
+      } as unknown as Envelope;
+      activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      if (activity) clearInterval(activity);
+      activity = null;
+
+      expect(frames.length).toBeGreaterThan(0);
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('epoch 守卫:过期 socket 的迟到 close/message 回调被忽略,不触发额外重连', async () => {
     const h = makeHarness();
     h.client.start();

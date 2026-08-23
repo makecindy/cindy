@@ -1653,9 +1653,10 @@ export class DeviceLinkClient {
     }
     const env = parsed;
     const validForHeartbeat = isValidInboundEnvelope(env);
-    // 畸形 invoke 仍须进入 Desktop runInvoke 生成结构化拒绝，但不能因此
-    // 喂活 heartbeat；其它已知 kind 的非法 payload 直接丢弃。
-    if (!validForHeartbeat && env.kind !== 'invoke') {
+    // 畸形 invoke / link-close 仍须进入 Desktop 业务层：前者生成结构化拒绝，后者
+    // 走既有 fail-generic 的 peer teardown；但两者都不能因此喂活 heartbeat。
+    // 其它已知 kind 的非法 payload 直接丢弃。
+    if (!validForHeartbeat && env.kind !== 'invoke' && env.kind !== 'link-close') {
       this.log.warn(`dropping invalid device-link frame kind=${env.kind}`);
       return;
     }
