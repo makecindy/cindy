@@ -175,6 +175,39 @@ export async function prepareInputPath(root: string, inPath: string): Promise<st
   return abs;
 }
 
+/**
+ * 在分配输入缓冲区前先从已打开的文件句柄读取大小，并且最多只读取该次 stat
+ * 看到的字节数。这样即使文件很大，或在 stat 后继续增长，也不会让 readFile
+ * 在主进程里无上限分配内存。
+ */
+export async function readInputFileWithinLimit(
+  abs: string,
+  maxBytes: number,
+  tooLarge: (bytes: number) => DocsPathError,
+): Promise<Buffer> {
+  const handle = await fs.open(abs, 'r');
+  try {
+    const stat = await handle.stat();
+    if (stat.size > maxBytes) throw tooLarge(stat.size);
+
+    const data = Buffer.allocUnsafe(stat.size);
+    let offset = 0;
+    while (offset < data.length) {
+      const { bytesRead } = await handle.read(data, offset, data.length - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+
+    // 文件在 stat 后增长时也 fail closed，避免把被截断的输入交给解析器。
+    const probe = Buffer.allocUnsafe(1);
+    const { bytesRead: extraBytes } = await handle.read(probe, 0, 1, offset);
+    if (extraBytes > 0) throw tooLarge(Math.max(stat.size + extraBytes, maxBytes + 1));
+    return offset === data.length ? data : data.subarray(0, offset);
+  } finally {
+    await handle.close();
+  }
+}
+
 /** 落盘后统一的成功信息:相对路径更适合读给用户听,绝对路径供后续工具串联。 */
 export async function describeOutput(
   root: string,

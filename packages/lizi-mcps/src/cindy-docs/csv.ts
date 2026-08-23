@@ -18,15 +18,44 @@ export interface ParseDelimitedOptions {
   delimiter: string;
 }
 
+export interface ParseDelimitedWindowOptions extends ParseDelimitedOptions {
+  /** 1 起的逻辑行号。 */
+  startRow: number;
+  /** 最多保留多少行；解析器仍会计数到文件尾，以便返回准确总行数。 */
+  maxRows: number;
+}
+
+export interface ParseDelimitedWindowResult {
+  rows: string[][];
+  totalRows: number;
+}
+
 /** 把分隔符文本解析成二维字符串数组。永不 throw。 */
 export function parseDelimited(text: string, opts: ParseDelimitedOptions): string[][] {
+  return parseDelimitedWindow(text, {
+    ...opts,
+    startRow: 1,
+    maxRows: Number.MAX_SAFE_INTEGER,
+  }).rows;
+}
+
+/** 单次扫描完整文本，但只保留请求的行窗口，避免把整份文件展开成二维数组。 */
+export function parseDelimitedWindow(
+  text: string,
+  opts: ParseDelimitedWindowOptions,
+): ParseDelimitedWindowResult {
   const delimiter = opts.delimiter.length > 0 ? opts.delimiter[0]! : ',';
   const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 
   const rows: string[][] = [];
+  const firstRow = Math.max(1, Math.trunc(opts.startRow));
+  const maxRows = Math.max(0, Math.trunc(opts.maxRows));
+  const lastRow = Math.min(Number.MAX_SAFE_INTEGER, firstRow + maxRows - 1);
+  let totalRows = 0;
   let row: string[] = [];
   let field = '';
   let inQuotes = false;
+  let lastRowWasEmpty = false;
   // 字段是否还停在「第一个字符」上 —— 决定引号算引号态还是普通字符。
   let atFieldStart = true;
 
@@ -37,7 +66,9 @@ export function parseDelimited(text: string, opts: ParseDelimitedOptions): strin
   };
   const endRow = (): void => {
     endField();
-    rows.push(row);
+    totalRows += 1;
+    lastRowWasEmpty = row.length === 1 && row[0] === '';
+    if (totalRows >= firstRow && totalRows <= lastRow) rows.push(row);
     row = [];
   };
 
@@ -88,11 +119,11 @@ export function parseDelimited(text: string, opts: ParseDelimitedOptions): strin
   }
 
   // 尾部单个空行(文本以换行结尾)不是数据行,去掉。
-  const last = rows[rows.length - 1];
-  if (rows.length > 0 && last && last.length === 1 && last[0] === '') {
-    rows.pop();
+  if (totalRows > 0 && lastRowWasEmpty) {
+    if (totalRows >= firstRow && totalRows <= lastRow) rows.pop();
+    totalRows -= 1;
   }
-  return rows;
+  return { rows, totalRows };
 }
 
 /** 按扩展名推断分隔符;未知扩展名按逗号处理。 */

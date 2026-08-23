@@ -32,6 +32,7 @@ import {
   resolvePptxGenConstructor,
 } from '../cindy-docs/make_pptx.js';
 import { writeOutputFile } from '../cindy-docs/_paths.js';
+import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
 import type {
   DocsMcpDeps,
   DocsMcpSessionCtx,
@@ -518,7 +519,31 @@ describe('read_sheet', () => {
     expect(result.returnedRows).toBe(10);
     expect(result.totalRows).toBe(50);
     expect(result.truncated).toBe(true);
+    expect(result.startRow).toBe(1);
+    expect(result.endRow).toBe(10);
+    expect(result.nextStartRow).toBe(11);
     expect(result.truncationNote).toContain('50');
+
+    const middle = await callTool(client, 'read_sheet', {
+      path: 'big.csv',
+      startRow: 21,
+      maxRows: 10,
+    });
+    expect(middle.rows).toEqual(
+      Array.from({ length: 10 }, (_, i) => [String(i + 20), `v${i + 20}`]),
+    );
+    expect(middle.startRow).toBe(21);
+    expect(middle.endRow).toBe(30);
+    expect(middle.nextStartRow).toBe(31);
+
+    const last = await callTool(client, 'read_sheet', {
+      path: 'big.csv',
+      startRow: 41,
+      maxRows: 10,
+    });
+    expect(last.returnedRows).toBe(10);
+    expect(last.truncated).toBe(false);
+    expect(last.nextStartRow).toBeUndefined();
   });
 
   it('按 worksheet.rowCount 保留物理行号,稀疏尾行会正确标记截断', async () => {
@@ -539,6 +564,16 @@ describe('read_sheet', () => {
     expect(full.totalRows).toBe(1000);
     expect(full.truncated).toBe(false);
     expect((full.rows as unknown[][])[999]![0]).toBe('tail');
+
+    const tail = await callTool(client, 'read_sheet', {
+      path: 'sparse.xlsx',
+      startRow: 999,
+      maxRows: 2,
+    });
+    expect(tail.rows).toEqual([[null], ['tail']]);
+    expect(tail.startRow).toBe(999);
+    expect(tail.endRow).toBe(1000);
+    expect(tail.truncated).toBe(false);
   });
 
   it('xlsx 输入先过文件大小与 ZIP 解压比上限,不把异常压缩包交给 ExcelJS', async () => {
@@ -728,6 +763,30 @@ describe('render_pdf', () => {
     ).toBe('INVALID_ARGS');
   });
 
+  it('htmlPath 与内联 html 都在主进程读取前执行同一大小上限', async () => {
+    const renderHtmlToPdf = vi.fn(async () => ({ buffer: pdfBytes, fontsReady: true }));
+    const client = await connect({ renderHtmlToPdf });
+
+    const hugePath = path.join(workdir, 'huge.html');
+    const handle = await fs.open(hugePath, 'w');
+    await handle.truncate(RENDER_PDF_MAX_HTML_BYTES + 1);
+    await handle.close();
+
+    expect(
+      (await callTool(client, 'render_pdf', { htmlPath: 'huge.html', outPath: 'path.pdf' }))
+        .errorCode,
+    ).toBe('FILE_TOO_LARGE');
+    expect(
+      (
+        await callTool(client, 'render_pdf', {
+          html: 'x'.repeat(RENDER_PDF_MAX_HTML_BYTES + 1),
+          outPath: 'inline.pdf',
+        })
+      ).errorCode,
+    ).toBe('FILE_TOO_LARGE');
+    expect(renderHtmlToPdf).not.toHaveBeenCalled();
+  });
+
   it('空产物报 RENDER_EMPTY,超小产物带回验告警', async () => {
     const empty = await connect({
       renderHtmlToPdf: async () => ({ buffer: Buffer.alloc(0), fontsReady: true }),
@@ -868,6 +927,19 @@ describe('inspect_pdf', () => {
     );
     const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
     expect(result.errorCode).toBe('EMPTY_FILE');
+  });
+
+  it('超限 PDF 在交给解析进程前按 stat 拒绝', async () => {
+    const inspectPdf = vi.fn(async () => ({ numPages: 0, pagesInspected: 0, pages: [] }));
+    const client = await connect({ inspectPdf });
+    const hugePath = path.join(workdir, 'huge.pdf');
+    const handle = await fs.open(hugePath, 'w');
+    await handle.truncate(64 * 1024 * 1024 + 1);
+    await handle.close();
+
+    const result = await callTool(client, 'inspect_pdf', { path: 'huge.pdf' });
+    expect(result.errorCode).toBe('FILE_TOO_LARGE');
+    expect(inspectPdf).not.toHaveBeenCalled();
   });
 
   it('非 pdf 扩展名与越界路径都被拒', async () => {

@@ -7,7 +7,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { delimiterForExtension, parseDelimited } from '../cindy-docs/csv.js';
+import {
+  delimiterForExtension,
+  parseDelimited,
+  parseDelimitedWindow,
+} from '../cindy-docs/csv.js';
 
 const csv = (text: string) => parseDelimited(text, { delimiter: ',' });
 
@@ -67,6 +71,31 @@ describe('parseDelimited', () => {
       ['a', 'b'],
       ['1', '2'],
     ]);
+  });
+});
+
+describe('parseDelimitedWindow', () => {
+  it('只保留请求窗口,但仍返回准确总行数', () => {
+    const text = Array.from({ length: 10_000 }, (_, i) => `${i},value-${i}`).join('\n');
+    expect(
+      parseDelimitedWindow(text, { delimiter: ',', startRow: 5_001, maxRows: 2 }),
+    ).toEqual({
+      rows: [
+        ['5000', 'value-5000'],
+        ['5001', 'value-5001'],
+      ],
+      totalRows: 10_000,
+    });
+  });
+
+  it('分页时仍把引号内换行视为同一逻辑行', () => {
+    expect(
+      parseDelimitedWindow('head,note\nfirst,"line1\nline2"\nlast,done\n', {
+        delimiter: ',',
+        startRow: 2,
+        maxRows: 1,
+      }),
+    ).toEqual({ rows: [['first', 'line1\nline2']], totalRows: 3 });
   });
 });
 

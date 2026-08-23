@@ -17,9 +17,14 @@ import JSZip from 'jszip';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
-import { DocsPathError, prepareInputPath, resolveSessionRoot } from './_paths.js';
+import {
+  DocsPathError,
+  prepareInputPath,
+  readInputFileWithinLimit,
+  resolveSessionRoot,
+} from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
-import { delimiterForExtension, parseDelimited } from './csv.js';
+import { delimiterForExtension, parseDelimitedWindow } from './csv.js';
 import type { DocsMcpSessionCtx } from './types.js';
 
 const DEFAULT_MAX_ROWS = 200;
@@ -39,7 +44,8 @@ const DESCRIPTION = [
   '要回读确认内容真的写进去了(产出自检)。',
   '',
   '【参数】sheet 只对 xlsx 有效,可传工作表名或 1 起的序号;不传取第一张。',
-  'maxRows 默认 200,最大 5000。返回里 truncated=true 表示还有更多行,',
+  'startRow 是 1 起的起始行,默认 1;maxRows 默认 200,最大 5000。',
+  '返回里 truncated=true 表示后面还有更多行,nextStartRow 可直接用于下一次读取;',
   'totalRows 是实际总行数 —— 别把截断当成「表就这么大」。',
   '',
   '【返回】rows 是二维数组(每格为字符串、数字、布尔或 null);',
@@ -144,8 +150,9 @@ function normalizeCell(value) {
   const totalRows = Math.max(worksheet.rowCount || 0, worksheet.actualRowCount || 0);
   const columnCount = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
   const rows = [];
-  const lastRow = Math.min(totalRows, workerData.maxRows);
-  for (let r = 1; r <= lastRow; r += 1) {
+  const firstRow = workerData.startRow;
+  const lastRow = Math.min(totalRows, firstRow + workerData.maxRows - 1);
+  for (let r = firstRow; r <= lastRow; r += 1) {
     const row = worksheet.getRow(r);
     const cells = [];
     for (let c = 1; c <= columnCount; c += 1) cells.push(normalizeCell(row.getCell(c).value));
@@ -162,12 +169,19 @@ function normalizeCell(value) {
 function readXlsxInWorker(
   absPath: string,
   sheetSelector: string | number | undefined,
+  startRow: number,
   maxRows: number,
 ): Promise<SheetRead> {
   return new Promise((resolve, reject) => {
 const worker = new Worker(XLSX_WORKER_SOURCE, {
       eval: true,
-      workerData: { absPath, sheetSelector, maxRows, exceljsPath: createRequire(import.meta.url).resolve('exceljs') },
+      workerData: {
+        absPath,
+        sheetSelector,
+        startRow,
+        maxRows,
+        exceljsPath: createRequire(import.meta.url).resolve('exceljs'),
+      },
       resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 },
     });
     let settled = false;
@@ -211,28 +225,36 @@ const worker = new Worker(XLSX_WORKER_SOURCE, {
 async function readXlsx(
   absPath: string,
   sheetSelector: string | number | undefined,
+  startRow: number,
   maxRows: number,
 ): Promise<SheetRead> {
   await assertSafeXlsxArchive(absPath);
-  return readXlsxInWorker(absPath, sheetSelector, maxRows);
+  return readXlsxInWorker(absPath, sheetSelector, startRow, maxRows);
 }
 
 async function readTextTable(
   absPath: string,
   ext: string,
+  startRow: number,
   maxRows: number,
 ): Promise<SheetRead> {
-  const stat = await fs.stat(absPath);
-  if (stat.size > MAX_TEXT_BYTES) {
-    throw new DocsPathError(
-      'FILE_TOO_LARGE',
-      `文本表格过大: ${stat.size} 字节`,
-      `这个文件有 ${(stat.size / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先让用户拆分文件,或改用命令行工具处理。`,
-    );
-  }
-  const text = await fs.readFile(absPath, 'utf-8');
-  const parsed = parseDelimited(text, { delimiter: delimiterForExtension(ext) });
-  return { rows: parsed.slice(0, maxRows), totalRows: parsed.length };
+  const text = (
+    await readInputFileWithinLimit(
+      absPath,
+      MAX_TEXT_BYTES,
+      (bytes) =>
+        new DocsPathError(
+          'FILE_TOO_LARGE',
+          `文本表格过大: ${bytes} 字节`,
+          `这个文件有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先让用户拆分文件,或改用命令行工具处理。`,
+        ),
+    )
+  ).toString('utf8');
+  return parseDelimitedWindow(text, {
+    delimiter: delimiterForExtension(ext),
+    startRow,
+    maxRows,
+  });
 }
 
 export function registerReadSheetTool(
@@ -252,6 +274,13 @@ export function registerReadSheetTool(
         .union([z.string(), z.number().int().min(1)])
         .optional()
         .describe('仅 xlsx 有效:工作表名,或 1 起的序号。不传取第一张。'),
+      startRow: z
+        .number()
+        .int()
+        .min(1)
+        .max(Number.MAX_SAFE_INTEGER - HARD_MAX_ROWS)
+        .default(1)
+        .describe('从第几行开始返回,1 起。默认 1;配合 nextStartRow 分批继续读取。'),
       maxRows: z
         .number()
         .int()
@@ -260,7 +289,7 @@ export function registerReadSheetTool(
         .default(DEFAULT_MAX_ROWS)
         .describe(`最多返回多少行,默认 ${DEFAULT_MAX_ROWS},上限 ${HARD_MAX_ROWS}。`),
     },
-    handler: async ({ path: inputPath, sheet, maxRows }) => {
+    handler: async ({ path: inputPath, sheet, startRow, maxRows }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareInputPath(root, inputPath);
@@ -268,9 +297,9 @@ export function registerReadSheetTool(
 
         let result: SheetRead;
         if (ext === '.xlsx' || ext === '.xlsm') {
-          result = await readXlsx(abs, sheet, maxRows);
+          result = await readXlsx(abs, sheet, startRow, maxRows);
         } else if (ext === '.csv' || ext === '.tsv' || ext === '.tab' || ext === '.txt') {
-          result = await readTextTable(abs, ext, maxRows);
+          result = await readTextTable(abs, ext, startRow, maxRows);
         } else if (ext === '.xls') {
           return errorPayload(
             'UNSUPPORTED_FORMAT',
@@ -285,19 +314,23 @@ export function registerReadSheetTool(
           );
         }
 
-        const truncated = result.totalRows > result.rows.length;
+        const endRow = result.rows.length > 0 ? startRow + result.rows.length - 1 : startRow - 1;
+        const truncated = endRow < result.totalRows;
         return okPayload({
           path: abs,
           format: ext.replace('.', ''),
           ...(result.sheetName !== undefined ? { sheet: result.sheetName } : {}),
           ...(result.sheetNames !== undefined ? { sheetNames: result.sheetNames } : {}),
           rows: result.rows,
+          startRow,
+          endRow,
           returnedRows: result.rows.length,
           totalRows: result.totalRows,
           truncated,
           ...(truncated
             ? {
-                truncationNote: `只返回了前 ${result.rows.length} 行,总共 ${result.totalRows} 行。需要更多请调大 maxRows(上限 ${HARD_MAX_ROWS}),不要把这个当作全表。`,
+                nextStartRow: endRow + 1,
+                truncationNote: `返回了第 ${startRow}–${endRow} 行,总共 ${result.totalRows} 行。需要更多请用 startRow=${endRow + 1} 继续读取(单次上限 ${HARD_MAX_ROWS}),不要把这一页当作全表。`,
               }
             : {}),
         });

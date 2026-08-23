@@ -14,13 +14,17 @@
  * 二进制),代价与收益不匹配。空白/串页/尺寸错这几类真实翻车,结构证据已经能定死。
  */
 
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
-import { DocsPathError, prepareInputPath, resolveSessionRoot } from './_paths.js';
+import {
+  DocsPathError,
+  prepareInputPath,
+  readInputFileWithinLimit,
+  resolveSessionRoot,
+} from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
 import type { DocsMcpSessionCtx, InspectPdfFn } from './types.js';
 
@@ -110,7 +114,16 @@ export function registerInspectPdfTool(
           );
         }
 
-        const data = await fs.readFile(abs);
+        const data = await readInputFileWithinLimit(
+          abs,
+          MAX_INPUT_BYTES,
+          (bytes) =>
+            new DocsPathError(
+              'FILE_TOO_LARGE',
+              `PDF 过大: ${bytes} 字节`,
+              `PDF 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出检查上限(64 MB)。请先压缩或拆分 PDF。`,
+            ),
+        );
         if (data.byteLength === 0) {
           return errorPayload(
             'EMPTY_FILE',
@@ -118,14 +131,6 @@ export function registerInspectPdfTool(
             { path: abs },
           );
         }
-        if (data.byteLength > MAX_INPUT_BYTES) {
-          return errorPayload(
-            'FILE_TOO_LARGE',
-            `PDF 有 ${(data.byteLength / 1024 / 1024).toFixed(1)} MB,超出检查上限(64 MB)。`,
-            { path: abs, bytes: data.byteLength },
-          );
-        }
-
         const inspection = await inspectPdf({
           data: new Uint8Array(data),
           pages: pages ?? [],

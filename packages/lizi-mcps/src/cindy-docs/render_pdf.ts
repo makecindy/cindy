@@ -9,8 +9,6 @@
  * 再运行期报不可用」——模型看不到的工具不会被误选。
  */
 
-import { promises as fs } from 'node:fs';
-
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
@@ -19,6 +17,7 @@ import {
   DocsPathError,
   prepareInputPath,
   prepareOutputPath,
+  readInputFileWithinLimit,
   resolveSessionRoot,
   writeOutputFile,
 } from './_paths.js';
@@ -47,6 +46,8 @@ export const RENDER_PDF_TIMEOUT_MS = 30_000;
  * 出片并告警,不占满总超时(字体只是"可能不对",而不是"渲染失败")。
  */
 export const RENDER_PDF_FONT_TIMEOUT_MS = 5_000;
+/** 自包含 HTML 允许内联图片/字体，但仍需限制主进程读取和模板复制的内存上界。 */
+export const RENDER_PDF_MAX_HTML_BYTES = 16 * 1024 * 1024;
 /** 空/超小 PDF 的告警阈值:低于这个字节数几乎必然是白页,值得让模型自查。 */
 const SUSPICIOUS_PDF_BYTES = 2_048;
 
@@ -60,6 +61,7 @@ const DESCRIPTION = [
   '如果产物要给人二次编辑,请改用 make_docx —— PDF 不好改。',
   '',
   '【输入】htmlPath(工作目录内的 .html 文件)与 html(内联源码)二选一,必须给且只给一个。',
+  'HTML 源码上限 16 MB;文件路径与内联源码使用同一上限。',
   '为防止不可信 HTML 借用户网络身份探测内网或触发跟踪,渲染窗会阻断外部网络请求。',
   '图片/字体请内联成 data URI;相对路径资源只有在用 htmlPath 时才解析得到。',
   '',
@@ -180,8 +182,29 @@ export function registerRenderPdfTool(
           ? await prepareInputPath(root, htmlPath!)
           : undefined;
         const sourceHtml = sourcePath
-          ? await fs.readFile(sourcePath, 'utf8')
+          ? (
+              await readInputFileWithinLimit(
+                sourcePath,
+                RENDER_PDF_MAX_HTML_BYTES,
+                (bytes) =>
+                  new DocsPathError(
+                    'FILE_TOO_LARGE',
+                    `HTML 过大: ${bytes} 字节`,
+                    `这份 HTML 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出 PDF 渲染上限(16 MB)。请压缩内联图片/字体或拆分文档后重试。`,
+                  ),
+              )
+            ).toString('utf8')
           : html!;
+        if (!sourcePath) {
+          const inlineBytes = Buffer.byteLength(sourceHtml, 'utf8');
+          if (inlineBytes > RENDER_PDF_MAX_HTML_BYTES) {
+            throw new DocsPathError(
+              'FILE_TOO_LARGE',
+              `HTML 过大: ${inlineBytes} 字节`,
+              `这份 HTML 有 ${(inlineBytes / 1024 / 1024).toFixed(1)} MB,超出 PDF 渲染上限(16 MB)。请压缩内联图片/字体或拆分文档后重试。`,
+            );
+          }
+        }
         const palette = resolveDocsTheme(
           (theme ?? DEFAULT_DOCS_THEME) as DocsThemeName,
         );

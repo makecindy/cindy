@@ -21,6 +21,7 @@ export {
   registerRenderPdfTool,
   RENDER_PDF_TIMEOUT_MS,
   RENDER_PDF_FONT_TIMEOUT_MS,
+  RENDER_PDF_MAX_HTML_BYTES,
 } from './render_pdf.js';
 export { registerInspectPdfTool, INSPECT_PDF_TIMEOUT_MS } from './inspect_pdf.js';
 
@@ -31,12 +32,20 @@ export {
   htmlHasRelativeResources,
 } from './pdfTemplate.js';
 export { inferNumberFormat } from './make_xlsx.js';
-export { parseDelimited, delimiterForExtension, type ParseDelimitedOptions } from './csv.js';
+export {
+  parseDelimited,
+  parseDelimitedWindow,
+  delimiterForExtension,
+  type ParseDelimitedOptions,
+  type ParseDelimitedWindowOptions,
+  type ParseDelimitedWindowResult,
+} from './csv.js';
 export {
   DocsPathError,
   describeOutput,
   prepareInputPath,
   prepareOutputPath,
+  readInputFileWithinLimit,
   resolveSessionRoot,
 } from './_paths.js';
 export { okPayload, errorPayload, type DocsPayloadResult } from './_payload.js';
