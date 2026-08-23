@@ -479,7 +479,8 @@
       "pinnedSourceLabel": {
         "label": "Show project source for pinned tasks",
         "hint": "Turn this off to give task titles more horizontal space.",
-        "aria": "Toggle project source for pinned tasks"
+        "aria": "Toggle project source for pinned tasks",
+        "reset": "Reset to default"
       },
       "ghostPanelRestore": {
         "label": "Plugin panel restore entry",

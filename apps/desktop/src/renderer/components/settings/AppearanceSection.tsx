@@ -323,8 +323,12 @@ export function AppearanceSection() {
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
-  const { visible: pinnedSourceLabelVisible, setVisible: setPinnedSourceLabelVisible } =
-    usePinnedSourceLabelPreference();
+  const {
+    visible: pinnedSourceLabelVisible,
+    isOverridden: pinnedSourceLabelIsOverridden,
+    setVisible: setPinnedSourceLabelVisible,
+    resetToDefault: resetPinnedSourceLabel,
+  } = usePinnedSourceLabelPreference();
   const { mode: ghostPanelRestoreMode, setMode: setGhostPanelRestoreMode } =
     useGhostPanelRestoreMode();
   const { t } = useTranslation();
@@ -871,11 +875,30 @@ export function AppearanceSection() {
               {t('settings.appearance.pinnedSourceLabel.hint')}
             </p>
           </div>
-          <Switch
-            checked={pinnedSourceLabelVisible}
-            onCheckedChange={setPinnedSourceLabelVisible}
-            aria-label={t('settings.appearance.pinnedSourceLabel.aria')}
-          />
+          <div className="flex shrink-0 items-center gap-2">
+            <Tip text={t('settings.appearance.pinnedSourceLabel.reset')}>
+              <button
+                type="button"
+                aria-label={t('settings.appearance.pinnedSourceLabel.reset')}
+                onClick={resetPinnedSourceLabel}
+                disabled={!pinnedSourceLabelIsOverridden}
+                className={cn(
+                  'flex h-8 w-8 items-center justify-center rounded-xl',
+                  'border border-[var(--settings-input-border)]',
+                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                  'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+                  'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
+                )}
+              >
+                <RefreshCw size={14} aria-hidden />
+              </button>
+            </Tip>
+            <Switch
+              checked={pinnedSourceLabelVisible}
+              onCheckedChange={setPinnedSourceLabelVisible}
+              aria-label={t('settings.appearance.pinnedSourceLabel.aria')}
+            />
+          </div>
         </div>
 
         <div className="flex items-center justify-between gap-3">

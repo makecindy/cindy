@@ -26,11 +26,27 @@ describe('usePinnedSourceLabelPreference', () => {
     const { result } = renderHook(() => usePinnedSourceLabelPreference());
 
     expect(result.current.visible).toBe(true);
+    expect(result.current.isOverridden).toBe(false);
 
     act(() => result.current.setVisible(false));
 
     expect(result.current.visible).toBe(false);
+    expect(result.current.isOverridden).toBe(true);
     expect(localStorage.getItem('sidebar.pinnedSourceLabelVisible')).toBe('false');
+  });
+
+  it('removes the override when restoring the default and synchronizes subscribers', async () => {
+    const { usePinnedSourceLabelPreference } = await import('../useSidebarCardMode');
+    const first = renderHook(() => usePinnedSourceLabelPreference());
+    const second = renderHook(() => usePinnedSourceLabelPreference());
+
+    act(() => first.result.current.setVisible(false));
+    expect(second.result.current.visible).toBe(false);
+
+    act(() => first.result.current.resetToDefault());
+    expect(first.result.current).toMatchObject({ visible: true, isOverridden: false });
+    expect(second.result.current).toMatchObject({ visible: true, isOverridden: false });
+    expect(localStorage.getItem('sidebar.pinnedSourceLabelVisible')).toBeNull();
   });
 
   it('restores the persisted source-label preference', async () => {

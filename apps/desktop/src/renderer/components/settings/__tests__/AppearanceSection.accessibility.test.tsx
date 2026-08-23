@@ -42,7 +42,12 @@ vi.mock('@/hooks/useFontSettings', async (importOriginal) => ({
 vi.mock('@/hooks/useSidebarCardMode', () => ({
   useSidebarCardMode: () => ({ mode: 'text', setMode: vi.fn() }),
   useSidebarMainViewMode: () => ({ mode: 'list', setMode: vi.fn() }),
-  usePinnedSourceLabelPreference: () => ({ visible: true, setVisible: vi.fn() }),
+  usePinnedSourceLabelPreference: () => ({
+    visible: true,
+    isOverridden: false,
+    setVisible: vi.fn(),
+    resetToDefault: vi.fn(),
+  }),
 }));
 
 vi.mock('@/themes/local-themes', () => ({
@@ -88,6 +93,14 @@ describe('AppearanceSection accessibility', () => {
     ).toBeTruthy();
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.codeSize.label' }),
+    ).toBeTruthy();
+  });
+
+  it('labels the pinned project-source reset control', () => {
+    render(<AppearanceSection />);
+
+    expect(
+      screen.getByRole('button', { name: 'settings.appearance.pinnedSourceLabel.reset' }),
     ).toBeTruthy();
   });
 });
