@@ -73,6 +73,11 @@ export interface GhostAgentSlotDeps {
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
   };
+  /**
+   * 执行落到一条可见任务时，由主机把左侧切过去。
+   * 只对 user-action 调用 — 后台 continue/new/fork 不能抢当前任务。
+   */
+  onRevealSession?: (sessionId: string) => void;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -90,14 +95,21 @@ export class GhostAgentSlot {
   private readonly inFlightGhosts = new Set<string>();
   private readonly lastBackgroundAt = new Map<string, number>();
   private runner: GhostAgentTurnRunner | null;
+  private onRevealSession: ((sessionId: string) => void) | null;
 
   constructor(private readonly deps: GhostAgentSlotDeps) {
     this.runner = deps.runner ?? null;
+    this.onRevealSession = deps.onRevealSession ?? null;
   }
 
   /** maker-ipc 初始化完成后注入真实 session runner；传 null 用于退出清理。 */
   setRunner(runner: GhostAgentTurnRunner | null): void {
     this.runner = runner;
+  }
+
+  /** maker-ipc 初始化完成后注入任务聚焦；传 null 用于退出清理。 */
+  setRevealSession(reveal: ((sessionId: string) => void) | null): void {
+    this.onRevealSession = reveal;
   }
 
   /** 插件停用/卸载时清除该 ghost 的所有会话关联和节流状态，防止权限残留。 */
@@ -144,6 +156,14 @@ export class GhostAgentSlot {
     }
     sessions.add(sessionId);
     return token;
+  }
+
+  /** 消费卡片点击票。派活切任务与 agent.run 共用，一次作废。 */
+  consumeUserActionToken(token: string, ghostId: string): boolean {
+    const peeked = this.peekGrant(token, ghostId);
+    if (!peeked.ok) return false;
+    this.grants.delete(token);
+    return true;
   }
 
   /** 处理电子脑的 agent-request；所有失败都折叠成结构化返回。 */
@@ -312,6 +332,7 @@ export class GhostAgentSlot {
         trigger,
         disposition: result.disposition,
       });
+      this.maybeRevealSession(trigger, mode as GhostAgentRunMode, result.sessionId);
       return {
         ok: true,
         sessionId: result.sessionId,
@@ -326,6 +347,20 @@ export class GhostAgentSlot {
       return { ok: false, errorCode: 'INTERNAL', message: 'Agent 回合启动失败' };
     } finally {
       this.inFlightGhosts.delete(ghostId);
+    }
+  }
+
+  private maybeRevealSession(
+    trigger: string,
+    _mode: GhostAgentRunMode,
+    sessionId: string,
+  ): void {
+    // 只认用户当次点击。后台 new/fork 也会开可见任务，但不能抢前台。
+    if (trigger !== 'user-action') return;
+    try {
+      this.onRevealSession?.(sessionId);
+    } catch {
+      // 聚焦失败不能让已经成功的回合对插件变失败。
     }
   }
 

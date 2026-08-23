@@ -192,6 +192,24 @@ describe('新鲜度判定', () => {
     expect(views.map((view) => view.text)).toEqual(['bar']);
   });
 
+  it('跨桌面并列时不比各自主机的 emittedAt', () => {
+    const views = buildMobileVoiceDictionaryEntryViews([
+      {
+        entries: [{ text: '旧且时钟快' }],
+        fetchedAt: 1_000,
+        stateVector: { a: '0000000100.0000.a' },
+        emittedAt: 9_999_999,
+      },
+      {
+        entries: [{ text: '新到达' }],
+        fetchedAt: 9_000,
+        stateVector: { b: '0000000101.0000.b' },
+        emittedAt: 1,
+      },
+    ]);
+    expect(views.map((view) => view.text)).toEqual(['新到达']);
+  });
+
   it('最大 HLC 更大但并不包含对方时,不能因此被当成完整答案', () => {
     // 这正是只比最大时间戳会犯的错:B 的 HLC 更大,但它没有 A 的词。
     const views = buildMobileVoiceDictionaryEntryViews([

@@ -19,6 +19,19 @@ import {
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
+import {
+  rememberResolvedAppTheme,
+  resolveAppThemeIsDark,
+} from './resolved-app-theme';
+import {
+  parseWindowThemeVibrancyPayload,
+  readWindowThemeSnapshot,
+  writeWindowThemeSnapshot,
+} from './window-theme-mode-store';
+import {
+  createWindowBackdropMaterialArgument,
+  WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+} from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -370,9 +383,7 @@ import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
-import {
-  attachWorkLouderCodexWindowReveal,
-} from './worklouder-codex/index.js';
+import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
 import {
   disposeInputDevices,
   resumeInputDeviceTaskSlots,
@@ -425,6 +436,7 @@ import {
   registerWorktreeIpc,
   WorktreePool,
   reconcileWorktreesForDeletedSessions,
+  reconcilePendingSafeDirectoryCleanups,
 } from './worktree';
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
@@ -523,6 +535,7 @@ import {
   setIsDetachedForBackend,
 } from './mcp-integrations/browser.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
+import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
 import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
@@ -862,7 +875,7 @@ import {
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
 import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
-import { startGoalController, getGoalController } from './goal-host/index.js';
+import { startGoalController, getGoalController, resetGoalController, getGoalTeardownGeneration } from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
@@ -919,7 +932,19 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
  * startScheduler 返回同一实例，WeakSet 防止 scheduler.on 重复挂 listener。切账号后
  * resetScheduler 把 _scheduler 置 null，新实例不在 WeakSet 里，会重新 attach 一次。
  */
-async function attemptStartScheduler(): Promise<void> {
+// Provider/DB readiness can trigger this entry from several places. Serialize
+// complete account-host attempts, not only Scheduler construction: when an
+// account-boundary reset supersedes an older attempt, its cleanup must finish
+// before an abort recovery starts Scheduler, GoalController, and Learn again.
+let attemptStartSchedulerBarrier: Promise<void> = Promise.resolve();
+
+function attemptStartScheduler(): Promise<void> {
+  const attempt = attemptStartSchedulerBarrier.then(() => attemptStartSchedulerOnce());
+  attemptStartSchedulerBarrier = attempt.catch(() => undefined);
+  return attempt;
+}
+
+async function attemptStartSchedulerOnce(): Promise<void> {
   // 两个前置条件必须满足才能启动：
   //   1. maker 单例已构造 (splash check-environment 完成 → registerMakerIpcsAfterSplash)
   //   2. DbClient 已 smoke 通过 (user login → renderer 触发 'local-db:ensure-ready' IPC)
@@ -947,7 +972,14 @@ async function attemptStartScheduler(): Promise<void> {
   // 触发时可能发生），_initialCustomMcpRefresh 刚启动但尚未落地；在 startScheduler 前
   // await，确保第一个 scheduler tick 能看到用户已保存的自定义 MCP 配置。
   // 若 Maker 已被 registerMakerIpcsAfterSplash 构造过，promise 早已 resolve，no-op。
+  const goalGenBefore = getGoalTeardownGeneration();
   await waitForInitialCustomMcpRefresh();
+  // If a teardown raced the await, bail out — the next account's activation
+  // pass will re-trigger attemptStartScheduler with fresh state.
+  if (getGoalTeardownGeneration() !== goalGenBefore) {
+    console.log('[bootstrap-electron] attemptStartScheduler: teardown raced await, aborting');
+    return;
+  }
   const automationGitBaselineHooks = createAutomationUserTurnGitBaselineHooks();
   try {
     const scheduler = await startScheduler({
@@ -958,6 +990,14 @@ async function attemptStartScheduler(): Promise<void> {
       logger: createSchedulerLogger('scheduler-host'),
       ...automationGitBaselineHooks,
     });
+    // startScheduler fences resets while its async startup is in flight. Keep
+    // the boundary check immediately before listener publication as a second
+    // guard so a stale generation can never make readiness visible.
+    if (getGoalTeardownGeneration() !== goalGenBefore) {
+      console.log('[bootstrap-electron] attemptStartScheduler: teardown raced scheduler start, aborting stale scheduler attach');
+      await resetScheduler();
+      return;
+    }
     // scheduler 真正 ready 后挂 listener + 喂入 readiness holder。WeakSet 按实例
     // 去重:localDb onReady 重试可能再次拿到同实例，此时 no-op；
     // 切账号后新实例不在 set 里，会重新 attach。
@@ -971,6 +1011,13 @@ async function attemptStartScheduler(): Promise<void> {
     }
   } catch (err) {
     console.error('[bootstrap-electron] startScheduler failed (non-fatal):', err);
+  }
+  // A superseded startup is reported as a non-fatal error by the catch above;
+  // keep the old post-await fence as well so it cannot continue into
+  // GoalController/learn-host startup with the stale maker.
+  if (getGoalTeardownGeneration() !== goalGenBefore) {
+    console.log('[bootstrap-electron] attemptStartScheduler: teardown raced scheduler start, aborting stale account startup');
+    return;
   }
   // GoalController 与 scheduler 同就绪点启动(maker + localDb 均 ready):内部幂等
   // (_controller 已存在则直接返回),启动时 resume 所有 active goal。失败非致命。
@@ -1025,10 +1072,7 @@ const _scheduleIpcRegistered = new WeakSet<object>();
  */
 function isChatEmbeddingAvailable(): boolean {
   try {
-    return isCindyEmbeddingModelAvailable(
-      getDesktopSelectableCatalog(),
-      CHAT_EMBED_MODEL_ID,
-    );
+    return isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), CHAT_EMBED_MODEL_ID);
   } catch {
     return false;
   }
@@ -1123,7 +1167,9 @@ function scheduleChatEmbeddingRuntimeReconcile(): void {
       }
     })
     .catch((err: unknown) => {
-      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', { error: String(err) });
+      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', {
+        error: String(err),
+      });
     });
 }
 
@@ -1235,10 +1281,8 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
     }
   };
 
-  await run('interruptGhostCallsForAccountBoundary', () =>
-    withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
-  await run('waitForGhostMutations', () =>
-    withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
+  await run('interruptGhostCallsForAccountBoundary', () => withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
+  await run('waitForGhostMutations', () => withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
   await run('suspendAllGhosts', suspendAllGhosts);
 
   if (failures.length > 0) {
@@ -1317,13 +1361,19 @@ function clearAccountBoundaryAbortMark(): void {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const blockingFailures: unknown[] = [];
-  // Raised before anything else in this function, because everything below
-  // it is destructive: input device slots are suspended, the custom provider
-  // catalog is cleared, IM, the scheduler, embedding and the Ghost projection
-  // are stopped. Failing to raise it aborts the handover — and it used to do
-  // that *after* those services were already down, leaving the user on a
-  // half-dismantled old account with no way back except a restart. From here
-  // the abort costs nothing: nothing has been taken apart yet.
+  // Goal timers can dispatch through the outgoing Maker while launch-fence
+  // acquisition waits behind queued filesystem work. Invalidate them before
+  // the first await; resetGoalController() synchronously disposes the current
+  // controller and cancels continuation / usage-resume timers.
+  // Start disposal synchronously, then drain it before waiting on the
+  // cross-process launch fence. This closes the Goal boundary immediately;
+  // disposal itself only settles owner-scoped persistence and cannot launch a
+  // new durable runner after the controller has been fenced.
+  const goalDispose = resetGoalController();
+  // Raise the durable-run fence before the remaining destructive teardown:
+  // input device slots are suspended, the custom provider catalog is cleared,
+  // and IM, scheduler, embedding and Ghost projection are stopped. Failing to
+  // raise it still aborts the handover before those services are taken apart.
   //
   // Holding it for the whole teardown rather than only the shutdown+sweep is
   // the intended widening: a durable launch is exactly what must not start
@@ -1337,6 +1387,36 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       path.join(app.getPath('userData'), 'pi-agent-home'),
     );
   } catch (err) {
+    try {
+      await goalDispose;
+    } catch (disposeErr) {
+      authBoundaryLog.error(`resetGoalController on ${reason} failed (non-fatal):`, disposeErr);
+    }
+    // The handover is aborting before the owner commit, so the outgoing Maker
+    // and DB remain authoritative. Recreate the controller disposed above;
+    // otherwise a transient fence failure leaves the still-active account with
+    // no goal IPC/runtime until the whole app restarts.
+    try {
+      const maker = getMakerCore();
+      const automationGitBaselineHooks = createAutomationUserTurnGitBaselineHooks();
+      startGoalController({
+        maker,
+        getDb: () => getDbClient().drizzle,
+        broadcastStatus: broadcastGoalStatus,
+        ...automationGitBaselineHooks,
+      });
+      // A startup already in flight before resetGoalController() will exit on
+      // its generation fence (and may stop a scheduler it just constructed).
+      // Queue a fresh full account-host attempt behind that cleanup so the
+      // still-active account also regains Scheduler and Learn. Do not await it:
+      // the original fence error must remain the handover result.
+      void attemptStartScheduler();
+    } catch (restoreErr) {
+      authBoundaryLog.error(
+        `restore GoalController after launch-fence failure on ${reason} failed:`,
+        restoreErr,
+      );
+    }
     // Fail closed, unlike quit and the relaunch. Those two are allowed to
     // continue without a fence because the process is about to disappear
     // (quit) or the operation is cancelled outright (relaunch). Here the
@@ -1350,6 +1430,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       err,
       'the PI Subagent launch fence could not be raised',
     );
+  }
+  try {
+    await goalDispose;
+  } catch (err) {
+    authBoundaryLog.error(`resetGoalController on ${reason} failed (non-fatal):`, err);
   }
   try {
     // Hardware must stop before the long async drain. Otherwise a held stick or
@@ -1667,7 +1752,10 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   }
 
   if (blockingFailures.length > 0) {
-    throw new AggregateError(blockingFailures, `account boundary teardown on ${reason} was incomplete`);
+    throw new AggregateError(
+      blockingFailures,
+      `account boundary teardown on ${reason} was incomplete`,
+    );
   }
   // Reached only when the handover ran all the way through, which is exactly
   // when a previous abort's blocking state stops being true.
@@ -1823,6 +1911,7 @@ const rsbWindowController = new RsbWindowController({
   tabHandoffChannel: MAKER_PUSH.RSB_WINDOW_TAB_HANDOFF,
   isQuitting: () => isQuitting,
   canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
+  resolveHostContext: resolveRsbHostContextFromSession,
   log: createLogger('right-sidebar-window-controller'),
 });
 
@@ -1994,7 +2083,11 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
     }
   },
   sendToWindow: (win, channel, payload) => {
-    try { win.webContents.send(channel, payload); } catch { /* ignore */ }
+    try {
+      win.webContents.send(channel, payload);
+    } catch {
+      /* ignore */
+    }
   },
   isQuitting: () => isQuitting,
   log: createLogger('ghost-panel-window-controller'),
@@ -2073,7 +2166,9 @@ registerTabOpResultHandler({
 // an automation tab-op pop the sidebar window first when the user prefers
 // detached mode but has the window closed.
 setMainWindowAccessorForBackend(() => rsbWindowController.getHostWebContents());
-setEnsureHostForBackend(() => rsbWindowController.ensureOpenForAutomation());
+setEnsureHostForBackend((sessionId) =>
+  rsbWindowController.ensureOpenForAutomation({ sessionId }),
+);
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
   try {
@@ -3176,18 +3271,22 @@ const createWindow = () => {
   // 效果由 renderer 的 swallowActivationClick DOM adapter 承接,即时生效。
   const swallowActivationClick = readWindowBehaviorSettings().swallowActivationClick;
 
-  // Use nativeTheme to pick initial background color matching OS preference,
-  // avoiding white flash on startup for dark mode users.
+  // Windows uses the renderer theme-mode mirror before the first BrowserWindow exists;
+  // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
   // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
+  const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
+  const isDark = process.platform === 'win32'
+    ? resolveAppThemeIsDark(
+        nativeTheme.shouldUseDarkColors,
+        persistedTheme?.mode,
+        persistedTheme?.resolvedIsDark,
+      )
+    : nativeTheme.shouldUseDarkColors;
   const bgColor =
-    process.platform === 'darwin'
-      ? '#00000000'
-      : nativeTheme.shouldUseDarkColors
-        ? '#1f1f1e'
-        : '#f8f8f6';
+    process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
-    'cindy',
-    nativeTheme.shouldUseDarkColors,
+    persistedTheme?.familyId ?? 'cindy',
+    isDark,
     process.platform,
   );
 
@@ -3228,6 +3327,9 @@ const createWindow = () => {
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: [
+        createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+      ],
       spellcheck: false,
       // 默认保留 Chromium 后台节流；只有 active turn 或 terminal grace 期间才由
       // setMainWindowBackgroundThrottlingForActiveTurn 临时关闭，避免后台 idle 常驻耗电。
@@ -3704,14 +3806,34 @@ const registerIpcHandlers = () => {
     }
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);
+      win.webContents.send(
+        WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+        config.backgroundMaterial,
+      );
     }
     win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
 
-  ipcMain.on('theme:apply-vibrancy', (_event, payload: { familyId: string; isDark: boolean }) => {
-    applyWindowVibrancy(payload.familyId, payload.isDark);
-  });
+  ipcMain.on(
+    'theme:apply-vibrancy',
+    (event, rawPayload: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const payload = parseWindowThemeVibrancyPayload(rawPayload);
+      if (!payload) return;
+      if (payload.mode === undefined || payload.systemModeFollowsSystem === undefined) return;
+      if (process.platform === 'win32') {
+        writeWindowThemeSnapshot(
+          payload.mode,
+          payload.isDark,
+          payload.familyId,
+          payload.systemModeFollowsSystem,
+        );
+      }
+      rememberResolvedAppTheme(payload.isDark);
+      applyWindowVibrancy(payload.familyId, payload.isDark);
+    },
+  );
 
   ipcMain.on('get-app-version', (event) => {
     event.returnValue = app.getVersion();
@@ -4294,6 +4416,16 @@ const registerIpcHandlers = () => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? getWindow();
     if (!win) return false;
     return win.isFullScreen() || win.isSimpleFullScreen();
+  });
+
+  ipcMain.handle('toggle-fullscreen', (event): boolean => {
+    assertTrustedAppRendererEvent(event);
+    const win = BrowserWindow.fromWebContents(event.sender) ?? getWindow();
+    if (!win) return false;
+    const next = !(win.isFullScreen() || win.isSimpleFullScreen());
+    if (win.isSimpleFullScreen()) win.setSimpleFullScreen(false);
+    win.setFullScreen(next);
+    return next;
   });
 
   // Find-in-page (F-FIP-1): renderer overlay drives Chromium's native page search.
@@ -5162,6 +5294,10 @@ const registerIpcHandlers = () => {
     // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
     void reconcileWorktreesForDeletedSessions().catch((err) => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
+    });
+    // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
+    void reconcilePendingSafeDirectoryCleanups().catch((err) => {
+      console.error('[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):', err);
     });
     // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
     // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
@@ -7203,6 +7339,16 @@ app.on('ready', async () => {
   registerLocalDbIpc({
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
+    closeIdleSessionForMove: async (sessionId) => {
+      const maker = getMakerIfReady();
+      if (maker?.getSession(sessionId)?.isTurnRunning()) return false;
+      if (maker) {
+        await rehydrateCloseSuppression.withSuppressed(sessionId, () =>
+          maker.closeSession(sessionId),
+        );
+      }
+      return true;
+    },
     reconcilePersistedSessionRuntimes: reconcilePersistedIOSSimulatorOwnership,
     withSessionLock: withSendToSessionLock,
     // Mirrors exactly what the resume handler requires (`maker-ipc/register.ts`):
@@ -7626,11 +7772,7 @@ app.on('ready', async () => {
       setAccountProviderReadinessReadyHandler((ownerId) => {
         startAccountIntegrationsAfterOwnerDbReady(ownerId, {
           isOwnerCurrent: (id) =>
-            isLocalDbOwnerCurrent(
-              authManager.getAuthState(),
-              id,
-              isAppSessionBoundaryPending(),
-            ),
+            isLocalDbOwnerCurrent(authManager.getAuthState(), id, isAppSessionBoundaryPending()),
           startHookControlAccount,
           startImConnection,
           log: dbClientLog,
@@ -7640,7 +7782,8 @@ app.on('ready', async () => {
       });
       accountProviderReadinessArm.publish(userId, startProviderReadiness, resumeIncompleteDiscovery);
       if (makerProviderRefreshConfigured) startProviderReadiness();
-      else startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
+      else
+        startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
       logStartupPhase('post-db-hooks-scheduled');
     },
   });
@@ -8324,7 +8467,10 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
     // trim 后拒绝空白元素，避免脏值（" deepseek " / "  "）落盘。
     const trimmed = input.targetModels.map((m) => (typeof m === 'string' ? m.trim() : ''));
     if (trimmed.some((m) => m.length === 0)) {
-      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a non-blank string array');
+      throwIpcError(
+        'INVALID_PARAMS',
+        'vision bridge targetModels must be a non-blank string array',
+      );
     }
     patch.targetModels = trimmed;
   }
@@ -8336,11 +8482,17 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
       continue;
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     const ref = value as Record<string, unknown>;
     if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     // trim 后拒绝纯空白，避免脏配置（空白串）落盘。
     const providerId = ref.providerId.trim();

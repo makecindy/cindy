@@ -1,5 +1,6 @@
 import { messageContentToPreview } from './messageNormalize.js';
 import { stripTrailingPathSeparators } from './pathText.js';
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import type { RemoteSchedule, RemoteScheduleRun, RemoteScheduleRunStatus } from './scheduleTypes.js';
 import { toMillis } from './scheduleModel.js';
@@ -528,7 +529,7 @@ function remoteSessionListItemIsRunning(
 
 export function buildRemoteSessionCardPreview(
   item: RemoteSessionListItem,
-  options: { running?: boolean } = {},
+  options: { running?: boolean; localizer?: PresentationLocalizer } = {},
 ): string | null {
   // 等待交互优先于一切:此时 compactDetail 往往是过期的 tool 状态行(典型
   // 'ask_user_question running...'),和"在等你"的语义打架。与桌面卡片 awaitingText
@@ -538,17 +539,49 @@ export function buildRemoteSessionCardPreview(
     || (live != null && isActiveLiveActivity(live) && live.phase === 'needs-interaction');
   if (awaiting) {
     const kind = live?.interactionKind;
-    if (kind === 'permission') return '等待授权';
-    if (kind === 'plan_review') return '等待计划审阅';
-    if (kind === 'ask_user_question') return '等待你的回复';
-    return '等待你处理';
+    if (kind === 'permission') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.permission',
+        '等待授权',
+      );
+    }
+    if (kind === 'plan_review') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.planReview',
+        '等待计划审阅',
+      );
+    }
+    if (kind === 'ask_user_question') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.answer',
+        '等待你的回复',
+      );
+    }
+    return presentationText(
+      options.localizer,
+      'devices.presentation.sessionList.preview.attention',
+      '等待你处理',
+    );
   }
   if (options.running === true) {
     if (live && isActiveLiveActivity(live)) {
       const text = normalizeInlinePreview(live.compactDetail);
       if (text) return text;
     }
-    return item.scheduleInfo?.running || item.session.source === 'scheduler' ? '自动化执行中' : '运行中';
+    return item.scheduleInfo?.running || item.session.source === 'scheduler'
+      ? presentationText(
+          options.localizer,
+          'devices.presentation.sessionList.preview.automationRunning',
+          '自动化执行中',
+        )
+      : presentationText(
+          options.localizer,
+          'devices.presentation.sessionList.preview.running',
+          '运行中',
+        );
   }
   // idle:展示最近一条消息预览。messagePreview 来自已 load 的消息(打开过的会话),
   // 或由首页构建时回退到 device-link 带的 session.preview(见 buildMobileHomePresentation /
@@ -648,7 +681,7 @@ function matchesStatusFilter(
   return session.status === filter;
 }
 
-function matchesSearchQuery(
+export function matchesSearchQuery(
   session: RemoteSession,
   query: string,
   options: {

@@ -94,6 +94,7 @@
     "tabs": {
       "general": "General",
       "billing": "Usage and billing",
+      "usage": "Usage history",
       "personalization": "Personalization",
       "apiKeys": "Tool Keys",
       "voiceInput": "Voice Input",
@@ -1047,6 +1048,13 @@
           "cancel": "Cancel",
           "edit": "Edit",
           "delete": "Delete",
+          "termLabel": "Term",
+          "aliasSeparator": ", ",
+          "aliases": "Often misheard as: {{aliases}}",
+          "aliasesEditLabel": "Often misheard as",
+          "aliasesEditAriaLabel": "Edit common misrecognitions",
+          "aliasesPlaceholder": "One misrecognition per line",
+          "aliasesEditHint": "Use one per line. Clear the field to remove them all.",
           "searchAriaLabel": "Search dictionary",
           "closeSearch": "Close search",
           "searchPlaceholder": "Search dictionary",
@@ -3496,6 +3504,12 @@
     },
     "shortcuts": {
       "title": "Keyboard Shortcuts",
+      "accessories": {
+        "title": "Accessories",
+        "description": "Keyboards, gamepads, and other input devices",
+        "openAria": "Open accessories",
+        "back": "Back"
+      },
       "resetAll": "Reset all to defaults",
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
@@ -3532,7 +3546,7 @@
           },
           "composer.submit": {
             "name": "Send message",
-            "description": "Send the current composer message"
+            "description": "Send the composer message, or approve the pending request"
           },
           "feedback": {
             "name": "Send feedback",
@@ -3615,7 +3629,11 @@
           },
           "navigateBack": {
             "name": "Back",
-            "description": "Go back in navigation history"
+            "description": "Go back, or decline the pending request"
+          },
+          "toggleFullscreen": {
+            "name": "Toggle fullscreen",
+            "description": "Enter or exit fullscreen"
           },
           "composer.focus": {
             "name": "Focus composer",
@@ -3635,7 +3653,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
         "openAria": "Open Work Louder Codex Micro settings",
         "back": "Back to keyboard shortcuts",
@@ -3936,7 +3953,113 @@
       "edit": "Edit",
       "delete": "Delete",
       "deleteAria": "Delete shortcut for {{name}}",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "xboxGamepad": {
+        "title": "Xbox controller",
+        "openAria": "Open Xbox controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "back": "Back",
+        "retry": "Retry",
+        "layout": {
+          "title": "Controls",
+          "description": "Click a control to change what it does. Pressing the pad lights the matching control here.",
+          "clickToEdit": "Click to set",
+          "editor": {
+            "title": "Control",
+            "description": "Choose a Cindy action for this control. Unmapped controls do nothing.",
+            "done": "Done",
+            "assigned": "Action",
+            "assignedDescription": "Fires on press. Hold-to-talk ends when you release."
+          },
+          "reset": {
+            "title": "Reset mapping",
+            "description": "Restores each control’s action without turning the controller off.",
+            "button": "Reset mapping"
+          }
+        },
+        "stick": {
+          "description": "A stick can scroll the conversation, or fire a different action in each direction.",
+          "customDescription": "Fires once when the stick enters this direction.",
+          "mode": {
+            "label": "Stick mode",
+            "description": "Conversation scroll follows how far you push. Custom assigns an action per direction.",
+            "options": {
+              "conversation-scroll": "Scroll conversation",
+              "custom": "Custom directions"
+            }
+          }
+        },
+        "directions": {
+          "up": "Up",
+          "right": "Right",
+          "down": "Down",
+          "left": "Left"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "Left stick click",
+          "rs": "Right stick click",
+          "dpadUp": "D-pad up",
+          "dpadDown": "D-pad down",
+          "dpadLeft": "D-pad left",
+          "dpadRight": "D-pad right",
+          "leftStick": "Left stick",
+          "rightStick": "Right stick"
+        },
+        "actions": {
+          "none": "Unmapped",
+          "voice": "Voice input",
+          "voiceDescription": "Hold for voice input, release to stop.",
+          "commands": "Commands",
+          "skills": "Skills",
+          "choose": "Choose action"
+        },
+        "errors": {
+          "load": "Could not load controller settings",
+          "save": "Could not save controller settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "toggle": {
+            "label": "Enable",
+            "aria": "Let this Cindy use an Xbox controller while it is in the foreground"
+          },
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "present": "Connected",
+            "disabled": "Off",
+            "error": "Connection error",
+            "unavailable": "Not supported on this system"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for an Xbox controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect an Xbox controller with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read an Xbox controller yet."
+          }
+        },
+        "device": {
+          "usb": "Wired",
+          "bluetooth": "Bluetooth",
+          "battery": "{{percent}}%",
+          "charging": "Charging {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "Plugins",
@@ -5149,6 +5272,70 @@
       "lowCache": "Cache hit rate is low; more context was billed again this turn"
     }
   },
+  "usageHistory": {
+    "description": "Token usage produced inside Cindy on this device. Records start accumulating when the feature ships; earlier history is not backfilled.",
+    "empty": "No usage recorded yet. This fills in once you start a chat.",
+    "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
+    "summary": {
+      "title": "Overview"
+    },
+    "stats": {
+      "todayTokens": "Tokens today",
+      "totalTokens": "Tokens (30d)",
+      "streak": "Active streak",
+      "cacheHitRate": "Cache hit rate (30d)",
+      "models": "Models used"
+    },
+    "heatmap": {
+      "title": "Activity heatmap",
+      "subtitle": "Last 20 weeks",
+      "emptyCell": "No usage recorded"
+    },
+    "daily": {
+      "title": "Daily tokens (30d)",
+      "subtitle": "Stacked by model"
+    },
+    "byAgent": {
+      "title": "By Agent / harness",
+      "subtitle": "Last 30 days",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "Tokens (30d)",
+        "share": "Share",
+        "today": "Today",
+        "hitRate": "Cache hit rate",
+        "models": "Models"
+      }
+    },
+    "byModel": {
+      "title": "By model",
+      "subtitle": "Last 30 days",
+      "col": {
+        "model": "Model",
+        "total": "Total tokens",
+        "share": "Share",
+        "input": "Input",
+        "output": "Output",
+        "cacheRead": "Cache read",
+        "cacheCreate": "Cache write",
+        "hitRate": "Cache hit rate"
+      }
+    },
+    "tasks": {
+      "title": "Top sessions by tokens",
+      "subtitle": "Sessions active in the last 30 days, ranked by lifetime tokens",
+      "col": {
+        "task": "Session",
+        "model": "Model",
+        "provider": "Provider",
+        "tokens": "Total tokens",
+        "context": "Context used",
+            "lastActive": "Last active"
+      },
+      "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
+      "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
+    }
+  },
   "usageDashboard": {
     "title": "Usage & Spend",
     "updating": "Updating",
@@ -5506,6 +5693,7 @@
     },
     "browser": {
       "newTab": "New tab",
+      "audible": "Playing audio",
       "urlPlaceholder": "Enter URL or search",
       "goBack": "Back",
       "goForward": "Forward",
@@ -6089,6 +6277,12 @@
     }
   },
   "sidebar": {
+    "vendorReadiness": {
+      "loading": "Checking availability",
+      "ready": "Ready",
+      "unauthenticated": "Sign-in required",
+      "binary-missing": "Component unavailable"
+    },
     "ariaLabel": "Sidebar navigation",
     "horizontalTabbarAria": "Main view switcher",
     "tabs": {
@@ -6128,10 +6322,10 @@
         "enabled": "Enabled"
       },
       "close": "Close Download Dialog"
-    },
-    "vendorReadiness": {
-      "loading": "loading"
     }
+  },
+  "common": {
+    "dismiss": "Dismiss"
   },
   "commonUi": {
     "crossAgentConvert": {
@@ -6583,6 +6777,7 @@
       "popoverTitle": "Bring in a Worker",
       "startButton": "Start collab",
       "startFailed": "Failed to start collaboration",
+      "stopFailed": "Failed to stop collaboration",
       "startFailedContinue": "Failed to start collaboration. Continuing as a single session.",
       "createWorkerRefreshFailed": "Unable to refresh Worker status. Please try again.",
       "assignmentFailed": "The Worker was created, but task assignment could not be confirmed. Check the Worker pane before trying again.",
@@ -6628,6 +6823,7 @@
     "chatInput": {
       "defaultPlaceholder": "What shall we work on today~",
       "createAgentPlaceholder": "Hi {{appName}}!",
+      "recommendationShortcut": "Tab",
       "voiceInput": {
         "start": "Start voice input",
         "stop": "Stop voice input",
@@ -6863,6 +7059,8 @@
     "verificationFailed": "Cindy couldn’t confirm whether the ChatGPT sign-in has recovered. Check again."
   },
   "chat": {
+    "jumpToBottom": "Jump to bottom",
+    "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
       "skippedAnswer": "Skipped",
@@ -7058,6 +7256,8 @@
       "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
+      "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in",
+      "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in",
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
@@ -7100,6 +7300,10 @@
       "dismissTitle": "Not now"
     },
     "media": {
+      "clickToZoom": "Click to zoom",
+      "audioPlay": "Play audio",
+      "audioPause": "Pause audio",
+      "modelPreviewAlt": "3D model preview",
       "imageCopied": "Image copied",
       "copyFailed": "Copy failed",
       "openFolderFailed": "Failed to open folder",
@@ -7702,6 +7906,8 @@
       "waiting": "Just wait…",
       "working": "Working…",
       "running": "Running…",
+      "waitingWorkflow": "Waiting for Workflow…",
+      "waitingWorkflowProgress": "Waiting for Workflow · {{done}}/{{total}} agents",
       "turnStart": "{{status}}",
       "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
       "runningTool": "{{tool}} running…"
@@ -7778,6 +7984,9 @@
         "cancel": "Cancel"
       },
       "chatPlaceholder": "Let's keep chatting…",
+      "worktreeCreating": "Creating worktree",
+      "worktreeFailed": "Worktree creation failed",
+      "extraDirsSaveFailed": "Failed to save additional directories",
       "chatDropAreaAria": "Chat file drop area",
       "openWorkingDirAria": "Open working directory in the system file manager",
       "projectContextLoaded": "Project Knowledge Base loaded",
@@ -7793,6 +8002,10 @@
       "backToAutomations": "Back to Automations",
       "waitForReply": "Waiting for your reply in the document area…",
       "modelSwitchedFastModeOff": "Model switched, Fast Mode disabled"
+    },
+    "remoteDesktopConfirmation": {
+      "title": "Confirmation required on the controlled computer",
+      "description": "Open Cindy on the controlled computer to review and respond."
     },
     "handoff": {
       "card": {
@@ -7906,8 +8119,9 @@
       },
       "filterVendor": {
         "all": "All",
-        "cc": "Claude",
-        "codex": "Codex"
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
       },
       "filterGroupBy": {
         "project": "Group by project",
@@ -8317,6 +8531,8 @@
         "revealFolder": "Show in folder"
       },
       "fileBody": {
+        "drawioLoading": "Loading draw.io preview…",
+        "pdfLoading": "Loading PDF preview…",
         "selectFile": "Select a file to preview",
         "readFailed": "Read file failed: {{message}}",
         "truncatedNotice": "File is large, only the first 2 MB are shown — open in system to view the full content",
@@ -8428,7 +8644,7 @@
       },
       "filterAria": "Search filters and sort (Sort: {{sort}}, Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
       "filter": {
-        "label": "Filters",
+        "label": "Search criteria",
         "active": "{{count}} filters",
         "reset": "Reset",
         "allProjects": "All projects"
@@ -8446,6 +8662,48 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "presentation": {
+      "status": {
+        "active": "Active",
+        "paused": "Paused",
+        "expired": "Once",
+        "running": "Running"
+      },
+      "summary": {
+        "hourly": "Hourly",
+        "daily": "Daily at {{time}}",
+        "weekly": "{{weekday}} at {{time}}",
+        "weekdays": "Weekdays at {{time}}",
+        "weekends": "Weekends at {{time}}",
+        "monthly": "Monthly on day {{day}} at {{time}}",
+        "custom": "Custom"
+      },
+      "weekday": {
+        "full": { "0": "Sunday", "1": "Monday", "2": "Tuesday", "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday" },
+        "short": { "0": "Su", "1": "Mo", "2": "Tu", "3": "We", "4": "Th", "5": "Fr", "6": "Sa" }
+      },
+      "time": {
+        "last": "Last {{value}}",
+        "today": "Today · {{time}}",
+        "yesterday": "Yesterday · {{time}}",
+        "daysAgo": "{{count}} days ago · {{time}}",
+        "startedSeconds": "Started {{count}}s ago",
+        "startedMinutes": "Started {{count}}m ago",
+        "startedHours": "Started {{count}}h ago",
+        "intervalMinutes": "{{count}}m",
+        "intervalHours": "{{count}}h",
+        "intervalDays": "{{count}}d",
+        "nextLessThanMinute": "Next less than 1 min",
+        "next": "Next {{when}} (in {{interval}})"
+      },
+      "destination": {
+        "boundSession": "Bound to session {{id}}",
+        "newDialogue": "New dialogue",
+        "newWorktreeSession": "New worktree session",
+        "newSession": "New session",
+        "inDirectory": "{{base}} in "
+      }
+    },
     "page": {
       "title": "Automations",
       "totalCount": "{{count}} total",
@@ -9978,6 +10236,7 @@
       "enableCollabSubmit": "Start Collaboration"
     },
     "rolePill": {
+      "unread": "Unread update",
       "worker": "Worker",
       "workersHeader": "Workers",
       "workerCountSummary_one": "{{totalCount}} worker · {{activeCount}} active",
@@ -9992,6 +10251,10 @@
       "layoutMenuLabel": "Worker list layout",
       "layoutTabs": "Tabs",
       "layoutDropdown": "Dropdown",
+      "scrollWorkersLeft": "Scroll to earlier workers",
+      "scrollWorkersRight": "Scroll to more workers",
+      "scrollWorkersLeftEdge": "Already at the earliest worker",
+      "scrollWorkersRightEdge": "Already at the latest worker",
       "errorBadge": "ERR",
       "errorBadgeAria": "A worker has an error"
     },

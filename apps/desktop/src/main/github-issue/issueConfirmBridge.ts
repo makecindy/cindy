@@ -17,11 +17,10 @@
  * 本模块保持 electron-free(broadcast 由调用方注入),单测直接 new。
  */
 
-import { randomUUID } from 'node:crypto';
-
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
+import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection.js';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
@@ -120,7 +119,7 @@ export class IssueConfirmBridge {
     submissionChoices: IssueSubmissionChoices,
     suggestedPublicName?: string,
   ): Promise<IssueConfirmDecision> {
-    const requestId = randomUUID();
+    const requestId = createDesktopOnlyConfirmationRequestId();
     const request: IssueConfirmInteractionSnapshot = {
       kind: 'issue_confirm',
       requestId,

@@ -125,3 +125,188 @@ describe('createBinaryProvisioner emit 时序', () => {
     expect(statuses[statuses.length - 1]).toBe('ready');
   });
 });
+
+
+describe('离线启动 fallback', () => {
+  async function mountVerifiedBinary(
+    installSubdir: string,
+    version: string,
+    binaryName: string,
+  ): Promise<{ binPath: string; cleanup: () => void }> {
+    const { app } = await import('electron');
+    const installRoot = path.join(app.getPath('userData'), installSubdir);
+    const versionDir = path.join(installRoot, version);
+    fs.mkdirSync(versionDir, { recursive: true });
+    const binPath = path.join(versionDir, binaryName);
+    fs.writeFileSync(binPath, 'fake binary');
+    fs.chmodSync(binPath, 0o755);
+    fs.writeFileSync(path.join(versionDir, '.verified'), '');
+    return {
+      binPath,
+      cleanup: () => fs.rmSync(installRoot, { recursive: true, force: true }),
+    };
+  }
+
+  it('本地有已验证版本时:manifest fetch 失败仍返回 ready', async () => {
+    const installSubdir = `offline-fallback-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const version = '1.2.3-verified';
+    const binaryName = 'test-binary';
+    const local = await mountVerifiedBinary(installSubdir, version, binaryName);
+
+    try {
+      // 让 manifest 和 cache 都返回 null（模拟 CDN 不可达）
+      const { getCachedManifest, fetchManifest } = await import('../../manifestService.js');
+      vi.mocked(getCachedManifest).mockReturnValue(null as any);
+      vi.mocked(fetchManifest).mockResolvedValue(null as any);
+
+      const provisioner = createBinaryProvisioner({
+        vendorKey: 'claude',
+        manifestField: 'testField',
+        installSubdir,
+        artifact: { kind: 'raw', binaryName },
+      });
+
+      const result = await provisioner.prepare();
+
+      expect(result.ready).toBe(true);
+      expect(result.binaryPath).toBe(local.binPath);
+    } finally {
+      local.cleanup();
+    }
+  });
+
+  it('download 失败时:本地有已验证版本仍返回 ready', async () => {
+    const installSubdir = `download-fallback-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const version = '2.0.0-verified';
+    const binaryName = 'test-binary';
+    const local = await mountVerifiedBinary(installSubdir, version, binaryName);
+
+    try {
+      // manifest 返回成功，但 download 会抛错（模拟 CDN 拦截）
+      const { getCachedManifest, fetchManifest } = await import('../../manifestService.js');
+      vi.mocked(getCachedManifest).mockReturnValue(null as any);
+      vi.mocked(fetchManifest).mockResolvedValue({
+        version: '2.0.0',
+        claude: { file: '/linux-x64/claude.bin', sha256: 'abc', size: 100 },
+      } as any);
+
+      // Mock download to throw
+      const downloader = await import('../../downloader/index.js');
+      vi.mocked(downloader.download).mockRejectedValue(new Error('CDN blocked'));
+
+      const provisioner = createBinaryProvisioner({
+        vendorKey: 'claude',
+        manifestField: 'claude',
+        installSubdir,
+        artifact: { kind: 'raw', binaryName },
+      });
+
+      const result = await provisioner.prepare();
+
+      expect(result.ready).toBe(true);
+      expect(result.binaryPath).toBe(local.binPath);
+    } finally {
+      local.cleanup();
+    }
+  });
+
+  it('解压失败时:本地有已验证版本仍返回 ready', async () => {
+    const installSubdir = `extract-fallback-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const version = '3.0.0-verified';
+    const binaryName = 'claude-test-bin';
+    const local = await mountVerifiedBinary(installSubdir, version, binaryName);
+
+    try {
+      const { getCachedManifest, fetchManifest } = await import('../../manifestService.js');
+      vi.mocked(getCachedManifest).mockReturnValue(null as any);
+      vi.mocked(fetchManifest).mockResolvedValue({
+        version: '3.0.0',
+        claudeCode: { file: 'claude/claude-3.0.0.gz', sha256: FAKE_SHA, size: 3 },
+      } as any);
+      // A successful download followed by invalid gzip exercises the catch path
+      // for extraction/verification failures, not just network failures.
+      mocks.download.mockImplementation(async (opts: DownloadOpts) => {
+        fs.mkdirSync(path.dirname(opts.targetPath), { recursive: true });
+        fs.writeFileSync(opts.targetPath, 'not gzip');
+        return {
+          path: opts.targetPath,
+          size: 8,
+          sha256: FAKE_SHA,
+          fromCache: false,
+          durationMs: 1,
+          resumedFromBytes: 0,
+        };
+      });
+
+      const provisioner = createBinaryProvisioner({
+        vendorKey: 'claude',
+        manifestField: 'claudeCode',
+        installSubdir,
+        artifact: { kind: 'gz', binaryName },
+      });
+
+      const result = await provisioner.prepare();
+
+      expect(result.ready).toBe(true);
+      expect(result.binaryPath).toBe(local.binPath);
+    } finally {
+      local.cleanup();
+    }
+  });
+
+  it('可选 runtime 在 manifest 失败时不复用旧版本', async () => {
+    const installSubdir = `optional-manifest-failure-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const local = await mountVerifiedBinary(installSubdir, '4.0.0-verified', 'pi');
+
+    try {
+      const { getCachedManifest, fetchManifest } = await import('../../manifestService.js');
+      vi.mocked(getCachedManifest).mockReturnValue(null as any);
+      vi.mocked(fetchManifest).mockResolvedValue(null as any);
+
+      const provisioner = createBinaryProvisioner({
+        vendorKey: 'pi',
+        manifestField: 'pi',
+        installSubdir,
+        optionalAsset: true,
+        artifact: { kind: 'raw', binaryName: 'pi' },
+      });
+
+      const result = await provisioner.prepare();
+
+      expect(result.ready).toBe(false);
+      expect(result.error).toBe('manifest_failed');
+    } finally {
+      local.cleanup();
+    }
+  });
+
+  it('可选 runtime 在下载失败时不复用旧版本', async () => {
+    const installSubdir = `optional-download-failure-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const local = await mountVerifiedBinary(installSubdir, '5.0.0-verified', 'pi');
+
+    try {
+      const { getCachedManifest, fetchManifest } = await import('../../manifestService.js');
+      vi.mocked(getCachedManifest).mockReturnValue(null as any);
+      vi.mocked(fetchManifest).mockResolvedValue({
+        version: '5.0.0',
+        pi: { file: 'pi/pi-5.0.0.gz', sha256: FAKE_SHA, size: 3 },
+      } as any);
+      mocks.download.mockRejectedValue(new Error('CDN blocked'));
+
+      const provisioner = createBinaryProvisioner({
+        vendorKey: 'pi',
+        manifestField: 'pi',
+        installSubdir,
+        optionalAsset: true,
+        artifact: { kind: 'gz', binaryName: 'pi' },
+      });
+
+      const result = await provisioner.prepare();
+
+      expect(result.ready).toBe(false);
+      expect(result.error).toBe('unknown');
+    } finally {
+      local.cleanup();
+    }
+  });
+});

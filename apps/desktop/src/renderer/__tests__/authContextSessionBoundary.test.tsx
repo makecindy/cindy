@@ -94,6 +94,7 @@ import {
   addModelFavorite,
   listModelFavorites,
 } from '@/state/modelFavorites';
+import { __testing as ssoOrgHistoryTesting } from '@/state/ssoOrgHistory';
 
 function user(id: string) {
   return {
@@ -157,6 +158,7 @@ describe('AuthContext session cache boundaries', () => {
     restoredToast.mockClear();
     mocks.confirm.mockClear();
     mocks.service.initialize.mockResolvedValue(authState('account-a'));
+    mocks.service.dispatchLoginAction.mockReset();
     mocks.service.logout.mockResolvedValue(undefined);
     mocks.service.enterLocalMode.mockResolvedValue(localAuthState());
     mocks.service.exitLocalMode.mockResolvedValue(authState(null));
@@ -165,6 +167,8 @@ describe('AuthContext session cache boundaries', () => {
     ).electronAPI = {
       onAuthSessionExpired: mocks.registerExpired,
     };
+    window.localStorage.clear();
+    ssoOrgHistoryTesting.reset();
   });
 
   afterEach(() => {
@@ -373,6 +377,91 @@ describe('AuthContext session cache boundaries', () => {
 
     expect(view.result.current.mode).toBe('local');
     expect(view.result.current.loginState).toBeNull();
+  });
+
+  it('remembers successful organization discovery before sole-SSO browser auth settles', async () => {
+    const providers = { email: true, phone: false, social: [] };
+    const identifierState = { step: 'identifier' as const, providers };
+    const methodChoiceState = {
+      step: 'method-choice' as const,
+      email: '',
+      methods: [
+        {
+          type: 'sso' as const,
+          connectionId: 'conn-1',
+          protocol: 'oidc' as const,
+          orgName: 'Example Corp',
+          connectionName: 'Example SSO',
+          ssoRequired: false,
+        },
+      ],
+    };
+    let resolveBrowser!: (result: unknown) => void;
+    mocks.service.initialize.mockResolvedValue(authState(null));
+    mocks.service.dispatchLoginAction
+      .mockResolvedValueOnce({ success: true, state: methodChoiceState })
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveBrowser = resolve;
+        }),
+      );
+
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.mode).toBe('signed-out'));
+
+    let pending!: ReturnType<typeof view.result.current.dispatchLoginAction>;
+    act(() => {
+      pending = view.result.current.dispatchLoginAction({
+        type: 'discover-sso-org',
+        org: 'Example-Corp',
+      });
+    });
+    await waitFor(() =>
+      expect(mocks.service.dispatchLoginAction).toHaveBeenCalledTimes(2),
+    );
+    expect(
+      JSON.parse(
+        window.localStorage.getItem(ssoOrgHistoryTesting.storageKey) ?? '{}',
+      ),
+    ).toEqual({
+      version: 1,
+      entries: ['Example-Corp'],
+    });
+
+    await act(async () => {
+      resolveBrowser({
+        success: false,
+        code: 'USER_CANCELLED',
+        state: identifierState,
+      });
+      await expect(pending).resolves.toMatchObject({
+        success: false,
+        code: 'USER_CANCELLED',
+      });
+    });
+  });
+
+  it('does not remember an organization when discovery itself fails', async () => {
+    const providers = { email: true, phone: false, social: [] };
+    mocks.service.initialize.mockResolvedValue(authState(null));
+    mocks.service.dispatchLoginAction.mockResolvedValueOnce({
+      success: false,
+      code: 'ORG_SSO_NOT_FOUND',
+      state: { step: 'identifier', providers },
+    });
+
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.mode).toBe('signed-out'));
+    await act(async () => {
+      await view.result.current.dispatchLoginAction({
+        type: 'discover-sso-org',
+        org: 'missing-corp',
+      });
+    });
+
+    expect(
+      window.localStorage.getItem(ssoOrgHistoryTesting.storageKey),
+    ).toBeNull();
   });
 
   /**

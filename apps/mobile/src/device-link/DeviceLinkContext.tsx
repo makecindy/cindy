@@ -63,7 +63,11 @@ import {
 } from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
-import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
+import {
+  DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL,
+  type MobileGoalStatusPayload,
+  type MobileVoiceDictionarySnapshotResult,
+} from '@cindy/maker-shared/device-link-contract';
 import {
   DeviceLinkTopicRegistry,
   markHeldRemoteTopicsSubscribed,
@@ -77,6 +81,7 @@ import {
   SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
 } from '@/session/remoteProjectOrder';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { applyMobileVoiceDictionarySnapshot } from '@/session/mobileVoiceDictionaryCache';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import {
   acquireDeviceSendSlot,
@@ -1180,6 +1185,15 @@ export function routeFrame(env: Envelope, handlers: {
   if (push.channel === FILE_BROWSER_EVENT_CHANNEL) {
     // 文件树变更是 workdir 域事件,与会话 store 无关,单独分发给文件浏览页。
     dispatchFileBrowserWatchEvent(push.payload);
+    return;
+  }
+  if (push.channel === DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL) {
+    // 只读全量快照由桌面主动推送，不经过 remoteControlEnabled 控制门禁。
+    // env.src 是 relay 写入的来源设备，缓存按它分片，不能信任 payload 自报 host。
+    void applyMobileVoiceDictionarySnapshot(
+      env.src,
+      push.payload as MobileVoiceDictionarySnapshotResult,
+    );
     return;
   }
   remoteSessionStore.applyRemotePush(env.src, push.channel, push.payload);

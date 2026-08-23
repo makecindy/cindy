@@ -51,9 +51,9 @@ export const AGENT_ISLAND_HOVER_SHORT_COOLDOWN_MS = 300;
 export const AGENT_ISLAND_TOOL_DETAIL_LINGER_MS = 2_000;
 export const AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS = 1_600;
 export const AGENT_ISLAND_FOCUS_VERIFY_TIMEOUT_MS = 1_500;
-// 未读的 completed / error 条目在灵动岛列表里驻留的上限;超过后即便用户没 ack,
-// 也从灵动岛列表 prune 掉,避免几小时前完成的 schedule / 后台任务无限期霸占展开视图。
-// 会话本身在侧栏的未读状态不受影响。
+// 未读的 completed / error 在**灵动岛浮窗**里驻留的上限;超过后即便用户没 ack,
+// 也不再占用展开列表。岛 state 会按 TTL prune;远程绿/红点改订独立的
+// remoteUnreadTerminals 账本,不跟完整会话(含活动文本)一起留下。
 export const AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS = 4 * 60 * 60 * 1_000;
 const AGENT_ISLAND_COMPACT_CURRENT_MIN_DWELL_MS = 1_200;
 const AGENT_ISLAND_MEASURED_HEIGHT_MAX = 2_000;
@@ -193,6 +193,18 @@ export interface AgentIslandState {
   strings: AgentIslandStrings;
   /** 工具状态文案的措辞实现:默认共享包中文表,service 注入本地化版(lazy t())。 */
   toolWording: ToolRowWording;
+  /**
+   * 远程侧栏绿/红点的未读账本。岛面 TTL 只决定浮窗还显不显,不删这里。
+   * 条目只保留 phase / lastActivityAt,不含活动文本;resetRuntimeState 会清掉
+   * (进程重启后靠 localDb 兜底补发收尾包)。
+   */
+  remoteUnreadTerminals: Map<string, AgentIslandRemoteUnreadTerminal>;
+}
+
+export interface AgentIslandRemoteUnreadTerminal {
+  sessionId: string;
+  phase: 'completed' | 'error';
+  lastActivityAt: number;
 }
 
 export function createAgentIslandState(): AgentIslandState {
@@ -225,6 +237,7 @@ export function createAgentIslandState(): AgentIslandState {
     compactCurrentUntil: null,
     strings: { ...DEFAULT_AGENT_ISLAND_STRINGS },
     toolWording: DEFAULT_TOOL_ROW_WORDING,
+    remoteUnreadTerminals: new Map(),
   };
 }
 
@@ -257,6 +270,7 @@ export function resetAgentIslandState(state: AgentIslandState): void {
   state.compactCurrentSessionId = fresh.compactCurrentSessionId;
   state.compactCurrentUntil = fresh.compactCurrentUntil;
   state.strings = fresh.strings;
+  state.remoteUnreadTerminals = fresh.remoteUnreadTerminals;
   // toolWording 是注入的配置(非会话状态),reset 时保留,避免退回默认中文表。
 }
 
@@ -708,6 +722,7 @@ export function applyAgentIslandEvent(
     // 用户真的看到了报错内容。unread 只能由显式已读 ack(renderer 确认报错 UI
     // 真实展示给用户)清除,否则条目会在 errorUntil 过期后被 prune 静默删除。
     requestAttentionReveal(state, session, now, AGENT_ISLAND_ERROR_REVEAL_DWELL_MS, { forceUnread: true });
+    syncRemoteUnreadTerminal(state, session);
     return true;
   }
 
@@ -828,7 +843,7 @@ function dismissPendingInteraction(
     session.phase = 'error';
     return;
   }
-  // errorUntil 已过期但未读的 error 仍然可见(isSessionVisible),不能删。
+  // errorUntil 已过期但未读的 error 账本仍在,不能删 —— 岛面 TTL 只影响展示。
   if (preserveErrorUnread) return;
   state.sessions.delete(session.sessionId);
 }
@@ -852,12 +867,20 @@ export function acknowledgeAgentIslandSessionRead(
   options: { source?: 'passive' | 'explicit' } = {},
 ): AgentIslandSessionReadAckResult {
   const session = state.sessions.get(sessionId);
-  if (!session) return 'not-found';
-
-  // passive = 「会话路由可见 / 窗口聚焦」这类被动信号。它不能证明用户真的看到了
-  // 报错内容(切回窗口的瞬间就会触发),所以未读的 error 会话对被动 ack 免疫,
-  // 只接受显式 ack(renderer 确认报错 UI 真实展示后经 badge 桥接过来)。
-  if (options.source === 'passive' && session.phase === 'error' && session.unread) return 'error-immune';
+  const unread = state.remoteUnreadTerminals.get(sessionId);
+  // 未读 error 订账本,不订当前 live phase。新一轮 running 时 session.phase 已不是
+  // error,但用户仍可能没看过那次报错;passive 必须先看账本,否则聚焦/路由可见会把
+  // 旧红点清掉。
+  if (options.source === 'passive' && (
+    unread?.phase === 'error' || (session?.phase === 'error' && session.unread)
+  )) {
+    return 'error-immune';
+  }
+  if (!session) {
+    if (!unread) return 'not-found';
+    clearRemoteUnreadTerminal(state, sessionId);
+    return 'cleared';
+  }
 
   const wasUnread = session.unread;
   const hadDeferredReveal = session.deferredReveal;
@@ -866,6 +889,7 @@ export function acknowledgeAgentIslandSessionRead(
   const hadErrorDwell = session.errorUntil !== null;
 
   session.unread = false;
+  clearRemoteUnreadTerminal(state, sessionId);
   session.deferredReveal = false;
   session.deferredRevealReason = null;
   session.revealUntil = null;
@@ -906,6 +930,7 @@ export function completeAgentIslandSessionWithoutAttention(
   });
 
   if (!isSessionVisible(session, now)) {
+    if (isUnreadTerminalLedger(session)) syncRemoteUnreadTerminal(state, session);
     state.sessions.delete(sessionId);
     removeQueuedTransientReveal(state, sessionId);
   }
@@ -919,6 +944,7 @@ export function markAgentIslandSessionAttention(
   const session = state.sessions.get(sessionId);
   if (!session || session.unread) return false;
   session.unread = true;
+  syncRemoteUnreadTerminal(state, session);
   return true;
 }
 
@@ -926,11 +952,12 @@ export function hasAgentIslandSessionAttention(
   state: AgentIslandState,
   sessionId: string,
 ): boolean {
+  if (state.remoteUnreadTerminals.has(sessionId)) return true;
   const session = state.sessions.get(sessionId);
   return session ? session.unread || isAttentionSession(session) : false;
 }
 
-export function removeAgentIslandSession(state: AgentIslandState, sessionId: string): void {
+function forgetAgentIslandSession(state: AgentIslandState, sessionId: string): void {
   state.sessions.delete(sessionId);
   if (state.visibleSessionIds.delete(sessionId) && state.visibleSessionId === sessionId) {
     state.visibleSessionId = state.visibleSessionIds.values().next().value ?? null;
@@ -942,6 +969,11 @@ export function removeAgentIslandSession(state: AgentIslandState, sessionId: str
   }
 }
 
+export function removeAgentIslandSession(state: AgentIslandState, sessionId: string): void {
+  clearRemoteUnreadTerminal(state, sessionId);
+  forgetAgentIslandSession(state, sessionId);
+}
+
 /**
  * 会话**进程**关闭:落下运行态,但保留仍需展示的通知条目。
  *
@@ -951,8 +983,10 @@ export function removeAgentIslandSession(state: AgentIslandState, sessionId: str
  * 没了,用户看到的就是「弹了一下就收起」。通知是**已发生事件的记录**,生命周期不该绑在
  * agent session 句柄上。
  *
- * 判据复用 `isSessionVisible`:仍需展示(未读终态未过 TTL / dwell 未走完 / 有 pending
- * 交互)就留着,由既有 lifecycle 到期或用户 ack 收掉;否则照常删除。
+ * 判据复用 `isSessionVisible`:仍需在岛上展示(TTL 内的未读终态 / dwell 未走完 /
+ * 有 pending 交互)就留着。过了岛面 TTL 的未读终态会先写入独立账本再删岛 state;
+ * 若岛条目已经不在(TTL 已 prune / 仅剩账本),close 不得再清账本 —— 远程绿/红点
+ * 要等到真正已读。
  *
  * 会话被归档 / 删除、或 Orca worker 被策略清除时**不走这里** —— 那些语义是「这条记录
  * 不该再存在」,继续用 `removeAgentIslandSession` 硬删。
@@ -964,7 +998,7 @@ export function closeAgentIslandSessionPreservingUnread(
 ): void {
   const session = state.sessions.get(sessionId);
   if (!session) {
-    removeAgentIslandSession(state, sessionId);
+    // 岛面已 prune,独立账本仍可能挂着未读。进程关闭不等于已读。
     return;
   }
   // 进程已经没了,运行态必须落下来,否则 pill 会一直转着 working 动画。
@@ -972,13 +1006,26 @@ export function closeAgentIslandSessionPreservingUnread(
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
   // pending 交互随进程一起失效(service 侧同时会 deletePermissionRequestsForSession)。
-  // 留着会让用户对着一张永远不会被响应的审批卡片点按钮,所以这类条目整条删掉 —— 要保的
-  // 只是「已经发生完、还没被看到」的终态通知。
+  // 留着会让用户对着一张永远不会被响应的审批卡片点按钮。岛条目可以丢,但旧的
+  // completed/error 账本不是这次审批,进程关闭不等于已读。
   if (session.pendingInteractionIds.size > 0) {
+    if (state.remoteUnreadTerminals.has(sessionId)) {
+      forgetAgentIslandSession(state, sessionId);
+      return;
+    }
     removeAgentIslandSession(state, sessionId);
     return;
   }
   if (isSessionVisible(session, now)) return;
+  if (isUnreadTerminalLedger(session)) {
+    syncRemoteUnreadTerminal(state, session);
+    forgetAgentIslandSession(state, sessionId);
+    return;
+  }
+  if (state.remoteUnreadTerminals.has(sessionId)) {
+    forgetAgentIslandSession(state, sessionId);
+    return;
+  }
   removeAgentIslandSession(state, sessionId);
 }
 
@@ -1068,6 +1115,9 @@ export function pruneAgentIslandSessions(state: AgentIslandState, now: number): 
   const preserveExpiredTransient = isPointerInsideIsland(state) || state.hoverExpanded || isCollapsePending(state, now);
   for (const [sessionId, session] of state.sessions.entries()) {
     if (isSessionVisible(session, now, preserveExpiredTransient)) continue;
+    // 过了岛面 TTL 的未读终态先写入独立账本,再删岛 state。远程绿/红点订账本,
+    // 不再跟完整 AgentIslandSessionState(含活动文本)绑在一起。
+    if (isUnreadTerminalLedger(session)) syncRemoteUnreadTerminal(state, session);
     state.sessions.delete(sessionId);
     removeQueuedTransientReveal(state, sessionId);
   }
@@ -1146,12 +1196,19 @@ export function buildAgentIslandDisplayState(
  * (PR #246 review)。侧栏卡片按 sessionId 各取所需,故这里取 state.sessions 全集。
  *
  * 仅做读取映射;session 的增删与过期裁剪由 buildAgentIslandDisplayState 负责,调用方
- * 应在其后调用本函数(此时 state.sessions 已裁剪)。
+ * 应在其后调用本函数(此时 state.sessions 已裁剪)。过了岛面 TTL 的未读终态已迁到
+ * remoteUnreadTerminals,这里把账本补进快照,远程侧栏才能继续看到绿/红点。
  */
 export function buildAllSessionActivitySnapshots(
   state: AgentIslandState,
 ): AgentIslandSessionSnapshot[] {
-  return Array.from(state.sessions.values()).map((session) => toSnapshot(session));
+  const snapshots = Array.from(state.sessions.values()).map((session) => toSnapshot(session));
+  const seen = new Set(snapshots.map((snapshot) => snapshot.sessionId));
+  for (const unread of state.remoteUnreadTerminals.values()) {
+    if (seen.has(unread.sessionId)) continue;
+    snapshots.push(toRemoteUnreadSnapshot(unread));
+  }
+  return snapshots;
 }
 
 export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number): number | null {
@@ -1175,6 +1232,7 @@ export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number):
       session.visibleInteractionSuppressedUntil,
       session.toolDetailUntil,
       session.messagePreview?.until,
+      unreadIslandTtlAt(session),
     ]) {
       if (value && value > now && (next === null || value < next)) {
         next = value;
@@ -1343,6 +1401,7 @@ function completeAgentIslandSession(
     session.deferredRevealReason = null;
     session.queuedRevealDwellMs = null;
     session.unread = options.preserveAttention;
+    syncRemoteUnreadTerminal(state, session);
     removeQueuedTransientReveal(state, session.sessionId);
     if (state.activeTransientSessionId === session.sessionId) {
       state.activeTransientSessionId = null;
@@ -1352,6 +1411,7 @@ function completeAgentIslandSession(
 
   session.completedUntil = now + AGENT_ISLAND_COMPLETION_DWELL_MS;
   requestAttentionReveal(state, session, now, completionRevealDwellMs(session, now));
+  syncRemoteUnreadTerminal(state, session);
 }
 
 function requestAttentionReveal(
@@ -2204,14 +2264,69 @@ function shouldDisplaySession(
     && !isVisibleInteractionSuppressed(state, session, now);
 }
 
+function isUnreadTerminalLedger(
+  session: AgentIslandSessionState,
+): session is AgentIslandSessionState & { phase: 'completed' | 'error' } {
+  return session.unread && (session.phase === 'completed' || session.phase === 'error');
+}
+
+function syncRemoteUnreadTerminal(state: AgentIslandState, session: AgentIslandSessionState): void {
+  if (isUnreadTerminalLedger(session)) {
+    state.remoteUnreadTerminals.set(session.sessionId, {
+      sessionId: session.sessionId,
+      phase: session.phase,
+      lastActivityAt: session.lastActivityAt,
+    });
+    return;
+  }
+  // 新一轮 running / 等待交互不是已读。App badge 镜像会给 live session 打 unread,
+  // 但不能据此把还没被看到的旧 completed/error 账本清掉。真正变成新的终态时,
+  // 再按当前 unread 覆盖或清除。
+  if (session.running || session.phase === 'needs-interaction' || session.pendingInteractionIds.size > 0) {
+    return;
+  }
+  clearRemoteUnreadTerminal(state, session.sessionId);
+}
+
+function clearRemoteUnreadTerminal(state: AgentIslandState, sessionId: string): void {
+  state.remoteUnreadTerminals.delete(sessionId);
+}
+
+function unreadIslandTtlAt(session: AgentIslandSessionState): number | null {
+  if (!isUnreadTerminalLedger(session)) return null;
+  return session.lastActivityAt + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS;
+}
+
+function toRemoteUnreadSnapshot(unread: AgentIslandRemoteUnreadTerminal): AgentIslandSessionSnapshot {
+  return {
+    sessionId: unread.sessionId,
+    title: unread.sessionId.slice(0, 8),
+    projectName: null,
+    detail: '',
+    compactDetail: '',
+    messagePreview: null,
+    phase: unread.phase,
+    agentKind: 'claude-code',
+    interactionKind: undefined,
+    permissionAction: null,
+    attention: true,
+    activityLines: [],
+    startedAt: unread.lastActivityAt,
+    lastActivityAt: unread.lastActivityAt,
+  };
+}
+
+function isUnreadTerminalWithinIslandTtl(session: AgentIslandSessionState, now: number): boolean {
+  return isUnreadTerminalLedger(session)
+    && now - session.lastActivityAt < AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS;
+}
+
 function isSessionVisible(session: AgentIslandSessionState, now: number, preserveExpiredTransient = false): boolean {
   if (session.pendingInteractionIds.size > 0) return true;
   if (session.running) return true;
-  if (session.unread && (session.phase === 'completed' || session.phase === 'error')) {
-    // 未读的完成/错误只在 TTL 内保留;过了 TTL 即使用户没 ack,也不再让它占据灵动岛
-    // 列表 —— 会话本身在侧栏的未读状态仍由 renderer 侧维护,不受影响。
-    if (now - session.lastActivityAt < AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS) return true;
-  }
+  // 岛面只在 TTL 内展示未读终态;过了 TTL prune 会把岛 state 删掉,未读迁到
+  // remoteUnreadTerminals 给远程侧栏 / 已读回执。
+  if (isUnreadTerminalWithinIslandTtl(session, now)) return true;
   if (session.completedUntil && session.completedUntil > now) return true;
   if (session.errorUntil && session.errorUntil > now) return true;
   // 不复活已过 TTL 的 unread 条目：preserveExpiredTransient 仅用于短 dwell 窗口内到期的
@@ -2219,7 +2334,7 @@ function isSessionVisible(session: AgentIslandSessionState, now: number, preserv
   if (
     preserveExpiredTransient &&
     (session.phase === 'completed' || session.phase === 'error') &&
-    !(session.unread && now - session.lastActivityAt >= AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS)
+    !isUnreadTerminalLedger(session)
   )
     return true;
   return false;
@@ -2259,12 +2374,12 @@ function isWaitingSession(session: AgentIslandSessionState, now: number): boolea
   return (
     session.pendingInteractionIds.size > 0
     || session.phase === 'needs-interaction'
-    || (session.phase === 'error' && (session.unread || (session.errorUntil !== null && session.errorUntil > now)))
+    || (session.phase === 'error' && (isUnreadTerminalWithinIslandTtl(session, now) || (session.errorUntil !== null && session.errorUntil > now)))
   );
 }
 
 function isUnreadCompletedSession(session: AgentIslandSessionState, now: number): boolean {
-  return session.phase === 'completed' && (session.unread || (session.completedUntil !== null && session.completedUntil > now));
+  return session.phase === 'completed' && (isUnreadTerminalWithinIslandTtl(session, now) || (session.completedUntil !== null && session.completedUntil > now));
 }
 
 function isTransientlyPinnedSession(

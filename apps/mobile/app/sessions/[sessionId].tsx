@@ -2031,12 +2031,12 @@ export default function SessionScreen() {
   // 写编排只读 reason(fork/rewind、队列编辑、会话设置写、pending interaction):对 lead + worker 都返回。
   const collaborationReadOnlyReason = useMemo(
     () => sessionCollaborationReadOnlyReason(currentSession),
-    [currentSession?.orcaRole],
+    [currentSession?.orcaRole, i18nInstance.language],
   );
   // composer(发消息)只读 reason:仅非 lead 的协作角色只读;Lead 返回 null → 可在手机上发文字消息。
   const composerReadOnlyReason = useMemo(
     () => sessionCollaborationComposerReadOnlyReason(currentSession),
-    [currentSession?.orcaRole],
+    [currentSession?.orcaRole, i18nInstance.language],
   );
   const activePendingInteraction = useMemo(() => {
     return selectPendingInteractionByRequestId(pending, pendingInteractionActiveRequestId);
@@ -2075,7 +2075,7 @@ export default function SessionScreen() {
   const pendingInteractionBlocksComposer = pendingInteractionsBlockRemoteComposer(pending);
   const remoteUnavailableReason = useMemo(
     () => describeRemoteError(connectionError),
-    [connectionError],
+    [connectionError, i18nInstance.language],
   );
   // 自动恢复类错误只影响 outbox 派发，不锁 composer；确定性错误（撤权、关闭远程
   // 控制、版本不兼容等）仍按原规则禁发。连接 issue 沿用 banner 的 active 判定，
@@ -2425,6 +2425,7 @@ export default function SessionScreen() {
     composerQuoteCount,
     composerSendUnavailableReason,
     draft,
+    i18nInstance.language,
     queueBusy,
     sending,
     voiceState,
@@ -2584,7 +2585,10 @@ export default function SessionScreen() {
   }, [navigation, sessionListDrawerOverlayMounted]);
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
-    if (targetSession.id === sessionId) {
+    const focusClientId = 'searchFocusClientId' in item
+      ? (item as { searchFocusClientId?: string }).searchFocusClientId
+      : undefined;
+    if (targetSession.id === sessionId && !focusClientId) {
       closeSessionListDrawer();
       return;
     }
@@ -2612,6 +2616,7 @@ export default function SessionScreen() {
         deviceId: targetDeviceId,
         deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
         sessionId: targetSession.id,
+        ...(focusClientId ? { focusClientId } : {}),
       });
     });
   }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);
@@ -4049,10 +4054,12 @@ export default function SessionScreen() {
     const creationPendingClientId = creationTask?.status === 'running'
       ? creationTask.firstMessageClientId
       : null;
-    if (!creationPendingClientId || sendingQueueClientIds.has(creationPendingClientId)) {
-      return sendingQueueClientIds;
+    const sending = new Set(sendingQueueClientIds);
+    if (!creationPendingClientId || sending.has(creationPendingClientId)) {
+      return sending;
     }
-    return new Set([...sendingQueueClientIds, creationPendingClientId]);
+    sending.add(creationPendingClientId);
+    return sending;
   }, [creationTask, sendingQueueClientIds]);
 
   // 已读回执:liveActivity **签名变化且 attention=true**(会话开着时新 turn 完成翻
@@ -5609,6 +5616,27 @@ export default function SessionScreen() {
     }
   };
 
+  const readAuthoritativeEnqueueAcceptance = async (targetSessionId: string, clientId: string,
+    expectedRemoteEpoch: number) => {
+    try {
+      const expectedAuthorityEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch(targetSessionId);
+      const queryRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch(targetSessionId);
+      const fresh = await maker.input.getProjection(targetSessionId);
+      const accepted = fresh.pendingQueue.some((item) => item.clientId === clientId)
+        || remoteSessionStore.hasAuthoritativeQueuedItemSince(
+          targetSessionId,
+          clientId,
+          expectedRemoteEpoch,
+        );
+      remoteSessionStore.setInputProjectionIfCurrent(
+        targetSessionId, fresh, expectedAuthorityEpoch, queryRemoteEpoch, accepted ? clientId : undefined,
+      );
+      return accepted;
+    } catch {
+      return remoteSessionStore.hasAuthoritativeQueuedItemSince(targetSessionId, clientId, expectedRemoteEpoch);
+    }
+  };
+
   /**
    * 派发一条就绪的 outbox 条目:构建 queued(权限档用发送时刻快照,model / effort
    * 等跟随会话最新值)→ 乐观进本地 pendingQueue(待发气泡原位变为排队气泡,同帧
@@ -5695,7 +5723,7 @@ export default function SessionScreen() {
     // 乐观交接:进本地 pendingQueue 的同一同步段把条目移出 outbox,气泡原位从
     // 「发送中」变「排队中」不闪断;enqueue 成功后用权威 projection 覆盖 reconcile。
     const projectionBeforeSend = remoteSessionStore.getInputProjection(item.sessionId);
-    remoteSessionStore.setInputProjection(item.sessionId, {
+    remoteSessionStore.setInputProjectionOptimistically(item.sessionId, {
       ...projectionBeforeSend,
       sessionId: projectionBeforeSend.sessionId || item.sessionId,
       pendingQueue: [...projectionBeforeSend.pendingQueue, queued],
@@ -5712,10 +5740,12 @@ export default function SessionScreen() {
     // outbox 气泡本来就在转圈:交接进 pendingQueue 后 enqueue 仍在途,徽标继续转圈,
     // 不要在这一帧闪成排队 icon 再回来(也不能谎报「已入队」)。
     markQueueItemSending(queued.clientId);
+    const projectionRemoteEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionRemoteEpoch(item.sessionId);
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
     try {
       // 弱网重试与写序边界同 send() 原路径(仅明确可安全重发的瞬时传输错误)。
-      const projectionEpochAtRequestStart =
-        remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
       let projection: InputProjection | undefined;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -5734,55 +5764,18 @@ export default function SessionScreen() {
         item.sessionId,
         projection,
         projectionEpochAtRequestStart,
+        projectionRemoteEpochAtRequestStart,
+        queued.clientId,
       );
     } catch (err) {
       // 与原路径同口径:先对账分辨「确实没应用」vs「已应用但响应丢了」。
       const safeToRetry = isSafelyUnsentOutboxEnqueueError(err);
-      const acceptanceUnknown = !safeToRetry && isAutoRecoveringRemoteError(err);
-      if (acceptanceUnknown) {
-        // 写请求已出、回执不确定时，fresh projection 不含 clientId 也不能证明没应用：
-        // 空闲 agent 可能已把消息从 pendingQueue 取进 active turn。只在 fresh 明确
-        // 含原 id 时吸收它；否则保留现有 optimistic projection，交给后续权威同步
-        // 收敛。这里绝不回 outbox / 草稿，避免离场后用新 id 重发造成重复执行。
-        try {
-          const projectionEpochAtRequestStart =
-            remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
-          const fresh = await maker.input.getProjection(item.sessionId);
-          if (fresh.pendingQueue.some((entry) => entry.clientId === queued.clientId)) {
-            remoteSessionStore.setInputProjectionIfCurrent(
-              item.sessionId,
-              fresh,
-              projectionEpochAtRequestStart,
-            );
-          }
-        } catch {
-          // 自动恢复同步会继续收敛；当前 optimistic clientId 仍是唯一 Mobile owner。
-        }
-        if (outboxSessionAliveRef.current === item.sessionId) {
-          setError(formatRemoteError(err));
-        }
-        return;
-      }
-      const applied = await (async () => {
-        try {
-          const projectionEpochAtRequestStart =
-            remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
-          const fresh = await maker.input.getProjection(item.sessionId);
-          remoteSessionStore.setInputProjectionIfCurrent(
-            item.sessionId,
-            fresh,
-            projectionEpochAtRequestStart,
-          );
-          // safeToRetry 时 fresh 是同 clientId 先前重试是否已经生效的唯一证据；本地
-          // optimistic pendingQueue 不能自证。确定性远端失败也沿用同一权威口径。
-          return fresh.pendingQueue.some((entry) => entry.clientId === queued.clientId);
-        } catch {
-          return false;
-        }
-      })();
-      if (!applied) {
+      const accepted = await readAuthoritativeEnqueueAcceptance(
+        item.sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
+      );
+      if (!accepted) {
         const current = remoteSessionStore.getInputProjection(item.sessionId);
-        remoteSessionStore.setInputProjection(item.sessionId, {
+        remoteSessionStore.setInputProjectionOptimistically(item.sessionId, {
           ...current,
           pendingQueue: current.pendingQueue.filter((entry) => entry.clientId !== queued.clientId),
         });
@@ -5792,7 +5785,6 @@ export default function SessionScreen() {
         }
         failItem(formatRemoteError(err));
       }
-      // applied:消息已在桌面队列,按成功继续(不回滚、不报错)。
     } finally {
       // 入队确认、回 outbox / 失败，或转交 optimistic projection 等待权威同步后，
       // 都不再是当前 RPC 在途；收掉 sending 标记，避免后续同 id 气泡悬空转圈。
@@ -5968,6 +5960,7 @@ export default function SessionScreen() {
       });
     },
     [
+      i18nInstance.language,
       inputProjection,
       outboxDisplayItems,
       queueBusy,
@@ -6727,7 +6720,7 @@ export default function SessionScreen() {
       // previews / mediaAssetAttachments 映射保留到成功后再清:它们不入消息体,失败
       // 恢复 attachments 时缩略图能原样回来。
       const projectionBeforeSend = remoteSessionStore.getInputProjection(sessionId);
-      remoteSessionStore.setInputProjection(sessionId, {
+      remoteSessionStore.setInputProjectionOptimistically(sessionId, {
         ...projectionBeforeSend,
         sessionId: projectionBeforeSend.sessionId || sessionId,
         pendingQueue: [...projectionBeforeSend.pendingQueue, queued],
@@ -6740,23 +6733,21 @@ export default function SessionScreen() {
       // 乐观气泡此刻还没有「已入队」这个事实:徽标先给转圈,enqueue 落定后才交给
       // 排队 icon(或随回滚一起消失)。
       markQueueItemSending(queued.clientId);
+      const projectionRemoteEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionRemoteEpoch(sessionId);
       setAttachments([]);
       attachmentsRef.current = [];
       // 标注再编辑真相(矢量笔迹 + 原图副本)不在乐观段清:enqueue 失败回滚恢复
       // 托盘后,标注附件必须还能继续编辑/撤销(review P2);成功收尾按本批精确清。
       setAttachmentError(null);
       requestMessageListFollowLatest();
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
       try {
         // 弱网重试:切基站 / 短暂断连时自动补发,不让用户为一次抖动手动重发。
         // 写序边界(codex review P1 + auto-review P1):只有「保证未发出」的
         // NOT_CONNECTED 仅在 inFlight 未置位时允许自动重发——
         // in-flight 被断连批量 reject 的 NOT_CONNECTED 可能已送达(ack 丢失),
-        // 且 projection 无法证明未入队(空闲 agent 下消息瞬间进 activeTurn、
-        // 不在 pendingQueue 里),盲重会双入队;这类歧义失败直接交给下方 catch
-        // 的回滚/报错路径。BACKPRESSURE 在本地发送前或被控端 admission 拒绝
-        // 执行时产生,可安全重发。被控端 enqueue 侧另有 clientId 幂等去重兜底。
-        const projectionEpochAtRequestStart =
-          remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
         let projection: InputProjection | undefined;
         for (let attempt = 0; ; attempt++) {
           try {
@@ -6775,36 +6766,21 @@ export default function SessionScreen() {
           sessionId,
           projection,
           projectionEpochAtRequestStart,
+          projectionRemoteEpochAtRequestStart,
+          queued.clientId,
         );
       } catch (err) {
-        // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:弱网下 enqueue 的 invoke
-        // 响应可能超时丢失而桌面端已入队——此时摘除气泡会让手机隐藏一条桌面将处理的
-        // 消息,用户重发即重复(codex review R19)。优先 refetch 权威 projection 判断,
-        // refetch 也失败再退回本地 store(订阅推送在此窗口内可能已带回该 clientId)。
-        const applied = await (async () => {
-          try {
-            const projectionEpochAtRequestStart =
-              remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
-            const fresh = await maker.input.getProjection(sessionId);
-            const accepted = remoteSessionStore.setInputProjectionIfCurrent(
-              sessionId,
-              fresh,
-              projectionEpochAtRequestStart,
-            );
-            // If a newer push/terminal boundary won the fence, the fetched value is
-            // stale for both the mirror and the applied decision; consult current state.
-            const current = accepted ? fresh : remoteSessionStore.getInputProjection(sessionId);
-            return current.pendingQueue.some((item) => item.clientId === queued.clientId);
-          } catch {
-            return remoteSessionStore.getInputProjection(sessionId).pendingQueue
-              .some((item) => item.clientId === queued.clientId);
-          }
-        })();
-        if (!applied) {
+        // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:优先 refetch 权威
+        // projection 判断。只有权威证据能保留乐观气泡；证据不可用时回到现有
+        // 可重试失败路径，避免留下没有持久 owner 的永久转圈条目。
+        const accepted = await readAuthoritativeEnqueueAcceptance(
+          sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
+        );
+        if (!accepted) {
           // 回滚:按 clientId 精确摘除乐观气泡(期间 projection 可能已被其他事件更新,
           // 不能整体还原快照),并恢复草稿与附件托盘。
           const current = remoteSessionStore.getInputProjection(sessionId);
-          remoteSessionStore.setInputProjection(sessionId, {
+          remoteSessionStore.setInputProjectionOptimistically(sessionId, {
             ...current,
             pendingQueue: current.pendingQueue.filter((item) => item.clientId !== queued.clientId),
           });
@@ -6821,8 +6797,6 @@ export default function SessionScreen() {
           restoreDirectSendDraftAfterFailure();
           throw err;
         }
-        // applied:消息已在桌面队列(权威 / 推送 projection 已含该 clientId),
-        // 按成功继续——不回滚、不报错,后续收尾(plan 恢复 / 映射清理)照常执行。
       } finally {
         // 成功、对账认定已入队、回滚 throw 三条路径都算「不再在途」:转圈必须收掉,
         // 否则回滚后集合残留、同 clientId 重发时首帧仍是转圈。
@@ -6911,7 +6885,7 @@ export default function SessionScreen() {
     if (queueBusy) return;
     setQueueBusy(true);
     if (!outboxConnectionDispatchBlocked) setError(null);
-    remoteSessionStore.setInputProjection(
+    remoteSessionStore.setInputProjectionOptimistically(
       sessionId,
       opts.optimistic(remoteSessionStore.getInputProjection(sessionId)),
     );
@@ -6923,7 +6897,7 @@ export default function SessionScreen() {
         applyProjectionIfCurrent(result, projectionEpochAtRequestStart);
       }
     } catch (err) {
-      remoteSessionStore.setInputProjection(
+      remoteSessionStore.setInputProjectionOptimistically(
         sessionId,
         opts.rollback(remoteSessionStore.getInputProjection(sessionId)),
       );
@@ -9610,7 +9584,7 @@ export default function SessionScreen() {
                       <ComposerRichInput
                         ref={composerInputRef}
                         accessibilityHint={composerLayout.input.disabledReason ?? undefined}
-                        accessibilityLabel="输入远程消息"
+                        accessibilityLabel={t('session.screen.composerPlaceholder')}
                         document={composerDocument}
                         editable={!composerLayout.input.disabled}
                         height={composerInputVisibleHeight}

@@ -44,6 +44,7 @@
         "codex": {
           "upstream": "https://api.x.ai/v1",
           "authStrategy": "provider-oauth-header",
+          "supportsResponsesCustomTools": false,
           "modelIdRewrite": {
             "stripPrefix": "xai/"
           },

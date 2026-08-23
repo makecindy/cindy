@@ -463,6 +463,11 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'open-terminal', sessionId })");
     expect(mainLayoutSource).toContain('const windowState = getRsbWindowUiState();');
     expect(mainLayoutSource).toContain('const currentSessionId = rightSidebarSessionIdRef.current;');
+    expect(mainLayoutSource).toContain('sessionId: targetSessionId');
+    expect(mainLayoutSource).toContain(
+      "if (visibility === 'open' && opts.userInitiated !== false)",
+    );
+    expect(mainLayoutSource).toContain('navigateToSessionRef.current?.(targetSessionId)');
   });
 
   it('passes Orca lead vendor options when sending from the plain lead route', () => {

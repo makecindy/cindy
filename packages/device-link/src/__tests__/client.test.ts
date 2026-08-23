@@ -1713,6 +1713,53 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('显式 close 后词典只读快照 push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const sentOpen = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: sentOpen.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'remote-stream',
+      },
+    });
+    await open;
+    h.client.closeLink('dev-b', 'user');
+
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'LINK_NOT_OPEN' }),
+    );
+    const sentBefore = h.current().sent.length;
+    expect(() => h.client.sendPush(
+      'dev-b',
+      'device-link:voice:dictionary:snapshot',
+      { ok: true, entries: [] },
+    )).not.toThrow();
+    const sent = h.current().sent.at(-1)!;
+    expect(h.current().sent.length).toBeGreaterThan(sentBefore);
+    expect(sent).toMatchObject({
+      kind: 'push',
+      dst: 'dev-b',
+      payload: { channel: 'device-link:voice:dictionary:snapshot' },
+    });
+    expect(parseTransportPayload(sent.payload)).toBeNull();
+    h.client.stop();
+  });
+
   it('显式 close 后只放行已接收的 legacy listing invoke-result 回程', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();

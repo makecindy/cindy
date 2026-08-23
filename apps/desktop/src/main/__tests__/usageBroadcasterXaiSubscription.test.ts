@@ -112,4 +112,25 @@ describe('xai subscription snapshot hydration', () => {
       accountFingerprint: 'bbbb',
     });
   });
+
+  it('lets a reset to 0% overwrite a previously exhausted weekly percent', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    await broadcaster.recordXaiSubscriptionUsageSnapshot({
+      planLabel: 'SuperGrok Heavy',
+      creditUsagePercent: 100,
+      accountFingerprint: 'bbbb',
+      updatedAt: 2,
+    });
+    await broadcaster.recordXaiSubscriptionUsageSnapshot({
+      planLabel: 'SuperGrok Heavy',
+      creditUsagePercent: 0,
+      accountFingerprint: 'bbbb',
+      updatedAt: 3,
+    });
+    await expect(broadcaster.readXaiSubscriptionUsageSnapshot()).resolves.toMatchObject({
+      creditUsagePercent: 0,
+      updatedAt: 3,
+    });
+  });
 });

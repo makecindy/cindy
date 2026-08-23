@@ -168,6 +168,14 @@ export interface AgentEvent {
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
   /**
+   * Session.turnGeneration captured when runEventLoop started the next() that
+   * dequeued this event. Adoption of a later generation must not overwrite it,
+   * so a leftover terminal keeps the older value after the next send. Host-only.
+   */
+  sessionTurnGeneration?: number;
+  /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
+  sessionInstanceId?: string;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later
@@ -341,6 +349,11 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
+  /**
+   * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
+   * 只由 Claude Code / Pi 的 AutoCompactController 锁存。
+   */
+  needsRollover?: boolean;
 }
 
 /**

@@ -252,13 +252,61 @@ describe('PI Subagent quit sweep', () => {
     expect(teardown.indexOf('lifecycleDbClientManager.dispose(reason)', sweep)).toBeGreaterThan(sweep);
   });
 
-  it('raises the account-boundary fence before anything destructive runs', () => {
+  it('disposes goals before waiting for the account-boundary fence', () => {
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+      source.indexOf('authManager.setAccountSwitchTeardown('),
+    );
+    const reset = teardown.indexOf('resetGoalController();');
+    const firstAwait = teardown.indexOf('await ');
+    const acquire = teardown.indexOf('acquirePiSubagentLaunchFence(');
+    expect(reset).toBeGreaterThan(-1);
+    expect(firstAwait).toBeGreaterThan(reset);
+    expect(acquire).toBeGreaterThan(firstAwait);
+    // Fence acquisition can queue behind filesystem work. The synchronous reset
+    // must already have cancelled continuation and usage-resume timers while it waits.
+    expect(teardown.slice(firstAwait, acquire)).toBe('await ');
+  });
+
+  it('restores the outgoing account goals when launch-fence acquisition aborts', () => {
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+      source.indexOf('authManager.setAccountSwitchTeardown('),
+    );
+    const acquire = teardown.indexOf('acquirePiSubagentLaunchFence(');
+    const acquireCatch = teardown.indexOf('} catch (err) {', acquire);
+    const abort = teardown.indexOf('throw new PiSubagentAccountBoundaryError(', acquireCatch);
+    const restore = teardown.indexOf('startGoalController({', acquireCatch);
+    expect(acquireCatch).toBeGreaterThan(acquire);
+    expect(restore).toBeGreaterThan(acquireCatch);
+    expect(restore).toBeLessThan(abort);
+    const recovery = teardown.slice(acquireCatch, abort);
+    expect(recovery).toContain('const maker = getMakerCore();');
+    expect(recovery).toContain('getDb: () => getDbClient().drizzle');
+    expect(recovery).toContain('createAutomationUserTurnGitBaselineHooks()');
+    // Goal IPC is restored synchronously, while the full Scheduler/Goal/Learn
+    // startup is queued behind any superseded in-flight attempt. The original
+    // fence error is still surfaced without awaiting that background recovery.
+    expect(recovery).toContain('void attemptStartScheduler();');
+    expect(recovery).not.toContain('await attemptStartScheduler()');
+    const startup = source.slice(
+      source.indexOf('let attemptStartSchedulerBarrier: Promise<void>'),
+      source.indexOf('const _scheduleIpcRegistered'),
+    );
+    expect(startup).toContain(
+      'attemptStartSchedulerBarrier.then(() => attemptStartSchedulerOnce())',
+    );
+    expect(startup).toContain('attemptStartSchedulerBarrier = attempt.catch(() => undefined)');
+  });
+
+  it('raises the account-boundary fence before the remaining destructive teardown', () => {
     // Failing to raise it aborts the handover. It used to do that from the
     // middle of the teardown: input device slots suspended, the custom provider
     // catalog cleared, IM / scheduler / embedding / Ghost projection already
     // stopped — and the abort path rebuilds none of them, so the user was left
     // on a half-dismantled account until a restart. Raised first, the abort
-    // costs nothing because nothing has been taken apart yet.
+    // leaves only the deliberately synchronous GoalController invalidation done;
+    // no owner-scoped service has been drained or discarded yet.
     const teardown = source.slice(
       source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
       source.indexOf('authManager.setAccountSwitchTeardown('),

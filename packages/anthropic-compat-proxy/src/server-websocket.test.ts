@@ -39,7 +39,7 @@ function upgradeRequest(
     `Host: ${host}`,
     'Connection: Upgrade',
     'Upgrade: websocket',
-    'Sec-WebSocket-Key: dGVzdC13ZWJzb2NrZXQta2V5',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
     'Sec-WebSocket-Version: 13',
     ...extraHeaders,
     '',
@@ -89,8 +89,12 @@ function openUpgrade(
   });
 }
 
-async function readUpgradeFailure(proxyUrl: string, path = '/v1/responses'): Promise<string> {
-  const { socket, head, rest } = await openUpgrade(proxyUrl, path);
+async function readUpgradeFailure(
+  proxyUrl: string,
+  path = '/v1/responses',
+  extraHeaders: readonly string[] = [],
+): Promise<string> {
+  const { socket, head, rest } = await openUpgrade(proxyUrl, path, Buffer.alloc(0), extraHeaders);
   const chunks = [rest];
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -135,6 +139,8 @@ function waitForSocketText(socket: Socket, initial: Buffer, expected: string): P
 
 function startUpgradeUpstream(opts: { handshakeDelayMs?: number } = {}): Promise<{
   url: string;
+  port: number;
+  server: ReturnType<typeof createServer>;
   requests: IncomingMessage[];
   received: string[];
   connections: Duplex[];
@@ -169,7 +175,7 @@ function startUpgradeUpstream(opts: { handshakeDelayMs?: number } = {}): Promise
   });
   return listenOnAvailableLoopbackPort(server).then((port) => {
     cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
-    return { url: `http://127.0.0.1:${port}`, requests, received, connections };
+    return { url: `http://127.0.0.1:${port}`, port, server, requests, received, connections };
   });
 }
 
@@ -251,6 +257,249 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     expect(response).toBe(
       'HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n',
     );
+  });
+
+  it('holds only a proven thread reconnect until its websocket upstream recovers', async () => {
+    const upstream = await startUpgradeUpstream();
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid',
+      transformRequest: [],
+      resolveWebSocketUpstream: () => upstream.url,
+      retryProvenWebSocketUpgrades: true,
+    });
+    const handshakeHeaders = [
+      'Thread-Id: thread-proven',
+      'Sec-WebSocket-Extensions: permessage-deflate',
+    ];
+
+    const first = await openUpgrade(
+      proxy.url,
+      '/v1/responses',
+      Buffer.alloc(0),
+      handshakeHeaders,
+    );
+    expect(first.head).toContain('HTTP/1.1 101 Switching Protocols');
+    expect(upstream.requests).toHaveLength(1);
+
+    // Drop the established path and stop accepting new upstream connections, matching a network cut.
+    first.socket.destroy();
+    for (const connection of upstream.connections) connection.destroy();
+    await new Promise<void>((resolve) => upstream.server.close(() => resolve()));
+
+    const reconnect = await openUpgrade(
+      proxy.url,
+      '/v1/responses',
+      Buffer.alloc(0),
+      handshakeHeaders,
+    );
+    expect(reconnect.head).toContain('HTTP/1.1 101 Switching Protocols');
+    expect(reconnect.head.toLowerCase()).toContain(
+      'sec-websocket-extensions: permessage-deflate',
+    );
+    expect(reconnect.head).toContain(
+      'Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=',
+    );
+    expect(upstream.requests).toHaveLength(1);
+
+    // A different thread has no successful-101 proof and must not be captured by this recovery path.
+    const otherThread = await readUpgradeFailure(
+      proxy.url,
+      '/v1/responses',
+      ['Thread-Id: thread-other'],
+    );
+    expect(otherThread).toBe(
+      'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n',
+    );
+
+    // Write while offline. The proxy pauses reads instead of accumulating an unbounded user-space queue.
+    reconnect.socket.write('PING_AFTER_RECONNECT');
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error): void => reject(error);
+      upstream.server.once('error', onError);
+      upstream.server.listen(upstream.port, '127.0.0.1', () => {
+        upstream.server.off('error', onError);
+        resolve();
+      });
+    });
+
+    await expect(
+      waitForSocketText(reconnect.socket, reconnect.rest, 'PONG'),
+    ).resolves.toContain('PONG');
+    expect(upstream.requests).toHaveLength(2);
+    expect(upstream.received.join('')).toContain('PING_AFTER_RECONNECT');
+  });
+
+  it('forgets one thread proof so a provider switch cannot reuse its websocket recovery', async () => {
+    const upstream = await startUpgradeUpstream();
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid',
+      transformRequest: [],
+      resolveWebSocketUpstream: () => upstream.url,
+      retryProvenWebSocketUpgrades: true,
+    });
+    const threadHeaders = ['Thread-Id: thread-provider-switch'];
+    const first = await openUpgrade(
+      proxy.url,
+      '/v1/responses',
+      Buffer.alloc(0),
+      threadHeaders,
+    );
+    expect(first.head).toContain('HTTP/1.1 101 Switching Protocols');
+
+    const firstClosed = new Promise<void>((resolve) => first.socket.once('close', () => resolve()));
+    expect(proxy.forgetWebSocketStateForThread?.('thread-provider-switch')).toBe(1);
+    await firstClosed;
+    for (const connection of upstream.connections) connection.destroy();
+    await new Promise<void>((resolve) => upstream.server.close(() => resolve()));
+
+    const response = await readUpgradeFailure(
+      proxy.url,
+      '/v1/responses',
+      threadHeaders,
+    );
+    expect(response).toBe(
+      'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n',
+    );
+  });
+
+  it('stops holding a proven thread when the real upstream returns an HTTP refusal', async () => {
+    let acceptUpgrade = true;
+    const upstream = createServer();
+    upstream.on('upgrade', (_req, socket) => {
+      sockets.add(socket);
+      if (!acceptUpgrade) {
+        socket.end([
+          'HTTP/1.1 503 Service Unavailable',
+          'Content-Length: 4',
+          'Connection: close',
+          '',
+          'down',
+        ].join('\r\n'));
+        return;
+      }
+      socket.write([
+        'HTTP/1.1 101 Switching Protocols',
+        'Connection: Upgrade',
+        'Upgrade: websocket',
+        '',
+        '',
+      ].join('\r\n'));
+    });
+    const port = await listenOnAvailableLoopbackPort(upstream);
+    cleanups.push(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid',
+      transformRequest: [],
+      resolveWebSocketUpstream: () => `http://127.0.0.1:${port}`,
+      retryProvenWebSocketUpgrades: true,
+    });
+    const threadHeaders = ['Thread-Id: thread-refused'];
+    const first = await openUpgrade(
+      proxy.url,
+      '/v1/responses',
+      Buffer.alloc(0),
+      threadHeaders,
+    );
+    first.socket.destroy();
+    acceptUpgrade = false;
+
+    const held = await openUpgrade(
+      proxy.url,
+      '/v1/responses',
+      Buffer.alloc(0),
+      threadHeaders,
+    );
+    expect(held.head).toContain('HTTP/1.1 101 Switching Protocols');
+    await new Promise<void>((resolve) => held.socket.once('close', () => resolve()));
+
+    const refusal = await readUpgradeFailure(proxy.url, '/v1/responses', threadHeaders);
+    expect(refusal).toContain('HTTP/1.1 503 Service Unavailable');
+    expect(refusal).toContain('down');
+  });
+
+  it('returns 500 instead of falling back when the websocket resolver throws', async () => {
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid',
+      transformRequest: [],
+      resolveWebSocketUpstream: () => {
+        throw new Error('resolver failed');
+      },
+    });
+
+    const response = await readUpgradeFailure(proxy.url);
+    expect(response).toBe(
+      'HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n',
+    );
+  });
+
+  it('returns 500 instead of falling back for an unusable websocket upstream url', async () => {
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid',
+      transformRequest: [],
+      resolveWebSocketUpstream: () => 'ws://upstream.invalid/backend-api/codex',
+    });
+
+    const response = await readUpgradeFailure(proxy.url);
+    expect(response).toBe(
+      'HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n',
+    );
+  });
+
+  it('returns 502 instead of falling back on pre-handshake network errors', async () => {
+    // A closed loopback port deterministically produces ECONNREFUSED. DNS ENOTFOUND,
+    // ECONNRESET and TLS failures enter the same ClientRequest error branch.
+    const unavailable = createServer();
+    const port = await listenOnAvailableLoopbackPort(unavailable);
+    await new Promise<void>((resolve) => unavailable.close(() => resolve()));
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid',
+      transformRequest: [],
+      resolveWebSocketUpstream: () => `http://127.0.0.1:${port}`,
+    });
+
+    const response = await readUpgradeFailure(proxy.url);
+    expect(response).toBe(
+      'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n',
+    );
+  });
+
+  it('returns 504 instead of falling back when the websocket handshake times out', async () => {
+    const upstream = createServer();
+    upstream.on('upgrade', (_req, socket) => {
+      sockets.add(socket);
+      // Intentionally leave the handshake pending. The ClientRequest timeout spy below
+      // fires the production timeout callback without making this test wait 15 seconds.
+    });
+    const port = await listenOnAvailableLoopbackPort(upstream);
+    cleanups.push(() => new Promise<void>((resolve) => {
+      upstream.closeAllConnections();
+      upstream.close(() => resolve());
+    }));
+    const setTimeoutSpy = vi.spyOn(ClientRequest.prototype, 'setTimeout');
+    setTimeoutSpy.mockImplementation(function (
+      this: ClientRequest,
+      msecs: number,
+      callback?: () => void,
+    ): ClientRequest {
+      if (msecs === 15_000 && callback) queueMicrotask(callback);
+      return this;
+    });
+
+    try {
+      proxy = await createAnthropicCompatProxy({
+        upstream: 'http://unused.invalid',
+        transformRequest: [],
+        resolveWebSocketUpstream: () => `http://127.0.0.1:${port}`,
+      });
+
+      const response = await readUpgradeFailure(proxy.url);
+      expect(response).toBe(
+        'HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n',
+      );
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it('handles an asynchronous socket error while writing an early 426 response', async () => {
@@ -533,7 +782,7 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     await expect(waitForSocketText(other.socket, other.rest, 'PONG')).resolves.toContain('PONG');
   });
 
-  it('routes an https websocket upstream through the configured HTTP CONNECT proxy', async () => {
+  it('returns 502 when an HTTP CONNECT proxy cannot reach the websocket upstream', async () => {
     const connects: string[] = [];
     const outbound = createServer();
     outbound.on('connect', (req, clientSocket) => {
@@ -551,7 +800,7 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     });
 
     const response = await readUpgradeFailure(proxy.url);
-    expect(response).toContain('HTTP/1.1 426 Upgrade Required');
+    expect(response).toContain('HTTP/1.1 502 Bad Gateway');
     expect(connects).toEqual(['upstream.invalid:443']);
   });
 

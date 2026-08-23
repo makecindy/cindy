@@ -45,7 +45,9 @@ describe('RenameSessionsConfirmBridge', () => {
       sessionId: 'sess-1',
       request: { kind: 'rename_sessions_confirm', changes: CHANGES },
     });
-    expect((payload as { request: { requestId: string } }).request.requestId).toBeTruthy();
+    expect((payload as { request: { requestId: string } }).request.requestId).toMatch(
+      /^desktop-confirm-source-/,
+    );
     expect(bridge.pendingSnapshots('other-session')).toEqual([]);
     expect(bridge.pendingSnapshots('sess-1')).toEqual([
       { sessionId: 'sess-1', request: (payload as { request: unknown }).request },

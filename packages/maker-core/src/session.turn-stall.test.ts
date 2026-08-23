@@ -260,6 +260,33 @@ describe('Session turn stall watchdog', () => {
     }
   });
 
+  it('stamps dequeued terminals with the queued generation and Session instance', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('first');
+      expect(session.getTurnGeneration()).toBe(1);
+      stub.endTurn();
+      await session.send('second');
+      expect(session.getTurnGeneration()).toBe(2);
+      stub.endTurn();
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const done = seen.find((ev) => ev.type === 'done');
+      // The constructor wait starts at generation 0; the send that is current
+      // when that wait finally dequeues owns the event.
+      expect(done?.sessionTurnGeneration).toBe(2);
+      expect(done?.sessionInstanceId).toBe(session.instanceId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('合成的超时 error 带 turnOrigin,并在 fan-out 后清空(review 第二轮)', async () => {
     // 不带 origin 的话:goal-host 把它归类成 origin:'other' 并像用户插话一样暂停 goal,
     // scheduler 的 IM 转播则直接忽略这条终态,卡片永不 finalize。

@@ -76,6 +76,11 @@ export interface SessionRecycleScope {
   mediaDb: DbClient['drizzle'];
 }
 
+export interface RegisterSessionIpcOpts {
+  /** Close a local Pi/Codex runtime only if its current turn is idle. */
+  closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+}
+
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
 
@@ -117,8 +122,9 @@ async function withStatusWriteLock<T>(
   sessionId: string,
   status: unknown,
   task: () => Promise<T>,
+  alreadyLocked = false,
 ): Promise<T> {
-  if (status === undefined) return task();
+  if (status === undefined || alreadyLocked) return task();
   return withSessionRouteLock(sessionId, task);
 }
 
@@ -951,6 +957,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
 
 export function registerSessionIpc(
   readSessionListLogScope: () => string | null = () => null,
+  opts: RegisterSessionIpcOpts = {},
 ): void {
   // interrupted-turn-resume 假阳性修复:每次 last_turn_ended_at 真正落库(正常收尾 /
   // barrier 版收尾 / ack)都广播 lastTurnEndedAt patch —— renderer 的 session 快照可能
@@ -1343,6 +1350,9 @@ export function registerSessionIpc(
     const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
     const db = getDbClient().drizzle;
+    // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
+    // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
+    const update = async () => {
     if (p.workspaceKind !== undefined) {
       const value = p.workspaceKind;
       if (value !== 'project' && value !== 'dialogue') {
@@ -1401,6 +1411,26 @@ export function registerSessionIpc(
               .where(eq(sessions.id, sid))
           )[0]
         : undefined;
+    const movingLocalNonClaudeSession =
+      beforeMove &&
+      beforeMove.agentKind !== 'cc' &&
+      !beforeMove.remoteHostId &&
+      beforeMove.workingDir &&
+      typeof p.workingDir === 'string' &&
+      p.workingDir &&
+      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir;
+    // Pi/Codex keep a live Maker handle whose cwd is fixed at bootstrap. Close it
+    // before persisting the new directory so the next send lazily recreates the
+    // runtime with the moved session's cwd instead of continuing in the old one.
+    if (movingLocalNonClaudeSession) {
+      if (!opts.closeIdleSessionForMove) {
+        throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
+      }
+      const idle = await opts.closeIdleSessionForMove(sid);
+      if (idle === false) {
+        throwIpcError('PRECONDITION_FAILED', '运行中的任务不能移动');
+      }
+    }
     // 只有纯设置字段(model/effort 等)才跳过 bump；凡带 activity 字段
     // (clearedAt / sdkSessionId / status / token 用量等)仍需更新 updatedAt，
     // 否则本地 /clear 后重启侧栏时间回退旧值。
@@ -1429,7 +1459,12 @@ export function registerSessionIpc(
     // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
     // 按下过保存,这个方向的偏差是安全的。
     if (typeof p.title === 'string') noteUserTitleWritten(sid);
-    await withStatusWriteLock(sid, p.status, () => writeSessionPatch(db, sid, setObj, p.status));
+    await withStatusWriteLock(
+      sid,
+      p.status,
+      () => writeSessionPatch(db, sid, setObj, p.status),
+      p.workingDir !== undefined,
+    );
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
@@ -1478,14 +1513,6 @@ export function registerSessionIpc(
       row.summary = null;
     }
     const updated = sessionToCamel(row);
-    const broadcastPatch =
-      p.pinnedAt === undefined
-        ? p
-        : {
-            ...p,
-            pinnedAt: updated.pinnedAt,
-            ...(updated.pinnedAt === null ? { summary: null } : { status: updated.status }),
-          };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
@@ -1500,6 +1527,37 @@ export function registerSessionIpc(
     ) {
       await upsertRecentWorkdir(row.workingDir, Date.now());
     }
+    // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
+    // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
+    // 之后、广播之前还有 await(摘要清理 / recent-workdir / 转录迁移),两个窗口
+    // 对同一任务并发操作时,本请求可能在此期间被另一窗口推进到更晚的终态(如
+    // 归档写入后被删除)。用过期值广播会把镜像回滚成旧 UI 状态(已删除任务在
+    // 副窗/控制端复活),且若本广播是最后一条,镜像不会自愈。
+    //
+    // 因此含 status 的 patch 在广播前(所有 await 之后)**重读一次**:重读与广播
+    // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
+    // 晚于本广播到达,镜像最终也收敛到 deleted。
+    let broadcastStatus = updated.status;
+    if (p.status !== undefined) {
+      const [currentRow] = await db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      if (currentRow) broadcastStatus = currentRow.status;
+    }
+    const broadcastPatch =
+      p.pinnedAt === undefined && p.status === undefined
+        ? p
+        : {
+            ...p,
+            ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
+            ...(p.status !== undefined ? { status: broadcastStatus } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
+              ? { status: broadcastStatus }
+              : {}),
+          };
     if (
       projectTargetChanged ||
       settingsChanged ||
@@ -1529,6 +1587,8 @@ export function registerSessionIpc(
     notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
     cleanupSessionTerminalArtifacts(sid, p.status);
     return updated;
+    };
+    return p.workingDir === undefined ? update() : withSessionRouteLock(sid, update);
   });
 
   // 窄口径会话元数据编辑(status / title / pinnedAt)。专为 device-link 控制端**远程**

@@ -94,6 +94,7 @@
     "tabs": {
       "general": "一般",
       "billing": "使用量と請求",
+      "usage": "使用履歴",
       "personalization": "パーソナライズ",
       "apiKeys": "ツールキー",
       "voiceInput": "音声入力",
@@ -1047,6 +1048,13 @@
           "cancel": "キャンセル",
           "edit": "編集",
           "delete": "削除",
+          "termLabel": "辞書の語",
+          "aliasSeparator": "、",
+          "aliases": "よくある誤認識：{{aliases}}",
+          "aliasesEditLabel": "よくある誤認識",
+          "aliasesEditAriaLabel": "よくある誤認識を編集",
+          "aliasesPlaceholder": "誤認識を 1 行に 1 件入力",
+          "aliasesEditHint": "1 行に 1 件入力します。すべて削除するには空欄にします。",
           "searchAriaLabel": "辞書を検索",
           "closeSearch": "検索を閉じる",
           "searchPlaceholder": "辞書を検索",
@@ -1161,10 +1169,10 @@
       "summary": {
         "total": "表示中",
         "totalHint": "インポート対象として選択可能",
-        "projects": "Existing project sessions",
-        "projectsHint": "Sessions under current sidebar projects",
-        "dialogue": "New folder sessions",
-        "dialogueHint": "Sessions that will create project groups",
+        "projects": "既存プロジェクトのセッション",
+        "projectsHint": "現在のサイドバーのプロジェクトに属するセッション",
+        "dialogue": "新規フォルダーのセッション",
+        "dialogueHint": "プロジェクトグループを作成するセッション",
         "filtered": "スキップ済み",
         "filteredHint": "内部セッション、または既にアプリ内に存在"
       },
@@ -1175,7 +1183,7 @@
         "codex": "Codex",
         "claude": "Claude",
         "project": "既存プロジェクト",
-        "dialogue": "New folders"
+        "dialogue": "新規フォルダー"
       },
       "toast": {
         "scanFailed": "スキャンに失敗しました",
@@ -1968,7 +1976,7 @@
         "note": "現在の QR コードスキャンユーザーにバインドされています。他の人からのプライベートメッセージは自動的に無視されます。",
         "serviceLabel": "サービス",
         "appIdLabel": "App ID",
-        "ownerLabel": "Owner",
+        "ownerLabel": "オーナー",
         "ownerWaiting": "初回プライベートメッセージのバインドを待機中",
         "reconnect": "{{service}} ボットを再接続",
         "clear": "連携解除"
@@ -3495,6 +3503,12 @@
     },
     "shortcuts": {
       "title": "キーボードショートカット",
+      "accessories": {
+        "title": "アクセサリ",
+        "description": "キーボードやゲームパッドなどの入力デバイス",
+        "openAria": "アクセサリを開く",
+        "back": "戻る"
+      },
       "resetAll": "すべてデフォルトに戻す",
       "reset": "デフォルトに戻す",
       "recording": "新しいショートカットを入力…",
@@ -3531,7 +3545,7 @@
           },
           "composer.submit": {
             "name": "メッセージを送信",
-            "description": "入力欄のメッセージを送信します"
+            "description": "入力中のメッセージを送信します。承認待ちがあれば承認します"
           },
           "feedback": {
             "name": "フィードバックを送信",
@@ -3614,7 +3628,11 @@
           },
           "navigateBack": {
             "name": "戻る",
-            "description": "ナビゲーション履歴を戻ります"
+            "description": "前の画面に戻ります。承認待ちがあれば拒否します"
+          },
+          "toggleFullscreen": {
+            "name": "全画面を切り替え",
+            "description": "全画面表示の開始または終了"
           },
           "composer.focus": {
             "name": "入力欄にフォーカス",
@@ -3634,7 +3652,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "Agent キーでタスクを開き、ライトで状態を表示します。",
         "openAria": "Work Louder Codex Micro の設定を開く",
         "back": "キーボードショートカットに戻る",
@@ -3935,7 +3952,113 @@
       "edit": "編集",
       "delete": "削除",
       "deleteAria": "{{name}} のショートカットを削除",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "xboxGamepad": {
+        "title": "Xbox コントローラー",
+        "openAria": "Xbox コントローラー設定を開く",
+        "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
+        "back": "戻る",
+        "retry": "再試行",
+        "layout": {
+          "title": "コントローラー",
+          "description": "ボタンをタップして割り当てを変更できます。実機を押すと、図の同じ位置が点灯します。",
+          "clickToEdit": "タップして設定",
+          "editor": {
+            "title": "ボタン",
+            "description": "このボタンに Cindy の機能を割り当てます。未設定のボタンは何もしません。",
+            "done": "完了",
+            "assigned": "機能",
+            "assignedDescription": "押したときに実行します。押し話しは離すと終了します。"
+          },
+          "reset": {
+            "title": "割り当てをリセット",
+            "description": "各ボタンの機能だけを戻します。コントローラーはオフになりません。",
+            "button": "割り当てをリセット"
+          }
+        },
+        "stick": {
+          "description": "スティックは会話のスクロールにも、方向ごとの機能にも使えます。",
+          "customDescription": "スティックがこの方向に入ったときに 1 回実行します。",
+          "mode": {
+            "label": "スティックの用途",
+            "description": "会話スクロールは倒した量に応じて連続します。カスタムは方向ごとに機能を指定します。",
+            "options": {
+              "conversation-scroll": "会話をスクロール",
+              "custom": "方向をカスタム"
+            }
+          }
+        },
+        "directions": {
+          "up": "上",
+          "right": "右",
+          "down": "下",
+          "left": "左"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "左スティック押し込み",
+          "rs": "右スティック押し込み",
+          "dpadUp": "十字キー上",
+          "dpadDown": "十字キー下",
+          "dpadLeft": "十字キー左",
+          "dpadRight": "十字キー右",
+          "leftStick": "左スティック",
+          "rightStick": "右スティック"
+        },
+        "actions": {
+          "none": "未設定",
+          "voice": "音声入力",
+          "voiceDescription": "押している間音声入力し、離すと終了します。",
+          "commands": "コマンド",
+          "skills": "スキル",
+          "choose": "機能を選択"
+        },
+        "errors": {
+          "load": "コントローラー設定を読み込めませんでした",
+          "save": "コントローラー設定を保存できませんでした"
+        },
+        "connection": {
+          "label": "接続",
+          "toggle": {
+            "label": "有効にする",
+            "aria": "Cindy が前面にあるとき Xbox コントローラーを使う"
+          },
+          "status": {
+            "connecting": "接続中",
+            "connected": "接続済み",
+            "not-detected": "未検出",
+            "present": "接続済み",
+            "disabled": "オフ",
+            "error": "接続エラー",
+            "unavailable": "このシステムでは未対応"
+          },
+          "descriptions": {
+            "connecting": "Cindy は Xbox コントローラーを探しています。",
+            "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
+            "disabled": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "present": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "not-detected": "USB または Bluetooth で Xbox コントローラーを接続してください。",
+            "error": "Cindy はコントローラーを読み取れず、再試行しています。",
+            "unavailable": "このコンピューターはまだ Xbox コントローラーを読めません。"
+          }
+        },
+        "device": {
+          "usb": "有線",
+          "bluetooth": "Bluetooth",
+          "battery": "{{percent}}%",
+          "charging": "充電中 {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "プラグイン",
@@ -5147,6 +5270,70 @@
       "lowCache": "キャッシュヒット率が低く、このターンでは多くのコンテキストが再課金されています"
     }
   },
+  "usageHistory": {
+    "description": "このデバイスの Cindy 内で発生したトークン使用量です。記録は機能の提供開始時から蓄積され、それ以前の履歴は補完されません。",
+    "empty": "まだ使用記録がありません。会話を実行すると蓄積が始まります。",
+    "cacheHitTooltip": "キャッシュ読取 ÷（入力 + キャッシュ読取 + キャッシュ書込）。メッセージカードと同じ基準です。",
+    "summary": {
+      "title": "概要"
+    },
+    "stats": {
+      "todayTokens": "今日のトークン",
+      "totalTokens": "直近 30 日のトークン",
+      "streak": "連続稼働日数",
+      "cacheHitRate": "キャッシュヒット率(30 日)",
+      "models": "使用モデル数"
+    },
+    "heatmap": {
+      "title": "アクティビティヒートマップ",
+      "subtitle": "直近 20 週",
+      "emptyCell": "この日は使用記録なし"
+    },
+    "daily": {
+      "title": "直近 30 日の日次トークン",
+      "subtitle": "モデル別の積み上げ"
+    },
+    "byAgent": {
+      "title": "Agent / harness 別",
+      "subtitle": "直近 30 日",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "直近 30 日のトークン",
+        "share": "割合",
+        "today": "今日",
+        "hitRate": "キャッシュヒット率",
+        "models": "モデル数"
+      }
+    },
+    "byModel": {
+      "title": "モデル別",
+      "subtitle": "直近 30 日",
+      "col": {
+        "model": "モデル",
+        "total": "合計トークン",
+        "share": "割合",
+        "input": "入力",
+        "output": "出力",
+        "cacheRead": "キャッシュ読取",
+        "cacheCreate": "キャッシュ書込",
+        "hitRate": "キャッシュヒット率"
+      }
+    },
+    "tasks": {
+      "title": "トークン消費の多いセッション",
+      "subtitle": "直近 30 日に稼働したセッションを累計トークン順に表示",
+      "col": {
+        "task": "セッション",
+        "model": "モデル",
+        "provider": "プロバイダー",
+        "tokens": "累計トークン",
+        "context": "コンテキスト使用率",
+            "lastActive": "最終アクティブ"
+      },
+      "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
+      "tokensTooltip": "セッションの累計値であり、直近 30 日の増分ではありません。"
+    }
+  },
   "usageDashboard": {
     "title": "使用量とコスト",
     "updating": "更新中",
@@ -5299,18 +5486,18 @@
         "title": "パネルを開く",
         "desc": "ファイル、レビュー、アクティビティモニタ、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
         "openFile": "ファイルを開く",
-        "fileSub": "Files",
+        "fileSub": "ファイル",
         "openReview": "レビューを開く",
-        "reviewSub": "Review",
+        "reviewSub": "レビュー",
         "openSubagents": "サブエージェントを開く",
         "subagentsSub": "後から確認できる子タスク",
         "openBackgroundTasks": "バックグラウンドタスクを開く",
-        "backgroundTasksSub": "Background tasks",
+        "backgroundTasksSub": "バックグラウンドタスク",
         "openResourceUsage": "アクティビティモニタを開く",
         "openBrowser": "ブラウザを開く",
-        "browserSub": "Browser",
+        "browserSub": "ブラウザ",
         "openTerminal": "ターミナルを開く",
-        "terminalSub": "Terminal",
+        "terminalSub": "ターミナル",
         "addMoreHint": "上部の + ボタンからほかのパネルタイプを選択できます"
       },
       "placeholderHint": "{{kind}} — コンテンツは後続フェーズで追加されます"
@@ -5504,6 +5691,7 @@
     },
     "browser": {
       "newTab": "新しいタブ",
+      "audible": "音声を再生中",
       "urlPlaceholder": "URL を入力または検索",
       "goBack": "戻る",
       "goForward": "進む",
@@ -5616,7 +5804,7 @@
       "sessionRunningWriteBlocked": "エージェントの実行中は、git の書き込み操作を一時的に利用できません。",
       "renamePartialNotice": "v1 ではリネームされたファイルはファイル全体のステージ/ステージ解除/元に戻すのみ対応しています。",
       "typechangePartialNotice": "この種類のファイルは、ファイル全体のステージ/ステージ解除/元に戻すのみ対応しています。",
-      "aheadBehindTooltip": "{{upstream}}: {{ahead}} 件 ahead、{{behind}} 件 behind",
+      "aheadBehindTooltip": "{{upstream}}：{{ahead}} 件先行、{{behind}} 件遅れ",
       "writeDisabledNotice": "読み取り専用状態: {{reasons}}。git の変更は引き続き表示されます。",
       "writeDisabledReasons": {
         "detached": "detached HEAD",
@@ -6087,6 +6275,12 @@
     }
   },
   "sidebar": {
+    "vendorReadiness": {
+      "loading": "利用可否を確認中",
+      "ready": "準備完了",
+      "unauthenticated": "サインインが必要です",
+      "binary-missing": "コンポーネントを利用できません"
+    },
     "ariaLabel": "サイドバーナビゲーション",
     "horizontalTabbarAria": "メインビュー切り替え",
     "tabs": {
@@ -6126,10 +6320,10 @@
         "enabled": "有効"
       },
       "close": "ダウンロード画面を閉じる"
-    },
-    "vendorReadiness": {
-      "loading": "読み込み中"
     }
+  },
+  "common": {
+    "dismiss": "閉じる"
   },
   "commonUi": {
     "crossAgentConvert": {
@@ -6581,6 +6775,7 @@
       "popoverTitle": "Worker を呼ぶ",
       "startButton": "協同を開始",
       "startFailed": "協同の開始に失敗しました",
+      "stopFailed": "協同を停止できませんでした",
       "startFailedContinue": "協同の開始に失敗しました。単一セッションとして続行します。",
       "createWorkerRefreshFailed": "Worker の状態を更新できませんでした。もう一度お試しください。",
       "assignmentFailed": "Worker は作成されましたが、タスクが割り当てられたか確認できません。再試行する前に Worker パネルを確認してください。",
@@ -6626,6 +6821,7 @@
     "chatInput": {
       "defaultPlaceholder": "今日は何をしましょうか〜",
       "createAgentPlaceholder": "{{appName}}さん、こんにちは！",
+      "recommendationShortcut": "Tab",
       "voiceInput": {
         "start": "音声入力を開始",
         "stop": "音声入力を停止",
@@ -6861,6 +7057,8 @@
     "verificationFailed": "ChatGPT ログインが復旧したか確認できませんでした。再確認してください。"
   },
   "chat": {
+    "jumpToBottom": "一番下へ移動",
+    "prevMessageJump": "前の質問へ移動：{{preview}}",
     "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
       "skippedAnswer": "スキップ済み",
@@ -7055,6 +7253,8 @@
       "streamInterruptedNoRetry": "モデル出力が途中で中断されました。一時的な上流障害であることが多いので、しばらくしてから再試行してください",
       "networkShowRaw": "元のエラーを表示",
       "networkHideRaw": "元のエラーを隠す",
+      "gatewayProxyTokenInvalid": "Cindy AI の認証情報が無効になりました。「再試行」をクリックしてください。繰り返す場合はサインアウトしてから再ログインしてください",
+      "gatewayProxyTokenInvalidNoRetry": "Cindy AI の認証情報が無効になりました。繰り返す場合はサインアウトしてから再ログインしてください",
       "silentStopContinue": "続行",
       "silentStopContinueTitle": "現在のタスクを続行",
       "piTransportClosed": "リモート Pi の接続が切断されました（SSH チャンネルが閉じました）。リモートのタスクは実行中のままです。再接続すると続行できます。",
@@ -7097,6 +7297,10 @@
       "dismissTitle": "今は復元しない"
     },
     "media": {
+      "clickToZoom": "クリックして拡大",
+      "audioPlay": "音声を再生",
+      "audioPause": "音声を一時停止",
+      "modelPreviewAlt": "3D モデルのプレビュー",
       "imageCopied": "画像をコピーしました",
       "copyFailed": "コピーに失敗しました",
       "openFolderFailed": "フォルダを開けませんでした",
@@ -7690,6 +7894,8 @@
       "waiting": "少々お待ちください…",
       "working": "作業中…",
       "running": "実行中…",
+      "waitingWorkflow": "Workflow を待機中…",
+      "waitingWorkflowProgress": "Workflow を待機中 · {{done}}/{{total}} Agent",
       "turnStart": "{{name}} さん、対応中です…",
       "issueTip": "{{name}} さん、/issue でフィードバックや提案をお寄せください",
       "runningTool": "{{tool}} を実行中…"
@@ -7766,6 +7972,9 @@
         "cancel": "キャンセル"
       },
       "chatPlaceholder": "続けてやり取りしましょう…",
+      "worktreeCreating": "worktree を作成中",
+      "worktreeFailed": "worktree の作成に失敗しました",
+      "extraDirsSaveFailed": "追加ディレクトリを保存できませんでした",
       "chatDropAreaAria": "チャットのファイルドロップ領域",
       "openWorkingDirAria": "作業ディレクトリをシステムのファイルマネージャーで開く",
       "projectContextLoaded": "プロジェクトナレッジベースを読み込みました",
@@ -7781,6 +7990,10 @@
       "backToAutomations": "Automations に戻る",
       "waitForReply": "ドキュメント領域での返信を待っています…",
       "modelSwitchedFastModeOff": "モデルを切り替えました。Fast Mode は無効になりました"
+    },
+    "remoteDesktopConfirmation": {
+      "title": "制御対象のコンピューターで確認が必要です",
+      "description": "制御対象のコンピューターで Cindy を開き、内容を確認して応答してください。"
     },
     "handoff": {
       "card": {
@@ -7894,8 +8107,9 @@
       },
       "filterVendor": {
         "all": "すべて",
-        "cc": "Claude",
-        "codex": "Codex"
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
       },
       "filterGroupBy": {
         "project": "プロジェクトでグループ化",
@@ -8305,6 +8519,8 @@
         "revealFolder": "フォルダで表示"
       },
       "fileBody": {
+        "drawioLoading": "draw.io プレビューを読み込み中…",
+        "pdfLoading": "PDF プレビューを読み込み中…",
         "selectFile": "ファイルを選択してプレビュー",
         "readFailed": "ファイルの読み取りに失敗：{{message}}",
         "truncatedNotice": "ファイルが大きすぎるため、先頭 2 MB のみ表示しています。完全な内容はシステムで開いてください",
@@ -8416,7 +8632,7 @@
       },
       "filterAria": "検索フィルターと並び順（並び順：{{sort}}、状態：{{status}}、エージェント：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
       "filter": {
-        "label": "フィルター",
+        "label": "検索条件",
         "active": "フィルター {{count}} 件",
         "reset": "リセット",
         "allProjects": "すべてのプロジェクト"
@@ -8434,6 +8650,48 @@
     "ultra": "究極"
   },
   "scheduler": {
+    "presentation": {
+      "status": {
+        "active": "有効",
+        "paused": "一時停止",
+        "expired": "1回",
+        "running": "実行中"
+      },
+      "summary": {
+        "hourly": "毎時",
+        "daily": "毎日 {{time}}",
+        "weekly": "毎週{{weekday}} {{time}}",
+        "weekdays": "平日 {{time}}",
+        "weekends": "週末 {{time}}",
+        "monthly": "毎月 {{day}} 日 {{time}}",
+        "custom": "カスタム"
+      },
+      "weekday": {
+        "full": { "0": "日曜日", "1": "月曜日", "2": "火曜日", "3": "水曜日", "4": "木曜日", "5": "金曜日", "6": "土曜日" },
+        "short": { "0": "日", "1": "月", "2": "火", "3": "水", "4": "木", "5": "金", "6": "土" }
+      },
+      "time": {
+        "last": "前回 {{value}}",
+        "today": "今日 · {{time}}",
+        "yesterday": "昨日 · {{time}}",
+        "daysAgo": "{{count}} 日前 · {{time}}",
+        "startedSeconds": "{{count}} 秒前に開始",
+        "startedMinutes": "{{count}} 分前に開始",
+        "startedHours": "{{count}} 時間前に開始",
+        "intervalMinutes": "{{count}}分",
+        "intervalHours": "{{count}}時間",
+        "intervalDays": "{{count}}日",
+        "nextLessThanMinute": "次回は 1 分以内",
+        "next": "次回 {{when}}（{{interval}}後）"
+      },
+      "destination": {
+        "boundSession": "タスク {{id}} に紐付け",
+        "newDialogue": "新しい対話",
+        "newWorktreeSession": "新しい worktree タスク",
+        "newSession": "新しいタスク",
+        "inDirectory": "{{base}}："
+      }
+    },
     "page": {
       "title": "自動化",
       "totalCount": "合計 {{count}} 件",
@@ -8906,17 +9164,17 @@
         "nightly-test-heal": {
           "name": "夜間セルフヒーリングテスト",
           "description": "毎晩テストを実行し、失敗項目を分離ワークツリーで最小修正",
-          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        "prompt": "プロジェクトのテストスイートを実行し、失敗があれば隔離された worktree で最小限の修正を試みてください。\n制約：\n- リポジトリのドキュメントまたは package スクリプトから標準のテストコマンドを特定してから、テストスイート全体を実行する\n- 明確な失敗の証拠がある問題だけを修正し、影響範囲が最小の変更を優先して、ついでのリファクタリングは避ける\n- 修正後は関連テストを再実行して成功を確認し、diff 全体をレビューする\n- リポジトリのワークフローに従って修正を提出する（例：ブランチを作成して PR を開く）。main ブランチを直接変更しない\n- 安全に修正できない失敗については、原因、疑わしいファイル、推奨する調査手順を報告する"
         },
         "pr-gatekeeper": {
           "name": "PR ゲートキーパー",
           "description": "平日にオープン PR の新規変更を事前レビューし、重大度別にリスクを報告",
-          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        "prompt": "リポジトリで現在オープンな PR を確認し、新しい変更を事前レビューしてください。\n制約：\n- 過去 24 時間以内に新しいコミットがあるオープン PR を 1 件ずつ確認する（月曜日は週末全体を対象）。PR 番号、ファイルパス、具体的な diff を引用する\n- 正確性、セキュリティ、データ損失、互換性の問題に重点を置き、深刻度別に分類する\n- 証拠で裏付けられる問題だけを報告し、失敗シナリオを説明する。スタイル上の好みだけで指摘しない\n- ユーザーが明示的に許可しない限り、レビュー結果のみを出力し、PR へのコメントやコード変更は行わない"
         },
         "domain-radar": {
           "name": "分野レーダー",
           "description": "注目分野の最新動向を定期収集し、見解付きサマリーを出力",
-          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+        "prompt": "テーマ「{{topic}}」について過去 24 時間の最新動向（月曜日は週末全体）を収集し、見解を含むダイジェストを作成してください。\n制約：\n- Web 検索を使い、複数の情報源で照合してから採用し、各項目に出典リンクを付ける\n- リリース、研究、政策、重要な議論など実質的な進展を優先し、宣伝記事や転載を除外する\n- リンクを並べるだけでなく、各動向に「なぜ注目すべきか」を 1 文で示す\n- 情報が少ない場合や情報源に疑義がある場合は率直に明記し、推測で補わない",
           "params": {
             "topic": {
               "label": "注目テーマ",
@@ -8927,7 +9185,7 @@
         "competitor-watch": {
           "name": "競合ウォッチ",
           "description": "競合の製品・市場動向を週次でまとめ、自社への影響を分析",
-          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+        "prompt": "次の競合の過去 1 週間の動向を追跡してください：{{competitors}}。\n制約：\n- Web 検索で製品更新、リリース、価格変更、市場動向、ユーザー評価を調べ、出典を示す\n- 公式情報と第三者による情報を区別し、未確認の噂は明示する\n- 重要な動向ごとに、それが自社に何を意味するかを分析し、対応案を示す\n- 実質的な動きがない場合は、水増しせず率直にその旨を伝える",
           "params": {
             "competitors": {
               "label": "競合リスト",
@@ -8938,12 +9196,12 @@
         "weekly-work-draft": {
           "name": "週報ドラフトアシスタント",
           "description": "作業ディレクトリのドキュメントから今週の作業を整理し、週報ドラフトを生成",
-          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        "prompt": "作業ディレクトリ内で今週変更されたドキュメント、メモ、成果物を基に、週報の下書きを作成してください。\n制約：\n- 作業ディレクトリ内に実際の変更履歴がある内容だけを根拠とし、対応するファイルを示す\n- 「今週完了 / 進行中 / 来週の予定 / 調整が必要」の構成で、そのまま提出できる簡潔な文章にする\n- 実質的な進捗と定常作業を区別し、価値のある成果を強調する\n- 判断材料が足りない箇所には説明付きのプレースホルダーを残し、ユーザーが追記できるようにする"
         },
         "knowledge-freshness": {
           "name": "ナレッジベース鮮度チェック",
           "description": "毎月ドキュメントを点検し、古い内容や矛盾を洗い出す",
-          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        "prompt": "作業ディレクトリ内のドキュメントを点検し、更新が必要な内容を見つけてください。\n制約：\n- 古い情報（過去の日付、無効なリンク、廃止された手順やツール）、矛盾、重複を確認する\n- 各問題についてファイルパスと具体的な場所を示し、判断理由を説明する\n- 「更新を推奨 / 統合を推奨 / 削除を推奨」に分類し、修正チェックリストを作成する\n- 点検レポートだけを出力し、ドキュメント自体は変更しない"
         }
       }
     }
@@ -9532,7 +9790,7 @@
       "skillNameRequired": "スキル名は必須です",
       "skillNameFormat": "形式：[a-z0-9-]+",
       "displayNameLabel": "表示名",
-      "displayNamePlaceholder": "My Skill",
+      "displayNamePlaceholder": "マイスキル",
       "displayNameLimit": "最大 64 文字",
       "descriptionLabel": "説明",
       "descriptionPlaceholder": "この skill の用途を簡潔に",
@@ -9965,6 +10223,7 @@
       "enableCollabSubmit": "コラボレーションを開始"
     },
     "rolePill": {
+      "unread": "未読の更新",
       "worker": "Worker",
       "workersHeader": "Workers",
       "workerCountSummary_other": "Worker 合計 {{totalCount}} · 稼働中 {{activeCount}}",
@@ -9978,6 +10237,10 @@
       "layoutMenuLabel": "Worker リストの表示方式",
       "layoutTabs": "タブ",
       "layoutDropdown": "ドロップダウン",
+      "scrollWorkersLeft": "前の Worker を表示",
+      "scrollWorkersRight": "次の Worker を表示",
+      "scrollWorkersLeftEdge": "すでに先頭の Worker を表示しています",
+      "scrollWorkersRightEdge": "すでに末尾の Worker を表示しています",
       "errorBadge": "エラー",
       "errorBadgeAria": "エラーが発生した Worker があります"
     },

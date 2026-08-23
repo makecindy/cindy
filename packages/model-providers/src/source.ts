@@ -196,6 +196,31 @@ function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access
   return sameRoutes ? bundled.access : undefined;
 }
 
+/**
+ * 回填新增的 Responses custom-tool capability 只认同一条官方 Codex 路由。
+ * 旧远端快照没有这个 append-only 字段；同 id 但改变了鉴权或 upstream 的供应商可能具备
+ * 完全不同的协议能力，不能因为名字相同就套用 bundled 结论。
+ */
+function bundledResponsesCustomToolCapabilityFor(
+  primary: Provider,
+  bundled: Provider,
+): boolean | undefined {
+  const current = primary.routing.codex;
+  const baseline = bundled.routing.codex;
+  if (
+    current === undefined
+    || baseline === undefined
+    || current.supportsResponsesCustomTools !== undefined
+    || baseline.supportsResponsesCustomTools === undefined
+    || primary.auth.method !== bundled.auth.method
+    || current.upstream !== baseline.upstream
+    || current.authStrategy !== baseline.authStrategy
+  ) {
+    return undefined;
+  }
+  return baseline.supportsResponsesCustomTools;
+}
+
 /** 图片能力只可沿用到未声明 access，或仍明确属于同一 bundled 订阅的旧条目。 */
 function allowsBundledImageInheritance(
   primaryAccess: Provider['access'],
@@ -278,6 +303,9 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   const withBundledMetadata = primary.providers.map((p) => {
     const bundled = bundledById.get(p.id);
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
+    const bundledResponsesCustomToolCapability = bundled
+      ? bundledResponsesCustomToolCapabilityFor(p, bundled)
+      : undefined;
     if (!bundled) return p;
     // Pi became a first-class provider runtime in catalog v3. Production may still serve a v2
     // xAI block that is otherwise the same SuperGrok subscription provider; whole-provider
@@ -320,12 +348,15 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       bundled.embeddingModels !== undefined &&
       bundledAccess !== undefined &&
       allowsBundledImageInheritance(p.access, bundledAccess);
+    const inheritResponsesCustomToolCapability =
+      bundledResponsesCustomToolCapability !== undefined;
     if (
       !(p.access === undefined && bundledAccess !== undefined) &&
       !inheritPiRuntime &&
       !inheritImage &&
       !inheritVideo &&
-      !inheritEmbedding
+      !inheritEmbedding &&
+      !inheritResponsesCustomToolCapability
     ) {
       return p;
     }
@@ -335,8 +366,23 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       ...(inheritPiRuntime
         ? {
             agents: [...p.agents, 'pi' as const],
-            routing: { ...p.routing, pi: bundled.routing.pi },
             models: { ...p.models, pi: bundled.models.pi },
+          }
+        : {}),
+      ...(inheritPiRuntime || inheritResponsesCustomToolCapability
+        ? {
+            routing: {
+              ...p.routing,
+              ...(inheritPiRuntime ? { pi: bundled.routing.pi } : {}),
+              ...(inheritResponsesCustomToolCapability
+                ? {
+                    codex: {
+                      ...p.routing.codex!,
+                      supportsResponsesCustomTools: bundledResponsesCustomToolCapability,
+                    },
+                  }
+                : {}),
+            },
           }
         : {}),
       ...(inheritImage

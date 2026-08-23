@@ -69,6 +69,18 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "accessories",
+      "status": "proposed",
+      "en": "Accessories",
+      "translations": {
+        "zh-CN": "配件",
+        "zh-TW": "配件",
+        "ja": "アクセサリ",
+        "ko": "액세서리"
+      },
+      "note": "设置 → 键盘快捷键里，尚未检测到的硬件输入设备（Work Louder 键盘、Xbox 手柄等）收在这一栏。已插入的设备单独成卡，不进这一栏。与 device-link 的「设备／设备互联」不是同一概念。"
+    },
+    {
       "id": "captcha",
       "status": "proposed",
       "en": "Security check",

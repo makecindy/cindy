@@ -11,11 +11,7 @@ import {
   resetClaudeGenerationTiming,
   resumeClaudeGeneration,
 } from './generation-timing.js';
-import {
-  newRuntimeState,
-  translateSdkMessage,
-  type TurnState,
-} from './translator.js';
+import { newRuntimeState, translateSdkMessage, type TurnState } from './translator.js';
 
 describe('claude generation timing', () => {
   afterEach(() => {
@@ -70,6 +66,7 @@ function createTurnState(): TurnState {
     generation: 0,
     interruptGeneration: 0,
     lastAssistantMsgHadSubstance: true,
+    nextRequestPriceVariant: 'standard',
   };
 }
 
@@ -193,7 +190,14 @@ describe('claude generation pause boundaries', () => {
       {
         type: 'assistant',
         message: {
-          content: [{ type: 'tool_use', id: 'toolu_2', name: 'Read', input: { file_path: '/tmp/a' } }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_2',
+              name: 'Read',
+              input: { file_path: '/tmp/a' },
+            },
+          ],
         },
       },
       queue,
@@ -216,7 +220,14 @@ describe('claude generation pause boundaries', () => {
       {
         type: 'assistant',
         message: {
-          content: [{ type: 'tool_use', id: 'toolu_3', name: 'Read', input: { file_path: '/tmp/a' } }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_3',
+              name: 'Read',
+              input: { file_path: '/tmp/a' },
+            },
+          ],
         },
       },
       queue,
@@ -282,6 +293,247 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 
+  it('merges message_start and message_delta usage into one request segment', async () => {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: {
+            model: 'claude-sonnet-4.5',
+            usage: {
+              input_tokens: 100,
+              cache_read_input_tokens: 900,
+              cache_creation_input_tokens: 50,
+            },
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: 900,
+            cache_creation_input_tokens: 50,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.tracker.getTurnUsage()).toEqual({
+      input: 100,
+      output: 25,
+      cacheRead: 900,
+      cacheCreate: 50,
+    });
+    expect(ctx.tracker.getTurnUsageSegments()).toHaveLength(1);
+
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 25,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 50,
+        },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({
+      usageSegmentsComplete: true,
+      usageSegments: [
+        {
+          model: 'claude-sonnet-4.5',
+          inputTokens: 100,
+          outputTokens: 25,
+          cacheReadTokens: 900,
+          cacheCreateTokens: 50,
+          complete: true,
+        },
+      ],
+    });
+  });
+
+  it('freezes the current request and captures the next tool-loop request variant at the tool boundary', () => {
+    let fastMode = false;
+    const ctx = {
+      ...createTranslatorCtx(),
+      getFastMode: () => fastMode,
+    };
+    const queue = createAsyncQueue<AgentEvent>();
+    // The first request was accepted on standard before its message_start
+    // arrived; the user toggles Fast while that response is still in flight.
+    ctx.turn.nextRequestPriceVariant = 'standard';
+    fastMode = true;
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 100 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    // The first response requests a tool. Fast is toggled while the tool is
+    // running, and the SDK's tool-result echo is the boundary at which the
+    // next provider request's variant is captured.
+    fastMode = false;
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    fastMode = true;
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    // The next provider request is dispatched after the tool result and gets
+    // its own priority segment.
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 200 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 200,
+            output_tokens: 10,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    expect(ctx.tracker.getTurnUsageSegments()).toEqual([
+      expect.objectContaining({ inputTokens: 100, outputTokens: 25, priceVariant: 'standard' }),
+      expect.objectContaining({ inputTokens: 200, outputTokens: 10, priceVariant: 'priority' }),
+    ]);
+    queue.end();
+  });
+
+  it('fails closed when a resumed result aggregate cannot prove streamed segment completeness', async () => {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 100 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 25 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 2,
+        num_turns: 1,
+        usage: {
+          // First result after resume can include historical usage, and some
+          // providers only reveal cache tokens here. Request count alone must
+          // not turn the streamed subset into an exact priced total.
+          input_tokens: 1_100,
+          output_tokens: 225,
+          cache_read_input_tokens: 500,
+        },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({
+      usageSegmentsComplete: false,
+      usageSegments: [
+        {
+          model: 'claude-sonnet-4.5',
+          inputTokens: 100,
+          outputTokens: 25,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: false,
+        },
+      ],
+    });
+  });
+
   it('marks timing unreliable for a complete subagent assistant without message_delta', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -314,5 +566,3 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 });
-
-

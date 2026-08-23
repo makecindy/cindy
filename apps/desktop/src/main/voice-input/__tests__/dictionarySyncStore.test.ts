@@ -44,9 +44,15 @@ const { voiceDictionarySyncStore } = await import('../VoiceDictionarySyncStore.j
 const { sanitizeDictionaryLearningActions, voiceInputDataStore } = await import(
   '../VoiceInputDataStore.js'
 );
-const { addManualEntry, createEmptySyncState, createHlcClock, deleteTerms, recordLearningEvent } = await import(
-  '@cindy/voice-input-core'
-);
+const {
+  DEFAULT_MATERIALIZE_LIMITS,
+  addManualEntry,
+  createEmptySyncState,
+  createHlcClock,
+  deleteTerms,
+  materializeDictionary,
+  recordLearningEvent,
+} = await import('@cindy/voice-input-core');
 
 const DATA_FILE = 'voice-input-data.v1.json';
 const SYNC_FILE = 'voice-dictionary-sync.v1.json';
@@ -120,7 +126,7 @@ describe('词典同步落盘 —— 首次迁移', () => {
 });
 
 describe('词典同步落盘 —— 写入路径', () => {
-  it('手动添加、改写、删除都落到同步状态并回投影到词典文件', () => {
+  it('手动添加、改写主词与误识别写法、删除都落到同步状态并回投影到词典文件', () => {
     writeDictionaryFile({ dictionaryEntries: [] });
     voiceInputDataStore.getSettings();
 
@@ -131,8 +137,84 @@ describe('词典同步落盘 —— 写入路径', () => {
     voiceInputDataStore.renameDictionaryEntry(entryId, 'LiteLLM');
     expect(readDictionaryFile().dictionaryEntries.map((entry) => entry.text)).toEqual(['LiteLLM']);
 
+    voiceInputDataStore.editDictionaryEntry(entryId, 'LiteLLM', ['light llm', '莱特 LLM']);
+    expect(
+      voiceInputDataStore.getSettings().dictionaryEntries[0].aliases.map((alias) => alias.text),
+    ).toEqual(['light llm', '莱特 LLM']);
+
     voiceInputDataStore.deleteDictionaryEntries([entryId]);
     expect(readDictionaryFile().dictionaryEntries).toEqual([]);
+  });
+
+  it('编辑可见别名时保留物化上限之外的历史别名', () => {
+    writeDictionaryFile({ dictionaryEntries: [] });
+    voiceInputDataStore.getSettings();
+    const aliases = Array.from({ length: 10 }, (_, index) => `alias-${index}`);
+    voiceDictionarySyncStore.mutate((state, clock) =>
+      recordLearningEvent(state, clock, {
+        text: 'Vibe Coding',
+        aliases,
+        stage: 'entry',
+        nowMs: 1_000,
+      }),
+    );
+    const entry = voiceDictionarySyncStore.materialize().entries[0];
+    expect(entry.aliases).toHaveLength(8);
+
+    voiceInputDataStore.editDictionaryEntry(
+      entry.id,
+      entry.text,
+      entry.aliases.map((alias) => alias.text),
+    );
+
+    const allAliases = materializeDictionary(voiceDictionarySyncStore.getState(), {
+      ...DEFAULT_MATERIALIZE_LIMITS,
+      maxAliases: Number.MAX_SAFE_INTEGER,
+    }).entries[0].aliases;
+    expect(allAliases.map((alias) => alias.text).sort()).toEqual(aliases.sort());
+
+    voiceInputDataStore.editDictionaryEntry(entry.id, entry.text, []);
+    expect(
+      materializeDictionary(voiceDictionarySyncStore.getState(), {
+        ...DEFAULT_MATERIALIZE_LIMITS,
+        maxAliases: Number.MAX_SAFE_INTEGER,
+      }).entries[0].aliases,
+    ).toEqual([]);
+  });
+
+  it('替换可见别名时以提交集合为准，不让隐藏高频别名挤掉新值', () => {
+    writeDictionaryFile({ dictionaryEntries: [] });
+    voiceInputDataStore.getSettings();
+    const aliases = Array.from({ length: 10 }, (_, index) => `alias-${index}`);
+    for (const [index, alias] of aliases.entries()) {
+      for (let count = 0; count < aliases.length - index; count += 1) {
+        voiceDictionarySyncStore.mutate((state, clock) =>
+          recordLearningEvent(state, clock, {
+            text: 'Vibe Coding',
+            aliases: [alias],
+            stage: 'entry',
+            nowMs: 1_000 + index,
+          }),
+        );
+      }
+    }
+    const entry = voiceDictionarySyncStore.materialize().entries[0];
+    expect(entry.aliases).toHaveLength(8);
+
+    const submittedAliases = [
+      ...entry.aliases.slice(1).map((alias) => alias.text),
+      'brand new alias',
+    ];
+    voiceInputDataStore.editDictionaryEntry(entry.id, entry.text, submittedAliases);
+
+    const visibleAliases = voiceDictionarySyncStore.materialize().entries[0].aliases;
+    expect(visibleAliases.map((alias) => alias.text)).toContain('brand new alias');
+    expect(visibleAliases.map((alias) => alias.text)).not.toContain(entry.aliases[0].text);
+    const allAliases = materializeDictionary(voiceDictionarySyncStore.getState(), {
+      ...DEFAULT_MATERIALIZE_LIMITS,
+      maxAliases: Number.MAX_SAFE_INTEGER,
+    }).entries[0].aliases;
+    expect(allAliases.map((alias) => alias.text).sort()).toEqual(submittedAliases.sort());
   });
 
   it('通用 settings 更新不能整份覆盖词典(会绕过同步状态)', () => {
@@ -814,6 +896,18 @@ describe('词典同步落盘 —— 第十轮收口', () => {
     const body = handler.slice(0, handler.indexOf('});'));
     expect(body).toContain('assertTrustedAppRendererEvent');
     expect(body).toContain('sanitizeDictionaryEntryIds');
+  });
+
+  it('编辑误识别写法的 IPC 校验 sender，并限制条数与单条长度', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'VoiceInputDataStore.ts'),
+      'utf-8',
+    );
+    const handler = source.slice(source.indexOf("'voice-input:dictionary:edit-entry'"));
+    const body = handler.slice(0, handler.indexOf('});'));
+    expect(body).toContain('assertTrustedAppRendererEvent');
+    expect(body).toContain('MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS');
+    expect(body).toContain('MAX_VOICE_INPUT_DICTIONARY_ALIASES');
   });
 
   it('用户显式打开同步会被记成 override,即使它和当前默认值相同', () => {

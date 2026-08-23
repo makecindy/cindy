@@ -28,9 +28,6 @@ const PLURAL_SUFFIXES = ['_zero', '_one', '_two', '_few', '_many', '_other'] as 
  * 记录在案以免阻断 device-link 工作;后续按文件 owner 逐条补齐后从这里删除。
  */
 const KNOWN_MISSING: ReadonlySet<string> = new Set([
-  'ccAgent.workdirBrowse.fileBody.drawioLoading',
-  'ccAgent.workdirBrowse.fileBody.pdfLoading',
-  'chat.media.clickToZoom',
 ]);
 
 function loadLocales(): Record<string, unknown>[] {

@@ -43,6 +43,7 @@ import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
+import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
@@ -347,6 +348,12 @@ export function AuthProvider({
         setLoginState({ step: 'browser-redirect', label: action.label });
       }
       const result = await authServiceRef.current!.dispatchLoginAction(action);
+      // Org discovery can auto-start a sole SSO browser flow below. Persist at
+      // the successful discovery boundary so a later browser cancel/timeout
+      // does not erase a valid organization from local history.
+      if (action.type === 'discover-sso-org' && result.success) {
+        rememberSsoOrgIdentifier(action.org);
+      }
       // 没有真正选择时不停留 method-choice：唯一 SSO 改派 start-browser
       //（确认窗立刻消失、露出等待态）；唯一邮箱验证码直接发码进输码页。
       if (result.success && result.state.step === 'method-choice') {
