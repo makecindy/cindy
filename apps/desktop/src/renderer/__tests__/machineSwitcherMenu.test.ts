@@ -561,6 +561,14 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('<Loader2 size={12} strokeWidth={1.8} />');
   });
 
+  it('归档范围同步进入段头按钮的无障碍名称', () => {
+    expect(menuSource).toContain("const archivedLabel = filter.status === 'archived'");
+    expect(menuSource).toContain(
+      'aria-label={`${triggerLabel}: ${triggerText}${archivedLabel ? `, ${archivedLabel}` : \'\'}`}',
+    );
+    expect(menuSource).toContain('<span className="truncate">{archivedLabel}</span>');
+  });
+
   it('MachineSwitcherMenu 保留设备选择 / 显示设置 / 远程设置入口;无远程时仍带箭头只留设置项', () => {
     // 段头恒在:无远程设备时不再退化成不可点的静态标题(旧 return <span>),
     // 箭头保留,菜单只渲染两个设置入口、不出现设备列表。

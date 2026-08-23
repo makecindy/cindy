@@ -192,6 +192,9 @@ export function MachineSwitcherMenu({
       });
     }
   }
+  const archivedLabel = filter.status === 'archived'
+    ? t('ccAgent.sidebar.archivedSessions')
+    : undefined;
 
   // 点击展开(2026-08-13 定稿,推翻 2026-07-12 的 hover 展开——作为段头标题,
   // hover 扫过就弹菜单太吵)。modal={false}:侧栏是常驻面板,不锁列表滚动。
@@ -200,7 +203,7 @@ export function MachineSwitcherMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`${triggerLabel}: ${triggerText}`}
+          aria-label={`${triggerLabel}: ${triggerText}${archivedLabel ? `, ${archivedLabel}` : ''}`}
           aria-busy={remoteSessionBootstrapLoading}
           className={cn(
             'flex min-w-0 items-center gap-1 focus:outline-none',
@@ -214,7 +217,7 @@ export function MachineSwitcherMenu({
           {filter.status === 'archived' ? (
             <span className="flex min-w-0 items-center gap-0.5 text-[var(--sidebar-nav-text)]">
               <Archive size={12} strokeWidth={2} aria-hidden="true" />
-              <span className="truncate">{t('ccAgent.sidebar.archivedSessions')}</span>
+              <span className="truncate">{archivedLabel}</span>
             </span>
           ) : null}
           <ChevronDown size={13} strokeWidth={2} className="shrink-0" />
