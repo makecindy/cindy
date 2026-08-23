@@ -373,7 +373,7 @@ describe('claude generation pause boundaries', () => {
     });
   });
 
-  it('keeps a Claude request on its accepted price variant across a pre-response Fast toggle', () => {
+  it('freezes the current request and captures the next tool-loop request variant at the tool boundary', () => {
     let fastMode = false;
     const ctx = {
       ...createTranslatorCtx(),
@@ -412,7 +412,33 @@ describe('claude generation pause boundaries', () => {
       ctx,
     );
 
-    // The next provider request is accepted after Fast is enabled and gets
+    // The first response requests a tool. Fast is toggled while the tool is
+    // running, and the SDK's tool-result echo is the boundary at which the
+    // next provider request's variant is captured.
+    fastMode = false;
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    fastMode = true;
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    // The next provider request is dispatched after the tool result and gets
     // its own priority segment.
     translateSdkMessage(
       {

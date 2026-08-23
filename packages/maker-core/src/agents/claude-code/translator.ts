@@ -734,6 +734,16 @@ export function translateSdkMessage(
         resumeClaudeGeneration(ctx.rt.generation, toolUseId);
         ctx.rt.toolUseIdToName.delete(toolUseId);
       }
+      if (completedToolUseIds.size > 0) {
+        // The SDK emits the tool-result echo immediately before it dispatches
+        // the next provider request. Capture the mutable Fast setting here,
+        // after tool execution has completed, rather than at the previous
+        // message_delta (which can be much earlier than the next request).
+        ctx.rt.pendingUsagePriceVariantByParent.set(
+          parentToolUseId ?? '__main__',
+          ctx.getFastMode?.() ? 'priority' : 'standard',
+        );
+      }
       return;
     }
 
@@ -1580,13 +1590,6 @@ function handleStreamEvent(
         cacheCreateTokens: dCacheCreate,
         complete: hasCompleteUsageSnapshot,
       });
-      // A completed message is the acceptance boundary for the next Claude
-      // request. Capture the then-current setting for that next request, but
-      // keep the active segment's variant immutable until its final frame.
-      ctx.rt.pendingUsagePriceVariantByParent.set(
-        parentStreamKey,
-        ctx.getFastMode?.() ? 'priority' : 'standard',
-      );
       if (parentToolUseId && dOut > 0) markClaudeGenerationUnreliable(ctx.rt.generation);
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。
