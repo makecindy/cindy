@@ -897,17 +897,18 @@ function ExpandedView({
         const unreadRunIds = sessionIds.flatMap(
           (sessionId) => scheduleSessionIndex.get(sessionId)?.unreadRunIds ?? [],
         );
-        try {
-          if (unreadRunIds.length > 0) {
-            await markScheduleRunsReadAndSync(unreadRunIds);
-            toast.success(t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length }));
+        if (unreadRunIds.length > 0) {
+          const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds);
+          if (processed.length > 0) {
+            toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
           }
-        } catch (e) {
-          toast.error(
-            t('ccAgent.layout.markAllReadFailed', {
-              error: e instanceof Error ? e.message : String(e),
-            }),
-          );
+          if (failed.length > 0) {
+            toast.error(
+              t('ccAgent.layout.markAllReadFailed', {
+                error: firstError ?? String(failed.length),
+              }),
+            );
+          }
         }
         return;
       }

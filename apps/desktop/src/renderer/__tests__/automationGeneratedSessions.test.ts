@@ -1180,6 +1180,10 @@ describe('automation-generated sessions', () => {
     expect(sidebarSource).toContain('knownSessionIds: group.sessions.map((session) => session.id)');
     expect(sidebarSource).toContain("if (action === 'mark-read')");
     expect(sidebarSource).toContain('unreadSuccessScheduleRunIds(info)');
+    expect(sidebarSource).toContain("t('ccAgent.layout.markedAsRead', { count: processed.length })");
+    expect(sidebarSource).not.toContain(
+      "t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length })",
+    );
     expect(schedulerPageSource).toContain('getFocusedScheduleStatusFilter(schedules, focusId)');
     expect(schedulerPageSource).toContain('setEditing(focused)');
     expect(schedulerPageSource).toContain('setFormOpen(true)');
