@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 describe('ErrorBanner — LiteLLM 网关凭据失效', () => {
-  it('replaces LiteLLM verification-table copy with friendly text and keeps Retry', () => {
+  it('replaces LiteLLM verification-table copy and does not offer Retry', () => {
     const onRetry = vi.fn();
     render(
       createElement(ErrorBanner, {
@@ -62,11 +62,12 @@ describe('ErrorBanner — LiteLLM 网关凭据失效', () => {
       }),
     );
 
-    expect(screen.getByText('chat.errorBanner.gatewayProxyTokenInvalid')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.gatewayProxyTokenInvalid')).toBeNull();
     expect(screen.queryByText(/LiteLLM_VerificationTokenTable/)).toBeNull();
     expect(screen.queryByText(/Invalid proxy server token/)).toBeNull();
-    fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle'));
-    expect(onRetry).toHaveBeenCalledWith('retry-token');
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
   it('still classifies by message when reason is missing', () => {
@@ -79,7 +80,7 @@ describe('ErrorBanner — LiteLLM 网关凭据失效', () => {
       }),
     );
 
-    expect(screen.getByText('chat.errorBanner.gatewayProxyTokenInvalid')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')).toBeTruthy();
   });
 
   it('keeps a custom LiteLLM provider error as provider-owned raw text', () => {

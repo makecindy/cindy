@@ -36,5 +36,5 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
     'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',
-  [GATEWAY_PROXY_TOKEN_INVALID_REASON]: 'chat.errorBanner.gatewayProxyTokenInvalid',
+  [GATEWAY_PROXY_TOKEN_INVALID_REASON]: 'chat.errorBanner.gatewayProxyTokenInvalidNoRetry',
 };

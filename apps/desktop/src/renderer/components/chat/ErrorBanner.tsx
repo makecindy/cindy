@@ -306,6 +306,7 @@ export function ErrorBanner({
   const hideRetry =
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
+    isGatewayProxyTokenInvalid ||
     isCodexThreadStale ||
     showInvalidEncryptedContentRecovery ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
@@ -355,7 +356,7 @@ export function ErrorBanner({
   } else if (isClaudeSubscriptionOpusPlanMismatch) {
     displayError = t('chat.errorBanner.claudeSubscriptionOpusPlanMismatch');
   } else if (isGatewayProxyTokenInvalid) {
-    displayError = t('chat.errorBanner.gatewayProxyTokenInvalid');
+    displayError = t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry');
   } else if (isGatewayQuotaExhausted) {
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
