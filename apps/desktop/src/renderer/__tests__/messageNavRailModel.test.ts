@@ -282,6 +282,21 @@ describe('deriveNavRailEntries', () => {
     expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('第二轮真正的结论。');
   });
 
+  it('显式失败收尾不能靠费用把进度提交成最终摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '成功结论。', turnCompleted: true }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '失败前的进度。',
+        turnCompleted: false,
+        turnCostUsd: 0.12,
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('成功结论。');
+  });
+
   it('hook 消息(带 userText):预览取干净原文,不取 content 里的 agent prompt', () => {
     const messages = [
       msg({

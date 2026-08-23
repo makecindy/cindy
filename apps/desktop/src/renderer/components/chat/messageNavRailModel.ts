@@ -229,10 +229,14 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
   return entries;
 }
 
-/** 与消息流 action bar 的收尾判定同口径:done 边界 / 费用 / 用量。 */
+/**
+ * 与 latestMessageText.logic.isTitleTurnCompleted 同口径:
+ * 显式 turnCompleted=false 是失败,不能被费用/用量兜底当成封轮。
+ */
 function isSealedAssistantAnswer(message: ChatMessage): boolean {
+  if (message.turnCompleted === false) return false;
+  if (message.turnCompleted === true) return true;
   return (
-    message.turnCompleted === true ||
     (message.turnMoney?.amount ?? 0) > 0 ||
     (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
     message.turnUsageDetails !== undefined
