@@ -4531,6 +4531,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               turn: turnState,
               log,
               getModel: () => mutableModel,
+              getProviderId: () => mutableProviderId,
               getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,

@@ -19,6 +19,8 @@ import type { AgentEvent, AgentTaskStatus, AgentTaskUsage, AgentTaskUpdateEventD
 import { normalizeWorkflowProgressEntries } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isCindyGatewayProxyTokenInvalidError,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
 import {
@@ -530,6 +532,8 @@ interface TranslateContext {
    * 不会因为闭包捕获 startSession 时的初始值而打陈旧数据。
    */
   getModel: () => string;
+  /** 当前 turn 的 provider 路由；null = 兼容旧会话的隐式默认来源。 */
+  getProviderId?: () => string | null;
   /**
    * Maker capabilities 中当前模型的 contextWindow。
    * Claude Code SDK 对未知第三方模型会回 200K 默认值; maker 侧配置更准时用它覆盖。
@@ -2122,7 +2126,14 @@ function handleResult(
     // 上下文超限带稳定 reason key(判定在上方 endTurn 前已算好): renderer 靠它
     // 隐藏必败的 Retry(原样重发必然再撞同一个 4xx)并给出压缩 / 新开会话入口;
     // 文案匹配仅作历史持久化错误行的兜底(overload reason 同款分层)。
-    const overflowReason = isContextOverflowTurn ? { reason: CONTEXT_OVERFLOW_REASON } : {};
+    const classifiedReason = isContextOverflowTurn
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : isCindyGatewayProxyTokenInvalidError({
+            providerId: ctx.getProviderId?.() ?? null,
+            message: [errorMessage, errDetail, pendingApiError?.message].filter(Boolean).join('\n'),
+          })
+        ? { reason: GATEWAY_PROXY_TOKEN_INVALID_REASON }
+        : {};
     queue.push({
       type: 'error',
       data: pendingApiError
@@ -2130,7 +2141,7 @@ function handleResult(
             message: errorMessage,
             sdkError: pendingApiError.sdkError,
             isTerminal: true,
-            ...overflowReason,
+            ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
             ...(pendingApiError.retryAttempt !== undefined
@@ -2144,7 +2155,7 @@ function handleResult(
         ? {
             message: errDetail,
             isTerminal: true,
-            ...overflowReason,
+            ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
           }

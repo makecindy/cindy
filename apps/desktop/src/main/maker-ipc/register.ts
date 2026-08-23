@@ -37,7 +37,12 @@ import type {
 } from '@cindy/maker-core';
 import { storedCustomProviderId } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import {
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isCindyGatewayProviderId,
+  isGatewayProxyTokenInvalidError,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   isProductTurnCompletionTailEvent,
@@ -3075,7 +3080,10 @@ function handleAgentIslandEventAfterBroadcast(
     const service = getAgentIslandService();
     if (!service) return;
     const meta = sessionMetaForIsland(session);
-    if (isRemoteAuthRetryErrorEvent(session, event)) {
+    if (
+      isRemoteAuthRetryErrorEvent(session, event) ||
+      isGatewayProxyTokenRecoveryErrorEvent(session.id, event)
+    ) {
       service.deferRemoteAuthRetryError(meta, event);
       return;
     }
@@ -3146,6 +3154,16 @@ function isRemoteAuthRetryErrorEvent(
     /authentication_error|invalid.*api.key|401/i.test(
       typeof data?.message === 'string' ? data.message : '',
     )
+  );
+}
+
+function isGatewayProxyTokenRecoveryErrorEvent(sessionId: string, event: AgentEvent): boolean {
+  if (event.type !== 'error' || !isTerminalTurnErrorEvent(event)) return false;
+  const data = event.data as { message?: unknown; reason?: unknown } | undefined;
+  return (
+    isCindyGatewayProviderId(getSessionProvider(sessionId)) &&
+    (data?.reason === GATEWAY_PROXY_TOKEN_INVALID_REASON ||
+      isGatewayProxyTokenInvalidError(typeof data?.message === 'string' ? data.message : ''))
   );
 }
 
@@ -4042,6 +4060,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 提前声明在终止型 error 块与 done/terminal 边界块两处均需使用的持久化条件标志。
       let isPlannedUpgradeClose = false;
       let isRemoteAuthRetry = false;
+      let isGatewayProxyTokenRecovery = false;
       if (isTerminalTurnErrorEvent(event)) {
         finalizeTurnChangeSet(session.id, null, 'partial');
         // **任何**终态失败都先把上一条重连记录钉成失败 —— 不管这次错误本身是否值得自愈。
@@ -4081,6 +4100,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
         // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
         isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
+        isGatewayProxyTokenRecovery = isGatewayProxyTokenRecoveryErrorEvent(session.id, event);
         if (!isPlannedUpgradeClose) {
           agentInputCoordinatorHolder?.onTurnEvent(
             session.id,
@@ -4367,6 +4387,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           isTerminalTurnErrorEvent(event) &&
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
+          !isGatewayProxyTokenRecovery &&
           !autoResumeSuppressesPersist &&
           isContextOverflowErrorData(attributedEvent.data)
             ? (contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
@@ -4412,6 +4433,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.type === 'error' &&
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
+          !isGatewayProxyTokenRecovery &&
           !autoResumeSuppressesPersist
         ) {
           onTurnErrorEvent(
@@ -4443,7 +4465,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // _turnStartedAtBySession 之前保存一份，让 deferred 路径能正确做 /clear 竞态 cap。
         // 自愈压住 error 行时同理:补落发生在 resetTurnPersistState 之后(退避 3–20 秒,
         // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。
-        if (event.type === 'error' && (isRemoteAuthRetry || autoResumeSuppressesPersist)) {
+        if (
+          event.type === 'error' &&
+          (isRemoteAuthRetry || isGatewayProxyTokenRecovery || autoResumeSuppressesPersist)
+        ) {
           saveTurnStartedAtForDeferred(session.id);
         }
         // turn 收尾打标:本 turn 已知持久化(assistant flush / orphan tool_result /

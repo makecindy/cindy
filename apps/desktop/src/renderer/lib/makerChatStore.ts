@@ -30,7 +30,12 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import {
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isCindyGatewayProviderId,
+  isGatewayProxyTokenInvalidError,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 import {
   formatRemoteError,
   isDeviceUnresponsiveRemoteError,
@@ -2318,6 +2323,8 @@ export interface SessionChatState {
     data: Record<string, unknown> | null;
     agentMeta: Record<string, unknown> | null;
   };
+  /** Internal: root user input whose rejected Cindy gateway credential was already retried. */
+  _gatewayProxyTokenRetriedRootClientId?: string;
   /**
    * Internal: consecutive auto-retry count for this session. Hard cap against
    * the rare loop where the key refreshes successfully every time but the
@@ -6831,35 +6838,68 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // Legacy CC/XD remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
     if (event.type === 'error') {
       const errData =
-        (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
+        (event.data as {
+          sdkError?: string;
+          message?: string;
+          errorStatus?: number;
+          reason?: string;
+        }) ?? {};
       const isAuthError =
         errData.sdkError === 'authentication_failed' ||
         errData.errorStatus === 401 ||
         /authentication_error|invalid.*api.key|401/i.test(errData.message ?? '');
+      const isGatewayProxyTokenInvalid =
+        errData.reason === GATEWAY_PROXY_TOKEN_INVALID_REASON ||
+        isGatewayProxyTokenInvalidError(errData.message ?? '');
       const preSnap = getOrCreateState(sessionId);
       const authRetryCount = preSnap._authRetryCount ?? 0;
-      if (
+      const ownsGatewayProxyTokenRecovery = ownsRemoteAuthRetry && !ingress.remoteDeviceId;
+      const recoveryProviderId =
+        preSnap.inputRecovery?.kind === 'active-turn'
+          ? preSnap.inputRecovery.item.createOpts.providerId
+          : undefined;
+      const gatewayRecovery =
+        isGatewayProxyTokenInvalid &&
+        preSnap.inputRecovery?.kind === 'active-turn' &&
+        isCindyGatewayProviderId(recoveryProviderId)
+          ? preSnap.inputRecovery
+          : null;
+      const isCindyGatewayProxyTokenInvalid =
+        errData.reason === GATEWAY_PROXY_TOKEN_INVALID_REASON || gatewayRecovery !== null;
+      const gatewayRetryRootClientId = gatewayRecovery
+        ? (gatewayRecovery.item.supersedesUserClientId ?? gatewayRecovery.item.clientId)
+        : null;
+      const canRecoverGatewayProxyToken =
+        ownsGatewayProxyTokenRecovery &&
+        gatewayRecovery !== null &&
+        gatewayRetryRootClientId !== null &&
+        !preSnap._authRetryInFlight &&
+        preSnap._gatewayProxyTokenRetriedRootClientId !== gatewayRetryRootClientId;
+      const canRecoverRemoteCcAuth =
         ownsRemoteAuthRetry &&
         isAuthError &&
-        preSnap.remoteHostId &&
+        !isGatewayProxyTokenInvalid &&
+        Boolean(preSnap.remoteHostId) &&
         preSnap.agentKind === 'claude-code' &&
         !preSnap._authRetryInFlight &&
-        authRetryCount < MAX_REMOTE_AUTH_RETRIES
-      ) {
+        authRetryCount < MAX_REMOTE_AUTH_RETRIES;
+      if (canRecoverGatewayProxyToken || canRecoverRemoteCcAuth) {
         const lastUser = [...preSnap.messages].reverse().find((m) => m.role === 'user');
-        const lastUserClientId = lastUser?.clientId;
+        const retryOwnerClientId = gatewayRecovery?.item.clientId ?? lastUser?.clientId;
         // Per-message retry guard: same user message only auto-retried once.
         // Session-level count guard (_authRetryCount): hard cap on consecutive
         // retries — the per-message guard can't stop a chain because each retry
         // sends a fresh user message with a new clientId.
-        if (lastUserClientId && preSnap._authRetryAttemptedClientId === lastUserClientId) {
+        if (retryOwnerClientId && preSnap._authRetryAttemptedClientId === retryOwnerClientId) {
           // Already retried this message — show error, don't loop.
         } else {
           setState(sessionId, (s) => ({
             ...s,
             _authRetryInFlight: true,
-            _authRetryAttemptedClientId: lastUserClientId,
-            _authRetryCount: (s._authRetryCount ?? 0) + 1,
+            _authRetryAttemptedClientId: retryOwnerClientId,
+            ...(isGatewayProxyTokenInvalid
+              ? { _gatewayProxyTokenRetriedRootClientId: gatewayRetryRootClientId ?? undefined }
+              : { _authRetryCount: (s._authRetryCount ?? 0) + 1 }),
           }));
           const retryText =
             lastUser && typeof lastUser.content === 'string' && lastUser.content.length > 0
@@ -6877,21 +6917,33 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           void (async () => {
             try {
               if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              // 本地 only:网关 key 不再有服务器副本可拉。改为校验本机 safeStorage 是否
-              // 有 key —— 有则关闭并重发会话(重连时把本机 key 重新下发给 remote host);
-              // 没有则中止重试,让 error banner 浮现,提示用户在本机重填 key。
-              const localKey = await window.electronAPI.safeStorageRead(
-                providerSecretStorageKey('xd'),
-              );
-              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              if (!localKey) {
-                throw new Error('no local api key available');
+              if (isGatewayProxyTokenInvalid) {
+                const status = await window.electronAPI.modelAccess.retry();
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                if (status.state !== 'ok') {
+                  throw new Error('model-access credentials retry failed');
+                }
               }
-              // preserveWorkspace: 鉴权重连是瞬态 close+resend,会话继续,工作区必须保留。
-              await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
-              await new Promise((r) => setTimeout(r, 1500));
-              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              if (hasRetryPayload) {
+              if (preSnap.remoteHostId) {
+                const localKey = await window.electronAPI.safeStorageRead(
+                  providerSecretStorageKey('xd'),
+                );
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                if (!localKey) {
+                  throw new Error('no local api key available');
+                }
+                await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
+                await new Promise((r) => setTimeout(r, 1500));
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+              }
+              if (isGatewayProxyTokenInvalid) {
+                await retryLastError(sessionId);
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                const postRetry = getOrCreateState(sessionId);
+                if (postRetry.error !== null || postRetry.inputRecovery !== null) {
+                  throw new Error('gateway credential retry did not take effect');
+                }
+              } else if (hasRetryPayload) {
                 const row = await sessionService.get(sessionId);
                 if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
                 if (row.workingDir && row.model) {
@@ -6925,14 +6977,16 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
               }
             } catch {
               if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              // 重试失败——main 侧已跳过持久化（isRemoteAuthRetry），在此补落。
-              // device-link 控制端经 makerApiFor 路由到被控端 main（不直调本地 IPC）;
-              // 同时透传 agentMeta 供 flushAssistantBlock 边界 meta 兜底与 dedup key。
-              void makerApiFor(sessionId).input.persistTurnErrorDeferred(
-                sessionId,
-                event.data as Record<string, unknown> | null,
-                event.agentMeta ?? null,
-              );
+              if (
+                isCindyGatewayProxyTokenInvalid ||
+                (preSnap.remoteHostId && preSnap.agentKind === 'claude-code')
+              ) {
+                void makerApiFor(sessionId).input.persistTurnErrorDeferred(
+                  sessionId,
+                  event.data as Record<string, unknown> | null,
+                  event.agentMeta ?? null,
+                );
+              }
               const terminalErrorEvent = {
                 sessionId,
                 type: 'error',
@@ -6962,9 +7016,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       //     等价于旧行为（重启后错误丢失）—— 保守起见不做 deferred。
       if (
         ownsRemoteAuthRetry &&
-        isAuthError &&
-        preSnap.remoteHostId &&
-        preSnap.agentKind === 'claude-code' &&
+        ((ownsGatewayProxyTokenRecovery && isCindyGatewayProxyTokenInvalid) ||
+          (isAuthError && preSnap.remoteHostId && preSnap.agentKind === 'claude-code')) &&
         !preSnap._authRetryInFlight
       ) {
         void makerApiFor(sessionId).input.persistTurnErrorDeferred(

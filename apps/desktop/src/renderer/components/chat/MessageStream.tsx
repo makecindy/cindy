@@ -6367,7 +6367,13 @@ const MessageItem = memo(function MessageItem({
       // 历史里的 turn 失败记录(role='error' 持久化行)——静态时间线卡,
       // live 报错仍走输入框上方的 ErrorBanner,两者不会同时出现
       // (error 行落库时不广播,只在历史加载路径进入消息流)。
-      return <ErrorMessageCard message={message.content} reason={message.errorReason} />;
+      return (
+        <ErrorMessageCard
+          message={message.content}
+          reason={message.errorReason}
+          providerId={message.errorProviderId}
+        />
+      );
     case 'thinking':
       // Defensive fallback only — MessageStream renders thinking inline.
       return (
