@@ -4263,7 +4263,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await handle.close();
   });
 
-  it('refreshes developerInstructions on direct resume when history already has product prompt', async () => {
+  it('omits developerInstructions from thread/resume params when codex proxy is inactive and history already has product prompt', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
@@ -4292,12 +4292,8 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const resumeParams = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
       developerInstructions?: string;
     };
-    expect(resumeParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
-    expect(resumeParams.developerInstructions).toContain('USER PROMPT');
-    expect(handle.codexProductPromptDelivery).toEqual({
-      threadId: 'resume-thread-id',
-      historyHasProductPrompt: true,
-    });
+    expect(resumeParams.developerInstructions).toBeUndefined();
+    expect(handle.codexProductPromptDelivery).toBeUndefined();
     expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
     await handle.close();
   });
