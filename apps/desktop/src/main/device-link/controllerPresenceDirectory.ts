@@ -69,7 +69,8 @@ function normalizeDirectoryName(device: ControllerPresenceDirectoryDevice): stri
  * 目录独立更新。
  *
  * 首次看到的在线设备若缺少客户端支持的平台值，保持为「在线状态未知」，让后续真实
- * presence 仍会形成上线边沿，不会被不完整或旧版目录记录永久压住词典握手。
+ * presence 仍会形成上线边沿；后续不完整目录则保留已经建立的可信在线状态，直到目录
+ * 明确报告离线，避免旧版目录记录中断词典同步。
  */
 export function applyControllerPresenceDirectorySnapshot(options: {
   devices: readonly ControllerPresenceDirectoryDevice[];
@@ -105,8 +106,10 @@ export function applyControllerPresenceDirectorySnapshot(options: {
 
     const wasOnline = options.getOnline(deviceId);
     if (device.online && platform === null) {
-      options.setPlatform(deviceId, null);
-      options.forgetOnline(deviceId);
+      if (wasOnline !== true) {
+        options.setPlatform(deviceId, null);
+        options.forgetOnline(deviceId);
+      }
       continue;
     }
 

@@ -167,6 +167,47 @@ describe('controller presence directory snapshot', () => {
     expect(h.exchanged).toHaveBeenCalledWith('peer-desktop', 'darwin');
   });
 
+  it.each([null, 'legacy-desktop'])(
+    '后续在线目录项平台为 %s 时保留可信状态，明确离线后再清除',
+    (incompletePlatform) => {
+      const h = createHarness();
+
+      h.apply([
+        {
+          deviceId: 'peer-desktop',
+          online: true,
+          platform: 'darwin',
+          isSelf: false,
+        },
+      ]);
+      h.apply([
+        {
+          deviceId: 'peer-desktop',
+          online: true,
+          platform: incompletePlatform,
+          isSelf: false,
+        },
+      ]);
+
+      expect(h.onlineByDevice.get('peer-desktop')).toBe(true);
+      expect(h.platformByDevice.get('peer-desktop')).toBe('darwin');
+      expect(h.exchanged).toHaveBeenCalledTimes(1);
+
+      h.apply([
+        {
+          deviceId: 'peer-desktop',
+          online: false,
+          platform: incompletePlatform,
+          isSelf: false,
+        },
+      ]);
+
+      expect(h.onlineByDevice.get('peer-desktop')).toBe(false);
+      expect(h.platformByDevice.has('peer-desktop')).toBe(false);
+      expect(h.exchanged).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('在线目录项缺平台时不清除实时 presence 已确认的在线状态与平台', () => {
     const h = createHarness();
     h.markPresence('peer-desktop', true, 'darwin');
