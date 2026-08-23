@@ -25,6 +25,7 @@ import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../se
 import { createWorkLouderCodexActiveWindowRouter } from '../worklouder-codex/actionWindow.js';
 import { XboxGamepadController } from './controller.js';
 import { createXboxGamepadHost } from './host.js';
+import { createLayoutPreviewLease, layoutPreviewOwnerFromEvent } from '../input-devices/previewLease.js';
 import { createXboxGamepadSettingsIpc } from './settingsIpc.js';
 import {
   readXboxGamepadSettings,
@@ -93,6 +94,9 @@ const controller = new XboxGamepadController({
 const host = createXboxGamepadHost((message) => {
   controller.handleHostMessage(message);
 });
+const layoutPreviewLease = createLayoutPreviewLease((active) => {
+  controller.setLayoutPreviewActive(active);
+});
 
 let inputDeviceRegistered = false;
 let settingsIpcRegistered = false;
@@ -134,7 +138,9 @@ export function registerXboxGamepadSettingsIpc(): void {
     resetSettings: resetXboxGamepadSettings,
     applySettings: (settings) => controller.applySettings(settings),
     probeDevice: () => host.probe(),
-    setLayoutPreviewActive: (active) => controller.setLayoutPreviewActive(active),
+    setLayoutPreviewActive: (active, event) => {
+      layoutPreviewLease.setActive(active, layoutPreviewOwnerFromEvent(event));
+    },
   });
 
   ipcMain.handle(XBOX_GAMEPAD_GET_STATE_CHANNEL, (event) => handlers.get(event));

@@ -25,7 +25,15 @@ export interface XboxGamepadHost {
   stop(): void;
 }
 
-export function createXboxGamepadHost(onMessage: (message: XboxGamepadHostMessage) => void): XboxGamepadHost {
+export interface XboxGamepadHostDeps {
+  spawnHelper?(command: string): ChildProcessWithoutNullStreams;
+  resolveHelperPath?(): Promise<string>;
+}
+
+export function createXboxGamepadHost(
+  onMessage: (message: XboxGamepadHostMessage) => void,
+  deps: XboxGamepadHostDeps = {},
+): XboxGamepadHost {
   let child: ChildProcessWithoutNullStreams | null = null;
   let starting = false;
   let wanted = false;
@@ -62,29 +70,39 @@ export function createXboxGamepadHost(onMessage: (message: XboxGamepadHostMessag
       const message = chunk.trim();
       if (message) log.debug('xbox gamepad helper stderr', { message });
     });
-    next.on('exit', () => {
+    next.on('error', (error: Error) => {
       if (child === next) child = null;
-      if (wanted) void startChild();
+      starting = false;
+      if (!wanted) return;
+      reportHostFailure(error.message);
     });
+    next.on('exit', (code, signal) => {
+      if (child === next) child = null;
+      // Crash / permission / signature failures must not respawn in a tight
+      // loop. Settings can probe() to retry; start() also retries explicitly.
+      if (!wanted) return;
+      reportHostFailure(`Xbox gamepad helper exited unexpectedly (${code ?? signal ?? 'unknown'})`);
+    });
+  };
+
+  const reportHostFailure = (message: string): void => {
+    log.warn('Xbox gamepad helper failed', { error: message });
+    onMessage({ kind: 'host-error', message });
   };
 
   const startChild = async (): Promise<void> => {
     if (!wanted || child || starting) return;
     starting = true;
     try {
-      const helperPath = await resolveXboxGamepadHelperPath();
-      attach(
-        spawn(helperPath, [], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }),
-      );
+      const helperPath = await (deps.resolveHelperPath ?? resolveXboxGamepadHelperPath)();
+      const next = (deps.spawnHelper ?? defaultSpawnHelper)(helperPath);
+      attach(next);
     } catch (error) {
       starting = false;
       const message = error instanceof Error ? error.message : String(error);
-      log.warn('failed to start Xbox gamepad helper', { error: message });
       // Not `presence: false` — a helper that won't build is an error state, not
       // "no controller plugged in", and the settings page must say so.
-      onMessage({ kind: 'host-error', message });
+      reportHostFailure(message);
     }
   };
 
@@ -116,6 +134,10 @@ export function createXboxGamepadHost(onMessage: (message: XboxGamepadHostMessag
   };
 }
 
+function defaultSpawnHelper(command: string): ChildProcessWithoutNullStreams {
+  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+}
+
 async function resolveXboxGamepadHelperPath(): Promise<string> {
   if (process.platform === 'darwin') return resolveMacHelperPath();
   throw new Error(`Xbox gamepad helper is not available on ${process.platform}`);
@@ -142,7 +164,18 @@ async function resolveMacHelperPath(): Promise<string> {
   try {
     await execFilePromise(
       'swiftc',
-      [source, '-O', '-framework', 'Foundation', '-framework', 'GameController', '-o', binary],
+      [
+        source,
+        '-O',
+        '-framework',
+        'Foundation',
+        '-framework',
+        'GameController',
+        '-framework',
+        'IOKit',
+        '-o',
+        binary,
+      ],
       { timeout: 20_000 },
     );
   } catch (error) {

@@ -241,8 +241,8 @@ describe('Work Louder Codex settings IPC business body', () => {
     ipc.setLayoutPreviewActive(EVENT, true);
     ipc.setLayoutPreviewActive(EVENT, false);
 
-    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(1, true);
-    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(2, false);
+    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(1, true, EVENT);
+    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(2, false, EVENT);
     expect(writeSettings).not.toHaveBeenCalled();
   });
 

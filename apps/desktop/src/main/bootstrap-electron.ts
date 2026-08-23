@@ -4344,6 +4344,7 @@ const registerIpcHandlers = () => {
   });
 
   ipcMain.handle('toggle-fullscreen', (event): boolean => {
+    assertTrustedAppRendererEvent(event);
     const win = BrowserWindow.fromWebContents(event.sender) ?? getWindow();
     if (!win) return false;
     const next = !(win.isFullScreen() || win.isSimpleFullScreen());

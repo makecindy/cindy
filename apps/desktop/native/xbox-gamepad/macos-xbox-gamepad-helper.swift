@@ -49,23 +49,51 @@ func batteryStateName(_ state: GCDeviceBattery.State) -> String {
 }
 
 /// Best-effort USB vs Bluetooth from IOHID. GameController does not expose transport.
-func microsoftControllerTransport() -> String {
+func controllerTransport(for controller: GCController) -> String {
+  let controllerTokens = transportMatchTokens(controller.vendorName, controller.productCategory)
+  if controllerTokens.isEmpty { return "unknown" }
+
   let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
   IOHIDManagerSetDeviceMatching(manager, [kIOHIDVendorIDKey as String: 0x45e] as CFDictionary)
   IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
   defer { IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone)) }
   guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return "unknown" }
-  var sawUsb = false
-  var sawBluetooth = false
+
+  var matched = Set<String>()
   for device in devices {
-    let transport = (IOHIDDeviceGetProperty(device, kIOHIDTransportKey as CFString) as? String ?? "")
-      .lowercased()
-    if transport.contains("usb") { sawUsb = true }
-    if transport.contains("blue") || transport.contains("wireless") { sawBluetooth = true }
+    let deviceTokens = transportMatchTokens(
+      IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String,
+      IOHIDDeviceGetProperty(device, kIOHIDManufacturerKey as CFString) as? String
+    )
+    guard deviceTokens.contains(where: { controllerTokens.contains($0) }) else { continue }
+    if let transport = hidTransportName(device) {
+      matched.insert(transport)
+    }
   }
-  if sawUsb { return "usb" }
-  if sawBluetooth { return "bluetooth" }
+  if matched.count == 1 { return matched.first! }
   return "unknown"
+}
+
+func transportMatchTokens(_ values: String?...) -> Set<String> {
+  var tokens = Set<String>()
+  for value in values {
+    let lowered = (value ?? "").lowercased()
+    for part in lowered.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
+      let token = String(part)
+      if token.count >= 3 { tokens.insert(token) }
+    }
+  }
+  // Generic Microsoft HID tokens would match keyboards, mice, and dongles.
+  tokens.subtract(["usb", "hid", "device", "microsoft", "controller"])
+  return tokens
+}
+
+func hidTransportName(_ device: IOHIDDevice) -> String? {
+  let transport = (IOHIDDeviceGetProperty(device, kIOHIDTransportKey as CFString) as? String ?? "")
+    .lowercased()
+  if transport.contains("usb") { return "usb" }
+  if transport.contains("blue") || transport.contains("wireless") { return "bluetooth" }
+  return nil
 }
 
 func presencePayload(from controller: GCController) -> [String: Any] {
@@ -74,7 +102,7 @@ func presencePayload(from controller: GCController) -> [String: Any] {
     "present": true,
     "name": controller.vendorName ?? controller.productCategory,
     "category": controller.productCategory,
-    "transport": microsoftControllerTransport(),
+    "transport": controllerTransport(for: controller),
     "batteryState": "unknown",
   ]
   if let battery = controller.battery {

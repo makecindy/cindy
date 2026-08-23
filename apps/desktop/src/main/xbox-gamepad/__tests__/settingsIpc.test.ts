@@ -84,4 +84,21 @@ describe('Xbox gamepad settings IPC', () => {
     });
     expect(() => handlers.set({}, { rumble: true })).toThrow('[INVALID_PARAMS]');
   });
+
+  it('forwards the renderer event when toggling layout preview', () => {
+    const setLayoutPreviewActive = vi.fn();
+    const event = { sender: { id: 9 } };
+    const handlers = createXboxGamepadSettingsIpc({
+      assertTrustedSender: vi.fn(),
+      getState: vi.fn(),
+      writeSettings: vi.fn(),
+      resetSettings: vi.fn(),
+      applySettings: vi.fn(),
+      probeDevice: vi.fn(),
+      setLayoutPreviewActive,
+    });
+
+    handlers.setLayoutPreviewActive(event, true);
+    expect(setLayoutPreviewActive).toHaveBeenCalledWith(true, event);
+  });
 });

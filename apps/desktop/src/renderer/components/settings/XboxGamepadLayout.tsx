@@ -401,7 +401,7 @@ function FaceButton({
         dominantBaseline="middle"
         fill="currentColor"
         stroke="none"
-        fontSize="42"
+        fontSize="28"
         fontWeight="600"
         fontFamily="Inter, system-ui, sans-serif"
       >
