@@ -5766,6 +5766,39 @@ describe('会话关闭原因决定条目去留', () => {
     expect(generations.has('gone')).toBe(false);
   });
 
+  it('TTL prune 后再 Stop 会清账本并立刻给远端发收尾包', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const publish = vi.fn(() => true);
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
+      });
+      service.setEnabled(false);
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      const islandState = (
+        service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
+      ).state;
+      expect(islandState.sessions.has('s1')).toBe(false);
+      expect(islandState.remoteUnreadTerminals.has('s1')).toBe(true);
+
+      mocks.tapWindowBroadcast.mockClear();
+      service.handleSessionStopped('s1');
+      expect(islandState.remoteUnreadTerminals.has('s1')).toBe(false);
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', attention: false }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('TTL prune 后再 process-close 仍保留远程未读,直到真正 ack', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));

@@ -1141,8 +1141,9 @@ export class AgentIslandService {
     this.clearDeferredRemoteAuthError(sessionId);
     this.deletePermissionRequestsForSession(sessionId);
     const hadSession = this.state.sessions.has(sessionId);
+    const hadUnread = this.state.remoteUnreadTerminals.has(sessionId);
     removeAgentIslandSession(this.state, sessionId);
-    if (hadSession) this.publish();
+    if (hadSession || hadUnread) this.publish();
   }
 
   private advanceInteractionEpoch(sessionId: string): number {
