@@ -3405,6 +3405,55 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('可靠 invoke 分片在重组前也算入站活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-fragment-stream');
+
+    const frames = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'fragmented-heartbeat-invoke',
+      src: 'dev-b',
+      dst: 'dev-self',
+      payload: { channel: 'maker:large', args: ['弱'.repeat(100_000)] },
+    }, 'heartbeat-fragment-stream', 1);
+    expect(frames.length).toBeGreaterThan(1);
+
+    const activity = setInterval(() => {
+      for (const frame of frames) h.current().push(frame);
+    }, 4);
+    await tick(50);
+    clearInterval(activity);
+
+    expect(h.current().terminated).toBe(false);
+    expect(h.client.getStatus()).toBe('online');
+    h.client.stop();
+  });
+
+  it('缺少 src 或 id 的可靠 invoke 不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-missing-id-stream');
+
+    const malformed = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      payload: { channel: 'maker:valid-looking', args: [] },
+    }, 'heartbeat-missing-id-stream', 1)[0]!;
+    const activity = setInterval(() => h.current().push(malformed), 4);
+    for (let i = 0; i < 40 && !h.current().terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(h.current().terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
   it('heartbeat idle 使用单调时钟，不受系统时间回拨影响', async () => {
     const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
     let monotonicMs = 100;

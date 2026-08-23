@@ -3616,6 +3616,19 @@ function isValidInboundEnvelope(value: Envelope): boolean {
     const parsed = parseTransportPayload(payload);
     if (parsed !== null) {
       if (value.kind !== 'invoke') return true;
+      // reliable invoke 仍要有 relay 注入的源设备和请求 id；缺任一项时
+      // ingestTransportEnvelope / Desktop dispatch 都无法把它当作可处理请求。
+      // 这类帧不能仅凭内层 channel/args 把坏连接喂活。
+      if (
+        typeof value.src !== 'string'
+        || value.src.length === 0
+        || typeof value.id !== 'string'
+        || value.id.length === 0
+      ) return false;
+      // 分片的 data 只是完整 JSON 文本的一段，不能在此处单独解析；transport
+      // 元数据已经证明 relay/socket 正在工作，重组后的完整 payload 再由接收
+      // 状态机做 JSON 与业务分发校验。
+      if (parsed.meta.segment) return true;
       try {
         const inner = decodeTransportJson(parsed.data);
         return isRecord(inner)
