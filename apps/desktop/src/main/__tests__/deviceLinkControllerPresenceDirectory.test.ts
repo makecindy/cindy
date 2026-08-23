@@ -137,6 +137,36 @@ describe('controller presence directory snapshot', () => {
     expect(h.exchanged).not.toHaveBeenCalled();
   });
 
+  it('在线目录项的平台不受支持时保持未知，后续规范平台仍能形成上线边沿', () => {
+    const h = createHarness();
+
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        online: true,
+        platform: 'legacy-desktop',
+        isSelf: false,
+      },
+    ]);
+
+    expect(h.onlineByDevice.has('peer-desktop')).toBe(false);
+    expect(h.platformByDevice.has('peer-desktop')).toBe(false);
+    expect(h.exchanged).not.toHaveBeenCalled();
+
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        online: true,
+        platform: 'darwin',
+        isSelf: false,
+      },
+    ]);
+
+    expect(h.onlineByDevice.get('peer-desktop')).toBe(true);
+    expect(h.platformByDevice.get('peer-desktop')).toBe('darwin');
+    expect(h.exchanged).toHaveBeenCalledWith('peer-desktop', 'darwin');
+  });
+
   it('在线目录项缺平台时不清除实时 presence 已确认的在线状态与平台', () => {
     const h = createHarness();
     h.markPresence('peer-desktop', true, 'darwin');

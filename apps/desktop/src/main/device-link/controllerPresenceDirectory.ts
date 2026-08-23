@@ -1,3 +1,5 @@
+import { isSupportedControllerPlatform } from './controllerPlatform.js';
+
 export interface ControllerPresenceFreshnessTracker {
   epoch: number;
   epochByDevice: Map<string, number>;
@@ -66,8 +68,8 @@ function normalizeDirectoryName(device: ControllerPresenceDirectoryDevice): stri
  * 在线还是离线都不再覆盖状态与平台，避免滞后的 REST 快照双向误翻转。设备名仍可由
  * 目录独立更新。
  *
- * 首次看到的在线设备若缺少可信平台值，保持为「在线状态未知」，让后续真实 presence
- * 仍会形成上线边沿，不会被不完整目录记录永久压住词典握手。
+ * 首次看到的在线设备若缺少客户端支持的平台值，保持为「在线状态未知」，让后续真实
+ * presence 仍会形成上线边沿，不会被不完整或旧版目录记录永久压住词典握手。
  */
 export function applyControllerPresenceDirectorySnapshot(options: {
   devices: readonly ControllerPresenceDirectoryDevice[];
@@ -93,8 +95,9 @@ export function applyControllerPresenceDirectorySnapshot(options: {
     if (presenceChangedAfterRequest(options.freshness, deviceId, options.requestEpoch)) continue;
     if (typeof device.online !== 'boolean') continue;
 
-    const platform =
+    const reportedPlatform =
       typeof device.platform === 'string' && device.platform.trim() ? device.platform.trim() : null;
+    const platform = isSupportedControllerPlatform(reportedPlatform) ? reportedPlatform : null;
     const name = normalizeDirectoryName(device);
     if (name) options.setName(deviceId, name);
 

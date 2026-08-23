@@ -19,9 +19,12 @@ import { MAX_FRAME_BYTES } from '@cindy/device-link';
 import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
 import { buildStateVersionVector, type VoiceDictionarySyncState } from '@cindy/voice-input-core';
 
+import { isDesktopPlatform } from '../device-link/controllerPlatform.js';
 import { createLogger } from '../logger.js';
 import { voiceDictionarySyncStore } from './VoiceDictionarySyncStore.js';
 import { voiceInputDataStore } from './VoiceInputDataStore.js';
+
+export { isDesktopPlatform };
 
 const log = createLogger('voice-input:dictionary-sync-driver');
 
@@ -32,8 +35,6 @@ export const DL_VOICE_DICTIONARY_SYNC_CHANNEL = 'device-link:voice:dictionary:sy
 const BROADCAST_DEBOUNCE_MS = 8_000;
 /** 兜底心跳:即便没有任何本地变更,也定期交换一次,收敛因丢帧错过的状态。 */
 const BROADCAST_INTERVAL_MS = 30 * 60 * 1000;
-/** 桌面平台白名单:手机(ios/android)不参与 push 同步。 */
-const DESKTOP_PLATFORMS = new Set(['darwin', 'win32', 'linux']);
 /**
  * 单帧状态的字节上限,留出信封与编码余量。
  *
@@ -75,10 +76,6 @@ let debounceTimer: NodeJS.Timeout | null = null;
 let intervalTimer: NodeJS.Timeout | null = null;
 /** 同进程内快照发出序号:取墙上时间与上一发+1 的较大值,时钟回拨也不会倒序。 */
 let lastEmittedAt = 0;
-
-export function isDesktopPlatform(platform: string | undefined | null): boolean {
-  return typeof platform === 'string' && DESKTOP_PLATFORMS.has(platform);
-}
 
 /**
  * 是否与某台设备交换词典。
@@ -200,7 +197,11 @@ export function handleIncomingDictionaryState(src: string, payload: unknown): vo
  * (而不是报错),手机侧照常降级到无词典,不打断语音输入。
  */
 export function readDictionaryProjectionForMobile(): {
-  entries: Array<{ text: string; frequency: number; aliases: Array<{ text: string; count: number }> }>;
+  entries: Array<{
+    text: string;
+    frequency: number;
+    aliases: Array<{ text: string; count: number }>;
+  }>;
   stateVector?: Record<string, string>;
 } {
   // 版本向量对合并单调(逐节点取 max),所以「逐节点 ≥」等价于「已经见过对方的
@@ -264,8 +265,8 @@ function buildMobileSnapshot(): MobileVoiceDictionarySnapshotResult | null {
   // 与桌面 CRDT 同一条上限:超限帧会被 relay 拒绝。这里不另造分片协议,
   // 手机保留上次缓存,词典缩小后下一次上线/变更再推。
   log.error(
-    `mobile dictionary snapshot is too large to push (${bytes} bytes > ${MAX_STATE_FRAME_BYTES}); `
-    + 'phones will keep their last cache until the dictionary shrinks',
+    `mobile dictionary snapshot is too large to push (${bytes} bytes > ${MAX_STATE_FRAME_BYTES}); ` +
+      'phones will keep their last cache until the dictionary shrinks',
   );
   return null;
 }
@@ -310,8 +311,8 @@ function buildFrame(options?: { requestReply?: boolean }): DictionarySyncFramePa
   // 超限:发出去只会被 relay 拒绝并抛错,且此后每次广播都一样。宁可这一轮不发,
   // 也要让日志把原因说清楚 —— 否则表现是「同步无声无息地不工作了」。
   log.error(
-    `dictionary state frame is too large to sync (${bytes} bytes > ${MAX_STATE_FRAME_BYTES}); `
-    + 'peers will not receive updates until the dictionary shrinks',
+    `dictionary state frame is too large to sync (${bytes} bytes > ${MAX_STATE_FRAME_BYTES}); ` +
+      'peers will not receive updates until the dictionary shrinks',
   );
   return null;
 }
