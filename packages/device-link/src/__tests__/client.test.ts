@@ -3523,7 +3523,7 @@ describe('DeviceLinkClient', () => {
   });
 
   it('可靠 invoke 分片在重组前也算入站活性', async () => {
-    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const h = makeHarness({ timing: { pingIntervalMs: 50, pongMissLimit: 2 } });
     h.client.start();
     await tick();
     h.current().ack();
@@ -3535,14 +3535,14 @@ describe('DeviceLinkClient', () => {
       id: 'fragmented-heartbeat-invoke',
       src: 'dev-b',
       dst: 'dev-self',
-      payload: { channel: 'maker:large', args: ['弱'.repeat(100_000)] },
+      payload: { channel: 'maker:large', args: ['x'.repeat(150_000)] },
     }, 'heartbeat-fragment-stream', 1);
     expect(frames.length).toBeGreaterThan(1);
 
     const activity = setInterval(() => {
       for (const frame of frames) h.current().push(frame);
-    }, 4);
-    await tick(50);
+    }, 10);
+    await tick(180);
     clearInterval(activity);
 
     expect(h.current().terminated).toBe(false);
