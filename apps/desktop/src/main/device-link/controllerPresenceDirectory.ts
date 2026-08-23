@@ -57,8 +57,9 @@ function normalizeDirectoryName(device: ControllerPresenceDirectoryDevice): stri
  * presence 是增量流，新连接不会收到已经在线设备的历史状态。设备目录承担冷启动
  * 快照，但只能补请求期间没有实时 presence 的设备，避免旧 REST 响应覆盖新广播。
  *
- * 在线设备若缺少可信平台值，保持为「在线状态未知」：这样后续真实 presence 到达
- * 时仍会形成上线边沿，而不会被一条不完整目录记录永久压住词典握手。
+ * 在线设备若缺少可信平台值，且当前没有已知在线状态，则保持为「在线状态未知」：
+ * 这样后续真实 presence 到达时仍会形成上线边沿。若实时 presence 已确认在线，目录的
+ * 不完整记录不能清除更可信的在线状态与平台，否则后续词典变更会漏发到该设备。
  */
 export function applyControllerPresenceDirectorySnapshot(options: {
   devices: readonly ControllerPresenceDirectoryDevice[];
@@ -86,17 +87,19 @@ export function applyControllerPresenceDirectorySnapshot(options: {
 
     const platform =
       typeof device.platform === 'string' && device.platform.trim() ? device.platform.trim() : null;
-    options.setPlatform(deviceId, platform);
-
     const name = normalizeDirectoryName(device);
     if (name) options.setName(deviceId, name);
 
+    const wasOnline = options.getOnline(deviceId);
     if (device.online && platform === null) {
-      options.forgetOnline(deviceId);
+      if (wasOnline !== true) {
+        options.setPlatform(deviceId, null);
+        options.forgetOnline(deviceId);
+      }
       continue;
     }
 
-    const wasOnline = options.getOnline(deviceId);
+    options.setPlatform(deviceId, platform);
     options.setOnline(deviceId, device.online);
     if (
       wasOnline !== true &&
