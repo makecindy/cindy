@@ -578,6 +578,17 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
       path: path.join(os.homedir(), "Applications/Chromium.app/Contents/MacOS/Chromium"),
     },
     {
+      kind: "chrome",
+      path: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+    },
+    {
+      kind: "chrome",
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+      ),
+    },
+    {
       kind: "canary",
       path: "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
     },
@@ -594,14 +605,37 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
 }
 
 function findGoogleChromeExecutableMac(): BrowserExecutable | null {
-  return findFirstChromeExecutable([
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    path.join(
-      os.homedir(),
-      "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    ),
+  return findFirstExecutable([
+    {
+      kind: "chrome",
+      path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    },
+    {
+      kind: "chrome",
+      path: path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    },
+    {
+      kind: "chrome",
+      path: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+    },
+    {
+      kind: "chrome",
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+      ),
+    },
+    {
+      kind: "canary",
+      path: "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    },
+    {
+      kind: "canary",
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      ),
+    },
   ]);
 }
 

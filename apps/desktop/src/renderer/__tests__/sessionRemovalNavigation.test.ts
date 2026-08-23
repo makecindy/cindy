@@ -154,4 +154,45 @@ describe('getVisibleSidebarSessionIds', () => {
       'visible-under-pointer-suppression',
     ]);
   });
+
+  it('reads search hits and ignores the list underneath a search overlay', () => {
+    const aside = document.createElement('aside');
+    const list = document.createElement('div');
+    const covered = document.createElement('div');
+    covered.dataset.sidebarSessionRow = 'true';
+    covered.dataset.sessionId = 'old';
+    list.append(covered);
+
+    const overlay = document.createElement('div');
+    overlay.dataset.conversationSearchSurface = '';
+    overlay.dataset.conversationSearchOverlay = '';
+    const hit = document.createElement('div');
+    hit.dataset.sidebarSessionRow = 'true';
+    hit.dataset.sessionId = 'hit';
+    overlay.append(hit);
+
+    aside.append(list, overlay);
+    document.body.append(aside);
+    try {
+      expect(getVisibleSidebarSessionIds()).toEqual(['hit']);
+    } finally {
+      aside.remove();
+    }
+  });
+
+  it('keeps the real sidebar list when only the resident search input is marked', () => {
+    const aside = document.createElement('aside');
+    const search = document.createElement('div');
+    search.dataset.conversationSearchSurface = '';
+    const row = document.createElement('div');
+    row.dataset.sidebarSessionRow = 'true';
+    row.dataset.sessionId = 'visible';
+    aside.append(search, row);
+    document.body.append(aside);
+    try {
+      expect(getVisibleSidebarSessionIds()).toEqual(['visible']);
+    } finally {
+      aside.remove();
+    }
+  });
 });

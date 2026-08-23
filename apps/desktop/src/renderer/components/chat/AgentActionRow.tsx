@@ -65,6 +65,12 @@ import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
+} from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
@@ -876,7 +882,7 @@ export function AgentActionRow({
   };
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" data-message-client-id={message.clientId}>
       <button
         type="button"
         onClick={(e) => void onActivate(e.currentTarget)}
@@ -894,8 +900,10 @@ export function AgentActionRow({
         }
         className={cn(
           'group flex w-full items-center gap-[6px]',
-          'rounded-[6px] px-2 py-[3px]',
-          'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
+          ACTIVITY_ROW_RADIUS_CLASS,
+          'px-2 py-[3px]',
+          ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+          ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           'cursor-pointer select-none outline-none',
           'focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
           'text-left',
@@ -934,14 +942,7 @@ export function AgentActionRow({
         )}
         {/* v9: 移除 chevron 上的"查看详情" Tooltip。整行 button 已经是
             统一激活目标，末尾 chevron 只保留视觉提示。 */}
-        <span
-          aria-hidden="true"
-          className={cn(
-            'flex h-[18px] w-[18px] items-center justify-center rounded-[4px] shrink-0',
-            'text-[var(--msg-tool-card-chevron)]',
-            'group-hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-          )}
-        >
+        <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
           {isInlineExpand && expanded ? (
             <ChevronDown size={13} />
           ) : (

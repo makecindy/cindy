@@ -12,7 +12,10 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { deriveAgentTaskStatus } from '@cindy/maker-shared/agent-task';
+import {
+  deriveAgentTaskStatus,
+  type AgentTaskTerminalStatus,
+} from '@cindy/maker-shared/agent-task';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
@@ -20,6 +23,7 @@ import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
+import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
 import { WorkflowAgentStrip } from '@/features/right-sidebar/plugins/background-tasks/WorkflowAgentStrip';
 import {
@@ -43,6 +47,7 @@ interface AgentTaskCardProps {
   toolCall?: ChatMessage;
   update?: AgentTaskUpdate;
   result?: string;
+  persistedStatus?: AgentTaskTerminalStatus;
   /**
    * subagent-model-chip: 子代理实际跑的模型 raw id,由 MessageStream 用
    * parentToolUseId→model 映射(从子消息 agentMeta 反查)解析后传入,作为
@@ -54,6 +59,9 @@ interface AgentTaskCardProps {
    * 定位任务也依赖它。
    */
   sessionId?: string;
+  /** Current owning harness. Pi's durable-detail sidebar must never surface
+   * after the session has switched to Claude Code or Codex. */
+  sessionAgentKind?: 'cc' | 'codex' | 'pi';
 }
 
 function readInputString(input: unknown, keys: string[]): string | undefined {
@@ -140,18 +148,31 @@ function readHistoryFileStatus(
   return pending;
 }
 
-export function AgentTaskCard({ toolCall, update, result, subagentModel, sessionId }: AgentTaskCardProps) {
+export function AgentTaskCard({
+  toolCall,
+  update,
+  result,
+  persistedStatus,
+  subagentModel,
+  sessionId,
+  sessionAgentKind,
+}: AgentTaskCardProps) {
   const { t } = useTranslation();
   const blockId = `task:${toolCall?.clientId ?? update?.taskId ?? 'unknown'}`;
   // subagent-model-chip: 子代理模型 —— 实时态优先 update.model(progress 事件
-  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel;两者皆无时
-  // 再回退 spawn 参数里显式指定的 model(codex collab 卡,translator 透传
-  // item.model)。`model: null` 是实时聚合卡的显式清除指令,不能再落到历史/输入兜底,
+  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel。Claude
+  // Agent/Task 的 input.model 只是请求值,可能被运行时个性化配置覆盖,不能冒充
+  // 实际模型；Codex collab spawn 沿用既有显式模型展示。`model: null` 是实时聚合卡
+  // 的显式清除指令,不能再落到历史/输入兜底,
   // 否则多 receiver 模型冲突时旧徽标会被重新显示。V1 多 receiver 的实时聚合结论
   // 不落库;重载后既无法证明所有 receiver 都已上报、也无法证明模型一致,所以历史态
-  // 同样不从首条子消息或 spawn 参数猜回单一徽标。默认继承主模型时 spawn 无 model
-  // 字段——不猜继承值,不渲染。
+  // 同样不从首条子消息或 spawn 参数猜回单一徽标。默认继承主模型时 Codex live tracker
+  // 会按 spawn 当刻的运行时模型冻结到 update.model；历史态若没有这条事实仍不猜。
   const receiverThreadIds = readInputStringArray(toolCall?.toolInput, 'receiverThreadIds');
+  const isPiDurableSubagent = update?.provider === 'pi' && update.taskType === 'pi_subagent';
+  const codexSpawnModel = toolCall?.toolName?.startsWith('collab:') === true
+    ? readInputString(toolCall.toolInput, ['model'])
+    : undefined;
   const ambiguousMultiReceiverHistory =
     !update && toolCall?.toolName?.startsWith('collab:') === true && receiverThreadIds.length > 1;
   const modelLabel = formatModelShortLabel(
@@ -159,18 +180,21 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
       ? undefined
       : update?.model ?? (ambiguousMultiReceiverHistory
         ? undefined
-        : subagentModel ?? readInputString(toolCall?.toolInput, ['model'])),
+        : subagentModel ?? codexSpawnModel),
   );
   // codex spawn 可为子代理显式指定思考强度(translator 透传 reasoningEffort);
   // 已知档位才走 effortLevels 词表,未知值不显示。CC 无此参数,行为不变。
   // 显示集合含 minimal:设置页白名单(CODEX_SUBAGENT_EFFORTS)刻意不含它,但
   // seed/glm 系模型的 spawn 参数可显式给 minimal(协议合法档),徽标不静默降级。
-  const effortRaw = readInputString(toolCall?.toolInput, ['reasoningEffort']);
+  const effortRaw = isPiDurableSubagent
+    ? update?.reasoningEffort ?? readInputString(toolCall?.toolInput, ['reasoningEffort', 'thinking'])
+    : readInputString(toolCall?.toolInput, ['reasoningEffort']);
   const effortLabel =
     effortRaw && EFFORT_BADGE_LEVELS.has(effortRaw) ? t(`effortLevels.${effortRaw}`) : undefined;
   const chipLabel = [modelLabel, effortLabel].filter(Boolean).join(' · ');
   const { expanded, setExpanded } = useExpandedBlockMemory(blockId);
   const toggle = useCallback(() => setExpanded((v) => !v), [setExpanded]);
+  const [piResultExpanded, setPiResultExpanded] = useState(false);
 
   // workflow-card: Workflow 工具在父会话事件流里是单个 local_workflow 任务(内部子 agent
   // 不发独立 task 事件,只有 workflow 级聚合进度)。按 taskType / toolName 识别:标题优先取
@@ -207,6 +231,7 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   const status = isWorkflow
     ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
     : deriveAgentTaskStatus(update?.status, result, {
+        persistedStatus,
         resultIsLaunchReceipt:
           subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
           || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
@@ -236,13 +261,24 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // 原文),用户可见句子在这里按 locale 组装。判据与 mobile 卡模型共用
   // maker-shared 的 subagentSpawnReceiptName,不在端上内联复制。
   const spawnReceiptName = subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result);
+  const resultIsPiLaunchReceipt = isPiDurableSubagent
+    && subagentSpawnResultIndicatesRunning(toolCall?.toolName, result);
   // 判据与抑制规则同 maker-shared 的 buildAgentTaskCardModel:有 live update 时不显示
   // 「已启动」句子(title + 状态已表达),否则 codex 卡会比 Claude 卡多一行冗余文案。
+  // PI/Claude detached tool_result 也是启动回执；终态卡必须优先显示后续 durable
+  // update.summary，不能把「已启动」错当最终答案。
   const summary = spawnReceiptName
     ? (update
         ? detailText(update.summary)
         : t('chat.agentTask.subagentStarted', { name: spawnReceiptName }))
-    : detailText(result, update?.summary);
+    : resultIsPiLaunchReceipt
+      ? detailText(update?.summary, result)
+      : detailText(result, update?.summary);
+  const piResultNeedsCollapse = Boolean(
+    isPiDurableSubagent
+      && summary
+      && (summary.length > 320 || summary.split(/\r?\n/).length > 4),
+  );
   const duration = formatDuration(update?.usage?.durationMs);
   // provider 推断与 maker-shared 的 buildAgentTaskCardModel 同口径(裸 `subagent` 是 pi
   // 扩展注册的工具名);历史回放没有 live update 时也不会把 pi 卡标成 Claude。
@@ -262,16 +298,19 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
           ? t('chat.agentTask.provider.pi')
           : t('chat.agentTask.provider.claude');
 
-  // 停止按钮:running + 本会话可定位 + claude-code(codex 无 stopTask 通道)。
-  // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification 事件流收口
-  // (状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。失败静默恢复 ——
-  // 任务恰好自然结束时 stop 是幂等成功,真失败(不支持等)保持 running 状态可重试。
+  // 停止按钮:Claude 后台任务沿用 SDK stopTask；PI 只开放 Cindy durable runner
+  // 明确标成 taskType=pi_subagent 的异步任务。普通 PI 前台委派没有 durable 控制面，
+  // 不能仅凭 provider 猜测可停止。Codex 仍无 stopTask 通道。
+  // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
+  // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
+  const providerCanStop = update?.provider === 'claude-code'
+    || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
   const canStop =
     status === 'running' &&
     Boolean(sessionId) &&
     Boolean(update?.taskId) &&
-    update?.provider === 'claude-code' &&
+    providerCanStop &&
     // device-link 镜像会话:session 活在被控端,本地 stopAgentTask 会假成功 —— 不给
     // 按钮。粘滞判定:relay 瞬断清空注册表的窗口内不误判为本机(与面板同口径)。
     !(sessionId && isRemoteSessionSticky(sessionId));
@@ -296,10 +335,24 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // 不到 —— 那里必须退回展开区,否则卡片既点不动、又因面板入口化丢掉了展开区。
   const panelReachable = useSidebarPanelReachable(sessionId);
   const canOpenInPanel = Boolean(sessionId) && Boolean(workflowTaskId) && panelReachable;
+  const subagentFocusId = update?.taskId ?? toolCall?.toolUseId;
+  const canOpenSubagentInPanel =
+    isPiDurableSubagent &&
+    sessionAgentKind === 'pi' &&
+    Boolean(sessionId) &&
+    Boolean(subagentFocusId) &&
+    panelReachable;
   const openInPanel = useCallback(() => {
     if (!sessionId || !workflowTaskId) return;
     void openBackgroundTasksTab(sessionId, { focusTaskId: workflowTaskId });
   }, [sessionId, workflowTaskId]);
+  const openSubagentInPanel = useCallback(() => {
+    if (!sessionId || !subagentFocusId) return;
+    void openSubagentsTab(sessionId, {
+      focusRunId: subagentFocusId,
+      focusProvider: provider,
+    });
+  }, [provider, sessionId, subagentFocusId]);
 
   // workflow 摘要行:当前运行中 agent 的 phaseTitle + 已收口/总数。收口判定走
   // workflowAgentVisualState 归一(与方块条 / 面板同一词表源,done 与 failed 都算收口)。
@@ -450,6 +503,22 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
             />
           )}
         </button>
+        {canOpenSubagentInPanel && (
+          <button
+            type="button"
+            onClick={openSubagentInPanel}
+            title={t('chat.agentTask.openInPanel')}
+            aria-label={t('chat.agentTask.openInPanel')}
+            data-agent-task-open-subagents="true"
+            className={cn(
+              'mt-[2px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
+              'text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)]',
+              'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            )}
+          >
+            <PanelRight size={12} aria-hidden="true" />
+          </button>
+        )}
         {canStop && (
           <button
             type="button"
@@ -476,7 +545,31 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
           <Collapse open={expanded}>
             <div className="mt-2 border-l-2 border-[var(--agent-actions-rail)] pl-3 text-13 leading-5 text-[var(--text-secondary)]">
               {description && <p className="mb-1">{description}</p>}
-              {summary && <p className="mb-1 whitespace-pre-wrap">{summary}</p>}
+              {summary && (
+                <>
+                  <p
+                    data-agent-task-result-preview={isPiDurableSubagent ? 'true' : undefined}
+                    className={cn(
+                      'mb-1 whitespace-pre-wrap',
+                      piResultNeedsCollapse && !piResultExpanded && 'line-clamp-4',
+                    )}
+                  >
+                    {summary}
+                  </p>
+                  {piResultNeedsCollapse && (
+                    <button
+                      type="button"
+                      aria-expanded={piResultExpanded}
+                      onClick={() => setPiResultExpanded((current) => !current)}
+                      className="mb-1 rounded-full text-12 text-[var(--accent-fg)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    >
+                      {t(piResultExpanded
+                        ? 'chat.agentTask.hideFullResult'
+                        : 'chat.agentTask.showFullResult')}
+                    </button>
+                  )}
+                </>
+              )}
               {update?.lastToolName && (
                 <p className="text-12 leading-4 text-[var(--text-tertiary)]">
                   {t('chat.agentTask.lastTool', { tool: update.lastToolName })}

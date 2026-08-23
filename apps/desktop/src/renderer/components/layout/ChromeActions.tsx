@@ -36,6 +36,7 @@ import { PanelLeft } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { MenuButton } from '@/components/title-bar/MenuButton';
+import { Tip } from '@/components/ui/tooltip';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { cn } from '@/lib/utils';
 
@@ -65,6 +66,9 @@ export function ChromeActions({
     isMac && !isFullscreen
       ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
       : CHROME_ACTIONS_GEOMETRY.defaultLeft;
+  const sidebarToggleLabel = t(
+    isSidebarCollapsed ? 'contentHeader.expandSidebar' : 'contentHeader.collapseSidebar',
+  );
 
   return (
     <div
@@ -78,21 +82,23 @@ export function ChromeActions({
         } as React.CSSProperties
       }
     >
-      <button
-        {...peekTriggerProps}
-        className={cn(
-          'flex items-center justify-center',
-          'h-7 w-7 rounded-md',
-          'text-titlebar-icon',
-          'transition-colors',
-          'hover:bg-titlebar-button-hover',
-        )}
-        onClick={onToggleSidebar}
-        aria-label={t('contentHeader.toggleSidebar')}
-        aria-expanded={!isSidebarCollapsed}
-      >
-        <PanelLeft size={15} />
-      </button>
+      <Tip text={sidebarToggleLabel} side="bottom">
+        <button
+          {...peekTriggerProps}
+          className={cn(
+            'flex items-center justify-center',
+            'h-7 w-7 rounded-md',
+            'text-titlebar-icon',
+            'transition-colors',
+            'hover:bg-titlebar-button-hover',
+          )}
+          onClick={onToggleSidebar}
+          aria-label={sidebarToggleLabel}
+          aria-expanded={!isSidebarCollapsed}
+        >
+          <PanelLeft size={15} />
+        </button>
+      </Tip>
       <MenuButton />
     </div>
   );

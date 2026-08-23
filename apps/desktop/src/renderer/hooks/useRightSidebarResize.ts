@@ -142,8 +142,8 @@ export interface RightSidebarResizeResult {
 }
 
 /**
- * @param availableWidth 中间 + 右栏可分配的总像素宽(窗口宽 − 左栏宽),由
- *   MainLayout 实时测量下发;首帧退回 fallback。
+ * @param availableWidth 中间 + 右栏可分配的总像素宽。布局引擎消费者可显式传入；
+ *   MainLayout 只读取稳定的像素宽兜底，不再订阅 live resize，因此缺省用 fallback。
  */
 export function useRightSidebarResize(
   availableWidth: number = RIGHT_SIDEBAR_AVAILABLE_WIDTH_FALLBACK,

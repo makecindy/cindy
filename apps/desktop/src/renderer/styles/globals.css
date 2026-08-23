@@ -194,7 +194,9 @@
     .animate-confirm-overlay-in,
     .animate-confirm-overlay-out,
     .animate-confirm-content-in,
-    .animate-confirm-content-out {
+    .animate-confirm-content-out,
+    .animate-confirm-content-layout-in,
+    .animate-confirm-content-layout-out {
       animation-duration: 0ms !important;
     }
 
@@ -402,6 +404,11 @@ html:lang(ko) {
 }
 [data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
 [data-voice-draft-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
+  content: none;
+}
+/* 输入框推荐提示词生效时,推荐词由 ChatInput 的 overlay 承载,关掉原生 placeholder。 */
+[data-recommendation-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
+[data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
 }
 .ProseMirror {
@@ -742,16 +749,42 @@ html:lang(ko) {
 }
 
 /* Slash 指令确认胶囊 — doc 里仍是普通 `/command` 文本。字号、字重和文字色
-   完全继承 composer 正文;仅用 surface/border/radius 表达“已命中命令”。 */
+   完全继承 composer 正文;仅用 surface/border/radius 表达“已命中命令”。
+   inline-flex 让 padding 进布局,避免行首悬挂绘制溢出输入卡片。 */
 .ProseMirror .slash-cmd-pill {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
   background: var(--surface-chip);
   border: 1px solid var(--border-default);
   border-radius: 9999px;
   padding: 2px 8px 3px;
+  margin-inline: 0 4px;
   color: var(--chat-input-text);
   font: inherit;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
+}
+/* Pi 线路名 `/skill:git` 里的 `skill:` 只做识别:展示层与 CC/Codex 一样只留 `/git`。 */
+.ProseMirror .slash-cmd-runtime-prefix {
+  display: none;
+}
+/* 隐藏 runtime 前缀后 ProseMirror 会把胶囊切成相邻 span,接缝拼回一颗。 */
+.ProseMirror .slash-cmd-pill:has(+ .slash-cmd-pill),
+.ProseMirror .slash-cmd-pill:has(+ .slash-cmd-runtime-prefix) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 0;
+  margin-right: 0;
+  padding-right: 0;
+}
+.ProseMirror .slash-cmd-pill + .slash-cmd-pill,
+.ProseMirror .slash-cmd-runtime-prefix + .slash-cmd-pill {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 0;
+  margin-left: 0;
+  padding-left: 0;
 }
 
 /* 快速开始预填胶囊 — QuickStartPillMark。点击 New Maker 快速开始卡片后
@@ -1115,11 +1148,11 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
-/* 流式正文逐词淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
-   每个新词以 --motion-fast 从透明「浮现」,delay 由 rehypeStreamWordFade 按词序
-   写进 --wf-delay(上限 24ms/词,按排程预算自适应压缩)。不是逐字打字机 ——
-   词整体已就位,只有 opacity 渐变;pure-opacity 一次性动画,compositor-only。
-   `both`:delay 未到时停在 0% 帧(透明),避免先闪现再淡入。
+/* 流式正文分段淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
+   每个新词与 inline-code 原子以 --motion-fast 从透明「浮现」。普通聊天不做
+   跨词 stagger,新段的 --wf-delay 为 0ms;已见段 remount 时可用负 delay 恢复
+   原动画进度。不是逐字打字机 —— 段整体已就位,只有 opacity 渐变;
+   pure-opacity 一次性动画,compositor-only。`both` 保证负 delay / remount 续播。
    reduced-motion 双保险:JS 侧短路(插件不挂载,span 不进 DOM)+ 下方 reduce
    块的 animation: none(摘掉动画连同 both 填充,span 落回自然 opacity 1,
    不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
@@ -1170,6 +1203,14 @@ body.resizing-pane [data-ghost-webview] {
    zero-size trigger inside the render item. Opt only those items out of the
    containment boundary; plain text items keep the render-skip optimization. */
 .msg-stream-items > *:has([data-fixed-menu-anchor]) {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
+/* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
+   消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
+   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
   content-visibility: visible;
   contain-intrinsic-size: none;
 }
@@ -1421,7 +1462,9 @@ body.resizing-pane [data-ghost-webview] {
 /* CINDY dark hljs 整改(D 裁决 2026-07-17,§15.4 双门槛):
    github-dark .hljs-section #1f6feb × CINDY surface-elevated #312F2F = 2.87 <3:1(语法色门槛);
    保持色相(蓝 H212 S84%),仅提亮度 L52%→53.5% → #2573ec × #312F2F = 3.00 ≥3:1。
-   -punctuation/-tag dark 无单独选择器,继承 .dark .hljs text #c9d1d9(× #312F2F=8.62 ≥3,无需整改)。 */
+   -punctuation/-tag dark 无单独选择器,继承 .dark .hljs text #c9d1d9(× #312F2F=8.62 ≥3,无需整改)。
+   2026-08 色阶改版复算: 代码块底随 surface-elevated 变为 #1F1F1F,#2573ec×#1F1F1F=3.72、
+   #c9d1d9×#1F1F1F=10.68,整改值继续达标,选择器与值均不需调整(决策表 §9)。 */
 [data-theme='cindy-dark'] .hljs-section {
   color: #2573ec;
 }
@@ -1946,10 +1989,12 @@ body.resizing-pane [data-ghost-webview] {
     color: var(--sidebar-item-active-foreground);
   }
 
-  html[data-platform='win32'] .cursor-not-allowed,
-  html[data-platform='win32'] .disabled\:cursor-not-allowed:disabled,
-  html[data-platform='win32'] .data-\[disabled\]\:cursor-not-allowed[data-disabled] {
-    cursor: var(--cursor-not-allowed, not-allowed);
+  /* Disabled controls keep the ordinary desktop arrow. Their visual disabled
+     state already comes from opacity/color, so a separate cursor adds noise. */
+  .cursor-not-allowed,
+  .disabled\:cursor-not-allowed:disabled,
+  .data-\[disabled\]\:cursor-not-allowed[data-disabled] {
+    cursor: default;
   }
 }
 
@@ -2076,7 +2121,7 @@ body.resizing-pane [data-ghost-webview] {
 /* E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):仅 CINDY family,窗口 vibrancy
    透壁纸(main 设置)+ 应用内 backdrop-filter 互透。**仅侧栏 + 浮层 blur;主内容区
    不透明(macOS 标准范式;用户勘误 2026-07-17:主区不透壁纸,content-area 回落
-   --content-area=--surface-hsl 不透明 #EDEDED/#2A2828)**。blur(50px 侧栏、6px 浮层)。
+   --content-area=--surface-hsl 不透明,2026-08 起 #F2F2ED/#181818)**。blur(50px 侧栏、6px 浮层)。
    精确选择器(转义 Tailwind class .bg-\[var\(--panel-bg\)\] 等,避免 contains 过命中渐变/border)。其他 family 不命中,行为零变化。 */
 [data-theme='cindy-light'] body,
 [data-theme='cindy-dark'] body {
@@ -2096,13 +2141,22 @@ body.resizing-pane [data-ghost-webview] {
    .bg-\[var\(--panel-bg\)\] 已从本规则移除 —— 该 class 的消费者全是右侧工具面板族
    (RSB TabBar/Body、Review、PanelChrome、Ghost 面板、独立窗顶带),被劫持成玻璃后
    与左侧主区(不透明 content-area)底色打架;移除后回落 CINDY 的 --panel-bg
-   (#EDEDED/#2A2828),与主区同色,右侧面板整体与左边聊天区一致(模式2 口径)。 */
+   (2026-08 起 #F2F2ED/#181818),与主区同色,右侧面板整体与左边聊天区一致(模式2 口径)。 */
 [data-theme='cindy-light'] aside.bg-sidebar {
   background: var(--surface-translucent-sidebar);
 }
 [data-theme='cindy-dark'] aside.bg-sidebar {
   background: var(--surface-translucent-sidebar);
   /* backdrop-filter 移除:CSS blur 采样不到窗外壁纸,且已知会把透明窗背衬渲染成黑;壁纸模糊由原生 vibrancy 材质提供 */
+}
+/* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
+   扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
+   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。 */
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]),
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: transparent;
 }
 /* Sidebar peek 抽屉是 fixed overlay,它覆盖的是应用内容而不是窗外壁纸;这里需要
    单独 blur 被覆盖的应用 UI,避免 hover 预览时正文直接透出来。常规展开态仍交给
@@ -2114,7 +2168,7 @@ body.resizing-pane [data-ghost-webview] {
   -webkit-backdrop-filter: blur(28px);
 }
 /* 模式2 主面板:用户勘误 2026-07-17 — 主内容区不透壁纸(macOS 标准范式),撤销 blur。
-   content-area 回落 --content-area(=var(--surface-hsl) 不透明 #EDEDED/#2A2828),无 blur。
+   content-area 回落 --content-area(=var(--surface-hsl) 不透明,2026-08 起 #F2F2ED/#181818),无 blur。
    surface-translucent-main token 保留注册但 CINDY override 改不透明等价值(见 cindy themes)。 */
 /* 模式3 浮层卡:blur 6px + surface-translucent-overlay(cmd-palette/popover 类) */
 [data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],

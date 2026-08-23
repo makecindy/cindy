@@ -21,6 +21,7 @@ import {
   IOSSimulatorInstanceError,
   IOSSimulatorOwnershipStore,
   IOSSimulatorOwnershipRegistryFile,
+  IOSSimulatorPendingCreateEvidenceFile,
   IOSSimulatorProjectBuildError,
   IOSSimulatorProjectBuilder,
   IOSSimulatorResourceScheduler,
@@ -49,6 +50,8 @@ import {
   type IOSSimulatorMutationRoute,
   type IOSSimulatorNativeSidecarDriver,
   type IOSSimulatorLatestH264Frame,
+  type IOSSimulatorPendingCreateEvidence,
+  type IOSSimulatorPendingCreateEvidenceStore,
   type IOSSimulatorProjectBuildResult,
   type IOSSimulatorRuntime,
   type IOSSimulatorSimctlLifecycle,
@@ -62,6 +65,7 @@ import {
 } from '@cindy/ios-simulator-runtime';
 import type {
   IOSSimulatorMcpCallContext,
+  IOSSimulatorMcpAccessDecision,
   IOSSimulatorMcpDeps,
   IOSSimulatorMcpErrorCode,
   IOSSimulatorMcpToolName,
@@ -119,6 +123,16 @@ interface IOSSimulatorSessionSnapshot {
   workDir: string;
   remoteHostId?: string | null;
   status?: 'active' | 'archived' | 'deleted' | null;
+}
+
+interface IOSSimulatorPersistedInstanceReconcileResult {
+  /** False when this binding still needs another reconcile pass. */
+  complete: boolean;
+  /**
+   * True once this pass either reconciled the binding or removed it, meaning a
+   * later pass must no longer treat its persisted `viewerState` as inherited.
+   */
+  viewerStateHandled: boolean;
 }
 
 interface IOSSimulatorPluginStatusReadOptions {
@@ -199,6 +213,12 @@ export interface IOSSimulatorHostOptions {
   resourceScheduler?: IOSSimulatorResourceScheduler;
   /** Fail-closed gate supplied by the persisted registry owner. */
   canReconcilePendingCreates?: () => boolean;
+  /**
+   * Profile-scoped interrupted-create breadcrumb shared with the injected
+   * lifecycle. A completed sweep retires it so later startups can skip the
+   * CoreSimulator probe entirely.
+   */
+  pendingCreateEvidence?: IOSSimulatorPendingCreateEvidenceStore;
   /** Main-owned account generation used to scope persisted ownership reconciliation. */
   getOwnerScopeKey?: () => string;
   /** Fail closed while the active account runtime is being replaced. */
@@ -260,6 +280,12 @@ export interface IOSSimulatorHost {
     fallbackReason?: 'native-decoder-fallback',
     viewerWebContentsId?: number,
     viewerToken?: string,
+  ): Promise<IOSSimulatorHostResult>;
+  retryNativeRoute(
+    sessionId: string,
+    route: Omit<IOSSimulatorMutationRoute, 'sessionId'>,
+    viewerWebContentsId: number,
+    viewerToken: string,
   ): Promise<IOSSimulatorHostResult>;
   getLatestFrame(
     sessionId: string,
@@ -443,14 +469,34 @@ export function createRegistryBackedIOSSimulatorDeviceGrantStore(
   });
 }
 
+/**
+ * Interrupted-create evidence lives beside the ownership registry, inside the
+ * active Cindy profile. Its presence is the only reason a profile without
+ * persisted ownership still needs a CoreSimulator sweep, so keeping it accurate
+ * is what keeps Xcode consent prompts tied to real simulator use.
+ */
+function createDefaultPendingCreateEvidence(
+  registry: IOSSimulatorOwnershipRegistryFile,
+): IOSSimulatorPendingCreateEvidenceStore {
+  const filePath = path.join(path.dirname(registry.filePath), 'pending-create-evidence.json');
+  return new IOSSimulatorPendingCreateEvidenceFile(filePath, {
+    onError: (error) =>
+      logger.warn('iOS Simulator interrupted-create evidence could not be updated', {
+        filePath: redact(filePath),
+        error: error instanceof Error ? error.message : String(error),
+      }),
+  });
+}
+
 function createProfileScopedIOSSimulatorLifecycle(
   registry: IOSSimulatorOwnershipRegistryFile,
+  pendingCreateEvidence: IOSSimulatorPendingCreateEvidence,
 ): IOSSimulatorSimctlLifecycle {
   const createMarkerNamespace = createHash('sha256')
     .update(path.resolve(registry.filePath))
     .digest('hex')
     .slice(0, 16);
-  return createIOSSimulatorSimctlLifecycle({ createMarkerNamespace });
+  return createIOSSimulatorSimctlLifecycle({ createMarkerNamespace, pendingCreateEvidence });
 }
 
 const STARTUP_PENDING_CREATE_RECOVERY_TIMEOUT_MS = 6_000;
@@ -458,9 +504,15 @@ const STARTUP_PENDING_CREATE_RECOVERY_TIMEOUT_MS = 6_000;
 async function recoverProfilePendingCreatesAtStartup(
   lifecycle: IOSSimulatorSimctlLifecycle,
   persistedInstances: readonly IOSSimulatorInstance[],
-  signal?: AbortSignal,
+  options: {
+    signal?: AbortSignal;
+    /** Retired only after a completed sweep proves no marker is left. */
+    evidence?: IOSSimulatorPendingCreateEvidenceStore | null;
+  } = {},
 ): Promise<void> {
   if (!lifecycle.recoverPendingCreatesAtStartup) return;
+  const { signal, evidence } = options;
+  const evidenceGeneration = evidence?.generation() ?? 0;
   const controller = new AbortController();
   const abortFromParent = (): void => controller.abort(signal?.reason);
   if (signal?.aborted) abortFromParent();
@@ -471,13 +523,17 @@ async function recoverProfilePendingCreatesAtStartup(
   );
   timer.unref?.();
   try {
-    await lifecycle.recoverPendingCreatesAtStartup(
+    const recovery = await lifecycle.recoverPendingCreatesAtStartup(
       persistedInstances.map((instance) => ({
         udid: instance.simulatorUdid,
         name: instance.simulatorName,
       })),
       controller.signal,
     );
+    // A completed sweep proves this profile holds no leftover create marker.
+    // Retire the breadcrumb so the next startup stays off xcrun — unless
+    // another create armed it while this sweep was still running.
+    if (recovery.complete) evidence?.clearIfUnchanged(evidenceGeneration);
   } catch (error) {
     // A marker remains hidden and profile-scoped, so an optional Simulator
     // cleanup failure must not block Cindy startup. Keeping it intact lets the
@@ -1056,7 +1112,14 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
   const getOwnerScopeKey = options.getOwnerScopeKey ?? activeOwnerScopeKey;
   const isOwnerBoundaryPending =
     options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
+  const pendingCreateEvidence = options.pendingCreateEvidence ?? null;
   let ownershipReconciledScopeKey: string | null = null;
+  // Persisted `viewerState` can only be stale on the first sweep that actually
+  // reaches a binding; after that a detached value would be this process's own
+  // truth. Tracked per binding, because an incomplete sweep can skip one
+  // binding entirely while normalizing the rest.
+  let viewerStateNormalizedScopeKey: string | null = null;
+  const viewerStateNormalizedInstanceIds = new Set<string>();
   let ownershipReconcilePromise: { scopeKey: string; promise: Promise<void> } | null = null;
   let pendingCreateReconcileController: AbortController | null = null;
   let pendingCreateReconcilePromise: Promise<unknown> | null = null;
@@ -1707,11 +1770,25 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
               : 'native-sidecar-unavailable',
       };
     }
+    const nativeFallback =
+      stream.reasonCode === 'native-stream-disconnected' ||
+      stream.reasonCode === 'native-sidecar-unavailable' ||
+      input.reasonCode === 'native-sidecar-unavailable';
+    const manager = getDriverManager();
+    const nativeDiagnostics = manager.diagnostics?.(instance.instanceId)?.nativeSidecar;
+    const nativeRecoveryAvailable = Boolean(
+      manager.recoverNativeSidecar &&
+        nativeFallback &&
+        (stream.reasonCode === 'native-stream-disconnected' ||
+          (nativeDiagnostics?.recoveryEligible === true &&
+            nativeDiagnostics.admission?.launch.allowed === true)),
+    );
     return {
       sessionId: instance.sessionId,
       instanceId: instance.instanceId,
       generation: instance.generation,
       updatedAt: now,
+      nativeRecoveryAvailable,
       stream,
       input,
     };
@@ -2321,11 +2398,13 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
   async function reconcilePersistedInstance(
     snapshot: IOSSimulatorInstance,
     devices: ReadonlyMap<string, IOSSimulatorEnvironmentReport['devices'][number]>,
-  ): Promise<boolean> {
+    normalizeViewerState: boolean,
+  ): Promise<IOSSimulatorPersistedInstanceReconcileResult> {
     const instance = actor
       .list(snapshot.sessionId)
       .find((candidate) => candidate.instanceId === snapshot.instanceId);
-    if (!instance) return true;
+    // A binding that no longer exists has no inherited viewer state to correct.
+    if (!instance) return { complete: true, viewerStateHandled: true };
 
     let complete = true;
     let driverRuntimeRecovered = await cleanupOrphanedDriverRuntime(instance);
@@ -2349,7 +2428,9 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         instanceId: instance.instanceId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return false;
+      // This binding was skipped before any reconcile, so its inherited viewer
+      // state is still unhandled and the retry must normalize it.
+      return { complete: false, viewerStateHandled: false };
     }
     if (!session || session.status === 'deleted' || session.status === 'archived') {
       const released = await actor.runOwnershipCleanup(
@@ -2357,7 +2438,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         instance.sessionId,
         (owned, signal) => releaseStaleBinding(owned, device, true, signal),
       );
-      return released && complete;
+      return { complete: released && complete, viewerStateHandled: released };
     }
     if (session.remoteHostId || !device) {
       const runtimeReleased = await releaseInstanceRuntime(instance);
@@ -2371,8 +2452,9 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         device ? (deviceState === 'booted' ? 'ready' : 'stopped') : 'error',
         'degraded',
         session.remoteHostId ? 'UNSUPPORTED_SESSION_KIND' : 'ORPHANED_DEVICE',
+        { normalizeViewerState },
       );
-      return complete;
+      return { complete, viewerStateHandled: true };
     }
     const reconciledDeviceState = deviceState ?? 'unknown';
     if (reconciledDeviceState === 'shutdown') {
@@ -2410,14 +2492,43 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           ? 'healthy'
           : 'recovering',
       driverRuntimeRecovered ? null : 'WDA_UNAVAILABLE',
-      { preserveDetachGrace: shouldResumeDetachGrace },
+      { preserveDetachGrace: shouldResumeDetachGrace, normalizeViewerState },
     );
     if (shouldResumeDetachGrace && driverRuntimeRecovered && complete) {
       await actor.resumeDetachGrace(reconciled.instanceId, reconciled.sessionId, () =>
         resourceScheduler.markStopped(reconciled.instanceId),
       );
     }
-    return complete;
+    return { complete, viewerStateHandled: true };
+  }
+
+  function isViewerStateNormalized(scopeKey: string, instanceId: string): boolean {
+    return (
+      viewerStateNormalizedScopeKey === scopeKey &&
+      viewerStateNormalizedInstanceIds.has(instanceId)
+    );
+  }
+
+  function markViewerStateNormalized(scopeKey: string, instanceId: string): void {
+    // An old in-flight pass must not suppress the new owner's normalization.
+    if (isOwnerBoundaryPending() || getOwnerScopeKey() !== scopeKey) return;
+    if (viewerStateNormalizedScopeKey !== scopeKey) {
+      viewerStateNormalizedInstanceIds.clear();
+      viewerStateNormalizedScopeKey = scopeKey;
+    }
+    viewerStateNormalizedInstanceIds.add(instanceId);
+  }
+
+  /** Keep the per-binding latch bounded by the bindings that still exist. */
+  function retainViewerStateNormalized(
+    scopeKey: string,
+    persisted: readonly IOSSimulatorInstance[],
+  ): void {
+    if (viewerStateNormalizedScopeKey !== scopeKey) return;
+    const live = new Set(persisted.map((instance) => instance.instanceId));
+    for (const instanceId of viewerStateNormalizedInstanceIds) {
+      if (!live.has(instanceId)) viewerStateNormalizedInstanceIds.delete(instanceId);
+    }
   }
 
   async function reconcilePersistedOwnership(): Promise<void> {
@@ -2463,11 +2574,10 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         } else {
           startupPendingCreateRecoveryAttempted = true;
           const controller = new AbortController();
-          const recovery = recoverProfilePendingCreatesAtStartup(
-            lifecycle,
-            actor.listAll(),
-            controller.signal,
-          );
+          const recovery = recoverProfilePendingCreatesAtStartup(lifecycle, actor.listAll(), {
+            signal: controller.signal,
+            evidence: pendingCreateEvidence,
+          });
           pendingCreateReconcileController = controller;
           pendingCreateReconcilePromise = recovery;
           try {
@@ -2522,11 +2632,22 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       const devices = new Map(
         environment.devices.map((device) => [device.udid.toUpperCase(), device]),
       );
-      for (const snapshot of actor.listAll()) {
-        const instanceComplete = await withSessionLock(snapshot.sessionId, () =>
-          reconcilePersistedInstance(snapshot, devices),
+      const persisted = actor.listAll();
+      retainViewerStateNormalized(scopeKey, persisted);
+      for (const snapshot of persisted) {
+        const normalizeViewerState = !isViewerStateNormalized(scopeKey, snapshot.instanceId);
+        const instanceResult = await withSessionLock(snapshot.sessionId, () =>
+          reconcilePersistedInstance(snapshot, devices, normalizeViewerState),
         );
-        if (!instanceComplete) complete = false;
+        if (!instanceResult.complete) complete = false;
+        // Latch per binding, not per pass: a binding skipped before its reconcile
+        // (e.g. its session row was unreadable) still carries viewer state
+        // inherited from a dead process, and the retry has to correct it. A
+        // binding that was reconciled must not be normalized again, or the retry
+        // would kick a viewer that attached in the meantime.
+        if (instanceResult.viewerStateHandled) {
+          markViewerStateNormalized(scopeKey, snapshot.instanceId);
+        }
       }
       // Every DB/session read above belongs to the captured owner generation.
       // Never latch it across an account boundary or let an old in-flight pass
@@ -2732,10 +2853,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       state: hasInstance ? (hasRunning ? 'available' : 'instance-dependent') : 'requires-instance',
       ...(hasInstance ? {} : { reasonCode: 'INSTANCE_REQUIRED' }),
     };
+    // Keyed by the advertised (model-facing) tool names, because the registry
+    // merges this map into its own listing. Host dispatch names stay unchanged.
     const tools: Record<string, IOSSimulatorToolAvailability> = {
       check_environment: { state: 'available', backend: 'host' },
       doctor: { state: 'available', backend: 'host' },
-      list_devices: inspected.ready
+      list_simulator_devices: inspected.ready
         ? { state: 'available', backend: 'simctl' }
         : { state: 'unavailable', reasonCode: inspected.issue ?? 'ENVIRONMENT_NOT_READY' },
       list_instances: { state: 'available', backend: 'host' },
@@ -2755,9 +2878,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       wait_for_ui: { ...requiresInstance, backend: 'wda' },
       tap: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
       swipe: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
-      drag: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
+      drag_on_simulator: {
+        ...requiresInstance,
+        backend: hasNativeInput ? 'native-hid' : 'wda',
+      },
       long_press: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
-      key_press: { ...requiresInstance, backend: 'wda' },
+      press_simulator_key: { ...requiresInstance, backend: 'wda' },
       batch: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
       touch_path: hasNativeInput
         ? { state: 'available', backend: 'native-hid' }
@@ -2773,7 +2899,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           },
     };
     for (const name of [
-      'type_text',
+      'type_simulator_text',
       'press_home',
       'set_orientation',
       'set_appearance',
@@ -2792,8 +2918,8 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       'install_app',
       'launch_app',
       'terminate_app',
-      'open_url',
-      'take_screenshot',
+      'open_simulator_url',
+      'take_simulator_screenshot',
       'capture_visual_baseline',
       'visual_diff',
       'capture_state',
@@ -3675,7 +3801,13 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           tools: {
             doctor: { state: 'available', backend: 'host' },
             check_environment: { state: 'available', backend: 'host' },
-            list_devices: { state: 'unavailable', reasonCode: resolved.errorCode },
+            // Advertised name: the registry merges availability by the name it
+            // lists, so a stale key would report TOOL_NOT_REPORTED instead of the
+            // real session rejection reason.
+            list_simulator_devices: {
+              state: 'unavailable',
+              reasonCode: resolved.errorCode,
+            },
           },
         };
       }
@@ -3974,6 +4106,116 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         ) {
           scheduleIdleRecycle(viewerRuntimeInstance);
         }
+        removalBarrierOperation?.finish();
+      }
+    },
+    async retryNativeRoute(sessionId, route, viewerWebContentsId, viewerToken) {
+      let removalBarrierOperation: IOSSimulatorSessionRemovalBarrierOperation | null = null;
+      try {
+        assertHostActive();
+        const resolved = await resolveSession(sessionId, { registerRemovalBarrier: true });
+        if (!resolved.ok) return resolved;
+        removalBarrierOperation = resolved.removalBarrierOperation ?? null;
+        assertSessionRemovalAdmission(resolved.sessionId, removalBarrierOperation);
+        assertHostActive();
+        assertCurrentViewer(resolved.sessionId, route.instanceId, viewerWebContentsId, viewerToken);
+        let instance = actor.heartbeat({ ...route, sessionId: resolved.sessionId });
+        instance = await reconcileLiveDevice(instance);
+        assertSessionRemovalAdmission(resolved.sessionId, removalBarrierOperation);
+        assertHostActive();
+        assertCurrentViewer(
+          resolved.sessionId,
+          instance.instanceId,
+          viewerWebContentsId,
+          viewerToken,
+        );
+        if (instance.lifecycleState !== 'ready') return viewerRouteRefreshResult(instance);
+
+        const driverManager = getDriverManager();
+        let running = await getHealthyDriver(instance.instanceId);
+        assertSessionRemovalAdmission(resolved.sessionId, removalBarrierOperation);
+        assertHostActive();
+        assertCurrentViewer(
+          resolved.sessionId,
+          instance.instanceId,
+          viewerWebContentsId,
+          viewerToken,
+        );
+        let current = currentReadyGeneration(instance);
+        if (!current) return viewerRouteRefreshResult(currentOwnedInstance(instance));
+        instance = current;
+        if (!running) {
+          throw new IOSSimulatorInstanceError(
+            'INVALID_INSTANCE_STATE',
+            'The simulator automation driver is unavailable.',
+            true,
+          );
+        }
+
+        if (!nativeH264Driver(running) && driverManager.recoverNativeSidecar) {
+          running =
+            (await driverManager.recoverNativeSidecar(instance.instanceId, { rearm: true })) ??
+            running;
+          assertSessionRemovalAdmission(resolved.sessionId, removalBarrierOperation);
+          assertHostActive();
+          assertCurrentViewer(
+            resolved.sessionId,
+            instance.instanceId,
+            viewerWebContentsId,
+            viewerToken,
+          );
+          current = currentReadyGeneration(instance);
+          if (!current) return viewerRouteRefreshResult(currentOwnedInstance(instance));
+          instance = current;
+        }
+
+        const nativeRecovered = nativeH264Driver(running) !== null;
+        const preferredEncoding =
+          viewerPreferredEncodings.get(instance.instanceId) ??
+          viewerEncodings.get(instance.instanceId) ??
+          'jpeg';
+        const viewport = viewports.get(instance.instanceId) ?? (await readViewport(running));
+        assertSessionRemovalAdmission(resolved.sessionId, removalBarrierOperation);
+        assertHostActive();
+        assertCurrentViewer(
+          resolved.sessionId,
+          instance.instanceId,
+          viewerWebContentsId,
+          viewerToken,
+        );
+        current = currentReadyGeneration(instance);
+        if (!current) return viewerRouteRefreshResult(currentOwnedInstance(instance));
+        instance = actor.heartbeatOwned(resolved.sessionId, current.instanceId);
+        assertCurrentViewer(
+          resolved.sessionId,
+          instance.instanceId,
+          viewerWebContentsId,
+          viewerToken,
+        );
+        const stream = startViewerStream(
+          instance,
+          running,
+          preferredEncoding,
+          viewport.orientation,
+          null,
+          viewerWebContentsId,
+          viewerToken,
+        );
+        return {
+          ok: true,
+          data: {
+            nativeRecovered,
+            ...(instance.generation !== route.generation || instance.lease.id !== route.leaseId
+              ? { instance: publicInstance(instance) }
+              : {}),
+            stream,
+            viewport: viewports.get(instance.instanceId) ?? viewport,
+            mutation: actor.mutationState(instance.instanceId),
+          },
+        };
+      } catch (error) {
+        return safeHostError(error, sessionId, 'retry_native_route');
+      } finally {
         removalBarrierOperation?.finish();
       }
     },
@@ -5927,7 +6169,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           const recommendedActions: string[] = [];
           if (!environment.ready) recommendedActions.push('check_environment');
           if (environment.ready && instances.length === 0) {
-            recommendedActions.push('list_devices', 'create_instance_or_attach_device');
+            // Advertised names only: a recommendation the model cannot find in
+            // list_tools sends it back to the ambiguous superseded name.
+            recommendedActions.push(
+              'list_simulator_devices',
+              'create_instance_or_attach_device',
+            );
           }
           if (instances.some((entry) => !entry.running)) recommendedActions.push('start_instance');
           if (
@@ -6347,6 +6594,7 @@ function installDefaultIOSSimulatorHost(
   lifecycle: IOSSimulatorSimctlLifecycle,
   persistedActor: ReturnType<typeof createDefaultActor>,
   registry: IOSSimulatorOwnershipRegistryFile,
+  pendingCreateEvidence: IOSSimulatorPendingCreateEvidenceStore,
 ): IOSSimulatorHost {
   if (defaultIOSSimulatorRuntime) {
     persistedActor.release();
@@ -6364,6 +6612,7 @@ function installDefaultIOSSimulatorHost(
       actor: persistedActor.actor,
       grantStore: createRegistryBackedIOSSimulatorDeviceGrantStore(registry),
       canReconcilePendingCreates: persistedActor.canReconcilePendingCreates,
+      pendingCreateEvidence,
       driverManager: createDefaultDriverManager(),
     });
     configureIOSSimulatorRendererAccessRevocationObserver((grants) => {
@@ -6402,9 +6651,15 @@ export function initializeIOSSimulatorHost(): IOSSimulatorHost {
   }
 
   const registry = createDefaultOwnershipRegistry();
-  const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry);
+  const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
+  const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
   const persistedActor = createDefaultActor(lifecycle, registry);
-  return installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry);
+  return installDefaultIOSSimulatorHost(
+    lifecycle,
+    persistedActor,
+    registry,
+    pendingCreateEvidence,
+  );
 }
 
 function currentIOSSimulatorHost(): IOSSimulatorHost | null {
@@ -6475,6 +6730,20 @@ export function setIOSSimulatorViewerVisibility(
   );
 }
 
+export function retryIOSSimulatorNativeRoute(
+  sessionId: string,
+  route: Omit<IOSSimulatorMutationRoute, 'sessionId'>,
+  viewerWebContentsId: number,
+  viewerToken: string,
+): Promise<IOSSimulatorHostResult> {
+  return initializeIOSSimulatorHost().retryNativeRoute(
+    sessionId,
+    route,
+    viewerWebContentsId,
+    viewerToken,
+  );
+}
+
 export function setIOSSimulatorAgentMutationPaused(
   sessionId: string,
   route: Omit<IOSSimulatorMutationRoute, 'sessionId'>,
@@ -6501,9 +6770,15 @@ export function reconcileIOSSimulatorOwnership(): Promise<void> {
 
 /**
  * Startup recovery performs one bounded, profile-scoped pending-create sweep
- * even when ownership is empty, then releases the writer lease without
+ * when this profile can still hold a create marker — persisted ownership, or an
+ * armed interrupted-create breadcrumb — then releases the writer lease without
  * installing the Host. Persisted bindings still install the Host so they are
  * reconciled even if the feature is not opened again after a crash.
+ *
+ * A profile with neither is provably clean, so startup performs no `xcrun` /
+ * CoreSimulator access at all. That keeps macOS Xcode consent prompts attached
+ * to the moment the user actually opens the simulator, in the same spirit as
+ * the safeStorage probe rule in `docs/dev-rules/credentials-and-local-storage.md`.
  */
 export interface IOSSimulatorPersistedOwnershipRecoveryOptions {
   /** Test seam; production always derives a profile-scoped lifecycle. */
@@ -6528,15 +6803,32 @@ export async function reconcilePersistedIOSSimulatorOwnership(
       );
     }
     const persistedInstances = registry.loadSync();
+    const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
+    if (persistedInstances.length === 0 && !pendingCreateEvidence.isArmed()) {
+      // Nothing owned and no interrupted create: sweeping here would spawn
+      // xcrun on a profile that never used the simulator, which is exactly the
+      // startup-time Xcode permission prompt users report.
+      logger.debug('Skipped iOS Simulator startup recovery for a profile with no simulator state');
+      registry.releaseWriterSync();
+      return;
+    }
     const lifecycle =
-      options.createLifecycle?.(registry) ?? createProfileScopedIOSSimulatorLifecycle(registry);
+      options.createLifecycle?.(registry) ??
+      createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
     if (persistedInstances.length === 0) {
-      await recoverProfilePendingCreatesAtStartup(lifecycle, persistedInstances);
+      await recoverProfilePendingCreatesAtStartup(lifecycle, persistedInstances, {
+        evidence: pendingCreateEvidence,
+      });
       registry.releaseWriterSync();
       return;
     }
     const persistedActor = createDefaultActor(lifecycle, registry);
-    const host = installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry);
+    const host = installDefaultIOSSimulatorHost(
+      lifecycle,
+      persistedActor,
+      registry,
+      pendingCreateEvidence,
+    );
     registryTransferred = true;
     await host.reconcileOwnership();
   } catch (error) {
@@ -6598,9 +6890,15 @@ export function cleanupIOSSimulatorRemovedSession(sessionId: string): Promise<vo
     // Keep the same writer lease from the authoritative read through Host
     // installation. Releasing and reacquiring here would reopen the race with
     // another Cindy process attaching this task while it is being removed.
-    const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry);
+    const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
+    const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
     const persistedActor = createDefaultActor(lifecycle, registry);
-    const host = installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry);
+    const host = installDefaultIOSSimulatorHost(
+      lifecycle,
+      persistedActor,
+      registry,
+      pendingCreateEvidence,
+    );
     registryTransferred = true;
     return host.cleanupRemovedSession(normalizedSessionId);
   } catch (error) {
@@ -6648,6 +6946,7 @@ export function updateIOSSimulatorViewerTouch(
 
 export interface IOSSimulatorMcpDepsOptions {
   isIOSSimulatorEnabled?: (context?: IOSSimulatorMcpCallContext) => boolean;
+  resolveAccess?: (context?: IOSSimulatorMcpCallContext) => IOSSimulatorMcpAccessDecision;
   host?: IOSSimulatorHost;
 }
 
@@ -6655,6 +6954,21 @@ export function getIOSSimulatorMcpDeps(
   options: IOSSimulatorMcpDepsOptions = {},
 ): IOSSimulatorMcpDeps {
   const getHost = (): IOSSimulatorHost => options.host ?? initializeIOSSimulatorHost();
+  const resolveAccess = (
+    context?: IOSSimulatorMcpCallContext,
+  ): IOSSimulatorMcpAccessDecision => {
+    const decision = options.resolveAccess?.(context);
+    if (decision) return decision;
+    if (options.isIOSSimulatorEnabled && !options.isIOSSimulatorEnabled(context)) {
+      return {
+        allowed: false,
+        errorCode: 'IOS_SIMULATOR_DISABLED',
+        message: 'iOS Simulator tools are disabled for this project.',
+        data: { reason: 'disabled-in-workdir', action: 'enable-plugin' },
+      };
+    }
+    return { allowed: true };
+  };
   return {
     describeTools: async (context) => {
       const sessionId = context?.sessionId?.trim();
@@ -6669,25 +6983,33 @@ export function getIOSSimulatorMcpDeps(
           },
         };
       }
-      if (options.isIOSSimulatorEnabled && !options.isIOSSimulatorEnabled(context)) {
+      const access = resolveAccess(context);
+      if (!access.allowed) {
         return {
           ready: false,
           instanceCount: 0,
           runningInstanceCount: 0,
           tools: {
-            doctor: { state: 'unavailable', reasonCode: 'IOS_SIMULATOR_DISABLED' },
-            check_environment: { state: 'unavailable', reasonCode: 'IOS_SIMULATOR_DISABLED' },
+            doctor: { state: 'unavailable', reasonCode: access.errorCode },
+            check_environment: { state: 'unavailable', reasonCode: access.errorCode },
+          },
+          notice: {
+            errorCode: access.errorCode,
+            message: access.message,
+            ...(access.data ? { data: access.data } : {}),
           },
         };
       }
       return getHost().describeTools(sessionId);
     },
     callTool: async (name, args, context) => {
-      if (options.isIOSSimulatorEnabled && !options.isIOSSimulatorEnabled(context)) {
+      const access = resolveAccess(context);
+      if (!access.allowed) {
         return {
           ok: false,
-          errorCode: 'IOS_SIMULATOR_DISABLED',
-          message: 'iOS Simulator tools are disabled for this project.',
+          errorCode: access.errorCode,
+          message: access.message,
+          ...(access.data ? { data: access.data } : {}),
         };
       }
       return getHost().callTool(name, args, context);

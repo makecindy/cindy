@@ -233,7 +233,8 @@ describe('注入接线(源码级守卫)', () => {
     expect(source).toContain(
       'deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true',
     );
-    expect(source).toContain('prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)');
+    // 注入链:normalized → withHandoff → withPlanReconcile → mobile note(最外层)。
+    expect(source).toContain('prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)');
     expect(source).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
     // 落库内容必须仍取 persistUserMessage.content —— 若改成 outgoing,提示语会写进
     // 用户消息、污染界面显示的原话。
@@ -300,11 +301,13 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
       .toEqual({ messageUuid: 'u' });
   });
 
-  it('剥掉客户端伪造的 generation,但保留待 IPC 校验的 clear token', () => {
+  it('剥掉客户端伪造的 generation 与 turn 身份,但保留待 IPC 校验的 clear token', () => {
     expect(
       stripMainOnlySendOpts({
         expectedClearBoundaryMs: 123,
         expectedInputGeneration: 77,
+        expectedTurnSession: { forged: true },
+        expectedTurnGeneration: 88,
         messageUuid: 'u',
       }),
     ).toEqual({ expectedClearBoundaryMs: 123, messageUuid: 'u' });
@@ -338,6 +341,16 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
     expect(stripMainOnlySendOpts({ messageUuid: 'u', signal: 'forged' })).toEqual({
       messageUuid: 'u',
     });
+  });
+
+  it('剥掉 Renderer/device-link 自报的 IM permission policy', () => {
+    expect(stripMainOnlySendOpts({
+      messageUuid: 'u',
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'telegram' },
+        confirmationSurface: 'channel',
+      },
+    })).toEqual({ messageUuid: 'u' });
   });
 
   it('其它字段原样保留', () => {

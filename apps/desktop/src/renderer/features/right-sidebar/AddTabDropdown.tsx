@@ -16,7 +16,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  Activity,
   Bot,
   FileDiff,
   FolderTree,
@@ -50,6 +49,8 @@ interface AddTabDropdownProps {
   existingKinds?: ReadonlySet<TabKindId>;
   /** Host viewer is a public surface only while the product plugin is enabled. */
   iosSimulatorAvailable?: boolean;
+  /** Pi is the only harness with the complete Subagents detail contract. */
+  subagentsAvailable?: boolean;
 }
 
 // Phase 1 硬编码。Phase 2 之后由 plugin registry 自动汇总。
@@ -86,14 +87,6 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     singleton: true,
   },
   {
-    kind: 'resource-usage',
-    labelKey: 'rightSidebar.tabs.kinds.resourceUsage',
-    icon: Activity,
-    order: 18,
-    enabled: true,
-    singleton: true,
-  },
-  {
     kind: 'web-browser',
     labelKey: 'rightSidebar.tabs.kinds.browser',
     icon: Globe,
@@ -122,6 +115,7 @@ export function AddTabDropdown({
   onSelect,
   existingKinds,
   iosSimulatorAvailable = false,
+  subagentsAvailable = false,
 }: AddTabDropdownProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
@@ -220,7 +214,9 @@ export function AddTabDropdown({
   }, [anchorRef, onClose]);
 
   const visibleItems = MENU_ITEMS.filter(
-    (item) => item.kind !== 'ios-simulator' || iosSimulatorAvailable,
+    (item) =>
+      (item.kind !== 'ios-simulator' || iosSimulatorAvailable) &&
+      (item.kind !== 'subagents' || subagentsAvailable),
   );
   const enabled = visibleItems.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
   const coming = visibleItems.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);

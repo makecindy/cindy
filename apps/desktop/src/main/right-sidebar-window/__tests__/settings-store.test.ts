@@ -28,6 +28,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 import {
   normalizeRsbWindowSettings,
   readRsbWindowSettings,
+  resetRsbWindowSettingsForStartup,
   writeRsbWindowSettingsPatch,
 } from '../settings-store.js';
 
@@ -35,6 +36,7 @@ const settingsFile = path.join(tmpUserData, 'right-sidebar-window-settings.json'
 
 beforeEach(() => {
   if (fs.existsSync(settingsFile)) fs.unlinkSync(settingsFile);
+  resetRsbWindowSettingsForStartup();
 });
 
 afterEach(() => {
@@ -60,16 +62,27 @@ describe('normalizeRsbWindowSettings', () => {
   });
 });
 
-describe('read / writePatch round-trip', () => {
-  it('writePatch 落盘 override,read 返回合并值', () => {
+describe('runtime state', () => {
+  it('writePatch 仅更新当前进程内状态', () => {
     writeRsbWindowSettingsPatch({ detached: true });
     expect(readRsbWindowSettings()).toEqual({ detached: true, lastOpen: false });
 
     writeRsbWindowSettingsPatch({ lastOpen: true });
     expect(readRsbWindowSettings()).toEqual({ detached: true, lastOpen: true });
 
-    // 写回默认值 → override 键被清除(default+override 模型)
+    expect(fs.existsSync(settingsFile)).toBe(false);
+
     writeRsbWindowSettingsPatch({ detached: false, lastOpen: false });
+    expect(readRsbWindowSettings()).toEqual({ detached: false, lastOpen: false });
+    expect(fs.existsSync(settingsFile)).toBe(false);
+  });
+
+  it('startup 重置运行态并删除旧版本的持久化分离偏好', () => {
+    writeRsbWindowSettingsPatch({ detached: true, lastOpen: true });
+    fs.writeFileSync(settingsFile, JSON.stringify({ detached: true, lastOpen: true }));
+
+    resetRsbWindowSettingsForStartup();
+
     expect(readRsbWindowSettings()).toEqual({ detached: false, lastOpen: false });
     expect(fs.existsSync(settingsFile)).toBe(false);
   });

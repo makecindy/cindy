@@ -6,7 +6,8 @@
  * 包内不感知 Electron / 沙箱 / DB(设计规范规则 2:package 解耦)。
  *
  * 首个成员:ghost 总机(docs/dev-rules/plugin-security-and-authoring.md 的网关模式)——
- * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_call,
+ * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_manual /
+ * ghost_call,
  * 已装意识的增删即时反映在 ghost_info / ghost_list 的**返回内容**里。
  * 工具面(名称/schema/基线描述)版本内恒定;完整描述(含花名册快照)
  * 会话内恒定。
@@ -126,6 +127,8 @@ export interface CindyGhostInfo {
   command?: string;
   /** 插件作者提供的召回线索，仅作数据；Host 优先取 whenToUse，缺省回落 description。 */
   recall?: string;
+  /** 随包手册的轻量一级索引；正文必须另行调用 ghost_manual 按需读取。 */
+  manual?: CindyGhostManualIndexItem[];
   tools: CindyGhostToolInfo[];
   /**
    * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
@@ -144,7 +147,7 @@ export type CindyGhostCallErrorCode =
   | 'TIMEOUT' // 执行超时(host 掐掉)
   | 'SETUP_REQUIRED' // 配置仍未就绪（无交互面或恢复前又变化）；可带脱敏 assessment，未派发插件
   | 'SETUP_CANCELLED' // 用户取消插件配置；原调用未派发，不要自动重试
-  | 'ATTACHMENT_INVALID' // attachments 里的图片地址无法过户(格式/找不到/超数)
+  | 'ATTACHMENT_INVALID' // attachments 里的媒体地址无法过户(格式/找不到/超数)
   | 'DIR_INVALID' // dir 目录无法过户(不存在/不在会话 workdir 内/超限额)
   | 'INTERNAL'; // 其它 host 侧错误
 
@@ -163,6 +166,28 @@ export type CindyGhostInfoResult =
   | CindyGhostInfoHostResult
   | { ok: false; errorCode: 'INTERNAL'; message: string; errorType?: string };
 
+/** ghost_info 与 ghost_manual 共用的手册索引/候选条目。 */
+export interface CindyGhostManualIndexItem {
+  /** 根索引为逻辑单元 name；未命中候选为可直接回填 path 的完整逻辑路径。 */
+  name: string;
+  description: string;
+}
+
+export type CindyGhostManualErrorCode =
+  | CindyGhostInfoErrorCode
+  | "MANUAL_PATH_NOT_FOUND"
+  | "MANUAL_UNAVAILABLE"
+  | "INTERNAL";
+
+/** ghost_manual 固定信封；失败态额外携带稳定 errorCode/message。 */
+export interface CindyGhostManualResult {
+  ok: boolean;
+  manual: CindyGhostManualIndexItem[];
+  content: string;
+  errorCode?: CindyGhostManualErrorCode;
+  message?: string;
+}
+
 export type CindyGhostCallResult =
   | {
       ok: true;
@@ -178,6 +203,14 @@ export type CindyGhostCallResult =
        * 收不到生成图)。
        */
       producedMedia?: string[];
+      /**
+       * 工具结果图片的文字描述(可选,host 视觉桥最佳努力附加)。纯文本模型
+       * 拿不到 cindy-media:// 图片内容只能看到 URL 文本——host 把图片经
+       * 外部多模态模型转成描述随结果带回,模型据此「看到」图而非幻觉编造。
+       * 仅 host 侧注入的视觉桥能力存在且命中时附加;渲染层/IM 出站只消费
+       * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
+       */
+      xdt_media_descriptions?: Array<{ url: string; description: string }>;
     }
   | {
       ok: false;
@@ -190,6 +223,10 @@ export type CindyGhostCallResult =
 /** ghost_forge_pack 的结构化失败分类(host 侧产生,原样透传给 agent)。 */
 export type CindyForgePackErrorCode =
   | 'DIR_NOT_FOUND' // 目录不存在或不是目录
+  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录不在当前会话工作目录内
+  | 'WORKDIR_NOT_LOCAL' // 当前会话工作目录在远端或无法证明为本地
+  | 'WORKDIR_READ_ONLY' // 当前会话禁止写入
+  | 'SOURCE_IS_INSTALLED_PLUGIN' // 源目录命中 Host 管理的已安装插件或批准状态根
   | 'MANIFEST_INVALID' // ghost.json 缺失 / 不合法(message 带具体原因)
   | 'ENTRY_MISSING' // 清单声明的 entry / panel.html 等文件不在目录里
   | 'TOO_LARGE' // 文件数或总体积超上限
@@ -226,12 +263,34 @@ export type CindyForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'INTERNAL';
       message: string;
     };
 
+/** Cindy Core 原生媒体能力；模型目录与调用说明均由 Model Access 动态下发。 */
+export type CindyMediaCapability =
+  | 'image.generate'
+  | 'image.edit'
+  | 'video.generate'
+  | 'video.image_to_video';
+
+/** 当前 Agent 专用的永久 media 工具与 Host 之间的稳定请求面。插件运行时代码不调用。 */
+export type CindyMediaToolRequest =
+  | { action: 'list_models'; capability?: CindyMediaCapability }
+  | {
+      action: 'prepare';
+      /** 精确执行来源；插件配置返回 providerId 时必须原样传入。 */
+      providerId?: string;
+      modelId: string;
+      capability: CindyMediaCapability;
+    }
+  | { action: 'request'; invocationId: string; body: Record<string, unknown> }
+  | { action: 'poll'; invocationId: string };
+
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
+  /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
+  callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
    * 现查"已装且唤醒"的意识清单(总机不缓存——装/卸/唤醒/沉睡即时反映,
    * 这正是网关模式让老会话立即生效的机制)。
@@ -243,6 +302,13 @@ export interface CindyGhostsMcpDeps {
    */
   getAwakeGhost(ghostId: string): Promise<CindyGhostInfoHostResult>;
   /**
+   * 读取已声明的随包手册；Host 每次调用都重新执行插件可见性判定，且不启动沙箱。
+   */
+  readGhostManual(request: {
+    ghostId: string;
+    path?: string;
+  }): Promise<CindyGhostManualResult>;
+  /**
    * 把工具调用派进目标意识的电子脑并等待结果(按需拉起沙箱、超时、
    * 崩溃分类全在 host 侧处理)。
    */
@@ -251,11 +317,12 @@ export interface CindyGhostsMcpDeps {
     tool: string;
     args: Record<string, unknown>;
     /**
-     * 用户图片过户(可选):会话里用户图片的地址(xdt-image:// /
-     * cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。
+     * 媒体过户(可选):会话里用户媒体或当前 Agent / Core 工具生成结果的
+     * 地址(xdt-image:// / cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。
      * host 把每张图落媒体总仓、给目标意识记可读引用(人工确认的引渡才形成
      * 按张永久授权；工作目录/Full Access 等 Host 代办交接不冒充用户授权),
-     * 再以指纹数组注入 args.attachments 交给意识——
+     * 再以指纹数组注入 args.attachments 交给意识。工具生成结果也必须由
+     * Agent 显式传入，不会由 Host 自动回调插件——
      * 意识拿到的仍只是字符串指纹,摸不到路径与字节。
      */
     attachments?: string[];
@@ -265,7 +332,7 @@ export interface CindyGhostsMcpDeps {
      * 每次用一个 workdir 外文件时,先把整批文件一次性过户——非 Full Access
      * 下用户只见一张列出全部文件的确认卡；Full Access 下自动交接、不弹卡，
      * 且不会形成降档后仍生效的人工永久授权。
-     * 普通调用 attachments 上限 4 张,grant_only 放宽(上限由 host 定)。
+     * 普通调用 attachments 上限 4 项,grant_only 放宽(上限由 host 定)。
      */
     grantOnly?: boolean;
     /**

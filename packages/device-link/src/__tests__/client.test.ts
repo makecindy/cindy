@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
 import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js';
 import {
+  DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
@@ -15,6 +16,7 @@ import {
   TRANSPORT_RETRY_PASS_BUDGET,
   encodeReliableFrames,
   makeTransportSkipPayload,
+  parseTransportAck,
   parseTransportPayload,
 } from '../transport.js';
 import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
@@ -112,8 +114,9 @@ async function establishInboundReliableLink(
   streamId: string,
   transportBaseSeq = 1,
   src = 'dev-b',
-  // 默认模拟新版控制端(addLocalCapabilities 会自动声明两项);传入仅
-  // RELIABLE 可模拟旧版控制端(不认识 transport-timeout 的瞬时重置语义)。
+  // 默认模拟当前已发布、尚未声明 reliable-link-confirm-v1 的控制端；这样既有
+  // 测试继续覆盖独立升级兼容路径。传入仅 RELIABLE 可进一步模拟不认识
+  // transport-timeout 瞬时重置语义的更老控制端。
   capabilities: string[] = [
     DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
     DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
@@ -169,6 +172,7 @@ class MemoryRelay {
   /** 按目的地记录实际投递给对端的帧（不含 hello-ack/pong 控制帧）。 */
   readonly deliveredTo = new Map<string, Envelope[]>();
   private readonly members = new Map<string, { ws: RelayWs | null }>();
+  private readonly dropNextPredicates: Array<(senderId: string, env: Envelope) => boolean> = [];
   private readonly queue: Array<
     | { kind: 'direct'; ws: RelayWs; env: Envelope }
     | { kind: 'routed'; dstId: string; env: Envelope }
@@ -195,6 +199,10 @@ class MemoryRelay {
     ws.emit('close', 1006, 'network lost');
   }
 
+  dropNext(predicate: (senderId: string, env: Envelope) => boolean): void {
+    this.dropNextPredicates.push(predicate);
+  }
+
   route(senderId: string, ws: RelayWs, env: Envelope): void {
     if (env.kind === 'hello') {
       this.queue.push({
@@ -213,6 +221,11 @@ class MemoryRelay {
       return;
     }
     if (!env.dst) return;
+    const dropIndex = this.dropNextPredicates.findIndex((predicate) => predicate(senderId, env));
+    if (dropIndex >= 0) {
+      this.dropNextPredicates.splice(dropIndex, 1);
+      return;
+    }
     // 入口即判定在线与否：离线目的地直接丢帧，不缓存、不重排
     if (!this.members.get(env.dst)?.ws) return;
     this.queue.push({ kind: 'routed', dstId: env.dst, env: { ...env, src: senderId } });
@@ -259,7 +272,11 @@ class MemoryRelay {
   }
 }
 
-function makeRelayClient(relay: MemoryRelay, deviceId: string): DeviceLinkClient {
+function makeRelayClient(
+  relay: MemoryRelay,
+  deviceId: string,
+  timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'],
+): DeviceLinkClient {
   return new DeviceLinkClient({
     getWsUrl: () => 'ws://test/api/device-link/ws',
     getToken: async () => 'jwt-token',
@@ -278,6 +295,7 @@ function makeRelayClient(relay: MemoryRelay, deviceId: string): DeviceLinkClient
       pongMissLimit: 4,
       requestTimeoutMs: 2_000,
       transportRetryIntervalMs: 60_000,
+      ...timing,
     },
   });
 }
@@ -1243,6 +1261,122 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('入站撤权取消待确认超时,同时保留此前已就绪的出站控制方向', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 先建立本机主动控制对方的可靠方向,确认 sendPhase 已经 ready。
+    const outboundOpen = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const outboundFrame = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: outboundFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'outbound-remote-stream',
+      },
+    });
+    await outboundOpen;
+
+    // 再接受对方入站 link-open,但不回 confirmation ACK,制造待确认 timer。
+    const inboundId = 'inbound-confirmation-revoke';
+    const off = h.client.onFrame((env) => {
+      if (env.kind !== 'link-open' || env.id !== inboundId || !env.src) return;
+      h.client.sendLinkAccept(env.src, env.id, {
+        appVersion: '1',
+        allowlistHash: 'hash',
+      });
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-open',
+      id: inboundId,
+      src: 'dev-b',
+      payload: {
+        controllerName: 'Remote',
+        protocolVersion: 1,
+        appVersion: '1',
+        capabilities: [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ],
+        transportStreamId: 'inbound-remote-stream',
+        transportBaseSeq: 1,
+      },
+    });
+    await tick();
+    off();
+
+    // 确认尚未完成时再次收到同方向 open:新 confirmation 替换旧对象,但必须继承
+    // 旧对象记录的 outbound ready 状态。
+    const replacementId = 'inbound-confirmation-revoke-replacement';
+    const offReplacement = h.client.onFrame((env) => {
+      if (env.kind !== 'link-open' || env.id !== replacementId || !env.src) return;
+      h.client.sendLinkAccept(env.src, env.id, {
+        appVersion: '1',
+        allowlistHash: 'hash',
+      });
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-open',
+      id: replacementId,
+      src: 'dev-b',
+      payload: {
+        controllerName: 'Remote',
+        protocolVersion: 1,
+        appVersion: '1',
+        capabilities: [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ],
+        transportStreamId: 'inbound-remote-stream',
+        transportBaseSeq: 1,
+      },
+    });
+    await tick();
+    offReplacement();
+
+    const socket = h.current();
+    h.client.closeLink('dev-b', 'revoked', 'inbound');
+    await tick(30);
+
+    // 撤权后旧确认 timer 不得再触发 transport-timeout 或拆共享 relay。
+    expect(socket.terminated).toBe(false);
+    expect(socket.sent.filter((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ))).toHaveLength(0);
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string }>;
+    };
+    expect(internals.peerTransport.get('dev-b')?.sendPhase).toBe('ready');
+
+    // 原有出站控制方向仍可继续写可靠帧,而不是被 pending confirmation 留在 awaiting。
+    const depthBefore = h.client.getReliableSendQueueDepth('dev-b');
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { still: 'alive' })).not.toThrow();
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBeGreaterThan(depthBefore);
+    h.client.stop();
+  }, 10_000);
+
   it('本地 closeLink 后迟到的 transport-timeout 被拦截:不交 app 层、不触发重建、不改变已关闭状态', async () => {
     const h = makeHarness({
       timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
@@ -1576,6 +1710,53 @@ describe('DeviceLinkClient', () => {
       payload: { ok: true, result: ['session-1'] },
     });
     await expect(listing).resolves.toMatchObject({ ok: true, result: ['session-1'] });
+    h.client.stop();
+  });
+
+  it('显式 close 后词典只读快照 push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const sentOpen = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: sentOpen.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'remote-stream',
+      },
+    });
+    await open;
+    h.client.closeLink('dev-b', 'user');
+
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'LINK_NOT_OPEN' }),
+    );
+    const sentBefore = h.current().sent.length;
+    expect(() => h.client.sendPush(
+      'dev-b',
+      'device-link:voice:dictionary:snapshot',
+      { ok: true, entries: [] },
+    )).not.toThrow();
+    const sent = h.current().sent.at(-1)!;
+    expect(h.current().sent.length).toBeGreaterThan(sentBefore);
+    expect(sent).toMatchObject({
+      kind: 'push',
+      dst: 'dev-b',
+      payload: { channel: 'device-link:voice:dictionary:snapshot' },
+    });
+    expect(parseTransportPayload(sent.payload)).toBeNull();
     h.client.stop();
   });
 
@@ -3606,7 +3787,7 @@ describe('DeviceLinkClient', () => {
     h.current().ack();
     await tick();
     expect(h.client.getStatus()).toBe('online');
-    // 建一条 reliable link:重建后它的 linkReady 必须被复位,host 才会重新 openLink
+    // 建一条 reliable link:重建后它的收发 ready 必须被复位,host 才会重新 openLink
     await establishInboundReliableLink(h, 'resume-stream', 1, 'ctrl-resume');
 
     const before = h.sockets.length;
@@ -3616,8 +3797,8 @@ describe('DeviceLinkClient', () => {
     h.current().ack();
     await tick();
     expect(h.client.getStatus()).toBe('online');
-    // linkReady 已复位:relay 在线 + link 未就绪 → invoke-result 走 legacy 裸帧
-    // (若 linkReady 残留 true,这里会被包进 transport wrapper 走旧 stream)
+    // 发送方向已复位:relay 在线 + link 未就绪 → invoke-result 走 legacy 裸帧
+    // (若 sendPhase 残留 ready,这里会被包进 transport wrapper 走旧 stream)
     h.client.sendInvokeResult('ctrl-resume', 'req-after-resume', { ok: true, result: 1 });
     const resent = h.current().sent.filter((e) => e.kind === 'invoke-result');
     expect(resent).toHaveLength(1);
@@ -3901,7 +4082,7 @@ describe('DeviceLinkClient', () => {
   });
 
   describe('可靠传输死锁自愈(2026-08-03 线上实锤:被控端回程队列冻结)', () => {
-    /** 建 reliable link 后经历一次 relay 断线重连:peer.reliable=true 而 linkReady=false。 */
+    /** 建 reliable link 后经历一次 relay 断线重连:peer.reliable=true 而收发方向未 ready。 */
     async function makeLinkDownPeer(h: Harness, src = 'ctrl-1'): Promise<void> {
       await tick();
       h.current().ack();
@@ -4247,6 +4428,7 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
         reconnectBaseMs: 1,
         reconnectMaxMs: 5,
         reconnectStableResetMs: 20,
+        congestionStableResetMs: 80,
         congestionBackoffBaseMs: 2,
         congestionBackoffMaxMs: 8,
         pingIntervalMs: 60_000,
@@ -4268,8 +4450,12 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     expect(h.client.getStatus()).toBe('online');
     expect(internals.congestionCloseStreak).toBe(1);
 
-    // 稳定在线满 reconnectStableResetMs 后清零
-    await tick(100);
+    // 普通稳定窗过了,拥塞连击仍在:现场 1013 间隔远大于 10s
+    await tick(40);
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    // 稳定在线满 congestionStableResetMs 后才清零
+    await tick(80);
     expect(internals.congestionCloseStreak).toBe(0);
 
     // 普通断线(1006)不计入拥塞连击
@@ -4432,6 +4618,549 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
   }
   const retriedSeqs = (counts: Map<number, number>): number[] =>
     [...counts.entries()].filter(([, n]) => n > 1).map(([seq]) => seq).sort((a, b) => a - b);
+
+  it('新确认阶段:首个 link-accept 丢失时不提前发可靠帧,同 stream 重开确认后恢复小帧', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const controller = makeRelayClient(relay, 'ios');
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'small-live-result' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    relay.dropNext((senderId, env) => senderId === 'desktop' && env.kind === 'link-accept');
+    const firstOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 50);
+    const firstOpenRejection = expect(firstOpen).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    await relay.settle();
+
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:small-live-request',
+      args: [],
+    }, 1_000);
+    await relay.settle();
+    const rawBeforeConfirm = relay.deliveredTo.get('ios') ?? [];
+    expect(rawBeforeConfirm.some((env) => parseTransportPayload(env.payload) !== null)).toBe(false);
+    await firstOpenRejection;
+
+    const secondOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+    await expect(secondOpen).resolves.toMatchObject({
+      capabilities: expect.arrayContaining([
+        DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+      ]),
+    });
+    expect(receivedInvokes[0]).toMatchObject({
+      kind: 'invoke',
+      payload: { channel: 'maker:small-live-request', args: [] },
+    });
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'small-live-result' });
+    expect(host.getReliableSendQueueDepth('ios')).toBe(0);
+
+    offHost();
+    offController();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:迟到的旧 request id 不跨代放行,只接受当前 link-open 的确认', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const controller = makeRelayClient(relay, 'ios');
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'confirmed-current' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    relay.dropNext((senderId, env) => senderId === 'desktop' && env.kind === 'link-accept');
+    const staleOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 50);
+    await relay.settle();
+    const staleRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(staleRequestId).toBeTruthy();
+    await expect(staleOpen).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:cross-generation-request',
+      args: [],
+    }, 1_000);
+    relay.dropNext((senderId, env) => (
+      senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    const currentOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    const accepted = await currentOpen;
+    const currentRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(currentRequestId).toBeTruthy();
+    expect(currentRequestId).not.toBe(staleRequestId);
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: Number.MAX_SAFE_INTEGER,
+      linkRequestId: currentRequestId,
+    });
+    await relay.settle();
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: 0,
+      linkRequestId: staleRequestId,
+    });
+    await relay.settle();
+    expect(host.isLinkReady('ios')).toBe(false);
+    expect(receivedInvokes).toHaveLength(0);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: 0,
+      linkRequestId: currentRequestId,
+    });
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+    expect(host.isLinkReady('ios')).toBe(true);
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'confirmed-current' });
+
+    offHost();
+    offController();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:同 stream 可靠业务帧不能替代当前代确认 ACK', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', {
+      transportRetryIntervalMs: 1_000,
+      transportMaxRetryAttempts: 3,
+    });
+    const controller = makeRelayClient(relay, 'ios', {
+      transportRetryIntervalMs: 1_000,
+      transportMaxRetryAttempts: 3,
+    });
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      } else if (env.kind === 'invoke' && env.src && env.id) {
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: 'host-ready' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'reopened' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    relay.dropNext((senderId, env) => (
+      senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    const firstOpen = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    const accepted = await firstOpen;
+    const currentRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(currentRequestId).toBeTruthy();
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:held-until-reopen',
+      args: [],
+    }, 1_000);
+    await relay.settle();
+    expect(receivedInvokes).toHaveLength(0);
+
+    const inboundEvidence = controller.invoke('desktop', {
+      channel: 'maker:prove-accept-was-processed',
+      args: [],
+    }, 500);
+    await relay.settleUntil(() => (
+      relay.deliveredTo.get('ios') ?? []
+    ).some((env) => env.kind === 'invoke-result'));
+    await expect(inboundEvidence).resolves.toEqual({ ok: true, result: 'host-ready' });
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: 0,
+      linkRequestId: currentRequestId,
+    });
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'reopened' });
+    expect(host.isLinkReady('ios')).toBe(true);
+
+    offHost();
+    offController();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:确认 ACK 丢失后自动有界重发,无需等待下一条控制端业务', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const controller = makeRelayClient(relay, 'ios', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const receivedInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offController = controller.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'retry-confirmed' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    relay.dropNext((senderId, env) => (
+      senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    const opened = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settleUntil(() => host.isLinkReady('ios'));
+    await expect(opened).resolves.toBeTruthy();
+    const linkRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(linkRequestId).toBeTruthy();
+
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:confirmed-by-retry',
+      args: [],
+    }, 500);
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'retry-confirmed' });
+
+    const confirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+      parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    // 第一包确认被丢弃后，host 收到首个重试便会恢复发送；但在其首个可靠业务帧
+    // 回到 controller、取消确认计时器之前，下一次 20ms 重试可能已经进入 relay。
+    // Windows runner 更容易命中这个合法竞态，因此这里只约束协议不变量：至少
+    // 有一次确认送达，且不会超过首包丢失后的剩余重试预算，也不跨 request 代际。
+    expect(confirmationAcks.length).toBeGreaterThanOrEqual(1);
+    expect(confirmationAcks.length).toBeLessThanOrEqual(3);
+    expect(confirmationAcks.every((env) => (
+      parseTransportAck(env)?.linkRequestId === linkRequestId
+    ))).toBe(true);
+
+    offHost();
+    offController();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:旧帧执行完才提交的新基线会刷新确认 ACK,不复用首次 stale ackSeq', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 1_000,
+        transportRetryIntervalMs: 50,
+        transportMaxRetryAttempts: 3,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const openLink = async (transportBaseSeq: number): Promise<string> => {
+      const opening = h.client.openLink('dev-b', {
+        controllerName: 'Test iPhone',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 500);
+      const requestId = h.current().sent.filter((env) => env.kind === 'link-open').at(-1)!.id!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: requestId,
+        src: 'dev-b',
+        payload: {
+          appVersion: '1',
+          allowlistHash: 'hash',
+          capabilities: [
+            DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+            DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          ],
+          transportStreamId: 'remote-stream',
+          transportBaseSeq,
+        },
+      });
+      await opening;
+      return requestId;
+    };
+
+    await openLink(1);
+    let release: (() => void) | undefined;
+    h.client.onFrame((env) => {
+      if (env.kind !== 'push') return;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    h.current().push(encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: { channel: 'maker:event', payload: { text: 'old-running-frame' } },
+    }, 'remote-stream', 1)[0]);
+    await tick();
+    expect(release).toBeTypeOf('function');
+
+    const reopenedRequestId = await openLink(2);
+    const confirmationAcks = () => h.current().sent
+      .map((env) => parseTransportAck(env))
+      .filter((ack) => ack?.linkRequestId === reopenedRequestId);
+    expect(confirmationAcks().at(-1)).toMatchObject({ ackSeq: 0 });
+
+    release?.();
+    await tick();
+    expect(confirmationAcks().at(-1)).toMatchObject({ ackSeq: 1 });
+
+    h.client.stop();
+  }, 10_000);
+
+  it('新确认阶段:确认重试全部丢失后超时重置 peer,通知控制端重开而非永久等待', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const controller = makeRelayClient(relay, 'ios', {
+      transportRetryIntervalMs: 20,
+      transportMaxRetryAttempts: 3,
+    });
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+
+    for (let i = 0; i < 3; i++) {
+      relay.dropNext((senderId, env) => (
+        senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+    }
+    const opened = controller.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    await expect(opened).resolves.toBeTruthy();
+    await relay.settleUntil(() => (
+      (relay.deliveredTo.get('ios') ?? []).some((env) => (
+        env.kind === 'link-close'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))
+    ));
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    offHost();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  it('新确认阶段:对端进程换 stream 后按新基线确认并重放 live 请求', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const firstController = makeRelayClient(relay, 'ios');
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    host.start();
+    firstController.start();
+    await relay.settleUntil(() => (
+      host.getStatus() === 'online' && firstController.getStatus() === 'online'
+    ));
+
+    const firstOpen = firstController.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settleUntil(() => host.isLinkReady('ios'));
+    await expect(firstOpen).resolves.toBeTruthy();
+
+    relay.disconnect('ios');
+    firstController.stop();
+    const liveInvoke = host.invoke('ios', {
+      channel: 'maker:survive-controller-restart',
+      args: [],
+    }, 1_000);
+    await relay.settle();
+    expect(host.getReliableSendQueueDepth('ios')).toBe(1);
+
+    const restartedController = makeRelayClient(relay, 'ios');
+    const receivedInvokes: Envelope[] = [];
+    const offRestarted = restartedController.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        receivedInvokes.push(env);
+        restartedController.sendInvokeResult(env.src, env.id, {
+          ok: true,
+          result: 'new-stream-result',
+        });
+      }
+    });
+    restartedController.start();
+    await relay.settleUntil(() => restartedController.getStatus() === 'online');
+    const reopened = restartedController.openLink('desktop', {
+      controllerName: 'iPhone',
+      protocolVersion: 1,
+      appVersion: '2',
+    }, 500);
+    await relay.settleUntil(() => receivedInvokes.length === 1);
+
+    await expect(reopened).resolves.toBeTruthy();
+    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'new-stream-result' });
+    expect(host.isLinkReady('ios')).toBe(true);
+    expect(host.getReliableSendQueueDepth('ios')).toBe(0);
+
+    offHost();
+    offRestarted();
+    host.stop();
+    restartedController.stop();
+  }, 10_000);
+
+  it('新确认阶段:一个 peer 卡在确认不影响另一个 peer 的发送与 ACK', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const stalledController = makeRelayClient(relay, 'ios-stalled');
+    const healthyController = makeRelayClient(relay, 'ios-healthy');
+    const stalledInvokes: Envelope[] = [];
+    const healthyInvokes: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+    });
+    const offStalled = stalledController.onFrame((env) => {
+      if (env.kind === 'invoke') stalledInvokes.push(env);
+    });
+    const offHealthy = healthyController.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src && env.id) {
+        healthyInvokes.push(env);
+        healthyController.sendInvokeResult(env.src, env.id, { ok: true, result: 'healthy' });
+      }
+    });
+    host.start();
+    stalledController.start();
+    healthyController.start();
+    await relay.settleUntil(() => (
+      host.getStatus() === 'online'
+      && stalledController.getStatus() === 'online'
+      && healthyController.getStatus() === 'online'
+    ));
+
+    const healthyOpen = healthyController.openLink('desktop', {
+      controllerName: 'Healthy iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settleUntil(() => host.isLinkReady('ios-healthy'));
+    await expect(healthyOpen).resolves.toBeTruthy();
+
+    relay.dropNext((senderId, env) => (
+      senderId === 'ios-stalled' && parseTransportAck(env)?.linkRequestId !== undefined
+    ));
+    const stalledOpen = stalledController.openLink('desktop', {
+      controllerName: 'Stalled iPhone',
+      protocolVersion: 1,
+      appVersion: '1',
+    }, 500);
+    await relay.settle();
+    await expect(stalledOpen).resolves.toBeTruthy();
+    expect(host.isLinkReady('ios-stalled')).toBe(false);
+
+    const stalledInvoke = host.invoke('ios-stalled', {
+      channel: 'maker:must-stay-held',
+      args: [],
+    }, 5_000);
+    const stalledOutcome = stalledInvoke.catch((err: unknown) => err);
+    const healthyInvoke = host.invoke('ios-healthy', {
+      channel: 'maker:must-stay-independent',
+      args: [],
+    }, 1_000);
+    await relay.settleUntil(() => healthyInvokes.length === 1);
+
+    await expect(healthyInvoke).resolves.toEqual({ ok: true, result: 'healthy' });
+    expect(stalledInvokes).toHaveLength(0);
+    expect(host.getReliableSendQueueDepth('ios-stalled')).toBe(1);
+    expect(host.getReliableSendQueueDepth('ios-healthy')).toBe(0);
+
+    offHost();
+    offStalled();
+    offHealthy();
+    host.stop();
+    stalledController.stop();
+    healthyController.stop();
+    await expect(stalledOutcome).resolves.toMatchObject({ code: 'NOT_CONNECTED' });
+  }, 10_000);
 
   /**
    * 这两条断言的是「**每一趟**发多少」,所以必须用 fake timers 逐趟驱动:真实定时器下
@@ -4652,11 +5381,11 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     });
   }, 10_000);
 
-  it('link 重建后的 replay 不受预算限制:可达性刚被对端 link-accept 证明过', async () => {
+  it('同连接代重复 link-open 不再全量 replay', async () => {
     const h = makeHarness({
       timing: {
         pingIntervalMs: 60_000,
-        transportRetryIntervalMs: 60_000, // 定时器不参与,只看 replay 那一趟
+        transportRetryIntervalMs: 60_000,
         transportRetryPassBudget: 2,
         transportMaxRetryAttempts: 50,
       },
@@ -4672,12 +5401,493 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     const ws = h.current();
     expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
 
-    // 对端重新 link-open → 本端 link-accept → replay:一趟把 7 条全部重放
-    await establishInboundReliableLink(h, 'remote-stream-2');
+    await establishInboundReliableLink(h, 'remote-stream');
     await tick();
-    expect(retriedSeqs(sendsBySeq(ws)).length).toBe(7);
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
 
     h.client.stop();
+  }, 10_000);
+
+  it('同连接同 stream 重复 link-open 确认后恢复 pending retry timer', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 20,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const capabilities = [
+      DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+      DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+      DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+    ];
+    const sendInboundOpen = async (id: string): Promise<void> => {
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || !env.src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Remote',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities,
+          transportStreamId: 'same-remote-stream',
+          transportBaseSeq: 1,
+        },
+      });
+      await tick();
+      off();
+    };
+    const confirmInboundOpen = (id: string): void => {
+      const accept = h.current().sent.filter((env) => (
+        env.kind === 'link-accept' && env.id === id
+      )).at(-1)!;
+      const payload = accept.payload as { transportStreamId?: string };
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: {
+            streamId: payload.transportStreamId,
+            ackSeq: 0,
+            linkRequestId: id,
+          },
+        },
+      });
+    };
+
+    await sendInboundOpen('duplicate-open-1');
+    confirmInboundOpen('duplicate-open-1');
+
+    h.client.sendInvokeResult('dev-b', 'pending-before-duplicate', {
+      ok: true,
+      result: 'pending',
+    });
+    const ws = h.current();
+    const first = ws.sent.filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    )).at(-1)!;
+    const firstMeta = parseTransportPayload(first.payload)!.meta;
+
+    // 在原 retry interval 到期前立刻处理同连接同 stream 的重复 open。
+    await sendInboundOpen('duplicate-open-2');
+    confirmInboundOpen('duplicate-open-2');
+
+    await vi.waitFor(() => {
+      const retries = ws.sent.filter((env) => {
+        const parsed = parseTransportPayload(env.payload);
+        return env.kind === 'invoke-result'
+          && parsed?.meta.seq === firstMeta.seq;
+      });
+      expect(retries.length).toBeGreaterThan(1);
+    }, { timeout: 500 });
+
+    h.client.stop();
+  }, 10_000);
+
+  it('对端换 stream 视为真正恢复,按探测预算 replay', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+
+    await establishInboundReliableLink(h, 'remote-stream-restarted');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+    h.client.stop();
+  }, 10_000);
+
+  it('真正恢复时 replay 受探测预算约束,ACK 后再继续 drain', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+    expect(seqs).toHaveLength(7);
+
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+    internals.peerTransport.get('dev-b')!.receiveReady = false;
+
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+    h.client.sendInvokeResult('dev-b', 'extra-during-recovery', { ok: true, result: 'x' });
+    expect([...sendsBySeq(ws).keys()]).toHaveLength(7);
+
+    const streamId = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!.meta.streamId;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId, ackSeq: seqs[1] },
+      },
+    });
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([...seqs.slice(0, 2), ...seqs.slice(2, 4)]);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复预算还剩一点时,放不下的大消息先入队不发出', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 3,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'small-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'small-1', { ok: true, result: 1 });
+    const ws = h.current();
+    const before = framesSent(ws);
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+    internals.peerTransport.get('dev-b')!.receiveReady = false;
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+
+    const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+    h.client.sendInvokeResult('dev-b', 'too-big', { ok: true, result: chunky });
+    expect(framesSent(ws)).toBe(before + 2);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('空队列恢复后新入队流量仍走探测预算', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    const before = framesSent(ws);
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `after-${i}`, { ok: true, result: i });
+    }
+    expect(framesSent(ws)).toBe(before + 2);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复期 hold 时不因共享 ws 缓冲满而 BACKPRESSURE', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendInvokeResult('dev-b', 'probe', { ok: true, result: 0 })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+
+    ws.bufferedAmount = 0;
+    h.client.sendInvokeResult('dev-b', 'probe-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'probe-1', { ok: true, result: 1 });
+    const before = framesSent(ws);
+    ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendInvokeResult('dev-b', 'held', { ok: true, result: 2 })).not.toThrow();
+    expect(framesSent(ws)).toBe(before);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('已发探针被驱逐后恢复期允许再发一帧换 ACK', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'probe-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'probe-1', { ok: true, result: 1 });
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, {
+        pending: Map<number, { sent: boolean; bytes: number }>;
+        pendingBytes: number;
+      }>;
+    };
+    const peer = internals.peerTransport.get('dev-b')!;
+    for (const [seq, pending] of [...peer.pending]) {
+      if (!pending.sent) continue;
+      peer.pending.delete(seq);
+      peer.pendingBytes -= pending.bytes;
+    }
+
+    const before = framesSent(ws);
+    h.client.sendInvokeResult('dev-b', 'reprobe', { ok: true, result: 2 });
+    expect(framesSent(ws)).toBe(before + 1);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复期内部分写出的分片也计入探测预算', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 3,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    const before = framesSent(ws);
+    const origSend = ws.send.bind(ws);
+    let reliableFrames = 0;
+    ws.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'invoke-result' && parseTransportPayload(env.payload)) {
+        reliableFrames += 1;
+        if (reliableFrames >= 2) throw new Error('socket raced');
+      }
+      origSend(data);
+    };
+    const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+    h.client.sendInvokeResult('dev-b', 'partial', { ok: true, result: chunky });
+    expect(framesSent(ws)).toBe(before + 1);
+
+    ws.send = origSend;
+    for (let i = 0; i < 5; i += 1) {
+      h.client.sendInvokeResult('dev-b', `after-${i}`, { ok: true, result: i });
+    }
+    expect(framesSent(ws)).toBe(before + 3);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复探测未 ACK 时定时器仍重发已发出的探针,不放行新帧', async () => {
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 7; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const internals = h.client as unknown as {
+        peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+      };
+      internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+      internals.peerTransport.get('dev-b')!.receiveReady = false;
+
+      const id = `inbound-link-${++inboundLinkId}`;
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || !env.src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Remote',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities: [
+            DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+            DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+          ],
+          transportStreamId: 'remote-stream-2',
+          transportBaseSeq: 1,
+        },
+      });
+      await advance(1);
+      off();
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+      expect(seqs.slice(0, 2).map((seq) => sendsBySeq(ws).get(seq))).toEqual([3, 3]);
+      expect(seqs.slice(2).every((seq) => sendsBySeq(ws).get(seq) === 1)).toBe(true);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 2,
+      transportMaxRetryAttempts: 50,
+    });
   }, 10_000);
 
   it('多 peer 拓扑:一个 peer 停止 ACK 被限流,另一个 peer 的投递零感知', async () => {

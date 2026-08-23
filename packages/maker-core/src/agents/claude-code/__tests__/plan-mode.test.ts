@@ -13,7 +13,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps } from '../../base-agent.js';
+import type { AgentDeps, RemoteClaudeRoute } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
@@ -30,7 +30,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
-import { ClaudeCodeAgent } from '../index.js';
+import { ClaudeCodeAgent, toClaudeSdkContent } from '../index.js';
 
 const tempDirs: string[] = [];
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -187,7 +187,37 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent plan mode', () => {
-  it('keeps review text, Markdown, PDF, and image references in one real SDK turn', async () => {
+  it('encodes the same image bytes that passed validation', async () => {
+    const workingDir = await makeTempDir();
+    const imagePath = path.join(workingDir, 'race.png');
+    const originalBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const original = Buffer.from(originalBase64, 'base64');
+    const replacement = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await fs.writeFile(imagePath, original);
+    const validateBuffer = vi.fn(async (data: Buffer) => {
+      expect(data).toEqual(original);
+      await fs.writeFile(imagePath, replacement);
+      return true;
+    });
+
+    const content = await toClaudeSdkContent(
+      [{ type: 'image', path: imagePath, mimeType: 'image/png' }],
+      { process: async (input) => input, validateBuffer },
+    );
+
+    expect(content).toEqual([{
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: 'image/png',
+        data: originalBase64,
+      },
+    }]);
+    expect(validateBuffer).toHaveBeenCalledOnce();
+  });
+
+  it('keeps review text, file references, and a native image in one real SDK turn', async () => {
     const { handle, queryPrompt, workingDir } = await startPlanSession(
       false,
       {},
@@ -199,16 +229,14 @@ describe('ClaudeCodeAgent plan mode', () => {
     const imagePath = path.join(workingDir, 'poster.png');
     await fs.writeFile(markdownPath, '# Launch\nBudget: 100 vs 80 + 50');
     await fs.writeFile(pdfPath, '%PDF-1.4\n% review transport fixture');
+    const imageBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     await fs.writeFile(
       imagePath,
-      Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
-        'base64',
-      ),
+      Buffer.from(imageBase64, 'base64'),
     );
     const realMarkdownPath = await fs.realpath(markdownPath);
     const realPdfPath = await fs.realpath(pdfPath);
-    const realImagePath = await fs.realpath(imagePath);
     const nextInput = queryPrompt[Symbol.asyncIterator]().next();
 
     await handle.send({
@@ -222,9 +250,20 @@ describe('ClaudeCodeAgent plan mode', () => {
     });
 
     const sdkInput = (await nextInput).value;
-    expect(sdkInput?.message?.content).toBe(
-      `@"${realMarkdownPath}" @"${realPdfPath}" @"${realImagePath}" Review the Markdown, PDF, and image evidence.`,
-    );
+    expect(sdkInput?.message?.content).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: imageBase64,
+        },
+      },
+      {
+        type: 'text',
+        text: `@"${realMarkdownPath}" @"${realPdfPath}" Review the Markdown, PDF, and image evidence.`,
+      },
+    ]);
     await handle.close();
   });
 
@@ -498,6 +537,210 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('keeps a truncated image as a path reference instead of native inline data', async () => {
+    const { handle, queryPrompt, workingDir } = await startPlanSession(false);
+    const imagePath = path.join(workingDir, 'truncated.png');
+    await fs.writeFile(
+      imagePath,
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    const nextInput = queryPrompt[Symbol.asyncIterator]().next();
+
+    await handle.send({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'Inspect this image.' },
+        { type: 'image', path: imagePath, mimeType: 'image/png' },
+      ],
+    });
+
+    const sdkInput = (await nextInput).value;
+    expect(sdkInput?.message?.content).toBe(`@"${imagePath}" Inspect this image.`);
+    await handle.close();
+  });
+
+  it('forwards SSH image paths without reading a same-named desktop file', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const imagePath = path.join(workingDir, 'remote.png');
+    await fs.writeFile(
+      imagePath,
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    const remoteSend = vi.fn(async (_message: unknown) => {});
+    const fakeQuery = { ...createFakeQuery(), send: remoteSend };
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    const logger = createNoopLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const agent = new ClaudeCodeAgent(createDeps({ logger, remoteCcQueryFactory }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-image-path',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    await handle.send({
+      type: 'user',
+      content: [
+        { type: 'image', path: imagePath, mimeType: 'image/png' },
+        { type: 'text', text: 'Inspect this' },
+      ],
+    });
+    await vi.waitFor(() => expect(remoteSend).toHaveBeenCalledTimes(1));
+
+    expect(remoteSend.mock.calls[0]?.[0]).toMatchObject({
+      message: { content: `@"${imagePath}" Inspect this` },
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      'cc remote: local attachment not accessible on remote session',
+      expect.anything(),
+    );
+    await handle.close();
+  });
+
+  it('warns when an SSH session receives a desktop-local image', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const imagePath = path.join(workingDir, 'desktop.png');
+    const remoteSend = vi.fn(async (_message: unknown) => {});
+    const fakeQuery = { ...createFakeQuery(), send: remoteSend };
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    const logger = createNoopLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const agent = new ClaudeCodeAgent(createDeps({ logger, remoteCcQueryFactory }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-desktop-image',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    await handle.send({
+      type: 'user',
+      content: [
+        {
+          type: 'image',
+          path: imagePath,
+          mimeType: 'image/png',
+          pathOrigin: 'desktop-host',
+        },
+        { type: 'text', text: 'Inspect this' },
+      ],
+    });
+    await vi.waitFor(() => expect(remoteSend).toHaveBeenCalledTimes(1));
+
+    expect(warn).toHaveBeenCalledWith(
+      'cc remote: local attachment not accessible on remote session',
+      expect.objectContaining({
+        sessionId: 'session-remote-desktop-image',
+        hostId: 'remote-1',
+      }),
+    );
+    const events = [await nextEvent(iterator), await nextEvent(iterator)];
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        message: expect.stringContaining('[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED]'),
+        isTerminal: false,
+      }),
+    }));
+    await handle.close();
+  });
+
+  it('warns when an active SSH session is steered with a desktop-local image', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const imagePath = path.join(workingDir, 'desktop-steer.png');
+    const remoteSend = vi.fn(async (_message: unknown) => {});
+    const fakeQuery = { ...createFakeQuery(), send: remoteSend };
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    const logger = createNoopLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const agent = new ClaudeCodeAgent(createDeps({ logger, remoteCcQueryFactory }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-desktop-steer-image',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    await handle.send({ type: 'user', content: 'Start the remote turn' });
+    await vi.waitFor(() => expect(remoteSend).toHaveBeenCalledTimes(1));
+    await handle.steer({
+      type: 'user',
+      content: [
+        {
+          type: 'image',
+          path: imagePath,
+          mimeType: 'image/png',
+          pathOrigin: 'desktop-host',
+        },
+        { type: 'text', text: 'Inspect this too' },
+      ],
+    });
+    await vi.waitFor(() => expect(remoteSend).toHaveBeenCalledTimes(2));
+
+    expect(warn).toHaveBeenCalledWith(
+      'cc remote: local attachment not accessible on remote session',
+      expect.objectContaining({
+        sessionId: 'session-remote-desktop-steer-image',
+        hostId: 'remote-1',
+      }),
+    );
+    const events = [await nextEvent(iterator), await nextEvent(iterator)];
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        message: expect.stringContaining('[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED]'),
+        isTerminal: false,
+      }),
+    }));
+    await handle.close();
+  });
+
+  it('passes the local session provider into spawn-time behavior flags', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(fakeQuery);
+    const behaviorFlags = vi.fn((ctx: { sessionProviderId?: string | null }) => ({
+      ENABLE_TOOL_SEARCH: ctx.sessionProviderId === 'openrouter-custom' ? 'false' : 'auto',
+    }));
+    const agent = new ClaudeCodeAgent(createDeps({ runtimeConfig: { behaviorFlags } }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-local-custom-provider',
+      model: 'x-ai/grok-4.6',
+      providerId: 'openrouter-custom',
+      workingDir,
+      permissionMode: 'auto',
+    });
+
+    const env = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.env as
+      | Record<string, string>
+      | undefined;
+    expect(env?.ENABLE_TOOL_SEARCH).toBe('false');
+    expect(behaviorFlags).toHaveBeenCalledWith({
+      credentialMode: 'provider-oauth',
+      sessionProviderId: 'openrouter-custom',
+      spawnMode: 'local',
+    });
+    await handle.close();
+  });
+
   it('overrides remote cc-manager env with a host-materialized Claude route', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -516,9 +759,12 @@ describe('ClaudeCodeAgent plan mode', () => {
         ANTHROPIC_CUSTOM_HEADERS: 'authorization: Bearer k-route\nx-tenant: acme',
       },
     }));
+    const behaviorFlags = vi.fn((ctx: { sessionProviderId?: string | null }) => ({
+      ENABLE_TOOL_SEARCH: ctx.sessionProviderId === 'custom-provider' ? 'false' : 'auto',
+    }));
     const agent = new ClaudeCodeAgent(createDeps({
       // Empty gateway endpoint would fail the old remote gateway guard; routed sessions must not depend on it.
-      runtimeConfig: { remoteEndpoint: '' },
+      runtimeConfig: { remoteEndpoint: '', behaviorFlags },
       remoteCcQueryFactory,
       resolveRemoteClaudeRoute,
     }));
@@ -541,6 +787,12 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(env?.ANTHROPIC_API_KEY).toBe('k-route');
     expect(env?.ANTHROPIC_CUSTOM_HEADERS).toBe('authorization: Bearer k-route\nx-tenant: acme');
     expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env?.ENABLE_TOOL_SEARCH).toBe('false');
+    expect(behaviorFlags).toHaveBeenCalledWith({
+      credentialMode: 'provider-oauth',
+      sessionProviderId: 'custom-provider',
+      spawnMode: 'remote',
+    });
     await handle.close();
   });
 
@@ -650,7 +902,7 @@ describe('ClaudeCodeAgent plan mode', () => {
         return { authenticated: true };
       },
       async logout() {},
-      async getAuthEnv(options) {
+      async getAuthEnv(options): Promise<Record<string, string>> {
         return options?.credentialMode === 'gateway-key'
           ? { ANTHROPIC_API_KEY: 'gw-key' }
           : { CLAUDE_CODE_OAUTH_TOKEN: 'tok-sub' }; // 本地 fallback: 订阅已连
@@ -1092,7 +1344,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     // 后台刷新后 nextRoute.env 是新 token,但 remoteEnv(远端 daemon)还是旧值 ——
     // token 值轮换不算路由变化,同路由放行(codex P2 三轮)。
     let callCount = 0;
-    const resolveRemoteClaudeRoute = vi.fn(async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async (): Promise<RemoteClaudeRoute> => {
       callCount += 1;
       return {
         endpoint: 'https://api.anthropic.com',
@@ -1128,7 +1380,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     // 登录后 backfill 补齐 subscriptionType/rateLimitTier(用户零操作)—— 与 token 同组
     // 按存在性比对,不按值,不误拒(Fable 5 评估 B1)。
     let callCount = 0;
-    const resolveRemoteClaudeRoute = vi.fn(async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async (): Promise<RemoteClaudeRoute> => {
       callCount += 1;
       return {
         endpoint: 'https://api.anthropic.com',
@@ -1207,7 +1459,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     // 初次解析带 x-tenant 定制头;切模时目标路由把它删了 —— 远端 daemon 仍烤着旧头,
     // 必须拒绝(Greptile review #1035:只取 nextRoute 的 key 会把删除误判成一致)。
     let callCount = 0;
-    const resolveRemoteClaudeRoute = vi.fn(async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async (): Promise<RemoteClaudeRoute> => {
       callCount += 1;
       return callCount === 1
         ? {

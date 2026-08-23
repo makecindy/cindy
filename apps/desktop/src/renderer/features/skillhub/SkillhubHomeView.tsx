@@ -39,10 +39,7 @@ import { basename, deriveProjectWorkingDir } from './lib/pathDerivations';
 import { projectHash } from './lib/projectHash';
 import { marketCardPrimaryAction } from './lib/marketDetailViewModel';
 import { deriveSkillSource } from './lib/skillSource';
-import {
-  InstallTargetPicker,
-  type InstallTargetSkill,
-} from './components/InstallTargetPicker';
+import { InstallTargetPicker, type InstallTargetSkill } from './components/InstallTargetPicker';
 import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
 
 const KIND_ICON: Record<string, LucideIcon> = {
@@ -59,7 +56,13 @@ function includesSkillQuery(values: ReadonlyArray<string | undefined>, query: st
   return values.some((value) => value?.toLocaleLowerCase().includes(query));
 }
 
-export function SkillhubHomeView() {
+export function SkillhubHomeView({
+  embedded = false,
+  onSelectCatalogTab,
+}: {
+  embedded?: boolean;
+  onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
+} = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { skills, projects, bootstrapped, syncResults } = useSkillhub();
@@ -203,8 +206,15 @@ export function SkillhubHomeView() {
       onQueryChange={setQuery}
       searchPlaceholder={t('skillhub.home.search')}
       clearSearchLabel={t('skillhub.home.clearSearch')}
+      embedded={embedded}
+      onSelectTab={onSelectCatalogTab}
     >
-      <main className="relative h-full w-full overflow-x-hidden overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+      <main
+        className={cn(
+          'relative h-full w-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable_both-edges]',
+          embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
+        )}
+      >
         <PluginManagementPage className="gap-10">
           <header className="plugin-motion-page-header flex items-start justify-between gap-4">
             <div className="min-w-0 pt-1">
@@ -419,7 +429,11 @@ export function SkillhubHomeView() {
           failedToastKey="skillhub.home.importFailed"
           runAction={async ({ installPath, force }) => {
             if (!importGrantToken) {
-              return { success: false, errorCode: 'INVALID_FILE', message: t('skillhub.home.importFailed') };
+              return {
+                success: false,
+                errorCode: 'INVALID_FILE',
+                message: t('skillhub.home.importFailed'),
+              };
             }
             return window.electronAPI.skillhub.importLocal({
               grantToken: importGrantToken,
@@ -448,7 +462,7 @@ export function SkillhubHomeView() {
                 absolutePath: result.absolutePath ?? '',
                 engine: 'claude-code' as const,
                 kind: 'skill' as const,
-                scope: projectRoot ? 'project' as const : 'global' as const,
+                scope: projectRoot ? ('project' as const) : ('global' as const),
                 projectHash: projectRoot ? projectHash(projectRoot) : undefined,
                 name: result.name,
               };

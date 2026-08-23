@@ -1,6 +1,7 @@
 /**
  * interrupted-turn-resume(简化版)单测。
- * 覆盖:started/ended 时间戳写入与保序、quit freeze、「疑似中断」pending 判定
+ * 覆盖:started/ended 时间戳写入与保序、quit freeze、owner 边界 ended 写抑制
+ * (有作用域、可释放、重入安全)、「疑似中断」pending 判定
  * (ended / cleared 边界、deleted / 不可见来源排除)、ended 落库后的注入回调通知
  * (广播假阳性修复:生效值读回 / 异常不断链 / ack resolve 前发出),以及 retry
  * 续跑判定 hasAssistantProgressAfterMessage 的正负路径。
@@ -271,6 +272,83 @@ describe('sessionActiveTurn', () => {
     const row = await readMarks(client, 's-quit');
     expect(row?.last_turn_ended_at).toBeNull();
     expect(row!.active_turn_started_at!).toBeGreaterThan(0);
+  });
+
+  it('owner-boundary suppression blocks ended writes while held and restores them after release', async () => {
+    const { markSessionTurnStarted, markSessionTurnEnded, beginSessionTurnEndedSuppression } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-owner-boundary');
+
+    markSessionTurnStarted('s-owner-boundary');
+    await vi.waitFor(async () => {
+      expect((await readMarks(client, 's-owner-boundary'))?.active_turn_started_at).toBeTypeOf(
+        'number',
+      );
+    });
+
+    // 模拟切账号:owner 边界 teardown 抑制期间,maker.shutdown 关 session 触发的
+    // ended 写必须 no-op —— 否则被切换打断的在飞 turn 被伪装成正常收尾,重新打开
+    // 会话时既无中断横幅也无红点(2026-08-11 实报:跨区凭证误判触发账号切换,
+    // busy Codex 会话静默孤儿化)。
+    const release = beginSessionTurnEndedSuppression();
+    markSessionTurnEnded('s-owner-boundary');
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await readMarks(client, 's-owner-boundary'))?.last_turn_ended_at).toBeNull();
+
+    // 释放后(新 owner 的运行期)正常收尾写恢复 —— 抑制必须有作用域,不能像
+    // quit freeze 一样永久生效,否则新 owner 每个正常完成的任务都会误报中断。
+    release();
+    markSessionTurnEnded('s-owner-boundary');
+    await vi.waitFor(async () => {
+      const row = await readMarks(client, 's-owner-boundary');
+      expect(row?.last_turn_ended_at).toBeTypeOf('number');
+      expect(row!.last_turn_ended_at!).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
+    });
+  });
+
+  it('owner-boundary suppression release is idempotent and reentrant holds stack', async () => {
+    const { markSessionTurnEnded, beginSessionTurnEndedSuppression } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const startedAt = Date.now() - 1_000;
+    await seedSession(client, 's-owner-reentrant', { startedAt });
+
+    // 重入:两个边界流程重叠持有(极端但登出+切号竞态可达),任一释放不解除另一个。
+    const releaseA = beginSessionTurnEndedSuppression();
+    const releaseB = beginSessionTurnEndedSuppression();
+    releaseA();
+    releaseA(); // 幂等:重复释放不把 B 的持有也计销。
+    markSessionTurnEnded('s-owner-reentrant');
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await readMarks(client, 's-owner-reentrant'))?.last_turn_ended_at).toBeNull();
+
+    releaseB();
+    markSessionTurnEnded('s-owner-reentrant');
+    await vi.waitFor(async () => {
+      expect((await readMarks(client, 's-owner-reentrant'))?.last_turn_ended_at).toBeTypeOf('number');
+    });
+  });
+
+  it('owner-boundary suppression also blocks barrier ended writes at call time', async () => {
+    const {
+      markSessionTurnStarted,
+      markSessionTurnEndedAfterBarrier,
+      beginSessionTurnEndedSuppression,
+    } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-owner-barrier');
+    markSessionTurnStarted('s-owner-barrier');
+    await vi.waitFor(async () => {
+      expect((await readMarks(client, 's-owner-barrier'))?.active_turn_started_at).toBeTypeOf('number');
+    });
+
+    // shutdown close 经 barrier 版收尾同样要被挡(与 quit freeze 的对应用例同构)。
+    const release = beginSessionTurnEndedSuppression();
+    markSessionTurnEndedAfterBarrier('s-owner-barrier', Promise.resolve());
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await readMarks(client, 's-owner-barrier'))?.last_turn_ended_at).toBeNull();
+    release();
   });
 
   it('ended write notifies the injected listener with the effective DB value', async () => {

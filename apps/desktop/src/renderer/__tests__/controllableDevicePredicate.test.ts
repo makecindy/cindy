@@ -1,7 +1,7 @@
 /**
  * controllableDevicePredicate.test.ts —— 可控被控设备的准入判定。
  * 守住「添加远程项目」设备下拉 / 入口 gate 的准入:
- * 同账号、在线、对方已开被控、本机未关闭控制、非本机。
+ * 同账号、在线、对方已开被控、本机未关闭控制、非本机、非手机。
  */
 import { describe, it, expect } from 'vitest';
 
@@ -36,22 +36,26 @@ describe('isControllableDevice', () => {
     // busy(对方正忙)仍可作为项目目标。
     expect(isControllableDevice(dev({ busy: true }))).toBe(true);
   });
-  it('离线 / 未开被控 / 本机关闭控制 / 本机 → 不可控', () => {
+  it('离线 / 未开被控 / 本机关闭控制 / 本机 / 手机 → 不可控', () => {
     expect(isControllableDevice(dev({ online: false }))).toBe(false);
     expect(isControllableDevice(dev({ remoteControlEnabled: false }))).toBe(false);
     expect(isControllableDevice(dev({ controlEnabled: false }))).toBe(false);
     expect(isControllableDevice(dev({ isSelf: true }))).toBe(false);
+    expect(isControllableDevice(dev({ platform: 'ios' }))).toBe(false);
+    expect(isControllableDevice(dev({ platform: 'android' }))).toBe(false);
   });
 });
 
 describe('toControllableDevices', () => {
-  it('过滤可控目标 + 投影成 {deviceId,name,platform}(丢弃离线/未开被控/本机)', () => {
+  it('过滤可控目标 + 投影成 {deviceId,name,platform}(丢弃离线/未开被控/本机/手机)', () => {
     const out = toControllableDevices([
       dev({ deviceId: 'ok', name: 'OK', platform: 'darwin' }),
       dev({ deviceId: 'off', online: false }),
       dev({ deviceId: 'noctl', remoteControlEnabled: false }),
       dev({ deviceId: 'local-off', controlEnabled: false }),
       dev({ deviceId: 'self', isSelf: true }),
+      dev({ deviceId: 'iphone', platform: 'ios' }),
+      dev({ deviceId: 'android', platform: 'android' }),
     ]);
     expect(out).toEqual([{ deviceId: 'ok', name: 'OK', platform: 'darwin' }]);
   });
@@ -88,16 +92,33 @@ describe('isSelectableDevice(设备切换器,含离线)', () => {
     expect(isSelectableDevice(dev({ isSelf: true }))).toBe(false);
     expect(isSelectableDevice(dev({ isSelf: true, online: false }))).toBe(false);
   });
+
+  it('手机只能作为控制端,在线或离线都不进入设备选择', () => {
+    expect(isSelectableDevice(dev({ platform: 'ios' }))).toBe(false);
+    expect(isSelectableDevice(dev({ platform: 'android' }))).toBe(false);
+    expect(
+      isSelectableDevice(
+        dev({ platform: 'ios', online: false, remoteControlEnabled: false }),
+      ),
+    ).toBe(false);
+    expect(
+      isSelectableDevice(
+        dev({ platform: 'android', online: false, remoteControlEnabled: false }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('toSelectableDevices', () => {
-  it('保留离线设备并带上 online 标记,过滤本机与已关控制的', () => {
+  it('保留离线电脑并带上 online 标记,过滤本机、已关控制与手机', () => {
     const out = toSelectableDevices([
       dev({ deviceId: 'on', name: 'On', platform: 'darwin' }),
       dev({ deviceId: 'off', name: 'Off', online: false, remoteControlEnabled: false }),
       dev({ deviceId: 'noctl', online: true, remoteControlEnabled: false }),
       dev({ deviceId: 'local-off', controlEnabled: false }),
       dev({ deviceId: 'self', isSelf: true }),
+      dev({ deviceId: 'iphone', platform: 'ios' }),
+      dev({ deviceId: 'android', platform: 'android', online: false }),
     ]);
     expect(out).toEqual([
       { deviceId: 'on', name: 'On', platform: 'darwin', online: true },

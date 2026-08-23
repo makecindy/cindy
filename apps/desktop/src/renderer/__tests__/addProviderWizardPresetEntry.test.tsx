@@ -50,7 +50,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   ProviderLogoMark: () => null,
 }));
 
-import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
+import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
 import { createCustomProvider } from '@/lib/customProviders';
 
 const anthropicProvider = {
@@ -129,20 +129,100 @@ const dualDiscoveryPreset = {
   },
 };
 
+const zhipuCodingPreset = {
+  id: 'zhipu-coding-plan-cn',
+  name: 'Zhipu GLM Coding Plan',
+  runtimes: {
+    codex: {
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'glm-5.2', name: 'GLM-5.2' }],
+      modelDiscovery: [
+        {
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          modelsUrl: 'https://open.bigmodel.cn/api/v1/models',
+          wireProtocol: 'openai-responses' as const,
+        },
+      ],
+    },
+  },
+};
+
+const editableDiscoveryPreset = {
+  id: 'editable-discovery',
+  name: 'Editable Discovery',
+  runtimes: {
+    codex: {
+      baseUrl: 'https://editable.example/api/v4',
+      baseUrlEditable: true,
+      wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'chat-model', name: 'Chat Model' }],
+      modelDiscovery: [
+        {
+          baseUrl: 'https://editable.example/api/v1',
+          modelsUrl: 'https://editable.example/api/v1/models',
+          wireProtocol: 'openai-responses' as const,
+        },
+      ],
+    },
+  },
+};
+
 const piReasoningPreset = {
   id: 'pi-reasoning',
   name: 'Pi Reasoning',
   runtimes: {
     pi: {
       baseUrl: 'https://pi.example/v1',
+      wireProtocol: 'openai-chat' as const,
       models: [
         {
           id: 'reasoning-model',
           name: 'Reasoning Model',
           reasoning: true,
           reasoningEfforts: ['low', 'high'] as const,
+          reasoningDefaultEffort: 'high' as const,
         },
       ],
+    },
+  },
+};
+
+const explicitPiPreset = {
+  id: 'explicit-pi',
+  name: 'Explicit Pi',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://explicit.example/anthropic',
+      models: [{ id: 'claude-model', name: 'Claude Model' }],
+    },
+    pi: {
+      baseUrl: 'https://explicit.example/pi',
+      wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'pi-model', name: 'Pi Model' }],
+    },
+  },
+};
+
+const claudeRequestPathPreset = {
+  id: 'claude-request-path',
+  name: 'Claude Request Path',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://path.example/anthropic',
+      requestPath: '/tenant/acme/messages',
+      models: [{ id: 'path-model', name: 'Path Model' }],
+    },
+  },
+};
+
+const claudeOnlyPreset = {
+  id: 'claude-only',
+  name: 'Claude Only',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://claude-only.example/anthropic',
+      models: [{ id: 'claude-only-model', name: 'Claude Only Model' }],
     },
   },
 };
@@ -162,6 +242,12 @@ function renderWizard(presetId: string) {
 beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      localModelList: vi.fn(async () => ({
+        status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
+        models: [],
+        memoryGb: 0,
+      })),
+      scanLocalCli: vi.fn(async () => ({ detections: [] })),
       listProviderPresets: vi.fn(async () => ({
         presets: [
           deepseekPreset,
@@ -169,7 +255,12 @@ beforeEach(() => {
           unsafeNoAuthDiscoveryPreset,
           openCodePreset,
           dualDiscoveryPreset,
+          zhipuCodingPreset,
+          editableDiscoveryPreset,
           piReasoningPreset,
+          explicitPiPreset,
+          claudeRequestPathPreset,
+          claudeOnlyPreset,
         ],
       })),
       // 列模型失败场景兜底(Greptile P1 回归):官方 API 预设必须靠推荐模型仍可完成。
@@ -184,6 +275,12 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  it('官方 API 入口逐一显式声明 Pi 协议，不依赖 Claude runtime 派生', () => {
+    expect(OFFICIAL_API_PRESETS.anthropic?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
+    expect(OFFICIAL_API_PRESETS.openai?.runtimes.pi?.wireProtocol).toBe('openai-responses');
+    expect(OFFICIAL_API_PRESETS.xai?.runtimes.pi?.wireProtocol).toBe('openai-chat');
+  });
+
   it('presets 载入后直达表单步:名称预填预设名,出现 API Key 输入', async () => {
     renderWizard('deepseek');
 
@@ -245,7 +342,7 @@ describe('AddProviderWizard — preset 直达', () => {
       expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
     );
     expect(screen.getByDisplayValue('Anthropic API')).not.toBeNull();
-    expect(screen.getAllByText(/api\.anthropic\.com/)).toHaveLength(2);
+    expect(screen.getAllByText(/api\.anthropic\.com/)).toHaveLength(3);
   });
 
   it('官方 API 预设:列模型失败 → 第三步仍有推荐模型预勾,可完成(Greptile P1 回归)', async () => {
@@ -323,6 +420,16 @@ describe('AddProviderWizard — preset 直达', () => {
     );
     const keys = vi.mocked(createCustomProvider).mock.calls[0][1];
     expect(keys).toMatchObject({ 'claude-code': 'sk-test', codex: 'sk-test' });
+    expect(config.runtimes.pi).toEqual({
+      baseUrl: 'https://api.anthropic.com',
+      wireProtocol: 'anthropic-messages',
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-opus-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-sonnet-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-haiku-4-5', contextWindow: 200_000 }),
+      ]),
+    });
+    expect(keys.pi).toBe('sk-test');
   });
 
   it('Pi 预设保存时保留显式 reasoning 能力与支持档位', async () => {
@@ -340,8 +447,84 @@ describe('AddProviderWizard — preset 直达', () => {
         id: 'reasoning-model',
         reasoning: true,
         reasoningEfforts: ['low', 'high'],
+        reasoningDefaultEffort: 'high',
       }),
     ]);
+  });
+
+  it('预设已有显式 Pi runtime 时不被 Claude 自动初始化覆盖', async () => {
+    renderWizard('explicit-pi');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Explicit Pi')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('Pi Model')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes.pi).toEqual({
+      baseUrl: 'https://explicit.example/pi',
+      wireProtocol: 'openai-chat',
+      models: [{ id: 'pi-model', name: 'Pi Model' }],
+    });
+    expect(keys.pi).toBe('sk-test');
+  });
+
+  it('预设显式 Pi 模型全部取消后不从 Claude 重新生成 Pi runtime', async () => {
+    renderWizard('explicit-pi');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Explicit Pi')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const piModel = await screen.findByText('Pi Model');
+    fireEvent.click(piModel.closest('button') as HTMLButtonElement);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes['claude-code']).toEqual({
+      baseUrl: 'https://explicit.example/anthropic',
+      models: [{ id: 'claude-model', name: 'Claude Model' }],
+    });
+    expect(config.runtimes.pi).toBeUndefined();
+    expect(keys.pi).toBeUndefined();
+  });
+
+  it('Claude runtime 带自定义请求路径时不自动生成 Pi runtime', async () => {
+    renderWizard('claude-request-path');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Claude Request Path')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('Path Model')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes['claude-code']).toMatchObject({
+      requestPath: '/tenant/acme/messages',
+    });
+    expect(config.runtimes.pi).toBeUndefined();
+    expect(keys.pi).toBeUndefined();
+  });
+
+  it('缺少显式 Pi runtime 的预设不会从 Claude runtime 静默派生', async () => {
+    renderWizard('claude-only');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Claude Only')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('Claude Only Model')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes['claude-code']?.models).toEqual([
+      { id: 'claude-only-model', name: 'Claude Only Model' },
+    ]);
+    expect(config.runtimes.pi).toBeUndefined();
+    expect(keys.pi).toBeUndefined();
   });
 
   it('editable preset saves the edited base URL and exact request path', async () => {
@@ -357,8 +540,9 @@ describe('AddProviderWizard — preset 直达', () => {
         },
       },
     };
-    vi.mocked(window.electronAPI.maker.listProviderPresets)
-      .mockResolvedValueOnce({ presets: [editablePreset] });
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({
+      presets: [editablePreset],
+    });
     renderWizard('local-gateway');
 
     const baseUrl = await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
@@ -432,7 +616,8 @@ describe('AddProviderWizard — preset 直达', () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue('Unsafe no-auth discovery')).not.toBeNull(),
     );
-    const next = screen.getByText('settings.providers.wizard.next')
+    const next = screen
+      .getByText('settings.providers.wizard.next')
       .closest('button') as HTMLButtonElement;
     expect(next.disabled).toBe(true);
     expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
@@ -520,13 +705,173 @@ describe('AddProviderWizard — preset 直达', () => {
     ]);
   });
 
+  it('智谱绑定合并 V4 与 V1 目录，并给 glm-5.3 保存 Responses 路由', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
+      async ({ baseUrl }: { baseUrl: string }) =>
+        baseUrl === 'https://open.bigmodel.cn/api/v1'
+          ? { ok: true, models: [{ id: 'glm-5.3', name: 'GLM-5.3' }] }
+          : { ok: true, models: [{ id: 'glm-5.2', name: 'GLM-5.2' }] },
+    );
+    renderWizard('zhipu-coding-plan-cn');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Zhipu GLM Coding Plan')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'glm-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    fireEvent.click(await screen.findByText('GLM-5.3'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(2);
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'codex',
+        baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+        wireProtocol: 'openai-chat',
+      }),
+    );
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'codex',
+        baseUrl: 'https://open.bigmodel.cn/api/v1',
+        modelsUrl: 'https://open.bigmodel.cn/api/v1/models',
+        wireProtocol: 'openai-responses',
+      }),
+    );
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes.codex).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      wireProtocol: 'openai-chat',
+      models: [
+        { id: 'glm-5.2', name: 'GLM-5.2' },
+        {
+          id: 'glm-5.3',
+          name: 'GLM-5.3',
+          route: {
+            baseUrl: 'https://open.bigmodel.cn/api/v1',
+            wireProtocol: 'openai-responses',
+          },
+        },
+      ],
+    });
+    expect(keys.codex).toBe('glm-key');
+  });
+
+  it('智谱主目录失败时附加目录不会改写预设模型的 V4 路由', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
+      async ({ baseUrl }: { baseUrl: string }) =>
+        baseUrl === 'https://open.bigmodel.cn/api/v1'
+          ? {
+              ok: true,
+              models: [
+                { id: 'glm-5.2', name: 'GLM-5.2' },
+                { id: 'glm-5.3', name: 'GLM-5.3' },
+              ],
+            }
+          : { ok: false },
+    );
+    renderWizard('zhipu-coding-plan-cn');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Zhipu GLM Coding Plan')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'glm-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await screen.findByText('GLM-5.3');
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const runtime = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex;
+    expect(runtime).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      wireProtocol: 'openai-chat',
+    });
+    expect(runtime?.models).toEqual([{ id: 'glm-5.2', name: 'GLM-5.2' }]);
+  });
+
+  it('可编辑预设改为同源 endpoint 后继续合并 Responses 目录', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
+      async ({ baseUrl }: { baseUrl: string }) =>
+        baseUrl === 'https://editable.example/api/v1'
+          ? { ok: true, models: [{ id: 'responses-model', name: 'Responses Model' }] }
+          : { ok: true, models: [{ id: 'chat-model', name: 'Chat Model' }] },
+    );
+    renderWizard('editable-discovery');
+
+    const endpoint = await screen.findByDisplayValue('https://editable.example/api/v4');
+    fireEvent.change(endpoint, { target: { value: 'https://editable.example/custom/v4' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'edited-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    fireEvent.click(await screen.findByText('Responses Model'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(2);
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: 'https://editable.example/custom/v4',
+        apiKey: 'edited-key',
+      }),
+    );
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: 'https://editable.example/api/v1',
+        wireProtocol: 'openai-responses',
+        apiKey: 'edited-key',
+      }),
+    );
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models).toEqual([
+      { id: 'chat-model', name: 'Chat Model' },
+      {
+        id: 'responses-model',
+        name: 'Responses Model',
+        route: {
+          baseUrl: 'https://editable.example/api/v1',
+          wireProtocol: 'openai-responses',
+        },
+      },
+    ]);
+  });
+
+  it('可编辑预设改为异源 endpoint 后不向旧目录发送 API Key', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+      ok: true,
+      models: [{ id: 'self-hosted-model', name: 'Self-hosted Model' }],
+    });
+    renderWizard('editable-discovery');
+
+    const endpoint = await screen.findByDisplayValue('https://editable.example/api/v4');
+    fireEvent.change(endpoint, { target: { value: 'https://self-hosted.example/v4' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'self-hosted-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    fireEvent.click(await screen.findByText('Self-hosted Model'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(1);
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: 'https://self-hosted.example/v4',
+        apiKey: 'self-hosted-key',
+      }),
+    );
+    expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: 'https://editable.example/api/v1' }),
+    );
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({
+      baseUrl: 'https://self-hosted.example/v4',
+      models: [
+        { id: 'chat-model', name: 'Chat Model' },
+        { id: 'self-hosted-model', name: 'Self-hosted Model' },
+      ],
+    });
+  });
+
   it('LiteLLM:清空可编辑端点后不回退预设地址，也不能继续', async () => {
     renderWizard('litellm');
 
     const endpoint = await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
     fireEvent.change(endpoint, { target: { value: '   ' } });
 
-    const next = screen.getByText('settings.providers.wizard.next')
+    const next = screen
+      .getByText('settings.providers.wizard.next')
       .closest('button') as HTMLButtonElement;
     expect(next.disabled).toBe(true);
     expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();

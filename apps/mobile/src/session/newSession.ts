@@ -1,5 +1,9 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import {
+  DEFAULT_DRAFT_SESSION_TITLE,
+  deriveOptimisticSessionTitle,
+} from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
@@ -321,19 +325,21 @@ type NewSessionDefaultModel = {
   id: string;
   efforts: readonly string[];
   defaultEffort: string | null;
-  newSessionDefault?: readonly ('claude-code' | 'codex')[];
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[];
 };
 
-function newSessionDefaultMarker(agentKind: NewSessionAgentKind): 'claude-code' | 'codex' {
-  return agentKind === 'codex' ? 'codex' : 'claude-code';
+function isNewSessionDefaultForAgent(
+  model: NewSessionDefaultModel,
+  agentKind: NewSessionAgentKind,
+): boolean {
+  return model.newSessionDefault?.includes(agentKind) === true;
 }
 
 function pickRegionalNewSessionDefault<T extends NewSessionDefaultModel>(
   models: readonly T[],
   agentKind: NewSessionAgentKind,
 ): T | undefined {
-  const marker = newSessionDefaultMarker(agentKind);
-  return models.find((model) => model.newSessionDefault?.includes(marker) === true);
+  return models.find((model) => isNewSessionDefaultForAgent(model, agentKind));
 }
 
 /**
@@ -679,8 +685,7 @@ export function pickAgentDefaultRuntime(args: {
     // 在 ProviderModelRow 层面选行,保留来源身份(codex review P2):同 modelId
     // 多 provider 时按 id 回查会把标记行错绑到首见 provider;标记行优先、无标记
     // 取首行,模型与 provider 同源。
-    const marker = newSessionDefaultMarker(agentKind);
-    const chosenRow = modelRows.find((row) => row.model.newSessionDefault?.includes(marker) === true)
+    const chosenRow = modelRows.find((row) => isNewSessionDefaultForAgent(row.model, agentKind))
       ?? modelRows[0];
     model = chosenRow.model.id;
     providerId = chosenRow.provider.id;
@@ -792,7 +797,7 @@ export function resolveNewSessionAutoDefault(input: {
   // provider 时按 id 回查会把标记行错绑到首见 provider;标记行优先、无标记取
   // 首行,模型与 provider 同源。modelRows 为空(旧被控端/目录不可用)才走扁平回退。
   const providerRow = modelRows.length > 0
-    ? modelRows.find((row) => row.model.newSessionDefault?.includes(newSessionDefaultMarker(rowsAgentKind)) === true)
+    ? modelRows.find((row) => isNewSessionDefaultForAgent(row.model, rowsAgentKind))
       ?? modelRows[0]
     : undefined;
   const flatDefault = providerRow
@@ -857,14 +862,28 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
 
 export function sessionFromCreateResult(
   result: CreateSessionResult,
-  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'>,
+  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'> & {
+    firstMessage?: string;
+    attachments?: readonly { name?: string; originalName?: string; path?: string; category?: string }[];
+  },
   now = new Date(),
 ): RemoteSession {
   const iso = now.toISOString();
+  const first = fallback.attachments?.[0];
+  const optimisticTitle = deriveOptimisticSessionTitle({
+    text: fallback.firstMessage,
+    fileNames: (fallback.attachments ?? [])
+      .filter((file) => !file.path?.startsWith('clipboard://'))
+      .map((file) => file.originalName || file.name || '')
+      .filter(Boolean),
+    imageLabel: i18n.t('session.common.photo'),
+    fileLabel: i18n.t('session.common.file'),
+    firstFileIsImage: first?.category === 'image',
+  });
   return {
     id: result.sessionId,
     userId: '',
-    title: 'New remote session',
+    title: optimisticTitle || DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: result.workDir ?? fallback.workingDir,
     workspaceKind: fallback.workspaceKind,
     model: fallback.model,

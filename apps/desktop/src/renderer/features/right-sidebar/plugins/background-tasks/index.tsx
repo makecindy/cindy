@@ -9,12 +9,16 @@
  *  - 注册:模块顶层 import-side-effect,由 plugins/index.ts 汇总。
  */
 
+import { lazy } from 'react';
 import { ListTodo } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { BackgroundTasksBody } from './BackgroundTasksBody';
+
+const BackgroundTasksBody = lazy(() =>
+  import('./BackgroundTasksBody').then((module) => ({ default: module.BackgroundTasksBody })),
+);
 
 export interface BackgroundTasksState {
   /** 一次性详情定位请求:对应 workflow 任务时直接进详情,消费后清空。 */

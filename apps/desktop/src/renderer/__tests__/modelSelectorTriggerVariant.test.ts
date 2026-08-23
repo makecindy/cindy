@@ -6,9 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Effort } from '@/lib/userPreferences.types';
 
+const modelSelectorI18nRef = vi.hoisted(() => ({
+  language: 'zh-CN',
+  resolvedLanguage: 'zh-CN',
+}));
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
+    i18n: modelSelectorI18nRef,
     t: (
       key: string,
       options?: {
@@ -420,6 +426,7 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 import {
   ModelSelector,
   ModelSelectorContent,
+  modelCompactEffortLabel,
   modelEffortLabel,
   modelListMaxHeightForRows,
   modelTagDensityForWidth,
@@ -431,6 +438,8 @@ import { makerChatStore } from '@/lib/makerChatStore';
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
 beforeEach(() => {
+  modelSelectorI18nRef.language = 'zh-CN';
+  modelSelectorI18nRef.resolvedLanguage = 'zh-CN';
   requestProviderModelsAutoRefresh.mockClear();
   modelVisibilityRef.isEnabled = () => true;
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
@@ -1432,6 +1441,35 @@ describe('ModelSelector trigger variants', () => {
     );
   });
 
+  it('uses stable English effort ids for compact row and trigger labels', () => {
+    const t = (key: string, options?: { defaultValue?: string }) =>
+      key === 'effortLevels.xhigh' ? '超高' : (options?.defaultValue ?? key);
+
+    expect(
+      modelCompactEffortLabel(
+        'en-US',
+        t,
+        { effortDisplayNames: { xhigh: 'Extra High' } },
+        'xhigh',
+        '特高',
+      ),
+    ).toBe('XHi');
+    expect(modelCompactEffortLabel('en-US', t, null, 'medium', '中')).toBe('Mid');
+    expect(modelCompactEffortLabel('zh-CN', t, null, 'xhigh', 'Extra High')).toBe('超高');
+    expect(
+      modelCompactEffortLabel(
+        'en-US',
+        t,
+        { effortDisplayNames: { 'adaptive-fast': 'Adaptive Fast' } },
+        'adaptive-fast',
+        'Capability Fast',
+      ),
+    ).toBe('Adaptive Fast');
+    expect(modelCompactEffortLabel('en-US', t, null, 'adaptive-safe', 'Adaptive Safe')).toBe(
+      'Adaptive Safe',
+    );
+  });
+
   it.each([
     {
       agentKind: 'claude-code' as const,
@@ -1927,9 +1965,9 @@ describe('ModelSelector trigger variants', () => {
       const subscription = within(tags as HTMLElement).getByText(
         'settings.providers.models.subscription',
       );
-      expect(
-        hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
       expect(row.querySelector('[data-model-hidden-label]')).toBe(hidden);
       expect(screen.queryByRole('option', { name: /Sonnet 4\.6/ })).toBeNull();
     } finally {
@@ -2641,6 +2679,9 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
       const row = await screen.findByRole('option', { name: /GPT-5\.5/ });
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
+      // 确认门收**本次目标引擎**(Chris 2026-08-19):调用方靠它判「已有指向该目标的意图」,
+      // 不传目标会让确认框在任何残留意图之后永久静默。
+      expect(confirmBrowseSwitch).toHaveBeenCalledWith('codex');
       // 来源 mark 存在说明目标 Agent 仍走 provider sections，而不是退化成 flat。
       expect(row.textContent).toContain('Z');
       // 行尾与悬浮面板同读目标 Agent 的 per-(来源,模型) 记忆，不落模型默认 medium。

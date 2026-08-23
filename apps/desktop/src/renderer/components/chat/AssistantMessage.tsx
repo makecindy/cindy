@@ -117,12 +117,16 @@ const StreamingBody = memo(function StreamingBody({
   localFileRefs,
   currentSessionId,
   currentSessionTitle,
+  streamFadeKey,
+  allowPrivilegedLinks,
 }: {
   workingDir: string;
   content: string;
   localFileRefs?: readonly KnownLocalFileRef[];
   currentSessionId?: string;
   currentSessionTitle?: string | null;
+  streamFadeKey?: string;
+  allowPrivilegedLinks: boolean;
 }) {
   const { committedText, pendingLine } = useMemo(
     () => splitAtLastNewline(content),
@@ -135,9 +139,11 @@ const StreamingBody = memo(function StreamingBody({
           workingDir={workingDir}
           content={committedText}
           isStreaming
+          streamFadeKey={streamFadeKey}
           localFileRefs={localFileRefs}
           currentSessionId={currentSessionId}
           currentSessionTitle={currentSessionTitle}
+          allowPrivilegedLinks={allowPrivilegedLinks}
         />
       )}
       {pendingLine && (
@@ -151,6 +157,14 @@ interface AssistantMessageProps {
   /** F1 transit: pass through to MarkdownRenderer for local-path resolution
    *  in markdown links. Stable per-session; doesn't trigger extra renders. */
   workingDir: string;
+  /**
+   * Whether this content may reach privileged link targets (`file:` and Cindy
+   * deep links) on *this* machine. False for anything whose author is another
+   * machine — a device-link or SSH task — where `workingDir` names a path the
+   * control side does not own. Default true keeps every existing caller,
+   * which renders local sessions, exactly as it was.
+   */
+  allowPrivilegedLinks?: boolean;
   localFileRefs?: readonly KnownLocalFileRef[];
   currentSessionId?: string;
   currentSessionTitle?: string | null;
@@ -198,6 +212,7 @@ interface AssistantMessageProps {
 
 export const AssistantMessage = memo(function AssistantMessage({
   workingDir,
+  allowPrivilegedLinks = true,
   localFileRefs,
   currentSessionId,
   currentSessionTitle,
@@ -286,6 +301,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   // /goal:隐藏助手输出末尾由 goal 协议要求模型吐出的裁决 JSON 块(仅显示层剥离,
   // 原文仍保留在 DB / transcript)。pattern:末尾的 ```json {...goal_status...} ``` 围栏块。
   const displayContent = stripGoalVerdictBlock(content);
+  const streamFadeKey = messageClientId
+    ? `${currentSessionId ?? ''}\u0000${messageClientId}`
+    : undefined;
 
   return (
     <div
@@ -324,6 +342,8 @@ export const AssistantMessage = memo(function AssistantMessage({
             localFileRefs={localFileRefs}
             currentSessionId={currentSessionId}
             currentSessionTitle={currentSessionTitle}
+            streamFadeKey={streamFadeKey}
+            allowPrivilegedLinks={allowPrivilegedLinks}
           />
         ) : (
           // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
@@ -333,9 +353,11 @@ export const AssistantMessage = memo(function AssistantMessage({
             workingDir={workingDir}
             content={displayContent}
             isStreaming={isStreaming}
+            streamFadeKey={streamFadeKey}
             localFileRefs={localFileRefs}
             currentSessionId={currentSessionId}
             currentSessionTitle={currentSessionTitle}
+            allowPrivilegedLinks={allowPrivilegedLinks}
           />
         )}
         {/* 自绘卡在场:提供原文 ↔ 意识卡片切换(信任边界,主机绘制,始终可切回原文)。 */}

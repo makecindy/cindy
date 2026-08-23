@@ -36,6 +36,11 @@ vi.mock('@cindy/mcps', () => ({
     mockState.capturedProvidersConfig = config;
     return [
       {
+        name: 'cindy_ios_simulator',
+        isEnabled: () => true,
+        toClaudeSdkConfig: () => null,
+      },
+      {
         name: 'cindy_orca',
         isEnabled: () => true,
         toClaudeSdkConfig: () => null,
@@ -46,7 +51,12 @@ vi.mock('@cindy/mcps', () => ({
 
 vi.mock('../../maker-host/plugins/builtin-plugins.js', () => ({
   BUILTIN_LIZI_MCP_IDS: ['cindy_orca', 'cindy_helper'],
-  pluginIdForProviderName: (name: string) => (name === 'cindy_orca' ? 'collab' : name),
+  pluginIdForProviderName: (name: string) =>
+    name === 'cindy_orca'
+      ? 'collab'
+      : name === 'cindy_ios_simulator'
+        ? 'ios-simulator'
+        : name,
 }));
 
 vi.mock('../../maker-host/index.js', () => ({
@@ -127,6 +137,13 @@ function createCollabService(overrides: Record<string, ReturnType<typeof vi.fn>>
     getWorkspaceInfo: vi.fn(),
     getWorkerStatus: vi.fn(),
     readWorker: vi.fn(),
+    listSessionQueue: vi.fn(),
+    listSessionQueuedCounts: vi.fn(),
+    updateSessionQueuedMessage: vi.fn(),
+    cancelSessionQueuedMessage: vi.fn(),
+    steerSession: vi.fn(),
+    stopSessionTurn: vi.fn(),
+    getSessionRuntime: vi.fn(),
     ...overrides,
   };
 }
@@ -149,13 +166,23 @@ describe('collab send outcome semantics', () => {
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
       pluginRegistry: { isEnabled: () => false } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
       invokeRemote: vi.fn(),
     });
     const orcaProvider = providers.find((provider) => provider.name === 'cindy_orca');
+    const iosSimulatorProvider = providers.find(
+      (provider) => provider.name === 'cindy_ios_simulator',
+    );
 
     expect(orcaProvider).toBeDefined();
     expect(
       orcaProvider?.isEnabled?.({
+        agentKind: 'claude-code',
+        workingDir: 'C:/projects/cindy',
+      } as never),
+    ).toBe(true);
+    expect(
+      iosSimulatorProvider?.isEnabled?.({
         agentKind: 'claude-code',
         workingDir: 'C:/projects/cindy',
       } as never),
@@ -310,6 +337,7 @@ describe('collab send outcome semantics', () => {
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
       pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
       invokeRemote: vi.fn(),
     });
     const orca = (mockState.capturedProvidersConfig?.orca ?? {}) as {
@@ -358,6 +386,7 @@ describe('collab send outcome semantics', () => {
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
       pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
       invokeRemote: vi.fn(),
     });
     const orca = (mockState.capturedProvidersConfig?.orca ?? {}) as {
@@ -417,6 +446,7 @@ describe('collab send outcome semantics', () => {
       getMakerMemoryManager: vi.fn(),
       lspPool: {} as never,
       pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
       invokeRemote: vi.fn(),
     });
     const orca = (mockState.capturedProvidersConfig?.orca ?? {}) as {
@@ -455,5 +485,85 @@ describe('collab send outcome semantics', () => {
     });
     expect(mockState.collabService.startTeam).not.toHaveBeenCalled();
     expect(mockState.collabService.createWorker).not.toHaveBeenCalled();
+  });
+
+  it('exposes arbitrary session queue reads through cindy_helper without Lead ownership', async () => {
+    mockState.collabService = createCollabService({
+      listSessionQueue: vi.fn().mockResolvedValue({
+        ok: true,
+        messages: [{ queuedMessageId: 'q-1', position: 0 }],
+      }),
+      listSessionQueuedCounts: vi.fn().mockResolvedValue({
+        ok: true,
+        counts: { 'session-1': 1 },
+      }),
+    });
+
+    createDesktopMcpProviders({
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      sessionQueue: {
+        listSessionQueue: (sessionId: string) => Promise<Record<string, unknown>>;
+        listSessionQueuedCounts: (sessionIds: string[]) => Promise<Record<string, unknown>>;
+      };
+    };
+
+    await expect(xdtHelper.sessionQueue.listSessionQueue('session-1')).resolves.toMatchObject({
+      ok: true,
+      messages: [{ queuedMessageId: 'q-1', position: 0 }],
+    });
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueuedCounts(['session-1']),
+    ).resolves.toEqual({ ok: true, counts: { 'session-1': 1 } });
+    expect(mockState.collabService.listSessionQueue).toHaveBeenCalledWith('session-1');
+    expect(mockState.collabService.listSessionQueuedCounts).toHaveBeenCalledWith(['session-1']);
+  });
+
+  it('preserves retryable host-readiness errors at the cindy_helper control boundary', async () => {
+    mockState.collabService = createCollabService({
+      listSessionQueue: vi.fn().mockRejectedValue(new Error('DbClient not ready')),
+      listSessionQueuedCounts: vi.fn().mockRejectedValue(new Error('localDb not ready')),
+      stopSessionTurn: vi.fn().mockRejectedValue({
+        code: 'HOST_NOT_READY',
+        message: 'database owner unavailable',
+      }),
+      getSessionRuntime: vi.fn().mockRejectedValue(new Error('storage read failed')),
+    });
+
+    createDesktopMcpProviders({
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      sessionQueue: {
+        listSessionQueue: (sessionId: string) => Promise<Record<string, unknown>>;
+        listSessionQueuedCounts: (sessionIds: string[]) => Promise<Record<string, unknown>>;
+      };
+      sessionControl: {
+        stopSessionTurn: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
+        getSessionRuntime: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
+      };
+    };
+
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueue('session-1'),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueuedCounts(['session-1']),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionControl.stopSessionTurn({ targetSessionId: 'session-1' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionControl.getSessionRuntime({ targetSessionId: 'session-1' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
   });
 });

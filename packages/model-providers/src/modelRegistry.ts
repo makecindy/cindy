@@ -1,12 +1,12 @@
-import {
-  modelRegistryCanonicalJson,
-  type ModelAgent,
-  type ModelPriceVariant,
-  type ModelReferencePrice,
-  type ModelRegistry,
-  type ModelRegistryEntry,
-  type ModelRegistryRoute,
-} from "@cindy/model-access-protocol";
+import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
+import type {
+  ModelAccessV2Agent,
+  ModelPriceVariant,
+  ModelReferencePrice,
+  ModelRegistry,
+  ModelRegistryEntry,
+  ModelRegistryRoute,
+} from "./modelAccessBean.js";
 
 export type ModelRegistryRevisionRelation =
   | "newer"
@@ -67,7 +67,7 @@ export interface ResolvedModelReferencePrice {
 }
 
 export interface ResolveModelReferencePriceOptions {
-  agent?: ModelAgent;
+  agent?: ModelAccessV2Agent;
   inputTokens?: number;
   variant?: ModelPriceVariant;
   /** ISO date or Date; defaults to the current day. */
@@ -84,8 +84,13 @@ function calendarDate(value: string | Date | undefined): string {
 
 function routeModelCandidates(providerId: string, modelId: string): string[] {
   const ids = [modelId];
+  const withoutContextProfile = modelId.replace(/\[1m\]$/, "");
+  if (withoutContextProfile !== modelId) ids.push(withoutContextProfile);
   if (providerId === "openai" && modelId.startsWith("chatgpt/")) {
-    ids.push(modelId.slice("chatgpt/".length));
+    const stripped = modelId.slice("chatgpt/".length);
+    ids.push(stripped);
+    const strippedWithoutContextProfile = stripped.replace(/\[1m\]$/, "");
+    if (strippedWithoutContextProfile !== stripped) ids.push(strippedWithoutContextProfile);
   }
   if (providerId === "anthropic") {
     const undatedModel = modelId.replace(/-\d{8}$/, "");
@@ -98,7 +103,7 @@ function matchingModelRegistryRoutes(
   registry: ModelRegistry | null | undefined,
   providerId: string,
   modelId: string,
-  agent?: ModelAgent,
+  agent?: ModelAccessV2Agent,
 ): Array<{ entry: ModelRegistryEntry; route: ModelRegistryRoute }> {
   if (!registry) return [];
   const normalizedProviderId = providerId.trim();
@@ -137,7 +142,7 @@ export function findModelRegistryRoute(
   registry: ModelRegistry | null | undefined,
   providerId: string,
   modelId: string,
-  agent?: ModelAgent,
+  agent?: ModelAccessV2Agent,
 ): { entry: ModelRegistryEntry; route: ModelRegistryRoute } | undefined {
   return matchingModelRegistryRoutes(registry, providerId, modelId, agent)[0];
 }

@@ -102,6 +102,9 @@ export class VoiceInputDataStore {
     const syncJustEnabled = isRecord(patch)
       && patch.dictionarySyncEnabled === true
       && current.settings.dictionarySyncEnabled === false;
+    const syncJustDisabled = isRecord(patch)
+      && patch.dictionarySyncEnabled === false
+      && current.settings.dictionarySyncEnabled === true;
     // 词典三件套的真相在同步状态里,不接受整份覆盖 —— 那会绕过 CRDT,让本地写入
     // 在下一次物化时被静默丢掉。词典变更一律走下面的语义化入口。
     const nextSettings = normalizeVoiceInputSettings({
@@ -112,9 +115,9 @@ export class VoiceInputDataStore {
       ...current,
       settings: nextSettings,
     });
-    // 刚打开同步开关:对端可能早已在线,既没有 presence 事件也没有词典变更,
-    // 不主动推一次就要等到兜底心跳才收敛。
-    if (syncJustEnabled) notifyDictionaryChanged({ immediate: true });
+    // 开关刚切到开或关:对端可能早已在线,既没有 presence 事件也没有词典变更。
+    // 打开时立刻推当前投影;关闭时立刻推空表,清掉已经在线的手机缓存。
+    if (syncJustEnabled || syncJustDisabled) notifyDictionaryChanged({ immediate: true });
     return cloneSettings(nextSettings);
   }
 
@@ -615,7 +618,7 @@ export const voiceInputDataStore = new VoiceInputDataStore();
 const dictionaryChangedListeners = new Set<DictionaryChangedListener>();
 
 /**
- * `immediate` = 这次变更希望立刻广播,不要走去抖(用户刚打开同步开关)。
+ * `immediate` = 这次变更希望立刻广播,不要走去抖(用户刚打开或关闭同步开关)。
  */
 export type DictionaryChangedListener = (options?: { immediate?: boolean }) => void;
 

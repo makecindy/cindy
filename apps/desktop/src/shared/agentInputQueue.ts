@@ -30,6 +30,8 @@ export interface AgentInputSerializedFile {
   size: number;
   category: AgentInputFileCategory;
   mimeType: string;
+  /** Renderer-owned image path that originated on this Desktop host. */
+  pathOrigin?: 'desktop-host';
   url?: string;
   originalName?: string;
   base64?: string;
@@ -235,6 +237,13 @@ export interface AgentInputQueuedMessage {
         scheduleName: string;
         /** 老队列快照可能没有；新 scheduler run 始终写入。 */
         runId?: string;
+      }
+    | {
+        /** cindy_helper 的 send_to_session 入队来源；只用于本人排队消息控制授权。 */
+        kind: 'session';
+        senderSessionId: string;
+        /** 原始可编辑正文；单独保留以兼容未来可能加入的派发包装。 */
+        displayText: string;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。
@@ -933,12 +942,15 @@ export function buildMakerUserMessage(
   let hasAnnotatedImage = false;
   for (const f of queued.files ?? []) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
+    const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
+      ? { pathOrigin: f.pathOrigin }
+      : {};
     if (f.url) {
-      blocks.push({ type, path: f.url, mimeType: f.mimeType });
+      blocks.push({ type, path: f.url, mimeType: f.mimeType, ...pathOrigin });
     } else if (f.path && !f.path.startsWith('clipboard://')) {
-      blocks.push({ type, path: f.path, mimeType: f.mimeType });
+      blocks.push({ type, path: f.path, mimeType: f.mimeType, ...pathOrigin });
     } else if (f.base64) {
-      blocks.push({ type, base64: f.base64, mimeType: f.mimeType });
+      blocks.push({ type, base64: f.base64, mimeType: f.mimeType, ...pathOrigin });
     } else {
       continue;
     }

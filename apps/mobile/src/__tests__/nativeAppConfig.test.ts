@@ -490,7 +490,7 @@ describe('mobile native app config', () => {
 
   it('Metro nodeModulesPaths 覆盖 workspace TS 源码包各自的 node_modules(pnpm hoisted 布局下 workspace: 链接不提升到根,只在消费方包自己的 node_modules)', () => {
     // 2026-07-16 iOS 冷更实踩:disableHierarchicalLookup 后漏列这些目录,
-    // packages/device-link 引用的 @cindy/device-link-protocol(cindy-protocol submodule)
+    // packages/device-link 引用的仓内 @cindy/device-link-protocol
     // 在 expo export:embed 打 bundle 时 Unable to resolve → ARCHIVE FAILED。
     // 期望路径从 metro.config.js 自身位置推导(它内部用 __dirname 计算),不依赖测试进程 cwd。
     const metroConfigPath = require.resolve('../../metro.config.js');

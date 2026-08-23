@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   describeTextPreviewFailure,
   isTextFilePreviewCandidate,
@@ -7,6 +8,10 @@ import {
   textPreviewStatusText,
   type TextFilePreviewState,
 } from '@/session/filePreview';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 describe('filePreview', () => {
   it('formats preview status without implying eager file reads', () => {
@@ -35,13 +40,13 @@ describe('filePreview', () => {
   });
 
   it('keeps non-text file fallbacks explicit instead of exposing the text-read action', () => {
-    expect(nonTextFilePreviewStatusText('pdf')).toContain('PDF 文件暂不在手机版内嵌预览');
-    expect(nonTextFilePreviewStatusText('drawio')).toContain('Draw.io 文件暂不在手机版内嵌预览');
-    expect(nonTextFilePreviewStatusText('office')).toContain('Office 文件暂不在手机版内嵌预览');
+    expect(nonTextFilePreviewStatusText('pdf')).toContain('PDF 文件暂不支持在手机版内嵌预览');
+    expect(nonTextFilePreviewStatusText('drawio')).toContain('Draw.io 文件暂不支持在手机版内嵌预览');
+    expect(nonTextFilePreviewStatusText('office')).toContain('Office 文件暂不支持在手机版内嵌预览');
     expect(nonTextFilePreviewStatusText('binary')).toContain('当前文件不是文本格式');
     expect(nonTextFilePreviewStatusText('unknown')).toContain('当前文件类型无法确认');
-    expect(textPreviewStatusText({ status: 'idle' }, false, 'pdf')).toContain('PDF 文件暂不在手机版内嵌预览');
-    expect(textPreviewStatusText({ status: 'idle' }, false, 'drawio')).toContain('Draw.io 文件暂不在手机版内嵌预览');
+    expect(textPreviewStatusText({ status: 'idle' }, false, 'pdf')).toContain('PDF 文件暂不支持在手机版内嵌预览');
+    expect(textPreviewStatusText({ status: 'idle' }, false, 'drawio')).toContain('Draw.io 文件暂不支持在手机版内嵌预览');
   });
 
   it('keeps remote preview failure reasons actionable', () => {
@@ -53,7 +58,7 @@ describe('filePreview', () => {
     })).toContain('文件超过远程预览上限');
     expect(describeTextPreviewFailure({ success: false, reason: 'forbidden', size: 0 })).toBe('被控电脑拒绝读取这个路径。');
     expect(describeTextPreviewFailure({ success: false, reason: 'not_found', size: 0 })).toBe('被控电脑上没有找到这个文件。');
-    expect(describeTextPreviewFailure({ success: false, reason: 'read_failed', size: 0, error: 'EACCES' })).toBe('读取失败: EACCES');
+    expect(describeTextPreviewFailure({ success: false, reason: 'read_failed', size: 0, error: 'EACCES' })).toBe('读取失败：EACCES');
     expect(describeTextPreviewFailure({ success: false, size: 128, error: 'binary file' })).toBe('binary file');
   });
 

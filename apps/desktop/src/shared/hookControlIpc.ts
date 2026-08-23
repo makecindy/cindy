@@ -108,7 +108,7 @@ export type HookProvider = 'slack' | 'telegram' | 'x';
 /** provider-neutral 状态机(非 slack legacy 线)覆盖的 provider。 */
 export type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
 
-/** provider-neutral 绑定状态（与 cindy-protocol v1 严格同形）。 */
+/** provider-neutral 绑定状态（与本仓 slack-hook-protocol v1 严格同形）。 */
 export type ProviderBindingState =
   | 'none'
   | 'pending'
@@ -259,6 +259,13 @@ export interface HookPendingBindView {
   installUrl: string | null;
   /** 重绑指定 team 时的目标 team; 添加新 workspace 时 null。 */
   teamId: string | null;
+  /**
+   * 本次授权流的发起意图 —— 决定终止态重试走哪个入口。add = 添加新
+   * workspace(重试回 addBinding, 授权页可切换); rebind = 定向重绑指定
+   * team(重试 pin 到 teamId)。不能靠 teamId 推断: add 流授权中途 server
+   * 也会回显用户所选 team 的 teamId(含 denied/expired/failed 终止态)。
+   */
+  intent: 'add' | 'rebind';
 }
 
 /**

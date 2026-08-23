@@ -104,15 +104,14 @@ export function resolveDeviceLinkDraftDefaults(
 
   // 要解析哪个模型:控制端本次显式 targetModel(切模型)永远优先。初始 seed 只有在**新端明确
   // 回传未选过模型**时才采用区域目录默认；旧端缺字段时保守保留 remoteDraft.model，避免
-  // 把无法识别的历史显式选择覆盖掉。pi 与本地默认口径一致，映射到 claude-code wire 标记。
-  const wireAgent = agentKind === 'codex' ? 'codex' : 'claude-code';
+  // 把无法识别的历史显式选择覆盖掉。每个 Agent 只接受自己的 v3 默认标记。
   const markedDefault = agentKind
     ? models
         .map((model, index) => ({ model, index }))
         .filter(
           ({ model }) =>
             model.defaultEnabled !== false &&
-            (model.newSessionDefault?.includes(wireAgent) ?? false),
+            (model.newSessionDefault?.includes(agentKind) ?? false),
         )
         .sort(
           (a, b) =>
@@ -138,14 +137,21 @@ export function resolveDeviceLinkDraftDefaults(
 
   const chosen = models.find((m) => m.id === wantedModelId) ?? models[0];
   const globalPreset = agentKind ? remoteDraft?.providerModelMemory?.[`${agentKind}:*`] : undefined;
+  const providerPreset =
+    agentKind && providerId
+      ? remoteDraft?.providerModelMemory?.[`${agentKind}:${providerId}`]
+      : undefined;
   // 解析的是不是被控端当前选中模型:是 → 草稿激活值;否 → per-model 记忆(切模型还原)。
   const isActiveModel = chosen.id === remoteDraft?.model;
   // 新建草稿没有 live 会话需要保护:全局模型预设存在时,即使是首页当前显示模型也优先采用。
   // agentKind 缺失时保留旧调用方语义,方便旧测试 / 兼容入口逐步迁移。
-  const wantedEffort = (globalPreset?.effortByModel[chosen.id] ??
+  // 新快照写 `${agent}:${providerId}`，旧快照仍可能只有 `${agent}:*`。
+  const wantedEffort = (providerPreset?.effortByModel[chosen.id] ??
+    globalPreset?.effortByModel[chosen.id] ??
     (isActiveModel ? remoteDraft?.effort : remoteDraft?.effortByModel?.[chosen.id])) as
     Effort | undefined;
-  const presetFast = globalPreset?.fastByModel[chosen.id];
+  const presetFast =
+    providerPreset?.fastByModel[chosen.id] ?? globalPreset?.fastByModel[chosen.id];
   const wantedFast =
     presetFast ??
     (isActiveModel

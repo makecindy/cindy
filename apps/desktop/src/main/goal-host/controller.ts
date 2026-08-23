@@ -41,9 +41,28 @@ import {
 } from './types';
 
 const DEFAULT_DEBOUNCE_MS = 150;
+const DISPATCH_REJECTION_BASE_DELAY_MS = 500;
+const DISPATCH_REJECTION_MAX_DELAY_MS = 4_000;
+const DISPATCH_REJECTION_MAX_ATTEMPTS = 4;
+const DISPATCH_REJECTION_MAX_WINDOW_MS = 15_000;
+const DISPATCH_REJECTION_BLOCK_REASON =
+  'turn dispatch failed: provider repeatedly rejected attempts before accepting work';
 
 export class GoalControllerInputError extends Error {
   readonly code = 'INVALID_PARAMS';
+}
+
+/** Goal 已保守收敛，但本次入口无法恢复其底层 Agent Session。 */
+export class GoalSessionRestoreError extends Error {
+  readonly code = 'PRECONDITION_FAILED';
+
+  constructor(cause?: unknown) {
+    super(
+      'unable to restore the agent session for Goal',
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = 'GoalSessionRestoreError';
+  }
 }
 
 /** Goal 仍存在，但本次编辑已被更新的生命周期或状态覆盖。 */
@@ -361,6 +380,11 @@ export class GoalController {
    */
   private readonly listenerSessions = new Map<string, SessionLike>();
   private readonly turns = new Map<string, TurnAccumulator>();
+  /** blocked 落盘失败时保留同一 fail-closed owner，GET_STATUS 可重试而不是回报旧 active。 */
+  private readonly unpersistedDispatchFailures = new Map<
+    string,
+    { boundary: TurnAccumulator; lastReason: string }
+  >();
   /** 正在派发的 fire 及其 owner；旧代 finally 只能清理自己，不能删掉 Resume 新代。 */
   private readonly firing = new Map<string, object>();
   /** 尚在 Session.send 派发边界内的 Goal fire；Stop 必须能取消 dispatch 前的异步 gate。 */
@@ -371,6 +395,14 @@ export class GoalController {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** goal controller 自己发起且尚未收到终止事件的 turn。用于编辑时区分 goal turn / user turn。 */
   private readonly goalTurnsInFlight = new Set<string>();
+  /**
+   * Provider 明确拒绝(确认未接受)的连续重排窗口。只记内存：成功接受或任一显式
+   * lifecycle 操作都会清零；未知投递从不进入这里，而是直接走 fence / blocked。
+   */
+  private readonly dispatchRejectionRetries = new Map<
+    string,
+    { attempts: number; firstRejectedAt: number; retryNotBefore: number }
+  >();
   /** (Option B)已经用 AskUserQuestion 答案改写、或正在提交改写的会话。token 让失败调用
    *  只能释放自己的 claim，不能误删新目标 / 后续调用的闸门。setGoal 与 clearGoal 时重置。 */
   private readonly clarificationApplied = new Map<string, object>();
@@ -427,6 +459,34 @@ export class GoalController {
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
     this.cancelDeferredManualResume(sessionId);
     let entryBoundary = this.turns.get(sessionId);
+    let rejectionTakeover:
+      | {
+          retry: { attempts: number; firstRejectedAt: number; retryNotBefore: number };
+          previousBoundary: TurnAccumulator;
+          hadGoalTurn: boolean;
+          hadFiring: boolean;
+        }
+      | undefined;
+    const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
+    if (rejectionRetry && entryBoundary) {
+      // A replacement `/goal` must synchronously fence the old objective before
+      // storage or hydration can yield. Keep a cancelled owner on failure so a
+      // stale backoff timer cannot dispatch the old objective invisibly.
+      rejectionTakeover = {
+        retry: { ...rejectionRetry },
+        previousBoundary: entryBoundary,
+        hadGoalTurn: this.goalTurnsInFlight.has(sessionId),
+        hadFiring: this.firing.has(sessionId),
+      };
+      const previousBoundary = entryBoundary;
+      this.stopSession(sessionId);
+      entryBoundary = freshTurn(
+        true,
+        previousBoundary.pendingPersistence,
+        previousBoundary.pendingCompletion,
+      );
+      this.turns.set(sessionId, entryBoundary);
+    }
     // 连续过载计数是 per-goal 状态：换目标(含替换既有目标的编辑路径)必须清零，
     // 否则上一个目标撞过载上限变 blocked 后，新目标会继承耗尽的计数，第一次容量
     // 错误就直接 blocked、拿不到自己的重试预算。
@@ -445,20 +505,66 @@ export class GoalController {
       if (this.turns.get(sessionId) !== takeoverBoundary) return null;
       entryBoundary = takeoverBoundary;
     }
-    const existing = await this.deps.storage.get(sessionId);
+    let existing: GoalState | null;
+    try {
+      existing = await this.deps.storage.get(sessionId);
+    } catch (error) {
+      if (
+        rejectionTakeover &&
+        this.turns.get(sessionId) === entryBoundary
+      ) {
+        this.turns.set(sessionId, rejectionTakeover.previousBoundary);
+        this.dispatchRejectionRetries.set(sessionId, rejectionTakeover.retry);
+        if (rejectionTakeover.hadGoalTurn) this.goalTurnsInFlight.add(sessionId);
+        this.attachListener(sessionId);
+        if (!rejectionTakeover.hadFiring) this.scheduleContinuation(sessionId);
+      }
+      throw error;
+    }
     if (this.turns.get(sessionId) !== entryBoundary) return null;
     const ts = this.now();
 
     if (existing) {
-      const session = await this.deps.ensureSession(sessionId);
+      const failureBoundary = entryBoundary ?? freshTurn();
+      if (!entryBoundary) {
+        entryBoundary = failureBoundary;
+        this.turns.set(sessionId, failureBoundary);
+      }
+      let session: SessionLike | undefined;
+      try {
+        session = await this.deps.ensureSession(sessionId);
+      } catch (error) {
+        if (this.turns.get(sessionId) !== failureBoundary) return null;
+        this.deps.logger.warn('[goal] setGoal edit: session restore failed', {
+          sessionId,
+          error: String(error),
+        });
+        await this.blockDispatchFailure(
+          sessionId,
+          failureBoundary,
+          'turn dispatch failed: unable to restore the agent session',
+          () => this.turns.get(sessionId) === failureBoundary,
+        );
+        throw new GoalSessionRestoreError(error);
+      }
       if (this.turns.get(sessionId) !== entryBoundary) return null;
       if (!session) {
         this.deps.logger.warn('[goal] setGoal edit: no live session', { sessionId });
-        return null;
+        await this.blockDispatchFailure(
+          sessionId,
+          failureBoundary,
+          'turn dispatch failed: unable to restore the agent session',
+          () => this.turns.get(sessionId) === failureBoundary,
+        );
+        throw new GoalSessionRestoreError();
       }
-      const sessionWasBusy = this.isBusy(sessionId);
+      const sessionWasBusy =
+        rejectionTakeover?.hadGoalTurn === true || this.isBusy(sessionId);
       if (sessionWasBusy) {
-        if (!this.goalTurnsInFlight.has(sessionId)) {
+        if (
+          rejectionTakeover?.hadGoalTurn !== true &&
+          !this.goalTurnsInFlight.has(sessionId)
+        ) {
           throw new GoalControllerInputError('current conversation is still running; edit the goal after it becomes idle');
         }
         // 先 stopSession(detach listener + 清 goalTurnsInFlight/turn),再 abort:否则 abort 触发的
@@ -473,6 +579,8 @@ export class GoalController {
         previousBoundary?.pendingCompletion ?? null,
       );
       this.turns.set(sessionId, editBoundary);
+      let editObjectivePersisted = false;
+      let updatedState: GoalState | null = null;
       try {
         if (sessionWasBusy) {
           await session.abort();
@@ -493,6 +601,7 @@ export class GoalController {
           }),
           async (persisted) => {
             if (!persisted) return;
+            editObjectivePersisted = true;
             // 新目标已经提交后才重置澄清闸门；被 Stop 取消或写入失败的 setGoal
             // 不能重新开放旧目标的澄清改写。
             this.clarificationApplied.delete(sessionId);
@@ -506,18 +615,34 @@ export class GoalController {
           this.turns.delete(sessionId);
           return null;
         }
+        updatedState = updated;
         this.resetTurn(sessionId);
         const activeBoundary = this.turns.get(sessionId);
         this.attachListener(sessionId);
         this.emit(updated);
         if (this.turns.get(sessionId) === activeBoundary) {
-          await this.fireTurn(sessionId);
+          await this.fireTurn(sessionId, { throwOnRestoreFailure: true });
         }
-        return updated;
       } catch (error) {
-        if (this.turns.get(sessionId) === editBoundary) this.turns.delete(sessionId);
+        if (this.turns.get(sessionId) === editBoundary) {
+          if (rejectionTakeover) {
+            // Keep the persisted active Goal live after either half of the edit
+            // fails. Before objective commit, resume the old rejection budget;
+            // after commit, retry only the new objective with a fresh budget.
+            if (!editObjectivePersisted) {
+              this.dispatchRejectionRetries.set(sessionId, rejectionTakeover.retry);
+            }
+            this.attachListener(sessionId);
+            this.scheduleContinuation(sessionId);
+          } else {
+            this.turns.delete(sessionId);
+          }
+        }
         throw error;
       }
+      // This is only a return-value refresh. The Goal lifecycle is already
+      // established, so a read failure must not tear down its owner or retry.
+      return (await this.deps.storage.get(sessionId)) ?? updatedState;
     }
 
     const limits = input.limits ?? this.deps.getDefaults();
@@ -529,12 +654,19 @@ export class GoalController {
       previousBoundary?.pendingCompletion ?? null,
     );
     this.turns.set(sessionId, createBoundary);
+    let createdState: GoalState | null = null;
     try {
       // 先活化(resume)会话,再据活化后的会话定 agentKind:dormant(重启后尚未活化)会话此刻
       // getSession 为空,若直接 fallback 'claude-code' 会把 Codex 目标错存成 claude-code,后续
       // getAccountLimit 读错账号配额快照 → Codex 限流目标的 reset/auto-resume 错位(reviewer #354)。
-      const ensured = await this.deps.ensureSession(sessionId);
+      let ensured: SessionLike | undefined;
+      try {
+        ensured = await this.deps.ensureSession(sessionId);
+      } catch (error) {
+        throw new GoalSessionRestoreError(error);
+      }
       if (this.turns.get(sessionId) !== createBoundary) return null;
+      if (!ensured) throw new GoalSessionRestoreError();
       await this.awaitPendingLifecycle(createBoundary);
       if (this.turns.get(sessionId) !== createBoundary) return null;
       const agentKind = input.agentKind ?? ensured?.agentKind ?? this.deps.getSession(sessionId)?.agentKind ?? 'claude-code';
@@ -554,6 +686,7 @@ export class GoalController {
         startedAt: ts,
         updatedAt: ts,
       };
+      createdState = state;
       await this.trackPersistence(createBoundary, this.deps.storage.upsert(state), async () => {
         this.clarificationApplied.delete(sessionId);
         // 目标创建 → 落一条目标文案作对话起点(updated:false),**只此一次**。
@@ -568,13 +701,15 @@ export class GoalController {
       this.attachListener(sessionId);
       this.emit(state);
       if (this.turns.get(sessionId) === activeBoundary) {
-        await this.fireTurn(sessionId);
+        await this.fireTurn(sessionId, { throwOnRestoreFailure: true });
       }
-      return state;
     } catch (error) {
       if (this.turns.get(sessionId) === createBoundary) this.turns.delete(sessionId);
       throw error;
     }
+    // Same as the edit path: post-dispatch status refresh is observational and
+    // cannot revoke a lifecycle that may already own a rejection retry.
+    return (await this.deps.storage.get(sessionId)) ?? createdState;
   }
 
   async updateGoal(sessionId: string, patch: GoalUpdatePatch): Promise<GoalState | null> {
@@ -584,6 +719,25 @@ export class GoalController {
     const ownsOperationBoundary = existingBoundary === undefined;
     if (ownsOperationBoundary) this.turns.set(sessionId, operationBoundary);
     let entryGeneration = operationBoundary.generation;
+    let objectiveChanged = false;
+    let objectivePersisted = false;
+    let rejectionRetryRescheduled = false;
+    let frozenRejectionRetry:
+      | { attempts: number; firstRejectedAt: number; retryNotBefore: number }
+      | undefined;
+    const rescheduleRejectedDispatchForObjective = (status: GoalStatus): boolean => {
+      if (
+        rejectionRetryRescheduled ||
+        !objectiveChanged ||
+        status !== 'active' ||
+        (!frozenRejectionRetry && !this.dispatchRejectionRetries.delete(sessionId))
+      ) {
+        return false;
+      }
+      rejectionRetryRescheduled = true;
+      this.scheduleContinuation(sessionId);
+      return true;
+    };
     const entryChanged = (): boolean => {
       const current = this.turns.get(sessionId);
       return current !== operationBoundary || current.generation !== entryGeneration;
@@ -635,6 +789,7 @@ export class GoalController {
         }
         return limited;
       }
+      rescheduleRejectedDispatchForObjective(current.status);
       this.emit(current);
       return current;
     };
@@ -646,13 +801,40 @@ export class GoalController {
       const state = await this.deps.storage.get(sessionId);
       if (entryChanged()) return reconcileLifecycleChange();
       if (!state) return null;
-      const objectiveChanged =
+      objectiveChanged =
         normalized.objective != null && normalized.objective !== state.objective;
+      if (objectiveChanged && state.status === 'active') {
+        const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
+        if (rejectionRetry && this.firing.has(sessionId)) {
+          // The old retry already entered Session.send. Its acceptance is not yet
+          // known, so committing a replacement objective and scheduling another
+          // send could duplicate side effects. Leave both lifecycle and storage
+          // untouched; the caller can retry after this dispatch settles.
+          throw new GoalControllerInputError(
+            'current goal dispatch is still being accepted; retry the update after it settles',
+          );
+        }
+        if (rejectionRetry) {
+          // Freeze the old objective synchronously before persistence can yield.
+          // Bump generation so a timer callback already waiting on storage cannot
+          // cross the dispatch boundary with the stale objective.
+          frozenRejectionRetry = { ...rejectionRetry };
+          this.dispatchRejectionRetries.delete(sessionId);
+          const timer = this.timers.get(sessionId);
+          if (timer) {
+            clearTimeout(timer);
+            this.timers.delete(sessionId);
+          }
+          operationBoundary.generation += 1;
+          entryGeneration = operationBoundary.generation;
+        }
+      }
       const ts = this.now();
       const preview = { ...state, ...normalized };
       const shouldLimit = state.status === 'active' && exceedsGoalBudget(preview);
       const persistObjectiveMarker = async (changed: GoalState | null): Promise<void> => {
         if (!objectiveChanged || !changed) return;
+        objectivePersisted = true;
         await this.deps.persistUserMessage?.(sessionId, changed.objective, {
           goalObjective: { updated: true },
         });
@@ -700,6 +882,7 @@ export class GoalController {
         if (entryChanged()) return reconcileLifecycleChange();
       }
       if (!changed) return null;
+      rescheduleRejectedDispatchForObjective(changed.status);
       if (shouldLimit) {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         this.stopSession(sessionId);
@@ -743,11 +926,28 @@ export class GoalController {
         return reconcileLifecycleChange();
       }
       this.emit(next);
-      if (next.status === 'active' && state.status === 'budgetLimited' && !this.isBusy(sessionId)) {
+      if (
+        next.status === 'active' &&
+        state.status === 'budgetLimited' &&
+        !this.isBusy(sessionId)
+      ) {
         this.scheduleContinuation(sessionId);
       }
       return next;
     } finally {
+      if (
+        frozenRejectionRetry &&
+        !rejectionRetryRescheduled &&
+        this.turns.get(sessionId) === operationBoundary
+      ) {
+        // Storage failure keeps the old objective authoritative, so restore its
+        // retry budget. Once the objective row committed (even if its marker
+        // failed), continue only with a fresh budget for the new objective.
+        if (!objectivePersisted) {
+          this.dispatchRejectionRetries.set(sessionId, frozenRejectionRetry);
+        }
+        this.scheduleContinuation(sessionId);
+      }
       if (ownsOperationBoundary && this.turns.get(sessionId) === operationBoundary) {
         this.turns.delete(sessionId);
       }
@@ -998,7 +1198,10 @@ export class GoalController {
     // 的目标一恢复就立刻又撞上限)。
     // **自动续跑(opts.auto)绝不清零**:到点自动续跑正是过载循环的一环,在这里清
     // 等于让计数永远回到 0,止损闸门形同不存在。
-    if (!opts?.auto) this.consecutiveOverloadTurns.delete(sessionId);
+    if (!opts?.auto) {
+      this.consecutiveOverloadTurns.delete(sessionId);
+      this.dispatchRejectionRetries.delete(sessionId);
+    }
     const budgetAlreadyExhausted = exceedsGoalBudget(state);
     if (!budgetAlreadyExhausted) {
       let ensured: SessionLike | undefined;
@@ -1009,15 +1212,23 @@ export class GoalController {
           this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
         }
         if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
-        throw error;
+        throw new GoalSessionRestoreError(error);
       }
       if (this.turns.get(sessionId) !== lookupBoundary) return;
       if (!ensured) {
-        if (!opts?.auto) {
-          this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+        if (opts?.auto) {
+          if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
+          return;
         }
-        if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
-        return;
+        this.completeDeferredManualResume(sessionId);
+        this.cancelUsageResume(sessionId);
+        await this.blockDispatchFailure(
+          sessionId,
+          lookupBoundary,
+          'turn dispatch failed: unable to restore the agent session',
+          () => this.turns.get(sessionId) === lookupBoundary,
+        );
+        throw new GoalSessionRestoreError();
       }
       if (!opts?.auto && this.isBusy(sessionId)) {
         this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
@@ -1070,7 +1281,7 @@ export class GoalController {
     this.attachListener(sessionId);
     this.emit(updated);
     if (!this.isBusy(sessionId)) {
-      await this.fireTurn(sessionId);
+      await this.fireTurn(sessionId, { throwOnRestoreFailure: !opts?.auto });
     }
   }
 
@@ -1135,10 +1346,25 @@ export class GoalController {
    * resume-on-open(#review):重启后未活会话的 active 目标是 **dormant** —— resumeActiveGoals
    * 不会硬 spawn,留着 status=active 但无 listener/timer。用户**打开该会话**时(renderer
    * useGoalStatus 拉状态)调用此方法把它接着续上:active ∧ 当前未挂 listener(dormant)→
-   * ensureSession 活化 + 挂 listener + 空闲则续一轮。否则(已在管 / 非 active / 活化失败)no-op。
+   * ensureSession 活化 + 挂 listener + 空闲则续一轮。已在管 / 非 active 时 no-op；
+   * 活化失败则转 blocked 并给出可见原因，不能继续显示成正在推进。
    * 这样重开会话能让 active 目标自己跑下去,而不是卡死等用户重发 /goal。
    */
-  async resumeOnOpen(sessionId: string): Promise<void> {
+  async resumeOnOpen(
+    sessionId: string,
+    opts?: { waitForDispatch?: boolean },
+  ): Promise<void> {
+    const pendingFailure = this.unpersistedDispatchFailures.get(sessionId);
+    if (pendingFailure) {
+      const persisted = await this.blockDispatchFailure(
+        sessionId,
+        pendingFailure.boundary,
+        pendingFailure.lastReason,
+        () => this.turns.get(sessionId) === pendingFailure.boundary,
+      );
+      if (!persisted) throw new GoalSessionRestoreError();
+      return;
+    }
     if (this.unsubscribers.has(sessionId) || this.turns.has(sessionId)) return; // 已在管或正在 Stop
     const lifecycleBoundary = freshTurn();
     this.turns.set(sessionId, lifecycleBoundary);
@@ -1159,6 +1385,8 @@ export class GoalController {
     // 发给 fireTurn 开始时捕获的旧 session。
     let releaseAgentSwitchLock = (): void => {};
     let session: SessionLike | undefined;
+    let restoreFailed = false;
+    let restoreError: unknown;
     try {
       releaseAgentSwitchLock =
         (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
@@ -1170,17 +1398,57 @@ export class GoalController {
         // fireTurn 也能凭 unsubscribers 标记把 listener 迁移到重新创建的新 session。
         this.attachListener(sessionId);
       }
+    } catch (error) {
+      restoreFailed = true;
+      restoreError = error;
     } finally {
-      releaseAgentSwitchLock();
-      if (!session && this.turns.get(sessionId) === lifecycleBoundary) {
-        this.turns.delete(sessionId);
+      try {
+        releaseAgentSwitchLock();
+      } catch (error) {
+        restoreFailed = true;
+        restoreError ??= error;
       }
     }
-    if (!session) return; // 活化失败(如 device-link 远程不可用)→ 留 dormant,下次打开再试
+    if (restoreFailed) {
+      this.deps.logger.warn('[goal] resumeOnOpen: session restore failed', {
+        sessionId,
+        error: String(restoreError),
+      });
+      const persisted = await this.blockDispatchFailure(
+        sessionId,
+        lifecycleBoundary,
+        'turn dispatch failed: unable to restore the agent session',
+        () => this.turns.get(sessionId) === lifecycleBoundary,
+      );
+      if (!persisted) throw new GoalSessionRestoreError(restoreError);
+      return;
+    }
+    if (!session) {
+      const persisted = await this.blockDispatchFailure(
+        sessionId,
+        lifecycleBoundary,
+        'turn dispatch failed: unable to restore the agent session',
+        () => this.turns.get(sessionId) === lifecycleBoundary,
+      );
+      if (!persisted) throw new GoalSessionRestoreError();
+      return;
+    }
     if (this.turns.get(sessionId) !== lifecycleBoundary) return;
     this.emit(state);
     if (!this.isBusy(sessionId)) {
-      await this.fireTurn(sessionId);
+      const dispatch = this.fireTurn(sessionId, {
+        throwOnUnpersistedRestoreFailure: true,
+      });
+      if (opts?.waitForDispatch === false) {
+        void dispatch.catch((error) => {
+          this.deps.logger.warn('[goal] detached resume-on-open fire failed', {
+            sessionId,
+            error: String(error),
+          });
+        });
+      } else {
+        await dispatch;
+      }
     }
   }
 
@@ -1212,7 +1480,12 @@ export class GoalController {
       this.emit(state);
       resumed += 1;
       if (!this.isBusy(state.sessionId)) {
-        void this.fireTurn(state.sessionId);
+        void this.fireTurn(state.sessionId).catch((error) => {
+          this.deps.logger.warn('[goal] detached startup fire failed', {
+            sessionId: state.sessionId,
+            error: String(error),
+          });
+        });
       }
     }
     if (active.length > 0) {
@@ -1246,8 +1519,10 @@ export class GoalController {
     }
     this.deferredManualResumes.clear();
     this.deferredManualResumeContexts.clear();
+    this.unpersistedDispatchFailures.clear();
     this.turns.clear();
     this.consecutiveOverloadTurns.clear();
+    this.dispatchRejectionRetries.clear();
   }
 
   // ── 内部 ───────────────────────────────────────────────────────────────────
@@ -1272,6 +1547,8 @@ export class GoalController {
     }
     this.firing.delete(sessionId);
     this.goalTurnsInFlight.delete(sessionId);
+    this.dispatchRejectionRetries.delete(sessionId);
+    this.unpersistedDispatchFailures.delete(sessionId);
     this.turns.delete(sessionId);
   }
 
@@ -1364,6 +1641,9 @@ export class GoalController {
 
   private isBusy(sessionId: string): boolean {
     if (this.firing.has(sessionId)) return true;
+    // PI may acknowledge prompt acceptance before agent_start flips the
+    // provider running flag. Goal ownership bridges that acceptance gap.
+    if (this.goalTurnsInFlight.has(sessionId)) return true;
     if (this.deps.isSessionInTurn(sessionId)) return true;
     const session = this.deps.getSession(sessionId);
     return session ? session.isTurnRunning() : false;
@@ -1666,13 +1946,64 @@ export class GoalController {
     }
   }
 
+  private async blockDispatchFailure(
+    sessionId: string,
+    boundary: TurnAccumulator,
+    lastReason: string,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    if (!isCurrent()) return true;
+    try {
+      const blocked = await this.trackPersistence(
+        boundary,
+        this.deps.storage.update(sessionId, {
+          status: 'blocked',
+          lastReason,
+          updatedAt: this.now(),
+        }),
+      );
+      if (!isCurrent()) return true;
+      if (blocked) this.emit(blocked);
+    } catch (persistError) {
+      this.deps.logger.error('[goal] failed to persist dispatch failure', {
+        sessionId,
+        error: String(persistError),
+      });
+      if (isCurrent()) {
+        const failClosedBoundary = freshTurn(
+          true,
+          boundary.pendingPersistence,
+          boundary.pendingCompletion,
+        );
+        this.stopSession(sessionId);
+        this.turns.set(sessionId, failClosedBoundary);
+        this.unpersistedDispatchFailures.set(sessionId, {
+          boundary: failClosedBoundary,
+          lastReason,
+        });
+      }
+      return false;
+    }
+    if (isCurrent()) this.stopSession(sessionId);
+    return true;
+  }
+
   private scheduleContinuation(sessionId: string): void {
     const existing = this.timers.get(sessionId);
     if (existing) clearTimeout(existing);
+    const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
+    const delayMs = rejectionRetry
+      ? Math.max(this.debounceMs, rejectionRetry.retryNotBefore - this.now())
+      : this.debounceMs;
     const timer = setTimeout(() => {
       this.timers.delete(sessionId);
-      void this.fireTurn(sessionId);
-    }, this.debounceMs);
+      void this.fireTurn(sessionId).catch((error) => {
+        this.deps.logger.warn('[goal] detached continuation fire failed', {
+          sessionId,
+          error: String(error),
+        });
+      });
+    }, delayMs);
     // Node 环境;不 block 进程退出。
     (timer as { unref?: () => void }).unref?.();
     this.timers.set(sessionId, timer);
@@ -1761,7 +2092,12 @@ export class GoalController {
     // 立刻触发(限额窗口正常是 5h / weekly,远小于上限;clamp 只是防御异常 resetAt)。
     const delay = Math.min(Math.max(0, resetAtMs - this.now()), 2_147_483_647);
     const timer = setTimeout(() => {
-      void this.autoResumeFromUsageLimit(sessionId);
+      void this.autoResumeFromUsageLimit(sessionId).catch((error) => {
+        this.deps.logger.warn('[goal] detached usage resume failed', {
+          sessionId,
+          error: String(error),
+        });
+      });
     }, delay);
     (timer as { unref?: () => void }).unref?.();
     this.usageResumeTimers.set(sessionId, timer);
@@ -1853,14 +2189,36 @@ export class GoalController {
     }
   }
 
-  private async fireTurn(sessionId: string): Promise<void> {
+  private async fireTurn(
+    sessionId: string,
+    opts?: {
+      throwOnRestoreFailure?: boolean;
+      throwOnUnpersistedRestoreFailure?: boolean;
+    },
+  ): Promise<void> {
     const lifecycleBoundary = this.turns.get(sessionId);
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) return;
     const lifecycleGeneration = lifecycleBoundary.generation;
     const isCurrentLifecycle = (): boolean =>
       this.turns.get(sessionId) === lifecycleBoundary &&
       lifecycleBoundary.generation === lifecycleGeneration;
-    const state = await this.deps.storage.get(sessionId);
+    let state: GoalState | null;
+    try {
+      state = await this.deps.storage.get(sessionId);
+    } catch (error) {
+      this.deps.logger.warn('[goal] fireTurn preflight state read failed', {
+        sessionId,
+        error: String(error),
+      });
+      const persisted = await this.blockDispatchFailure(
+        sessionId,
+        lifecycleBoundary,
+        'turn dispatch failed: unable to read Goal state',
+        isCurrentLifecycle,
+      );
+      if (!persisted && opts?.throwOnUnpersistedRestoreFailure) throw error;
+      return;
+    }
     // owner 身份拒绝 Stop / Resume 换代，generation 拒绝另一轮正常推进后的旧 fire；
     // 两者都不能只信上面读到的 active 存档快照。
     if (
@@ -1883,6 +2241,24 @@ export class GoalController {
       if (!isCurrentLifecycle()) return;
       this.stopSession(sessionId);
       if (limited) this.emit(limited);
+      return;
+    }
+    const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
+    if (
+      rejectionRetry &&
+      Math.max(0, this.now() - rejectionRetry.firstRejectedAt) >=
+        DISPATCH_REJECTION_MAX_WINDOW_MS
+    ) {
+      this.deps.logger.warn('[goal] provider rejection retry window expired', {
+        sessionId,
+        attempts: rejectionRetry.attempts,
+      });
+      await this.blockDispatchFailure(
+        sessionId,
+        lifecycleBoundary,
+        DISPATCH_REJECTION_BLOCK_REASON,
+        isCurrentLifecycle,
+      );
       return;
     }
     if (this.firing.has(sessionId)) return;
@@ -1916,6 +2292,7 @@ export class GoalController {
       this.turns.get(sessionId) === dispatchBoundary &&
       dispatchBoundary.generation === dispatchGeneration;
     let releaseAgentSwitchLock = (): void => {};
+    let restoringSession = true;
     let baselineStarted = false;
     try {
       // fireTurn 每次都可能是登记 deferred intent 后的第一条直发消息。锁必须覆盖
@@ -1926,14 +2303,8 @@ export class GoalController {
       if (!isCurrentLifecycle()) return;
       const session = await this.deps.ensureSession(sessionId);
       if (!isCurrentLifecycle()) return;
-      if (!session) {
-        this.deps.logger.warn('[goal] no live session to fire (resume failed)', {
-          sessionId,
-          kind,
-        });
-        if (isCurrentLifecycle()) this.stopSession(sessionId);
-        return;
-      }
+      if (!session) throw new GoalSessionRestoreError();
+      restoringSession = false;
       // deferred switch 可能刚把 live session 换成目标引擎的新对象;本会话若有 goal
       // listener,必须迁到新 session,否则这轮 turn 的 done/error 事件进不了 finalizeTurn,
       // 目标卡死在 active(reviewer P1)。attachListener 按 session 身份判等,未换则 no-op;
@@ -2003,12 +2374,64 @@ export class GoalController {
         }
         if (!isCurrentDispatch()) return;
         this.goalTurnsInFlight.delete(sessionId);
+
+        if (result.reason === 'provider-rejected-before-dispatch') {
+          const rejectedAt = this.now();
+          const previousRetry = this.dispatchRejectionRetries.get(sessionId);
+          const firstRejectedAt = previousRetry?.firstRejectedAt ?? rejectedAt;
+          const attempts = (previousRetry?.attempts ?? 0) + 1;
+          const elapsedMs = Math.max(0, rejectedAt - firstRejectedAt);
+
+          if (
+            attempts >= DISPATCH_REJECTION_MAX_ATTEMPTS ||
+            elapsedMs >= DISPATCH_REJECTION_MAX_WINDOW_MS
+          ) {
+            this.deps.logger.warn('[goal] provider rejection retry limit reached', {
+              sessionId,
+              kind,
+              attempts,
+              elapsedMs,
+            });
+            await this.blockDispatchFailure(
+              sessionId,
+              dispatchBoundary,
+              DISPATCH_REJECTION_BLOCK_REASON,
+              isCurrentDispatch,
+            );
+            return;
+          }
+
+          const remainingWindowMs = DISPATCH_REJECTION_MAX_WINDOW_MS - elapsedMs;
+          const retryDelayMs = Math.min(
+            DISPATCH_REJECTION_BASE_DELAY_MS * (2 ** (attempts - 1)),
+            DISPATCH_REJECTION_MAX_DELAY_MS,
+            remainingWindowMs,
+          );
+          const retryNotBefore = rejectedAt + retryDelayMs;
+          this.dispatchRejectionRetries.set(sessionId, {
+            attempts,
+            firstRejectedAt,
+            retryNotBefore,
+          });
+          this.deps.logger.warn('[goal] provider rejected dispatch; retrying with backoff', {
+            sessionId,
+            kind,
+            attempts,
+            retryDelayMs,
+          });
+          this.scheduleContinuation(sessionId);
+          return;
+        }
+
         this.deps.logger.warn('[goal] send not accepted', { sessionId, kind, reason: result.reason });
+        this.scheduleContinuation(sessionId);
       } else {
         if (!isCurrentDispatch()) {
           baselineStarted = false;
           return;
         }
+        // Provider acceptance ends any prior confirmed-rejection retry window.
+        this.dispatchRejectionRetries.delete(sessionId);
         // onDispatching 是归属登记的唯一边界。不能在 await send 后再次 add：极快的
         // turn 可能已经发出终态并同步释放归属，重新登记会把后续用户 turn 误认成 Goal。
         baselineStarted = false;
@@ -2018,13 +2441,46 @@ export class GoalController {
         this.deps.onUndispatchedUserTurn?.(sessionId);
         baselineStarted = false;
       }
-      if (dispatchBoundary ? isCurrentDispatch() : isCurrentLifecycle()) {
+      const failureBoundary = dispatchBoundary ?? lifecycleBoundary;
+      const isCurrentFailure = (): boolean =>
+        dispatchBoundary ? isCurrentDispatch() : isCurrentLifecycle();
+      if (isCurrentFailure()) {
         this.goalTurnsInFlight.delete(sessionId);
       }
-      // SESSION_RUNNING:会话已有 turn 在跑(用户抢发等);该 turn 的 done 会再触发裁决。
       this.deps.logger.warn('[goal] fireTurn send failed', { sessionId, kind, error: String(e) });
+      if (!isCurrentFailure()) return;
+
+      if ((e as { code?: unknown } | null)?.code === 'SESSION_RUNNING') {
+        // dispatch 前的窄 race；现有 turn 的终态会暂停 Goal，空闲检查则负责稍后重试。
+        this.scheduleContinuation(sessionId);
+        return;
+      }
+
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      const persisted = await this.blockDispatchFailure(
+        sessionId,
+        failureBoundary,
+        `turn dispatch failed: ${errorMessage}`,
+        isCurrentFailure,
+      );
+      if (
+        restoringSession &&
+        (opts?.throwOnRestoreFailure ||
+          (!persisted && opts?.throwOnUnpersistedRestoreFailure))
+      ) {
+        throw e instanceof GoalSessionRestoreError
+          ? e
+          : new GoalSessionRestoreError(e);
+      }
     } finally {
-      releaseAgentSwitchLock();
+      try {
+        releaseAgentSwitchLock();
+      } catch (error) {
+        this.deps.logger.warn('[goal] failed to release agent switch lock', {
+          sessionId,
+          error: String(error),
+        });
+      }
       if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
         this.goalDispatchAbortControllers.delete(sessionId);
       }

@@ -13,6 +13,7 @@ const {
   mcpConnectMock,
   transportCloseMock,
   transportCtorMock,
+  resolveDesktopOutboundProxyMock,
 } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
   readlinkSyncMock: vi.fn(),
@@ -22,10 +23,23 @@ const {
   mcpConnectMock: vi.fn(),
   transportCloseMock: vi.fn(),
   transportCtorMock: vi.fn(),
+  resolveDesktopOutboundProxyMock: vi.fn(),
 }));
 
 const originalPlatform = process.platform;
-const driverResolutionEnvKeys = ['XDT_CUA_DRIVER_PATH', 'LOCALAPPDATA', 'LocalAppData'] as const;
+const driverResolutionEnvKeys = [
+  'XDT_CUA_DRIVER_PATH',
+  'LOCALAPPDATA',
+  'LocalAppData',
+  'HTTPS_PROXY',
+  'https_proxy',
+  'HTTP_PROXY',
+  'http_proxy',
+  'ALL_PROXY',
+  'all_proxy',
+  'NO_PROXY',
+  'no_proxy',
+] as const;
 const originalDriverResolutionEnv = new Map<string, string | undefined>(
   driverResolutionEnvKeys.map((key) => [key, process.env[key]]),
 );
@@ -68,6 +82,10 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
   }),
 }));
 
+vi.mock('../../maker-host/outbound-proxy-resolver.js', () => ({
+  resolveDesktopOutboundProxy: resolveDesktopOutboundProxyMock,
+}));
+
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn((name: string) => (name === 'temp' ? '/tmp' : '/Users/tester')),
@@ -81,6 +99,7 @@ import {
   cleanupAllComputerDriverSessions,
   cleanupComputerDriverSession,
   compareSemver,
+  buildCuaInstallerProxyEnv,
   extractDriverSemver,
   getCuaDriverReleaseAssetName,
   resolveCuaDriverHostArch,
@@ -310,6 +329,7 @@ describe('computer mcp integration', () => {
     mcpConnectMock.mockReset().mockResolvedValue(undefined);
     transportCloseMock.mockReset().mockResolvedValue(undefined);
     transportCtorMock.mockReset();
+    resolveDesktopOutboundProxyMock.mockReset().mockResolvedValue(null);
     for (const key of driverResolutionEnvKeys) {
       delete process.env[key];
     }
@@ -1339,6 +1359,51 @@ describe('computer mcp integration', () => {
     expectDriverSessionGenerations(
       stateCalls.map((call) => (call?.arguments as { session: string }).session),
       'session-stale',
+      [0, 1],
+    );
+  });
+
+  it('rotates and retries when cua-driver rejects a call because the named session has ended', async () => {
+    mcpCallToolMock.mockImplementation((call: { name: string; arguments: Record<string, unknown> }) => {
+      if (call.name === 'end_session') {
+        return { content: [{ type: 'text', text: '{"ok":true}' }] };
+      }
+      if (call.name === 'list_windows') {
+        const generation = driverSessionGeneration(
+          String(call.arguments.session),
+          'session-ended-rejected',
+        );
+        if (generation === 0) {
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `session '${String(call.arguments.session)}' has ended; tool call '${call.name}' was rejected`,
+            }],
+          };
+        }
+        return {
+          content: [{ type: 'text', text: '{"ok":true,"windows":[{"window_id":9}]}' }],
+        };
+      }
+      throw new Error(`unexpected call ${call.name}`);
+    });
+
+    await expect(callComputerDriverTool('list_windows', {
+      session: 'caller-supplied',
+    }, { sessionId: 'session-ended-rejected' })).resolves.toEqual({
+      ok: true,
+      windows: [{ window_id: 9 }],
+    });
+
+    expect(mcpConnectMock).toHaveBeenCalledTimes(2);
+    expect(mcpCloseMock).toHaveBeenCalledTimes(1);
+    const listCalls = mcpCallToolMock.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call?.name === 'list_windows');
+    expectDriverSessionGenerations(
+      listCalls.map((call) => (call?.arguments as { session: string }).session),
+      'session-ended-rejected',
       [0, 1],
     );
   });
@@ -2446,54 +2511,6 @@ describe('computer mcp integration', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it('resolves Computer Use target PID provenance for package-level routing guards', async () => {
-    const deps = getComputerMcpDeps();
-    mockProcessSnapshotSpawn([{
-      pid: 686,
-      parentPid: 1,
-      name: 'Xcode',
-      command: '/Applications/Xcode.app/Contents/MacOS/Xcode',
-      executable: '/Applications/Xcode.app/Contents/MacOS/Xcode',
-    }]);
-
-    await expect(deps.resolveProcessIdentity?.(686)).resolves.toMatchObject({
-      pid: 686,
-      name: 'Xcode',
-      command: '/Applications/Xcode.app/Contents/MacOS/Xcode',
-    });
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('bypasses the process snapshot cache when a routing guard requests fresh provenance', async () => {
-    const deps = getComputerMcpDeps();
-    mockProcessSnapshotSpawn([{
-      pid: 687,
-      parentPid: 1,
-      name: 'Code',
-      command: '/Applications/Visual Studio Code.app/Contents/MacOS/Electron',
-    }]);
-    mockProcessSnapshotSpawn([{
-      pid: 687,
-      parentPid: 1,
-      name: 'Simulator',
-      command:
-        '/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator',
-    }]);
-
-    await expect(deps.resolveProcessIdentity?.(687)).resolves.toMatchObject({
-      pid: 687,
-      command: '/Applications/Visual Studio Code.app/Contents/MacOS/Electron',
-    });
-    await expect(
-      deps.resolveProcessIdentity?.(687, { forceFresh: true }),
-    ).resolves.toMatchObject({
-      pid: 687,
-      command:
-        '/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator',
-    });
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-  });
-
   it('closes active MCP sessions and blocks tool dispatch while permission onboarding is paused', async () => {
     setPlatform('darwin');
     mcpCallToolMock
@@ -2581,6 +2598,63 @@ describe('computer mcp integration', () => {
       },
     });
     expect(spawnMock.mock.calls[0]?.[0]).toMatch(process.platform === 'win32' ? /powershell/i : '/bin/bash');
+  });
+
+  it('passes the resolved system HTTP proxy to the POSIX installer', async () => {
+    setPlatform('linux');
+    resolveDesktopOutboundProxyMock.mockResolvedValue('http://127.0.0.1:7897');
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+
+    await installComputerDriver();
+
+    expect(resolveDesktopOutboundProxyMock).toHaveBeenCalledWith(
+      'https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh',
+    );
+    expect(spawnMock.mock.calls[0]?.[2]?.env).toMatchObject({
+      HTTPS_PROXY: 'http://127.0.0.1:7897',
+      HTTP_PROXY: 'http://127.0.0.1:7897',
+      https_proxy: 'http://127.0.0.1:7897',
+      http_proxy: 'http://127.0.0.1:7897',
+    });
+  });
+
+  it('continues the POSIX install when system proxy resolution fails', async () => {
+    setPlatform('linux');
+    resolveDesktopOutboundProxyMock.mockRejectedValue(new Error('resolver unavailable'));
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+
+    await expect(installComputerDriver()).resolves.toMatchObject({ ok: true });
+
+    expect(spawnMock.mock.calls[0]?.[2]?.env).not.toHaveProperty('HTTPS_PROXY');
+    expect(spawnMock.mock.calls[0]?.[2]?.env).not.toHaveProperty('ALL_PROXY');
+  });
+
+  it('preserves explicit proxy env instead of replacing it with the system proxy', async () => {
+    setPlatform('linux');
+    process.env.HTTPS_PROXY = 'http://user:secret@127.0.0.1:6152';
+    resolveDesktopOutboundProxyMock.mockResolvedValue('http://127.0.0.1:7897');
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+
+    await installComputerDriver();
+
+    expect(resolveDesktopOutboundProxyMock).not.toHaveBeenCalled();
+    expect(spawnMock.mock.calls[0]?.[2]?.env?.HTTPS_PROXY).toBe(
+      'http://user:secret@127.0.0.1:6152',
+    );
+  });
+
+  it('uses remote DNS for a resolved SOCKS5 installer proxy', () => {
+    expect(buildCuaInstallerProxyEnv('socks5://127.0.0.1:7898')).toEqual({
+      ALL_PROXY: 'socks5h://127.0.0.1:7898',
+      all_proxy: 'socks5h://127.0.0.1:7898',
+    });
+    expect(buildCuaInstallerProxyEnv('https://unsupported.example')).toBeUndefined();
   });
 
   it('keeps macOS status checks side-effect-free when the daemon is stopped', async () => {

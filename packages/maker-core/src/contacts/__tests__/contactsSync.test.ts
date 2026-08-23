@@ -7,6 +7,7 @@ import { MakerContactsStore } from "../store.js";
 import {
   createContactsSyncDelta,
   mergeContactsSyncStates,
+  stableContactsSyncJson,
 } from "../sync/merge.js";
 import { materializeContactsSyncState } from "../sync/materialize.js";
 import {
@@ -36,7 +37,9 @@ describe("contacts device sync", () => {
     for (const db of databases.splice(0)) db.close();
   });
 
-  function createStore(config?: { maxIdentityValueLen: number }): MakerContactsStore {
+  function createStore(config?: {
+    maxIdentityValueLen: number;
+  }): MakerContactsStore {
     const db = new DatabaseCtor(":memory:");
     databases.push(db);
     const store = new MakerContactsStore({ db, logger: noopLogger(), config });
@@ -152,6 +155,104 @@ describe("contacts device sync", () => {
     ).toEqual(mergeContactsSyncStates(a!, mergeContactsSyncStates(b!, c!)));
   });
 
+  it("同 stamp 的确认成员元数据按完整写入稳定裁决", () => {
+    const a = createStore();
+    a.activateDeviceSync();
+    const contact = a.createContact({
+      kind: "person",
+      displayName: "元数据裁决",
+    });
+    const plain = stateOf(a);
+    const enriched = structuredClone(plain);
+    enriched.contacts.find((entry) => entry.id === contact.id)!.status = {
+      ...enriched.contacts.find((entry) => entry.id === contact.id)!.status,
+      acknowledgedConflicts: [
+        {
+          platform: "email",
+          normalizedValue: "same@example.com",
+          membershipHash: "a".repeat(64),
+        },
+      ],
+    };
+
+    expect(mergeContactsSyncStates(plain, enriched)).toEqual(
+      mergeContactsSyncStates(enriched, plain),
+    );
+  });
+
+  it("深层 stamped 扩展字段不会耗尽规范化调用栈", () => {
+    const store = createStore();
+    const contact = store.createContact({
+      kind: "person",
+      displayName: "深层扩展",
+    });
+    store.activateDeviceSync();
+    const state = stateOf(store);
+    const contactRecord = state.contacts.find((entry) => entry.id === contact.id)!;
+    let extension: Record<string, unknown> = { leaf: "ok" };
+    for (let depth = 0; depth < 10_000; depth += 1) {
+      extension = { next: extension };
+    }
+    (contactRecord.status as unknown as Record<string, unknown>).extension =
+      extension;
+
+    expect(() => stableContactsSyncJson(contactRecord.status)).not.toThrow();
+  });
+
+  it("规范化不会把旧预算之后的合法快照差异折叠成相等", () => {
+    const baseline = {
+      rows: Array.from({ length: 100_001 }, (_, index) => index),
+    };
+    const changed = structuredClone(baseline);
+    changed.rows[100_000] = -1;
+
+    expect(stableContactsSyncJson(baseline)).not.toBe(
+      stableContactsSyncJson(changed),
+    );
+  });
+
+  it("确认成员元数据使用同步层上限，不收紧多设备合并后的合法身份数", () => {
+    const store = createStore();
+    store.activateDeviceSync();
+    const contact = store.createContact({
+      kind: "person",
+      displayName: "多身份确认",
+    });
+    const state = stateOf(store);
+    const record = state.contacts.find((entry) => entry.id === contact.id)!;
+    record.status.acknowledgedConflicts = Array.from(
+      { length: 20 },
+      (_, index) => ({
+        platform: "custom",
+        normalizedValue: `identity-${index}`,
+        membershipHash: index.toString(16).padStart(64, "0"),
+      }),
+    );
+
+    expect(isValidContactsSyncState(state)).toBe(true);
+  });
+
+  it("确认成员元数据按全状态总量限制，不能按联系人重复放大", () => {
+    const store = createStore();
+    store.activateDeviceSync();
+    const first = store.createContact({ kind: "person", displayName: "甲" });
+    const second = store.createContact({ kind: "person", displayName: "乙" });
+    const state = stateOf(store);
+    const oversized = Array.from({ length: 50_001 }, (_, index) => ({
+      platform: "custom",
+      normalizedValue: `identity-${index}`,
+      membershipHash: index.toString(16).padStart(64, "0"),
+    }));
+    state.contacts.find(
+      (contact) => contact.id === first.id,
+    )!.status.acknowledgedConflicts = oversized;
+    state.contacts.find(
+      (contact) => contact.id === second.id,
+    )!.status.acknowledgedConflicts = structuredClone(oversized);
+
+    expect(isValidContactsSyncState(state)).toBe(false);
+  });
+
   it("已知对端版本后只发送缺失记录，增量合并结果与全量一致", () => {
     const a = createStore();
     const b = createStore();
@@ -244,6 +345,426 @@ describe("contacts device sync", () => {
     expect(aHit[0]!.profile.id).toBe(bHit[0]!.profile.id);
     expect(a.listContacts({ status: "pending" })).toHaveLength(2);
     expect(b.listContacts({ status: "pending" })).toHaveLength(2);
+  });
+
+  it("用户确认冲突联系人后，reconcile 和设备往返不会重新变成待确认", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "same@example.com" }],
+    });
+    b.createContact({
+      kind: "person",
+      displayName: "乙",
+      identities: [{ platform: "email", value: "same@example.com" }],
+    });
+
+    exchange(a, b);
+    expect(a.listContacts({ status: "pending" })).toHaveLength(2);
+
+    a.updateContact(aContact.id, { status: "confirmed" });
+    expect(a.stats().pending).toBe(1);
+    // 这次读取会捕获用户确认，并重建同步投影；旧实现会在这里再次打回 pending。
+    expect(a.readDeviceSyncState()).not.toBeNull();
+    expect(a.stats().pending).toBe(1);
+
+    exchange(b, a);
+    exchange(a, b);
+    expect(a.getContact(aContact.id).status).toBe("confirmed");
+    expect(b.getContact(aContact.id).status).toBe("confirmed");
+    expect(a.stats().pending).toBe(1);
+    expect(b.stats().pending).toBe(1);
+  });
+
+  it("确认后同一身份删除重建不撤销确认", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "recreated@example.com" }],
+    });
+    b.createContact({
+      kind: "person",
+      displayName: "乙",
+      identities: [{ platform: "email", value: "recreated@example.com" }],
+    });
+    exchange(a, b);
+    a.updateContact(aContact.id, { status: "confirmed" });
+    const state = stateOf(a);
+    const recreated = structuredClone(state);
+    const identity = recreated.identities.find(
+      (record) => record.value.value.contactId === aContact.id,
+    )!;
+    identity.id = `${identity.id}-recreated`;
+
+    const projection = materializeContactsSyncState(recreated);
+    expect(
+      projection.contacts.find((contact) => contact.id === aContact.id)!.status,
+    ).toBe("confirmed");
+  });
+
+  it("大量确认凭据仍按冲突 key 线性索引并保留确认状态", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "indexed@example.com" }],
+    });
+    b.createContact({
+      kind: "person",
+      displayName: "乙",
+      identities: [{ platform: "email", value: "indexed@example.com" }],
+    });
+    exchange(a, b);
+    a.updateContact(aContact.id, { status: "confirmed" });
+
+    const state = stateOf(a);
+    const contact = state.contacts.find((entry) => entry.id === aContact.id)!;
+    const acknowledgement = contact.status.acknowledgedConflicts![0]!;
+    contact.status.acknowledgedConflicts = [
+      ...Array.from({ length: 50_000 }, (_, index) => ({
+        platform: "custom",
+        normalizedValue: `unrelated-${index}`,
+        membershipHash: index.toString(16).padStart(64, "0"),
+      })),
+      acknowledgement,
+    ];
+
+    expect(
+      materializeContactsSyncState(state).contacts.find(
+        (entry) => entry.id === aContact.id,
+      )!.status,
+    ).toBe("confirmed");
+  });
+
+  it("清理同 owner 重复 identity 不撤销确认", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "duplicate@example.com" }],
+    });
+    b.createContact({
+      kind: "person",
+      displayName: "乙",
+      identities: [{ platform: "email", value: "duplicate@example.com" }],
+    });
+    exchange(a, b);
+    a.updateContact(aContact.id, { status: "confirmed" });
+    const state = stateOf(a);
+    const duplicate = structuredClone(state);
+    const identity = duplicate.identities.find(
+      (record) => record.value.value.contactId === aContact.id,
+    )!;
+    duplicate.identities.push({
+      ...identity,
+      id: `${identity.id}-duplicate`,
+    });
+
+    const projection = materializeContactsSyncState(duplicate);
+    expect(
+      projection.contacts.find((contact) => contact.id === aContact.id)!.status,
+    ).toBe("confirmed");
+  });
+
+  it("旧客户端丢失确认凭据后不靠 Lamport 大小吞掉新冲突", () => {
+    const a = createStore();
+    const b = createStore();
+    const c = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    c.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "legacy@example.com" }],
+    });
+    b.createContact({
+      kind: "person",
+      displayName: "乙",
+      identities: [{ platform: "email", value: "legacy@example.com" }],
+    });
+    exchange(a, b);
+    a.updateContact(aContact.id, { status: "confirmed" });
+    const confirmedState = stateOf(a);
+    const confirmedStamp = confirmedState.contacts.find(
+      (contact) => contact.id === aContact.id,
+    )!.status.stamp;
+    const cContact = c.createContact({
+      kind: "person",
+      displayName: "离线新成员",
+      identities: [{ platform: "email", value: "legacy@example.com" }],
+    });
+    const cIdentityStamp = stateOf(c).identities.find(
+      (identity) => identity.value.value.contactId === cContact.id,
+    )!.value.stamp;
+    expect(cIdentityStamp.counter).toBeLessThan(confirmedStamp.counter);
+
+    // 模拟旧客户端接收新版状态时丢掉未知确认字段，随后再并入自己
+    // 低 counter 创建的新成员。
+    const legacyState = structuredClone(confirmedState);
+    delete legacyState.contacts.find((contact) => contact.id === aContact.id)!
+      .status.acknowledgedConflicts;
+    const legacyWithNewConflict = mergeContactsSyncStates(
+      legacyState,
+      stateOf(c),
+    );
+    expect(isValidContactsSyncState(legacyState)).toBe(true);
+
+    const db = databases.at(-3)!;
+    db.prepare(
+      `UPDATE contacts_sync_state SET state_json = ? WHERE singleton = 1`,
+    ).run(JSON.stringify(legacyWithNewConflict));
+    const reconciled = stateOf(a);
+
+    expect(a.getContact(aContact.id).status).toBe("pending");
+    expect(a.getContact(cContact.id).status).toBe("pending");
+    expect(
+      reconciled.contacts.find((contact) => contact.id === aContact.id)!.status
+        .acknowledgedConflicts ?? [],
+    ).toHaveLength(0);
+  });
+
+  it("确认成员凭据进入增量包后，接收设备保留明确确认", () => {
+    const a = createStore();
+    const b = createStore();
+    const c = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    c.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "ack-delta@example.com" }],
+    });
+    exchange(b, a);
+    c.createContact({
+      kind: "person",
+      displayName: "冲突成员",
+      identities: [{ platform: "email", value: "ack-delta@example.com" }],
+    });
+    exchange(a, c);
+    const beforeConfirmation = stateOf(b);
+    a.updateContact(aContact.id, { status: "confirmed" });
+    const confirmedState = stateOf(a);
+    const delta = createContactsSyncDelta(
+      confirmedState,
+      beforeConfirmation.clocks,
+    );
+
+    expect(
+      delta.contacts.find((contact) => contact.id === aContact.id)!.status
+        .acknowledgedConflicts,
+    ).toHaveLength(1);
+    expect(b.mergeDeviceSyncState(delta)).toBe(true);
+    expect(b.getContact(aContact.id).status).toBe("confirmed");
+  });
+
+  it("用户确认后出现更新的同身份冲突时，所有关联联系人重新变成待确认", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "same@example.com" }],
+    });
+    a.updateContact(aContact.id, { status: "pending" });
+    stateOf(a);
+    a.updateContact(aContact.id, { status: "confirmed" });
+    stateOf(a);
+
+    // 让离线设备 B 的后续身份写入晚于 A 的确认裁决。
+    for (const displayName of ["垫高时钟一", "垫高时钟二", "垫高时钟三"]) {
+      b.createContact({ kind: "person", displayName });
+      stateOf(b);
+    }
+    const bContact = b.createContact({
+      kind: "person",
+      displayName: "乙",
+      identities: [{ platform: "email", value: "same@example.com" }],
+    });
+
+    exchange(a, b);
+    exchange(b, a);
+    expect(a.getContact(aContact.id).status).toBe("pending");
+    expect(a.getContact(bContact.id).status).toBe("pending");
+    expect(b.getContact(aContact.id).status).toBe("pending");
+    expect(b.getContact(bContact.id).status).toBe("pending");
+  });
+
+  it("用户确认后离线低 counter 设备新增同身份时，双方都重新待确认且往返幂等", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "same@example.com" }],
+    });
+    const firstConflict = createStore();
+    firstConflict.activateDeviceSync();
+    firstConflict.createContact({
+      kind: "person",
+      displayName: "旧冲突成员",
+      identities: [{ platform: "email", value: "same@example.com" }],
+    });
+    exchange(a, firstConflict);
+    expect(a.getContact(aContact.id).status).toBe("pending");
+
+    a.updateContact(aContact.id, { status: "confirmed" });
+    const confirmedState = stateOf(a);
+    const confirmedStatus = confirmedState.contacts.find(
+      (contact) => contact.id === aContact.id,
+    )!.status.stamp;
+    const bContact = b.createContact({
+      kind: "person",
+      displayName: "离线新冲突成员",
+      identities: [{ platform: "email", value: "same@example.com" }],
+    });
+    const bIdentityStamp = stateOf(b).identities.find(
+      (identity) => identity.value.value.contactId === bContact.id,
+    )!.value.stamp;
+    expect(bIdentityStamp.counter).toBeLessThan(confirmedStatus.counter);
+
+    exchange(a, b);
+    exchange(b, a);
+    exchange(a, b);
+    for (const store of [a, b]) {
+      expect(store.getContact(aContact.id).status).toBe("pending");
+      expect(store.getContact(bContact.id).status).toBe("pending");
+    }
+    const converged = stateOf(a);
+    expect(b.mergeDeviceSyncState(converged)).toBe(false);
+    expect(stateOf(b)).toEqual(converged);
+  });
+
+  it("已见旧冲突的设备后来新增同身份成员时，离线确认仍失效并最终收敛", () => {
+    const a = createStore();
+    const b = createStore();
+    const c = createStore();
+    const d = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    c.activateDeviceSync();
+    d.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "relay@example.com" }],
+    });
+    c.createContact({
+      kind: "person",
+      displayName: "旧冲突成员",
+      identities: [{ platform: "email", value: "relay@example.com" }],
+    });
+    exchange(a, c);
+    exchange(b, a);
+    expect(b.listContacts({ status: "pending" })).toHaveLength(2);
+
+    a.updateContact(aContact.id, { status: "confirmed" });
+    const confirmedStamp = stateOf(a).contacts.find(
+      (contact) => contact.id === aContact.id,
+    )!.status.stamp;
+    const bContact = d.createContact({
+      kind: "person",
+      displayName: "D 离线新成员",
+      identities: [{ platform: "email", value: "relay@example.com" }],
+    });
+    const bIdentityStamp = stateOf(d).identities.find(
+      (identity) => identity.value.value.contactId === bContact.id,
+    )!.value.stamp;
+    expect(bIdentityStamp.counter).toBeLessThan(confirmedStamp.counter);
+
+    exchange(b, d);
+    exchange(a, b);
+    exchange(b, a);
+    exchange(a, b);
+    for (const store of [a, b]) {
+      expect(store.getContact(aContact.id).status).toBe("pending");
+      expect(store.getContact(bContact.id).status).toBe("pending");
+      expect(store.listContacts({ status: "pending" })).toHaveLength(3);
+    }
+    expect(stateOf(a)).toEqual(stateOf(b));
+  });
+
+  it("完整新冲突之后的明确确认可传播到仍缺成员的设备", () => {
+    const a = createStore();
+    const b = createStore();
+    const c = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    c.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "ack@example.com" }],
+    });
+    exchange(b, a);
+    const cContact = c.createContact({
+      kind: "person",
+      displayName: "新冲突成员",
+      identities: [{ platform: "email", value: "ack@example.com" }],
+    });
+    exchange(a, c);
+    expect(a.getContact(aContact.id).status).toBe("pending");
+    expect(a.getContact(cContact.id).status).toBe("pending");
+
+    a.updateContact(aContact.id, { status: "confirmed" });
+    stateOf(a);
+    exchange(b, a);
+
+    expect(b.getContact(aContact.id).status).toBe("confirmed");
+    expect(b.getContact(cContact.id).status).toBe("pending");
+  });
+
+  it("低 counter 新冲突通过增量包到达时也会使既有确认失效", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const aContact = a.createContact({
+      kind: "person",
+      displayName: "甲",
+      identities: [{ platform: "email", value: "delta@example.com" }],
+    });
+    const oldConflict = createStore();
+    oldConflict.activateDeviceSync();
+    oldConflict.createContact({
+      kind: "person",
+      displayName: "旧冲突成员",
+      identities: [{ platform: "email", value: "delta@example.com" }],
+    });
+    exchange(a, oldConflict);
+    a.updateContact(aContact.id, { status: "confirmed" });
+    const confirmedState = stateOf(a);
+
+    const bContact = b.createContact({
+      kind: "person",
+      displayName: "增量新成员",
+      identities: [{ platform: "email", value: "delta@example.com" }],
+    });
+    const delta = createContactsSyncDelta(stateOf(b), confirmedState.clocks);
+    expect(delta.identities).toHaveLength(1);
+    expect(a.mergeDeviceSyncState(delta)).toBe(true);
+
+    expect(a.getContact(aContact.id).status).toBe("pending");
+    expect(a.getContact(bContact.id).status).toBe("pending");
   });
 
   it("FTS 重建失败后重复接收相同状态仍会重试", () => {

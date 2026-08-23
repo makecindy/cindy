@@ -11,8 +11,8 @@ import { EmptyState } from '../EmptyState';
 afterEach(() => cleanup());
 
 function renderEmptyState(
-  onAddResourceUsageTab = vi.fn(),
   onAddSubagentsTab = vi.fn(),
+  subagentsAvailable = false,
 ) {
   return render(
     <EmptyState
@@ -20,9 +20,9 @@ function renderEmptyState(
       onAddReviewTab={vi.fn()}
       onAddSubagentsTab={onAddSubagentsTab}
       onAddBackgroundTasksTab={vi.fn()}
-      onAddResourceUsageTab={onAddResourceUsageTab}
       onAddBrowserTab={vi.fn()}
       onAddTerminalTab={vi.fn()}
+      subagentsAvailable={subagentsAvailable}
     />,
   );
 }
@@ -47,17 +47,15 @@ describe('EmptyState 面板收束(2026-08)', () => {
     expect(screen.queryByText('rightSidebar.tabs.empty.pluginSub')).toBeNull();
   });
 
-  it('提供资源用量快捷入口', () => {
-    const onAddResourceUsageTab = vi.fn();
-    renderEmptyState(onAddResourceUsageTab);
-    fireEvent.click(screen.getByText('rightSidebar.tabs.empty.openResourceUsage'));
-    expect(onAddResourceUsageTab).toHaveBeenCalledOnce();
-  });
-
-  it('提供 Subagent 工作区快捷入口', () => {
+  it('仅在 Pi 任务中提供 Subagent 工作区快捷入口', () => {
     const onAddSubagentsTab = vi.fn();
-    renderEmptyState(vi.fn(), onAddSubagentsTab);
+    renderEmptyState(onAddSubagentsTab, true);
     fireEvent.click(screen.getByText('rightSidebar.tabs.empty.openSubagents'));
     expect(onAddSubagentsTab).toHaveBeenCalledOnce();
+  });
+
+  it('Claude Code/Codex 任务不显示 Subagent 快捷入口', () => {
+    renderEmptyState(vi.fn(), false);
+    expect(screen.queryByText('rightSidebar.tabs.empty.openSubagents')).toBeNull();
   });
 });

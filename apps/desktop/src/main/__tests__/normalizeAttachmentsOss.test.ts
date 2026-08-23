@@ -148,10 +148,13 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
     const [ossKeyArg, destArg] = downloadToFile.mock.calls[0] as unknown as [string, string];
     expect(ossKeyArg).toBe('cindy/device-link/u/x.png');
     expect(destArg).toMatch(/cindy-attachments[\\/]v2-[^\\/]+[\\/]sess-1[\\/].+\.png$/);
-    const block = (out as { content: Array<{ type: string; path?: string; mimeType?: string }> })
+    const block = (out as {
+      content: Array<{ type: string; path?: string; mimeType?: string; pathOrigin?: string }>;
+    })
       .content[1];
     expect(block.path).toBe(destArg); // path 指向下载目标
     expect(block.mimeType).toBe('image/png');
+    expect(block.pathOrigin).toBe('desktop-host');
     expect(removeRemote).toHaveBeenCalledWith('cindy/device-link/u/x.png');
   });
 

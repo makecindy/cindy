@@ -31,19 +31,18 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { createLogger } from '@/lib/logger';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
-import {
-  forceKillBrowserTab,
-  setForegroundBrowserTab,
-} from '../../lib/rsbBrowserBridge';
+import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
@@ -133,10 +132,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     url: browser.url || state.url,
     reload: browser.reload,
     enabled:
-      active === true &&
-      ctx.remoteHostId === null &&
-      deviceLinkDeviceId === null &&
-      !browser.crash,
+      active === true && ctx.remoteHostId === null && deviceLinkDeviceId === null && !browser.crash,
   });
 
   // 把 pool 的 wrapper 挂进 slot —— useLayoutEffect(在 paint 前移 DOM,避免闪)。
@@ -198,10 +194,20 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   }, [browser.title, ctx, state.title]);
 
   useEffect(() => {
-    // null 表示当前 webview 代际尚未观测到 favicon，不能据此清掉持久化图标；
-    // 空串才是 page-favicon-updated 明确报告 "无图标"。
+    // null 表示当前 webview 代际尚未观测到 favicon,或观测到但全部候选不可
+    // 持久化(如只有 blob:)——两种都不能据此清掉 / 覆盖已持久化图标。
     if (browser.favicon === null) return;
-    const nextFavicon = browser.favicon || null;
+    // 空串才是 page-favicon-updated 明确报告 "页面无图标" → 清空持久化 favicon。
+    if (browser.favicon === '') {
+      if (state.favicon === null) return;
+      ctx.patchState({ favicon: null });
+      return;
+    }
+    // 非空候选:WebView 和原生 popup 两套事件源必须在共用写入边界再做一次
+    // 过滤,避免 blob: / 超长 / 非白名单 scheme 进入 tab state。
+    // 不可持久化 → 保留已有图标,不写不清。
+    const nextFavicon = normalizePersistableFavicon(browser.favicon);
+    if (nextFavicon === null) return;
     if (nextFavicon === state.favicon) return;
     ctx.patchState({ favicon: nextFavicon });
   }, [browser.favicon, ctx, state.favicon]);
@@ -402,10 +408,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 主线程被打断重启),对 crashed/killed/oom 走 navigate(等价于 reload,但能
   // 容忍 webContents 已经死掉的情况)。两种都会触发 did-start-loading → 清 crash。
   const handleRecover = useCallback(() => {
-    if (
-      browser.crash?.reason === 'unresponsive' ||
-      browser.crash?.reason === 'navigation-loop'
-    ) {
+    if (browser.crash?.reason === 'unresponsive' || browser.crash?.reason === 'navigation-loop') {
       browser.reload();
     } else {
       browser.navigate(state.url || 'about:blank');
@@ -535,14 +538,16 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             >
               {t('rightSidebar.browser.resourceAlert.terminate')}
             </button>
-            <button
-              type="button"
-              aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
-              onClick={browser.dismissResourceAlert}
-              className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-            >
-              <X size={12} strokeWidth={2} />
-            </button>
+            <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom">
+              <button
+                type="button"
+                aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
+                onClick={browser.dismissResourceAlert}
+                className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              >
+                <X size={12} strokeWidth={2} />
+              </button>
+            </Tip>
           </div>
         )}
         {/* 评论模式提示条:点选中显示操作说明,固定在 slot 顶部居中,不挡 chrome。 */}
@@ -607,18 +612,18 @@ function BrowserCrashBanner({
     cause === 'resource-memory'
       ? 'rightSidebar.browser.crash.resourceKilledTitle'
       : reason === 'navigation-loop'
-      ? 'rightSidebar.browser.crash.navigationLoopTitle'
-      : reason === 'unresponsive'
-      ? 'rightSidebar.browser.crash.unresponsiveTitle'
-      : 'rightSidebar.browser.crash.crashedTitle';
+        ? 'rightSidebar.browser.crash.navigationLoopTitle'
+        : reason === 'unresponsive'
+          ? 'rightSidebar.browser.crash.unresponsiveTitle'
+          : 'rightSidebar.browser.crash.crashedTitle';
   const descKey =
     cause === 'resource-memory'
       ? 'rightSidebar.browser.crash.resourceKilledDesc'
       : reason === 'navigation-loop'
-      ? 'rightSidebar.browser.crash.navigationLoopDesc'
-      : reason === 'unresponsive'
-      ? 'rightSidebar.browser.crash.unresponsiveDesc'
-      : 'rightSidebar.browser.crash.crashedDesc';
+        ? 'rightSidebar.browser.crash.navigationLoopDesc'
+        : reason === 'unresponsive'
+          ? 'rightSidebar.browser.crash.unresponsiveDesc'
+          : 'rightSidebar.browser.crash.crashedDesc';
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-modal)] backdrop-blur-sm">
       <div className="flex max-w-xs flex-col items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-5 text-center">

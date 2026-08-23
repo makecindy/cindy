@@ -4,9 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  desktopUserDataDirNameForRegion,
+  resolveDesktopDevRegion,
+} from './shared/desktop-dev-region.mjs';
+import {
+  buildDesktopDevVerdictFromWhoami,
+  printDesktopDevVerdict,
+} from './desktop-dev-verdict.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PRODUCT_USER_DATA_NAME = 'Cindy';
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
@@ -50,11 +57,11 @@ export function parseWorktreeEntries(text) {
   return entries;
 }
 
-function repositoryWorktrees() {
-  const result = run('git', ['worktree', 'list', '--porcelain']);
-  if (result.status !== 0) return [{ rootDir, branch: null }];
+function repositoryWorktrees(cwd = rootDir) {
+  const result = run('git', ['worktree', 'list', '--porcelain'], { cwd });
+  if (result.status !== 0) return [{ rootDir: path.resolve(cwd), branch: null }];
   const entries = parseWorktreeEntries(result.stdout);
-  return entries.length > 0 ? entries : [{ rootDir, branch: null }];
+  return entries.length > 0 ? entries : [{ rootDir: path.resolve(cwd), branch: null }];
 }
 
 function listProcesses() {
@@ -186,15 +193,16 @@ export function identifyDesktopProcesses(processes, worktrees) {
   return result;
 }
 
-function defaultUserDataDir() {
+function defaultUserDataDir(region = 'global') {
+  const dirName = desktopUserDataDirNameForRegion(region);
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    return path.join(appData, PRODUCT_USER_DATA_NAME);
+    return path.join(appData, dirName);
   }
   if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', PRODUCT_USER_DATA_NAME);
+    return path.join(os.homedir(), 'Library', 'Application Support', dirName);
   }
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), PRODUCT_USER_DATA_NAME);
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), dirName);
 }
 
 function isProcessAlive(pid) {
@@ -264,8 +272,11 @@ export function mergeDesktopInstanceRecords(scanned, records, worktrees) {
       // main + renderer process scan as a second, independent signal.
       ready: record.state === 'ready' && scannedItem?.ready === true,
       mode: record.mode,
+      region: record.region ?? null,
       passive: Boolean(record.passive),
       isolated: Boolean(record.isolated),
+      isolationIntent: record.isolationIntent === true,
+      profileKind: typeof record.profileKind === 'string' ? record.profileKind : null,
       userDataDir: record.userDataDir,
       commit: record.commit ?? null,
       commitVerified: typeof record.commit === 'string' && record.commit.length > 0,
@@ -302,41 +313,54 @@ function printText(report) {
   console.log('active dev instances:');
   for (const instance of report.instances) {
     console.log(
-      `- pid=${instance.pid} state=${instance.state} mode=${instance.mode} passive=${instance.passive}` +
+      `- pid=${instance.pid} state=${instance.state} mode=${instance.mode} region=${instance.region ?? 'unknown'} passive=${instance.passive}` +
       ` root=${instance.rootDir} commit=${instance.commit ?? 'unverified'} userData=${instance.userDataDir ?? 'unknown'}`,
     );
   }
 }
 
-function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const worktrees = repositoryWorktrees();
-  const processes = listProcesses();
-  const preliminary = identifyDesktopProcesses(processes, worktrees);
+export function collectDesktopWhoamiReport(options = {}) {
+  const expectedRoot = path.resolve(options.rootDir ?? rootDir);
+  const env = options.env ?? process.env;
+  const region = resolveDesktopDevRegion([], env);
+  const worktrees = options.worktrees ?? repositoryWorktrees(expectedRoot);
+  const processes = options.processes ?? listProcesses();
+  const preliminary = options.scanned ?? identifyDesktopProcesses(processes, worktrees);
   const userDataDirs = new Set([
-    path.resolve(options.userDataDir ?? process.env.XDT_USER_DATA_DIR ?? defaultUserDataDir()),
+    path.resolve(options.userDataDir ?? env.XDT_USER_DATA_DIR ?? defaultUserDataDir(region)),
     ...preliminary.map((item) => item.userDataDir).filter(Boolean).map((item) => path.resolve(item)),
   ]);
-  const scanned = preliminary;
-  const records = readInstanceRecords(userDataDirs, worktrees);
-  const allInstances = mergeDesktopInstanceRecords(scanned, records, worktrees);
-  const expectedCommit = gitHead(rootDir);
+  const records = options.records ?? readInstanceRecords(userDataDirs, worktrees);
+  const allInstances = mergeDesktopInstanceRecords(preliminary, records, worktrees);
+  const expectedCommit = options.commit === undefined ? gitHead(expectedRoot) : options.commit;
   const match = allInstances.some((instance) =>
-    normalize(instance.rootDir) === normalize(rootDir) &&
+    normalize(instance.rootDir) === normalize(expectedRoot) &&
     instance.ready &&
     instance.commitVerified &&
     instance.commit === expectedCommit);
-  const report = {
+  return {
     schemaVersion: 1,
-    expected: { rootDir, commit: expectedCommit },
+    expected: { rootDir: expectedRoot, commit: expectedCommit },
     match,
     instances: options.all
       ? allInstances
-      : allInstances.filter((instance) => normalize(instance.rootDir) === normalize(rootDir)),
+      : allInstances.filter((instance) => normalize(instance.rootDir) === normalize(expectedRoot)),
   };
-  if (options.json) console.log(JSON.stringify(report, null, 2));
-  else printText(report);
-  process.exitCode = match ? 0 : 1;
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const report = collectDesktopWhoamiReport({
+    all: options.all,
+    userDataDir: options.userDataDir,
+  });
+  const verdict = buildDesktopDevVerdictFromWhoami(report);
+  if (options.json) console.log(JSON.stringify({ ...report, verdict }, null, 2));
+  else {
+    printText(report);
+    printDesktopDevVerdict(verdict);
+  }
+  process.exitCode = verdict.state === 'ready' ? 0 : 1;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

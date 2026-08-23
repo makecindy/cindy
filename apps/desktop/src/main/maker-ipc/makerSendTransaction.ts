@@ -5,9 +5,7 @@ import {
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
-import {
-  CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
-} from '@cindy/maker-shared/agent-input-projection';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import {
   createHostSendFailure,
@@ -18,6 +16,7 @@ import {
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
+  extractPlainText,
   prependHandoffToUserMessage,
   prependNoteToWireUserMessage,
   type HandoffWireMessage,
@@ -63,6 +62,7 @@ type MakerSendOptions = {
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
+    agentFacingWireContent?: unknown;
     sdkSessionId?: unknown;
     delivery?: unknown;
     shouldBroadcast?: unknown;
@@ -214,12 +214,26 @@ export interface MakerSendTransactionDeps {
    */
   applyPendingAgentSwitch?(sessionId: string): Promise<void>;
   /**
+   * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
+   * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
+   */
+  prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  /**
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  /**
+   * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
+   * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
+   */
+  peekPlanReconcileNote?(sessionId: string): Promise<{
+    note: string;
+    sealedTurnId?: string;
+  } | null>;
+  consumeSealedPlanReconcileNote?(sessionId: string, turnId: string): void | Promise<void>;
   /**
    * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
@@ -251,6 +265,7 @@ type ResolveSessionResult =
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   clientId: string;
   content: unknown;
+  agentFacingWireContent?: IpcUserMessage;
   sdkSessionId?: string;
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
@@ -269,6 +284,9 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   return {
     clientId: persist.clientId,
     content: persist.content,
+    ...(persist.agentFacingWireContent && typeof persist.agentFacingWireContent === 'object'
+      ? { agentFacingWireContent: persist.agentFacingWireContent as IpcUserMessage }
+      : {}),
     ...(typeof persist.sdkSessionId === 'string' ? { sdkSessionId: persist.sdkSessionId } : {}),
     ...(persist.autoResume === true ? { autoResume: true as const } : {}),
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
@@ -586,6 +604,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
       await deps.applyPendingAgentSwitch?.(sessionId);
+      await deps.prepareUnhealthySession?.(sessionId);
       let sess = deps.getSession(sessionId);
       // Maker keeps a failed Session registered until its real handle cleanup
       // succeeds. It is not a reusable send target: route it through the
@@ -737,6 +756,78 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
+      // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
+      // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
+      // 只对"用户真的开口"的普通新轮次注入,判定用白名单而非枚举内部来源
+      // (scheduler/auto-resume/compact/UI 触发续跑…漏一个就会让自动轮次去动
+      // 一份用户没打算收的计划):
+      //  - 排除一切带内部来源标记的派发(origin / autoResume);
+      //  - 排除斜杠控制消息(/compact 等,以 '/' 开头的纯指令)与合成触发
+      //    ([UI_ACTION_TRIGGER] 前缀,coordinator 的续跑指令);
+      //  - 只在消息即将作为可显示 user 行落库(persistUserMessage.content 非空)
+      //    时注入——内部控制轮次都不落可显示 user 行。
+      // 失败静默跳过:对账是锦上添花,不能挡发送。
+      const soForReconcile = (outgoingSendOpts ?? {}) as MakerSendOptions;
+      // 落库内容是 stringifyUserContent 信封({"text":...}),裸 startsWith 只会
+      // 看到 '{'——必须先抽出纯文本再分类,否则 /compact、[UI_ACTION_TRIGGER]
+      // 一类控制消息全部漏网(review P2)。
+      const reconcilePersistContent = soForReconcile.persistUserMessage?.content;
+      const reconcilePersistText =
+        reconcilePersistContent !== undefined
+          ? extractPlainText(reconcilePersistContent).trim()
+          : '';
+      // 仅附件轮次(图片/文件,text 为空)同样是"用户真的开口":信封里带
+      // images/files 即认可显示 user 行,不要求正文非空(review P2)。
+      const reconcileHasAttachments = (() => {
+        if (typeof reconcilePersistContent !== 'string') return false;
+        if (!reconcilePersistContent.startsWith('{')) return false;
+        try {
+          const parsed = JSON.parse(reconcilePersistContent) as {
+            images?: unknown;
+            files?: unknown;
+          };
+          return (
+            (Array.isArray(parsed.images) && parsed.images.length > 0) ||
+            (Array.isArray(parsed.files) && parsed.files.length > 0)
+          );
+        } catch {
+          return false;
+        }
+      })();
+      // 斜杠开头不等于控制指令:`/tmp/build.log 为什么失败` 是普通提问,按首字符
+      // 排除会让它绕过对账、遗留计划失去这一轮的收口机会(review P2)。信封里的
+      // slashCommandRanges 是权威判据 —— Composer 对新消息总会写这个键(空数组
+      // 表示"确认没有指令",见 stringifyUserContent 的注释),所以键在时只认
+      // 起点为 0 的真实指令范围;键不在(旧数据 / 非 Composer 生产者)才退回
+      // 首字符启发式。
+      const reconcileSlashRanges = (() => {
+        if (typeof reconcilePersistContent !== 'string') return undefined;
+        if (!reconcilePersistContent.startsWith('{')) return undefined;
+        try {
+          const parsed = JSON.parse(reconcilePersistContent) as { slashCommandRanges?: unknown };
+          return Array.isArray(parsed.slashCommandRanges) ? parsed.slashCommandRanges : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      const startsWithSlashCommand =
+        reconcileSlashRanges !== undefined
+          ? reconcileSlashRanges.some((range) => (range as { start?: unknown } | null)?.start === 0)
+          : reconcilePersistText.startsWith('/');
+      const isOrdinaryUserTurn =
+        soForReconcile.origin === undefined &&
+        soForReconcile.persistUserMessage?.autoResume !== true &&
+        soForReconcile.persistUserMessage?.origin === undefined &&
+        soForReconcile.persistUserMessage?.delivery !== 'steer' &&
+        (reconcilePersistText.length > 0 || reconcileHasAttachments) &&
+        !startsWithSlashCommand &&
+        !reconcilePersistText.startsWith('[UI_ACTION_TRIGGER]');
+      const planReconcile = isOrdinaryUserTurn
+        ? ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null)
+        : null;
+      const withPlanReconcile = planReconcile
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcile.note)
+        : withHandoff;
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
       // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
@@ -745,13 +836,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
       // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
       const mobileClientNote =
-        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true)
-        && shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true) &&
+        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildMobileClientPromptNote()
           : null;
       const outgoing = mobileClientNote
-        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
-        : withHandoff;
+        ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)
+        : withPlanReconcile;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);
@@ -924,10 +1015,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         ...(persistUserMessage.recoveryCheckpoint
                           ? { recoveryCheckpoint: persistUserMessage.recoveryCheckpoint }
                           : {}),
-                        ...(persistUserMessage.origin ? { origin: persistUserMessage.origin } : {}),
-                        // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
-                        // 对齐,renderer 据此渲染"由自动化任务发送"标签。
-                        ...(so.origin ? { origin: so.origin } : {}),
+                        ...(persistUserMessage.agentFacingWireContent
+                          ? { agentFacingWireContent: persistUserMessage.agentFacingWireContent }
+                          : {}),
+                        // 队列来源写入 agentMeta,不发给 maker-core。Orca 只在 persist
+                        // 上;scheduler 直发可能只在 sendOpts.origin 上。
+                        ...((persistUserMessage.origin ?? so.origin)
+                          ? { origin: persistUserMessage.origin ?? so.origin }
+                          : {}),
                       },
                     },
                     persistUserMessage.shouldBroadcast ||
@@ -994,6 +1089,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (pendingHandoff && sendResult.accepted) {
           // 只有跨过不可逆 dispatch 边界才消费;未派发保留 pending 下次重试。
           deps.consumePendingHandoff?.(sessionId);
+        }
+        if (planReconcile?.sealedTurnId && sendResult.accepted) {
+          try {
+            await deps.consumeSealedPlanReconcileNote?.(sessionId, planReconcile.sealedTurnId);
+          } catch (err) {
+            deps.log.warn('send: completed plan guard consume failed', {
+              sessionId,
+              turnId: planReconcile.sealedTurnId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         if (userPromptPreviewSessionId && userPromptPreviewClientId) {
           if (sendResult.accepted) {

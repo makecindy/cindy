@@ -26,6 +26,10 @@ import {
   Target,
 } from 'lucide-react';
 import { readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
+import {
+  projectSlashCommandsInText,
+  slashCommandDisplayLabel,
+} from '@cindy/maker-shared/composer-palette';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
@@ -135,6 +139,16 @@ interface UserMessageProps {
   /** F2: session cwd used to resolve relative paths in inline @-chip refs.
    *  Stable per-session — only changes on session switch. */
   workingDir: string;
+  /**
+   * Whether `workingDir` names paths on *this* machine.
+   *
+   * False for a device-link or SSH task, where an inline @-chip would otherwise
+   * resolve the remote author's path against the control side's filesystem and
+   * open a local file. Chips then render inert — the same shape a collapsed
+   * long message already uses. Default true keeps every existing caller, which
+   * renders local sessions, exactly as it was.
+   */
+  allowPrivilegedLinks?: boolean;
   content: string;
   /** Resolved range summaries for session links in this user message. */
   sessionReferences?: PersistedSessionReferenceMetadata[];
@@ -526,11 +540,12 @@ function renderContentWithoutPastedText(
     // Check for /command at line start — only if it looks like a real command
     const slashMatch = line.match(/^\/(\S+)/);
     if (renderLegacySlashCommands && slashMatch && looksLikeCommand(slashMatch[1])) {
+      const slashLabel = `/${slashMatch[1]}`;
       nodes.push(
         <InlineReferenceChip
           key={`s-${li}`}
-          label={`/${slashMatch[1]}`}
-          tooltip={`/${slashMatch[1]}`}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />,
       );
@@ -857,11 +872,12 @@ export function renderContent(
   const useLegacySlashHeuristic = slashCommandRanges === undefined;
   return tokens.map((token, index) => {
     if (token.kind === 'slash') {
+      const slashLabel = slashCommandDisplayLabel(token.text);
       return (
         <InlineReferenceChip
           key={`slash-chip-${index}`}
-          label={token.text}
-          tooltip={token.text}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />
       );
@@ -922,6 +938,7 @@ export function renderContent(
 
 export function UserMessage({
   workingDir,
+  allowPrivilegedLinks = true,
   content,
   sessionReferences,
   quotesEncoded,
@@ -1139,7 +1156,16 @@ export function UserMessage({
   // copy text per V1.2: original text + (if files) "\n\n附件：a.md, b.md"
   // ghost-summon-card:copy 给用户的是"他自己的话"(剥离机器追加段);
   // 追加段原文在卡片展开区可查可选中。
-  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  // Project on the persisted wire text first so slashCommandRanges stay valid,
+  // then strip private quote markers for copy / edit display.
+  const projectedSource = projectSlashCommandsInText(ghostBody, slashCommandRanges);
+  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(projectedSource) : projectedSource;
+  const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  const editSubmitText = quotesEncoded
+    ? ghostBody
+    : copyBody !== visibleSource
+      ? visibleSource
+      : undefined;
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;
@@ -1317,8 +1343,8 @@ export function UserMessage({
 
   const orcaCardTitle =
     orcaCommunication?.orcaSource === 'lead'
-      ? 'Orca Lead: dispatched task'
-      : 'Orca Worker: reported result';
+      ? t('chat.userMessage.orcaFromLead')
+      : t('chat.userMessage.orcaFromWorker');
 
   // Attachments belong to the user message independently of its visual shell.
   // Define each renderer once, then place it inside the hook / ordinary branch
@@ -1467,7 +1493,7 @@ export function UserMessage({
                 sessionId={sessionId}
                 messageClientId={messageClientId}
                 initialText={copyBody}
-                initialSubmitText={quotesEncoded ? ghostBody : undefined}
+                initialSubmitText={editSubmitText}
                 images={images}
                 files={files}
                 workingDir={workingDir}
@@ -1579,7 +1605,7 @@ export function UserMessage({
                               {renderContent(
                                 segment.text,
                                 workingDir,
-                                longMessageCollapsed
+                                longMessageCollapsed || !allowPrivilegedLinks
                                   ? undefined
                                   : async (abs, name, chip) => {
                                       if (
@@ -1592,7 +1618,7 @@ export function UserMessage({
                                       activeFileChipRef.current = chip;
                                       setTextLightboxFile({ path: abs, name });
                                     },
-                                longMessageCollapsed
+                                longMessageCollapsed || !allowPrivilegedLinks
                                   ? undefined
                                   : (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
                                 t,
@@ -1665,16 +1691,20 @@ export function UserMessage({
                           : renderContent(
                               displayBubbleBody,
                               workingDir,
-                              async (abs, name, chip) => {
-                                if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
-                                  return;
-                                // F2 / F6: stash the clicked chip so the lightbox can
-                                // return focus on close. State + ref are shared with the
-                                // Chip-Row above ("most recent trigger wins" semantics).
-                                activeFileChipRef.current = chip;
-                                setTextLightboxFile({ path: abs, name });
-                              },
-                              (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
+                              allowPrivilegedLinks
+                                ? async (abs, name, chip) => {
+                                    if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
+                                      return;
+                                    // F2 / F6: stash the clicked chip so the lightbox can
+                                    // return focus on close. State + ref are shared with the
+                                    // Chip-Row above ("most recent trigger wins" semantics).
+                                    activeFileChipRef.current = chip;
+                                    setTextLightboxFile({ path: abs, name });
+                                  }
+                                : undefined,
+                              allowPrivilegedLinks
+                                ? (xdtFileUrl) => setLightboxSrc(xdtFileUrl)
+                                : undefined,
                               t,
                               sessionId,
                               isRemoteFileOrigin(sessionFileCtx.origin),

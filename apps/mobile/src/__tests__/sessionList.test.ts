@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   buildSessionMessagePreviewIndex,
   buildRemoteSessionListContext,
@@ -17,6 +18,10 @@ import {
 } from '@/session/sessionList';
 import type { RemoteSchedule, RemoteScheduleRun } from '@/scheduler/types';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -145,7 +150,26 @@ describe('sessionList', () => {
     expect(buildRemoteSessionCardPreview({
       ...base,
       scheduleInfo: { scheduleId: 's', scheduleName: '巡检', unreadRunIds: [], unreadCount: 0, running: true, latestRunAt: 0 },
-    }, { running: true })).toBe('自动化执行中');
+    }, { running: true })).toBe('自动化运行中');
+  });
+
+  it('does not translate a real message that happens to match a generated preview state', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      await i18n.changeLanguage('en');
+      const item = toRemoteSessionListItem(
+        session('literal-status-message'),
+        Date.now(),
+        undefined,
+        0,
+        '运行中',
+      );
+
+      expect(buildRemoteSessionCardPreview(item)).toBe('运行中');
+      expect(buildRemoteSessionCardPreview(item, { running: true })).toBe('Running');
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
 
   it('shows the device-link preview on idle rows, null when the session has no message', () => {
@@ -246,7 +270,7 @@ describe('sessionList', () => {
     expect(group).toMatchObject({
       title: '移动端巡检',
       subtitle: '自动化 · 2 个任务 · Claude Code · claude-sonnet-4-6',
-      detail: '2 个任务 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '2 个任务 · 4 分钟前 · 自动化运行中 · 未读 1',
       automationGroup: {
         key: 'schedule:sched-1',
         sessionIds: ['running', 'old'],
@@ -372,8 +396,8 @@ describe('sessionList', () => {
       ['scheduled-waiting', 1],
       ['waiting', 2],
     ]);
-    expect(waitingRows.find((item) => item.session.id === 'waiting')?.detail).toContain('等待处理 2 个');
-    expect(waitingRows.find((item) => item.session.id === 'scheduled-waiting')?.detail).toContain('等待处理 1 个');
+    expect(waitingRows.find((item) => item.session.id === 'waiting')?.detail).toContain('待处理 2');
+    expect(waitingRows.find((item) => item.session.id === 'scheduled-waiting')?.detail).toContain('待处理 1');
 
     const automationRows = buildRemoteSessionSections(sessions, Date.now(), {
       pendingInteractionIndex,
@@ -419,7 +443,7 @@ describe('sessionList', () => {
     });
     expect(remoteSessionFilterLabel('waiting', overview)).toBe('待处理 1');
     expect(remoteSessionFilterLabel('all', overview)).toBe('全部 5');
-    expect(remoteSessionControlsSummary('automation', 'date', overview)).toBe('自动化 2 · 时间分组');
+    expect(remoteSessionControlsSummary('automation', overview)).toBe('自动化 2 · 按项目分组');
     expect(remoteSessionOverviewCopy(overview)).toBe('1 个置顶 · 3 个项目 · 1 个自动化执行中');
   });
 
@@ -436,14 +460,13 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: activeOverview,
       searchQuery: 'billing',
       sections: searchSections,
       statusFilter: 'active',
     })).toMatchObject({
       title: '搜索结果',
-      detail: '1 个匹配任务 · 活跃 2 · 项目分组',
+      detail: '1 个匹配任务 · 活跃 2 · 按项目分组',
       hint: '搜索范围包含标题、项目路径、模型、自动化名称和消息预览。',
       resultCount: 1,
       rowCount: 1,
@@ -468,14 +491,13 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: automationOverview,
       searchQuery: '',
       sections: automationSections,
       statusFilter: 'automation',
     })).toMatchObject({
       title: '自动化生成的任务',
-      detail: '2 个任务 · 1 行 · 自动化 2 · 项目分组',
+      detail: '2 个任务 · 1 行 · 自动化 2 · 按项目分组',
       hint: '自动化生成的任务会按计划聚合，展开后可以进入单次运行。',
       resultCount: 2,
       rowCount: 1,
@@ -496,7 +518,7 @@ describe('sessionList', () => {
       title: '没有归档任务',
     });
     expect(deviceSessionEmptyState('active', '')).toMatchObject({
-      title: '这台电脑暂无活动任务',
+      title: '这台电脑暂无活跃任务',
     });
   });
 
@@ -569,27 +591,6 @@ describe('sessionList', () => {
     expect(sections[0].data[0].messagePreview).not.toContain('{');
   });
 
-  it('can group non-pinned sessions by recent activity date', () => {
-    const now = new Date(2026, 0, 8, 12, 0, 0).getTime();
-    const sections = buildRemoteSessionSections([
-      session('today', { updatedAt: localIso(2026, 0, 8, 1), userSendAt: localIso(2026, 0, 8, 1) }),
-      session('yesterday', { updatedAt: localIso(2026, 0, 7, 23), userSendAt: localIso(2026, 0, 7, 23), workingDir: '/repo/b' }),
-      session('last7', { updatedAt: localIso(2026, 0, 3, 1), userSendAt: localIso(2026, 0, 3, 1), workingDir: '/repo/c' }),
-      session('earlier', { updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1), workingDir: '/repo/d' }),
-      session('pinned', { pinnedAt: localIso(2026, 0, 8, 2), updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1) }),
-    ], now, {
-      groupMode: 'date',
-    });
-
-    expect(sections.map((section) => [section.key, section.title, section.data.map((item) => item.session.id)])).toEqual([
-      ['pinned', '置顶', ['pinned']],
-      ['date:today', '今天', ['today']],
-      ['date:yesterday', '昨天', ['yesterday']],
-      ['date:last7', '最近 7 天', ['last7']],
-      ['date:earlier', '更早', ['earlier']],
-    ]);
-  });
-
   it('builds sections for a 1000-session remote device without duplicate rendered rows', () => {
     const now = new Date('2026-01-08T12:00:00.000Z').getTime();
     const sessions = createLargeSessionFixture(1000);
@@ -616,7 +617,6 @@ describe('sessionList', () => {
 
     const start = performance.now();
     const projectSections = buildRemoteSessionSections(sessions, now, {
-      groupMode: 'project',
       scheduleIndex,
     });
     const durationMs = performance.now() - start;
@@ -645,10 +645,6 @@ describe('sessionList', () => {
     )).toBe(true);
   });
 });
-
-function localIso(year: number, monthIndex: number, day: number, hour: number): string {
-  return new Date(year, monthIndex, day, hour, 0, 0).toISOString();
-}
 
 function createLargeSessionFixture(count: number): RemoteSession[] {
   const base = Date.parse('2026-01-08T12:00:00.000Z');

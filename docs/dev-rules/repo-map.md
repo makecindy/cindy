@@ -13,7 +13,6 @@
 |---|---|
 | `apps/` | 终端产品（desktop、mobile）与随包分发的二进制资产 |
 | `packages/` | 客户端共享能力包（与 render／main 解耦，详见下表） |
-| `cindy-protocol/` | git submodule：客户端与服务端共享的存量 wire protocol 权威源；package 集合封闭且持续精简，当前保留 device-link、slack-hook、plugin、model-access 四包；升级规则见 [`protocol-and-submodules.md`](protocol-and-submodules.md) |
 | `config/` | 运行期端点清单（`endpoint.json` / `endpoint.dev.json` / `endpoint.global.json`：auth、device-link 等线上 base URL） |
 | `scripts/` | 仓库级工程脚本：dev 启动包装、agent 二进制拉取（`ensure-agent-binaries.mjs`）、i18n／endpoint／文档等校验 guard、worktree 管理 |
 | `tools/` | claude／codex／ripgrep／pi 四个 Desktop runtime 的版本 pin（`latest.json`）与更新器（`update.mjs`） |
@@ -38,6 +37,7 @@
 | `maker-core` | Cindy 核心：agent 抽象（BaseAgent）、session 编排与事件流，零 Electron 依赖；改动前必读 [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md) | desktop、lizi-mcps、orca-workflow |
 | `maker-shared` | 桌面与手机共享的展示层契约模型，零 React／Electron／Expo 依赖 | desktop + mobile |
 | `maker-cc-manager` | cc-remote：跑在远程 SSH 机器上的 NDJSON RPC 守护进程，封装 Claude Agent SDK，向本地桌面暴露多会话／detach-reattach 能力 | desktop（remote-ssh） |
+| `maker-pi-manager` | pi-remote：跑在远程 SSH 机器上的 PI 单例 daemon（TS NDJSON RPC + unix socket bridge），持有 pi 会话、条件 restart、空闲回收 | desktop（remote-ssh） |
 | `maker-remote-ssh` | SSH remote：连接池、`~/.ssh/config` 读写、凭据解析，零 Electron 依赖 | desktop |
 | `maker-scheduler` | 定时任务：cron 引擎 + storage／runner／notifier 接口 | desktop、lizi-mcps |
 | `orca-workflow` | Orca 多 worker 协同的 lead 侧：MCP 桥接 + lead prompt；改动前必读 [`orca-team-architecture.md`](orca-team-architecture.md) | desktop |

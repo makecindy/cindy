@@ -10,7 +10,6 @@
  */
 
 import {
-  Activity,
   Bot,
   ChevronRight,
   FileDiff,
@@ -30,7 +29,7 @@ interface EmptyStateProps {
   onAddReviewTab: () => void;
   onAddSubagentsTab: () => void;
   onAddBackgroundTasksTab: () => void;
-  onAddResourceUsageTab: () => void;
+  subagentsAvailable?: boolean;
 }
 
 export function EmptyState({
@@ -40,7 +39,7 @@ export function EmptyState({
   onAddReviewTab,
   onAddSubagentsTab,
   onAddBackgroundTasksTab,
-  onAddResourceUsageTab,
+  subagentsAvailable = false,
 }: EmptyStateProps) {
   const { t } = useTranslation();
   return (
@@ -74,24 +73,19 @@ export function EmptyState({
         />
         {/* 后台任务:顺序与 + dropdown 一致(review order=15 → background-tasks
             order=17 → browser order=20)。 */}
-        <ActionRow
-          icon={Bot}
-          label={t('rightSidebar.tabs.empty.openSubagents')}
-          sub={t('rightSidebar.tabs.empty.subagentsSub')}
-          onClick={onAddSubagentsTab}
-        />
+        {subagentsAvailable && (
+          <ActionRow
+            icon={Bot}
+            label={t('rightSidebar.tabs.empty.openSubagents')}
+            sub={t('rightSidebar.tabs.empty.subagentsSub')}
+            onClick={onAddSubagentsTab}
+          />
+        )}
         <ActionRow
           icon={ListTodo}
           label={t('rightSidebar.tabs.empty.openBackgroundTasks')}
           sub={t('rightSidebar.tabs.empty.backgroundTasksSub')}
           onClick={onAddBackgroundTasksTab}
-        />
-        {/* 资源用量 order=18，紧跟 background-tasks=17，顺序与 + 菜单一致。 */}
-        <ActionRow
-          icon={Activity}
-          label={t('rightSidebar.tabs.empty.openResourceUsage')}
-          sub={t('rightSidebar.tabs.kinds.resourceUsage')}
-          onClick={onAddResourceUsageTab}
         />
         <ActionRow
           icon={Globe}

@@ -84,8 +84,23 @@ interface GrokTokenBlob {
 // writeBlob / logoutGrok 时更新。undefined = 尚未从磁盘读过。
 let _blobCache: GrokTokenBlob | null | undefined;
 
+// 视频任务会跨越数分钟轮询。仅靠 Cindy app-session owner 无法识别同一 owner
+// 内的 SuperGrok 登出/换号，所以用进程内单调代际把任务绑定到“提交时那次登录”。
+// 常规 access_token 刷新不推进代际：它仍属于同一登录，不能误杀正常在途任务。
+let _credentialGeneration = 0;
+
+function advanceGrokOAuthCredentialGeneration(): void {
+  _credentialGeneration += 1;
+}
+
+/** 当前 SuperGrok 登录代际；只用于比较，不包含任何凭证材料。 */
+export function getGrokOAuthCredentialGeneration(): number {
+  return _credentialGeneration;
+}
+
 /** Drop the process-local xAI OAuth blob cache after an owner boundary. */
 export function resetGrokOAuthMemoryCache(): void {
+  advanceGrokOAuthCredentialGeneration();
   _blobCache = undefined;
   _refreshChain = Promise.resolve();
   _lastForcedRefreshAt = 0;
@@ -125,6 +140,9 @@ export function hasGrokOAuthLoginUnbound(): boolean {
 
 /** 登出:清掉本机 xAI 凭证。 */
 export function logoutGrok(): void {
+  // 用户一旦发起登出，旧视频任务就必须立即失效；即使后续存储/解绑异常让
+  // UI 报错，也不能继续拿登出前的任务跨凭证边界执行。
+  advanceGrokOAuthCredentialGeneration();
   // remove() 的失败结果这里不阻断登出(用户意图优先),但正因为凭证可能没删掉,解绑必须
   // 带撤销标记 —— 否则下一次读连接态会把残留凭证自动认领回来(PR #548 review)。
   getProviderSecretStore().remove(SECRET_ID);
@@ -562,6 +580,7 @@ export async function runGrokOAuthLogin(opts?: {
     if (abort.signal.aborted) throw new Error('login_cancelled');
     writeBlob(blobFromTokenResponse(tok));
     bindNativeProviderAuth('xai');
+    advanceGrokOAuthCredentialGeneration();
     listener.succeed();
     log.info('xai oauth login success', { scope: tok.scope });
     return { ok: true };

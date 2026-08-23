@@ -59,6 +59,7 @@ import {
   type TurnDeliveryPayload,
   type TurnEndPayload,
 } from '@cindy/slack-hook-protocol';
+import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
@@ -152,6 +153,16 @@ export interface HookRunRequest {
   laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
   isNew: boolean;
+  /**
+   * 新建任务替换了哪条不可投递的旧任务。runner 用它从旧任务仍可读取的
+   * 本地消息构造一次性 Agent 交接；省略 = 普通新建，不补旧任务上下文。
+   */
+  replacementOfSessionId?: string;
+  /**
+   * 原任务尚未落库时的内存兜底 prompt。只进入新 Agent 的交接前缀，绝不作为
+   * replacement 的用户消息落库；省略 = 仅尝试读取旧任务消息。
+   */
+  replacementPrompt?: string;
   workingDir: string;
   /** dispatch options 显式指定的 agent; null = 桌面端按草稿默认落值。 */
   agentKind: string | null;
@@ -603,8 +614,27 @@ interface PendingReopen {
   /** 那一轮真正跑的目录(执行前还要按当前映射复核一次)。 */
   workingDir: string;
   source?: TaskSource;
+  /** 失败任务本身若是 replacement，下一次 replacement 继续从最初来源任务交接。 */
+  replacementOfSessionId?: string;
+  replacementPrompt?: string;
   accountGeneration: number;
   expiresAt: number;
+}
+
+/**
+ * 官方 legacy adapter 的消息生命周期。
+ *
+ * Slack / X 继续沿用原路径；只有 Telegram 任务接入共享内核。当前服务端仍由
+ * `turn.progress` / `turn.end` 实际发布，所以这里的 sent 表示终态已进入客户端
+ * 可靠发布边界，不冒充 Telegram Bot API 的最终回执。
+ */
+function telegramLegacyLifecycle(
+  connectionId: string,
+  requestId: string,
+  source: TaskSource | undefined,
+): TelegramMessageLifecycle | null {
+  if (source?.im !== 'telegram') return null;
+  return createTelegramMessageLifecycle(`telegram-official:${connectionId}:${requestId}`);
 }
 
 export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
@@ -745,6 +775,19 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     string,
     { staleSessionId: string; replacementSessionId: string }
   >();
+  /** 最近一次已受理派发的原始需求；原任务未落库时供 replacement 恢复。 */
+  const latestPromptBySession = new Map<string, string>();
+  const MAX_REMEMBERED_SESSION_PROMPTS = 2_000;
+  const MAX_REMEMBERED_PROMPT_CHARS = 20_000;
+  function rememberSessionPrompt(sessionId: string, prompt: string): void {
+    // 第一条才是 thread 的原始需求。后续“再试试”等短追问不得覆盖它。
+    if (latestPromptBySession.has(sessionId)) return;
+    latestPromptBySession.set(sessionId, prompt.slice(0, MAX_REMEMBERED_PROMPT_CHARS));
+    if (latestPromptBySession.size > MAX_REMEMBERED_SESSION_PROMPTS) {
+      const oldest = latestPromptBySession.keys().next().value;
+      if (oldest !== undefined) latestPromptBySession.delete(oldest);
+    }
+  }
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
@@ -1233,6 +1276,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
     const requestId = randomUUID();
     const requestKey = ackKey(entry.connectionId, requestId);
+    const messageLifecycle = telegramLegacyLifecycle(
+      entry.connectionId,
+      requestId,
+      entry.source,
+    );
     let claimed = false;
     // runner 可能在 watch() 里**同步**收口(会话已不在进程里就直接 onAbandon),
     // 那时 cancelWatch 还没赋值 —— 用这个标记决定要不要登记, 不去碰它。
@@ -1317,6 +1365,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       },
       onProgress: (text) => {
         if (revoked || !claimed || !isCurrentGeneration(entry.accountGeneration)) return;
+        if (messageLifecycle && !messageLifecycle.acceptProgress()) return;
         const send = sendFns.get(entry.connectionId);
         if (send) send(makeTurnProgress({ requestId, text }));
       },
@@ -1329,6 +1378,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (revoked || !claimed || !isCurrentGeneration(entry.accountGeneration)) return;
         const status: 'ok' | 'error' | 'cancelled' = wasCancelled ? 'cancelled' : outcome.status;
         const isError = status === 'error';
+        // Fence progress before the legacy terminal frame. Continuation
+        // callbacks can race the async attachment-collection tail.
+        const finalIntent = messageLifecycle?.beginFinal() ?? null;
         // 续跑轮的 turn.end **直发不缓存**, 与普通任务(sendOrBuffer 断线补发)刻意
         // 相反: 普通任务的消息由 server 建、断线期间没人动它, 补发就能定稿; 而续跑
         // 轮的消息在断连那一刻已被 server 的孤儿收口改写并解绑 requestId, 迟到的
@@ -1351,10 +1403,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             }),
           ) === true;
         if (!delivered) {
+          if (messageLifecycle && finalIntent) messageLifecycle.markFinalFailed(finalIntent);
           // 没发出去 => server 已把这条消息收口并解绑本轮 requestId, 再拿它当
           // reopenOf 只会被静默忽略。这条消息线到此为止, 不再登记可续跑。
           log.warn(`hook continuation turn.end dropped (connection offline): ${requestId}`);
           return;
+        }
+        if (messageLifecycle && finalIntent) {
+          messageLifecycle.markFinalSent(finalIntent);
+          if (messageLifecycle.beginCleanup()) messageLifecycle.finishCleanup();
         }
         // 续跑又失败了 -> 允许再续一次(用户还得再点一次重试, 天然限流)。
         // reopenOf 换成这一轮的 requestId: server 侧那条消息现在挂在它上面。
@@ -1367,6 +1424,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
               externalKey: entry.externalKey,
               workingDir: entry.workingDir,
               ...(entry.source ? { source: entry.source } : {}),
+              ...(entry.replacementOfSessionId
+                ? { replacementOfSessionId: entry.replacementOfSessionId }
+                : {}),
+              ...(entry.replacementPrompt ? { replacementPrompt: entry.replacementPrompt } : {}),
               accountGeneration: entry.accountGeneration,
             },
             // 这一轮开跑时已复核过能力(见 beginContinuation), 且它的 turn.end 刚刚
@@ -1423,11 +1484,17 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
     runningByRequest.set(requestKey, { sessionId, connectionId: task.connectionId });
+    const messageLifecycle = telegramLegacyLifecycle(
+      task.connectionId,
+      task.requestId,
+      task.run.source,
+    );
 
     // 进度快照直发不缓存: 断线期间的中间帧没有补发价值(turn.end 会带最终
     // 结果), 发送失败静默丢弃即可
     const onProgress = (text: string): void => {
       if (!isCurrentGeneration(task.accountGeneration)) return;
+      if (messageLifecycle && !messageLifecycle.acceptProgress()) return;
       const send = sendFns.get(task.connectionId);
       if (send) send(makeTurnProgress({ requestId: task.requestId, text }));
     };
@@ -1537,6 +1604,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ? { attachments: outcome.attachments }
         : {}),
     };
+    // Open the final fence before the legacy terminal frame enters any async
+    // outbox path. A late progress callback from the observer must never write
+    // over the answer after this point.
+    const finalIntent = messageLifecycle?.beginFinal() ?? null;
     // Protocol idempotency replays only the original ACK. The terminal record
     // is written as a pending outbox entry before sending; an offline frame
     // stays buffered in memory until onConnected flushes the full payload.
@@ -1546,6 +1617,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       ack: task.ack,
       turnEnd: durableTurnEnd(turnEnd),
     });
+    if (messageLifecycle && finalIntent) {
+      messageLifecycle.markFinalSent(finalIntent);
+      if (messageLifecycle.beginCleanup()) messageLifecycle.finishCleanup();
+    }
     // 表情换终态。连接断了也要**调**一次 —— 传一个必然失败的发送器, 让
     // ackReactions 把它记进待补发队列; 直接跳过的话那条消息会永远挂着 👀,
     // 而重连补发拿不到任何东西可补。
@@ -1567,6 +1642,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           externalKey: task.externalKey,
           workingDir: task.run.workingDir,
           ...(task.run.source ? { source: task.run.source } : {}),
+          ...(task.run.replacementOfSessionId
+            ? { replacementOfSessionId: task.run.replacementOfSessionId }
+            : {}),
+          ...(task.run.replacementPrompt
+            ? { replacementPrompt: task.run.replacementPrompt }
+            : {}),
           accountGeneration: task.accountGeneration,
         },
         task.reopenCapable,
@@ -1704,12 +1785,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     let effectiveWorkspace = payload.workspace;
     let effectiveWorkspaces = config.workspaces;
     let forceNew = false;
+    let replacementOfSessionId: string | null = null;
+    let replacementPrompt: string | null = null;
     /** 旧绑定作废、本次不得不新建会话时, 随 turn.end 回给渠道的说明。 */
     let recreatedNotice: string | null = null;
 
     const laneKind = deriveLaneKind(payload.externalKey);
     const laneKey = bindingKey(connectionId, payload.externalKey);
     const namespacedBound = bindings.get(connectionId, payload.externalKey);
+    const trackedReplacement = staleTakeoverReplacements.get(laneKey);
     // v1 stored every mapping under the literal "slack" namespace.  A new
     // account/provider namespace may read it only as a candidate; it is moved
     // after current-account DB existence + workspace allowlist checks pass.
@@ -1812,6 +1896,18 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         // 仍保留旧拒绝语义, 避免凭空选择一个工作目录。
         return { reject: 'session_not_found' };
       }
+      const canRecoverFromRequestedSession =
+        payload.sessionId === namespacedBound ||
+        (trackedReplacement !== undefined &&
+          (payload.sessionId === trackedReplacement.staleSessionId ||
+            payload.sessionId === trackedReplacement.replacementSessionId));
+      replacementOfSessionId = canRecoverFromRequestedSession
+        ? (trackedReplacement?.staleSessionId ?? payload.sessionId)
+        : null;
+      replacementPrompt =
+        replacementOfSessionId === null
+          ? null
+          : (latestPromptBySession.get(replacementOfSessionId) ?? null);
       forceNew = true;
       log.info(
         `hook takeover target ${payload.sessionId} is gone or archived; creating a fresh session in ${effectiveWorkspace}`,
@@ -1835,7 +1931,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ? bindings.get(legacyNamespace, payload.externalKey)
         : null;
     const bound = namespacedBound ?? legacyBound;
-    const trackedReplacement = staleTakeoverReplacements.get(laneKey);
+    const previousTrackedStaleSessionId = trackedReplacement?.staleSessionId ?? null;
     const reusesTrackedReplacement =
       forceNew &&
       payload.sessionId !== null &&
@@ -1953,6 +2049,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 原因, 因此带一条说明随本次 turn.end 回去(见 execute)。
       if (!forceNew) {
         recreatedNotice = info?.usable ? NOTICE_SESSION_RECREATED : NOTICE_SESSION_GONE;
+        // 当前 lane 自己的失效绑定可以作为交接来源。legacy namespace 可能来自
+        // 另一账号，只允许迁移可用且仍在映射内的任务，绝不从失效 legacy 读历史。
+        if (!info?.usable && bound === namespacedBound) {
+          replacementOfSessionId = bound;
+          replacementPrompt = latestPromptBySession.get(bound) ?? null;
+        }
       }
       log.info(
         `hook binding for ${payload.externalKey} dropped: session ${bound} ${
@@ -2004,8 +2106,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 新建会话跑在别名目录(或对话根)里, 是否还能复用每次现场按映射判定
     bindings.set(connectionId, payload.externalKey, sessionId);
     if (forceNew && payload.sessionId !== null) {
+      // Security: staleSessionId is only used for routing repeated dispatches to
+      // the same replacement session (reusesTrackedReplacement path). It never
+      // grants read access — replacementOfSessionId (which enables history read)
+      // is always gated by canRecoverFromRequestedSession above.
       staleTakeoverReplacements.set(laneKey, {
-        staleSessionId: payload.sessionId,
+        staleSessionId: previousTrackedStaleSessionId ?? payload.sessionId,
         replacementSessionId: sessionId,
       });
     } else {
@@ -2034,6 +2140,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       run: {
         sessionId,
         isNew: true,
+        ...(replacementOfSessionId !== null ? { replacementOfSessionId } : {}),
+        ...(replacementPrompt !== null ? { replacementPrompt } : {}),
         laneKind,
         workingDir: runDir,
         agentKind,
@@ -2229,6 +2337,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
               ...taskBase,
               ack,
             };
+            rememberSessionPrompt(sessionId, task.run.prompt);
             queue.push(task);
             queues.set(sessionId, queue);
             reply(connectionId, send, ack);
@@ -2251,6 +2360,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             queuePosition: null,
           };
           const task: PendingTask = { ...taskBase, ack };
+          rememberSessionPrompt(sessionId, task.run.prompt);
           reply(connectionId, send, ack);
           ackReactions.onAccepted(ackTaskOf(task), send);
           startExecution(task);
@@ -2375,6 +2485,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         // (PR #733 review 指出)。这些会话属于上一个账号, 新账号下本就不该免检。
         awaitingPersist.clear();
         staleTakeoverReplacements.clear();
+        latestPromptBySession.clear();
         keyChains.clear();
         sessionAdmissionChains.clear();
       })();
@@ -2568,6 +2679,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }
       pendingReopens.clear();
       staleTakeoverReplacements.clear();
+      latestPromptBySession.clear();
       serverFeatures.clear();
       sendFns.clear();
       pendingTurnEnds.clear();

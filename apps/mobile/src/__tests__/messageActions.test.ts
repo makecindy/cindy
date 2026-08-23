@@ -84,6 +84,29 @@ describe('messageActions', () => {
     expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'user' })).toBe(false);
   });
 
+  it('projects confirmed Pi runtime /skill: aliases when copying a user message', () => {
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git follow-up review',
+      slashCommandRanges: [{ start: 0, end: 10 }],
+    }))).toBe('/git follow-up review');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git is just prose here',
+    }))).toBe('/skill:git is just prose here');
+    const quoted = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up review',
+    ].join('\n');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: quoted,
+      quotesEncoded: true,
+      slashCommandRanges: [
+        { start: quoted.indexOf('/skill:git'), end: quoted.indexOf('/skill:git') + 10 },
+      ],
+    }))).toBe(['> quoted', '', '/git follow-up review'].join('\n'));
+  });
+
   it('builds desktop-compatible copy text with attachment names', () => {
     expect(buildMobileMessageCopyText(normalizedMessage({
       body: 'Please inspect this.',

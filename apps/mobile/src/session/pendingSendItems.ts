@@ -73,6 +73,31 @@ export interface MobilePendingSendItem {
   hint: string | null;
 }
 
+export interface MobileMessageListExtraData {
+  pendingSendSelectedClientId: string | null;
+  shareSelectionActive: boolean;
+}
+
+/**
+ * LegendList 的行外刷新信号。待发送气泡的展开态不改变 data，必须把选中项放进
+ * extraData，才能让已复用的可见行重新计算操作区。
+ */
+export function buildMobileMessageListExtraData(
+  pendingSendSelectedClientId: string | null,
+  shareSelectionActive: boolean,
+): MobileMessageListExtraData {
+  return { pendingSendSelectedClientId, shareSelectionActive };
+}
+
+/** 待发送气泡是否处于展开态；生产渲染与状态转换测试共用同一判据。 */
+export function isPendingSendItemSelected(
+  item: Pick<MobilePendingSendItem, 'actions' | 'clientId' | 'phase'>,
+  selectedClientId: string | null,
+): boolean {
+  const interactive = item.actions !== null || item.phase === 'failed';
+  return interactive && selectedClientId === item.clientId;
+}
+
 export function pendingSendItemKey(clientId: string): string {
   return `message-${clientId}`;
 }
@@ -161,7 +186,6 @@ export interface BuildPendingSendItemsInput {
   hiddenClientIds: ReadonlySet<string>;
   /** enqueue RPC 在途的 clientId(徽标转圈,不谎报「已入队」)。 */
   sendingClientIds: ReadonlySet<string>;
-  unconfirmedClientIds: ReadonlySet<string>;
   /** 正在 composer 里编辑的条目。 */
   editingClientId: string | null;
   /** 插队发送中的 clientId(projection.steeringQueueClientIds)。 */
@@ -189,7 +213,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
     if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
     const attachments = queuedAttachmentThumbs(item, input.previewByOssRef);
-    const presentation = queueIndex === null || input.unconfirmedClientIds.has(item.clientId)
+    const presentation = queueIndex === null
       ? null
       : input.presentationByClientId.get(item.clientId) ?? null;
     items.push({
@@ -223,8 +247,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   input.queue.forEach((item, index) => {
     const phase: MobilePendingSendPhase = input.editingClientId === item.clientId
       ? 'editing'
-      : input.unconfirmedClientIds.has(item.clientId)
-        || input.steeringClientIds.has(item.clientId)
+      : input.steeringClientIds.has(item.clientId)
         || input.sendingClientIds.has(item.clientId)
         ? 'sending'
         : 'queued';

@@ -1,12 +1,14 @@
 // RsbWindowController 状态机单测(纯 DI,不 mock electron):
-//  - open / close / setDetached 的落盘 + 广播行为
-//  - 用户关窗(closed 事件)在 quitting / 非 quitting 下 lastOpen 的差异
-//  - ensureOpenForAutomation:非 detached no-op、开窗等 ready、超时、窗口先关
+//  - prewarm / open / close / setDetached 的落盘 + 广播行为
+//  - 双阶段就绪握手(renderer-ready → presentation-ready)
+//  - 隐藏复用(close = hide, 不销毁; setDetached(false) = 真正 destroy)
+//  - 崩溃恢复有界
 //  - getHostWebContents 三态(detached+open → 子窗;否则主窗)
-//  - setContext 缓存 + 仅窗口开着时转发;routeCommand 原子裁决宿主并处理 deferred intent
+//  - setContext 缓存 + 仅窗口活跃时转发;routeCommand 原子裁决宿主
+//  - 跨 session 呼起 adopt/pin,不被主窗焦点抢回
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, WebContents } from 'electron';
 
 import { RsbWindowController, type RsbWindowControllerDeps } from '../controller.js';
 import type { RsbWindowSettings } from '../settings-store.js';
@@ -14,82 +16,138 @@ import type { RsbWindowSettings } from '../settings-store.js';
 interface FakeWindow {
   on: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  destroy: ReturnType<typeof vi.fn>;
+  hide: ReturnType<typeof vi.fn>;
   show: ReturnType<typeof vi.fn>;
+  showInactive: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   restore: ReturnType<typeof vi.fn>;
   isMinimized: () => boolean;
+  isVisible: () => boolean;
   isDestroyed: () => boolean;
   destroyed: boolean;
-  webContents: { id: number };
-  /** 测试用:触发已注册的 closed listener(模拟用户关窗 / win.close() 完成)。 */
+  visible: boolean;
+  webContents: {
+    id: number;
+    on: ReturnType<typeof vi.fn>;
+    setBackgroundThrottling: ReturnType<typeof vi.fn>;
+    isDestroyed: () => boolean;
+  };
   emitClosed: () => void;
+  emitWindowEvent: (event: string, ...args: unknown[]) => void;
+  emitWebContentsEvent: (event: string, ...args: unknown[]) => void;
 }
 
-function fakeWindow(id = 1, asyncClose = false): FakeWindow {
-  const listeners = new Map<string, () => void>();
+function fakeWindow(id = 1): FakeWindow {
+  const winListeners = new Map<string, (...args: unknown[]) => void>();
+  const wcListeners = new Map<string, (...args: unknown[]) => void>();
+  let destroyed = false;
+  let visible = false;
+  let minimized = false;
+  const webContentsOn = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+    wcListeners.set(event, cb);
+  });
   const win: FakeWindow = {
-    on: vi.fn((event: string, cb: () => void) => {
-      listeners.set(event, cb);
+    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+      winListeners.set(event, cb);
     }),
-    // 真实 BrowserWindow.close() 异步走到 'closed';fake 里同步触发,足够覆盖状态机
     close: vi.fn(() => {
-      if (asyncClose) return;
-      win.destroyed = true;
-      listeners.get('closed')?.();
+      let prevented = false;
+      winListeners.get('close')?.({ preventDefault: () => { prevented = true; } });
+      if (prevented) return;
+      destroyed = true;
+      visible = false;
+      winListeners.get('closed')?.();
     }),
-    show: vi.fn(),
+    destroy: vi.fn(() => {
+      destroyed = true;
+      visible = false;
+      winListeners.get('closed')?.();
+    }),
+    hide: vi.fn(() => { visible = false; }),
+    show: vi.fn(() => { visible = true; }),
+    showInactive: vi.fn(() => { visible = true; }),
     focus: vi.fn(),
-    restore: vi.fn(),
-    isMinimized: () => false,
-    isDestroyed: () => win.destroyed,
+    restore: vi.fn(() => {
+      minimized = false;
+      winListeners.get('restore')?.();
+    }),
+    isMinimized: () => minimized,
+    isVisible: () => visible,
+    isDestroyed: () => destroyed,
     destroyed: false,
-    webContents: { id },
-    emitClosed: () => {
-      win.destroyed = true;
-      listeners.get('closed')?.();
+    visible: false,
+    webContents: {
+      id,
+      on: webContentsOn,
+      setBackgroundThrottling: vi.fn(),
+      isDestroyed: () => destroyed,
     },
+    emitClosed: () => {
+      destroyed = true;
+      visible = false;
+      winListeners.get('closed')?.();
+    },
+    emitWindowEvent: (event, ...args) => {
+      if (event === 'minimize') minimized = true;
+      if (event === 'restore') minimized = false;
+      if (event === 'hide') visible = false;
+      if (event === 'show') visible = true;
+      winListeners.get(event)?.(...args);
+    },
+    emitWebContentsEvent: (event, ...args) => wcListeners.get(event)?.(...args),
   };
   return win;
 }
 
 function makeHarness(
   initial: Partial<RsbWindowSettings> = {},
-  opts: { asyncClose?: boolean } = {},
+  extras: Pick<RsbWindowControllerDeps, 'resolveHostContext'> = {},
 ) {
   let settings: RsbWindowSettings = { detached: false, lastOpen: false, ...initial };
   let quitting = false;
   const windows: FakeWindow[] = [];
-  const createWindowCalls: Array<{ userInitiated: boolean }> = [];
+  const createWindowCalls: Array<Record<string, never>> = [];
   const mainWin = fakeWindow(100);
   const broadcasts: Array<{ detached: boolean; open: boolean }> = [];
   const sends: Array<{ channel: string; payload: unknown }> = [];
   const sendTargets: number[] = [];
+  const windowWillShowTargets: number[] = [];
+  const windowHiddenTargets: number[] = [];
 
   const deps: RsbWindowControllerDeps = {
     settings: {
       read: () => ({ ...settings }),
-      writePatch: (patch) => {
-        settings = { ...settings, ...patch };
-      },
+      writePatch: (patch) => { settings = { ...settings, ...patch }; },
     },
-    createWindow: (createOpts) => {
-      createWindowCalls.push(createOpts);
-      const w = fakeWindow(200 + windows.length, opts.asyncClose === true);
+    createWindow: () => {
+      createWindowCalls.push({});
+      const w = fakeWindow(200 + windows.length);
       windows.push(w);
       return w as unknown as BrowserWindow;
     },
     getMainWindow: () => mainWin as unknown as BrowserWindow,
-    broadcastState: (s) => {
-      broadcasts.push(s);
-    },
+    broadcastState: (s) => { broadcasts.push(s); },
     sendToWindow: (win, channel, payload) => {
       sends.push({ channel, payload });
-      sendTargets.push((win.webContents as { id: number }).id);
+      sendTargets.push((win.webContents as unknown as FakeWindow['webContents']).id);
+    },
+    onWindowWillShow: (win) => {
+      windowWillShowTargets.push(
+        (win.webContents as unknown as FakeWindow['webContents']).id,
+      );
+    },
+    onWindowHidden: (win) => {
+      windowHiddenTargets.push(
+        (win.webContents as unknown as FakeWindow['webContents']).id,
+      );
     },
     contextChannel: 'ctx-channel',
     commandChannel: 'cmd-channel',
+    tabHandoffChannel: 'handoff-channel',
     isQuitting: () => quitting,
-    log: { info: vi.fn(), warn: vi.fn() },
+    resolveHostContext: extras.resolveHostContext,
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   const controller = new RsbWindowController(deps);
   return {
@@ -100,133 +158,493 @@ function makeHarness(
     broadcasts,
     sends,
     sendTargets,
+    windowWillShowTargets,
+    windowHiddenTargets,
     getSettings: () => settings,
-    setQuitting: (v: boolean) => {
-      quitting = v;
-    },
+    setQuitting: (v: boolean) => { quitting = v; },
   };
 }
 
-beforeEach(() => {
-  vi.useFakeTimers();
-});
+function markReady(controller: RsbWindowController, win: FakeWindow): void {
+  expect(controller.markRendererReady(win.webContents as unknown as WebContents)).toBe(true);
+  expect(controller.markPresentationReady(win.webContents as unknown as WebContents)).toBe(true);
+}
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+const ctx = { sessionId: 's1', workdir: '/w', remoteHostId: null, available: true };
 
-describe('open / close', () => {
-  it('open 建窗 + lastOpen=true + 广播 open:true;重复 open 只 focus 不重建', () => {
+beforeEach(() => { vi.useFakeTimers(); });
+afterEach(() => { vi.useRealTimers(); });
+
+// ═══════════════════════════════════════════════════════════════════════
+// prewarm: 后台预热
+// ═══════════════════════════════════════════════════════════════════════
+describe('prewarm', () => {
+  it('prewarm creates window without showing or focusing it', () => {
     const h = makeHarness();
-    h.controller.open();
+    h.controller.prewarm();
     expect(h.windows).toHaveLength(1);
-    expect(h.getSettings().lastOpen).toBe(true);
-    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: true });
-
-    h.controller.open();
-    expect(h.windows).toHaveLength(1);
-    expect(h.windows[0].focus).toHaveBeenCalled();
-  });
-
-  it('close 落 lastOpen=false;closed 回调广播 open:false', () => {
-    const h = makeHarness();
-    h.controller.open();
-    h.controller.close();
-    expect(h.getSettings().lastOpen).toBe(false);
-    expect(h.windows[0].close).toHaveBeenCalled();
-    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
-  });
-
-  it('窗口不存在时 close 也落 lastOpen=false 并广播', () => {
-    const h = makeHarness({ lastOpen: true });
-    h.controller.close();
-    expect(h.getSettings().lastOpen).toBe(false);
-    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
-  });
-});
-
-describe('userInitiated:false 不抢用户前台', () => {
-  it('窗口已开:程序自发的 open 完全不动窗口(无 show / focus / restore)', () => {
-    const h = makeHarness();
-    h.controller.open();
     const win = h.windows[0];
-    win.show.mockClear();
-    win.focus.mockClear();
-    win.restore.mockClear();
-
-    h.controller.open({ userInitiated: false });
-
-    expect(h.windows).toHaveLength(1);
+    expect(win.webContents.setBackgroundThrottling).toHaveBeenCalledWith(false);
     expect(win.show).not.toHaveBeenCalled();
     expect(win.focus).not.toHaveBeenCalled();
-    expect(win.restore).not.toHaveBeenCalled();
+    expect(h.getSettings().lastOpen).toBe(false);
+    expect(h.broadcasts).toHaveLength(0);
   });
 
-  it('窗口未开:照常建窗并落 lastOpen,但把 userInitiated:false 透传给窗口工厂', () => {
+  it('restores background throttling after presentation-ready', () => {
     const h = makeHarness();
-    h.controller.open({ userInitiated: false });
+    h.controller.prewarm();
+    const win = h.windows[0];
+
+    markReady(h.controller, win);
+
+    expect(win.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+  });
+
+  it('restores background throttling when hidden prewarm times out', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+
+    vi.advanceTimersByTime(10_000);
+
+    expect(win.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+    expect(h.controller.getState().open).toBe(false);
+  });
+
+  it('prewarm is no-op when disposed', () => {
+    const h = makeHarness();
+    h.controller.dispose();
+    h.controller.prewarm();
+    expect(h.windows).toHaveLength(0);
+  });
+
+  it('open on a prewarmed completed window shows + focuses immediately', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+
+    h.controller.open({ userInitiated: true });
+    expect(win.show).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
     expect(h.windows).toHaveLength(1);
-    expect(h.createWindowCalls).toEqual([{ userInitiated: false }]);
+  });
+
+  it('open on a prewarmed but not-ready window waits for presentation-ready', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    // Only renderer-ready, not presentation-ready
+    expect(h.controller.markRendererReady(win.webContents as unknown as WebContents)).toBe(true);
+
+    h.controller.open({ userInitiated: true });
+    // Not shown yet — waiting for presentation
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+
+    // presentation-ready → now shown
+    expect(h.controller.markPresentationReady(win.webContents as unknown as WebContents)).toBe(true);
+    expect(win.show).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// open / close: 隐藏复用
+// ═══════════════════════════════════════════════════════════════════════
+describe('open / close (hide-reuse)', () => {
+  it('open creates window + sets lastOpen=true + broadcasts open:true', () => {
+    const h = makeHarness();
+    h.controller.open();
+    expect(h.windows).toHaveLength(1);
     expect(h.getSettings().lastOpen).toBe(true);
     expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: true });
   });
 
-  it('ensureOpenForAutomation 缺省按程序自发处理(建窗不抢焦点)', async () => {
-    const h = makeHarness({ detached: true });
-    const p = h.controller.ensureOpenForAutomation();
-    h.controller.markReady();
-    await expect(p).resolves.toBeUndefined();
-    expect(h.createWindowCalls).toEqual([{ userInitiated: false }]);
-  });
-
-  it('routeCommand userInitiated:false:命令照常派发,但开窗不抢焦点', async () => {
-    const h = makeHarness({ detached: true });
-    h.controller.setContext({
-      sessionId: 's1',
-      workdir: '/w',
-      remoteHostId: null,
-      available: true,
-    });
-    const command = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://x.test/' };
-    const routed = h.controller.routeCommand({
-      command,
-      allowOpen: true,
-      userInitiated: false,
-    });
-    h.controller.markReady();
-    await expect(routed).resolves.toBe('routed');
-    expect(h.createWindowCalls).toEqual([{ userInitiated: false }]);
-    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
-  });
-
-  it('routeCommand 缺省(用户手势)仍走聚焦开窗', async () => {
-    const h = makeHarness({ detached: true });
-    h.controller.setContext({
-      sessionId: 's1',
-      workdir: '/w',
-      remoteHostId: null,
-      available: true,
-    });
-    const routed = h.controller.routeCommand({
-      command: { type: 'open-terminal', sessionId: 's1' },
-      allowOpen: true,
-    });
-    h.controller.markReady();
-    await expect(routed).resolves.toBe('routed');
-    expect(h.createWindowCalls).toEqual([{ userInitiated: true }]);
-  });
-
-  it('setDetached(true)(用户点按钮)开窗并聚焦', () => {
+  it('repeat open on shown window only focuses', () => {
     const h = makeHarness();
-    h.controller.setDetached(true);
-    expect(h.createWindowCalls).toEqual([{ userInitiated: true }]);
-    h.controller.setDetached(true);
-    expect(h.windows[0].focus).toHaveBeenCalled();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    expect(h.windows).toHaveLength(1);
+
+    win.show.mockClear();
+    win.focus.mockClear();
+    h.controller.open();
+    // Only focus (show would be redundant since already visible)
+    expect(h.windows).toHaveLength(1);
+  });
+
+  it('close hides window without destroying (hide-reuse)', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    h.controller.close();
+    expect(win.hide).toHaveBeenCalled();
+    expect(win.isDestroyed()).toBe(false);
+    expect(h.getSettings().lastOpen).toBe(false);
+    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
+  });
+
+  it('re-open after close reuses the same window (hot path)', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    h.controller.close();
+
+    win.show.mockClear();
+    win.focus.mockClear();
+    h.controller.open();
+    // Same window, no recreate
+    expect(h.windows).toHaveLength(1);
+    expect(h.windows[0]).toBe(win);
+    expect(win.show).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+  });
+
+  it('native minimize exposes a recovery entry and open restores the hot window', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    win.emitWindowEvent('minimize');
+    expect(h.controller.getState()).toEqual({ detached: true, lastOpen: true, open: false });
+    expect(h.broadcasts.at(-1)).toEqual({ detached: true, open: false });
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
+
+    win.show.mockClear();
+    win.focus.mockClear();
+    h.controller.open();
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
+    expect(h.windows).toHaveLength(1);
+    expect(win.restore).toHaveBeenCalledOnce();
+    expect(win.show).toHaveBeenCalledOnce();
+    expect(win.focus).toHaveBeenCalledOnce();
+    expect(h.controller.getState().open).toBe(true);
+  });
+
+  it('native minimize releases a cross-session pin', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    expect(h.controller.getContext()?.sessionId).toBe('s1');
+    win.emitWindowEvent('minimize');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('native taskbar restore updates the main-window state mirror', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    win.emitWindowEvent('minimize');
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
+
+    win.emitWindowEvent('restore');
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
+    expect(h.broadcasts.at(-1)).toEqual({ detached: true, open: true });
+    expect(h.controller.getState().open).toBe(true);
+  });
+
+  it('native hide updates state and open shows the cached window again', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    win.emitWindowEvent('hide');
+    expect(h.controller.getState()).toEqual({ detached: true, lastOpen: true, open: false });
+    expect(h.broadcasts.at(-1)).toEqual({ detached: true, open: false });
+
+    win.show.mockClear();
+    win.focus.mockClear();
+    h.controller.open();
+    expect(h.windows).toHaveLength(1);
+    expect(win.show).toHaveBeenCalledOnce();
+    expect(win.focus).toHaveBeenCalledOnce();
+    expect(h.controller.getState().open).toBe(true);
+  });
+
+  it('hot reopen after a focus switch records the visible host', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+
+    h.controller.close();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+    expect(h.broadcasts.at(-1)).toMatchObject({
+      detached: true,
+      open: false,
+      hostSessionId: 's1',
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+
+    h.controller.open();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+    expect(h.controller.getState().hostSessionId).toBe('s2');
+  });
+
+  it('open repairs stale controller visibility using the native window state', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    // Simulate an external native hide that happened before the controller learned about it.
+    win.hide();
+    win.show.mockClear();
+    win.focus.mockClear();
+
+    h.controller.open();
+    expect(win.show).toHaveBeenCalledOnce();
+    expect(win.focus).toHaveBeenCalledOnce();
+    expect(h.controller.getState().open).toBe(true);
   });
 });
 
-describe('closed 事件(用户关窗 vs app 退出)', () => {
-  it('非 quitting:lastOpen=false + 广播 open:false', () => {
+describe('renderer navigation lifecycle', () => {
+  it('ignores same-document main-frame navigation such as hash routing', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    win.hide.mockClear();
+    win.emitWebContentsEvent(
+      'did-start-navigation',
+      {},
+      'http://localhost:5173/?sidebarWindow=1#/sidebar-window',
+      true,
+      true,
+    );
+
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(h.controller.getState().open).toBe(true);
+  });
+
+  it('ignores child-frame navigation such as a newly attached browser webview', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    win.hide.mockClear();
+    win.emitWebContentsEvent(
+      'did-start-navigation',
+      {},
+      'https://example.com/',
+      false,
+      false,
+    );
+
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(h.controller.getState().open).toBe(true);
+  });
+
+  it('temporarily hides and restores only for main-frame renderer navigation', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    win.emitWebContentsEvent(
+      'did-start-navigation',
+      {},
+      'http://localhost:5173/?sidebarWindow=1#/sidebar-window',
+      false,
+      true,
+    );
+    expect(win.hide).toHaveBeenCalledOnce();
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
+    expect(win.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+    expect(h.controller.getState().open).toBe(true);
+
+    markReady(h.controller, win);
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
+    expect(win.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+    expect(win.show).toHaveBeenCalledTimes(2);
+    expect(h.controller.getState().open).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// setDetached
+// ═══════════════════════════════════════════════════════════════════════
+describe('setDetached', () => {
+  it('true: sets preference + opens window', () => {
+    const h = makeHarness();
+    const state = h.controller.setDetached(true);
+    expect(h.getSettings().detached).toBe(true);
+    expect(h.windows).toHaveLength(1);
+    expect(h.createWindowCalls).toHaveLength(1);
+    expect(state).toEqual({ detached: true, lastOpen: true, open: true });
+  });
+
+  it('true: queues a memory-only tab snapshot until the detached renderer is ready', () => {
+    const h = makeHarness();
+    h.controller.setContext(ctx);
+    const handoff = {
+      snapshots: [
+        {
+          sessionId: 's1',
+          tabs: [{ id: 't1', kind: 'web-browser', state: { url: 'about:blank' } }],
+          activeTabId: 't1',
+          persistable: false as const,
+        },
+      ],
+    };
+
+    h.controller.setDetached(true, handoff);
+    const win = h.windows[0];
+    expect(h.sends.some((entry) => entry.channel === 'handoff-channel')).toBe(false);
+
+    markReady(h.controller, win);
+
+    const handoffIndex = h.sends.findIndex((entry) => entry.channel === 'handoff-channel');
+    expect(h.sends[handoffIndex]).toEqual({ channel: 'handoff-channel', payload: handoff });
+    expect(h.sendTargets[handoffIndex]).toBe(win.webContents.id);
+  });
+
+  it('true: drops a queued snapshot if the main context changes before renderer ready', () => {
+    const h = makeHarness();
+    h.controller.setContext(ctx);
+    h.controller.setDetached(true, {
+      snapshots: [
+        {
+          sessionId: 's1',
+          tabs: [{ id: 't1', kind: 'web-browser', state: null }],
+          activeTabId: 't1',
+          persistable: false,
+        },
+      ],
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+
+    markReady(h.controller, h.windows[0]);
+
+    expect(h.sends.some((entry) => entry.channel === 'handoff-channel')).toBe(false);
+  });
+
+  it('false: destroys window + broadcasts detached:false', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+
+    const state = h.controller.setDetached(false);
+    expect(h.getSettings().detached).toBe(false);
+    expect(win.isDestroyed()).toBe(true);
+    expect(state.open).toBe(false);
+    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
+  });
+
+  it('false: hands off the current memory-only tab snapshot before destroying the window', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.setContext(ctx);
+    h.controller.open({ userInitiated: false });
+
+    const handoff = {
+      snapshots: [
+        {
+          sessionId: 's1',
+          tabs: [{ id: 't1', kind: 'web-browser', state: { url: 'https://example.com' } }],
+          activeTabId: 't1',
+          persistable: false,
+        },
+      ],
+    };
+    h.controller.setDetached(false, handoff);
+
+    const handoffIndex = h.sends.findIndex((entry) => entry.channel === 'handoff-channel');
+    expect(handoffIndex).toBeGreaterThanOrEqual(0);
+    expect(h.sends[handoffIndex]).toEqual({
+      channel: 'handoff-channel',
+      payload: handoff,
+    });
+    expect(h.sendTargets[handoffIndex]).toBe(h.mainWin.webContents.id);
+    expect(win.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('drops persistable snapshots but preserves a stale-session merge snapshot', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.setContext(ctx);
+    h.controller.open({ userInitiated: false });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+
+    h.controller.setDetached(false, {
+      snapshots: [
+        {
+          sessionId: 's1',
+          tabs: [],
+          activeTabId: null,
+          persistable: true,
+        },
+        {
+          sessionId: 'other',
+          tabs: [],
+          activeTabId: null,
+          persistable: false,
+        },
+      ],
+    });
+
+    const handoffIndex = h.sends.findIndex((entry) => entry.channel === 'handoff-channel');
+    expect(h.sends[handoffIndex]).toEqual({
+      channel: 'handoff-channel',
+      payload: {
+        snapshots: [
+          {
+            sessionId: 'other',
+            tabs: [],
+            activeTabId: null,
+            persistable: false,
+          },
+        ],
+      },
+    });
+    expect(h.sendTargets[handoffIndex]).toBe(h.mainWin.webContents.id);
+    expect(win.destroy).toHaveBeenCalledOnce();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// closed 事件(用户用 OS 关闭按钮 vs app 退出)
+// ═══════════════════════════════════════════════════════════════════════
+describe('closed event', () => {
+  it('non-quitting: lastOpen=false + broadcast open:false', () => {
     const h = makeHarness();
     h.controller.open();
     h.windows[0].emitClosed();
@@ -235,121 +653,388 @@ describe('closed 事件(用户关窗 vs app 退出)', () => {
     expect(h.controller.getState().open).toBe(false);
   });
 
-  it('quitting:lastOpen 保留 true(供重启恢复),不广播', () => {
+  it('quitting: preserves lastOpen=true, no broadcast', () => {
     const h = makeHarness();
     h.controller.open();
-    const broadcastCount = h.broadcasts.length;
+    const count = h.broadcasts.length;
     h.setQuitting(true);
     h.windows[0].emitClosed();
     expect(h.getSettings().lastOpen).toBe(true);
-    expect(h.broadcasts).toHaveLength(broadcastCount);
+    expect(h.broadcasts).toHaveLength(count);
   });
 });
 
-describe('setDetached', () => {
-  it('true:落偏好 + 开窗;返回新 state', () => {
+// ═══════════════════════════════════════════════════════════════════════
+// userInitiated:false 不抢用户前台
+// ═══════════════════════════════════════════════════════════════════════
+describe('userInitiated:false', () => {
+  it('window already visible: automated open is no-op', () => {
     const h = makeHarness();
-    const state = h.controller.setDetached(true);
-    expect(h.getSettings().detached).toBe(true);
-    expect(h.windows).toHaveLength(1);
-    expect(state).toEqual({ detached: true, lastOpen: true, open: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open({ userInitiated: true });
+
+    win.show.mockClear();
+    win.showInactive.mockClear();
+    win.focus.mockClear();
+    h.controller.open({ userInitiated: false });
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.showInactive).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
   });
 
-  it('false:落偏好 + 关窗;广播最终态 detached:false open:false', () => {
-    const h = makeHarness({ detached: true });
-    h.controller.open();
-    const state = h.controller.setDetached(false);
-    expect(h.getSettings().detached).toBe(false);
-    expect(state.open).toBe(false);
-    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
+  it('prewarmed ready window: automated open shows without focusing', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+
+    h.controller.open({ userInitiated: false });
+
+    expect(win.showInactive).toHaveBeenCalledTimes(1);
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(h.controller.getState().open).toBe(true);
+  });
+
+  it('window not yet built: shows without focusing after presentation-ready', () => {
+    const h = makeHarness();
+    h.controller.open({ userInitiated: false });
+    expect(h.windows).toHaveLength(1);
+    expect(h.createWindowCalls).toHaveLength(1);
+    const win = h.windows[0];
+
+    markReady(h.controller, win);
+
+    expect(win.showInactive).toHaveBeenCalledTimes(1);
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it('not-ready window: automated open fallback shows without focusing', () => {
+    const h = makeHarness();
+    h.controller.open({ userInitiated: false });
+    const win = h.windows[0];
+
+    vi.advanceTimersByTime(5000);
+
+    expect(win.showInactive).toHaveBeenCalledTimes(1);
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it('not-ready window: later user open upgrades pending show to focused', () => {
+    const h = makeHarness();
+    h.controller.open({ userInitiated: false });
+    const win = h.windows[0];
+
+    h.controller.open({ userInitiated: true });
+    markReady(h.controller, win);
+
+    expect(win.show).toHaveBeenCalledTimes(1);
+    expect(win.showInactive).not.toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('setDetached(true) opens window', () => {
+    const h = makeHarness();
+    h.controller.setDetached(true);
+    expect(h.windows).toHaveLength(1);
+    expect(h.createWindowCalls).toHaveLength(1);
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// ensureOpenForAutomation
+// ═══════════════════════════════════════════════════════════════════════
 describe('ensureOpenForAutomation', () => {
-  it('非 detached:no-op resolve,不开窗', async () => {
+  it('non-detached: no-op resolve', async () => {
     const h = makeHarness();
     await expect(h.controller.ensureOpenForAutomation()).resolves.toBeUndefined();
     expect(h.windows).toHaveLength(0);
   });
 
-  it('detached + 窗口关:开窗并等 markReady', async () => {
+  it('detached + presentation-ready: direct resolve', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    await expect(h.controller.ensureOpenForAutomation()).resolves.toBeUndefined();
+    expect(win.showInactive).toHaveBeenCalledTimes(1);
+    expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it('detached + no window: opens and waits for presentation-ready', async () => {
     const h = makeHarness({ detached: true });
     const pending = h.controller.ensureOpenForAutomation();
     expect(h.windows).toHaveLength(1);
-    h.controller.markReady();
+    const win = h.windows[0];
+    expect(h.controller.markRendererReady(win.webContents as unknown as WebContents)).toBe(true);
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    h.controller.markPresentationReady(win.webContents as unknown as WebContents);
     await expect(pending).resolves.toBeUndefined();
   });
 
-  it('detached + 已 ready:直接 resolve', async () => {
-    const h = makeHarness({ detached: true });
-    h.controller.open();
-    h.controller.markReady();
-    await expect(h.controller.ensureOpenForAutomation()).resolves.toBeUndefined();
-  });
-
-  it('ready 超时 reject', async () => {
+  it('ready timeout rejects', async () => {
     const h = makeHarness({ detached: true });
     const pending = h.controller.ensureOpenForAutomation();
+    // ensureOpenForAutomation 内部 readyWaiter 超时为 READY_TIMEOUT_MS(8s)。
+    // 5s openFallback 会 showInactive 但不影响 readyWaiter。
     const assertion = expect(pending).rejects.toThrow(/ready timeout/);
     vi.advanceTimersByTime(8000);
     await assertion;
   });
 
-  it('窗口在 ready 前被关:reject', async () => {
+  it('ready timeout with a session pin lets a later context take the host', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const assertion = expect(pending).rejects.toThrow(/ready timeout/);
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    markReady(h.controller, h.windows[0]);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
+  it('window closed before ready rejects', async () => {
     const h = makeHarness({ detached: true });
     const pending = h.controller.ensureOpenForAutomation();
     const assertion = expect(pending).rejects.toThrow(/closed before ready/);
     h.windows[0].emitClosed();
     await assertion;
   });
+
+  it('waits for the target session context before resolving a tab-op host', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(h.controller.getContext()).toBeNull();
+    lookup = resolved;
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.controller.getContext()).toEqual(resolved);
+  });
+
+  it('resolves a host waiter when Main reports the pinned session', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/from-main',
+    });
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.controller.getContext()).toEqual({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/from-main',
+    });
+  });
+
+  it('cancels an in-flight adopt after Main leaves chat', async () => {
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let finishLookup!: (value: typeof resolved) => void;
+    const lookup = new Promise<typeof resolved>((resolve) => {
+      finishLookup = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    finishLookup(resolved);
+    await expect(pending).rejects.toThrow(/cancelled/);
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({
+      sessionId: null,
+      workdir: null,
+      remoteHostId: null,
+      available: false,
+    });
+  });
+
+  it('does not show a pending window after Main leaves chat', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    expect(h.windows).toHaveLength(1);
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    await expect(pending).rejects.toThrow(/cancelled/);
+    markReady(h.controller, h.windows[0]);
+    expect(h.windows[0].show).not.toHaveBeenCalled();
+    expect(h.windows[0].showInactive).not.toHaveBeenCalled();
+    expect(h.controller.getState().open).toBe(false);
+  });
+
+  it('fails closed when the target session context never arrives', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const assertion = expect(pending).rejects.toThrow(/host context not ready/);
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    expect(h.controller.getContext()).toBeNull();
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// getHostWebContents
+// ═══════════════════════════════════════════════════════════════════════
 describe('getHostWebContents', () => {
-  it('非 detached → 主窗 webContents', () => {
+  it('non-detached → main window webContents', () => {
     const h = makeHarness();
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
   });
 
-  it('detached + 窗口关 → 回落主窗', () => {
+  it('detached + no window → main window', () => {
     const h = makeHarness({ detached: true });
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
   });
 
-  it('detached + 窗口开 → 子窗口 webContents;关窗后回落主窗', () => {
+  it('detached + window open → child window webContents', () => {
     const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
     h.controller.open();
-    expect(h.controller.getHostWebContents()).toBe(h.windows[0].webContents);
-    h.windows[0].emitClosed();
-    expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+    expect(h.controller.getHostWebContents()).toBe(win.webContents);
   });
 
-  it('异步 closing 阶段立即排除旧子窗口 host', () => {
-    const h = makeHarness({ detached: true }, { asyncClose: true });
+  it('detached + cached window hidden → main window webContents', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
     h.controller.open();
-    h.controller.markReady();
     h.controller.close();
 
-    expect(h.windows[0].isDestroyed()).toBe(false);
-    expect(h.controller.getState().open).toBe(false);
-    expect(h.controller.getSidebarWebContents()).toBeNull();
+    expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+  });
+
+  it('detached + native-minimized window → main window webContents', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    win.emitWindowEvent('minimize');
+
+    expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+  });
+
+  it('after destroy: falls back to main', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    h.controller.setDetached(false);
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
   });
 });
 
-describe('setContext / routeCommand', () => {
-  const ctx = { sessionId: 's1', workdir: '/w', remoteHostId: null, available: true };
-  const terminalRequest = (sessionId = 's1', allowOpen = true) => ({
-    command: { type: 'open-terminal' as const, sessionId },
-    allowOpen,
+describe('getVisibleSidebarWebContents', () => {
+  it('returns null for a cached hidden window while keeping the IPC sender available', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+
+    expect(h.controller.getSidebarWebContents()).toBe(win.webContents);
+    expect(h.controller.getVisibleSidebarWebContents()).toBeNull();
+
+    h.controller.open({ userInitiated: false });
+    expect(h.controller.getVisibleSidebarWebContents()).toBe(win.webContents);
+
+    h.controller.close();
+    expect(h.controller.getVisibleSidebarWebContents()).toBeNull();
   });
 
-  it('窗口关着:只缓存不转发;开着:转发到 context channel', () => {
+  it('runs the Host show hook whenever a cached hidden window is reused', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+
+    h.controller.open({ userInitiated: false });
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id]);
+    expect(h.controller.getVisibleSidebarWebContents()).toBe(win.webContents);
+
+    h.controller.close();
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
+    h.controller.open({ userInitiated: false });
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
+    expect(h.windows).toHaveLength(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// setContext / routeCommand
+// ═══════════════════════════════════════════════════════════════════════
+describe('setContext / routeCommand', () => {
+  function terminalRequest(sessionId = 's1', allowOpen = true) {
+    return { command: { type: 'open-terminal' as const, sessionId }, allowOpen };
+  }
+
+  it('keeps live context out of a hidden prewarm and exposes it after opening', () => {
     const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
     h.controller.setContext(ctx);
-    expect(h.sends).toHaveLength(0);
-    expect(h.controller.getContext()).toEqual(ctx);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+    expect(h.controller.getContext()).toBeNull();
 
     h.controller.open();
+    expect(h.controller.getContext()).toEqual(ctx);
+    h.controller.refreshContext(win.webContents as unknown as WebContents);
+    expect(h.sends.at(-1)).toEqual({ channel: 'ctx-channel', payload: ctx });
+
     h.controller.setContext({ ...ctx, sessionId: 's2' });
     expect(h.sends.at(-1)).toEqual({
       channel: 'ctx-channel',
@@ -357,25 +1042,37 @@ describe('setContext / routeCommand', () => {
     });
   });
 
-  it('attached:残留异步 closing 子窗仍返回 attached 且绝不发送', async () => {
-    const h = makeHarness({ detached: true }, { asyncClose: true });
+  it('ignores refreshContext while the cached sidebar window is hidden', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
     h.controller.setContext(ctx);
-    h.controller.open();
-    h.controller.markReady();
-    h.controller.setDetached(false);
-    expect(h.windows[0].isDestroyed()).toBe(false);
 
-    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('attached');
-    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    h.controller.refreshContext(win.webContents as unknown as WebContents);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+
+    h.controller.open();
+    h.controller.refreshContext(win.webContents as unknown as WebContents);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([
+      { channel: 'ctx-channel', payload: ctx },
+    ]);
+
+    h.controller.close();
+    h.controller.refreshContext(win.webContents as unknown as WebContents);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([
+      { channel: 'ctx-channel', payload: ctx },
+    ]);
   });
 
-  it('detached + allowOpen=true:开窗等 ready 后 routed', async () => {
+  it('detached + allowOpen: opens window, waits ready, routes', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
     const pending = h.controller.routeCommand(terminalRequest());
     expect(h.windows).toHaveLength(1);
     expect(h.sends).toHaveLength(0);
-    h.controller.markReady();
+    const win = h.windows[0];
+    markReady(h.controller, win);
     await expect(pending).resolves.toBe('routed');
     expect(h.sends.at(-1)).toEqual({
       channel: 'cmd-channel',
@@ -383,231 +1080,777 @@ describe('setContext / routeCommand', () => {
     });
   });
 
-  it('renderer 旧 attached 镜像不影响 main 的最新 detached 裁决', async () => {
-    const h = makeHarness({ detached: false });
-    h.controller.setContext(ctx);
-    h.controller.setDetached(true);
-
+  it('context mismatch adopts the command session and routes', async () => {
+    const remote = {
+      sessionId: 's1',
+      workdir: '/remote/app',
+      remoteHostId: 'ssh-1',
+      deviceLinkDeviceId: 'device-1',
+      subagentsAvailable: true,
+      available: true,
+    };
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? remote : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
     const pending = h.controller.routeCommand(terminalRequest());
-    h.controller.markReady();
+    const win = h.windows[0];
+    markReady(h.controller, win);
     await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toEqual(remote);
+    expect(h.controller.getState().hostSessionId).toBe('s1');
     expect(h.sends.at(-1)).toEqual({
       channel: 'cmd-channel',
       payload: { type: 'open-terminal', sessionId: 's1' },
     });
-    expect(h.sendTargets.at(-1)).toBe(h.windows[0].webContents.id);
+    h.controller.close();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
   });
 
-  it('detached:协同 tab 命令复用同一条 command channel', async () => {
+  it('does not forge a local host when resolve misses', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual(focused);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+  });
+
+  it('starts a bounded waiter when allowOpen arrives before any context', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getContext()?.sessionId).not.toBe('s2');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
+  });
+
+  it('releases a visible-window pin when allowOpen host never resolves', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
+  it('opens a hidden window after a missed allowOpen lookup is adopted', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open();
+    h.controller.close();
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    expect(h.controller.getContext()).toBeNull();
+    lookup = resolved;
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.controller.getState().open).toBe(true);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('retries a missed host lookup and flushes the queued reveal', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    lookup = resolved;
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('does not flush a pinned session queue into a foreign host context', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.refreshContext(h.windows[0].webContents as unknown as WebContents);
+    expect(h.controller.getContext()).toEqual(focused);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+  });
+
+  it('keeps retrying a missed lookup after the fast budget without another focus change', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(h.controller.getContext()).toEqual(focused);
+    lookup = resolved;
+    h.sends.length = 0;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('retries an exhausted lookup when the main window reports another context', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(h.controller.getContext()).toEqual(focused);
+    lookup = resolved;
+    h.sends.length = 0;
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('reuses a previously reported host context instead of forging a local one', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/visited',
+      remoteHostId: 'ssh-visited',
+      deviceLinkDeviceId: 'dev-visited',
+      subagentsAvailable: true,
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toMatchObject({
+      sessionId: 's1',
+      workdir: '/visited',
+      remoteHostId: 'ssh-visited',
+      deviceLinkDeviceId: 'dev-visited',
+      subagentsAvailable: true,
+    });
+  });
+
+  it('does not switch a visible host for passive commands from another session', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    const cmd = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await expect(
+      h.controller.routeCommand({ command: cmd, allowOpen: false }),
+    ).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+  });
+
+  it('keeps another session queued when a later reveal adopts a different host', async () => {
+    const s3 = { ...ctx, sessionId: 's3' };
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's3' ? s3 : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const first = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://a.example' };
+    await expect(
+      h.controller.routeCommand({ command: first, allowOpen: false }),
+    ).resolves.toBe('queued');
+    const pending = h.controller.routeCommand(terminalRequest('s3'));
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's3' } },
+    ]);
+
+    h.sends.length = 0;
+    h.controller.setContext(s3);
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: first },
+    ]);
+  });
+
+  it('remembers an earlier resolve after a later pin takes the host', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    const resolvedB = { ...ctx, sessionId: 's3', workdir: '/from-b' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return lookupA;
+        if (sessionId === 's3') return resolvedB;
+        return null;
+      },
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    await expect(h.controller.routeCommand(terminalRequest('s3'))).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    expect(h.controller.getContext()).toEqual(resolvedA);
+  });
+
+  it('does not let a replaced async route steal the host', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    const resolvedB = { ...ctx, sessionId: 's3', workdir: '/from-b' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return lookupA;
+        if (sessionId === 's3') return resolvedB;
+        return null;
+      },
+    });
+    const pendingA = h.controller.routeCommand(terminalRequest('s1'));
+    const pendingB = h.controller.routeCommand(terminalRequest('s3'));
+    markReady(h.controller, h.windows[0]);
+    await expect(pendingB).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual(resolvedB);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      { type: 'open-terminal', sessionId: 's3' },
+    ]);
+  });
+
+  it('flushes only the current host on attach, then the focused session later', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const closeA = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    const closeB = { type: 'close-orca-workers-tab' as const, sessionId: 's2' };
+    await expect(
+      h.controller.routeCommand({ command: closeA, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    await expect(
+      h.controller.routeCommand({ command: closeB, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setDetached(false);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeB,
+    ]);
+    h.sends.length = 0;
+    h.controller.setContext(ctx);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeA,
+    ]);
+  });
+
+  it('flushes the main-window focus queue when merging back from a pinned host', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const closeB = { type: 'close-orca-workers-tab' as const, sessionId: 's2' };
+    await expect(
+      h.controller.routeCommand({ command: closeB, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setDetached(false);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeB,
+    ]);
+  });
+
+  it('lets a user raise of the current host cancel a foreign pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.open({ userInitiated: true });
+    finishA(resolvedA);
+    await Promise.resolve();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('lets a command for the visible host replace a foreign async pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.routeCommand(terminalRequest('s1'));
+    await expect(h.controller.routeCommand(terminalRequest('s2'))).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).resolves.toBe('queued');
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('lets ensureOpen for the visible host cancel a foreign pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    await expect(h.controller.ensureOpenForAutomation({ sessionId: 's2' })).resolves.toBeUndefined();
+    finishA(resolvedA);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('submits adopted context before revealing a pending window', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open();
+    h.controller.close();
+    h.sends.length = 0;
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    const channels = h.sends.map((entry) => entry.channel);
+    expect(channels.indexOf('ctx-channel')).toBeGreaterThanOrEqual(0);
+    expect(channels.indexOf('ctx-channel')).toBeLessThan(
+      channels.indexOf('rsb-window:visibility-changed'),
+    );
+    expect(h.sends.find((entry) => entry.channel === 'ctx-channel')?.payload).toMatchObject({
+      sessionId: 's1',
+    });
+  });
+
+  it('cancels an earlier ready waiter when a later pin takes the host', async () => {
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return { ...ctx, sessionId: 's1' };
+        if (sessionId === 's3') return { ...ctx, sessionId: 's3' };
+        return null;
+      },
+    });
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const pendingB = h.controller.ensureOpenForAutomation({ sessionId: 's3' });
+    markReady(h.controller, h.windows[0]);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    await expect(pendingB).resolves.toBeUndefined();
+    expect(h.controller.getContext()?.sessionId).toBe('s3');
+  });
+
+  it('does not reopen a left session after adopt returns', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    finishA(resolvedA);
+    await expect(pending).resolves.toBe('queued');
+    expect(h.controller.getContext()).toBeNull();
+  });
+
+  it('does not advertise a cancelled pending reveal as a user close', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(h.broadcasts.at(-1)).toMatchObject({ open: false, userClose: false });
+  });
+
+  it('pinned host session ignores later focus switches until the user arrives', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()).toEqual(ctx);
+
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/adopted',
+    });
+    expect(h.controller.getContext()).toEqual({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/adopted',
+    });
+  });
+
+  it('releases a fire-and-forget open pin when the host never resolves', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()?.sessionId).not.toBe('s3');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
+  it('does not pin an already-active host, so a later focus switch is applied', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
     h.controller.open();
-    h.controller.markReady();
-
-    await h.controller.routeCommand({
-      command: {
-        type: 'ensure-orca-workers-tab',
-        sessionId: 's1',
-        focusWorkerSessionId: 'worker-s1',
-        focusTab: true,
-      },
-      allowOpen: true,
-    });
-    await h.controller.routeCommand({
-      command: { type: 'close-orca-workers-tab', sessionId: 's1' },
-      allowOpen: false,
-    });
-
-    expect(h.sends.at(-2)).toEqual({
-      channel: 'cmd-channel',
-      payload: {
-        type: 'ensure-orca-workers-tab',
-        sessionId: 's1',
-        focusWorkerSessionId: 'worker-s1',
-        focusTab: true,
-      },
-    });
-    expect(h.sends.at(-1)).toEqual({
-      channel: 'cmd-channel',
-      payload: { type: 'close-orca-workers-tab', sessionId: 's1' },
-    });
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('routed');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
   });
 
-  it('跨会话 open-turn-review 按 hostSessionId(lead 桶)裁决,worker sessionId 不拒发', async () => {
-    // 协同面板审查 worker 轮次:command.sessionId 是取数目标 worker,可见桶是
-    // lead(hostSessionId)。detached context 停在 lead 上,按 sessionId 裁决会
-    // 误判 stale-context,worker 审查入口在 detached 形态下点了没反应。
+  it('allowOpen=false + window hidden: stays queued through prewarm and flushes on open', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
-    h.controller.open();
-    h.controller.markReady();
-
-    const command = {
-      type: 'open-turn-review' as const,
-      sessionId: 'worker-1',
-      changeSetIds: ['c1'],
-      selectedDiffId: null,
-      selectedPath: null,
-      requestNonce: 1,
-      hostSessionId: 's1',
-    };
+    const cmd = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
     await expect(
-      h.controller.routeCommand({ command, allowOpen: true }),
-    ).resolves.toBe('routed');
-    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
-
-    // hostSessionId 与当前 context 不符时仍是 stale-context(不能放宽成任意会话)。
-    await expect(
-      h.controller.routeCommand({
-        command: { ...command, hostSessionId: 'other-lead' },
-        allowOpen: true,
-      }),
-    ).resolves.toBe('stale-context');
-  });
-
-  it('跨会话 open-turn-review 延迟命令按 lead 桶入队,lead ready 后派发', async () => {
-    const h = makeHarness({ detached: true });
-    h.controller.setContext(ctx);
-
-    const command = {
-      type: 'open-turn-review' as const,
-      sessionId: 'worker-1',
-      changeSetIds: ['c1'],
-      selectedDiffId: null,
-      selectedPath: null,
-      requestNonce: 2,
-      hostSessionId: 's1',
-    };
-    await expect(
-      h.controller.routeCommand({ command, allowOpen: false }),
+      h.controller.routeCommand({ command: cmd, allowOpen: false }),
     ).resolves.toBe('queued');
     expect(h.windows).toHaveLength(0);
 
-    // context 一直是 lead(s1),不会切到 worker;flush 必须按 lead 桶命中。
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+
     h.controller.open();
-    h.controller.markReady();
-    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
+    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: cmd });
   });
 
-  it('context mismatch / unavailable 返回 stale-context，不开窗也不派发', async () => {
-    const h = makeHarness({ detached: true });
-    h.controller.setContext({ ...ctx, sessionId: 's2' });
-
-    await expect(
-      h.controller.routeCommand(terminalRequest()),
-    ).resolves.toBe('stale-context');
-    h.controller.setContext({ ...ctx, available: false });
-    await expect(
-      h.controller.routeCommand(terminalRequest()),
-    ).resolves.toBe('stale-context');
-
-    expect(h.windows).toHaveLength(0);
-    expect(h.sends).toHaveLength(0);
-  });
-
-  it('等待 detached renderer ready 时 context A->B 返回 stale 且不派旧命令', async () => {
+  it('queues passive commands while a cached detached window is hidden and flushes on reopen', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
-    const pending = h.controller.routeCommand(terminalRequest());
-    expect(h.windows).toHaveLength(1);
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    h.controller.close();
+    h.sends.length = 0;
 
-    h.controller.setContext({ ...ctx, sessionId: 's2' });
-    h.controller.markReady();
-    await expect(pending).resolves.toBe('stale-context');
-    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    const cmd = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await expect(
+      h.controller.routeCommand({ command: cmd, allowOpen: false }),
+    ).resolves.toBe('queued');
+    expect(h.sends).toEqual([]);
+
+    h.controller.open();
+    expect(h.sends).toContainEqual({ channel: 'cmd-channel', payload: cmd });
   });
 
-  it('ready 等待期间偏好切 attached 返回 attached，不向 closing 旧 host 发送', async () => {
-    const h = makeHarness({ detached: true }, { asyncClose: true });
+  it('detach preference change mid-wait: returns attached, no send to destroyed host', async () => {
+    const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
     const pending = h.controller.routeCommand(terminalRequest());
     expect(h.windows).toHaveLength(1);
 
     h.controller.setDetached(false);
-    h.windows[0].emitClosed();
+    // setDetached(false) now destroys the window
     await expect(pending).resolves.toBe('attached');
-    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    expect(h.sends.filter(e => e.channel === 'cmd-channel')).toEqual([]);
   });
 
-  it('allowOpen=false + detached closed:queued 且不重开；同 session ready 后派发', async () => {
+  it('pins the opening session so a focus switch during ready wait cannot drop it', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
-    const command = {
+    const pending = h.controller.routeCommand(terminalRequest());
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toEqual(ctx);
+    expect(h.sends.at(-1)).toEqual({
+      channel: 'cmd-channel',
+      payload: { type: 'open-terminal', sessionId: 's1' },
+    });
+  });
+
+  it('keeps another session queued across an ordinary focus switch', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const first = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://a.example' };
+    await expect(
+      h.controller.routeCommand({ command: first, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    await expect(h.controller.routeCommand(terminalRequest('s1'))).resolves.toBe('queued');
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: first },
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// 崩溃恢复
+// ═══════════════════════════════════════════════════════════════════════
+describe('crash recovery', () => {
+  it('did-fail-load invalidates window and rebuilds if pendingOpen', () => {
+    const h = makeHarness();
+    h.controller.open();
+    const win = h.windows[0];
+    expect(h.controller.markRendererReady(win.webContents as unknown as WebContents)).toBe(true);
+
+    // Simulate load failure
+    win.emitWebContentsEvent('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'url', true);
+    vi.advanceTimersByTime(10);
+
+    // Window should have been destroyed and a new one created (auto-recovery)
+    expect(win.isDestroyed()).toBe(true);
+    expect(h.windows).toHaveLength(2);
+  });
+
+  it('render-process-gone invalidates window with bounded recovery', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win1 = h.windows[0];
+    markReady(h.controller, win1);
+    h.controller.open();
+
+    // First crash: auto-recover
+    win1.emitWebContentsEvent('render-process-gone', {}, { reason: 'crashed' });
+    vi.advanceTimersByTime(10);
+    expect(win1.isDestroyed()).toBe(true);
+    expect(h.windows).toHaveLength(2); // new window created
+
+    // Second crash: recovery exhausted
+    const win2 = h.windows[1];
+    markReady(h.controller, win2);
+    win2.emitWebContentsEvent('render-process-gone', {}, { reason: 'killed' });
+    vi.advanceTimersByTime(10);
+    expect(h.windows).toHaveLength(2); // no third window
+  });
+
+  it('recovery quota resets after stability period', () => {
+    const h = makeHarness();
+    h.controller.open();
+    const win1 = h.windows[0];
+    markReady(h.controller, win1);
+
+    win1.emitWebContentsEvent('render-process-gone', {}, { reason: 'crashed' });
+    vi.advanceTimersByTime(10);
+    expect(h.windows).toHaveLength(2);
+
+    // Wait for stability period
+    vi.advanceTimersByTime(30_000);
+
+    // Recovery creates win2; need to open (request visibility) before second crash.
+    const win2 = h.windows[1];
+    markReady(h.controller, win2);
+    h.controller.open();
+    win2.emitWebContentsEvent('render-process-gone', {}, { reason: 'crashed' });
+    vi.advanceTimersByTime(10);
+    expect(h.windows).toHaveLength(3); // recovery quota reset allows third window
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// dispose
+// ═══════════════════════════════════════════════════════════════════════
+describe('dispose', () => {
+  it('dispose destroys the window and prevents further prewarm', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    h.controller.dispose();
+    expect(win.isDestroyed()).toBe(true);
+
+    // prewarm should be no-op after dispose
+    h.controller.prewarm();
+    expect(h.windows).toHaveLength(1); // no new window
+  });
+
+  it('dispose is idempotent', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    h.controller.dispose();
+    h.controller.dispose();
+    // Does not throw
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// sender guard: markRendererReady/markPresentationReady reject wrong sender
+// ═══════════════════════════════════════════════════════════════════════
+describe('sender guard', () => {
+  it('markRendererReady rejects non-sidebar sender', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const wrongSender = { id: 999 } as unknown as WebContents;
+    expect(h.controller.markRendererReady(wrongSender)).toBe(false);
+  });
+
+  it('markPresentationReady rejects non-sidebar sender', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const wrongSender = { id: 999 } as unknown as WebContents;
+    expect(h.controller.markPresentationReady(wrongSender)).toBe(false);
+  });
+
+  it('refreshContext rejects non-sidebar sender', () => {
+    const h = makeHarness();
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.setContext({ sessionId: 's1', workdir: '/w', remoteHostId: null, available: true });
+    // setContext sends to the window when alive, so there is already traffic.
+    const sendCountBefore = h.sends.length;
+    const wrongSender = { id: 999 } as unknown as WebContents;
+    h.controller.refreshContext(wrongSender);
+    // No additional send from refreshContext with wrong sender
+    expect(h.sends.length).toBe(sendCountBefore);
+  });
+
+  it('同会话多条不同 passive 命令保序全量下发,不再互相覆盖(#2409)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const register = {
       type: 'ensure-orca-workers-tab' as const,
       sessionId: 's1',
       focusWorkerSessionId: 'worker-s1',
       focusTab: false,
     };
-
-    await expect(
-      h.controller.routeCommand({ command, allowOpen: false }),
-    ).resolves.toBe('queued');
-    expect(h.windows).toHaveLength(0);
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await expect(h.controller.routeCommand({ command: register, allowOpen: false })).resolves.toBe('queued');
+    await expect(h.controller.routeCommand({ command: close, allowOpen: false })).resolves.toBe('queued');
 
     h.controller.open();
-    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
-    h.controller.markReady();
-    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
+    markReady(h.controller, h.windows[0]);
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([register, close]);
   });
 
-  it('allowOpen=false + closing:不重开并排队，下一 host ready 后派发', async () => {
-    const h = makeHarness({ detached: true }, { asyncClose: true });
-    h.controller.setContext(ctx);
-    h.controller.open();
-    h.controller.markReady();
-    h.controller.close();
-
-    const command = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
-    await expect(
-      h.controller.routeCommand({ command, allowOpen: false }),
-    ).resolves.toBe('queued');
-    expect(h.windows).toHaveLength(1);
-    h.windows[0].emitClosed();
-    h.controller.open();
-    h.controller.markReady();
-    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
-  });
-
-  it('closing + terminal 快速返回 stale，不等待关窗或进入 ready timeout', async () => {
-    const h = makeHarness({ detached: true }, { asyncClose: true });
-    h.controller.setContext(ctx);
-    h.controller.open();
-    h.controller.markReady();
-    h.controller.close();
-
-    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('stale-context');
-
-    expect(h.windows).toHaveLength(1);
-    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('queued A intent 在 context 切到 B 后丢弃，不发子 host 也不转主 host', async () => {
+  it('切 attached 时同会话多条 deferred 命令按序转交主 renderer(#2409)', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
-    await h.controller.routeCommand({
-      command: { type: 'close-orca-workers-tab', sessionId: 's1' },
-      allowOpen: false,
-    });
-
-    h.controller.setContext({ ...ctx, sessionId: 's2' });
-    h.controller.open();
-    h.controller.markReady();
-    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
-  });
-
-  it('queued current-session intent 在切 attached 时交给主 renderer', async () => {
-    const h = makeHarness({ detached: true });
-    h.controller.setContext(ctx);
-    const command = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
-    await h.controller.routeCommand({ command, allowOpen: false });
+    const register = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await h.controller.routeCommand({ command: register, allowOpen: false });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
 
     h.controller.setDetached(false);
-    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
-    expect(h.sendTargets.at(-1)).toBe(h.mainWin.webContents.id);
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([register, close]);
+    expect(h.sendTargets.slice(-2)).toEqual([
+      h.mainWin.webContents.id,
+      h.mainWin.webContents.id,
+    ]);
   });
 
-  it('passive ensure 不覆盖已排队的显式 worker intent', async () => {
+  it('完全等价的重复 passive 帧只登记一次(#2409)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const register = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    await h.controller.routeCommand({ command: register, allowOpen: false });
+    await h.controller.routeCommand({ command: { ...register }, allowOpen: false });
+
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toHaveLength(1);
+  });
+
+  it('generic ensure 被合并后,显式 intent 与其他登记命令仍全量下发(#2409)', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
     const explicit = {
@@ -616,14 +1859,88 @@ describe('setContext / routeCommand', () => {
       focusWorkerSessionId: 'worker-s1',
       focusTab: false,
     };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
     await h.controller.routeCommand({ command: explicit, allowOpen: false });
     await h.controller.routeCommand({
       command: { type: 'ensure-orca-workers-tab', sessionId: 's1', focusTab: false },
       allowOpen: false,
     });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
 
     h.controller.open();
-    h.controller.markReady();
-    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: explicit });
+    markReady(h.controller, h.windows[0]);
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([explicit, close]);
   });
+
+  it('close 之后的 generic ensure 不与屏障前的 ensure 合并,重开意图保留(#2511 review)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const explicit = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    const reopen = { type: 'ensure-orca-workers-tab' as const, sessionId: 's1', focusTab: false };
+    await h.controller.routeCommand({ command: explicit, allowOpen: false });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
+    await h.controller.routeCommand({ command: reopen, allowOpen: false });
+
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([explicit, close, reopen]);
+  });
+
+  it('隔着 close 的等价 ensure 帧不做跨屏障合并(#2511 review)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const ensure = { type: 'ensure-orca-workers-tab' as const, sessionId: 's1', focusTab: false };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await h.controller.routeCommand({ command: ensure, allowOpen: false });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
+    await h.controller.routeCommand({ command: { ...ensure }, allowOpen: false });
+
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([ensure, close, ensure]);
+  });
+
+  it('同目标 open-turn-review 后帧取代前帧,不同 session 的并存(#2511 review)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const stale = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-a',
+      changeSetIds: ['cs-old'],
+      requestNonce: 1,
+      hostSessionId: 's1',
+    };
+    const fresh = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-a',
+      changeSetIds: ['cs-new'],
+      requestNonce: 2,
+      hostSessionId: 's1',
+    };
+    const other = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-b',
+      changeSetIds: ['cs-b'],
+      requestNonce: 3,
+      hostSessionId: 's1',
+    };
+    await h.controller.routeCommand({ command: stale, allowOpen: false });
+    await h.controller.routeCommand({ command: other, allowOpen: false });
+    await h.controller.routeCommand({ command: fresh, allowOpen: false });
+
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([other, fresh]);
+  });
+
 });

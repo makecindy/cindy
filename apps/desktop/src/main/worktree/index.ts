@@ -32,6 +32,7 @@ export {
   recycleWorktreeForRemovedSession,
   reconcileWorktreesForDeletedSessions,
 } from './sessionRemovalRecycle';
+export { reconcilePendingSafeDirectoryCleanups } from './WorktreeManager';
 export {
   getWorktreeRestoreStatus,
   restoreMissingManagedWorktreeForSession,

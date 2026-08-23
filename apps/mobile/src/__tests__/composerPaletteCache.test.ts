@@ -40,12 +40,26 @@ describe('composerPaletteCache eviction', () => {
 
   it('key 用 \\u0000 分隔:构造与驱逐前缀口径一致,不同设备/agent/目录互不冲突', () => {
     const key = buildComposerPaletteCacheKey('dev-a', 'cc', '/w');
-    expect(key).toBe('dev-a\u0000cc\u0000/w');
+    expect(key).toBe('dev-a\u0000cc\u0000/w\u0000');
     expect(key.startsWith('dev-a\u0000')).toBe(true);
     // 前缀是设备 id + 分隔符:同前缀字符串的另一设备 id(如 dev-a2)不会被误驱逐。
     const other = buildComposerPaletteCacheKey('dev-a2', 'cc', '/w');
     writeSlashCommandCache(other, [command('/keep')]);
     evictComposerPaletteCacheForDevice('dev-a');
     expect(readSlashCommandCache(other)?.[0]?.name).toBe('/keep');
+  });
+
+  it('keeps live session slash snapshots separate from preview and sibling tasks', () => {
+    const preview = buildComposerPaletteCacheKey('dev-a', 'pi', '/repo');
+    const sessionOne = buildComposerPaletteCacheKey('dev-a', 'pi', '/repo', 'session-one');
+    const sessionTwo = buildComposerPaletteCacheKey('dev-a', 'pi', '/repo', 'session-two');
+
+    writeSlashCommandCache(preview, [command('/preview')]);
+    writeSlashCommandCache(sessionOne, [command('/one')]);
+    writeSlashCommandCache(sessionTwo, [command('/two')]);
+
+    expect(readSlashCommandCache(preview)?.[0]?.name).toBe('/preview');
+    expect(readSlashCommandCache(sessionOne)?.[0]?.name).toBe('/one');
+    expect(readSlashCommandCache(sessionTwo)?.[0]?.name).toBe('/two');
   });
 });

@@ -1,4 +1,5 @@
 import { piEditReplacements } from './toolUseDescriptor.js';
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
 
@@ -199,12 +200,13 @@ export function buildTextPayload(title: string, body: string): Extract<SharedMes
 
 export function buildDiffPayload<Diff extends PayloadToolDiffLike>(
   diff: Diff,
+  localizer?: PresentationLocalizer,
 ): Extract<SharedMessagePayload<Diff>, { kind: 'diff' }> {
   return {
     kind: 'diff',
     title: diff.filePath,
     diff,
-    body: formatDiffPayload(diff),
+    body: formatDiffPayload(diff, localizer),
   };
 }
 
@@ -283,8 +285,9 @@ export function buildPayloadToolDiff(toolName: string, input: unknown): PayloadT
 export function buildMediaPayload<Media extends PayloadMediaLike>(
   media: Media,
   label: string,
+  localizer?: PresentationLocalizer,
 ): Extract<SharedMessagePayload<PayloadToolDiffLike, Media>, { kind: 'media' }> {
-  const actionNotice = formatMediaActionNotice(media);
+  const actionNotice = formatMediaActionNotice(media, localizer);
   return {
     kind: 'media',
     title: label,
@@ -292,7 +295,7 @@ export function buildMediaPayload<Media extends PayloadMediaLike>(
     body: [
       media.previewable
         ? media.url
-        : `移动端会尝试从远程电脑取回媒体。\n\n${media.url}`,
+        : `${payloadPresentationText(localizer, 'remoteFetchBody', '移动端会尝试从远程电脑取回媒体。')}\n\n${media.url}`,
       actionNotice,
     ].filter(Boolean).join('\n\n'),
   };
@@ -301,17 +304,19 @@ export function buildMediaPayload<Media extends PayloadMediaLike>(
 export function buildFilePayload(
   title: string,
   sourcePath: string,
+  localizer?: PresentationLocalizer,
 ): Extract<SharedMessagePayload, { kind: 'file' }> {
   return {
     kind: 'file',
     title,
-    body: sourcePath || '没有可展示的远程路径',
+    body: sourcePath || payloadPresentationText(localizer, 'missingRemotePath', '没有可展示的远程路径'),
     sourcePath: sourcePath || undefined,
   };
 }
 
 export function buildAttachmentPayload(
   attachment: PayloadAttachmentLike,
+  localizer?: PresentationLocalizer,
 ): AttachmentMessagePayload {
   if (attachment.kind === 'image' && attachment.uri) {
     return buildMediaPayload({
@@ -319,7 +324,7 @@ export function buildAttachmentPayload(
       previewable: attachment.previewable,
       title: attachment.name,
       url: attachment.uri,
-    }, attachment.name);
+    }, attachment.name, localizer);
   }
 
   const sourcePath = attachment.path || attachment.uri || '';
@@ -338,9 +343,10 @@ export function buildAttachmentPayload(
         url: sourcePath,
       },
       attachment.name,
+      localizer,
     );
   }
-  return buildFilePayload(attachment.name, sourcePath);
+  return buildFilePayload(attachment.name, sourcePath, localizer);
 }
 
 export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayloadToolMediaLike[] {
@@ -426,23 +432,29 @@ export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayl
   });
 }
 
-export function buildMermaidPayload(source: string): Extract<SharedMessagePayload, { kind: 'mermaid' }> {
+export function buildMermaidPayload(
+  source: string,
+  localizer?: PresentationLocalizer,
+): Extract<SharedMessagePayload, { kind: 'mermaid' }> {
   return {
     kind: 'mermaid',
-    title: 'Mermaid 图表源码',
+    title: payloadPresentationText(localizer, 'mermaidSourceTitle', 'Mermaid 图表源码'),
     body: source,
   };
 }
 
-export function summarizeMessagePayload(payload: SharedMessagePayload): MessagePayloadSummary {
+export function summarizeMessagePayload(
+  payload: SharedMessagePayload,
+  localizer?: PresentationLocalizer,
+): MessagePayloadSummary {
   switch (payload.kind) {
     case 'diff':
       return {
         kind: 'diff',
         kindLabel: 'DIFF',
         title: payload.title,
-        subtitle: `+${payload.diff.insertions} / -${payload.diff.deletions} 行`,
-        copyableText: formatDiffPayload(payload.diff),
+        subtitle: formatDiffStats(payload.diff, localizer),
+        copyableText: formatDiffPayload(payload.diff, localizer),
         sourcePath: payload.diff.filePath,
         openTarget: { kind: 'file', value: payload.diff.filePath },
       };
@@ -463,7 +475,9 @@ export function summarizeMessagePayload(payload: SharedMessagePayload): MessageP
         kind: 'media',
         kindLabel: payload.media.kind.toUpperCase(),
         title: payload.title,
-        subtitle: payload.media.previewable ? '可直接预览' : '需要远程取件',
+        subtitle: payload.media.previewable
+          ? payloadPresentationText(localizer, 'directPreview', '可直接预览')
+          : payloadPresentationText(localizer, 'remoteFetchRequired', '需要远程取件'),
         copyableText: payload.media.url,
         openTarget: payload.media.previewable ? { kind: 'url', value: payload.media.url } : undefined,
       };
@@ -472,7 +486,7 @@ export function summarizeMessagePayload(payload: SharedMessagePayload): MessageP
         kind: 'mermaid',
         kindLabel: 'MERMAID',
         title: payload.title,
-        subtitle: '图表源码',
+        subtitle: payloadPresentationText(localizer, 'chartSource', '图表源码'),
         copyableText: payload.body,
       };
     case 'text':
@@ -485,10 +499,13 @@ export function summarizeMessagePayload(payload: SharedMessagePayload): MessageP
   }
 }
 
-export function summarizeMessagePayloadBody(payload: SharedMessagePayload): MessagePayloadBodyPresentation {
+export function summarizeMessagePayloadBody(
+  payload: SharedMessagePayload,
+  localizer?: PresentationLocalizer,
+): MessagePayloadBodyPresentation {
   switch (payload.kind) {
     case 'diff': {
-      const view = formatDiffPayloadView(payload.diff);
+      const view = formatDiffPayloadView(payload.diff, localizer);
       return {
         bodyText: payload.body,
         diff: {
@@ -496,7 +513,7 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
           sectionCount: view.sections.length,
           stats: view.stats,
         },
-        emptyText: '没有 diff 内容。',
+        emptyText: payloadPresentationText(localizer, 'noDiffContent', '没有 diff 内容。'),
         kind: 'diff',
         textMonospace: true,
       };
@@ -505,9 +522,9 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
       const sourcePath = payload.sourcePath ?? '';
       return {
         bodyText: payload.body || sourcePath,
-        emptyText: '没有可展示的远程路径。',
+        emptyText: payloadPresentationText(localizer, 'missingRemotePathSentence', '没有可展示的远程路径。'),
         file: {
-          displayPath: sourcePath || payload.body || '没有可展示的远程路径',
+          displayPath: sourcePath || payload.body || payloadPresentationText(localizer, 'missingRemotePath', '没有可展示的远程路径'),
           sourcePath,
         },
         kind: 'file',
@@ -519,27 +536,27 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
       const needsRemoteFetch = !payload.media.previewable && isPayloadDesktopLocalMediaUrl(payload.media.url);
       const canInlineDirectImage = payload.media.kind === 'image' && directPreviewable;
       const canInlineDirectPlayer = (payload.media.kind === 'video' || payload.media.kind === 'audio') && directPreviewable;
-      const bodyText = formatMediaPayloadDisplayText(payload);
+      const bodyText = formatMediaPayloadDisplayText(payload, localizer);
       return {
         bodyText,
-        emptyText: '没有媒体地址。',
+        emptyText: payloadPresentationText(localizer, 'noMediaAddress', '没有媒体地址。'),
         kind: 'media',
         media: {
           canDirectOpen: isPayloadDirectPreviewableUrl(payload.media.url),
           canInlineDirectImage,
           canInlineDirectPlayer,
           directPreviewable,
-          kindLabel: payloadMediaKindLabel(payload.media.kind),
+          kindLabel: payloadMediaKindLabel(payload.media.kind, localizer),
           needsRemoteFetch,
           placeholderText: needsRemoteFetch
-            ? '正在准备远程媒体取件'
+            ? payloadPresentationText(localizer, 'remoteMediaPreparing', '正在准备远程媒体取件')
             : payload.media.previewable
-              ? '当前媒体类型暂以地址形式展示。'
-              : '当前媒体暂不能直接预览。',
-          remoteIdleText: '正在准备远程媒体取件',
+              ? payloadPresentationText(localizer, 'mediaAddressOnlySentence', '当前媒体类型暂以地址形式展示。')
+              : payloadPresentationText(localizer, 'mediaCannotPreviewSentence', '当前媒体暂不能直接预览。'),
+          remoteIdleText: payloadPresentationText(localizer, 'remoteMediaPreparing', '正在准备远程媒体取件'),
           unsupportedText: payload.media.previewable
-            ? '当前媒体类型暂以地址形式展示。'
-            : '当前媒体暂不能直接预览。',
+            ? payloadPresentationText(localizer, 'mediaAddressOnlySentence', '当前媒体类型暂以地址形式展示。')
+            : payloadPresentationText(localizer, 'mediaCannotPreviewSentence', '当前媒体暂不能直接预览。'),
         },
         textMonospace: false,
       };
@@ -547,7 +564,7 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
     case 'mermaid':
       return {
         bodyText: payload.body,
-        emptyText: '空 Mermaid 图表。',
+        emptyText: payloadPresentationText(localizer, 'emptyMermaid', '空 Mermaid 图表。'),
         kind: 'mermaid',
         mermaid: { source: payload.body },
         textMonospace: true,
@@ -555,7 +572,7 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
     case 'text':
       return {
         bodyText: payload.body,
-        emptyText: '没有可展示的文本内容。',
+        emptyText: payloadPresentationText(localizer, 'noTextContent', '没有可展示的文本内容。'),
         kind: 'text',
         textMonospace: false,
       };
@@ -565,22 +582,24 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
 export function summarizeMessagePayloadPreview(
   payload: SharedMessagePayload,
   options: MessagePayloadPreviewOptions = {},
+  localizer?: PresentationLocalizer,
 ): MessagePayloadPreview {
   const maxPreviewChars = Math.max(24, options.maxPreviewChars ?? 220);
 
   switch (payload.kind) {
     case 'diff': {
-      const stats = `+${payload.diff.insertions} / -${payload.diff.deletions} 行`;
+      const stats = formatDiffStats(payload.diff, localizer);
       const editCount = payload.diff.segments.length;
       return {
         actionKind: 'view',
-        actionLabel: '查看 diff',
+        actionLabel: payloadPresentationText(localizer, 'viewDiff', '查看 diff'),
         canInlinePreview: false,
         detail: `${payload.diff.filePath} · ${stats}`,
         kind: 'diff',
-        meta: [stats, `${editCount} 处编辑`],
+        meta: [stats, payloadPresentationText(localizer, 'editCount', `${editCount} 处编辑`, { count: editCount })],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(formatDiffPreviewText(payload.diff), maxPreviewChars) || '没有 diff 内容。',
+        previewText: trimPayloadPreviewText(formatDiffPreviewText(payload.diff, localizer), maxPreviewChars)
+          || payloadPresentationText(localizer, 'noDiffContent', '没有 diff 内容。'),
         severity: payload.diff.insertions > 0 || payload.diff.deletions > 0 ? 'info' : 'neutral',
         shouldUseMonospacePreview: true,
         title: payload.title,
@@ -591,13 +610,18 @@ export function summarizeMessagePayloadPreview(
       const hasSourcePath = !!sourcePath.trim();
       return {
         actionKind: hasSourcePath ? 'preview-file' : 'view',
-        actionLabel: hasSourcePath ? '预览文件' : '查看详情',
+        actionLabel: hasSourcePath
+          ? payloadPresentationText(localizer, 'previewFile', '预览文件')
+          : payloadPresentationText(localizer, 'viewDetails', '查看详情'),
         canInlinePreview: false,
-        detail: hasSourcePath ? sourcePath : '没有远程路径',
+        detail: hasSourcePath ? sourcePath : payloadPresentationText(localizer, 'noRemotePath', '没有远程路径'),
         kind: 'file',
-        meta: [hasSourcePath ? sourcePath : '缺少远程路径'],
+        meta: [hasSourcePath ? sourcePath : payloadPresentationText(localizer, 'remotePathMissing', '缺少远程路径')],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(payload.body || sourcePath || '没有可展示的远程路径。', maxPreviewChars),
+        previewText: trimPayloadPreviewText(
+          payload.body || sourcePath || payloadPresentationText(localizer, 'missingRemotePathSentence', '没有可展示的远程路径。'),
+          maxPreviewChars,
+        ),
         severity: hasSourcePath ? 'neutral' : 'warning',
         shouldUseMonospacePreview: true,
         title: payload.title,
@@ -608,16 +632,16 @@ export function summarizeMessagePayloadPreview(
       const needsRemoteFetch = !payload.media.previewable && isPayloadDesktopLocalMediaUrl(payload.media.url);
       const canInlinePreview = directPreviewable
         && (payload.media.kind === 'image' || payload.media.kind === 'video' || payload.media.kind === 'audio');
-      const kindLabel = payloadMediaKindLabel(payload.media.kind);
-      const actionNotice = formatMediaActionNotice(payload.media);
+      const kindLabel = payloadMediaKindLabel(payload.media.kind, localizer);
+      const actionNotice = formatMediaActionNotice(payload.media, localizer);
       if (needsRemoteFetch) {
         return {
           actionKind: 'fetch-remote-media',
-          actionLabel: '取回媒体',
+          actionLabel: payloadPresentationText(localizer, 'fetchMedia', '取回媒体'),
           canInlinePreview: false,
-          detail: '需要从电脑端取回媒体',
+          detail: payloadPresentationText(localizer, 'fetchMediaFromDesktop', '需要从电脑端取回媒体'),
           kind: 'media',
-          meta: [kindLabel, '待取件'],
+          meta: [kindLabel, payloadPresentationText(localizer, 'pendingFetch', '待取件')],
           needsRemoteFetch: true,
           previewText: trimPayloadPreviewText([payload.media.url, actionNotice].filter(Boolean).join('\n'), maxPreviewChars),
           severity: 'info',
@@ -626,14 +650,14 @@ export function summarizeMessagePayloadPreview(
         };
       }
       if (directPreviewable) {
-        const displayText = formatMediaPayloadDisplayText(payload);
+        const displayText = formatMediaPayloadDisplayText(payload, localizer);
         return {
           actionKind: 'open-url',
-          actionLabel: '预览媒体',
+          actionLabel: payloadPresentationText(localizer, 'previewMedia', '预览媒体'),
           canInlinePreview,
-          detail: '可直接预览',
+          detail: payloadPresentationText(localizer, 'directPreview', '可直接预览'),
           kind: 'media',
-          meta: [kindLabel, '可预览'],
+          meta: [kindLabel, payloadPresentationText(localizer, 'previewable', '可预览')],
           needsRemoteFetch: false,
           previewText: trimPayloadPreviewText(displayText, maxPreviewChars),
           severity: 'neutral',
@@ -643,11 +667,20 @@ export function summarizeMessagePayloadPreview(
       }
       return {
         actionKind: payload.media.previewable ? 'open-url' : 'view',
-        actionLabel: payload.media.previewable ? '打开媒体' : '查看详情',
+        actionLabel: payload.media.previewable
+          ? payloadPresentationText(localizer, 'openMedia', '打开媒体')
+          : payloadPresentationText(localizer, 'viewDetails', '查看详情'),
         canInlinePreview: false,
-        detail: payload.media.previewable ? '当前媒体以地址形式展示' : '当前媒体暂不能直接预览',
+        detail: payload.media.previewable
+          ? payloadPresentationText(localizer, 'mediaAddressOnly', '当前媒体以地址形式展示')
+          : payloadPresentationText(localizer, 'mediaCannotPreview', '当前媒体暂不能直接预览'),
         kind: 'media',
-        meta: [kindLabel, payload.media.previewable ? '地址展示' : '不可预览'],
+        meta: [
+          kindLabel,
+          payload.media.previewable
+            ? payloadPresentationText(localizer, 'addressDisplay', '地址展示')
+            : payloadPresentationText(localizer, 'notPreviewable', '不可预览'),
+        ],
         needsRemoteFetch: false,
         previewText: trimPayloadPreviewText([payload.media.url, actionNotice].filter(Boolean).join('\n'), maxPreviewChars),
         severity: payload.media.previewable ? 'info' : 'warning',
@@ -658,13 +691,16 @@ export function summarizeMessagePayloadPreview(
     case 'mermaid':
       return {
         actionKind: 'view',
-        actionLabel: '查看图表',
+        actionLabel: payloadPresentationText(localizer, 'viewChart', '查看图表'),
         canInlinePreview: true,
-        detail: 'Mermaid 图表源码',
+        detail: payloadPresentationText(localizer, 'mermaidSourceTitle', 'Mermaid 图表源码'),
         kind: 'mermaid',
-        meta: ['图表源码'],
+        meta: [payloadPresentationText(localizer, 'chartSource', '图表源码')],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(payload.body || '空 Mermaid 图表。', maxPreviewChars),
+        previewText: trimPayloadPreviewText(
+          payload.body || payloadPresentationText(localizer, 'emptyMermaid', '空 Mermaid 图表。'),
+          maxPreviewChars,
+        ),
         severity: 'neutral',
         shouldUseMonospacePreview: true,
         title: payload.title,
@@ -672,13 +708,16 @@ export function summarizeMessagePayloadPreview(
     case 'text':
       return {
         actionKind: 'view',
-        actionLabel: '查看内容',
+        actionLabel: payloadPresentationText(localizer, 'viewContent', '查看内容'),
         canInlinePreview: false,
-        detail: '文本输出',
+        detail: payloadPresentationText(localizer, 'textOutput', '文本输出'),
         kind: 'text',
-        meta: ['文本'],
+        meta: [payloadPresentationText(localizer, 'text', '文本')],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(payload.body || '没有可展示的文本内容。', maxPreviewChars),
+        previewText: trimPayloadPreviewText(
+          payload.body || payloadPresentationText(localizer, 'noTextContent', '没有可展示的文本内容。'),
+          maxPreviewChars,
+        ),
         severity: 'neutral',
         shouldUseMonospacePreview: false,
         title: payload.title,
@@ -686,20 +725,28 @@ export function summarizeMessagePayloadPreview(
   }
 }
 
-export function payloadMediaKindLabel(kind: PayloadMediaLike['kind']): string {
-  if (kind === 'image') return '图片';
-  if (kind === 'video') return '视频';
-  return '音频';
+export function payloadMediaKindLabel(
+  kind: PayloadMediaLike['kind'],
+  localizer?: PresentationLocalizer,
+): string {
+  if (kind === 'image') return payloadPresentationText(localizer, 'image', '图片');
+  if (kind === 'video') return payloadPresentationText(localizer, 'video', '视频');
+  return payloadPresentationText(localizer, 'audio', '音频');
 }
 
-function formatMediaPayloadDisplayText(payload: Extract<SharedMessagePayload, { kind: 'media' }>): string {
+function formatMediaPayloadDisplayText(
+  payload: Extract<SharedMessagePayload, { kind: 'media' }>,
+  localizer?: PresentationLocalizer,
+): string {
   const dataImage = describeDataImageUrl(payload.media.url);
   if (!dataImage) return payload.body || payload.media.url;
   return [
-    `内联${payloadMediaKindLabel(payload.media.kind)}数据`,
+    payloadPresentationText(localizer, 'inlineMediaData', `内联${payloadMediaKindLabel(payload.media.kind, localizer)}数据`, {
+      kind: payloadMediaKindLabel(payload.media.kind, localizer),
+    }),
     dataImage.mimeLabel,
     dataImage.sizeLabel,
-    formatMediaActionNotice(payload.media),
+    formatMediaActionNotice(payload.media, localizer),
   ].filter(Boolean).join(' · ');
 }
 
@@ -746,10 +793,13 @@ export function isPayloadDirectPreviewableUrl(url: unknown): url is string {
   );
 }
 
-export function formatDiffPayload(diff: PayloadToolDiffLike): string {
+export function formatDiffPayload(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): string {
   const head = [
     diff.filePath,
-    `+${diff.insertions} / -${diff.deletions} 行`,
+    formatDiffStats(diff, localizer),
   ];
   const segments = diff.segments.map((segment, index) => {
     const label = segment.label ?? `Edit ${index + 1}/${diff.segments.length}`;
@@ -760,10 +810,13 @@ export function formatDiffPayload(diff: PayloadToolDiffLike): string {
   return [...head, ...segments].join('\n\n');
 }
 
-export function formatDiffPayloadRows(diff: PayloadToolDiffLike): FormattedDiffPayloadRow[] {
+export function formatDiffPayloadRows(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): FormattedDiffPayloadRow[] {
   const rows: FormattedDiffPayloadRow[] = [
     { key: 'header', kind: 'header', text: diff.filePath },
-    { key: 'stats', kind: 'stats', text: `+${diff.insertions} / -${diff.deletions} 行` },
+    { key: 'stats', kind: 'stats', text: formatDiffStats(diff, localizer) },
   ];
   diff.segments.forEach((segment, index) => {
     const label = segment.label ?? `Edit ${index + 1}/${diff.segments.length}`;
@@ -786,10 +839,13 @@ export function formatDiffPayloadRows(diff: PayloadToolDiffLike): FormattedDiffP
   return rows;
 }
 
-export function formatDiffPayloadView(diff: PayloadToolDiffLike): FormattedDiffPayloadView {
+export function formatDiffPayloadView(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): FormattedDiffPayloadView {
   return {
     filePath: diff.filePath,
-    stats: `+${diff.insertions} / -${diff.deletions} 行`,
+    stats: formatDiffStats(diff, localizer),
     sections: diff.segments.map((segment, index) => ({
       key: segment.key,
       label: segment.label ?? `Edit ${index + 1}/${diff.segments.length}`,
@@ -807,14 +863,21 @@ export function formatDiffPayloadView(diff: PayloadToolDiffLike): FormattedDiffP
   };
 }
 
-export function formatMediaActionNotice(media: PayloadMediaLike): string {
+export function formatMediaActionNotice(
+  media: PayloadMediaLike,
+  localizer?: PresentationLocalizer,
+): string {
   const actions = media.actions;
   if (!actions?.buttons.length) return '';
   const labels = actions.buttons.map(formatMediaActionButtonLabel).join(' / ');
   return [
-    '桌面端为这个媒体提供了后续操作。',
-    `可用操作: ${labels}`,
-    '手机版 V1 只安全展示这些操作,暂不远程触发。请回到电脑端点击。',
+    payloadPresentationText(localizer, 'mediaActionsAvailable', '桌面端为这个媒体提供了后续操作。'),
+    payloadPresentationText(localizer, 'availableActions', `可用操作：${labels}`, { actions: labels }),
+    payloadPresentationText(
+      localizer,
+      'mediaActionsDesktopOnly',
+      '手机版 V1 只安全展示这些操作，暂不远程触发。请回到电脑端点击。',
+    ),
   ].join('\n');
 }
 
@@ -828,14 +891,42 @@ function splitChangedLines(value: string): string[] {
   return value.split('\n');
 }
 
-function formatDiffPreviewText(diff: PayloadToolDiffLike): string {
+function formatDiffPreviewText(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): string {
   const firstSegment = diff.segments[0];
   if (!firstSegment) return '';
   const label = firstSegment.label ?? `Edit 1/${diff.segments.length}`;
   const oldLines = splitChangedLines(firstSegment.oldString).slice(0, 2).map((line) => `- ${line}`);
   const newLines = splitChangedLines(firstSegment.newString).slice(0, 2).map((line) => `+ ${line}`);
-  const more = diff.segments.length > 1 ? [`...还有 ${diff.segments.length - 1} 处编辑`] : [];
+  const more = diff.segments.length > 1
+    ? [payloadPresentationText(localizer, 'moreEdits', `…还有 ${diff.segments.length - 1} 处编辑`, {
+        count: diff.segments.length - 1,
+      })]
+    : [];
   return [label, ...oldLines, ...newLines, ...more].filter(Boolean).join('\n');
+}
+
+function formatDiffStats(
+  diff: Pick<PayloadToolDiffLike, 'insertions' | 'deletions'>,
+  localizer?: PresentationLocalizer,
+): string {
+  return payloadPresentationText(
+    localizer,
+    'diffStats',
+    `+${diff.insertions} / -${diff.deletions} 行`,
+    { insertions: diff.insertions, deletions: diff.deletions },
+  );
+}
+
+function payloadPresentationText(
+  localizer: PresentationLocalizer | undefined,
+  key: string,
+  fallback: string,
+  values?: Readonly<Record<string, string | number | boolean | null | undefined>>,
+): string {
+  return presentationText(localizer, `message.payloadPresentation.${key}`, fallback, values);
 }
 
 function trimPayloadPreviewText(value: string, maxChars: number): string {

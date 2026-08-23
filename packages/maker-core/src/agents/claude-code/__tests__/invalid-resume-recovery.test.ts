@@ -15,6 +15,7 @@ const sdkMock = vi.hoisted(() => ({ query: vi.fn(), forkSession: vi.fn() }));
 
 const imageResizerMock = vi.hoisted(() => ({
   process: vi.fn(async (p: string) => p),
+  validateBuffer: vi.fn(async () => true),
 }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -282,6 +283,11 @@ describe('Claude invalid-resume recovery', () => {
     expect(clear).toHaveBeenCalledTimes(1);
     expect(h.events.filter((event) => event.type === 'error')).toHaveLength(0);
     expect(h.events).toContainEqual({ type: 'session_id', data: 'sdk-fresh', source: 'claude-code' });
+    expect(
+      (h.events.find((event) => event.type === 'done')?.data as {
+        modelUsageCumulativeStartsAtZero?: boolean;
+      }).modelUsageCumulativeStartsAtZero,
+    ).toBe(true);
     await vi.waitFor(() => expect(h.consumedInputs[1]?.length).toBe(1));
 
     await h.handle.close();

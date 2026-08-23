@@ -8,6 +8,7 @@ import {
   findMessageTodoInsertions,
   formatDuration,
   getLatestMessageTodoState,
+  isSubagentParentToolUseId,
   type MessageRenderItem,
   type MessageRenderNormalizedMessage,
   type MessageRenderSourceMessageLike,
@@ -928,6 +929,305 @@ describe('message render todo grouping', () => {
     ).not.toHaveProperty('turnFailed');
   });
 
+  /**
+   * 计划归属(ownership)。三个历史病根,都源于"同 source 的上一份计划没勾完
+   * 就无条件当续期":
+   *  1. 跨普通 user turn 串号——用户换了话题,新计划仍复用旧 session/key;
+   *  2. 子代理的计划工具调用与主线程平权,子计划能顶掉主计划;
+   *  3. Codex 不同 turn 的 update_plan 被并成同一 session。
+   */
+  describe('plan ownership boundaries', () => {
+    it('treats a bare legacy transcript parentUuid as top-level, not subagent', () => {
+      // 旧 Claude 导入把普通 transcript 链边也存在 agentMeta.parentUuid(裸 uuid
+      // 形态)。一律当子代理会让旧会话的顶层计划被面板与对账整段过滤掉;只认
+      // SDK tool-use id 形态(toolu_/call_ 前缀),与 latestMessageText 同判据。
+      const legacyTopLevelPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-legacy', 'TodoWrite', {
+          todos: [
+            { content: 'Legacy step', status: 'in_progress' },
+            { content: 'Legacy follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: '4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f' },
+      };
+
+      expect(findLatestMessageTodoInsertion([legacyTopLevelPlan])).toMatchObject({
+        key: 'todo-todo-legacy',
+        todos: [
+          { content: 'Legacy step', status: 'in_progress' },
+          { content: 'Legacy follow-up', status: 'pending' },
+        ],
+      });
+
+      // 真正的 SDK tool 父级(toolu_ 前缀)仍然按子代理排除。
+      const realSubagentPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub2', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent step', status: 'in_progress' },
+            { content: 'Subagent follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: 'toolu_01ABCDEF' },
+      };
+      expect(findLatestMessageTodoInsertion([realSubagentPlan])).toBeNull();
+
+      // 兼容模型归一化后的父调用 id(Task_x1)同样是真实 tool parent。
+      const compatSubagentPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub3', 'TodoWrite', {
+          todos: [
+            { content: 'Compat subagent step', status: 'in_progress' },
+            { content: 'Compat subagent follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: 'Task_x1' },
+      };
+      expect(findLatestMessageTodoInsertion([compatSubagentPlan])).toBeNull();
+    });
+
+    it('exports the same tool-parent shape check that projection sites must use', () => {
+      // desktop 渲染层的历史恢复会把裸 agentMeta.parentUuid 提升成显式
+      // parentToolUseId。提升前必须过这条判据,否则 legacy transcript 链边被当成
+      // 显式父归属,顶层计划在桌面端被过滤、在 mobile / main 端不被过滤,同一份
+      // 历史两端分组分叉(review P2)。判据与本文件内部的子代理归属同一份。
+      expect(isSubagentParentToolUseId('toolu_01ABCDEF')).toBe(true);
+      expect(isSubagentParentToolUseId('call_abc123')).toBe(true);
+      expect(isSubagentParentToolUseId('4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f')).toBe(false);
+      expect(isSubagentParentToolUseId('preceding-user-uuid')).toBe(false);
+      // 兼容模型(kimi 系)的真实 tool-use id:`名字_序号`,以及 resume 前转录
+      // 归一化的产物 `_x` 顺延 / `_dupN` 去重。只认 toolu_/call_ 会把这类子代理
+      // 的计划当成顶层计划(review P2)。
+      expect(isSubagentParentToolUseId('Task_1')).toBe(true);
+      expect(isSubagentParentToolUseId('Task_x1')).toBe(true);
+      expect(isSubagentParentToolUseId('Bash_xx210')).toBe(true);
+      expect(isSubagentParentToolUseId('Bash_5_dup2')).toBe(true);
+    });
+
+    it('starts a new session when an ordinary user turn intervenes', () => {
+      const staleTodo = tool('todo-old', 'TodoWrite', {
+        todos: [
+          { content: 'Old work', status: 'in_progress' },
+          { content: 'Old follow-up', status: 'pending' },
+        ],
+      });
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-2',
+        content: '换个话题:帮我做另一件事',
+        createdAt: at(5),
+      };
+      const freshTodo = tool('todo-new', 'TodoWrite', {
+        todos: [{ content: 'New work', status: 'in_progress' }, { content: 'New follow-up', status: 'pending' }],
+      });
+
+      const latest = findLatestMessageTodoInsertion([staleTodo, newUserTurn, freshTodo]);
+      // 新 user turn 之后的计划是新 session:key 必须锚在新调用上,不复用旧 key。
+      expect(latest).toMatchObject({
+        key: 'todo-todo-new',
+        todos: [
+          { content: 'New work', status: 'in_progress' },
+          { content: 'New follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('does not let an old Task update carry later TaskCreate calls across a user boundary', () => {
+      const staleTask = tool(
+        'task-old',
+        'TaskCreate',
+        { subject: 'Old work' },
+        'create-old',
+      );
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-task-boundary',
+        content: '开始另一项工作',
+        createdAt: at(5),
+      };
+      const staleProgress = tool(
+        'task-old-progress',
+        'TaskUpdate',
+        { taskId: 'old', status: 'in_progress' },
+        'update-old',
+      );
+      const freshTask = tool(
+        'task-new',
+        'TaskCreate',
+        { subject: 'Current work' },
+        'create-new',
+      );
+
+      const latest = findLatestMessageTodoInsertion([
+        staleTask,
+        result('create-old', 'Task #old created successfully: Old work'),
+        newUserTurn,
+        // 指向旧 id 的更新可以合法穿过边界,但不能把 session 的所有权锚点
+        // 搬到新 turn,否则紧随其后的新 TaskCreate 会继续并入旧清单。
+        staleProgress,
+        freshTask,
+        result('create-new', 'Task #new created successfully: Current work'),
+      ]);
+
+      expect(latest).toMatchObject({
+        key: 'todo-task-new',
+        source: 'task',
+        todos: [{ content: 'Current work', status: 'pending' }],
+      });
+    });
+
+    it('does not cut a session at synthetic user rows (auto-resume / scheduler)', () => {
+      const staleTodo = tool('todo-live', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'in_progress' },
+          { content: 'Long follow-up', status: 'pending' },
+        ],
+      });
+      const autoResumeRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'auto-resume-1',
+        content: '继续',
+        createdAt: at(5),
+        agentMeta: { autoResume: true },
+      };
+      const schedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sched-1',
+        content: '定时任务触发',
+        createdAt: at(6),
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' } },
+      };
+      // desktop 渲染层投影后 agentMeta 被丢弃,只剩这两个字段——同样不得切边界。
+      const projectedSyntheticRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-1',
+        content: '',
+        createdAt: at(7),
+        isSyntheticTrigger: true,
+      };
+      const projectedSchedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-2',
+        content: '定时活',
+        createdAt: at(8),
+        automationOrigin: { kind: 'scheduler', scheduleId: 's1' },
+      };
+      // 子代理内部的 user 行(agentMeta.parentUuid)同样不是用户开新话题。
+      const subagentUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sub-user-1',
+        content: '子任务内部输入',
+        createdAt: at(9),
+        agentMeta: { parentUuid: 'toolu_parent_1' },
+      };
+      // 同轮 steer 插话(desktop 投影 delivery='steer')也不是新话题边界。
+      const steerUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'steer-1',
+        content: '顺便把日志也看下',
+        createdAt: at(10),
+        delivery: 'steer',
+      };
+      const progress = tool('todo-live-2', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+
+      // 自动续跑/scheduler 落的 user 行不是"用户开新话题":同计划的后续更新
+      // 仍并入原 session,key 不变,不产生重复计划卡。
+      expect(
+        findLatestMessageTodoInsertion([
+          staleTodo,
+          autoResumeRow,
+          schedulerRow,
+          projectedSyntheticRow,
+          projectedSchedulerRow,
+          subagentUserRow,
+          steerUserRow,
+          progress,
+        ]),
+      ).toMatchObject({
+        key: 'todo-todo-live',
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+    });
+
+    it('keeps in-turn progress updates merged into one session (no user turn between)', () => {
+      const first = tool('todo-a', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'in_progress' }],
+      });
+      const second = tool('todo-b', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+
+      // 同一 turn 内的进度更新仍是续期:key 锚定首次调用(现状契约,不能破坏)。
+      expect(findLatestMessageTodoInsertion([first, second])).toMatchObject({
+        key: 'todo-todo-a',
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+    });
+
+    it('ignores subagent plan calls for the top-level pinned panel', () => {
+      const mainPlan = tool('plan-main', 'update_plan', {
+        plan: [
+          { step: 'Main step', status: 'in_progress' },
+          { step: 'Main follow-up', status: 'pending' },
+        ],
+      });
+      const subagentTodo: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent internal', status: 'in_progress' },
+            { content: 'Subagent extra', status: 'pending' },
+          ],
+        }),
+        parentToolUseId: 'agent-task-1',
+      };
+
+      // 子代理自己的清单不得顶掉主线程计划。
+      expect(findLatestMessageTodoInsertion([mainPlan, subagentTodo])).toMatchObject({
+        key: 'todo-plan-main',
+        todos: [
+          { content: 'Main step', status: 'in_progress' },
+          { content: 'Main follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('does not merge Codex plans from different turns into one session', () => {
+      const turn1Plan = tool('plan-t1', 'update_plan', {
+        plan: [
+          { step: 'Turn one work', status: 'in_progress' },
+          { step: 'Turn one rest', status: 'pending' },
+        ],
+      }, 'plan:turn-1');
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-3',
+        content: '下一个任务',
+        createdAt: at(6),
+      };
+      const turn2Plan = tool('plan-t2', 'update_plan', {
+        plan: [
+          { step: 'Turn two work', status: 'in_progress' },
+          { step: 'Turn two rest', status: 'pending' },
+        ],
+      }, 'plan:turn-2');
+
+      const latest = findLatestMessageTodoInsertion([turn1Plan, newUserTurn, turn2Plan]);
+      expect(latest).toMatchObject({
+        key: 'todo-plan-t2',
+        todos: [
+          { content: 'Turn two work', status: 'in_progress' },
+          { content: 'Turn two rest', status: 'pending' },
+        ],
+      });
+    });
+  });
+
   it('does not infer completion from an ambiguous legacy Codex turn seal', () => {
     const plan = {
       ...tool('plan1', 'update_plan', {
@@ -1085,6 +1385,87 @@ describe('message render todo grouping', () => {
       insertion: {
         todos: [{ content: 'Fix renderer', status: 'in_progress' }],
       },
+    });
+  });
+
+  it('resolves a new Task session after a real user boundary despite an older orphan update', () => {
+    const orphanUpdate = tool(
+      'old-task-update',
+      'TaskUpdate',
+      { taskId: 'old', status: 'in_progress' },
+      'update-old',
+    );
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-2',
+      content: 'Start a new plan',
+    };
+    const first = tool('new-task-1', 'TaskCreate', { subject: 'Inspect renderer' }, 'create-new-1');
+    const second = tool('new-task-2', 'TaskCreate', { subject: 'Run tests' }, 'create-new-2');
+
+    expect(getLatestMessageTodoState([
+      orphanUpdate,
+      newUserTurn,
+      first,
+      result('create-new-1', 'Task #new-1 created successfully: Inspect renderer'),
+      second,
+      result('create-new-2', 'Task #new-2 created successfully: Run tests'),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        key: 'todo-new-task-1',
+        todos: [
+          { content: 'Inspect renderer', status: 'pending' },
+          { content: 'Run tests', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('treats a visible real user row as the boundary of the first Task session in a paged window', () => {
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-1',
+      content: 'Start a plan',
+    };
+    const first = tool('task-1', 'TaskCreate', { subject: 'Inspect renderer' }, 'create-1');
+    const second = tool('task-2', 'TaskCreate', { subject: 'Run tests' }, 'create-2');
+
+    expect(getLatestMessageTodoState([
+      newUserTurn,
+      first,
+      result('create-1', 'Task #1 created successfully: Inspect renderer'),
+      second,
+      result('create-2', 'Task #2 created successfully: Run tests'),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        key: 'todo-task-1',
+        todos: [
+          { content: 'Inspect renderer', status: 'pending' },
+          { content: 'Run tests', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('keeps a first TaskGet unresolved when a visible user row does not prove the old plan is complete', () => {
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-1',
+      content: 'Continue the existing task',
+    };
+    const getExisting = tool('task-get', 'TaskGet', { taskId: 'old' }, 'get-old');
+
+    expect(getLatestMessageTodoState([
+      newUserTurn,
+      getExisting,
+      result('get-old', JSON.stringify({
+        task: { id: 'old', subject: 'Inspect renderer', status: 'in_progress' },
+      })),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      insertion: null,
+      isResolved: false,
     });
   });
 

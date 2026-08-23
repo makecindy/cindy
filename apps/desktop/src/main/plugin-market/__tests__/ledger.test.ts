@@ -70,6 +70,53 @@ describe('PluginMarketLedger', () => {
     ).toBe(false);
   });
 
+  it('atomically reconnects an unchanged server record and clears its false opt-out', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record());
+    ledger.markRemoved('cindy-test', 'user-a');
+    const disconnected = ledger.installationForGhost('cindy-test');
+    expect(disconnected).not.toBeNull();
+    if (!disconnected) return;
+
+    expect(ledger.restoreDisconnectedInstallation(disconnected, 'user-a')).toBe(true);
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: true });
+    expect(
+      ledger.isDefaultInstallSuppressed('user-a', disconnected.pluginId),
+    ).toBe(false);
+  });
+
+  it('keeps a recovered organization route out of market-only authorization', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record({
+      scope: 'organization',
+      organizationId: 'org-a',
+    }));
+    ledger.markRemoved('cindy-test', 'user-a');
+    const disconnected = ledger.installationForGhost('cindy-test');
+    expect(disconnected).not.toBeNull();
+    if (!disconnected) return;
+
+    expect(ledger.restoreDisconnectedInstallation(disconnected, 'user-a')).toBe(true);
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({
+      installed: true,
+      source: 'legacy-adopted',
+      scope: 'organization',
+    });
+  });
+
+  it('does not overwrite a disconnected record that changed after recovery captured it', () => {
+    const { ledger } = harness();
+    const disconnected = record({ installed: false });
+    ledger.upsertInstallation(disconnected);
+    ledger.upsertInstallation({ ...disconnected, sha256: 'c'.repeat(64) });
+
+    expect(ledger.restoreDisconnectedInstallation(disconnected, 'user-a')).toBe(false);
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({
+      installed: false,
+      sha256: 'c'.repeat(64),
+    });
+  });
+
   it('fails closed to an empty ledger for malformed or future data', () => {
     const { filePath, ledger } = harness();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

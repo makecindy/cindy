@@ -217,7 +217,9 @@ export function selectVisibleModels(params: {
    * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
    * 远端 cc 不经本地 compat-proxy 的 responses-bridge,选了必失败;静默消失会让用户
    * 误以为订阅掉了。device-link 远程不受影响(被控端跑完整 app,其本地 proxy 上
-   * bridge 可用,模型清单本就来自被控端)。
+   * bridge 可用,模型清单本就来自被控端)。唯一例外是 Pi 的 OpenAI `[1m]` context
+   * profile:它依赖 Desktop 本地 subscription adapter 剥离 profile 后缀,SSH 没有等价
+   * 改写链,所以不向远程 Pi picker 发布。
    */
   excludeSubscriptionDirect?: boolean;
   /**
@@ -238,15 +240,21 @@ export function selectVisibleModels(params: {
     excludeSubscriptionDirect,
     excludeChatBridgedCodex,
   } = params;
-  // excludeSubscriptionDirect 不再过滤(见参数文档):行保留,准入由调用方按
-  // isSubscriptionDirectModel 打 disabled。保留参数是为了不破坏既有调用签名。
+  // 普通 subscription-direct 行继续保留,准入由调用方按 isSubscriptionDirectModel
+  // 打 disabled。Pi 的 `[1m]` profile 是仅本地可改写的 catalog identity,SSH 侧必须隐藏。
   const pass = (list: ModelDescriptor[]): ModelDescriptor[] => list;
   const codexDeriveOpts = excludeChatBridgedCodex
     ? { excludeProvider: isChatBridgedCodexProvider }
     : undefined;
   const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
   const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
-  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'));
+  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'))
+    .filter((model) => !(
+      excludeSubscriptionDirect === true &&
+      agentKind === 'pi' &&
+      model.id.startsWith('chatgpt/') &&
+      model.id.endsWith('[1m]')
+    ));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   if (agentKind === 'pi') return pi;

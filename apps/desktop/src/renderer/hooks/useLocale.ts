@@ -85,6 +85,19 @@ function applyLocale(loc: SupportedLocale): void {
   syncApplicationMenuLocale(loc);
 }
 
+/**
+ * Apply the persisted locale before the first React render.
+ *
+ * Lightweight windows render their error boundary outside the provider tree;
+ * initializing i18next synchronously here keeps even an early render failure
+ * in the user's selected language.
+ */
+export function bootstrapInitialLocale(): SupportedLocale {
+  const effectiveLocale = effectiveOf(readStoredLocale());
+  applyLocale(effectiveLocale);
+  return effectiveLocale;
+}
+
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(() =>

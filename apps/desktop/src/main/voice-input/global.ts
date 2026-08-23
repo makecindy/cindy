@@ -22,13 +22,16 @@ import { createLogger } from '../logger.js';
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
 import { openMainWindowVoiceSettings } from '../deepLink.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { onQuit } from '../lifecycle.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { prewarmVoiceInputProvider } from './index.js';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning.js';
 import {
+  isVoiceInputBareFunctionKeyShortcut,
   voiceInputShortcutNeedsMacNativeListener,
+  voiceInputShortcutNeedsWindowsNativeListener,
   type VoiceInputSettings,
   type VoiceInputShortcut,
 } from '../../shared/voiceInputData.js';
@@ -38,6 +41,7 @@ import {
   requestMacInputMonitoringPermission,
   type MacInputMonitoringPermissionSnapshot,
 } from './MacModifierShortcutListener.js';
+import { WindowsFunctionKeyShortcutListener } from './WindowsFunctionKeyShortcutListener.js';
 import {
   computeOverlayPositionRatio,
   isBoundsCenterOnDisplay,
@@ -49,6 +53,14 @@ import {
 import { voiceInputOverlayPositionStore } from './overlayPositionStore.js';
 import { voiceInputDataStore } from './VoiceInputDataStore.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
+import {
+  resolveNativeVoiceActivation,
+  type NativeVoiceActivationSource,
+} from './nativeVoiceActivation.js';
+import {
+  assertHelperCommandSucceeded,
+  waitForSpawnedProcess,
+} from './macHelperProcess.js';
 
 const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
@@ -87,41 +99,52 @@ function hasActiveShortcutRecordingSession(): boolean {
 }
 
 /**
- * 上一次 native 激活的 start 有没有真的投递到下游。
+ * Which native source currently owns the overlay start/end pair.
  *
- * listener 的 triggered / end 是它自己的内部时序，与这里的投递层抑制无关：被上面那条守卫挡掉的
- * start，用户按住超过阈值再松手时照样会给出一条 end（endActiveTriggerIfNeeded 补发的那条同理）。
- * 而 end 在下游就是「停止并提交」—— 一个正在跑的 inline 语音输入会话会被这条**没有配对 start**
- * 的 end 直接提交掉，而用户只是按了一下本该被吞掉的键。
- *
- * 所以 end 的投递条件是「配对的 start 投递过没有」。这也覆盖了录制框已经关掉、end 才姗姗来迟的
- * 情形 —— 那时录制守卫早就不生效了，只有配对关系还算数。
+ * Hardware and the system shortcut share this overlay. The pairing is per
+ * source so one side's start or end cannot submit or drop the other.
  */
-let nativeActivationStartDelivered = false;
+let nativeActivationOwner: NativeVoiceActivationSource | null = null;
+
+function handleNativeGlobalShortcutPhase(
+  phase: GlobalVoiceInputShortcutPhase,
+  source: NativeVoiceActivationSource = 'shortcut',
+): void {
+  const next = resolveNativeVoiceActivation(
+    nativeActivationOwner,
+    phase,
+    source,
+    hasActiveShortcutRecordingSession(),
+  );
+  nativeActivationOwner = next.owner;
+  if (!next.deliver) {
+    log.debug('ignoring native voice activation', { phase, source });
+    return;
+  }
+  log.debug('native global shortcut triggered', { phase, source });
+  if (phase === 'tap') {
+    handleGlobalVoiceInputShortcutTap();
+  } else if (phase === 'start') {
+    handleGlobalVoiceInputShortcut('start');
+  } else {
+    handleGlobalVoiceInputShortcutSubmit();
+  }
+}
+
+function abandonNativeShortcutAfterRestartLimit(): void {
+  if (registeredAccelerator) {
+    globalShortcut.unregister(registeredAccelerator);
+    registeredAccelerator = null;
+  }
+  registeredShortcut = null;
+  registeredNativeShortcutLabel = null;
+  registeredNativeShortcutKey = null;
+  notifyPendingShortcutRecoveryFailed();
+}
 
 const macModifierShortcutListener = new MacModifierShortcutListener({
-  onTrigger: (phase) => {
-    if (phase !== 'end' && hasActiveShortcutRecordingSession()) {
-      // 挡掉 start 就等于这次激活在下游不存在，它后面那条配对的 end 也必须一起挡掉。
-      if (phase === 'start') nativeActivationStartDelivered = false;
-      log.debug('ignoring native global shortcut activation while recording', { phase });
-      return;
-    }
-    if (phase === 'end' && !nativeActivationStartDelivered) {
-      log.debug('ignoring native global shortcut end without a delivered start');
-      return;
-    }
-    // tap 没有配对的 end；end 到这里就算消费掉了。两种都把配对状态清干净。
-    nativeActivationStartDelivered = phase === 'start';
-    log.debug('native global shortcut triggered', { phase });
-    if (phase === 'tap') {
-      handleGlobalVoiceInputShortcutTap();
-    } else if (phase === 'start') {
-      handleGlobalVoiceInputShortcut('start');
-    } else {
-      handleGlobalVoiceInputShortcutSubmit();
-    }
-  },
+  onTrigger: handleNativeGlobalShortcutPhase,
+  onRestartLimitReached: abandonNativeShortcutAfterRestartLimit,
   onKeys: (keys) => {
     for (const webContentsId of Array.from(modifierShortcutRecordingWebContentsIds)) {
       const window = BrowserWindow.getAllWindows()
@@ -134,6 +157,21 @@ const macModifierShortcutListener = new MacModifierShortcutListener({
     }
   },
 });
+
+const windowsFunctionKeyShortcutListener = new WindowsFunctionKeyShortcutListener({
+  onTrigger: handleNativeGlobalShortcutPhase,
+  onRestartLimitReached: abandonNativeShortcutAfterRestartLimit,
+});
+
+export function releaseActiveGlobalVoiceInputShortcut(): void {
+  macModifierShortcutListener.releaseActiveTrigger();
+  windowsFunctionKeyShortcutListener.releaseActiveTrigger();
+}
+
+/** Drive the existing global overlay from hardware, using the same phases as the system shortcut. */
+export function triggerGlobalVoiceInputFromHardware(phase: GlobalVoiceInputShortcutPhase): void {
+  handleNativeGlobalShortcutPhase(phase, 'hardware');
+}
 
 type VoiceInputGlobalResult =
   | { ok: true }
@@ -1486,7 +1524,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     }
   });
 
-  app.once('will-quit', () => {
+  onQuit('voice-input-global-shortcut', () => {
     if (registeredAccelerator) {
       globalShortcut.unregister(registeredAccelerator);
       registeredAccelerator = null;
@@ -1495,6 +1533,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     registeredNativeShortcutLabel = null;
     registeredNativeShortcutKey = null;
     macModifierShortcutListener.stop();
+    windowsFunctionKeyShortcutListener.stop();
     unregisterOverlayCancelShortcut();
     destroyOverlayWindow();
   });
@@ -1516,7 +1555,28 @@ function stopNativeShortcutListenerPreservingCapture(): void {
   macModifierShortcutListener.stop();
 }
 
-async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null): Promise<VoiceInputGlobalResult> {
+const WINDOWS_NATIVE_LISTENER_FAILURE_MESSAGE =
+  'Could not start the Windows voice input shortcut listener.';
+
+type WindowsNativeListenerStartResult =
+  { ok: true } | { ok: false; error: string; superseded?: true };
+
+async function startWindowsNativeListener(
+  start: () => Promise<WindowsNativeListenerStartResult>,
+): Promise<WindowsNativeListenerStartResult> {
+  try {
+    return await start();
+  } catch (error) {
+    log.warn('Windows native shortcut listener threw while starting', {
+      error: stringifyError(error),
+    });
+    return { ok: false, error: WINDOWS_NATIVE_LISTENER_FAILURE_MESSAGE };
+  }
+}
+
+async function setVoiceInputGlobalShortcut(
+  shortcut: VoiceInputShortcut | null,
+): Promise<VoiceInputGlobalResult> {
   if (process.platform === 'linux' && shortcut) {
     return {
       ok: false,
@@ -1534,6 +1594,7 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
     registeredNativeShortcutLabel = null;
     registeredNativeShortcutKey = null;
     stopNativeShortcutListenerPreservingCapture();
+    windowsFunctionKeyShortcutListener.stop();
     destroyOverlayWindow();
     log.info('global shortcut disabled');
     return { ok: true };
@@ -1544,6 +1605,28 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
       return { ok: false, error: 'Function/modifier voice input shortcuts are only available on macOS.' };
     }
     const nativeShortcutKey = stableVoiceInputShortcutKey(shortcut);
+    const reservationAccelerator = isVoiceInputBareFunctionKeyShortcut(shortcut)
+      ? toElectronAccelerator(shortcut)
+      : null;
+    if (isVoiceInputBareFunctionKeyShortcut(shortcut) && !reservationAccelerator) {
+      return { ok: false, error: 'Unsupported voice input shortcut.' };
+    }
+    const reservedNewAccelerator = Boolean(
+      reservationAccelerator && registeredAccelerator !== reservationAccelerator,
+    );
+    if (
+      reservedNewAccelerator &&
+      !globalShortcut.register(reservationAccelerator as string, () => {
+        // Native key snapshots own start/tap/end. Electron only reserves the
+        // bare F-key so it does not also reach the foreground application.
+      })
+    ) {
+      log.warn('global shortcut reservation failed', { accelerator: reservationAccelerator });
+      return {
+        ok: false,
+        error: `Global shortcut is already in use: ${reservationAccelerator}`,
+      };
+    }
     // 复用已注册的那次要求**已就绪**,不是「进程在跑」。scheduleRestart 起的替补不经过
     // setShortcut,所以 registeredNativeShortcutKey 一直是旧值:替补还没报 ready 时用 isRunning
     // 判断就会在这里返回成功,而此刻没人在监听。两处后果:
@@ -1556,11 +1639,21 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
     // 落到这里之后走 setShortcut:child 还在但没就绪时它会等那次启动的真实落点
     // （MacModifierShortcutListener.awaitInFlightChild）,所以这里不会凭空多 spawn 一个 helper。
     // 兜底恢复的 pendingNativeShortcutRecoveryTarget 用的也是 isReady,两条路口径至此一致。
-    if (registeredNativeShortcutKey === nativeShortcutKey && macModifierShortcutListener.isReady()) {
+    if (
+      registeredNativeShortcutKey === nativeShortcutKey &&
+      macModifierShortcutListener.isReady()
+    ) {
+      if (reservedNewAccelerator && reservationAccelerator) {
+        if (registeredAccelerator) globalShortcut.unregister(registeredAccelerator);
+        registeredAccelerator = reservationAccelerator;
+      }
       return { ok: true };
     }
     const result = await startMacNativeListener(() => macModifierShortcutListener.setShortcut(shortcut));
     if (!result.ok && result.superseded) {
+      if (reservedNewAccelerator && reservationAccelerator) {
+        globalShortcut.unregister(reservationAccelerator);
+      }
       // 被更晚的一轮顶掉：那一轮才决定最终注册结果，这里既不回滚（会踩掉它刚建立的
       // 状态）也不报故障（这次调用已经过时）。调用方按 'superseded' 静默丢弃即可。
       log.debug('native global shortcut registration superseded', { code: shortcut.code });
@@ -1590,8 +1683,12 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
           registeredShortcut = shortcut;
           registeredNativeShortcutLabel = getNativeShortcutLogLabel(shortcut);
           registeredNativeShortcutKey = nativeShortcutKey;
+          if (reservationAccelerator) registeredAccelerator = reservationAccelerator;
           return { ok: true };
         }
+      }
+      if (reservedNewAccelerator && reservationAccelerator) {
+        globalShortcut.unregister(reservationAccelerator);
       }
       const errorCode = await classifyMacNativeListenerFailure();
       log.warn('native global shortcut registration failed', {
@@ -1604,10 +1701,11 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
       // 带着 helper 源码/二进制的内部路径，不能过 IPC 边界。
       return { ok: false, error: MAC_NATIVE_LISTENER_FAILURE_MESSAGE, errorCode };
     }
-    if (registeredAccelerator) {
+    if (registeredAccelerator && registeredAccelerator !== reservationAccelerator) {
       globalShortcut.unregister(registeredAccelerator);
-      registeredAccelerator = null;
     }
+    registeredAccelerator = reservationAccelerator;
+    windowsFunctionKeyShortcutListener.stop();
     registeredShortcut = shortcut;
     registeredNativeShortcutLabel = getNativeShortcutLogLabel(shortcut);
     registeredNativeShortcutKey = nativeShortcutKey;
@@ -1616,6 +1714,81 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
       modifiers: shortcut.modifiers,
       trigger: shortcut.trigger,
     });
+    void prewarmVoiceInputProvider();
+    setTimeout(() => prewarmGlobalVoiceInputOverlay(), 1500);
+    return { ok: true };
+  }
+
+  if (voiceInputShortcutNeedsWindowsNativeListener(shortcut, process.platform)) {
+    const nativeShortcutKey = stableVoiceInputShortcutKey(shortcut);
+    const reservationAccelerator = toElectronAccelerator(shortcut);
+    if (!reservationAccelerator) {
+      return { ok: false, error: 'Unsupported voice input shortcut.' };
+    }
+    const reservedNewAccelerator = registeredAccelerator !== reservationAccelerator;
+    if (
+      reservedNewAccelerator &&
+      !globalShortcut.register(reservationAccelerator, () => {
+        // Native press/release owns start/tap/end. Electron only reserves the
+        // bare F-key so another app cannot claim it first.
+      })
+    ) {
+      log.warn('Windows global shortcut reservation failed', { accelerator: reservationAccelerator });
+      return {
+        ok: false,
+        error: `Global shortcut is already in use: ${reservationAccelerator}`,
+      };
+    }
+    if (
+      registeredNativeShortcutKey === nativeShortcutKey &&
+      windowsFunctionKeyShortcutListener.isReady()
+    ) {
+      if (reservedNewAccelerator) registeredAccelerator = reservationAccelerator;
+      return { ok: true };
+    }
+    const previousShortcut = registeredShortcut;
+    const result = await startWindowsNativeListener(() =>
+      windowsFunctionKeyShortcutListener.setShortcut(shortcut),
+    );
+    if (!result.ok && result.superseded) {
+      if (reservedNewAccelerator) globalShortcut.unregister(reservationAccelerator);
+      return { ok: false, error: result.error, errorCode: 'superseded' };
+    }
+    if (!result.ok) {
+      if (reservedNewAccelerator) globalShortcut.unregister(reservationAccelerator);
+      if (
+        previousShortcut &&
+        voiceInputShortcutNeedsWindowsNativeListener(previousShortcut, process.platform)
+      ) {
+        const restored = await startWindowsNativeListener(() =>
+          windowsFunctionKeyShortcutListener.setShortcut(previousShortcut),
+        );
+        if (restored.ok && stableVoiceInputShortcutKey(previousShortcut) === nativeShortcutKey) {
+          registeredShortcut = shortcut;
+          registeredNativeShortcutLabel = getNativeShortcutLogLabel(shortcut);
+          registeredNativeShortcutKey = nativeShortcutKey;
+          return { ok: true };
+        }
+      }
+      log.warn('Windows native global shortcut registration failed', {
+        code: shortcut.code,
+        error: result.error,
+      });
+      return {
+        ok: false,
+        error: WINDOWS_NATIVE_LISTENER_FAILURE_MESSAGE,
+        errorCode: 'failed',
+      };
+    }
+    if (registeredAccelerator && registeredAccelerator !== reservationAccelerator) {
+      globalShortcut.unregister(registeredAccelerator);
+    }
+    registeredAccelerator = reservationAccelerator;
+    registeredShortcut = shortcut;
+    registeredNativeShortcutLabel = getNativeShortcutLogLabel(shortcut);
+    registeredNativeShortcutKey = nativeShortcutKey;
+    stopNativeShortcutListenerPreservingCapture();
+    log.info('Windows native global shortcut registered', { code: shortcut.code });
     void prewarmVoiceInputProvider();
     setTimeout(() => prewarmGlobalVoiceInputOverlay(), 1500);
     return { ok: true };
@@ -1645,6 +1818,7 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
   registeredNativeShortcutLabel = null;
   registeredNativeShortcutKey = null;
   stopNativeShortcutListenerPreservingCapture();
+  windowsFunctionKeyShortcutListener.stop();
   log.info('global shortcut registered', { accelerator });
   // First-press warmup: read auth.json now so the very first shortcut press
   // does not pay for it on the critical path.
@@ -3497,6 +3671,27 @@ async function runMacTextInsertionHelper(
       `Invalid helper response: ${error instanceof Error ? error.message : String(error)}. Stdout bytes: ${stdout.length}.`,
     );
   }
+}
+
+export async function runMacTextInsertionHelperCommand(
+  args: string[],
+  options?: { input?: string; timeoutMs?: number },
+): Promise<MacTextInsertionHelperResult> {
+  const result = await runMacTextInsertionHelper(args, options);
+  assertHelperCommandSucceeded(result);
+  return result;
+}
+
+export async function spawnMacTextInsertionHelper(args: string[]) {
+  const helperPath = await resolveMacTextInsertionHelperPath();
+  return waitForSpawnedProcess(
+    spawn(helperPath, args, { stdio: ['pipe', 'ignore', 'pipe'] }),
+    (error) => {
+      log.warn('macOS text insertion helper failed after spawn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 /** 取 stdout 的最后一行 JSON 作为命令结果（前面的行是流式进度事件）。 */

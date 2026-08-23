@@ -1,11 +1,11 @@
 /**
  * removeWorktreeForSession / discardPrecreatedWorktree 删除守卫回归:
- *   - live-ref 守卫:其它未删除会话仍引用路径 → 保留
- *   - 排除自身:owning session(可能已归档,status 仍非 deleted)不算引用
+ *   - live-ref 守卫:其它 live 会话仍引用路径 → 保留;终态引用需确认 runtime 已关闭
+ *   - 排除自身:owning session 自己的路径不算引用
  *   - dirty → stash 失败保留 / 成功后继续删
  *   - clean 无引用 → git remove + store.del
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import os from 'node:os';
@@ -14,6 +14,7 @@ import type { WorktreeMeta } from '../worktree/types';
 import { withWorktreeRestoreMutation } from '../worktree/restoreLock';
 
 const gitExecMock = vi.fn();
+const crossProcessLockMock = vi.fn();
 const isWorktreeDirtyMock = vi.fn();
 const autoStashMock = vi.fn();
 const restoreAutoStashMock = vi.fn();
@@ -22,8 +23,10 @@ const ignoredFilesMock = vi.fn();
 const changedIncludeFilesMock = vi.fn();
 const storeSetMock = vi.fn();
 const storeMap = new Map<string, WorktreeMeta>();
+const pendingSafeDirectoryCleanups: string[] = [];
 const liveSessionRows: Array<{
   id: string;
+  status: string | null;
   workingDir: string | null;
   worktreePath: string | null;
 }> = [];
@@ -32,6 +35,15 @@ let liveSessionLookupError: Error | null = null;
 vi.mock('../worktree/gitExec', () => ({
   gitExec: (...args: unknown[]) => gitExecMock(...args),
   GitExecError: class GitExecError extends Error {},
+  globalSafeDirectoryLockPath: () => '/tmp/cindy-git-safe-directory.lock',
+  safeDirectorySpellings: (p: string) => {
+    const normalized = process.platform === 'win32' ? p.replace(/\\/g, '/') : p;
+    return normalized === p ? [p] : [normalized, p];
+  },
+}));
+
+vi.mock('../device-link/crossProcessLock', () => ({
+  withCrossProcessLock: (...args: unknown[]) => crossProcessLockMock(...args),
 }));
 
 vi.mock('../worktree/dirty', () => ({
@@ -56,6 +68,18 @@ vi.mock('../worktree/worktreeStore', () => ({
     ),
   set: (...args: unknown[]) => storeSetMock(...args),
   del: vi.fn((sessionId: string) => storeMap.delete(sessionId)),
+  getPendingSafeDirectoryCleanups: () => [...pendingSafeDirectoryCleanups],
+  addPendingSafeDirectoryCleanups: (paths: readonly string[]) => {
+    for (const p of paths) {
+      if (p && !pendingSafeDirectoryCleanups.includes(p)) pendingSafeDirectoryCleanups.push(p);
+    }
+  },
+  removePendingSafeDirectoryCleanups: (paths: readonly string[]) => {
+    const toRemove = new Set(paths);
+    for (let i = pendingSafeDirectoryCleanups.length - 1; i >= 0; i -= 1) {
+      if (toRemove.has(pendingSafeDirectoryCleanups[i])) pendingSafeDirectoryCleanups.splice(i, 1);
+    }
+  },
 }));
 
 vi.mock('../localDb/client/current', () => ({
@@ -91,8 +115,16 @@ describe('removeWorktreeForSession', () => {
   let manager: typeof import('../worktree/WorktreeManager');
 
   beforeEach(async () => {
+    vi.clearAllMocks();
     storeMap.clear();
+    pendingSafeDirectoryCleanups.length = 0;
     liveSessionRows.length = 0;
+    liveSessionRows.push({
+      id: '__unrelated_active_session__',
+      status: 'active',
+      workingDir: path.join(BASE_REPO, 'unrelated'),
+      worktreePath: null,
+    });
     liveSessionLookupError = null;
     gitExecMock.mockReset().mockImplementation(async (args: string[], cwd?: string) => {
       if (args[0] === 'symbolic-ref') {
@@ -103,6 +135,10 @@ describe('removeWorktreeForSession', () => {
       }
       return { stdout: '', stderr: '' };
     });
+    crossProcessLockMock.mockReset().mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: true }),
+    );
     isWorktreeDirtyMock.mockReset().mockResolvedValue(false);
     autoStashMock.mockReset().mockResolvedValue(true);
     restoreAutoStashMock.mockReset().mockResolvedValue(true);
@@ -113,10 +149,6 @@ describe('removeWorktreeForSession', () => {
       storeMap.set(sessionId, meta);
     });
     manager = await import('../worktree/WorktreeManager');
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
   });
 
   it('no store entry → no-op', async () => {
@@ -236,7 +268,101 @@ describe('removeWorktreeForSession', () => {
   it('preserves worktree still referenced by another live session', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
-    liveSessionRows.push({ id: 'other', workingDir: meta.path, worktreePath: null });
+    liveSessionRows.push({
+      id: 'other',
+      status: 'active',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).not.toHaveBeenCalled();
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it('archived session references block recycle without runtime observer', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).not.toHaveBeenCalled();
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it('deleted session references do not block recycle without runtime observer', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'deleted',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('s1')).toBe(false);
+  });
+
+  it('terminal session reference still blocks when its runtime is alive', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1', {
+      isSessionRuntimeAlive: (sessionId) => sessionId === 'other',
+    });
+
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it.each(['archived', 'deleted'])(
+    '%s session reference stops blocking after its runtime is closed',
+    async (status) => {
+      const meta = makeMeta('s1');
+      storeMap.set('s1', meta);
+      liveSessionRows.push({ id: 'other', status, workingDir: meta.path, worktreePath: null });
+
+      await manager.removeWorktreeForSession('s1', {
+        isSessionRuntimeAlive: () => false,
+      });
+
+      expect(gitExecMock).toHaveBeenCalledWith(
+        ['worktree', 'remove', '--force', meta.path],
+        BASE_REPO,
+      );
+      expect(storeMap.has('s1')).toBe(false);
+    },
+  );
+
+  it.each([
+    ['NULL', null],
+    ['unknown', 'paused'],
+  ])('%s session status conservatively keeps its reference live', async (_label, status) => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({ id: 'other', status, workingDir: meta.path, worktreePath: null });
 
     await manager.removeWorktreeForSession('s1');
 
@@ -313,8 +439,13 @@ describe('removeWorktreeForSession', () => {
   it('owning session row does not block its own recycle (archived owner)', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
-    // 归档会话 status 仍非 deleted,自己的行必须被排除,否则永远删不掉
-    liveSessionRows.push({ id: 's1', workingDir: null, worktreePath: meta.path });
+    // owning session 自己的路径必须被排除,否则其终态回收永远无法推进
+    liveSessionRows.push({
+      id: 's1',
+      status: 'archived',
+      workingDir: null,
+      worktreePath: meta.path,
+    });
 
     await manager.removeWorktreeForSession('s1');
 
@@ -405,6 +536,62 @@ describe('removeWorktreeForSession', () => {
     expect(storeSetMock).toHaveBeenCalledWith('s1', meta);
   });
 
+  it('rechecks borrower references before removing a clean owner worktree', async () => {
+    const meta = makeMeta('owner');
+    storeMap.set('owner', meta);
+    const borrower = {
+      id: 'borrower',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: meta.path,
+    };
+    liveSessionRows.push(borrower);
+    const isSessionRuntimeAlive = vi.fn(() => false);
+    const canRemove = vi.fn().mockImplementation(async () => {
+      if (canRemove.mock.calls.length === 2) borrower.status = 'active';
+      return true;
+    });
+
+    await manager.removeWorktreeForSession('owner', { canRemove, isSessionRuntimeAlive });
+
+    expect(canRemove).toHaveBeenCalledTimes(2);
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('owner')).toBe(true);
+  });
+
+  it('restores a dirty owner snapshot when a borrower becomes active before removal', async () => {
+    const meta = makeMeta('owner');
+    storeMap.set('owner', meta);
+    isWorktreeDirtyMock.mockResolvedValue(true);
+    const borrower = {
+      id: 'borrower',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: meta.path,
+    };
+    liveSessionRows.push(borrower);
+    const isSessionRuntimeAlive = vi.fn(() => false);
+    const canRemove = vi.fn().mockImplementation(async () => {
+      if (canRemove.mock.calls.length === 2) borrower.status = 'active';
+      return true;
+    });
+
+    await manager.removeWorktreeForSession('owner', { canRemove, isSessionRuntimeAlive });
+
+    expect(canRemove).toHaveBeenCalledTimes(2);
+    expect(autoStashMock).toHaveBeenCalledWith(meta.path, 'owner');
+    expect(restoreAutoStashMock).toHaveBeenCalledWith(meta.path, 'owner');
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('owner')).toBe(true);
+    expect(storeSetMock).toHaveBeenCalledWith('owner', meta);
+  });
+
   it('keeps a preserved worktree unregistered when cancelled snapshot reapply fails', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
@@ -479,6 +666,7 @@ describe('removeWorktreeForSession', () => {
     storeMap.set('s1', meta);
     liveSessionRows.push({
       id: 'other',
+      status: 'active',
       workingDir: path.join(meta.path, 'packages', 'app'),
       worktreePath: null,
     });
@@ -522,7 +710,12 @@ describe('removeWorktreeForSession', () => {
   it('clean + unreferenced → removed and store entry dropped', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
-    liveSessionRows.push({ id: 'other', workingDir: '/somewhere/else', worktreePath: null });
+    liveSessionRows.push({
+      id: 'other',
+      status: 'active',
+      workingDir: '/somewhere/else',
+      worktreePath: null,
+    });
 
     await manager.removeWorktreeForSession('s1');
 
@@ -856,6 +1049,120 @@ describe('removeWorktreeForSession', () => {
     }
   });
 
+  it('discard pre-created: cleans the generated quarantine path from global safe.directory', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-safedir-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      const worktreePath = path.join(base, '.xdt-worktrees', 's1');
+      fsSync.mkdirSync(worktreePath, { recursive: true });
+      const meta: WorktreeMeta = { ...makeMeta('s1'), baseRepo: base, path: worktreePath };
+      storeMap.set('s1', meta);
+
+      await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
+        status: 'discarded',
+        branchDeleted: false,
+      });
+
+      // 本轮 preserveDirty 现场生成的 .xdt-removing-* 路径
+      const moveCalls = gitExecMock.mock.calls.filter(
+        ([args]) => Array.isArray(args) && args[0] === 'worktree' && args[1] === 'move',
+      );
+      expect(moveCalls).toHaveLength(1);
+      const quarantinePath = moveCalls[0][0][3] as string;
+
+      // 原路径与本轮生成路径都要从全局 safe.directory 精确清理(#2627)
+      expect(gitExecMock).toHaveBeenCalledWith([
+        'config',
+        '--global',
+        '--unset-all',
+        '--fixed-value',
+        'safe.directory',
+        worktreePath,
+      ]);
+      expect(gitExecMock).toHaveBeenCalledWith([
+        'config',
+        '--global',
+        '--unset-all',
+        '--fixed-value',
+        'safe.directory',
+        quarantinePath,
+      ]);
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('defers safe.directory cleanup to the store when the global lock is not acquired', async () => {
+    crossProcessLockMock.mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: false, reason: 'busy' }),
+    );
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+
+    await manager.removeWorktreeForSession('s1');
+
+    // 目录已删、store.del 已执行; 拿不到锁时不得做无锁 --unset-all, 而是落盘待下次启动补清
+    expect(
+      gitExecMock.mock.calls.some(
+        ([args]) => Array.isArray(args) && args.includes('--unset-all'),
+      ),
+    ).toBe(false);
+    expect(pendingSafeDirectoryCleanups).toContain(meta.path);
+  });
+
+  it('reconcilePendingSafeDirectoryCleanups drains pending entries under the lock', async () => {
+    const gonePath = path.join(BASE_REPO, '.xdt-worktrees', 'gone');
+    pendingSafeDirectoryCleanups.push(gonePath);
+    crossProcessLockMock.mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: true }),
+    );
+
+    await manager.reconcilePendingSafeDirectoryCleanups();
+
+    expect(gitExecMock).toHaveBeenCalledWith([
+      'config',
+      '--global',
+      '--unset-all',
+      '--fixed-value',
+      'safe.directory',
+      gonePath,
+    ]);
+    expect(pendingSafeDirectoryCleanups).toEqual([]);
+  });
+
+  it('reconcile skips and drops pending paths re-created by a live worktree', async () => {
+    // 旧删除留下的待办 + 同名新 worktree 已在 store 里占用该路径
+    const reusedPath = path.join(BASE_REPO, '.xdt-worktrees', 'reused');
+    const orphanPath = path.join(BASE_REPO, '.xdt-worktrees', 'orphan');
+    pendingSafeDirectoryCleanups.push(reusedPath, orphanPath);
+    storeMap.set('s-new', { ...makeMeta('reused'), path: reusedPath });
+    crossProcessLockMock.mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: true }),
+    );
+
+    await manager.reconcilePendingSafeDirectoryCleanups();
+
+    // 复用路径: 不 --unset-all(条目归新 worktree), 只从待办移除
+    expect(
+      gitExecMock.mock.calls.some(
+        ([args]) => Array.isArray(args) && args.includes(reusedPath),
+      ),
+    ).toBe(false);
+    // 孤儿路径: 正常清理并出队
+    expect(gitExecMock).toHaveBeenCalledWith([
+      'config',
+      '--global',
+      '--unset-all',
+      '--fixed-value',
+      'safe.directory',
+      orphanPath,
+    ]);
+    expect(pendingSafeDirectoryCleanups).toEqual([]);
+  });
+
   it('does not move a worktree when quarantine state cannot be persisted', async () => {
     const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-quarantine-persist-'));
     try {
@@ -917,7 +1224,9 @@ describe('removeWorktreeForSession', () => {
       ['update-ref', '-d', `refs/heads/${meta.branch}`, 'abc123'],
       BASE_REPO,
     );
-    expect(gitOperations).toEqual([
+    // config 是 safe.directory 清理的副作用, 其次数随平台拼写数(POSIX 1 次 / Windows
+    // 正反斜杠 2 次)变化, 不参与这里的顺序断言。
+    expect(gitOperations.filter((op) => op !== 'config')).toEqual([
       'symbolic-ref',
       'worktree',
       'rev-parse',

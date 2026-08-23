@@ -19,8 +19,15 @@ import type { AgentEvent, AgentTaskStatus, AgentTaskUsage, AgentTaskUpdateEventD
 import { normalizeWorkflowProgressEntries } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isCindyGatewayProxyTokenInvalidError,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  holdStandaloneStopTokenDelta,
+  stripInternalWebCitations,
+  type StandaloneStopTokenHold,
+} from '@cindy/maker-shared/internal-citation';
 import type { createAsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
@@ -29,6 +36,17 @@ import {
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
 import type { UsageTracker } from '../shared/usage-tracker.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
+import {
+  beginClaudeGeneration,
+  finalizeClaudeGeneration,
+  markClaudeGenerationUnreliable,
+  newClaudeGenerationState,
+  pauseClaudeGeneration,
+  resetClaudeGenerationTiming,
+  resumeClaudeGeneration,
+  type ClaudeGenerationState,
+} from './generation-timing.js';
 
 // ── 共享 turn / runtime 状态 ─────────────────────────────────────────────────
 //
@@ -103,6 +121,13 @@ export interface TurnState {
    */
   lastAssistantMsgHadSubstance: boolean;
   /**
+   * The price variant captured when the current turn's next provider request
+   * was accepted. The SDK may deliver message_start after a runtime Fast-mode
+   * toggle, so usage translation must not read the mutable session setting for
+   * that already-dispatched request.
+   */
+  nextRequestPriceVariant?: 'standard' | 'priority';
+  /**
    * 本 turn 最近一条 assistant API message id。Vertex 路由用 `msg_vrtx_`
    * 前缀作为输出 token 延迟结算的确定性证据；result 本身不携带该 id，
    * 因此必须在 assistant 消息到达时按 turn 暂存，再随 done 交给 host。
@@ -115,12 +140,16 @@ export interface RuntimeState {
   /** tool_use.id → tool_use.name。用于在 tool_result echo 时区分命令输出和内容结果。 */
   toolUseIdToName: Map<string, string>;
   /**
-   * SDK partial stream 按 parent_tool_use_id 隔离的真实模型。
-   * 并发 subagent 的 stream_event 会交错，不能用会话级元数据推断。
+   * SDK child assistant 消息按 parent_tool_use_id 隔离的真实模型。
+   * 并发 subagent 的完整消息与 stream_event 都会交错，不能用会话级元数据推断。
    */
   streamModelByParentToolUseId: Map<string, string>;
-  /** Agent 异步启动回执里的权威模型，优先级高于流式事件里的 wire model。 */
+  /** Agent 工具回执里的权威模型，优先级高于流式事件里的 wire model。 */
   resolvedSubagentModelByParentToolUseId: Map<string, string>;
+  /** 已经通过 agent_task_update 下发过的模型；与 stream map 分离，避免漏发或重复发。 */
+  publishedSubagentModelByParentToolUseId: Map<string, string>;
+  /** parent tool_use.id 对应的最近任务状态；晚到的模型观测不能把终态倒退成 running。 */
+  subagentStatusByParentToolUseId: Map<string, AgentTaskStatus>;
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
   subagentParentToolUseIdByTaskId: Map<string, string>;
   /**
@@ -143,6 +172,20 @@ export interface RuntimeState {
    * translator 在 handleResult 里按上一条 result 做 delta, 再把 per-turn usage 交给 UsageTracker。
    */
   lastResultUsageAggregate: ResultUsageAggregate | null;
+  /**
+   * 按 parent + content-block index 隔离的停止符清洗缓冲。text_delta 可能把
+   * `<|eos|>` 拆开，必须先拼回该块的快照再清洗。`emitted` 只表示本块是否已
+   * 发出可见正文，不能看整轮 `uiEmittedText`，也不能跨 text block 复用。
+   */
+  streamStopTokenByKey: Map<string, StandaloneStopTokenHold>;
+  /** Per-parent active provider request used to merge message_start + message_delta usage. */
+  activeUsageSegmentByParent: Map<string, string>;
+  /** Price variant frozen for the active request of each parent stream. */
+  activeUsagePriceVariantByParent: Map<string, 'standard' | 'priority'>;
+  /** Price variant captured for the next request before its message_start arrives. */
+  pendingUsagePriceVariantByParent: Map<string, 'standard' | 'priority'>;
+  usageSegmentSeq: number;
+  generation: ClaudeGenerationState;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -151,11 +194,36 @@ export function newRuntimeState(): RuntimeState {
     toolUseIdToName: new Map(),
     streamModelByParentToolUseId: new Map(),
     resolvedSubagentModelByParentToolUseId: new Map(),
+    publishedSubagentModelByParentToolUseId: new Map(),
+    subagentStatusByParentToolUseId: new Map(),
     subagentParentToolUseIdByTaskId: new Map(),
     confirmedSubagentTaskIds: new Set(),
     excludedSubagentTaskIds: new Set(),
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
+    streamStopTokenByKey: new Map(),
+    activeUsageSegmentByParent: new Map(),
+    activeUsagePriceVariantByParent: new Map(),
+    pendingUsagePriceVariantByParent: new Map(),
+    usageSegmentSeq: 0,
+    generation: newClaudeGenerationState(),
+  };
+}
+
+function ccLiveStatus(
+  ctx: TranslateContext,
+  status: string,
+  isRunning: boolean,
+): { status: string; isRunning: boolean } & ReturnType<UsageTracker['snapshot']> {
+  return {
+    status,
+    ...attachLiveGeneration(ctx.tracker.snapshot(), {
+      outputTokens: ctx.tracker.getTurnUsage().output,
+      closedDurationMs: ctx.rt.generation.durationMs,
+      openStartedAt: ctx.rt.generation.startedAt,
+      reliable: ctx.rt.generation.reliable,
+    }),
+    isRunning,
   };
 }
 
@@ -338,30 +406,47 @@ function readToolResultFullText(blockRaw: unknown): { toolUseId: string; fullTex
 }
 
 /**
- * 从 Agent 工具的异步启动回执中提取权威模型。
- * Claude Code 会把最终解析后的模型放在 tool_use_result.resolvedModel；这比
- * 流式子消息的时序推断可靠，适合直接补到 AgentTaskUpdate 给任务卡展示。
+ * 从 Agent 工具回执中提取任务身份、生命周期与权威模型。
+ * Claude Code 会把最终解析后的模型放在 tool_use_result.resolvedModel；同步前台
+ * Agent 直接返回 completed，异步 Agent 返回 async_launched。两者都比根据请求参数
+ * 或流式子消息时序推断可靠，应直接投影成 AgentTaskUpdate。
  */
-interface AsyncSubagentLaunch {
+interface SubagentToolResult {
   taskId: string;
   parentToolUseId: string;
   prompt?: string;
   model?: string;
+  status: 'running' | 'completed';
+  usage?: AgentTaskUsage;
 }
 
-function extractAsyncSubagentLaunch(
+function readResultNumber(
+  result: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): number | undefined {
+  const value = result[camelKey] ?? result[snakeKey];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function extractSubagentToolResult(
   msg: {
     message?: { content?: unknown };
     tool_use_result?: unknown;
     toolUseResult?: unknown;
   },
-): AsyncSubagentLaunch | null {
+): SubagentToolResult | null {
   const rawResult = msg.tool_use_result ?? msg.toolUseResult;
   if (!rawResult || typeof rawResult !== 'object' || Array.isArray(rawResult)) return null;
   const result = rawResult as Record<string, unknown>;
   const isAsync = result.isAsync === true || result.is_async === true;
   const status = result.status;
-  if (!isAsync && status !== 'async_launched') return null;
+  const rawAgentId = result.agentId ?? result.agent_id;
+  const agentId = typeof rawAgentId === 'string' && rawAgentId ? rawAgentId : undefined;
+  const isAsyncLaunch = isAsync || status === 'async_launched';
+  // completed 很常见，必须同时有 Agent 专属的 agentId 才能识别为同步子任务回执。
+  const isCompletedAgent = status === 'completed' && Boolean(agentId);
+  if (!isAsyncLaunch && !isCompletedAgent) return null;
 
   const model = typeof result.resolvedModel === 'string'
     ? result.resolvedModel
@@ -378,18 +463,24 @@ function extractAsyncSubagentLaunch(
   }
   if (!toolResult) return null;
 
-  const rawAgentId = result.agentId ?? result.agent_id;
-  const taskId = typeof rawAgentId === 'string' && rawAgentId
-    ? rawAgentId
-    : toolResult.toolUseId;
+  const taskId = agentId ?? toolResult.toolUseId;
   const prompt = typeof result.prompt === 'string' && result.prompt
     ? result.prompt
     : undefined;
+  const usage: AgentTaskUsage = {};
+  const totalTokens = readResultNumber(result, 'totalTokens', 'total_tokens');
+  const toolUses = readResultNumber(result, 'totalToolUseCount', 'total_tool_use_count');
+  const durationMs = readResultNumber(result, 'totalDurationMs', 'total_duration_ms');
+  if (totalTokens !== undefined) usage.totalTokens = totalTokens;
+  if (toolUses !== undefined) usage.toolUses = toolUses;
+  if (durationMs !== undefined) usage.durationMs = durationMs;
   return {
     taskId,
     parentToolUseId: toolResult.toolUseId,
     model,
     prompt,
+    status: isCompletedAgent ? 'completed' : 'running',
+    ...(Object.keys(usage).length > 0 ? { usage } : {}),
   };
 }
 
@@ -441,6 +532,8 @@ interface TranslateContext {
    * 不会因为闭包捕获 startSession 时的初始值而打陈旧数据。
    */
   getModel: () => string;
+  /** 当前 turn 的 provider 路由；null = 兼容旧会话的隐式默认来源。 */
+  getProviderId?: () => string | null;
   /**
    * Maker capabilities 中当前模型的 contextWindow。
    * Claude Code SDK 对未知第三方模型会回 200K 默认值; maker 侧配置更准时用它覆盖。
@@ -448,6 +541,7 @@ interface TranslateContext {
   getModelContextWindow?: () => number | undefined;
   getEffort: () => string;
   getPermissionMode: () => string;
+  getFastMode?: () => boolean;
   /** SDK session_id 第一次出现时的回调, agent 用来回填 sdkSessionId */
   onSessionId: (sdkSessionId: string | undefined) => void;
   /**
@@ -455,6 +549,8 @@ interface TranslateContext {
    * 仅诊断日志用, getter 形式确保读到的是最新值 (system init 那一步会回填)。
    */
   getSdkSessionId: () => string | undefined;
+  /** Whether the current SDK query starts its cumulative modelUsage at zero. */
+  modelUsageCumulativeStartsAtZero?: () => boolean;
   /**
    * 当前 session 的展示 title —— 由调用方 (register.ts) 每次 send 时透传进来,
    * 同样仅用于诊断日志, 不参与业务。允许 undefined / 跨 turn 变化。
@@ -471,15 +567,23 @@ interface TranslateContext {
    * 缺省 = 不回调 (旧调用方零改动)。
    */
   onTurnEnd?: () => void;
-  /** upstream-response-idle watchdog / loop guard: assistant / stream_event 含 tool_use 时回调。 */
-  onToolUseStart?: (toolUseId: string, toolName?: unknown, input?: unknown) => void;
+  /**
+   * upstream-response-idle watchdog / loop guard: assistant / stream_event 含 tool_use 时回调。
+   * parentToolUseId 用于隔离并发 subagent；缺省表示顶层 agent。
+   */
+  onToolUseStart?: (
+    toolUseId: string,
+    toolName?: unknown,
+    input?: unknown,
+    parentToolUseId?: string,
+  ) => void;
   /**
    * upstream-response-idle watchdog: user 含 tool_result 时出队, 配对 onToolUseStart。
    * 不要复用 extractToolResultFullText — 那里 fullText.length>0 过滤会漏空内容 result
    * (Bash 无 stdout / Write 成功 / MCP return null), 导致 pendingToolIds 永远漏减,
-   * watchdog 整 turn 失效。
+   * watchdog 整 turn 失效。parentToolUseId 与 tool_use 同源，用于隔离并发 subagent。
    */
-  onToolResultDone?: (toolUseId: string, output: string) => void;
+  onToolResultDone?: (toolUseId: string, output: string, parentToolUseId?: string) => void;
   onSubagentTaskLaunched?: (task: {
     taskId: string;
     parentToolUseId: string;
@@ -509,6 +613,7 @@ export function translateSdkMessage(
     type?: string;
     subtype?: string;
     session_id?: string;
+    parent_tool_use_id?: string | null;
     model?: string;
     message?: { content?: Array<Record<string, unknown>>; role?: string };
     event?: Record<string, unknown>;
@@ -549,6 +654,9 @@ export function translateSdkMessage(
     case 'user': {
       // streaming-input 模式下 SDK 不 echo 真实 user 输入, 只 echo tool_result 包装的 user message
       // 这里只关心后者: 抽 tool_result_full 给 renderer (老 agentManager.ts:2178-2207 同等逻辑)
+      const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
+        ? msg.parent_tool_use_id
+        : undefined;
       const fullPairs = extractToolResultFullText(msg.message, ctx.rt);
       for (const pair of fullPairs) {
         queue.push({
@@ -557,17 +665,34 @@ export function translateSdkMessage(
           source: 'claude-code',
         });
       }
-      const subagentLaunch = extractAsyncSubagentLaunch(msg);
-      if (subagentLaunch) {
-        const { taskId, parentToolUseId, model, prompt } = subagentLaunch;
+      const subagentResult = extractSubagentToolResult(msg);
+      if (subagentResult) {
+        const { taskId, parentToolUseId, model, prompt, status, usage } = subagentResult;
+        const actualModel = model
+          ?? ctx.rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
+          ?? ctx.rt.streamModelByParentToolUseId.get(parentToolUseId);
         ctx.rt.subagentParentToolUseIdByTaskId.set(taskId, parentToolUseId);
         ctx.rt.confirmedSubagentTaskIds.add(taskId);
         ctx.rt.excludedSubagentTaskIds.delete(taskId);
+        // 迟到的 async_launched 回执（status=running）不得把已有终态降级回 running：
+        // 事件乱序时（task_notification: completed 先到）这会让 Renderer 永久转圈。
+        // 状态机只允许 running → 终态，终态后到达的 launch 回执只补元数据、不改状态。
+        const previousStatus = ctx.rt.subagentStatusByParentToolUseId.get(parentToolUseId);
+        const isTerminal = previousStatus === 'completed'
+          || previousStatus === 'failed'
+          || previousStatus === 'stopped';
+        const effectiveStatus = status === 'running' && isTerminal
+          ? previousStatus!
+          : status;
+        ctx.rt.subagentStatusByParentToolUseId.set(parentToolUseId, effectiveStatus);
         if (model) {
           ctx.rt.resolvedSubagentModelByParentToolUseId.set(parentToolUseId, model);
         }
-        if (prompt) {
-          ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model });
+        if (actualModel) {
+          ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
+        }
+        if (status === 'running' && prompt && !isTerminal) {
+          ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model: actualModel });
         }
         queue.push({
           type: 'agent_task_update',
@@ -575,13 +700,17 @@ export function translateSdkMessage(
             provider: 'claude-code',
             taskId,
             parentToolUseId,
-            status: 'running',
+            status: effectiveStatus,
             subagentObservation: {
+              // A synchronous completed Agent result may be the first and only
+              // lifecycle observation. It is authoritative to create the run,
+              // while the completed status still keeps the record terminal.
               kind: 'spawn',
               logicalSubagentId: taskId,
               parentToolUseId,
             },
-            ...(model ? { model } : {}),
+            ...(actualModel ? { model: actualModel } : {}),
+            ...(usage ? { usage } : {}),
           },
           source: 'claude-code',
         });
@@ -596,7 +725,7 @@ export function translateSdkMessage(
             const pair = rawPair ? normalizeToolResultFullText(rawPair, ctx.rt) : null;
             if (!pair) continue;
             completedToolUseIds.add(pair.toolUseId);
-            ctx.onToolResultDone(pair.toolUseId, pair.fullText);
+            ctx.onToolResultDone(pair.toolUseId, pair.fullText, parentToolUseId);
           }
         }
       } else if (Array.isArray(content)) {
@@ -606,7 +735,18 @@ export function translateSdkMessage(
         }
       }
       for (const toolUseId of completedToolUseIds) {
+        resumeClaudeGeneration(ctx.rt.generation, toolUseId);
         ctx.rt.toolUseIdToName.delete(toolUseId);
+      }
+      if (completedToolUseIds.size > 0) {
+        // The SDK emits the tool-result echo immediately before it dispatches
+        // the next provider request. Capture the mutable Fast setting here,
+        // after tool execution has completed, rather than at the previous
+        // message_delta (which can be much earlier than the next request).
+        ctx.rt.pendingUsagePriceVariantByParent.set(
+          parentToolUseId ?? '__main__',
+          ctx.getFastMode?.() ? 'priority' : 'standard',
+        );
       }
       return;
     }
@@ -918,6 +1058,18 @@ function toClaudeTaskUpdate(msg: {
   if (msg.subtype === 'task_notification') {
     status = msg.status === 'failed' || msg.status === 'stopped' ? msg.status : 'completed';
   }
+  if (parentToolUseId) {
+    // 事件乱序防线（与 user 消息回执分支同一条不变量）：终态后的 task_started /
+    // task_progress（恒 running）不得把内部终态登记降级回运行中。注意只挡 Map
+    // 回写、不改事件投影——迟到的 running 帧仍按 running 下发，由下游
+    // terminalBackgroundTaskIds 等按 taskId 的终态闩统一丢弃，两道闸口径一致。
+    const previousStatus = rt.subagentStatusByParentToolUseId.get(parentToolUseId);
+    const wouldDowngrade = status === 'running'
+      && (previousStatus === 'completed' || previousStatus === 'failed' || previousStatus === 'stopped');
+    if (!wouldDowngrade) {
+      rt.subagentStatusByParentToolUseId.set(parentToolUseId, status);
+    }
+  }
   const sdkUsage = toClaudeTaskUsage(msg.usage);
   const hostUsage = msg.subtype === 'task_notification'
     ? getSubagentTaskUsage?.(msg.task_id)
@@ -930,6 +1082,9 @@ function toClaudeTaskUpdate(msg: {
     ? rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
       ?? rt.streamModelByParentToolUseId.get(parentToolUseId)
     : undefined;
+  if (parentToolUseId && model) {
+    rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, model);
+  }
   // CLI 对纯心跳帧节流省略该字段;收窄失败/缺失都不下发(undefined = 下游沿用上一帧)。
   const workflowProgress = normalizeWorkflowProgressEntries(msg.workflow_progress);
   const taskType = msg.task_type;
@@ -1006,6 +1161,9 @@ function toClaudeTaskUpdatedPatch(msg: {
   const isKnownSubagent =
     !isExcludedTask &&
     (Boolean(parentToolUseId) || rt.confirmedSubagentTaskIds.has(msg.task_id));
+  if (isKnownSubagent && parentToolUseId) {
+    rt.subagentStatusByParentToolUseId.set(parentToolUseId, status);
+  }
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
@@ -1053,6 +1211,8 @@ function mapTaskUpdatedStatus(status: string | undefined, hasError: boolean): Ag
  */
 function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
   if (block.type === 'text') {
+    // Silent-stop 看上游有没有交出 text block，不看展示层清洗后还剩什么。
+    // 整条只剩 `<|eos|>` 仍算正常收口；泄漏只在可见文本 / 落库路径隐藏。
     return typeof block.text === 'string' && block.text.length > 0;
   }
   if (block.type === 'thinking' || block.type === 'redacted_thinking') {
@@ -1062,7 +1222,11 @@ function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
 }
 
 function handleAssistant(
-  msg: { message?: { content?: Array<Record<string, unknown>> }; error?: string },
+  msg: {
+    message?: { content?: Array<Record<string, unknown>> };
+    error?: string;
+    parent_tool_use_id?: string | null;
+  },
   queue: EventQueue,
   ctx: TranslateContext,
 ): void {
@@ -1122,6 +1286,58 @@ function handleAssistant(
   ctx.turn.pendingApiError = null;
   ctx.rt.lastAssistantMeta = assistantMeta;
 
+  const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
+    ? msg.parent_tool_use_id
+    : undefined;
+  // 子代理完整 assistant 没有 message_delta 时，result.usage 仍含其子输出，
+  // 而父级 Agent 工具区间已从分母排除。与 message_delta 路径同样 fail-closed。
+  if (parentToolUseId) markClaudeGenerationUnreliable(ctx.rt.generation);
+  // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
+  // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；
+  // 同时保持 main 新增的 loop guard 按 parent scope 读取同一张 stream model 表。
+  // resolvedModel 若已由启动回执给出仍保持更高优先级；这里把观测提升成 parent-linked
+  // task update，让实时卡片与后续 task_notification 都能沿用同一个 actual model。
+  const assistantModel = typeof assistantMeta.model === 'string' && assistantMeta.model
+    ? assistantMeta.model
+    : undefined;
+  if (parentToolUseId && assistantModel) {
+    ctx.rt.streamModelByParentToolUseId.set(parentToolUseId, assistantModel);
+    const actualModel = ctx.rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
+      ?? assistantModel;
+    const publishedModel = ctx.rt.publishedSubagentModelByParentToolUseId.get(parentToolUseId);
+    if (publishedModel !== actualModel) {
+      let taskId: string | undefined;
+      for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
+        if (candidateParentId !== parentToolUseId) continue;
+        taskId = candidateTaskId;
+        break;
+      }
+      if (!taskId) {
+        // child assistant 可能早于稳定 taskId 到达。只保留模型观测，等后续生命周期
+        // 事件用真实 taskId 发布，避免按 parentToolUseId 造出无法收口的第二条任务。
+      } else {
+        const status = ctx.rt.subagentStatusByParentToolUseId.get(parentToolUseId) ?? 'running';
+        ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            provider: 'claude-code',
+            taskId,
+            parentToolUseId,
+            status,
+            model: actualModel,
+            subagentObservation: {
+              kind: status === 'running' ? 'progress' : 'terminal',
+              logicalSubagentId: taskId,
+              parentToolUseId,
+            },
+          },
+          source: 'claude-code',
+        });
+      }
+    }
+  }
+
   const content = msg.message?.content ?? [];
   // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
   // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
@@ -1130,17 +1346,25 @@ function handleAssistant(
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
-      ctx.turn.text += block.text;
-      if (block.text.length > 0) {
-        ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += block.text;
+      const parentStreamKey = parentToolUseId ?? '__main__';
+      const prefix = `${parentStreamKey}:`;
+      for (const key of ctx.rt.streamStopTokenByKey.keys()) {
+        if (key === parentStreamKey || key.startsWith(prefix)) {
+          ctx.rt.streamStopTokenByKey.delete(key);
+        }
       }
-      queue.push({
-        type: 'text',
-        data: { text: block.text, isFinal: true },
-        source: 'claude-code',
-        agentMeta: assistantMeta,
-      });
+      const visibleText = stripInternalWebCitations(block.text);
+      ctx.turn.text += visibleText;
+      if (visibleText.length > 0) {
+        ctx.turn.hasEmittedText = true;
+        ctx.turn.uiEmittedText += visibleText;
+        queue.push({
+          type: 'text',
+          data: { text: visibleText, isFinal: true },
+          source: 'claude-code',
+          agentMeta: assistantMeta,
+        });
+      }
     } else if (block.type === 'tool_use') {
       ctx.turn.toolUses += 1;
       // ctx.log.info('SDK ▷ tool_use', {
@@ -1148,11 +1372,11 @@ function handleAssistant(
       //   toolUseId: block.id,
       //   turnToolUses: ctx.turn.toolUses,
       // });
-      if (typeof block.id === 'string' && block.id.length > 0) {
-        if (typeof block.name === 'string' && block.name.length > 0) {
-          ctx.rt.toolUseIdToName.set(block.id, block.name);
-        }
-        ctx.onToolUseStart?.(block.id, block.name, block.input);
+      const toolUseId = rememberClaudeToolUseId(ctx, block.id, block.name);
+      if (toolUseId) {
+        // 完整 assistant 消息已带工具参数,即使没有 stream_event 也可在此停表。
+        pauseClaudeGenerationForToolUse(ctx, toolUseId);
+        ctx.onToolUseStart?.(toolUseId, block.name, block.input, parentToolUseId);
       }
       queue.push({
         type: 'tool_use',
@@ -1187,6 +1411,36 @@ function handleAssistant(
   }
 }
 
+function rememberClaudeToolUseId(
+  ctx: TranslateContext,
+  toolUseId: unknown,
+  toolName: unknown,
+): string | null {
+  if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
+  const existingName = ctx.rt.toolUseIdToName.get(toolUseId);
+  ctx.rt.toolUseIdToName.set(
+    toolUseId,
+    typeof toolName === 'string' && toolName.length > 0
+      ? toolName
+      : (existingName ?? ''),
+  );
+  return toolUseId;
+}
+
+function pauseClaudeGenerationForToolUse(
+  ctx: TranslateContext,
+  toolUseId: unknown,
+): void {
+  if (typeof toolUseId !== 'string' || toolUseId.length === 0) return;
+  pauseClaudeGeneration(ctx.rt.generation, toolUseId);
+}
+
+function pauseClaudeGenerationForKnownTools(ctx: TranslateContext): void {
+  for (const toolUseId of ctx.rt.toolUseIdToName.keys()) {
+    pauseClaudeGenerationForToolUse(ctx, toolUseId);
+  }
+}
+
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
 
 function handleStreamEvent(
@@ -1199,6 +1453,7 @@ function handleStreamEvent(
 ): void {
   const event = msg.event as {
     type?: string;
+    index?: number;
     delta?: Record<string, unknown>;
     usage?: Record<string, number>;
     message?: { model?: string; usage?: Record<string, number> };
@@ -1206,31 +1461,42 @@ function handleStreamEvent(
   } | undefined;
   if (!event) return;
 
+  const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
+    ? msg.parent_tool_use_id
+    : undefined;
+
   // 冗余 add: 防 SDK 顺序契约变化 (stream_event 先于 assistant message yield), Set 幂等。
   if (event.type === 'content_block_start') {
     const cb = event.content_block;
-    if (cb && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-      if (typeof cb.name === 'string' && cb.name.length > 0) {
-        ctx.rt.toolUseIdToName.set(cb.id, cb.name);
+    if (cb && cb.type === 'text') {
+      const blockIndex = typeof event.index === 'number' ? event.index : 0;
+      ctx.rt.streamStopTokenByKey.delete(`${parentToolUseId ?? '__main__'}:${blockIndex}`);
+    }
+    if (cb && cb.type === 'tool_use') {
+      const toolUseId = rememberClaudeToolUseId(ctx, cb.id, cb.name);
+      if (toolUseId) {
+        // watchdog / loop-guard 仍要立刻拿到 tool id。生成计时要等
+        // message_delta 或完整 assistant tool_use: content_block_start
+        // 早于参数 input_json_delta,这里停表会把参数生成时间从分母抠掉,
+        // 而后续 message_delta 仍把这些 token 加进 outputTokens。
+        ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId);
       }
-      ctx.onToolUseStart?.(cb.id, cb.name, cb.input);
     }
   }
 
   // SDKPartialAssistantMessage 自带 parent_tool_use_id；并发 subagent 会在同一 Query
   // 事件流中交错，必须按 parent 隔离模型，不能使用会话级 lastAssistantMeta 串联。
   // 老 SDK / 单测若没有 wrapper 元数据，才保留旧兜底行为。
-  const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
-    ? msg.parent_tool_use_id
-    : undefined;
-  const streamKey = parentToolUseId ?? '__main__';
+  const parentStreamKey = parentToolUseId ?? '__main__';
+  const blockIndex = typeof event.index === 'number' ? event.index : 0;
+  const streamKey = `${parentStreamKey}:${blockIndex}`;
   const eventModel = event.message?.model;
   if (typeof eventModel === 'string' && eventModel) {
-    ctx.rt.streamModelByParentToolUseId.set(streamKey, eventModel);
+    ctx.rt.streamModelByParentToolUseId.set(parentStreamKey, eventModel);
   }
   const streamModel = typeof eventModel === 'string' && eventModel
     ? eventModel
-    : ctx.rt.streamModelByParentToolUseId.get(streamKey);
+    : ctx.rt.streamModelByParentToolUseId.get(parentStreamKey);
   const fallbackMeta: Record<string, unknown> | undefined = parentToolUseId
     ? {
         parentUuid: parentToolUseId,
@@ -1249,16 +1515,20 @@ function handleStreamEvent(
     const delta = event.delta as { type?: string; text?: string; thinking?: string } | undefined;
     if (!delta) return;
     if (delta.type === 'text_delta' && typeof delta.text === 'string') {
-      if (delta.text.length > 0) {
+      const buffer = ctx.rt.streamStopTokenByKey.get(streamKey)
+        ?? { pending: '', emitted: false };
+      const visibleDelta = holdStandaloneStopTokenDelta(buffer, delta.text);
+      ctx.rt.streamStopTokenByKey.set(streamKey, buffer);
+      if (visibleDelta && visibleDelta.length > 0) {
         ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += delta.text;
+        ctx.turn.uiEmittedText += visibleDelta;
+        queue.push({
+          type: 'text',
+          data: { text: visibleDelta, isFinal: false },
+          source: 'claude-code',
+          agentMeta: fallbackMeta,
+        });
       }
-      queue.push({
-        type: 'text',
-        data: { text: delta.text, isFinal: false },
-        source: 'claude-code',
-        agentMeta: fallbackMeta,
-      });
     } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
       // 第一次见 thinking_delta 时 lazy-init 一个 buffer (老链路 agentManager.ts:2322-2335)
       if (!ctx.rt.currentThinking) {
@@ -1287,6 +1557,10 @@ function handleStreamEvent(
   }
 
   if (event.type === 'message_delta') {
+    // message_delta 是整条 assistant 消息(含工具参数 token)生成完毕后的
+    // 第一个事件。在此停表,才能排除工具执行/审批等待,又不把参数生成
+    // 区间从 tok/s 分母里抠掉。
+    pauseClaudeGenerationForKnownTools(ctx);
     const usage = event.usage;
     if (usage) {
       const dIn = usage.input_tokens ?? 0;
@@ -1295,12 +1569,32 @@ function handleStreamEvent(
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
       // 累加进 tracker (跨多个 message_delta 会一直涨 —— 对标老 agentManager.ts:2362-2365
       // 的 session.currentTurn{Input,Output,CacheRead,CacheCreate}Tokens += dX)
-      ctx.tracker.ingestApiCallUsage({
+      const segmentId =
+        ctx.rt.activeUsageSegmentByParent.get(parentStreamKey) ??
+        `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
+      ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
+      const priceVariant =
+        ctx.rt.activeUsagePriceVariantByParent.get(parentStreamKey) ??
+        ctx.rt.pendingUsagePriceVariantByParent.get(parentStreamKey) ??
+        ctx.turn.nextRequestPriceVariant ??
+        (ctx.getFastMode?.() ? 'priority' : 'standard');
+      const hasCompleteUsageSnapshot = [
+        'input_tokens',
+        'output_tokens',
+        'cache_read_input_tokens',
+        'cache_creation_input_tokens',
+      ].every((field) => Object.prototype.hasOwnProperty.call(usage, field));
+      ctx.tracker.upsertApiCallUsage(segmentId, {
+        id: segmentId,
+        model: streamModel ?? ctx.getModel(),
+        priceVariant,
         inputTokens: dIn,
         outputTokens: dOut,
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
+        complete: hasCompleteUsageSnapshot,
       });
+      if (parentToolUseId && dOut > 0) markClaudeGenerationUnreliable(ctx.rt.generation);
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。
       ctx.log.debug('SDK ▷ token usage (message_delta)', {
@@ -1313,11 +1607,7 @@ function handleStreamEvent(
       const snap = ctx.tracker.snapshot();
       queue.push({
         type: 'status',
-        data: {
-          status: 'Generating...',
-          ...snap,
-          isRunning: true,
-        },
+        data: ccLiveStatus(ctx, 'Generating...', true),
         source: 'claude-code',
       });
       // Maker Memory flush 观察 (A 轻版: 只打日志). 缺省没注册时 no-op。
@@ -1335,6 +1625,14 @@ function handleStreamEvent(
       model: event.message?.model ?? ctx.getModel(),
     });
     ctx.turn.apiCalls += 1;
+    const segmentId = `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
+    ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
+    const priceVariant =
+      ctx.rt.pendingUsagePriceVariantByParent.get(parentStreamKey) ??
+      ctx.turn.nextRequestPriceVariant ??
+      (ctx.getFastMode?.() ? 'priority' : 'standard');
+    ctx.rt.pendingUsagePriceVariantByParent.delete(parentStreamKey);
+    ctx.rt.activeUsagePriceVariantByParent.set(parentStreamKey, priceVariant);
 
     // 第三方 proxy(如 litellm)或官方端点通常在 message_start 给出 input_tokens
     const usage = event.message?.usage as Record<string, number> | undefined;
@@ -1343,24 +1641,25 @@ function handleStreamEvent(
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
       if (dIn > 0 || dCacheRead > 0 || dCacheCreate > 0) {
-        ctx.tracker.ingestApiCallUsage({
+        ctx.tracker.upsertApiCallUsage(segmentId, {
+          id: segmentId,
+          model: event.message?.model ?? streamModel ?? ctx.getModel(),
+          priceVariant,
           inputTokens: dIn,
           outputTokens: 0,
           cacheReadTokens: dCacheRead,
           cacheCreateTokens: dCacheCreate,
+          complete: false,
         });
       }
     }
 
     // 不清 tracker —— message_start 在 turn 中可能出现多次(工具循环每次 API call 都会触发),
     // 老链路 agentManager.ts:2400-2407 这里也是带 currentTurn 累计, 不重置。
+    beginClaudeGeneration(ctx.rt.generation);
     queue.push({
       type: 'status',
-      data: {
-        status: 'Generating...',
-        ...ctx.tracker.snapshot(),
-        isRunning: true,
-      },
+      data: ccLiveStatus(ctx, 'Generating...', true),
       source: 'claude-code',
     });
     return;
@@ -1536,7 +1835,9 @@ function handleResult(
   // 的正常轮会被误判成空响应 terminal error(Codex P2)。tracker.getTurnUsage() 在 endTurn
   // 之前读到的正是本轮 streamed 累计;真正的空网关响应该累计也为 0, 不影响判定。
   const emitted = ctx.turn.uiEmittedText;
-  const full = !msg.is_error && typeof msg.result === 'string' ? msg.result : '';
+  const full = !msg.is_error && typeof msg.result === 'string'
+    ? stripInternalWebCitations(msg.result)
+    : '';
   let turnUsageDeltaAllZero: boolean;
   if (resultUsage) {
     turnUsageDeltaAllZero =
@@ -1588,10 +1889,41 @@ function handleResult(
 
   // turn 桶快照 — endTurn 会清掉 turn 桶, 必须在调用之前先取出来给后面日志用
   const preTurnEndCacheStats = ctx.tracker.getCacheStats();
+  const turnUsageSegments = ctx.tracker.getTurnUsageSegments();
+  const segmentTotals = turnUsageSegments.reduce<{
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreateTokens: number;
+  }>(
+    (sum, segment) => ({
+      inputTokens: sum.inputTokens + segment.inputTokens,
+      outputTokens: sum.outputTokens + segment.outputTokens,
+      cacheReadTokens: sum.cacheReadTokens + (segment.cacheReadTokens ?? 0),
+      cacheCreateTokens: sum.cacheCreateTokens + (segment.cacheCreateTokens ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+  );
+  const segmentsMatchResult = resultUsage
+    ? segmentTotals.inputTokens === resultUsage.inputTokens &&
+      segmentTotals.outputTokens === resultUsage.outputTokens &&
+      segmentTotals.cacheReadTokens === (resultUsage.cacheReadTokens ?? 0) &&
+      segmentTotals.cacheCreateTokens === (resultUsage.cacheCreateTokens ?? 0)
+    : false;
+  // Only declare request segments complete when an independent turn delta
+  // proves that they cover every token bucket. A matching request count is not
+  // enough: some providers report cache usage only in the terminal aggregate.
+  // On the first result after resume that aggregate may still include history,
+  // so a mismatch must fail closed to token-only accounting rather than price
+  // an incomplete set of requests.
+  const usageSegmentsComplete = segmentsMatchResult;
   const finalTextForLogs = msg.is_error ? redactSensitiveText(finalText) : finalText;
 
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,
   // 这里先转成 turn delta; tracker.endTurn 内部覆盖 currentTurn 然后返回 snapshot 再 reset。
+  finalizeClaudeGeneration(ctx.rt.generation);
+  const liveTurnOutput = resultUsage?.outputTokens ?? ctx.tracker.getTurnUsage().output;
+  const liveGeneration = ctx.rt.generation;
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -1761,6 +2093,7 @@ function handleResult(
     // 否则下一真实 turn 会从 0 起算、把整段历史 token 全算到那一轮(Codex P2)。
     ctx.rt.lastResultUsageAggregate = aggregateBeforeThisResult;
     resetTurnState(ctx.turn);
+    resetClaudeGenerationTiming(ctx.rt.generation);
     ctx.onTurnEnd?.();
     return;
   }
@@ -1793,7 +2126,14 @@ function handleResult(
     // 上下文超限带稳定 reason key(判定在上方 endTurn 前已算好): renderer 靠它
     // 隐藏必败的 Retry(原样重发必然再撞同一个 4xx)并给出压缩 / 新开会话入口;
     // 文案匹配仅作历史持久化错误行的兜底(overload reason 同款分层)。
-    const overflowReason = isContextOverflowTurn ? { reason: CONTEXT_OVERFLOW_REASON } : {};
+    const classifiedReason = isContextOverflowTurn
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : isCindyGatewayProxyTokenInvalidError({
+            providerId: ctx.getProviderId?.() ?? null,
+            message: [errorMessage, errDetail, pendingApiError?.message].filter(Boolean).join('\n'),
+          })
+        ? { reason: GATEWAY_PROXY_TOKEN_INVALID_REASON }
+        : {};
     queue.push({
       type: 'error',
       data: pendingApiError
@@ -1801,7 +2141,7 @@ function handleResult(
             message: errorMessage,
             sdkError: pendingApiError.sdkError,
             isTerminal: true,
-            ...overflowReason,
+            ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
             ...(pendingApiError.retryAttempt !== undefined
@@ -1815,7 +2155,7 @@ function handleResult(
         ? {
             message: errDetail,
             isTerminal: true,
-            ...overflowReason,
+            ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
           }
@@ -1831,7 +2171,12 @@ function handleResult(
     type: 'status',
     data: {
       status: 'Done',
-      ...endSnapshot,
+      ...attachLiveGeneration(endSnapshot, {
+        outputTokens: liveTurnOutput,
+        closedDurationMs: liveGeneration.durationMs,
+        openStartedAt: null,
+        reliable: liveGeneration.reliable,
+      }),
       isRunning: false,
     },
     source: 'claude-code',
@@ -1843,9 +2188,15 @@ function handleResult(
     msg.is_error && typeof msg.result === 'string'
       ? { ...msg, result: redactSensitiveText(msg.result) }
       : msg;
+  const resultWithUsageSegments = {
+    ...safeResult,
+    usageSegments: turnUsageSegments,
+    usageSegmentsComplete,
+    modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,
+  };
   const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
-    ? { ...safeResult, assistant_message_id: ctx.turn.lastAssistantRequestId }
-    : safeResult;
+    ? { ...resultWithUsageSegments, assistant_message_id: ctx.turn.lastAssistantRequestId }
+    : resultWithUsageSegments;
   queue.push({
     type: 'done',
     data:
@@ -1856,6 +2207,8 @@ function handleResult(
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)
   resetTurnState(ctx.turn);
+  ctx.rt.activeUsageSegmentByParent.clear();
+  resetClaudeGenerationTiming(ctx.rt.generation);
   // turn 结束钩子 — agent 用来清 turnInFlight 标记 (rewind preview/commit 前置守卫读它)
   ctx.onTurnEnd?.();
 }

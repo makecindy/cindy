@@ -54,9 +54,11 @@ import type { SessionMoveTarget } from '../sessionMoveTarget';
 import type { FilterStatus } from '../../hooks/useSidebarFilter';
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from '../menuStyles';
 import { RemoteProjectIcon } from '../RemoteProjectIcon';
+import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { isDeviceLinkWriteBlocked } from '../../lib/remoteSessionWriteGuard';
 import { projectBulkArchiveActionForStatus } from '../../lib/projectBulkArchiveAction';
 import { getRemoteProjectMachineIdentity } from '../../lib/remoteProjectIdentity';
+import type { CollapsedProjectAttentionTone } from '../projectCollapsedAttention';
 
 const log = createLogger('ProjectNode');
 
@@ -69,6 +71,8 @@ export interface ProjectNodeProps {
   /** 当前会话状态筛选，决定项目菜单是批量归档还是批量恢复。 */
   statusFilter: FilterStatus;
   isCollapsed: boolean;
+  /** 折叠时汇总子任务的红/绿状态点，放在行右侧状态槽(与会话行同一位置);展开态由子任务行各自展示。 */
+  collapsedAttentionTone?: CollapsedProjectAttentionTone | null;
   /** 父级 Projects 段整体收起时,也要让项目内「显示全部」在动画后复位。 */
   parentSectionCollapsed: boolean;
   activeSessionId?: string;
@@ -80,6 +84,13 @@ export interface ProjectNodeProps {
   selectedSessionIds?: ReadonlySet<string>;
   /** Sidebar 内容过滤态或时间升序排序下强制展示全部 session entry。 */
   disableSessionCollapse: boolean;
+  /**
+   * 隐藏标题右侧的远程机器标注(设备名 / SSH endpoint)。
+   * 「按设备分组」开启时列表已经按设备切段、段头写着设备名,行内再标一遍是重复
+   * (2026-08-12 用户裁决)。远程图标仍保留——它表达「这是远程项目 + 连接状态」,
+   * 不重复归属信息。置顶区不受分组影响,照常显示。
+   */
+  hideRemoteMachineLabel?: boolean;
   onToggle: (projectKey: string) => void;
   /** Project pin is independent from conversation pin state. */
   isProjectPinned: boolean;
@@ -116,6 +127,7 @@ export function ProjectNode({
   sessionVariant = 'text',
   statusFilter,
   isCollapsed,
+  collapsedAttentionTone = null,
   parentSectionCollapsed,
   activeSessionId,
   runningSessionIds,
@@ -124,6 +136,7 @@ export function ProjectNode({
   scheduleSessionIndex,
   selectedSessionIds,
   disableSessionCollapse,
+  hideRemoteMachineLabel = false,
   onToggle,
   isProjectPinned,
   onToggleProjectPin,
@@ -266,7 +279,12 @@ export function ProjectNode({
           }
         }}
         onContextMenu={(e) => {
-          if (isEditingName) return;
+          if (isEditingName) {
+            // 同 SessionItem:编辑态放行系统可编辑菜单,但拦下冒泡,避免与滚动
+            // 容器的空白处整理菜单叠弹(2026-08-13 实机回归)。
+            e.stopPropagation();
+            return;
+          }
           e.preventDefault();
           e.stopPropagation();
           setMenuPos({ x: e.clientX, y: e.clientY });
@@ -280,7 +298,7 @@ export function ProjectNode({
           // 2026-07 用户定稿:项目行作分组容器退后半步,让会话行更突出)。
           // h-8 + rounded-full:hover 底与顶部导航行 / 会话行同款药丸形,三处
           // 高度、圆角、左右边界(同容器 w-full)完全一致(2026-07 用户定稿)。
-          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3 pr-1',
+          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3 pr-2',
           'text-sm font-normal text-[var(--sidebar-list-muted)]',
           // 整行点击 = toggle 折叠，常态用 pointer。即便支持手动拖拽排序也不显示
           // grab 光标——只有真正进入拖拽时（SortableList onStart 给 body 挂
@@ -325,7 +343,9 @@ export function ProjectNode({
               )}
             />
           ) : (
-            <span className="min-w-0 flex-1 truncate">{project.displayName}</span>
+            // shrink 而非 flex-1:让远程图标紧跟项目名,不被推到行尾
+            // (2026-08-12 用户裁决,与会话行的标题 + 远程图标同款)。
+            <span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>
           )}
           {!isEditingName && isDeviceLink ? (
             <Tip text={remoteIdentity?.displayLabel ?? project.deviceLinkDeviceId ?? ''}>
@@ -340,7 +360,8 @@ export function ProjectNode({
               <RemoteProjectIcon kind="ssh" className="text-[var(--folder-item-icon)]" />
             </Tip>
           ) : null}
-          {!isEditingName && remoteIdentity ? (
+          {/* 远程机器标注:按设备分组时段头已写明归属,行内不再重复(hideRemoteMachineLabel)。 */}
+          {!isEditingName && remoteIdentity && !hideRemoteMachineLabel ? (
             <span
               title={remoteIdentity.displayLabel}
               className="max-w-[45%] shrink truncate text-11 text-[var(--cmd-palette-item-meta)]"
@@ -359,42 +380,73 @@ export function ProjectNode({
             />
           )}
         </div>
-        {/* 悬浮工具组——常态隐藏，hover 整行时淡入。
-            stopPropagation 阻止冒泡触发 Header 的 toggle。 */}
+        {/* 右侧状态槽几何与 SessionItem 同一份:ml-auto + h-6 + 16px 指示器入流,
+            hover 时 invisible spacer 把槽撑成按钮宽。绿/红点因此与任务行同大小、
+            同右边缘(pr-2 + size-4 槽 + size-2 圆点)。 */}
         {!isEditingName && (
-          <div
-            className={cn(
-              'shrink-0 flex items-center gap-0.5',
-              'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100',
-            )}
-          >
-            {/* More 按钮 —— 点击锚定 menuPos 到按钮正下方,复用下面同一份
-                DropdownMenu(右键也走它,菜单 items 一份维护)。原本 Search /
-                ShowFiles / OpenInExplorer 三个独立按钮整合到这个菜单里。 */}
-            <ProjectAction
-              label={t('ccAgent.common.moreActions')}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                setMenuPos({ x: rect.left, y: rect.bottom + 2 });
-              }}
-            >
-              <EllipsisVertical size={14} strokeWidth={2} />
-            </ProjectAction>
-            {/* delayed-create:在此目录新建会话——保留为独立按钮(primary 操作,
-                跟 SessionItem 的 Archive/Undo 等位)。父层会预填 workingDir 到
-                newMakerDraft store 并 navigate('/cc-agent/new')。vendor 由
-                NewMakerDraftRoute 内的 segmented switcher 决定(默认走用户上次选择)。 */}
-            <ProjectAction
-              label={
-                projectWritesBlocked
-                  ? t('ccAgent.remoteSession.actionsUnavailable')
-                  : t('ccAgent.sidebar.projectAction.newInDirectory')
-              }
-              disabled={projectWritesBlocked}
-              onClick={handleCreateInProject}
-            >
-              <SquarePen size={14} strokeWidth={2} />
-            </ProjectAction>
+          <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
+            <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
+              {isCollapsed && collapsedAttentionTone ? (
+                <div
+                  className={cn(
+                    'col-start-1 row-start-1 flex items-center gap-1',
+                    'transition-opacity duration-[120ms]',
+                    'group-hover:opacity-0 group-focus-within/slot:opacity-0',
+                    menuPos !== null && 'opacity-0',
+                  )}
+                >
+                  <SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />
+                </div>
+              ) : null}
+              <div
+                aria-hidden
+                className={cn(
+                  'invisible col-start-1 row-start-1 h-6 items-center gap-0.5',
+                  menuPos !== null
+                    ? 'flex'
+                    : 'hidden group-hover:flex group-focus-within/slot:flex',
+                )}
+              >
+                <span className="size-5 shrink-0" />
+                <span className="size-5 shrink-0" />
+              </div>
+              <div
+                className={cn(
+                  'absolute right-0 top-0 flex h-6 items-center gap-0.5',
+                  menuPos !== null
+                    ? 'opacity-100'
+                    : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+                )}
+              >
+                {/* More 按钮 —— 点击锚定 menuPos 到按钮正下方,复用下面同一份
+                    DropdownMenu(右键也走它,菜单 items 一份维护)。原本 Search /
+                    ShowFiles / OpenInExplorer 三个独立按钮整合到这个菜单里。 */}
+                <ProjectAction
+                  label={t('ccAgent.common.moreActions')}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setMenuPos({ x: rect.left, y: rect.bottom + 2 });
+                  }}
+                >
+                  <EllipsisVertical size={14} strokeWidth={2} />
+                </ProjectAction>
+                {/* delayed-create:在此目录新建会话——保留为独立按钮(primary 操作,
+                    跟 SessionItem 的 Archive/Undo 等位)。父层会预填 workingDir 到
+                    newMakerDraft store 并 navigate('/cc-agent/new')。vendor 由
+                    NewMakerDraftRoute 内的 segmented switcher 决定(默认走用户上次选择)。 */}
+                <ProjectAction
+                  label={
+                    projectWritesBlocked
+                      ? t('ccAgent.remoteSession.actionsUnavailable')
+                      : t('ccAgent.sidebar.projectAction.newInDirectory')
+                  }
+                  disabled={projectWritesBlocked}
+                  onClick={handleCreateInProject}
+                >
+                  <SquarePen size={14} strokeWidth={2} />
+                </ProjectAction>
+              </div>
+            </div>
           </div>
         )}
       </div>

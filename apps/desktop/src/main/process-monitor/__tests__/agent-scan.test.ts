@@ -79,7 +79,7 @@ describe('classifyMonitoredAgentCommandLine', () => {
   it('识别 pi 静态品牌 marker,不影响 claude/codex 委托', () => {
     const piMarkers = buildPiPathMarkers(['cindy']);
     expect(piMarkers).toContain('appdata\\roaming\\cindy\\pi\\');
-    // 品牌目录名随构建配置变化(如 CindyGlobal / 历史 xdt-maker),测试从真实
+    // 品牌目录名随构建配置变化(如 Cindy / CindyGlobal / 历史 xdt-maker),测试从真实
     // 品牌清单派生 probe,不写死品牌名。
     const brandDir = allUserDataDirNames(CURRENT_CINDY_REGION)[0].toLowerCase();
     expect(
