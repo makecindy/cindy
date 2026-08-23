@@ -16929,6 +16929,82 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('dismisses superseded same-turn ask_user requests and continues only the last card', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ask-user-supersede',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const firstDecision = deferred<InteractionDecision>();
+    const lastDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async (req) => {
+      if (req.kind !== 'ask_user_question') throw new Error('expected ask_user_question');
+      if (req.requestId === 'req-ask-first') return firstDecision.promise;
+      if (req.requestId === 'req-ask-last') return lastDecision.promise;
+      throw new Error(`unexpected request ${req.requestId}`);
+    });
+    const events = await collectAgentEvents(handle);
+
+    void handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-ask-first',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: { questions: [{ question: 'First question?' }] },
+    }, { requestId: 'req-ask-first' });
+    void handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-ask-last',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: { questions: [{ question: 'Last question?' }] },
+    }, { requestId: 'req-ask-last' });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      expect(events.some((event) => (
+        event.type === 'interaction_dismissed'
+        && (event.data as { requestId?: string }).requestId === 'req-ask-first'
+        && (event.data as { reason?: string }).reason === 'superseded'
+      ))).toBe(true);
+    });
+    expect(events.filter((event) => (
+      event.type === 'interaction_dismissed'
+      && (event.data as { requestId?: string }).requestId === 'req-ask-last'
+    ))).toEqual([]);
+
+    firstDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'First question?': 'stale' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(askUserTurnStartCalls(host)).toHaveLength(0);
+
+    lastDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Last question?': 'visible' },
+    });
+    await vi.waitFor(() => {
+      expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    });
+    const [, params] = askUserTurnStartCalls(host)[0] as [string, {
+      input: Array<{ type: string; text?: string }>;
+    }];
+    expect(params.input[0]?.text).toContain('Last question?');
+    expect(params.input[0]?.text).toContain('visible');
+    expect(params.input[0]?.text).not.toContain('First question?');
+    await handle.close();
+  });
+
   it('does not start a continuation when the user answers before turn completion', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

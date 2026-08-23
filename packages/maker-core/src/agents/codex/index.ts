@@ -5970,23 +5970,30 @@ export class CodexAgent extends BaseAgent {
         (meta) => meta.turnId === turnId,
         cancelledDynamicToolResponse('turn_completed'),
       );
-      const keepUiRequestIds = new Set<string>();
-      for (const live of liveAskUserByRequestId.values()) {
-        if (live.turnId !== turnId) continue;
-        live.detached = true;
-        keepUiRequestIds.add(live.requestId);
-      }
+      // Desktop 只有一个 pendingAskUser。同 turn 多个提问只留最后一张，
+      // 否则被盖住的 resolver 会一直占着 hasPendingAgentInteraction。
+      const lives = [...liveAskUserByRequestId.values()].filter((live) => live.turnId === turnId);
+      const keep = lives.at(-1) ?? null;
+      if (keep) keep.detached = true;
+      const keepUiRequestIds = new Set(keep ? [keep.requestId] : []);
       const dismissed = new Set<string>();
-      for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
-        const requestId = String(meta.requestId);
-        if (keepUiRequestIds.has(requestId) || dismissed.has(requestId)) continue;
+      const dismiss = (requestId: string, reason: string): void => {
+        if (keepUiRequestIds.has(requestId) || dismissed.has(requestId)) return;
         dismissed.add(requestId);
+        liveAskUserByRequestId.delete(requestId);
         forgetPendingUserInputRequest(requestId);
         eventQueue.push({
           type: 'interaction_dismissed',
-          data: { requestId, reason: 'turn_completed', resolvedAs: 'deny' },
+          data: { requestId, reason, resolvedAs: 'deny' },
           source: 'codex',
         });
+      };
+      for (const live of lives) {
+        if (keep && live.requestId === keep.requestId) continue;
+        dismiss(live.requestId, 'superseded');
+      }
+      for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
+        dismiss(String(meta.requestId), 'turn_completed');
       }
     }
 
