@@ -130,7 +130,7 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  * steer 插话不是边界,回答仍归上一问。
  *
  * 本轮只收集候选原文,收尾时从后往前规范化到第一条非空摘要。收尾标记
- * 即使正文规范化为空也封轮,避免后续未收尾进度盖掉已有摘要。
+ * 即使正文为空或规范化后为空也封轮,避免后续未收尾进度盖掉已有摘要。
  *
  * 注意输入是全量已加载 messages 而非 visibleRenderItems —— 导航条要覆盖
  * 整段已加载历史,渲染窗口外的目标由跳转侧扩窗解决(见 MessageStream 的
@@ -207,23 +207,16 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       }
       continue;
     }
-    if (!lastOwnsAnswers || !isNavRailAnswerCandidate(m)) continue;
+    if (!lastOwnsAnswers) continue;
+    if (m.role !== 'assistant' || m.systemCardType) continue;
     const sealed = isSealedAssistantAnswer(m);
-    if (sealed || !lastExcerptSealed) {
-      pendingAnswers.push(m);
-      if (sealed) lastExcerptSealed = true;
-    }
+    const accept = sealed || !lastExcerptSealed;
+    if (sealed) lastExcerptSealed = true;
+    if (!accept || m.content.trim().length === 0) continue;
+    pendingAnswers.push(m);
   }
   flushPendingAnswer();
   return entries;
-}
-
-function isNavRailAnswerCandidate(message: ChatMessage): boolean {
-  return (
-    message.role === 'assistant' &&
-    !message.systemCardType &&
-    message.content.trim().length > 0
-  );
 }
 
 /** 与消息流 action bar 的收尾判定同口径:done 边界 / 费用 / 用量。 */

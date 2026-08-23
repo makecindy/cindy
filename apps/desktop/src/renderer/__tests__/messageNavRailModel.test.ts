@@ -262,6 +262,16 @@ describe('deriveNavRailEntries', () => {
     expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
   });
 
+  it('空正文收尾标记仍封轮,未收尾进度不能盖掉已有摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '真正的回答' }),
+      msg({ clientId: 'a2', role: 'assistant', content: '', turnCompleted: true }),
+      msg({ clientId: 'a3', role: 'assistant', content: '我先核对下一处入口。' }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
+  });
+
   it('hook 消息(带 userText):预览取干净原文,不取 content 里的 agent prompt', () => {
     const messages = [
       msg({
