@@ -70,6 +70,10 @@ describe('reduceXboxGamepadFrame', () => {
     ]);
   });
 
+  it('ignores horizontal-only conversation-scroll input', () => {
+    expect(reduceXboxGamepadFrame(XBOX_GAMEPAD_EMPTY_FRAME, axes({ rx: 1 }), layout)).toEqual([]);
+  });
+
   it('uses remapped button bindings', () => {
     const remapped = cloneXboxGamepadLayout(layout);
     remapped.buttons.a = { type: 'command', commandId: 'newTask' };

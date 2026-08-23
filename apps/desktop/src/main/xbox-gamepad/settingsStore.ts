@@ -15,6 +15,7 @@ import {
   type XboxGamepadSettingsPatch,
   type XboxGamepadStickBinding,
 } from '../../shared/xboxGamepad.js';
+import { xboxGamepadLayoutOverrides } from './layoutOverride.js';
 
 const log = desktopMakerLogger.child('xbox-gamepad-settings-store');
 
@@ -88,6 +89,19 @@ const store = createOverrideSettingsFile<XboxGamepadSettings>({
   filePath: settingsFilePath,
   defaults: createXboxGamepadDefaultSettings,
   normalize: normalizeSettings,
+  mergeOverrides: ({ patch, next, defaults, overrides }) => {
+    const nextOverrides = { ...overrides };
+    if ('deviceEnabled' in patch) {
+      if (next.deviceEnabled === defaults.deviceEnabled) delete nextOverrides.deviceEnabled;
+      else nextOverrides.deviceEnabled = next.deviceEnabled;
+    }
+    if ('layout' in patch) {
+      const layout = xboxGamepadLayoutOverrides(next.layout, defaults.layout);
+      if (layout) nextOverrides.layout = layout;
+      else delete nextOverrides.layout;
+    }
+    return nextOverrides;
+  },
   log,
   label: 'Xbox gamepad',
   maxBytes: 64 * 1024,

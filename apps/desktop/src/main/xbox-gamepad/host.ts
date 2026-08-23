@@ -30,6 +30,9 @@ export interface XboxGamepadHostDeps {
   resolveHelperPath?(): Promise<string>;
 }
 
+const HELPER_RESTART_LIMIT = 3;
+const HELPER_RESTART_BASE_MS = 1_000;
+
 export function createXboxGamepadHost(
   onMessage: (message: XboxGamepadHostMessage) => void,
   deps: XboxGamepadHostDeps = {},
@@ -38,6 +41,8 @@ export function createXboxGamepadHost(
   let starting = false;
   let wanted = false;
   let buffer = '';
+  let consecutiveFailures = 0;
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
   const handleLine = (line: string): void => {
     const trimmed = line.trim();
@@ -49,9 +54,39 @@ export function createXboxGamepadHost(
         log[parsed.level](`[host] ${parsed.message}`);
         return;
       }
+      consecutiveFailures = 0;
       onMessage(parsed);
     } catch {
       log.debug('ignored malformed Xbox gamepad helper line');
+    }
+  };
+
+  const clearRestart = (): void => {
+    if (!restartTimer) return;
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  };
+
+  const scheduleRestart = (): void => {
+    if (!wanted || restartTimer || consecutiveFailures >= HELPER_RESTART_LIMIT) return;
+    consecutiveFailures += 1;
+    const delayMs = HELPER_RESTART_BASE_MS * 2 ** (consecutiveFailures - 1);
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      if (wanted) void startChild();
+    }, delayMs);
+    restartTimer.unref?.();
+  };
+
+  const writeHelper = (line: string): boolean => {
+    if (!child?.stdin || child.stdin.destroyed) return false;
+    try {
+      child.stdin.write(line, (error) => {
+        if (error) log.debug('xbox gamepad helper stdin write failed', { error: error.message });
+      });
+      return true;
+    } catch {
+      return false;
     }
   };
 
@@ -70,18 +105,21 @@ export function createXboxGamepadHost(
       const message = chunk.trim();
       if (message) log.debug('xbox gamepad helper stderr', { message });
     });
+    next.stdin.on('error', (error: Error) => {
+      log.debug('xbox gamepad helper stdin error', { error: error.message });
+    });
     next.on('error', (error: Error) => {
       if (child === next) child = null;
       starting = false;
       if (!wanted) return;
       reportHostFailure(error.message);
+      scheduleRestart();
     });
     next.on('exit', (code, signal) => {
       if (child === next) child = null;
-      // Crash / permission / signature failures must not respawn in a tight
-      // loop. Settings can probe() to retry; start() also retries explicitly.
       if (!wanted) return;
       reportHostFailure(`Xbox gamepad helper exited unexpectedly (${code ?? signal ?? 'unknown'})`);
+      scheduleRestart();
     });
   };
 
@@ -103,29 +141,34 @@ export function createXboxGamepadHost(
       // Not `presence: false` — a helper that won't build is an error state, not
       // "no controller plugged in", and the settings page must say so.
       reportHostFailure(message);
+      scheduleRestart();
     }
   };
 
   return {
     start() {
       wanted = true;
+      consecutiveFailures = 0;
       void startChild();
     },
     probe() {
-      if (child?.stdin && !child.stdin.destroyed) {
-        child.stdin.write('probe\n');
-        return;
-      }
+      if (writeHelper('probe\n')) return;
+      consecutiveFailures = 0;
       void startChild();
     },
     stop() {
       wanted = false;
+      clearRestart();
       const current = child;
       child = null;
       if (!current) return;
       try {
-        current.stdin.write('stop\n');
-        current.stdin.end();
+        if (!current.stdin.destroyed) {
+          current.stdin.write('stop\n', (error) => {
+            if (error) log.debug('xbox gamepad helper stdin write failed', { error: error.message });
+          });
+          current.stdin.end();
+        }
       } catch {
         // The helper may already have exited.
       }

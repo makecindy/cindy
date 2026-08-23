@@ -168,7 +168,7 @@ function combinedScroll(
 function scrollFromStick(
   axes: { x: number; y: number },
 ): Extract<InputDeviceRendererAction, { type: 'scroll' }> | null {
-  const distance = Math.hypot(axes.x, axes.y);
+  const distance = Math.abs(axes.y);
   if (distance < WORKLOUDER_JOYSTICK_ACTIVATION_DISTANCE) return null;
   const intensity = normalizeJoystickIntensity(distance);
   if (intensity <= 0) return null;
