@@ -1187,8 +1187,11 @@ describe('Agent Island display state', () => {
     applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, doneEvent(), 1_200);
 
     const display = buildAgentIslandDisplayState(state, 1_300);
+    expect(display.sessions[0]).toMatchObject({
+      sessionId: 'ask',
+      phase: 'completed',
+    });
     expect(display.pillSnapshot.pendingInteractionCount).toBe(0);
-    expect(display.sessions[0]?.phase).not.toBe('needs-interaction');
   });
 
   it('expands visible-session permission prompts so users can approve in the island', () => {

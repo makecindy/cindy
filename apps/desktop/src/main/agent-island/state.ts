@@ -671,7 +671,10 @@ export function applyAgentIslandEvent(
     // cards belong to the dead turn and must not keep the island waiting.
     for (const [requestId, kind] of [...session.pendingInteractionKinds.entries()]) {
       if (kind === 'ask_user_question' || kind === 'plan_review') continue;
-      dismissPendingInteraction(state, session, requestId, now, { requirePending: true });
+      dismissPendingInteraction(state, session, requestId, now, {
+        requirePending: true,
+        pruneIfIdle: false,
+      });
     }
     if (session.pendingInteractionIds.size > 0) {
       session.phase = 'needs-interaction';
@@ -813,7 +816,7 @@ function dismissPendingInteraction(
   session: AgentIslandSessionState,
   requestId: string,
   now: number,
-  options: { requirePending?: boolean } = {},
+  options: { requirePending?: boolean; pruneIfIdle?: boolean } = {},
 ): void {
   if (options.requirePending === true && !session.pendingInteractionIds.has(requestId)) return;
   session.pendingInteractionIds.delete(requestId);
@@ -862,6 +865,9 @@ function dismissPendingInteraction(
   }
   // errorUntil 已过期但未读的 error 账本仍在,不能删 —— 岛面 TTL 只影响展示。
   if (preserveErrorUnread) return;
+  // done 会先清死 turn 的 permission，再记 completed。这里若立刻 prune，
+  // 后续 complete 只能改到已脱离 state.sessions 的孤儿对象，岛面丢完成态。
+  if (options.pruneIfIdle === false) return;
   state.sessions.delete(session.sessionId);
 }
 

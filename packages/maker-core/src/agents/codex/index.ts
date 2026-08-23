@@ -5549,7 +5549,9 @@ export class CodexAgent extends BaseAgent {
 
     function defaultInteractionDecision(req: InteractionRequest, reason: string): InteractionDecision {
       if (req.kind === 'ask_user_question') {
-        return { kind: 'ask_user_question', answers: {} };
+        // dismissed: 系统性取消(无 resolver / resolver 抛错)。空 answers 是用户 Skip，
+        // 不能和系统兜底长得一样，否则 detach 后会误开 continuation。
+        return { kind: 'ask_user_question', answers: {}, dismissed: true };
       }
       if (req.kind === 'plan_review') {
         // dismissed: 系统性 deny(无 resolver / resolver 抛错), reason 是系统代码,
