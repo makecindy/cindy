@@ -87,7 +87,10 @@ import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
+  UnreadFailedScheduleBanner,
 } from '@/components/chat/InterruptedTurnBanner';
+import { useAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
 import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
@@ -578,6 +581,8 @@ function summarizeRunningWorkflow(taskUpdates: ReadonlyMap<string, AgentTaskUpda
     total: agents.length,
   };
 }
+
+const EMPTY_UNREAD_FAILED_RUN_IDS: string[] = [];
 
 export function CCAgentSessionView({
   sessionIdProp,
@@ -1777,6 +1782,15 @@ export function CCAgentSessionView({
   //     →「重试/关闭」
   // 后面有新消息 = 任务已被推进,判定自然不命中。此时消息流内不重复渲染该行
   // (MessageStream 对尾部未忽略 error 行返回 null,由本条独家承载)。
+  const scheduleSessionIndex = useAutomationScheduleSessionIndex();
+  const unreadFailedScheduleRunIds = useMemo(() => {
+    if (!sessionId) return EMPTY_UNREAD_FAILED_RUN_IDS;
+    return scheduleSessionIndex.get(sessionId)?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
+  }, [scheduleSessionIndex, sessionId]);
+  const handleUnreadFailedScheduleDismiss = useCallback(() => {
+    if (unreadFailedScheduleRunIds.length === 0) return;
+    void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds);
+  }, [unreadFailedScheduleRunIds]);
   const errorTailMsg = useMemo(() => {
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
     return last && last.role === 'error' && !last.errorDismissed ? last : null;
@@ -4476,6 +4490,22 @@ export function CCAgentSessionView({
                 <InterruptedTurnBanner
                   onContinue={handleSessionInterruptContinue}
                   onDismiss={handleSessionInterruptDismiss}
+                  style={{ width: inputWidth }}
+                  className="py-1"
+                />
+              )}
+
+            {!errorTailMsg &&
+              !interruptedFromSession &&
+              unreadFailedScheduleRunIds.length > 0 &&
+              !syntheticContinuationPending &&
+              !error &&
+              !credentialSwitchWait &&
+              !isStreaming &&
+              !agentStatus.isRunning &&
+              sessionId && (
+                <UnreadFailedScheduleBanner
+                  onDismiss={handleUnreadFailedScheduleDismiss}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />

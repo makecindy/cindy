@@ -7159,6 +7159,11 @@
       "continueTitle": "중단된 지점부터 작업을 계속합니다(완료된 단계는 반복하지 않습니다)",
       "dismissTitle": "이 중단 알림 닫기"
     },
+    "unreadFailedScheduleBanner": {
+      "text": "이 자동 작업이 완료되지 않았습니다.",
+      "markAsRead": "읽음으로 표시",
+      "markAsReadTitle": "이 실패 읽지 않음 표시를 지웁니다"
+    },
     "worktreeRestoreBanner": {
       "text": "이 세션의 워크트리가 정리되었습니다(디렉터리가 존재하지 않음).",
       "textPendingSnapshot": "이 세션에 적용되지 않은 변경 스냅샷이 있습니다.",
@@ -8093,6 +8098,7 @@
         "menu": {
           "runNow": "지금 실행",
           "more": "추가 작업",
+          "markAllAsRead": "읽음으로 표시",
           "edit": "편집",
           "pause": "일시중지",
           "resume": "재개",

@@ -7158,6 +7158,11 @@
       "continueTitle": "從中斷處繼續完成任務（不會重複已完成的步驟）",
       "dismissTitle": "關閉此中斷提示"
     },
+    "unreadFailedScheduleBanner": {
+      "text": "這次自動任務沒有完成。",
+      "markAsRead": "標為已讀",
+      "markAsReadTitle": "清除這條失敗未讀"
+    },
     "worktreeRestoreBanner": {
       "text": "該任務的 worktree 已被回收（目錄不存在）。",
       "textPendingSnapshot": "該任務有一份未應用的更改快照。",
@@ -8093,6 +8098,7 @@
         "menu": {
           "runNow": "立即執行",
           "more": "更多操作",
+          "markAllAsRead": "標為已讀",
           "edit": "編輯",
           "pause": "暫停",
           "resume": "恢復",

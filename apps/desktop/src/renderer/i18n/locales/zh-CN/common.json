@@ -7159,6 +7159,11 @@
       "continueTitle": "从中断处继续完成任务（不会重复已完成的步骤）",
       "dismissTitle": "关闭此中断提示"
     },
+    "unreadFailedScheduleBanner": {
+      "text": "这次自动任务没有完成。",
+      "markAsRead": "标为已读",
+      "markAsReadTitle": "清除这条失败未读"
+    },
     "worktreeRestoreBanner": {
       "text": "该任务的 worktree 已被回收（目录不存在）。",
       "textPendingSnapshot": "该任务有一份未应用的更改快照。",
@@ -8093,6 +8098,7 @@
         "menu": {
           "runNow": "立即运行",
           "more": "更多操作",
+          "markAllAsRead": "标为已读",
           "edit": "编辑",
           "pause": "暂停",
           "resume": "恢复",
