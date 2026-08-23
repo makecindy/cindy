@@ -49,6 +49,37 @@ describe('collectGeneratedFiles', () => {
       title: '产品路线图',
       theme: 'navy',
       summary: { kind: 'slides', value: 5 },
+      preview: { kind: 'slide', title: '封面' },
+    });
+  });
+
+  it('builds the spreadsheet thumbnail only from real tool input cells', () => {
+    expect(
+      extractDocumentArtifactMetadata('make_xlsx', {
+        outPath: 'documents/progress.xlsx',
+        sheets: [
+          {
+            name: '交付进度表',
+            header: ['项目', '状态', '完成率'],
+            rows: [
+              ['文档工坊', '进行中', 0.82],
+              ['作品卡', '已完成', { formula: '1', result: '100%' }],
+            ],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      format: 'xlsx',
+      title: '交付进度表',
+      preview: {
+        kind: 'sheet',
+        hasHeader: true,
+        rows: [
+          ['项目', '状态', '完成率'],
+          ['文档工坊', '进行中', '0.82'],
+          ['作品卡', '已完成', '100%'],
+        ],
+      },
     });
   });
 

@@ -30,7 +30,7 @@ import { ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import type { GeneratedFileRef } from '@/lib/generatedFiles';
+import type { DocumentArtifactMetadata, GeneratedFileRef } from '@/lib/generatedFiles';
 import { classifyMarkdownHref, toLocalFileUrl } from '@/lib/localPathResolver';
 import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import {
@@ -45,6 +45,121 @@ import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ModelLightbox } from './ModelLightbox';
+
+function DocumentCoverPreview({
+  artifact,
+  title,
+}: {
+  artifact: DocumentArtifactMetadata;
+  title: string;
+}) {
+  const { t } = useTranslation();
+  const formatLabel = t(`chat.generatedFiles.formats.${artifact.format}`);
+
+  return (
+    <span className="flex h-[142px] border-b border-[var(--border-default)] bg-[var(--surface)] p-3">
+      <span className="flex h-full w-full flex-col rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3.5">
+        <span className="flex items-center justify-between text-11 font-medium uppercase tracking-[0.1em] text-[var(--text-tertiary)]">
+          <span>{formatLabel}</span>
+          {artifact.summary && (
+            <span className="normal-case tracking-normal">
+              {t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
+                count: artifact.summary.value,
+              })}
+            </span>
+          )}
+        </span>
+        <span className="mt-5 block h-1 w-9 rounded-[9999px] bg-[var(--text-primary)]" />
+        <span className="mt-3 line-clamp-2 text-15 font-semibold leading-5 text-[var(--text-primary)]">
+          {title}
+        </span>
+        {artifact.subtitle && (
+          <span className="mt-1 line-clamp-1 text-11 text-[var(--text-tertiary)]">
+            {artifact.subtitle}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+function SlidePreview({ artifact, title }: { artifact: DocumentArtifactMetadata; title: string }) {
+  const { t } = useTranslation();
+  const preview = artifact.preview?.kind === 'slide' ? artifact.preview : undefined;
+  const previewTitle = preview?.title || title;
+  const previewSubtitle = preview?.subtitle || artifact.subtitle;
+
+  return (
+    <span className="relative flex aspect-[16/9] items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface)] px-8 text-center">
+      <span className="min-w-0">
+        <span className="mx-auto mb-3 block h-1 w-9 rounded-[9999px] bg-[var(--text-primary)]" />
+        <span className="block line-clamp-2 text-15 font-semibold leading-5 text-[var(--text-primary)]">
+          {previewTitle}
+        </span>
+        {previewSubtitle && (
+          <span className="mt-1 block line-clamp-1 text-11 text-[var(--text-tertiary)]">
+            {previewSubtitle}
+          </span>
+        )}
+      </span>
+      {artifact.summary && (
+        <span className="absolute bottom-2 right-2 rounded-[9999px] border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--text-tertiary)]">
+          {t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
+            count: artifact.summary.value,
+          })}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function SheetPreview({ artifact, title }: { artifact: DocumentArtifactMetadata; title: string }) {
+  const preview = artifact.preview?.kind === 'sheet' ? artifact.preview : undefined;
+  if (!preview?.rows.length) return <DocumentCoverPreview artifact={artifact} title={title} />;
+
+  const columnCount = Math.max(1, ...preview.rows.map((row) => row.length));
+  const gridTemplateColumns =
+    columnCount === 3 ? '1fr 1.6fr 1fr' : `repeat(${columnCount}, minmax(0, 1fr))`;
+
+  return (
+    <span className="block border-b border-[var(--border-default)] bg-[var(--surface)]">
+      {preview.rows.map((row, rowIndex) => (
+        <span
+          key={rowIndex}
+          className={cn(
+            'grid min-h-8 border-b border-[var(--border-default)] last:border-b-0',
+            rowIndex === 0 && preview.hasHeader && 'bg-[var(--surface-hover)]',
+          )}
+          style={{ gridTemplateColumns }}
+        >
+          {Array.from({ length: columnCount }, (_, columnIndex) => (
+            <span
+              key={columnIndex}
+              className={cn(
+                'min-w-0 truncate border-r border-[var(--border-default)] px-2.5 py-1.5 text-12 leading-5 text-[var(--text-secondary)] last:border-r-0',
+                rowIndex === 0 && preview.hasHeader && 'text-11 text-[var(--text-tertiary)]',
+              )}
+            >
+              {row[columnIndex] || '\u00a0'}
+            </span>
+          ))}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function ArtifactPreview({
+  artifact,
+  title,
+}: {
+  artifact: DocumentArtifactMetadata;
+  title: string;
+}) {
+  if (artifact.format === 'xlsx') return <SheetPreview artifact={artifact} title={title} />;
+  if (artifact.format === 'pptx') return <SlidePreview artifact={artifact} title={title} />;
+  return <DocumentCoverPreview artifact={artifact} title={title} />;
+}
 
 function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
   const { t } = useTranslation();
@@ -119,32 +234,33 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
         onContextMenu={ctxMenu.onContextMenu}
         className={cn(
           artifact
-            ? 'group flex min-h-[76px] w-full max-w-[420px] items-stretch gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2 text-left shadow-sm transition-colors hover:border-[var(--accent-cta-bg)] hover:bg-[var(--surface-hover)]'
+            ? 'group block w-full max-w-[420px] cursor-pointer overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left transition-colors hover:border-[var(--text-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]'
             : 'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-[9999px] bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
         )}
       >
         {artifact ? (
           <>
-            <span className="flex w-[58px] shrink-0 flex-col justify-between rounded-[9px] bg-[var(--accent-cta-bg)] px-2 py-2 text-[var(--accent-pure-cta-fg)]">
-              <span className="text-11 font-semibold uppercase tracking-[0.12em] opacity-80">
-                {t('chat.generatedFiles.artifactLabel')}
+            <ArtifactPreview artifact={artifact} title={artifactTitle} />
+            <span className="flex min-w-0 items-center gap-3 px-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
+                  {artifactTitle}
+                </span>
+                <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
+                  <span className="shrink-0">{formatLabel}</span>
+                  {summaryLabel && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="shrink-0">{summaryLabel}</span>
+                    </>
+                  )}
+                  <span aria-hidden="true">·</span>
+                  <span className="truncate">{file.name}</span>
+                </span>
               </span>
-              <span className="text-18 font-semibold leading-none">{formatLabel}</span>
-            </span>
-            <span className="min-w-0 flex-1 py-0.5">
-              <span className="block truncate text-14 font-semibold leading-5 text-[var(--text-primary)]">
-                {artifactTitle}
+              <span className="shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-secondary)]">
+                <FileText size={15} aria-hidden="true" />
               </span>
-              <span className="mt-0.5 block truncate text-12 text-[var(--text-secondary)]">
-                {artifact.subtitle || formatLabel}
-              </span>
-              <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-11 text-[var(--text-tertiary)]">
-                {summaryLabel && <span>{summaryLabel}</span>}
-                <span className="truncate">{file.name}</span>
-              </span>
-            </span>
-            <span className="flex shrink-0 items-start pt-1 text-[var(--text-tertiary)]">
-              <FileText size={15} aria-hidden="true" />
             </span>
           </>
         ) : (
@@ -273,12 +389,15 @@ export function GeneratedFilesCard({
   const hiddenCount = existing.length - visible.length;
 
   const hasArtifacts = existing.some((file) => file.artifact);
+  const hasOnlyArtifacts = existing.every((file) => file.artifact);
 
   return (
     <div className="my-1 flex flex-col gap-2">
-      <span className="text-12 font-medium text-[var(--text-secondary)]">
-        {t('chat.generatedFiles.title')}
-      </span>
+      {!hasOnlyArtifacts && (
+        <span className="text-12 font-medium text-[var(--text-secondary)]">
+          {t('chat.generatedFiles.title')}
+        </span>
+      )}
       <div className={cn('flex flex-wrap gap-2', hasArtifacts && 'flex-col')}>
         {visible.map((f) => (
           <GeneratedFileChip key={f.path} file={f} />

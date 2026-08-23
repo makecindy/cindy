@@ -44,6 +44,20 @@ export type DocumentArtifactSummary = {
   value: number;
 };
 
+export type DocumentArtifactPreview =
+  | {
+      kind: 'sheet';
+      /** 只取工具输入中真实存在的前几行、前几列。 */
+      rows: string[][];
+      hasHeader: boolean;
+    }
+  | {
+      kind: 'slide';
+      /** 封面文字来自第一张幻灯片，不构造示例内容。 */
+      title?: string;
+      subtitle?: string;
+    };
+
 export interface DocumentArtifactMetadata {
   format: DocumentArtifactFormat;
   title?: string;
@@ -51,6 +65,7 @@ export interface DocumentArtifactMetadata {
   theme?: 'light' | 'dark' | 'navy';
   cover?: boolean;
   summary?: DocumentArtifactSummary;
+  preview?: DocumentArtifactPreview;
 }
 
 interface ToolUseLike {
@@ -86,6 +101,33 @@ function parseToolResult(content: string | undefined): Record<string, unknown> |
 function stringField(record: Record<string, unknown> | null, key: string): string | undefined {
   const value = record?.[key];
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function previewCellText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).slice(0, 48);
+  }
+  const record = asRecord(value);
+  if (record && 'result' in record) return previewCellText(record.result);
+  if (record && 'text' in record) return previewCellText(record.text);
+  return '';
+}
+
+function sheetPreview(input: Record<string, unknown> | null): DocumentArtifactPreview | undefined {
+  const firstSheet = asRecord(Array.isArray(input?.sheets) ? input.sheets[0] : null);
+  if (!firstSheet) return undefined;
+  const header = Array.isArray(firstSheet.header)
+    ? firstSheet.header.slice(0, 3).map(previewCellText)
+    : [];
+  const bodyRows = Array.isArray(firstSheet.rows)
+    ? firstSheet.rows
+        .slice(0, header.length > 0 ? 3 : 4)
+        .filter(Array.isArray)
+        .map((row) => row.slice(0, 3).map(previewCellText))
+    : [];
+  const rows = header.length > 0 ? [header, ...bodyRows] : bodyRows;
+  return rows.length > 0 ? { kind: 'sheet', rows, hasHeader: header.length > 0 } : undefined;
 }
 
 export function extractDocumentArtifactMetadata(
@@ -146,6 +188,24 @@ export function extractDocumentArtifactMetadata(
         : name === 'make_xlsx' && Array.isArray(inputRecord?.sheets)
           ? { kind: 'sheets' as const, value: inputRecord.sheets.length }
           : undefined;
+  const firstSlide =
+    name === 'make_pptx'
+      ? asRecord(Array.isArray(inputRecord?.slides) ? inputRecord.slides[0] : null)
+      : null;
+  const preview =
+    name === 'make_xlsx'
+      ? sheetPreview(inputRecord)
+      : name === 'make_pptx'
+        ? {
+            kind: 'slide' as const,
+            ...(stringField(firstSlide, 'title')
+              ? { title: stringField(firstSlide, 'title') }
+              : {}),
+            ...(stringField(firstSlide, 'subtitle')
+              ? { subtitle: stringField(firstSlide, 'subtitle') }
+              : {}),
+          }
+        : undefined;
   return {
     format,
     ...(title ? { title } : {}),
@@ -157,6 +217,7 @@ export function extractDocumentArtifactMetadata(
         ? { cover: inputRecord.cover }
         : {}),
     ...(summary ? { summary: summary as DocumentArtifactSummary } : {}),
+    ...(preview ? { preview } : {}),
   };
 }
 
