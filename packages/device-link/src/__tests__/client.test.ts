@@ -3327,6 +3327,29 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('非 pong 的有效入站流量也能阻止心跳误判共享连接', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    // 模拟 relay 仍在持续推送 presence，但 pong 偶发丢失；有效业务帧证明
+    // 共享 socket 仍有入站流量，不应因单独的 pong 计数拆掉所有 peer。
+    const activity = setInterval(() => {
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'presence-changed',
+        payload: { deviceId: 'dev-b', online: true, deviceName: 'Test' },
+      });
+    }, 4);
+    await tick(50);
+    clearInterval(activity);
+    expect(ws.terminated).toBe(false);
+    expect(h.client.getStatus()).toBe('online');
+    h.client.stop();
+  });
+
   it('getToken 返回 null:不建连,按退避重试', async () => {
     const h = makeHarness({ token: null });
     h.client.start();

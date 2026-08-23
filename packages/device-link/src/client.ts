@@ -199,7 +199,7 @@ export interface DeviceLinkTiming {
    */
   reconnectStableResetMs: number;
   pingIntervalMs: number;
-  /** 连续无 pong 判定僵死的周期数 */
+  /** 连续无 pong 判定僵死的周期数；入站业务流量会把这组计数清零。 */
   pongMissLimit: number;
   /** invoke / link-open 默认等待响应时长 */
   requestTimeoutMs: number;
@@ -258,7 +258,8 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   reconnectMaxMs: 30_000,
   reconnectStableResetMs: 10_000,
   pingIntervalMs: 20_000,
-  pongMissLimit: 2,
+  // 允许弱网在一个额外周期内恢复；真正无响应仍由连续 miss + 无入站流量判定。
+  pongMissLimit: 3,
   requestTimeoutMs: 30_000,
   getTokenTimeoutMs: 15_000,
   handshakeTimeoutMs: 15_000,
@@ -567,6 +568,8 @@ export class DeviceLinkClient {
   private handshakeTimeoutStreak = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private pongMisses = 0;
+  /** 最近一次收到任何有效 relay 帧的时刻；避免把有业务流量的 socket 误判为僵死。 */
+  private lastInboundAt = 0;
   /** 当前连接的代号,用于丢弃过期 socket 的事件回调 */
   private connEpoch = 0;
   /** 本轮连接的最后一条 socket error message(升级失败 401 只在 error 事件里可见) */
@@ -1540,11 +1543,20 @@ export class DeviceLinkClient {
       this.pingTimer = null;
     }
     this.pongMisses = 0;
+    this.lastInboundAt = Date.now();
     this.pingTimer = setInterval(() => {
       if (this.status !== 'online') return;
+      const now = Date.now();
+      // pong 之外的有效入站帧同样证明 relay/socket 仍在工作。弱网下 pong
+      // 可能丢在业务帧之后，不能因为单独的心跳计数把共享连接整条拆掉。
+      if (now - this.lastInboundAt <= this.timing.pingIntervalMs) {
+        this.pongMisses = 0;
+      }
       this.pongMisses++;
       if (this.pongMisses > this.timing.pongMissLimit) {
-        this.log.warn('heartbeat lost, forcing reconnect');
+        this.log.warn(
+          `heartbeat lost, forcing reconnect (misses=${this.pongMisses}, idleForMs=${now - this.lastInboundAt})`,
+        );
         const ws = this.ws;
         this.ws = null;
         this.connEpoch++;
@@ -1635,6 +1647,7 @@ export class DeviceLinkClient {
       this.log.warn('dropping unparseable frame');
       return;
     }
+    this.lastInboundAt = Date.now();
 
     const ack = parseTransportAck(env);
     if (ack) {

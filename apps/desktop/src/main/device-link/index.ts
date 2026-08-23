@@ -1178,6 +1178,7 @@ function teardownActiveLink(): void {
   responsivenessTracker?.resetAll();
   for (const timer of subscriptionReplayRetryTimers.values()) clearTimeout(timer);
   subscriptionReplayRetryTimers.clear();
+  subscriptionReplayInFlight.clear();
   presenceAvailableByDevice.clear();
   revokedByRemote.clear();
   // 词典同步驱动是进程级的,**不随单次链路起停**:多实例仲裁的 demote → acquire
@@ -1227,6 +1228,9 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
 const SUBSCRIPTION_REPLAY_RETRY_BASE_MS = 3_000;
 const SUBSCRIPTION_REPLAY_RETRY_MAX_MS = 30_000;
 const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 同一设备的 subscribe 重放只能有一个物理请求在途；ws-online / presence / 熔断恢复
+ * 可能同一时刻触发多个入口，重复请求会把短暂抖动放大成恢复洪峰。 */
+const subscriptionReplayInFlight = new Set<string>();
 
 /**
  * 订阅重放的永久失败判据:这些码代表「重试同一动作不可能改变结果」的终态
@@ -1289,6 +1293,9 @@ function replayDeviceSubscription(
   attempt: number,
   generation?: number,
 ): void {
+  // 不打断已有请求的代次/退避；迟到失败由原代自行结算，下一次定向触发会在
+  // 请求结束后再进入。这样多个恢复入口不会并发灌同一设备的订阅。
+  if (subscriptionReplayInFlight.has(deviceId)) return;
   // 外部触发(无 generation)翻代:顶掉挂起的 timer,同时使旧代在途请求失效。
   let gen: number;
   if (generation === undefined) {
@@ -1302,6 +1309,7 @@ function replayDeviceSubscription(
     clearTimeout(prev);
     subscriptionReplayRetryTimers.delete(deviceId);
   }
+  subscriptionReplayInFlight.add(deviceId);
   void remoteSubscribe(deviceId, topics).catch((err) => {
     // 旧代在途请求的迟到失败:已被新一轮取代,不再排重试也不动新代的登记。
     if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
@@ -1335,6 +1343,8 @@ function replayDeviceSubscription(
     }, delay);
     timer.unref?.();
     subscriptionReplayRetryTimers.set(deviceId, timer);
+  }).finally(() => {
+    subscriptionReplayInFlight.delete(deviceId);
   });
 }
 
