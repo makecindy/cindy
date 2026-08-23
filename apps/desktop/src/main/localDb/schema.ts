@@ -89,9 +89,9 @@ export const sessions = sqliteTable(
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
     /**
-     * 任务现状一句话摘要（sidebar-card-mode 卡片/rail flyout 展示）。
-     * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束时经 oneShot 生成,
-     * NULL = 尚未生成（非置顶会话不生成）。
+     * 任务现状一句话摘要（仅置顶段卡片模式展示/生成）。
+     * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束或置顶时经 oneShot 生成,
+     * 取消置顶时清空。NULL = 尚未生成或非卡片置顶。
      */
     summary: text('summary'),
     /**
@@ -183,6 +183,8 @@ export const sessions = sqliteTable(
      * "restore once if leaving proxy mode" by maker-core.
      */
     codexHistoryHasProductPrompt: integer('codex_history_has_product_prompt', { mode: 'boolean' }),
+    /** Codex-only: latest native update_plan snapshot. */
+    codexPlanJson: text('codex_plan_json'),
     /**
      * Session 附加只读引用目录列表(JSON 字符串数组,绝对路径)。
      * agent 在每 turn 透传：Claude Code 使用 options.additionalDirectories，
@@ -430,11 +432,16 @@ export const subagentRuns = sqliteTable(
     title: text('title'),
     description: text('description'),
     summary: text('summary'),
+    /** Complete bounded terminal return; kept separate from the short summary. */
+    returnedResult: text('returned_result'),
+    returnedResultEmpty: integer('returned_result_empty'),
+    returnedResultTruncated: integer('returned_result_truncated'),
     model: text('model'),
     reasoningEffort: text('reasoning_effort'),
     totalTokens: integer('total_tokens'),
     toolUses: integer('tool_uses'),
     durationMs: integer('duration_ms'),
+    costUsd: real('cost_usd'),
     /** JSON SubagentCapabilities; optional fields are fail-closed by readers. */
     capabilities: text('capabilities').notNull().default('{}'),
     /** JSON SubagentActivityEntry[]; writer enforces count/text bounds. */
@@ -1553,6 +1560,36 @@ export const mediaRefs = sqliteTable(
     byHash: index('media_refs_hash_idx').on(t.hash),
     /** 业务删除自己名下 ref 的主路径(删会话/卸载意识)。 */
     byRef: index('media_refs_ref_idx').on(t.refKind, t.refId),
+  }),
+);
+
+/**
+ * Cindy Core 媒体模型调用记录。
+ *
+ * guideJson 固化 prepare 时取得的服务端调用说明，保证后续 request / poll
+ * 不会因目录刷新而切换协议；submitting 是付费 POST 的单次消费闸门，进程
+ * 中断后恢复为 unknown，禁止自动重提。
+ */
+export const mediaInvocations = sqliteTable(
+  'media_invocations',
+  {
+    id: text('id').primaryKey(),
+    owner: text('owner').notNull(),
+    modelId: text('model_id').notNull(),
+    capability: text('capability').notNull(),
+    guideRevision: text('guide_revision').notNull(),
+    guideJson: text('guide_json').notNull(),
+    state: text('state', {
+      enum: ['prepared', 'submitting', 'pending', 'complete', 'failed', 'unknown'],
+    }).notNull(),
+    taskId: text('task_id'),
+    responseJson: text('response_json'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    byOwnerCreatedAt: index('media_invocations_owner_created_at_idx').on(t.owner, t.createdAt),
+    byOwnerState: index('media_invocations_owner_state_idx').on(t.owner, t.state),
   }),
 );
 

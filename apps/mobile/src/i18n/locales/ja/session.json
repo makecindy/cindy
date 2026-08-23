@@ -24,8 +24,149 @@
     "voiceStopRecording": "録音を停止",
     "capabilitiesUnsupported": "リモート機能の形式に対応していません"
   },
+  "presentation": {
+    "collaboration": {
+      "labelLead": "コラボレーション Lead",
+      "labelWorker": "コラボレーション Worker",
+      "labelRole": "コラボレーション {{role}}",
+      "noticeLead": "これはコンピューター側の Orca Lead セッションです。スマートフォンからメッセージを続けて送れます。Worker の作成、フォーカスの変更、Fork/Rewind、キューの編集、セッション設定の変更はコンピューターで行ってください。",
+      "noticeWorker": "これはコンピューター側の Orca Worker セッションです。モバイル版の初期バージョンは読み取り専用で、メッセージ送信、Worker フォーカスの変更、Worker のアーカイブ、コラボレーションの停止には対応していません。",
+      "noticeOther": "これはコンピューター側のコラボレーションセッションです。モバイル版の初期バージョンは読み取り専用です。コラボレーションの管理はコンピューターで行ってください。",
+      "readOnlyReason": "モバイル版の初期バージョンではコラボレーションは読み取り専用です。確認、キュー編集、セッション変更はコンピューターで行ってください。",
+      "composerReadOnlyReason": "このコラボレーションのサブタスクはモバイルでは読み取り専用です。メッセージはコンピューターから送信してください。"
+    },
+    "composer": {
+      "voice": {
+        "listening": "聞き取り中",
+        "submitting": "文字起こし中",
+        "refining": "文章を整えています",
+        "error": "音声入力エラー",
+        "idle": "音声入力",
+        "sendingReason": "メッセージをコンピューターに送信中です。完了してから録音してください。",
+        "processingReason": "音声入力を処理中です。完了してからもう一度録音してください。"
+      },
+      "attachment": {
+        "count": "添付ファイル {{count}} 件",
+        "collapse": "添付ファイルを閉じる",
+        "label": "添付ファイル",
+        "busyReason": "添付ファイルを処理中です。完了してから追加してください。",
+        "sendingReason": "メッセージをコンピューターに送信中です。完了してから添付ファイルを変更してください。"
+      },
+      "input": {
+        "sendingReason": "メッセージをコンピューターに送信中です。"
+      },
+      "send": {
+        "sendingReason": "メッセージをコンピューターに送信中です。",
+        "attachmentBusyReason": "添付ファイルをアップロード中です。完了してから送信してください。",
+        "voiceBusyReason": "音声入力を処理中です。完了してから送信してください。",
+        "emptyReason": "テキストを入力するか、添付ファイルまたは引用を追加してから送信してください。",
+        "sending": "送信中",
+        "label": "送信"
+      },
+      "stop": {
+        "queueBusyReason": "キューの変更を同期中のため、まだ実行を停止できません。",
+        "unavailableReason": "コンピューター側に停止できる実行はありません。",
+        "processing": "処理中",
+        "label": "停止"
+      },
+      "placeholder": {
+        "listening": "聞き取り中…",
+        "submitting": "音声を文字起こし中",
+        "refining": "音声入力の文章を整えています",
+        "default": "続きを入力…"
+      },
+      "guidance": {
+        "sending": "メッセージをコンピューター側のキューに追加しています。完了するまで重複して送信しないでください。",
+        "queueBusy": "キューの変更を同期中です。完了するとキューの状態が更新されます。",
+        "listeningWithDraft": "送信をタップすると音声入力を終了して現在のテキストを送信します。入力欄をタップすると音声入力を終了してキーボードを開きます。",
+        "listening": "聞き取り中です。送信をタップすると音声入力を終了して認識したテキストを送信します。入力欄をタップすると音声入力を終了してキーボードを開きます。",
+        "submitting": "音声を文字起こし中です。入力欄は一時的にロックされます。",
+        "refining": "音声入力の文章を整えています。完了すると入力欄が更新されます。",
+        "attachmentBusy": "添付ファイルを確認またはアップロード中です。準備ができると一覧に表示されます。",
+        "attachmentsWithText": "添付ファイル {{count}} 件と入力欄のテキストを送信します。",
+        "attachmentsOnly": "添付ファイル {{count}} 件だけを送信します。送信前に説明を追加することもできます。",
+        "attachmentPickerOpen": "スマートフォンの写真、スクリーンショット、ファイルを追加できます。",
+        "draft": "送信をタップすると、現在のタスク設定でメッセージがコンピューター側のキューに追加されます。",
+        "quotesOnly": "引用 {{count}} 件を送信します。送信前に説明を追加することもできます。",
+        "canStop": "コンピューター側で実行中です。別のメッセージをキューに追加するか、停止をタップして現在のキューを保持できます。",
+        "empty": "テキストを入力して開始します。/ でコマンド、@ でプロジェクトのリソースを参照できます。"
+      },
+      "status": {
+        "sending": "コンピューターに送信中",
+        "queueBusy": "キューの変更を処理中",
+        "attachmentBusy": "添付ファイルを処理中",
+        "ready": "準備完了"
+      },
+      "operation": {
+        "sessionSyncing": "このタスクはまだ同期が完了していません。",
+        "pendingInteraction": "入力を続ける前に、コンピューターからの保留中のリクエストを処理してください。"
+      }
+    },
+    "overview": {
+      "unavailable": "利用不可",
+      "pendingCount": "保留中 {{count}} 件",
+      "readOnly": "読み取り専用",
+      "queuePaused": "キューは一時停止中",
+      "status": { "active": "アクティブ", "archived": "アーカイブ済み", "deleted": "削除済み" },
+      "actions": {
+        "settings": { "label": "設定", "a11y": "タスク設定を開く" },
+        "usage": { "label": "使用量", "a11y": "タスクの使用量を表示" },
+        "files": { "label": "ファイル", "a11y": "リモートファイルを参照" },
+        "queue": { "label": "キュー", "a11y": "キューパネルを開く" },
+        "search": { "label": "検索", "openA11y": "メッセージを検索", "closeA11y": "メッセージ検索を閉じる" }
+      },
+      "disabled": {
+        "files": "このタスクにはリモート作業ディレクトリがないため、ファイルを参照できません。",
+        "search": "検索できるメッセージはまだありません。",
+        "queueUnavailable": "操作対象のコンピューターは一時的に利用できません。再同期してからキューを確認してください。",
+        "queuePending": "先に保留中のリクエストを処理してください。完了するとキューパネルが使えるようになります。",
+        "queuePausedEmpty": "キューは一時停止中ですが、再開できるメッセージはありません。",
+        "queueEmpty": "キューにメッセージはありません。",
+        "queueDefault": "現在の状態ではキューパネルを開けません。"
+      },
+      "actionCopy": {
+        "pending": "先に保留中のリクエストを処理してください。完了すると入力欄が使えるようになります。",
+        "archived": "このタスクはアーカイブされています。復元してからメッセージを送信してください。",
+        "deleted": "このタスクは削除されているため、操作できません。",
+        "queuePaused": "キューは一時停止中です。キューパネルから再開できます。"
+      }
+    },
+    "controls": {
+      "spend": {
+        "title": "タスク使用量",
+        "unavailable": "タスクの使用量はまだありません",
+        "taskCost": "このタスク {{cost}}",
+        "contextWithLimit": "コンテキスト {{used}} / {{total}} · {{percentage}}",
+        "context": "コンテキスト {{used}} tokens"
+      },
+      "context": {
+        "title": "コンテキスト使用量",
+        "unavailable": "コンテキストデータがありません"
+      },
+      "rateLimit": {
+        "plan": "プラン",
+        "remaining": "残り {{percent}}",
+        "used": "使用済み {{percent}}",
+        "resetsAt": "{{time}} にリセット",
+        "status": "状態",
+        "reached": "アカウント上限に達しました",
+        "account": "アカウント",
+        "availableResets": "利用可能なリセット",
+        "resetCount": "{{count}} 回",
+        "earliestExpiry": "最も早い有効期限",
+        "window": {
+          "default": "上限",
+          "days": "{{count}} 日",
+          "week": "週"
+        }
+      }
+    }
+  },
   "screen": {
     "thinking": "考えています…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "再接続中…",
     "modelBusyRetrying": "モデルサービスが混雑、再試行中…",
     "rateLimitRetrying": "リクエストがレート制限されました。再試行中…",

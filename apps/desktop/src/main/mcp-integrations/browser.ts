@@ -135,7 +135,7 @@ function createRsbBackend(): RsbWebviewBackend {
       },
       // detached 偏好开 + 侧边栏子窗口关着时,tab-op 前先把子窗口拉起来并等
       // renderer ready 握手(否则没有任何 renderer 挂着 RSB store 可执行 op)。
-      ensureHost: () => ensureHostForBackend(),
+      ensureHost: (sessionId) => ensureHostForBackend(sessionId),
       // detached 偏好信号:直连动作解析 miss 时,只有 detached 模式才值得等
       // 子窗口 renderer 重注册 tab;内嵌模式主窗常驻,miss 即真失效,快速失败。
       isDetached: () => isDetachedForBackend(),
@@ -200,14 +200,14 @@ export function setMainWindowAccessorForBackend(
  * controller's `ensureOpenForAutomation`. Default no-op keeps the embedded
  * (non-detached) behavior: host is the always-alive main window.
  */
-let ensureHostForBackendImpl: () => Promise<void> = () => Promise.resolve();
+let ensureHostForBackendImpl: (sessionId?: string) => Promise<void> = () => Promise.resolve();
 
-function ensureHostForBackend(): Promise<void> {
-  return ensureHostForBackendImpl();
+function ensureHostForBackend(sessionId?: string): Promise<void> {
+  return ensureHostForBackendImpl(sessionId);
 }
 
 /** Bootstrap hook, same pattern as `setMainWindowAccessorForBackend`. */
-export function setEnsureHostForBackend(impl: () => Promise<void>): void {
+export function setEnsureHostForBackend(impl: (sessionId?: string) => Promise<void>): void {
   ensureHostForBackendImpl = impl;
 }
 

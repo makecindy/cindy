@@ -11,9 +11,19 @@
  * 恒等于真实事件数,与同步了多少次、以什么拓扑同步无关。
  */
 
-import { HLC_PREFIX_LENGTH, tickHlc, type HlcClock, type HlcTimestamp } from './hlc';
+import { compareHlc, hlcWallMs, tickHlc, type HlcClock, type HlcTimestamp } from './hlc';
 import { MATERIALIZED_ID_PREFIX, materializeDictionary, pickDisplayText } from './materialize';
+import { deriveMoveTag } from './move-tag';
+import { createMovedAliasResolver } from './moved-aliases';
 import { dictionaryTermKey, normalizeDictionaryTermText } from './text';
+import {
+  createAliasRemovalMarker,
+  gcExpiredRemovedAliases,
+  indexAliasRemovalMarkers,
+  isAliasRemovalMarkerKey,
+  readAliasStateVisibleCount,
+  readAliasVisibleCount,
+} from './alias-removal';
 import {
   copyDictionaryMap,
   createDictionaryMap,
@@ -105,12 +115,13 @@ export function recordLearningEvent(
   // 新建化身让状态无限膨胀。落在哪个化身上不影响总数:计数按节点分桶,不同设备
   // 各记各的桶,合并后求和仍是真实事件总数。
   const target = live[0];
+  const targetAliases = createMovedAliasResolver(state)(key, target);
   return {
     state: putRecord(state, key, {
       ...record!,
       incarnations: {
         ...copyDictionaryMap(record!.incarnations),
-        [target.tag]: bumpIncarnation(target, {
+        [target.tag]: bumpIncarnation({ ...target, aliases: targetAliases }, {
           nodeId: clock.nodeId,
           stage: input.stage,
           aliasTexts,
@@ -391,32 +402,6 @@ export interface RenameTermInput {
  *  - 改成了另一个词(主键变了):等价于「删掉旧词 + 添加新词」。此时**不写抑制**——
  *    用户是在改名,不是拒绝这个词,否则新写法若日后被自动学习到会被自己的抑制挡住。
  */
-/**
- * 搬移化身时用的确定性 tag。
- *
- * 要同时满足三件事:两台设备算出同一个值(否则合并后两个化身并存、频次翻倍)、
- * 与原 tag 不同(否则被原键刚打下的墓碑盖住)、以及仍是规范 HLC(定长前缀 + 无点
- * nodeId,校验与定序都依赖它)。
- *
- * 做法是保留原 tag 的墙钟与计数器段(所以它在时间序上仍落在原处,不会把任何设备的
- * 时钟推向未来),只把 nodeId 段换成一个由「原 tag + 目标键」折叠出来的定长标记 ——
- * 定长是必须的,否则反复改名会让 tag 越来越长。
- */
-function deriveMoveTag(sourceTag: HlcTimestamp, targetKey: string): HlcTimestamp {
-  const prefix = sourceTag.slice(0, HLC_PREFIX_LENGTH);
-  return `${prefix}mv${fold36(`${sourceTag}\u0000${targetKey}`)}`;
-}
-
-/** FNV-1a 折叠成定长 base36。只用于派生搬移标记,不参与任何安全判断。 */
-function fold36(input: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(36).padStart(7, '0');
-}
-
 export function renameTerm(
   state: VoiceDictionarySyncState,
   clock: HlcClock,
@@ -428,7 +413,13 @@ export function renameTerm(
   if (!fromKey || !toKey) return { state, clock, changed: false };
 
   const record = state.records[fromKey];
-  const live = record ? listLiveIncarnations(record) : [];
+  const resolveMovedAliases = createMovedAliasResolver(state);
+  const live = record
+    ? listLiveIncarnations(record).map((incarnation) => ({
+        ...incarnation,
+        aliases: resolveMovedAliases(fromKey, incarnation),
+      }))
+    : [];
   if (live.length === 0) return { state, clock, changed: false };
 
   if (fromKey !== toKey) {
@@ -503,6 +494,154 @@ export function renameTerm(
   };
 }
 
+export interface ReplaceTermAliasesInput {
+  /** 要编辑的词条主键。 */
+  termKey: string;
+  /** 保存后的主词；改名时用它排除“别名与主词相同”，默认仍取 termKey。 */
+  primaryText?: string;
+  /** 保存后的完整别名集合；缺少的旧别名视为删除。 */
+  aliases: ReadonlyArray<string>;
+  nowMs: number;
+}
+
+/**
+ * 替换一条词的完整别名集合。
+ *
+ * 保留别名原有的观察计数，只给真正新增或重新添加的别名记一次用户确认。删除记录
+ * “当时已观察到的各节点计数下界”，物化只展示下界之后的新证据：旧副本回流不会复活，
+ * 与删除并发发生的新学习也不会被吞掉。词条化身本身不替换，所以频次与并发改名都不会
+ * 因这次别名编辑重复计数。
+ */
+export function replaceTermAliases(
+  state: VoiceDictionarySyncState,
+  clock: HlcClock,
+  input: ReplaceTermAliasesInput,
+): MutationResult {
+  const key = dictionaryTermKey(input.termKey);
+  const record = key ? state.records[key] : undefined;
+  const resolveMovedAliases = createMovedAliasResolver(state);
+  const live = record
+    ? listLiveIncarnations(record).map((incarnation) => ({
+        ...incarnation,
+        aliases: resolveMovedAliases(key, incarnation),
+      }))
+    : [];
+  if (!key || !record || live.length === 0) return { state, clock, changed: false };
+
+  const primaryKey = dictionaryTermKey(input.primaryText ?? input.termKey);
+  const aliasTexts = normalizeAliasTexts(input.aliases, primaryKey);
+  const desired = new Map(aliasTexts.map((text) => [dictionaryTermKey(text), text]));
+  const current = new Map<string, { text: string; stamp: HlcTimestamp }>();
+  for (const incarnation of live) {
+    const removalIndex = indexAliasRemovalMarkers(incarnation.aliases);
+    for (const [aliasKey, alias] of Object.entries(incarnation.aliases)) {
+      if (isAliasRemovalMarkerKey(aliasKey)) continue;
+      const removal = removalIndex.get(aliasKey);
+      if (readAliasStateVisibleCount(alias, removal) === 0) continue;
+      const existing = current.get(aliasKey);
+      if (!existing || compareHlc(alias.textStamp, existing.stamp) > 0) {
+        current.set(aliasKey, { text: alias.text, stamp: alias.textStamp });
+      }
+    }
+  }
+  const unchanged =
+    current.size === desired.size &&
+    [...desired].every(([aliasKey, text]) => current.get(aliasKey)?.text === text) &&
+    live.every((incarnation) => incarnation.source === 'manual' && incarnation.stage === 'entry');
+  if (unchanged) return { state, clock, changed: false };
+
+  const ticked = tickHlc(clock, input.nowMs);
+  const primaryTag = [...live].sort((a, b) => a.tag.localeCompare(b.tag))[0].tag;
+  const incarnations = copyDictionaryMap(record.incarnations);
+
+  for (const incarnation of live) {
+    const aliases = copyDictionaryMap(incarnation.aliases);
+    const floors = indexAliasRemovalMarkers(incarnation.aliases);
+
+    for (const [aliasKey, existing] of Object.entries(incarnation.aliases)) {
+      if (isAliasRemovalMarkerKey(aliasKey)) continue;
+      const desiredText = desired.get(aliasKey);
+      if (desiredText !== undefined) {
+        if (existing.text !== desiredText) {
+          aliases[aliasKey] = {
+            ...existing,
+            text: desiredText,
+            textStamp: ticked.stamp,
+          };
+        }
+        continue;
+      }
+
+      const removal = floors?.get(aliasKey);
+      const visibleCount = readAliasStateVisibleCount(existing, removal);
+      if (visibleCount === 0) continue;
+      const counterVisibleCount = readAliasVisibleCount(existing.counters, removal?.floor);
+      for (const [counterNodeId, rawCount] of Object.entries(existing.counters)) {
+        const removedCount = Math.floor(rawCount);
+        if (removedCount <= (removal?.floor[counterNodeId] ?? 0)) continue;
+        const marker = createAliasRemovalMarker(ticked.stamp, {
+          aliasKey,
+          counterNodeId,
+          removedCount,
+        });
+        aliases[marker.key] = marker.state;
+      }
+      // TTL 回收后重新添加、再合并旧副本时，原 GCounter 与旧下界可能再次持平；
+      // 可见性此时来自较新的 alias.textStamp。删除要刷新一个既有下界的时间戳，
+      // 否则旧 marker 仍早于别名，这次删除会被误判成一次重新添加。
+      if (counterVisibleCount === 0) {
+        const fallbackCounter = Object.entries(existing.counters)
+          .filter(([, rawCount]) => Math.floor(rawCount) > 0)
+          .sort(([nodeA], [nodeB]) => nodeA.localeCompare(nodeB))[0];
+        if (fallbackCounter) {
+          const [counterNodeId, rawCount] = fallbackCounter;
+          const marker = createAliasRemovalMarker(ticked.stamp, {
+            aliasKey,
+            counterNodeId,
+            removedCount: Math.floor(rawCount),
+          });
+          aliases[marker.key] = marker.state;
+        }
+      }
+    }
+
+    if (incarnation.tag === primaryTag) {
+      for (const [aliasKey, text] of desired) {
+        if (current.has(aliasKey)) continue;
+        const existing = aliases[aliasKey];
+        const removal = floors?.get(aliasKey);
+        const counters = copyDictionaryMap(existing?.counters);
+        counters[clock.nodeId] =
+          Math.max(counters[clock.nodeId] ?? 0, removal?.floor[clock.nodeId] ?? 0) + 1;
+        aliases[aliasKey] = {
+          ...(existing ?? {
+            counters,
+            lastSeenAt: input.nowMs,
+          }),
+          text,
+          textStamp: ticked.stamp,
+          counters,
+          lastSeenAt: Math.max(existing?.lastSeenAt ?? 0, input.nowMs),
+        };
+      }
+    }
+
+    incarnations[incarnation.tag] = {
+      ...incarnation,
+      source: 'manual',
+      stage: 'entry',
+      aliases,
+      updatedAt: Math.max(incarnation.updatedAt, input.nowMs),
+    };
+  }
+
+  return {
+    state: putRecord(state, key, { ...record, incarnations }),
+    clock: ticked.clock,
+    changed: true,
+  };
+}
+
 /**
  * 把词条 id 翻译回合并主键。UI 只持有 id,删除入口需要这一步。
  *
@@ -530,7 +669,7 @@ export interface GcOptions {
   ttlMs: number;
 }
 
-/** 墓碑默认保留 180 天。 */
+/** 词条化身墓碑默认保留 180 天。 */
 export const DEFAULT_TOMBSTONE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 /**
@@ -594,34 +733,56 @@ export function pruneWeakAutomaticCandidates(
  * 常见的自伤。
  *
  * 已知边界:回收之后,一台离线时长超过 TTL 的设备重新上线,理论上能把它手里的
- * 旧化身带回来。自动词条有抑制集合兜底(抑制不过期),所以真正能复活的只剩
- * 「手动词条 + 设备离线超过 TTL」这一种组合。
+ * 旧化身或已删除别名带回来。自动词条有抑制集合兜底(抑制不过期),所以词条层面
+ * 真正能复活的只剩「手动词条 + 设备离线超过 TTL」这一种组合；别名与它采用
+ * 相同的离线兼容窗口。
  */
 export function gcTombstones(
   state: VoiceDictionarySyncState,
   options: GcOptions,
 ): VoiceDictionarySyncState {
   const threshold = options.nowMs - options.ttlMs;
-  let changed = false;
+  const hasExpiredState = Object.values(state.records).some(
+    (record) =>
+      Object.values(record.tombstones).some((stamp) => hlcWallMs(stamp) < threshold) ||
+      Object.values(record.incarnations).some((incarnation) =>
+        Object.entries(incarnation.aliases).some(
+          ([aliasKey, alias]) =>
+            isAliasRemovalMarkerKey(aliasKey) && hlcWallMs(alias.textStamp) < threshold,
+        ),
+      ),
+  );
+  if (!hasExpiredState) return state;
+
+  // 并发别名编辑可能仍挂在即将回收的改名前化身上。先沿搬移链把别名状态压实到
+  // 所有保留下来的后继化身，再删过期状态；否则 180 天后被删别名会在新词上复活。
+  const resolveMovedAliases = createMovedAliasResolver(state);
   // 用户文本作键 —— 必须无原型,否则 GC 后给 `__proto__` 赋值会走原型 setter,
   // 那条合法词条会被静默丢掉,而且这个丢失还会被持久化并同步出去。
   const records: Record<string, DictionaryRecord> = createDictionaryMap<DictionaryRecord>();
+  let changed = false;
 
   for (const [key, record] of Object.entries(state.records)) {
     const tombstones: Record<HlcTimestamp, HlcTimestamp> = createDictionaryMap<HlcTimestamp>();
     const expired = new Set<HlcTimestamp>();
     for (const [tag, stamp] of Object.entries(record.tombstones)) {
-      if (readTombstoneWallMs(stamp) < threshold) expired.add(tag);
+      if (hlcWallMs(stamp) < threshold) {
+        expired.add(tag);
+        changed = true;
+      }
       else tombstones[tag] = stamp;
     }
-    if (expired.size === 0) {
-      records[key] = record;
-      continue;
-    }
-    changed = true;
     const incarnations: Record<HlcTimestamp, DictionaryIncarnation> = createDictionaryMap<DictionaryIncarnation>();
     for (const [tag, incarnation] of Object.entries(record.incarnations)) {
-      if (!expired.has(tag)) incarnations[tag] = incarnation;
+      if (!expired.has(tag)) {
+        const resolvedAliases = resolveMovedAliases(key, incarnation);
+        const aliases = gcExpiredRemovedAliases(resolvedAliases, threshold);
+        changed = changed || aliases !== resolvedAliases;
+        incarnations[tag] = {
+          ...incarnation,
+          aliases,
+        };
+      }
     }
     if (Object.keys(incarnations).length > 0 || Object.keys(tombstones).length > 0) {
       records[key] = { incarnations, tombstones };
@@ -629,11 +790,6 @@ export function gcTombstones(
   }
 
   return changed ? { ...state, records } : state;
-}
-
-function readTombstoneWallMs(stamp: HlcTimestamp): number {
-  const parsed = Number.parseInt(stamp.slice(0, 10), 36);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function putRecord(
@@ -726,7 +882,7 @@ function normalizeAliasTexts(aliases: ReadonlyArray<string> | undefined, termKey
     const text = normalizeDictionaryTermText(raw);
     const key = dictionaryTermKey(text);
     // 别名等于词条本身没有意义(desktop 学习路径同样会把它过滤掉)。
-    if (!key || key === termKey || seen.has(key)) continue;
+    if (!key || key === termKey || isAliasRemovalMarkerKey(key) || seen.has(key)) continue;
     seen.add(key);
     result.push(text);
   }

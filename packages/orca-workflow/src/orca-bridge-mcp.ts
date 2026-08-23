@@ -8,7 +8,16 @@ import {
   ORCA_NESTED_REPORT_ERROR_MESSAGE,
   toSessionDispatchOutcome,
 } from '@cindy/maker-core';
-import type { AgentEvent, AgentKind, Logger, Maker, McpProvider, McpProviderContext, Session } from '@cindy/maker-core';
+import type {
+  AgentEvent,
+  AgentKind,
+  Logger,
+  Maker,
+  McpProvider,
+  McpProviderContext,
+  Session,
+  SessionDispatchOutcome,
+} from '@cindy/maker-core';
 import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
@@ -51,6 +60,26 @@ export interface OrcaTeamStore {
     workerSessionId?: string;
   }) => Promise<OrcaWorkerLink | null>;
   updateWorkerStatus: (workerId: string, status: OrcaWorkerStatus) => Promise<void>;
+}
+
+export interface OrcaLeadHistoryCursor {
+  createdAt: number;
+  id: string;
+  rowid?: number;
+}
+
+export interface OrcaLeadHistoryMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: unknown;
+  agentMeta: unknown;
+  createdAt: number;
+}
+
+export interface OrcaLeadHistoryPage {
+  items: OrcaLeadHistoryMessage[];
+  nextCursor: OrcaLeadHistoryCursor | null;
+  hasMore: boolean;
 }
 
 interface CapturedSessionEntry {
@@ -122,6 +151,16 @@ export interface OrcaBridgeMcpDeps {
     makerMemoryEnabled?: boolean;
   }>;
   orcaTeamStore?: OrcaTeamStore;
+  /**
+   * Worker-scoped read-only transcript access. The bridge resolves the owning Lead from the
+   * attested Worker link; callers never choose an arbitrary session id.
+   */
+  readLeadHistory?: (params: {
+    leadSessionId: string;
+    fromMs: number | null;
+    limit: number;
+    cursor: OrcaLeadHistoryCursor | null;
+  }) => Promise<OrcaLeadHistoryPage>;
   dispatchInterAgentMessage?: (params: {
     targetSessionId: string;
     rawContent: string;
@@ -258,7 +297,7 @@ function logOrcaSendNotDispatched(
 
 function makeOrcaDispatchToolError(
   meta: OrcaSendMeta,
-  reason: 'cancelled-before-dispatch',
+  reason: Extract<SessionDispatchOutcome, { dispatched: false }>['reason'],
   extra?: Record<string, unknown>,
 ): OrcaToolResult {
   return text({
@@ -814,6 +853,79 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             ok: true,
             worker_id: link.workerId,
             lead_session_id: link.leadSessionId,
+          });
+        },
+      );
+
+      server.tool(
+        'read_lead_history',
+        'Read user/assistant transcript rows from your owning Lead without waking or modifying the Lead. Use only when an [Orca UI Assignment] depends on Lead context. You MUST pass your worker_id.',
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+          from_ms: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe('Optional inclusive Unix-ms lower bound, such as the UI assignment snapshot_before_ms.'),
+          limit: z.number().int().min(1).max(200).default(100),
+          cursor: z
+            .object({
+              created_at_ms: z.number().int().nonnegative(),
+              id: z.string().min(1),
+              rowid: z.number().int().positive().optional(),
+            })
+            .optional()
+            .describe('next_cursor from the previous page.'),
+        },
+        async ({ worker_id, from_ms, limit, cursor }) => {
+          const resolved = await resolveWorkerLink(deps, ctx, worker_id);
+          if (!resolved.ok) return text(resolved.error, true);
+          if (!deps.readLeadHistory) {
+            return text({ error: 'lead history unavailable' }, true);
+          }
+          let page: OrcaLeadHistoryPage;
+          try {
+            page = await deps.readLeadHistory({
+              leadSessionId: resolved.link.leadSessionId,
+              fromMs: from_ms ?? null,
+              limit,
+              cursor: cursor
+                ? {
+                    createdAt: cursor.created_at_ms,
+                    id: cursor.id,
+                    ...(cursor.rowid !== undefined ? { rowid: cursor.rowid } : {}),
+                  }
+                : null,
+            });
+          } catch (err) {
+            log.warn('read lead history failed', {
+              workerId: resolved.link.workerId,
+              leadSessionId: resolved.link.leadSessionId,
+              errorName: err instanceof Error ? err.name : undefined,
+            });
+            return text({ error: 'lead history read failed' }, true);
+          }
+          return text({
+            worker_id: resolved.link.workerId,
+            lead_session_id: resolved.link.leadSessionId,
+            messages: page.items.map((item) => ({
+              id: item.id,
+              role: item.role,
+              content: item.content,
+              agent_meta: item.agentMeta,
+              created_at_ms: item.createdAt,
+            })),
+            has_more: page.hasMore,
+            next_cursor: page.nextCursor
+              ? {
+                  created_at_ms: page.nextCursor.createdAt,
+                  id: page.nextCursor.id,
+                  ...(page.nextCursor.rowid !== undefined
+                    ? { rowid: page.nextCursor.rowid }
+                    : {}),
+                }
+              : null,
           });
         },
       );

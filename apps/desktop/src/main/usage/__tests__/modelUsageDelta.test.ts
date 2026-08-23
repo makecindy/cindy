@@ -19,7 +19,7 @@ function snap(over: Partial<ModelUsageCumulative> = {}): ModelUsageCumulative {
 }
 
 describe('computeModelUsageDeltas', () => {
-  it('first report: full cumulative becomes the delta', () => {
+  it('first report without observed request usage only establishes a baseline', () => {
     const { next, deltas } = computeModelUsageDeltas(undefined, {
       'claude-opus-4-8': {
         costUSD: 0.5,
@@ -29,6 +29,31 @@ describe('computeModelUsageDeltas', () => {
         cacheCreationInputTokens: 400,
       },
     });
+    expect(deltas).toEqual([]);
+    expect(next.get('claude-opus-4-8')).toEqual(snap({
+      costUSD: 0.5,
+      inputTokens: 100,
+      outputTokens: 200,
+      cacheReadInputTokens: 3000,
+      cacheCreationInputTokens: 400,
+    }));
+  });
+
+  it('accepts the first cumulative report when the SDK query explicitly started at zero', () => {
+    const { deltas } = computeModelUsageDeltas(
+      undefined,
+      {
+        'claude-opus-4-8': {
+          costUSD: 0.5,
+          inputTokens: 100,
+          outputTokens: 200,
+          cacheReadInputTokens: 3000,
+          cacheCreationInputTokens: 400,
+        },
+      },
+      undefined,
+      { cumulativeStartsAtZero: true },
+    );
     expect(deltas).toEqual([
       {
         model: 'claude-opus-4-8',
@@ -39,13 +64,38 @@ describe('computeModelUsageDeltas', () => {
         cacheCreateTokensDelta: 400,
       },
     ]);
-    expect(next.get('claude-opus-4-8')).toEqual(snap({
-      costUSD: 0.5,
-      inputTokens: 100,
-      outputTokens: 200,
-      cacheReadInputTokens: 3000,
-      cacheCreationInputTokens: 400,
-    }));
+  });
+
+  it('first report uses independently observed request usage and accepts cost only on an exact match', () => {
+    const observed = new Map([
+      [
+        'claude-opus-4-8',
+        { inputTokens: 100, outputTokens: 200, cacheReadTokens: 3000, cacheCreateTokens: 400 },
+      ],
+    ]);
+    const { deltas } = computeModelUsageDeltas(
+      undefined,
+      {
+        'claude-opus-4-8': {
+          costUSD: 0.5,
+          inputTokens: 100,
+          outputTokens: 200,
+          cacheReadInputTokens: 3000,
+          cacheCreationInputTokens: 400,
+        },
+      },
+      observed,
+    );
+    expect(deltas).toEqual([
+      {
+        model: 'claude-opus-4-8',
+        costUsdDelta: 0.5,
+        inputTokensDelta: 100,
+        outputTokensDelta: 200,
+        cacheReadTokensDelta: 3000,
+        cacheCreateTokensDelta: 400,
+      },
+    ]);
   });
 
   it('monotonic increase: delta = cumulative - last', () => {
@@ -65,23 +115,43 @@ describe('computeModelUsageDeltas', () => {
     ]);
   });
 
-  it('cumulative reset (subprocess respawn): rebase from zero, no negative delta', () => {
+  it('cumulative reset without observed request usage rebases without charging the session total', () => {
     const prev = new Map([['m', snap({ costUSD: 2, inputTokens: 1000, outputTokens: 500 })]]);
     const { next, deltas } = computeModelUsageDeltas(prev, {
       m: { costUSD: 0.1, inputTokens: 50, outputTokens: 30, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
     });
-    // 归零后整体 rebase: 本次累计全额计入 (而不是部分字段钳 0 的混合口径)
+    expect(deltas).toEqual([]);
+    expect(next.get('m')!.costUSD).toBe(0.1);
+  });
+
+  it('cumulative reset uses observed turn tokens but withholds unmatched cumulative cost', () => {
+    const prev = new Map([['m', snap({ costUSD: 2, inputTokens: 1000, outputTokens: 500 })]]);
+    const observed = new Map([
+      ['m', { inputTokens: 40, outputTokens: 20, cacheReadTokens: 0, cacheCreateTokens: 0 }],
+    ]);
+    const { deltas } = computeModelUsageDeltas(
+      prev,
+      {
+        m: {
+          costUSD: 0.1,
+          inputTokens: 50,
+          outputTokens: 30,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+        },
+      },
+      observed,
+    );
     expect(deltas).toEqual([
       {
         model: 'm',
-        costUsdDelta: 0.1,
-        inputTokensDelta: 50,
-        outputTokensDelta: 30,
+        costUsdDelta: 0,
+        inputTokensDelta: 40,
+        outputTokensDelta: 20,
         cacheReadTokensDelta: 0,
         cacheCreateTokensDelta: 0,
       },
     ]);
-    expect(next.get('m')!.costUSD).toBe(0.1);
   });
 
   it('multi-model: independent deltas, unchanged model omitted', () => {
@@ -96,12 +166,12 @@ describe('computeModelUsageDeltas', () => {
     expect(deltas.map((d) => d.model)).toEqual(['a']);
   });
 
-  it('model absent from current report keeps its previous snapshot', () => {
+  it('model absent from current report keeps its previous snapshot and baselines unseen models', () => {
     const prev = new Map([['stale', snap({ costUSD: 3 })]]);
     const { next, deltas } = computeModelUsageDeltas(prev, {
       fresh: { costUSD: 0.2, inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
     });
-    expect(deltas.map((d) => d.model)).toEqual(['fresh']);
+    expect(deltas).toEqual([]);
     expect(next.get('stale')).toEqual(snap({ costUSD: 3 }));
   });
 

@@ -45,6 +45,11 @@ import {
 import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
 import { shouldShowInputMonitoringBadge } from '@/voice-input/inputMonitoringBadge';
 import {
+  formatVoiceInputDictionaryAliasDraft,
+  parseVoiceInputDictionaryAliasDraft,
+  voiceInputDictionaryEntryMatches,
+} from '@/voice-input/dictionaryEditor';
+import {
   createVoiceInputModifierShortcut,
   createVoiceInputShortcutFromEvent,
   createVoiceInputShortcutFromMacNativeKeys,
@@ -159,17 +164,6 @@ function formatUsd(costUsd: number): string {
   if (!Number.isFinite(costUsd) || costUsd <= 0) return '$0.00';
   if (costUsd < 0.01) return '<$0.01';
   return `$${costUsd.toFixed(2)}`;
-}
-
-function dictionaryEntryMatches(
-  entry: VoiceInputDictionaryEntry,
-  filter: DictionaryFilter,
-  query: string,
-): boolean {
-  if (filter !== 'all' && entry.source !== filter) return false;
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  if (!normalizedQuery) return true;
-  return entry.text.toLocaleLowerCase().includes(normalizedQuery);
 }
 
 function dictionarySourceIcon(source: VoiceInputDictionaryEntrySource): ReactNode {
@@ -1069,7 +1063,7 @@ export function VoiceInputSection() {
     setDictionarySyncEnabled,
     addDictionaryEntry: addDictionarySettingEntry,
     importDictionaryEntries: importDictionarySettingEntries,
-    renameDictionaryEntry: renameDictionarySettingEntry,
+    editDictionaryEntry: editDictionarySettingEntry,
     deleteDictionaryEntry: deleteDictionarySettingEntry,
     setShortcut,
   } = useVoiceInputSettings();
@@ -1091,6 +1085,7 @@ export function VoiceInputSection() {
   const [newDictionaryEntryText, setNewDictionaryEntryText] = useState('');
   const [editingDictionaryEntryId, setEditingDictionaryEntryId] = useState<string | null>(null);
   const [editingDictionaryEntryText, setEditingDictionaryEntryText] = useState('');
+  const [editingDictionaryEntryAliases, setEditingDictionaryEntryAliases] = useState('');
   const [permissions, setPermissions] = useState<VoiceInputSystemPermissions>(() =>
     normalizeVoiceInputSystemPermissions(window.electronAPI.voiceInput.getSystemPermissionsCached())
   );
@@ -1797,7 +1792,7 @@ export function VoiceInputSection() {
     () =>
       settings.dictionaryEntries
         .filter((entry) =>
-          dictionaryEntryMatches(entry, dictionaryFilter, dictionarySearch),
+          voiceInputDictionaryEntryMatches(entry, dictionaryFilter, dictionarySearch),
         )
         .sort((a, b) => {
           if (a.source !== b.source) return a.source === 'manual' ? -1 : 1;
@@ -1908,11 +1903,13 @@ export function VoiceInputSection() {
   const startEditingDictionaryEntry = useCallback((entry: VoiceInputDictionaryEntry) => {
     setEditingDictionaryEntryId(entry.id);
     setEditingDictionaryEntryText(entry.text);
+    setEditingDictionaryEntryAliases(formatVoiceInputDictionaryAliasDraft(entry.aliases));
   }, []);
 
   const cancelEditingDictionaryEntry = useCallback(() => {
     setEditingDictionaryEntryId(null);
     setEditingDictionaryEntryText('');
+    setEditingDictionaryEntryAliases('');
   }, []);
 
   const saveEditingDictionaryEntry = useCallback(() => {
@@ -1925,15 +1922,17 @@ export function VoiceInputSection() {
       });
       return;
     }
-    void renameDictionarySettingEntry(editingDictionaryEntryId, text).then((ok) => {
+    const aliases = parseVoiceInputDictionaryAliasDraft(editingDictionaryEntryAliases, text);
+    void editDictionarySettingEntry(editingDictionaryEntryId, text, aliases).then((ok) => {
       if (ok) cancelEditingDictionaryEntry();
     });
   }, [
     cancelEditingDictionaryEntry,
     deleteDictionarySettingEntry,
+    editDictionarySettingEntry,
+    editingDictionaryEntryAliases,
     editingDictionaryEntryId,
     editingDictionaryEntryText,
-    renameDictionarySettingEntry,
   ]);
 
   const deleteDictionaryEntry = useCallback(
@@ -2454,92 +2453,192 @@ export function VoiceInputSection() {
                               'group min-w-0 rounded-[12px] border border-[var(--settings-input-border)]',
                               'bg-[var(--settings-input-bg)] px-3 py-2.5 transition-colors',
                               'hover:bg-[var(--settings-menu-bg-hover)]',
+                              editing && 'md:col-span-2',
                             )}
                           >
                             {editing ? (
-                              <div className="flex min-w-0 items-center gap-1.5">
-                                <input
-                                  ref={editingDictionaryEntryInputRef}
-                                  value={editingDictionaryEntryText}
-                                  onChange={(event) => setEditingDictionaryEntryText(event.currentTarget.value)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                                      event.preventDefault();
-                                      saveEditingDictionaryEntry();
+                              <div className="flex min-w-0 flex-col gap-2.5">
+                                <label className="flex min-w-0 flex-col gap-1">
+                                  <span className="text-11 font-medium text-[var(--settings-section-sublabel)]">
+                                    {t('settings.voiceInput.refinement.dictionary.termLabel')}
+                                  </span>
+                                  <input
+                                    ref={editingDictionaryEntryInputRef}
+                                    value={editingDictionaryEntryText}
+                                    onChange={(event) =>
+                                      setEditingDictionaryEntryText(event.currentTarget.value)
                                     }
-                                    if (event.key === 'Escape') {
-                                      cancelEditingDictionaryEntry();
-                                    }
-                                  }}
-                                  aria-label={t('settings.voiceInput.refinement.dictionary.editAriaLabel')}
-                                  className="h-8 min-w-0 flex-1 bg-transparent text-13 text-[var(--settings-input-text)] outline-none"
-                                />
-                                <Tip text={t('settings.voiceInput.refinement.dictionary.save')} side="top">
-                                  <button
-                                    type="button"
-                                    onClick={saveEditingDictionaryEntry}
-                                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--settings-section-title)] text-[var(--settings-theme-card-bg)] transition-opacity hover:opacity-85"
-                                    aria-label={t('settings.voiceInput.refinement.dictionary.save')}
-                                  >
-                                    <Check size={14} />
-                                  </button>
-                                </Tip>
-                                <Tip text={t('settings.voiceInput.refinement.dictionary.cancel')} side="top">
-                                  <button
-                                    type="button"
-                                    onClick={cancelEditingDictionaryEntry}
-                                    className={cn(
-                                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors',
-                                      'border border-[var(--settings-btn-secondary-border)]',
-                                      'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-                                      'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
+                                    onKeyDown={(event) => {
+                                      if (
+                                        event.key === 'Enter' &&
+                                        !event.nativeEvent.isComposing
+                                      ) {
+                                        event.preventDefault();
+                                        saveEditingDictionaryEntry();
+                                      }
+                                      if (event.key === 'Escape') cancelEditingDictionaryEntry();
+                                    }}
+                                    aria-label={t(
+                                      'settings.voiceInput.refinement.dictionary.editAriaLabel',
                                     )}
-                                    aria-label={t('settings.voiceInput.refinement.dictionary.cancel')}
+                                    className={cn(
+                                      'h-9 min-w-0 rounded-full px-3 text-13',
+                                      'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
+                                      'text-[var(--settings-input-text)] outline-none transition-colors',
+                                      'focus-visible:border-[var(--settings-input-border-focus)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                                    )}
+                                  />
+                                </label>
+
+                                <label className="flex min-w-0 flex-col gap-1">
+                                  <span className="text-11 font-medium text-[var(--settings-section-sublabel)]">
+                                    {t(
+                                      'settings.voiceInput.refinement.dictionary.aliasesEditLabel',
+                                    )}
+                                  </span>
+                                  <textarea
+                                    value={editingDictionaryEntryAliases}
+                                    onChange={(event) =>
+                                      setEditingDictionaryEntryAliases(event.currentTarget.value)
+                                    }
+                                    onKeyDown={(event) => {
+                                      if (
+                                        (event.metaKey || event.ctrlKey) &&
+                                        event.key === 'Enter' &&
+                                        !event.nativeEvent.isComposing
+                                      ) {
+                                        event.preventDefault();
+                                        saveEditingDictionaryEntry();
+                                      }
+                                      if (event.key === 'Escape') cancelEditingDictionaryEntry();
+                                    }}
+                                    aria-label={t(
+                                      'settings.voiceInput.refinement.dictionary.aliasesEditAriaLabel',
+                                    )}
+                                    placeholder={t(
+                                      'settings.voiceInput.refinement.dictionary.aliasesPlaceholder',
+                                    )}
+                                    rows={3}
+                                    className={cn(
+                                      'min-h-[76px] w-full resize-y rounded-lg px-3 py-2 text-12 leading-[1.45]',
+                                      'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
+                                      'text-[var(--settings-input-text)] outline-none transition-colors',
+                                      'placeholder:text-[var(--text-placeholder)]',
+                                      'focus-visible:border-[var(--settings-input-border-focus)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                                    )}
+                                  />
+                                  <span className="text-11 leading-[1.35] text-[var(--settings-section-sublabel)] opacity-70">
+                                    {t('settings.voiceInput.refinement.dictionary.aliasesEditHint')}
+                                  </span>
+                                </label>
+
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <Tip
+                                    text={t('settings.voiceInput.refinement.dictionary.cancel')}
+                                    side="top"
                                   >
-                                    <X size={14} />
-                                  </button>
-                                </Tip>
+                                    <button
+                                      type="button"
+                                      onClick={cancelEditingDictionaryEntry}
+                                      className={cn(
+                                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors',
+                                        'border border-[var(--settings-btn-secondary-border)]',
+                                        'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
+                                        'hover:bg-[var(--settings-btn-secondary-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                                      )}
+                                      aria-label={t(
+                                        'settings.voiceInput.refinement.dictionary.cancel',
+                                      )}
+                                    >
+                                      <X size={14} />
+                                    </button>
+                                  </Tip>
+                                  <Tip
+                                    text={t('settings.voiceInput.refinement.dictionary.save')}
+                                    side="top"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={saveEditingDictionaryEntry}
+                                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--settings-section-title)] text-[var(--settings-theme-card-bg)] transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                                      aria-label={t(
+                                        'settings.voiceInput.refinement.dictionary.save',
+                                      )}
+                                    >
+                                      <Check size={14} />
+                                    </button>
+                                  </Tip>
+                                </div>
                               </div>
                             ) : (
-                              <div className="flex min-w-0 items-center gap-2">
+                              <div className="flex min-w-0 items-start gap-2">
                                 <span
                                   role="img"
                                   className={cn(
-                                    'flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
+                                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
                                     entry.source === 'automatic'
                                       ? 'text-[var(--settings-section-title)] opacity-70'
                                       : 'text-[var(--settings-section-sublabel)] opacity-45',
                                   )}
-                                  aria-label={t(`settings.voiceInput.refinement.dictionary.sources.${entry.source}`)}
-                                  title={t(`settings.voiceInput.refinement.dictionary.sources.${entry.source}`)}
+                                  aria-label={t(
+                                    `settings.voiceInput.refinement.dictionary.sources.${entry.source}`,
+                                  )}
+                                  title={t(
+                                    `settings.voiceInput.refinement.dictionary.sources.${entry.source}`,
+                                  )}
                                 >
                                   {dictionarySourceIcon(entry.source)}
                                 </span>
-                                <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-title)]">
-                                  {entry.text}
-                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-13 font-medium text-[var(--settings-section-title)]">
+                                    {entry.text}
+                                  </p>
+                                  {entry.aliases.length > 0 ? (
+                                    <p className="mt-0.5 line-clamp-2 text-11 leading-[1.35] text-[var(--settings-section-sublabel)] opacity-75">
+                                      {t('settings.voiceInput.refinement.dictionary.aliases', {
+                                        aliases: entry.aliases
+                                          .map((alias) => alias.text)
+                                          .join(
+                                            t(
+                                              'settings.voiceInput.refinement.dictionary.aliasSeparator',
+                                            ),
+                                          ),
+                                      })}
+                                    </p>
+                                  ) : null}
+                                </div>
                                 <div
                                   className={cn(
                                     'flex shrink-0 items-center gap-1 opacity-0 transition-opacity',
                                     'group-hover:opacity-100 group-focus-within:opacity-100',
                                   )}
                                 >
-                                  <Tip text={t('settings.voiceInput.refinement.dictionary.edit')} side="top">
+                                  <Tip
+                                    text={t('settings.voiceInput.refinement.dictionary.edit')}
+                                    side="top"
+                                  >
                                     <button
                                       type="button"
                                       onClick={() => startEditingDictionaryEntry(entry)}
-                                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)] hover:text-[var(--settings-section-title)]"
-                                      aria-label={t('settings.voiceInput.refinement.dictionary.edit')}
+                                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)] hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                                      aria-label={t(
+                                        'settings.voiceInput.refinement.dictionary.edit',
+                                      )}
                                     >
                                       <Pencil size={13} />
                                     </button>
                                   </Tip>
-                                  <Tip text={t('settings.voiceInput.refinement.dictionary.delete')} side="top">
+                                  <Tip
+                                    text={t('settings.voiceInput.refinement.dictionary.delete')}
+                                    side="top"
+                                  >
                                     <button
                                       type="button"
                                       onClick={() => deleteDictionaryEntry(entry.id)}
-                                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)] hover:text-[var(--settings-section-title)]"
-                                      aria-label={t('settings.voiceInput.refinement.dictionary.delete')}
+                                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)] hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                                      aria-label={t(
+                                        'settings.voiceInput.refinement.dictionary.delete',
+                                      )}
                                     >
                                       <Trash2 size={13} />
                                     </button>

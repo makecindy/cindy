@@ -41,6 +41,12 @@ interface CachedState<T> extends OverrideSettingsState<T> {
   readStatus: 'missing' | 'readable' | 'unreadable';
 }
 
+/**
+ * Atomic mutations use the ordinary/advisory lock tier and still require the
+ * lock to be held. `scopeKey` guards owner/session drift separately; neither
+ * concern is an authorization decision that should inherit the plugin
+ * security-boundary lock's process-identity and durable-recovery machinery.
+ */
 export function createOverrideSettingsFile<T>(options: {
   filePath: () => string;
   defaults: T;

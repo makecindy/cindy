@@ -10,7 +10,11 @@ import {
   type ModelPricingCatalog,
   type MoneyCurrency,
 } from './regionalMoney.js';
-import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from './subscriptionModels.js';
+import {
+  CHATGPT_MODEL_PREFIX,
+  exclusiveXaiCatalogModelId,
+  XAI_MODEL_PREFIX,
+} from './subscriptionModels.js';
 
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -77,6 +81,31 @@ function gatewayInputTokenPriceBands(
   return thresholdBands.length > 0 ? thresholdBands : undefined;
 }
 
+function gatewayPriorityInputTokenPriceBands(
+  model: ModelAccessGatewayModel,
+): ModelPriceQuote['inputTokenPriceBands'] {
+  const thresholdBands = [
+    {
+      minInputTokens: 200_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove200kTokensPriority),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove200kTokensPriority),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove200kTokensPriority),
+    },
+    {
+      minInputTokens: 272_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove272kTokensPriority),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove272kTokensPriority),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove272kTokensPriority),
+    },
+  ].filter(
+    (tier) =>
+      tier.inputPerMtok !== undefined ||
+      tier.outputPerMtok !== undefined ||
+      tier.cacheReadPerMtok !== undefined,
+  );
+  return thresholdBands.length > 0 ? thresholdBands : undefined;
+}
+
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
 export function isPricedGatewayModel(model: ModelAccessGatewayModel): boolean {
   // 币种不影响“是否有价格”的判断，随便传一个具体币种即可。
@@ -102,6 +131,10 @@ export function gatewayModelPriceQuote(
   }
   const cacheReadPerMtok = perMtok(model.cacheReadInputTokenCost);
   const cacheCreatePerMtok = perMtok(model.cacheCreationInputTokenCost);
+  const priorityInputPerMtok = perMtok(model.inputCostPerTokenPriority);
+  const priorityOutputPerMtok = perMtok(model.outputCostPerTokenPriority);
+  const priorityCacheReadPerMtok = perMtok(model.cacheReadInputTokenCostPriority);
+  const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model);
   if (
     inputPerMtok === 0 &&
     outputPerMtok === 0 &&
@@ -125,6 +158,25 @@ export function gatewayModelPriceQuote(
     outputPerMtok,
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+    ...(priorityInputPerMtok !== undefined ||
+    priorityOutputPerMtok !== undefined ||
+    priorityCacheReadPerMtok !== undefined ||
+    priorityInputTokenPriceBands
+      ? {
+          priority: {
+            ...(priorityInputPerMtok !== undefined ? { inputPerMtok: priorityInputPerMtok } : {}),
+            ...(priorityOutputPerMtok !== undefined
+              ? { outputPerMtok: priorityOutputPerMtok }
+              : {}),
+            ...(priorityCacheReadPerMtok !== undefined
+              ? { cacheReadPerMtok: priorityCacheReadPerMtok }
+              : {}),
+            ...(priorityInputTokenPriceBands
+              ? { inputTokenPriceBands: priorityInputTokenPriceBands }
+              : {}),
+          },
+        }
+      : {}),
     ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(costDiscount !== undefined ? { costDiscount } : {}),
     ...(!declaredCurrency && fallbackIsInferred ? { currencyInferred: true } : {}),
@@ -339,11 +391,12 @@ export function subscriptionDirectPriceQuote(
   agent?: AgentKind,
   at?: string | Date,
 ): ModelPriceQuote | undefined {
+  const routedId = exclusiveXaiCatalogModelId(modelId) ?? modelId;
   let quote: ModelPriceQuote | undefined;
-  if (modelId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('openai', modelId, registry, { agent, at });
-  } else if (modelId.startsWith(XAI_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('xai', modelId, registry, { agent, at });
+  if (routedId.startsWith(CHATGPT_MODEL_PREFIX)) {
+    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at });
+  } else if (routedId.startsWith(XAI_MODEL_PREFIX)) {
+    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at });
   }
   return quote
     ? {

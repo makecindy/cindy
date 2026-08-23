@@ -50,7 +50,7 @@ describe('resolveAgentCredentialMode', () => {
     expect(resolveAgentCredentialMode({
       agentKind: 'codex',
       providerId: 'custom-openai-compatible',
-      model: 'custom-model',
+      model: 'codex/gpt-5.6-luna',
     })).toBe('provider-oauth');
   });
 

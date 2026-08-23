@@ -67,11 +67,13 @@ const TEST_MODELS: ModelDescriptor[] = [
   },
 ];
 
-function createNoopLogger(): Logger {
+function createNoopLogger(onInfo?: (message: string) => void): Logger {
   const logger: Logger = {
     trace() {},
     debug() {},
-    info() {},
+    info(message: string) {
+      onInfo?.(message);
+    },
     warn() {},
     error() {},
     fatal() {},
@@ -82,7 +84,10 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createDeps(runtimeConfig: AgentDeps['runtimeConfig'] = {}): AgentDeps {
+function createDeps(
+  runtimeConfig: AgentDeps['runtimeConfig'] = {},
+  onInfo?: (message: string) => void,
+): AgentDeps {
   const auth: AuthAdapter = {
     async getState() {
       return { authenticated: true };
@@ -100,7 +105,7 @@ function createDeps(runtimeConfig: AgentDeps['runtimeConfig'] = {}): AgentDeps {
     auth,
     runtimeConfig,
     binaryPath: process.execPath,
-    logger: createNoopLogger(),
+    logger: createNoopLogger(onInfo),
   };
 }
 
@@ -175,6 +180,7 @@ function createFakeQuery(stream = createControlledStream()) {
     setModel: vi.fn(async () => assertWritable()),
     applyFlagSettings: vi.fn(async () => assertWritable()),
     interrupt: vi.fn(async () => {}),
+    send: vi.fn(async () => {}),
     close: vi.fn(() => {
       closed = true;
     }),
@@ -194,7 +200,13 @@ async function makeTempDir(): Promise<string> {
 }
 
 async function startRewindableSession(
-  options: { autoCompactThresholdPct?: number; idleTimeoutMs?: number } = {},
+  options: {
+    autoCompactThresholdPct?: number;
+    idleTimeoutMs?: number;
+    remoteHostId?: string;
+    model?: string;
+    shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
+  } = {},
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -204,19 +216,37 @@ async function startRewindableSession(
 
   const firstQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(firstQuery);
+  const remoteStartParams: Array<Record<string, unknown>> = [];
+  const remoteCcQueryFactory = options.remoteHostId
+    ? (async (opts: { startParams: Record<string, unknown> }) => {
+        remoteStartParams.push(opts.startParams);
+        return firstQuery as never;
+      })
+    : undefined;
+  const infoCalls: string[] = [];
 
   const agent = new ClaudeCodeAgent({
-    ...createDeps({ autoCompactThresholdPct: options.autoCompactThresholdPct }),
+    ...createDeps(
+      {
+        autoCompactThresholdPct: options.autoCompactThresholdPct,
+        shouldHandoffAfterContextAssessment: options.shouldHandoffAfterContextAssessment,
+      },
+      (message) => {
+        infoCalls.push(message);
+      },
+    ),
     capabilityAdditions: { availableModels: TEST_MODELS },
+    ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
-    model: 'claude-opus-4-6',
+    model: options.model ?? 'claude-opus-4-6',
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery };
+  return { agent, handle, firstQuery, infoCalls, remoteStartParams };
 }
 
 afterEach(async () => {
@@ -250,7 +280,128 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     ]);
 
     await handle.setModel?.('claude-sonnet-5');
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
     expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+    expect(firstQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      firstQuery.setModel.mock.invocationCallOrder[0],
+    );
+
+    await handle.close();
+  });
+
+  it('widens the live Claude allowlist before switching to a later-loaded gateway model', async () => {
+    const { handle, firstQuery, agent } = await startRewindableSession();
+
+    agent.capabilities.availableModels.push({
+      id: 'x-ai/grok-4.6',
+      displayName: 'Grok 4.6',
+      contextWindow: 256_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+
+    await handle.setModel?.('x-ai/grok-4.6');
+
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5', 'x-ai/grok-4.6'],
+    });
+    expect(firstQuery.setModel).toHaveBeenCalledWith('x-ai/grok-4.6');
+    expect(firstQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      firstQuery.setModel.mock.invocationCallOrder[0],
+    );
+    expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
+  it('uses the session provider route when the same model id has different windows', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
+    const workingDir = await makeTempDir();
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const resolveVerifiedContextWindow = vi.fn((providerId: string | null | undefined, modelId: string) => {
+      if (modelId !== 'shared-model') return null;
+      if (providerId === 'xd') return 256_000;
+      return 1_000_000;
+    });
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: {
+        availableModels: [
+          ...TEST_MODELS,
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 1_000_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolveVerifiedContextWindow,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-window',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+
+    await handle.setModel?.('shared-model', { providerId: 'xd' });
+
+    expect(resolveVerifiedContextWindow).toHaveBeenCalledWith('xd', 'shared-model');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
+  it('does not apply the flattened catalog window when the host resolver returns null', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
+    const workingDir = await makeTempDir();
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const resolveVerifiedContextWindow = vi.fn(() => null);
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: {
+        availableModels: [
+          ...TEST_MODELS,
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 256_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolveVerifiedContextWindow,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-unverified-window',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(0);
+
+    await handle.setModel?.('shared-model', { providerId: 'xd' });
+
+    expect(resolveVerifiedContextWindow).toHaveBeenCalledWith('xd', 'shared-model');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(0);
 
     await handle.close();
   });
@@ -268,11 +419,11 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
   it('falls back to the model-supported xhigh when an older runtime rejects max', async () => {
     const { handle, firstQuery } = await startRewindableSession();
+
+    await handle.setModel?.('claude-sonnet-5');
     firstQuery.applyFlagSettings
       .mockRejectedValueOnce(new Error('invalid effortLevel: max'))
       .mockResolvedValueOnce(undefined);
-
-    await handle.setModel?.('claude-sonnet-5');
     await expect(handle.setEffort?.('max')).resolves.toBeUndefined();
 
     expect(firstQuery.applyFlagSettings.mock.calls.slice(-2)).toEqual([
@@ -423,7 +574,13 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as { options: Record<string, unknown> };
     expect(rebuildArgs.options.model).toBe('claude-opus-4-6[1m]');
     // sonnet-5 fixture 窗口 500K < 1M → wire 串不带 [1m](窗口驱动规则)。
+    expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
     expect(secondQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+    expect(secondQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      secondQuery.setModel.mock.invocationCallOrder[0],
+    );
 
     await handle.close();
   });
@@ -529,6 +686,412 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
     // 修复前这里会立即注入 /compact 到即将被重建丢弃的 inputQueue, 并把 turnInFlight 置 true。
     expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.close();
+  });
+
+  it('injects host auto-compact at 75% even when the model-switch handoff callback would fire', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      autoCompactThresholdPct: 50,
+      shouldHandoffAfterContextAssessment: () => true,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 400_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+      'auto-compact triggered',
+    ]);
+
+    await handle.close();
+  });
+
+  it('injects host auto-compact at the 0.1.57 Grok occupancy that is below a full window', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+    expect(handle.getUsageSnapshot().contextTokens).toBe(437_712);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('does not inject host auto-compact when occupancy is already full', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
+
+    await handle.close();
+  });
+
+  it('keeps idle auto-compact on remote sessions because overflow rollover is local-only', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      autoCompactThresholdPct: 50,
+      remoteHostId: 'remote-1',
+      shouldHandoffAfterContextAssessment: () => true,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 400_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+      'auto-compact triggered',
+    ]);
+
+    await handle.close();
+  });
+
+  it('still injects host auto-compact on a full remote session because rollover is local-only', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+      remoteHostId: 'remote-1',
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('latches rollover when idle host auto-compact returns an empty summary', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: summarization produced empty response',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.getUsageSnapshot().needsRollover).toBe(true);
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    firstQuery.stream.emit({
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { input_tokens: 438_000, output_tokens: 0 } },
+    });
+    await Promise.resolve();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.close();
+  });
+
+  it('retries idle host auto-compact after a transient compact failure', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: 401 unauthorized',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  async function waitForIdleHostAutoCompact(
+    handle: Awaited<ReturnType<typeof startRewindableSession>>['handle'],
+    firstQuery: ReturnType<typeof createFakeQuery>,
+    infoCalls: string[],
+  ): Promise<void> {
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+  }
+
+  it('does not re-inject idle host auto-compact after abort until the next user turn', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.abort();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('does not re-inject idle host auto-compact after the upstream idle watchdog', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+      idleTimeoutMs: 20,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+    await vi.waitFor(() => {
+      expect(firstQuery.interrupt).toHaveBeenCalled();
+    });
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('clears idle host auto-compact fired after requestGracefulStop', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.requestGracefulStop?.();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
 
     await handle.close();
   });

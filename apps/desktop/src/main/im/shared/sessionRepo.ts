@@ -20,6 +20,7 @@ import { getDbClient } from '../../localDb/client/current';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
+import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
 import { createLogger, maskPath } from '../../logger';
 import { setSessionProvider } from '../../maker-host/session-provider-store';
 import {
@@ -27,7 +28,7 @@ import {
   resolveImSessionDefaults,
   type ResolvedImSessionDefaults,
 } from '../defaultSessionSettings';
-import { broadcastSessionCreated } from './sessionBroadcast';
+import { broadcastSessionCreated, broadcastSessionPatched } from './sessionBroadcast';
 import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
@@ -248,6 +249,11 @@ export function createImSessionRepo(
           // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
           // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
           // 写的话 sidebar 会按旧活跃时间排序/分组,直到下次整页刷新。
+          if (row.status === 'deleted') {
+            // Durable Subagent 墓碑与进行中的删除清理必须在翻回 active 之前撤掉，
+            // 否则确定性 id 复活后每次 spawn 仍判父任务已删除。
+            await retireDeletedPiSubagentState(id);
+          }
           const now = Date.now();
           await db
             .update(sessions)
@@ -332,9 +338,10 @@ export function createImSessionRepo(
         workingDir,
         await resolveImSessionDefaults(config, providerSnapshot, ns.source),
       );
-      // 渠道可按 userId 收紧新会话权限档(telegram guest lane → 只读探索)。
-      const tightened = ns.permissionModeFor?.(userId) ?? null;
-      if (tightened) row.permissionMode = tightened;
+      // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
+      // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
+      const overridden = ns.permissionModeFor?.(userId) ?? null;
+      if (overridden) row.permissionMode = overridden;
       return row;
     },
 
@@ -352,6 +359,15 @@ export function createImSessionRepo(
       const row = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
       const now = Date.now();
       const persisted = await withSessionRouteLock(row.id, async () => {
+        const priorRows = await db
+          .select({ status: sessions.status })
+          .from(sessions)
+          .where(eq(sessions.id, row.id))
+          .limit(1);
+        if (priorRows[0]?.status === 'deleted') {
+          await retireDeletedPiSubagentState(row.id);
+        }
+        const isFreshInsert = priorRows.length === 0;
         await db
           .insert(sessions)
           .values({
@@ -395,19 +411,20 @@ export function createImSessionRepo(
           .from(sessions)
           .where(eq(sessions.id, row.id))
           .limit(1);
-        return persistedRows[0];
+        return { row: persistedRows[0], isFreshInsert };
       });
-      const result: ImSessionRow = persisted
+      const persistedRow = persisted?.row;
+      const result: ImSessionRow = persistedRow
         ? {
-            id: persisted.id,
-            agentKind: toCoreAgentKind(persisted.agentKind),
-            workingDir: persisted.workingDir ?? row.workingDir,
-            model: persisted.model,
-            effort: persisted.effort,
-            permissionMode: persisted.permissionMode,
-            fastMode: persisted.fastMode,
-            sdkSessionId: persisted.sdkSessionId,
-            providerId: persisted.providerId ?? null,
+            id: persistedRow.id,
+            agentKind: toCoreAgentKind(persistedRow.agentKind),
+            workingDir: persistedRow.workingDir ?? row.workingDir,
+            model: persistedRow.model,
+            effort: persistedRow.effort,
+            permissionMode: persistedRow.permissionMode,
+            fastMode: persistedRow.fastMode,
+            sdkSessionId: persistedRow.sdkSessionId,
+            providerId: persistedRow.providerId ?? null,
           }
         : row;
       log.info(
@@ -417,6 +434,25 @@ export function createImSessionRepo(
       );
       // 通知 renderer sidebar / device-link 控制端有新会话行,否则要手动刷新才出现
       broadcastSessionCreated(result.id);
+      // 渠道可异步解析正式标题(飞书群/话题 lane → 拉群名拼 [飞书·群/话题] {群名}),
+      // 只对**新建行**生效 — 复活行保留自己的历史标题(首条消息 oneshot 会把
+      // 话题会话升级成 [飞书·群名·简介] 格式, 不能回刷)。失败/无结果保持
+      // defaultTitle, 不阻塞建行。
+      if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
+        try {
+          const resolved = await ns.resolveSessionTitle(userId, scopeKey);
+          if (resolved) {
+            await db
+              .update(sessions)
+              .set({ title: resolved })
+              .where(eq(sessions.id, result.id));
+            broadcastSessionPatched(result.id, { title: resolved });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`resolveSessionTitle failed for ${ns.source} session (non-fatal): ${msg}`);
+        }
+      }
       return result;
     },
   };

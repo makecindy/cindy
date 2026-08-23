@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-05T00:00:00.000Z",
+  "updatedAt": "2026-08-17T00:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -142,6 +142,7 @@
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "high",
       "sortOrder": 17,
       "routes": [
         {
@@ -857,11 +858,44 @@
       ]
     },
     {
+      "id": "xai/grok-4.6",
+      "name": "Grok 4.6",
+      "status": "active",
+      "group": "grok",
+      "description": "xAI Grok 4.6 旗舰,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
+      "contextWindow": 500000,
+      "efforts": ["low", "medium", "high"],
+      "defaultEffort": "high",
+      "sortOrder": 48,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-4.6",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 6,
+              "cacheReadPerMtok": 0.5,
+              "effectiveFrom": "2026-08-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-17"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "xai/grok-4.5",
       "name": "Grok 4.5",
       "status": "active",
       "group": "grok",
-      "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
+      "description": "xAI Grok 4.5,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
       "contextWindow": 500000,
       "efforts": ["low", "medium", "high"],
       "defaultEffort": "high",
@@ -1607,6 +1641,7 @@
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "high",
       "sortOrder": 101,
       "defaultEnabled": false,
       "routes": [

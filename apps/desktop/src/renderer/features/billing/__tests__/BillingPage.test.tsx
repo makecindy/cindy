@@ -1774,6 +1774,7 @@ describe('BillingPage plan change', () => {
     ),
     listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
     cancelCurrentSubscription: vi.fn(),
+    resumeCurrentSubscription: vi.fn(),
     quotePlanChange: vi.fn(),
     confirmPlanChange: vi.fn(),
     refreshPlanChange: vi.fn(),
@@ -2527,6 +2528,93 @@ describe('BillingPage plan change', () => {
     fireEvent.click(screen.getByText('stripe').closest('button')!);
     expect(screen.getByText('billing.currentSubscription.purchaseBlocked')).toBeTruthy();
     expect(screen.queryByText(/purchaseBlockedUntilPeriodEnd/)).toBeNull();
+  });
+
+  it('shows the resume action only for resumable canceled subscriptions', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: { ...activeSubscription(null, 'MONTH', 'ACTIVE', true), resumable: true },
+    }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    await openSubscriptionManagementMenu();
+    expect(screen.getByText('billing.settings.subscriptionCard.resumeAction')).toBeTruthy();
+    expect(screen.queryByText('billing.settings.subscriptionCard.cancelAction')).toBeNull();
+  });
+
+  it('confirms a provider-neutral resume and replaces the canceled subscription projection', async () => {
+    const billing = billingMocks();
+    const canceled = {
+      ...activeSubscription(null, 'MONTH', 'ACTIVE', true),
+      resumable: true,
+    };
+    billing.getCurrentSubscription = vi.fn(async () => ({ subscription: canceled }));
+    billing.resumeCurrentSubscription.mockResolvedValue({
+      ...canceled,
+      cancelAtPeriodEnd: false,
+      resumable: false,
+    });
+    install(billing);
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.resumeAction');
+
+    await waitFor(() => expect(billing.resumeCurrentSubscription).toHaveBeenCalledWith());
+    expect(uiMocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'billing.settings.subscriptionCard.resumeConfirmTitle',
+        confirmText: 'billing.settings.subscriptionCard.resumeConfirmAction',
+      }),
+    );
+    expect(uiMocks.toastSuccess).toHaveBeenCalledWith(
+      'billing.settings.subscriptionCard.resumeSuccess',
+    );
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'billing.settings.subscriptionCard.resumeAction' }),
+    ).toBeNull();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.cancelAction' }),
+    ).toBeTruthy();
+  });
+
+  it('explains when the server no longer allows subscription resume', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: { ...activeSubscription(null, 'MONTH', 'ACTIVE', true), resumable: true },
+    }));
+    billing.resumeCurrentSubscription.mockRejectedValue(
+      new Error('[RESUME_NOT_AVAILABLE] subscription is not resumable'),
+    );
+    install(billing);
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.resumeAction');
+
+    await waitFor(() =>
+      expect(uiMocks.toastError).toHaveBeenCalledWith(
+        'billing.settings.subscriptionCard.resumeNotAvailable',
+      ),
+    );
+    await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2));
+  });
+
+  it('hides the resume action when the server marks the subscription not resumable', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: { ...activeSubscription(null, 'MONTH', 'ACTIVE', true), resumable: false },
+    }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    await openSubscriptionManagementMenu();
+    expect(screen.queryByText('billing.settings.subscriptionCard.resumeAction')).toBeNull();
+    expect(screen.queryByText('billing.settings.subscriptionCard.cancelAction')).toBeNull();
   });
 
   it('explains a rejected quote and returns to the candidate list', async () => {

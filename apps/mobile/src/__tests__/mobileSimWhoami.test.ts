@@ -2,10 +2,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   bootedSimulatorLinesForTarget,
+  classifySimMetroListener,
+  extractSimJsonArgs,
   extractSimMetroPortArgs,
+  extractSimTakeoverArgs,
   extractSimWhoamiUdidArgs,
   getSimulatorAppContainer,
   resolveMobileSimulatorBundleId,
+  resolveSimMetroHandoff,
 } from '../../scripts/lib/sim-whoami.mjs';
 
 const SIMULATOR_UDID = 'A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6';
@@ -31,6 +35,135 @@ describe('mobile:sim:whoami Metro port', () => {
     expect(() => extractSimMetroPortArgs(['--port'])).toThrow(/端口无效/);
     expect(() => extractSimMetroPortArgs(['--port', '0'])).toThrow(/端口无效/);
     expect(() => extractSimMetroPortArgs(['--port=8082', '-p', '8083'])).toThrow(/只能传一次/);
+  });
+});
+
+describe('mobile:sim takeover and JSON arguments', () => {
+  it('extracts one explicit takeover flag', () => {
+    expect(extractSimTakeoverArgs(['--takeover'])).toEqual({
+      takeover: true,
+      passthrough: [],
+    });
+    expect(extractSimTakeoverArgs([])).toEqual({ takeover: false, passthrough: [] });
+    expect(() => extractSimTakeoverArgs(['--takeover', '--takeover'])).toThrow(/只能传一次/);
+  });
+
+  it('extracts one JSON output flag', () => {
+    expect(extractSimJsonArgs(['--json', '--port=8082'])).toEqual({
+      json: true,
+      passthrough: ['--port=8082'],
+    });
+    expect(() => extractSimJsonArgs(['--json', '--json'])).toThrow(/只能传一次/);
+  });
+
+  it('rejects non-Cindy paths and missing source identities', () => {
+    expect(classifySimMetroListener({
+      cwd: '/other/project',
+      source: 'branch@commit',
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: null,
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: 'branch@commit',
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile/',
+      source: 'branch@commit',
+      targetWorktree: '/repo/',
+    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: true });
+  });
+});
+
+describe('mobile:sim Metro handoff', () => {
+  const foreign = {
+    confirmed: true,
+    worktree: '/other',
+    isTarget: false,
+  };
+  const target = {
+    confirmed: true,
+    worktree: '/repo',
+    isTarget: true,
+  };
+
+  it('lets --takeover stop a foreign Metro even if that worktree is dirty', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/other/apps/mobile',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: 'there@bbb',
+      listener: foreign,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'occupied-foreign' });
+  });
+
+  it('lets --takeover stop an orphan Metro whose worktree is gone', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/gone/apps/mobile',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: 'gone@ccc',
+      listener: foreign,
+      listenerWorktreeExists: false,
+    })).toMatchObject({ action: 'restart', code: 'occupied-orphan' });
+  });
+
+  it('refuses a dirty or orphan foreign Metro without --takeover', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/other/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'there@bbb',
+      listener: foreign,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'occupied-foreign' });
+    expect(resolveSimMetroHandoff({
+      cwd: '/gone/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'gone@ccc',
+      listener: foreign,
+      listenerWorktreeExists: false,
+    })).toMatchObject({ action: 'refuse', code: 'occupied-orphan' });
+  });
+
+  it('keeps unknown occupants fail-closed even with --takeover', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/random',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: null,
+      listener: { confirmed: false, worktree: null },
+    })).toMatchObject({ action: 'refuse', code: 'occupied-unknown' });
+  });
+
+  it('reuses a fresh Metro on this worktree and restarts a stale one only with --takeover', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/repo/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'here@aaa',
+      listener: target,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'reuse', code: 'target-fresh' });
+    expect(resolveSimMetroHandoff({
+      cwd: '/repo/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'here@old',
+      listener: target,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-stale' });
+    expect(resolveSimMetroHandoff({
+      cwd: '/repo/apps/mobile',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: 'here@old',
+      listener: target,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-stale' });
   });
 });
 

@@ -18,6 +18,7 @@ const facts: PluginMarketPackageReviewFacts = {
   packageSha256: 'a'.repeat(64),
   installedBaseline: null,
   sourceType: 'server',
+  builtinOauthClientChanged: false,
 };
 const ownerStamp = { dataOwnerId: 'owner-a', ownerGeneration: 7 };
 

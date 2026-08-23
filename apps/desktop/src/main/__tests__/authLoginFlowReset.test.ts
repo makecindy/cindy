@@ -63,6 +63,10 @@ describe('auth login-flow reset', () => {
     expect(body).toContain("type: 'realm-switch-required'");
     expect(body).toContain("type: 'discovery-loaded'");
     expect(body).toContain("email: ''");
+    // 唯一 SSO 不在 main 里套 start-browser：否则 renderer 要等整段浏览器
+    // 授权结束才拿得到下一步，确认框会卡住。waiting 投影归 renderer。
+    expect(body).not.toContain('soleAutoStartSsoMethod');
+    expect(body).not.toContain("type: 'start-browser'");
 
     // 跨区连接只有 confirm action 才写入 start-browser 白名单；弹窗阶段不能
     // 通过伪造 connectionId 直接跳过确认。
@@ -73,6 +77,8 @@ describe('auth login-flow reset', () => {
     );
     expect(confirmBody).toContain('discoveredMethods = confirmation.methods;');
     expect(confirmBody).toContain("type: 'discovery-loaded'");
+    expect(confirmBody).not.toContain('soleAutoStartSsoMethod');
+    expect(confirmBody).not.toContain("type: 'start-browser'");
   });
 
   it('clears stale organization realm state before personal login and a new discovery', () => {
@@ -252,7 +258,7 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
-    expect(refreshBody).toContain('previousUserId !== currentUser.id || authRealmChanged');
+    expect(refreshBody).toContain('previousUserId !== nextUser.id || authRealmChanged');
     expect(refreshBody).toContain('if (authRealmChanged) {\n        notifyAuthListeners();');
 
     expect(deviceLinkSource).toContain('restartDeviceLinkForAuthRealmChange();');
@@ -266,13 +272,19 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function expireRuntimeAuth(');
     const helperEnd = source.indexOf('\n}\n\n// ── Public API', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('beginAppSessionBoundary()');
-    expect(helperBody).toContain('notifyRendererAuthBoundaryPending();');
     expect(helperBody).toContain('clearAuth({ notify: false,');
-    expect(helperBody).toContain('await accountSwitchTeardown');
-    expect(helperBody).toContain('closeLocalDb();');
-    expect(helperBody).toContain('notifyAuthListeners();');
+    expect(helperBody).toContain('await withAccountFreeOwnerCommit({');
+    expect(helperBody).toContain('authAlreadyCleared: true');
     expect(helperBody).toContain('notifySessionExpired(reason);');
+
+    const ownerCommitStart = source.indexOf('async function withAccountFreeOwnerCommit(');
+    const ownerCommitEnd = source.indexOf('\n}\n\nasync function withCloudOwnerCommit(', ownerCommitStart);
+    const ownerCommitBody = source.slice(ownerCommitStart, ownerCommitEnd);
+    expect(ownerCommitBody).toContain('beginAppSessionBoundary()');
+    expect(ownerCommitBody).toContain('notifyRendererAuthBoundaryPending();');
+    expect(ownerCommitBody).toContain('await accountSwitchTeardown');
+    expect(ownerCommitBody).toContain('await authSessionTeardown(opts.reason);');
+    expect(ownerCommitBody).toContain('notifyAuthListeners();');
 
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
@@ -286,15 +298,35 @@ describe('auth login-flow reset', () => {
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {
     expect(source).not.toContain('canaryFlagStore.sync(false)');
     expect(source.match(/scheduleCanaryFlagSync\(\{/g)).toHaveLength(3);
+    expect(source.match(/scheduleXdOrgBetaDefault\(\{/g)).toHaveLength(3);
+    expect(source.match(/scheduleNonXdOrgBetaDefault\(\{/g)).toHaveLength(1);
     expect(source).toContain("getClientEndpoint('oauthBrokerApiBaseUrl')");
     expect(source).toContain("apiFetch('/api/user/feature-flags'");
 
     const syncStart = source.indexOf('function scheduleCanaryFlagSync(');
-    const syncEnd = source.indexOf('\n}\n\n/**\n * 冷启动流程的进程内去重', syncStart);
+    const syncEnd = source.indexOf(
+      '\n}\n\n/**\n * 登录态落地后为 xd 组织补一次设备级 beta 默认值',
+      syncStart,
+    );
     expect(syncEnd).toBeGreaterThan(syncStart);
     const syncBody = source.slice(syncStart, syncEnd);
     expect(syncBody).toContain("if (outcome.kind === 'synced')");
     expect(syncBody).toContain('notifyRenderer();');
+
+    const betaStart = source.indexOf('function scheduleXdOrgBetaDefault(');
+    const betaEnd = source.indexOf('function scheduleNonXdOrgBetaDefault(', betaStart);
+    expect(betaEnd).toBeGreaterThan(betaStart);
+    const betaBody = source.slice(betaStart, betaEnd);
+    expect(betaBody).toContain('if (isPassiveSharedUserDataInstance()) return;');
+    expect(betaBody).toContain('decodeAccessTokenOrgSlug(accessToken)');
+    expect(betaBody).not.toContain('shouldAttemptOrgBetaDefault');
+    const nonXdStart = source.indexOf('function scheduleNonXdOrgBetaDefault(');
+    const nonXdEnd = source.indexOf('\n}\n\n/**\n * 冷启动流程的进程内去重', nonXdStart);
+    const nonXdBody = source.slice(nonXdStart, nonXdEnd);
+    expect(nonXdBody).toContain('shouldAttemptOrgBetaDefault');
+    expect(betaBody).toContain('enableUncustomizedBetaChannel');
+    expect(betaBody).toContain('authStateEpoch === input.expectedAuthEpoch');
+    expect(source).not.toContain('relaunchForChannelChange');
 
     const clearIntegrationsStart = source.indexOf('async function clearPerAccountIntegrations(');
     const clearIntegrationsEnd = source.indexOf('\n}', clearIntegrationsStart);

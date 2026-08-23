@@ -112,6 +112,13 @@ function oauthManifest(clientId: string): GhostManifest {
   };
 }
 
+function oauthManifestWithoutBuiltinClient(): GhostManifest {
+  const manifest = oauthManifest('placeholder');
+  const secret = manifest.network?.secrets?.[0];
+  if (secret?.source === 'oauth' && secret.oauth) delete secret.oauth.clientId;
+  return manifest;
+}
+
 describe('插件 OAuth clientId 迁移', () => {
   it('仅内置 clientId 变化时标记迁移过期，保留且不再消费旧 refresh token', async () => {
     const vault = memoryVault({
@@ -131,10 +138,7 @@ describe('插件 OAuth clientId 迁移', () => {
     });
 
     expect(
-      mgr.expireAccountsForChangedClients(
-        oauthManifest('old-client'),
-        oauthManifest('new-client'),
-      ),
+      mgr.expireAccountsForChangedClients(oauthManifest('old-client'), oauthManifest('new-client')),
     ).toBe(1);
     expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
     expect(mgr.clientMigrationExpiredAccountCount(GHOST, KEY)).toBe(1);
@@ -193,6 +197,275 @@ describe('插件 OAuth clientId 迁移', () => {
     expect(customized.clientMigrationExpiredAccountCount(GHOST, KEY)).toBe(0);
   });
 
+  it('prepare 延迟通知，rollback 恢复账号，commit 才发布过期状态', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [{ id: 'acc-1', label: 'a@b.com', status: 'connected', createdAt: 1 }],
+      }),
+    });
+    const onAccountStatusChanged = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      onAccountStatusChanged,
+    });
+
+    const rolledBack = mgr.prepareAccountsForChangedClients(
+      oauthManifest('old-client'),
+      oauthManifest('new-client'),
+    );
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+    expect(onAccountStatusChanged).not.toHaveBeenCalled();
+    rolledBack.rollback();
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('connected');
+    expect(onAccountStatusChanged).not.toHaveBeenCalled();
+
+    const committed = mgr.prepareAccountsForChangedClients(
+      oauthManifest('old-client'),
+      oauthManifest('new-client'),
+    );
+    committed.commit();
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+    expect(onAccountStatusChanged).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      status: 'expired',
+    });
+  });
+
+  it('rollback 不覆盖并发重连写入', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [{ id: 'acc-1', label: 'a@b.com', status: 'connected', createdAt: 1 }],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+    const migration = mgr.prepareAccountsForChangedClients(
+      oauthManifest('old-client'),
+      oauthManifest('new-client'),
+    );
+    const concurrent = JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}') as {
+      accounts: Array<Record<string, unknown>>;
+    };
+    concurrent.accounts[0].status = 'connected';
+    delete concurrent.accounts[0].expiredReason;
+    concurrent.accounts[0].displayLabel = 'reconnected';
+    vault.store(GHOST, `${KEY}-accounts`, JSON.stringify(concurrent));
+
+    migration.rollback();
+    expect(JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts[0]).toMatchObject({
+      status: 'connected',
+      displayLabel: 'reconnected',
+    });
+  });
+
+  it('启动对账只恢复已回滚到签发 client 的迁移账号', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@b.com',
+            status: 'expired',
+            expiredReason: 'oauth_client_changed',
+            expiredFromClientId: 'old-client',
+            expiredForClientId: 'new-client',
+            createdAt: 1,
+          },
+        ],
+      }),
+    });
+    const onAccountStatusChanged = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      onAccountStatusChanged,
+    });
+
+    expect(mgr.reconcileAccountsForInstalledManifest(oauthManifest('new-client'))).toBe(0);
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+    expect(mgr.reconcileAccountsForInstalledManifest(oauthManifest('third-client'))).toBe(0);
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+    expect(mgr.reconcileAccountsForInstalledManifest(oauthManifest('old-client'))).toBe(1);
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('connected');
+    expect(onAccountStatusChanged).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      status: 'connected',
+    });
+  });
+
+  it('reports a retry when crash recovery cannot persist the restored account state', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@b.com',
+            status: 'expired',
+            expiredReason: 'oauth_client_changed',
+            expiredFromClientId: 'old-client',
+            expiredForClientId: 'new-client',
+            createdAt: 1,
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault: { ...vault, store: () => false },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.reconcileAccountsForInstalledManifestWithResult(oauthManifest('old-client')))
+      .toEqual({ restored: 0, retryPending: true });
+  });
+
+  it('reports a retry when crash recovery cannot strictly read the account manifest', () => {
+    const vault = memoryVault();
+    const mgr = new GhostOauthAccountManager({
+      vault: {
+        ...vault,
+        readStrict: () => {
+          throw new Error('keychain temporarily unavailable');
+        },
+      },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.reconcileAccountsForInstalledManifestWithResult(oauthManifest('old-client')))
+      .toEqual({ restored: 0, retryPending: true });
+  });
+
+  it('插件切回签发 client 时只在 commit 后复活旧 token，不误复活新 client 账号', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'old-account',
+        accounts: [
+          {
+            id: 'old-account',
+            label: 'old@b.com',
+            status: 'expired',
+            expiredReason: 'oauth_client_changed',
+            expiredFromClientId: 'old-client',
+            expiredForClientId: 'new-client',
+            createdAt: 1,
+          },
+          { id: 'new-account', label: 'new@b.com', status: 'connected', createdAt: 2 },
+        ],
+      }),
+    });
+    const onAccountStatusChanged = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      onAccountStatusChanged,
+    });
+
+    const migration = mgr.prepareAccountsForChangedClients(
+      oauthManifest('new-client'),
+      oauthManifest('old-client'),
+    );
+    const preparedAccounts = mgr.listAccounts(GHOST, KEY);
+    expect(preparedAccounts.find((account) => account.id === 'old-account')?.status).toBe(
+      'expired',
+    );
+    expect(preparedAccounts.find((account) => account.id === 'new-account')?.status).toBe(
+      'expired',
+    );
+    migration.commit();
+    const committedAccounts = mgr.listAccounts(GHOST, KEY);
+    expect(committedAccounts.find((account) => account.id === 'old-account')?.status).toBe(
+      'connected',
+    );
+    expect(committedAccounts.find((account) => account.id === 'new-account')?.status).toBe(
+      'expired',
+    );
+    expect(onAccountStatusChanged).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      status: 'connected',
+    });
+    expect(onAccountStatusChanged).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      status: 'expired',
+    });
+  });
+
+  it('A → 无内置 client → A 时在第二次 receipt commit 后无需重启即可恢复', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [{ id: 'acc-1', label: 'a@b.com', status: 'connected', createdAt: 1 }],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    const removed = mgr.prepareAccountsForChangedClients(
+      oauthManifest('client-a'),
+      oauthManifestWithoutBuiltinClient(),
+    );
+    removed.commit();
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+
+    const restored = mgr.prepareAccountsForChangedClients(
+      oauthManifestWithoutBuiltinClient(),
+      oauthManifest('client-a'),
+    );
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+    restored.commit();
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('connected');
+  });
+
+  it('切回签发 client 后 receipt 失败时 rollback 不会提前复活 token', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@b.com',
+            status: 'expired',
+            expiredReason: 'oauth_client_changed',
+            expiredFromClientId: 'old-client',
+            expiredForClientId: 'new-client',
+            createdAt: 1,
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    const migration = mgr.prepareAccountsForChangedClients(
+      oauthManifest('new-client'),
+      oauthManifest('old-client'),
+    );
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+    migration.rollback();
+    expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
+  });
+
   it('迁移状态写入失败时抛错并保留旧账号与 refresh token', () => {
     const vault = memoryVault({
       [`${KEY}-accounts`]: JSON.stringify({
@@ -211,10 +484,7 @@ describe('插件 OAuth clientId 迁移', () => {
     });
 
     expect(() =>
-      mgr.expireAccountsForChangedClients(
-        oauthManifest('old-client'),
-        oauthManifest('new-client'),
-      ),
+      mgr.expireAccountsForChangedClients(oauthManifest('old-client'), oauthManifest('new-client')),
     ).toThrow('Unable to persist OAuth client migration state');
     expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('connected');
     expect(vault.read(GHOST, `${KEY}-rt-acc-1`)).toBe('rt-old-client');

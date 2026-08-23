@@ -48,9 +48,9 @@ export function registerMakerSessionSendHandler<TResult>(
       const mainOwnedBoundaryStamp =
         boundaryStamp && typeof boundaryStamp === 'object' ? boundaryStamp : undefined;
       // sendOpts 来自 wire:剥掉只允许 main 写的字段(fromMobileClient 由 coordinator
-      // 从队列项透传,客户端不得自报 —— 直连路径的来源判据只能是 async context),然后
-      // 由 main 覆盖 clear token + generation。旧控制端不带 token 也因此获得同样的
-      // clear 竞态保护,而不是在最终 fence 缺 precondition 时放行。
+      // 从队列项透传；turnPermissionPolicy 只由 Main 的 IM dispatcher 构造),然后由
+      // main 覆盖 clear token + generation。旧控制端不带 token 也因此获得同样的 clear
+      // 竞态保护,而不是在最终 fence 缺 precondition 时放行。
       return await deps.sendToAgentAccepted(
         sessionId,
         message,

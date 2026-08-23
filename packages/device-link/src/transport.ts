@@ -17,6 +17,16 @@ export const DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT = 'reliable-transport-v1'
  */
 export const DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE = 'transport-timeout-close-v1';
 
+/**
+ * 声明本端会在真正处理 link-accept、安装对端可靠 stream 基线后，回一条带
+ * linkRequestId 的 transport ACK。被控端只有收到这条确认才恢复向该控制端
+ * drain pending，避免把「accept 已写进本地 WebSocket」误当成「对端已提交链路」。
+ *
+ * 能力是 append-only：任一端未声明时继续沿用 v1 的即时 ready 语义，保证新旧
+ * Desktop / Mobile 可以独立升级；relay 仍只路由普通 push，不需要服务端改动。
+ */
+export const DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM = 'reliable-link-confirm-v1';
+
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
 
@@ -51,7 +61,7 @@ export const TRANSPORT_MAX_RETRY_ATTEMPTS = 5;
  * 2026-08-08 线上单簇 213 条、单日 449 条，8-06 单簇 125 条，全部是这个形状。
  *
  * 这条路径原本有两道刹车，但都装在错的量上:
- *  - per-peer 制动（收到带 dst 的 DEVICE_OFFLINE → linkReady=false + 清重试定时器，
+ *  - per-peer 制动（收到带 dst 的 DEVICE_OFFLINE → 复位该 peer 收发方向 + 清重试定时器，
  *    #1187）是**异步**的:relay-error 要一个 RTT 才回来，那一趟早已全部上线路，它只
  *    拦得住下一轮；
  *  - 单趟中断（ws 容量抛 BACKPRESSURE → break，#2167）的阈值是 8MB buffered bytes，
@@ -67,8 +77,10 @@ export const TRANSPORT_MAX_RETRY_ATTEMPTS = 5;
  * 213 条 → 上限 8 条/趟）。它是**每趟**上限，不是窗口上限，不改变可靠交付语义:
  * 没发出去的消息仍在 pending 里，下一趟继续。
  *
- * **只作用于定时器驱动的趟次**:link 重建后的 replay 由收到对端 link-accept 触发，
- * 可达性刚被证明过，不受此限（见 client.replayPending）。
+ * **所有恢复发送共用这一预算**（定时重发、link 重建 replay、outbox / drain
+ * 经 sendPeerEnvelope 的首发）。对端刚 accept 只证明 inbound 到了，outbound
+ * 仍可能立刻 DEVICE_OFFLINE；再给 replay 无限额度会把同一批 pending 在反复
+ * open 之间倒很多遍。恢复态先按本预算探测，收到可靠 ACK 后再继续 drain。
  */
 export const TRANSPORT_RETRY_PASS_BUDGET = 8;
 /**
@@ -106,6 +118,8 @@ export interface ReliableTransportPayload {
 export interface TransportAckPayload {
   streamId: string;
   ackSeq: number;
+  /** 处理 link-accept 后回显其 request id；缺省表示普通累计 ACK / 旧客户端。 */
+  linkRequestId?: string;
 }
 
 export interface TransportSkipPayload {
@@ -310,6 +324,7 @@ export function makeTransportAck(
   dst: string,
   streamId: string,
   ackSeq: number,
+  linkRequestId?: string,
 ): Envelope {
   return {
     v: PROTOCOL_VERSION,
@@ -317,7 +332,11 @@ export function makeTransportAck(
     dst,
     payload: {
       channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
-      payload: { streamId, ackSeq } satisfies TransportAckPayload,
+      payload: {
+        streamId,
+        ackSeq,
+        ...(linkRequestId ? { linkRequestId } : {}),
+      } satisfies TransportAckPayload,
     },
   };
 }
@@ -328,13 +347,23 @@ export function parseTransportAck(env: Envelope): TransportAckPayload | null {
   const payload = env.payload.payload;
   const streamId = isRecord(payload) ? payload.streamId : undefined;
   const ackSeq = isRecord(payload) ? payload.ackSeq : undefined;
+  const linkRequestId = isRecord(payload) ? payload.linkRequestId : undefined;
   if (
     typeof streamId !== 'string' ||
     typeof ackSeq !== 'number' ||
     !Number.isSafeInteger(ackSeq) ||
-    ackSeq < 0
+    ackSeq < 0 ||
+    (linkRequestId !== undefined && (
+      typeof linkRequestId !== 'string'
+      || linkRequestId.length < 1
+      || linkRequestId.length > 256
+    ))
   ) {
     return null;
   }
-  return { streamId, ackSeq };
+  return {
+    streamId,
+    ackSeq,
+    ...(typeof linkRequestId === 'string' ? { linkRequestId } : {}),
+  };
 }

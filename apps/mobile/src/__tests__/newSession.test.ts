@@ -1437,8 +1437,10 @@ describe('new session model', () => {
       permissionMode: 'acceptEdits',
       fastMode: false,
       providerId: null,
+      firstMessage: '帮我排查登录失败',
     }, new Date('2026-06-16T10:00:00.000Z'))).toMatchObject({
       id: 's-new',
+      title: '帮我排查登录失败',
       workingDir: '/repo',
       workspaceKind: 'project',
       agentKind: 'cc',
@@ -1481,6 +1483,7 @@ describe('new session model', () => {
       providerId: 'deepseek',
     });
     expect(session.providerId).toBe('deepseek');
+    expect(session.title).toBe('New Maker');
     // 未绑定来源的草稿 → null(默认路由),与真实会话同形
     expect(sessionFromCreateResult({ sessionId: 's-n' }, {
       agentKind: 'claude-code',
@@ -1530,7 +1533,7 @@ describe('new session composer surface', () => {
     const createButtonEnd = newSource.indexOf('// 聚焦卡片形态的底部工具排', createButtonStart);
     const createButtonSource = newSource.slice(createButtonStart, createButtonEnd);
     const composerIconButtonStart = newSource.indexOf('composerIconButton: {');
-    const composerIconButtonEnd = newSource.indexOf('composerIconButtonActive:', composerIconButtonStart);
+    const composerIconButtonEnd = newSource.indexOf('composerCompactLeading:', composerIconButtonStart);
     const composerIconButtonStyle = newSource.slice(composerIconButtonStart, composerIconButtonEnd);
     const modelPillStart = newSource.indexOf('modelPill: {');
     const modelPillEnd = newSource.indexOf('modelPillText:', modelPillStart);
@@ -1595,7 +1598,34 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
     expect(newComposerSource).toContain('scrollEnabled={composerInputScrollEnabled}');
     expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
+    expect(newComposerSource).toContain('leading={renderComposerCompactLeading()}');
+    expect(newSource).toContain('const renderComposerCompactLeading = () => (');
+    expect(newSource).not.toContain('styles.composerCompactAttachmentSlot');
+    expect(newSource).toContain('styles.composerCompactAttachmentHit');
+    expect(newSource).not.toContain('styles.composerCompactAttachmentHitArea');
+    expect(newSource).toContain('pointerEvents="none"');
+    expect(newSource).toContain('testID="newSession.attachmentToggleButton"');
+    expect(newSource).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).toContain('minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).not.toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
+    // 左侧组包住 [+][权限][计划][模型],再接 spacer;右段 语音占位 → 创建。
+    const newToolbarStart = newSource.indexOf('const renderComposerToolbar = () => (');
+    const newToolbarEnd = newSource.indexOf('const renderComposerInputOverlay', newToolbarStart);
+    const newToolbarSource = newSource.slice(newToolbarStart, newToolbarEnd);
+    const newToolbarLeftGroupStart = newToolbarSource.indexOf('<ComposerToolbarLeftGroup testID="newSession.composerToolbarLeft">');
+    const newToolbarLeftGroupEnd = newToolbarSource.indexOf('</ComposerToolbarLeftGroup>');
+    const newToolbarModelIndex = newToolbarSource.indexOf('testID="newSession.modelIndicator"');
+    const newToolbarSpacerIndex = newToolbarSource.indexOf('<ComposerToolbarSpacer />');
+    const newToolbarVoiceSlotIndex = newToolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
+    expect(newToolbarLeftGroupStart).toBeGreaterThan(-1);
+    expect(newToolbarModelIndex).toBeGreaterThan(newToolbarLeftGroupStart);
+    expect(newToolbarLeftGroupEnd).toBeGreaterThan(newToolbarModelIndex);
+    expect(newToolbarSpacerIndex).toBeGreaterThan(newToolbarLeftGroupEnd);
+    expect(newToolbarVoiceSlotIndex).toBeGreaterThan(newToolbarSpacerIndex);
     expect(newSource).toContain('PaperPlaneIcon');
     expect(newSource).not.toContain('ArrowUp');
     expect(attachmentButtonSource).toContain('contextSheetOpen && styles.composerIconButtonActive');
@@ -1770,10 +1800,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
     expect(sessionSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
-    expect(sharedSource).toContain('export const MOBILE_COMPOSER_CONTROL_SIZE = 34;');
-    expect(sharedSource).toContain('export function resolveMobileComposerVoiceButtonPlacement');
+    expect(sharedSource).toContain('MOBILE_COMPOSER_CONTROL_SIZE,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonPlacement,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
-    expect(sharedSource).toContain('styles.voiceButtonAnchor,');
+    expect(sharedSource).not.toContain('styles.voiceButtonAnchor');
     expect(newSource).not.toContain('messageInput: {');
     expect(newSource).not.toContain('composerToolbar: {');
     expect(newSource).not.toContain('permissionIcon: {');
@@ -2318,6 +2349,18 @@ describe('submit guard catalog wiring (source locks)', () => {
     const lastCheck = settleSlice.lastIndexOf('!ensureDeviceAlive()) return;');
     expect(lastCheck).toBeGreaterThan(0);
     expect(settleSlice.slice(lastCheck)).not.toMatch(/await /);
+  });
+
+  it('goal settle 只登记本机预览,不把目标文案写成用户改名', () => {
+    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const settleSlice = goalSlice.slice(
+      goalSlice.indexOf('── settle 段'),
+      goalSlice.indexOf('router.replace({'),
+    );
+    expect(settleSlice).toContain('remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title)');
+    expect(settleSlice).not.toContain('persistRemoteGoalSessionTitle');
+    expect(settleSlice).not.toContain('patchSessionMeta');
+    expect(settleSlice).not.toContain('generateSessionTitle');
   });
 });
 

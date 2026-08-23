@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import {
-  resolveIOSSimulatorPluginAccess,
-  shouldEnforceIOSSimulatorShellPolicy,
-} from '../iosSimulatorPluginGate.js';
+import { resolveIOSSimulatorPluginAccess } from '../iosSimulatorPluginGate.js';
 
 function ghost(id: string, enabled: boolean, slots: string[] = ['ios-simulator']): InstalledGhost {
   return {
@@ -68,38 +65,5 @@ describe('iOS Simulator plugin Host gate', () => {
       allowed: false,
       errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
     });
-  });
-});
-
-describe('embedded Simulator shell guard scope', () => {
-  it('applies while the plugin grants access', () => {
-    expect(
-      shouldEnforceIOSSimulatorShellPolicy({
-        pluginAccessAllowed: true,
-        hostRuntimeActive: false,
-      }),
-    ).toBe(true);
-  });
-
-  it('stops blocking the user own Xcode tooling once the capability is gated off', () => {
-    // Without the plugin there is no embedded simulator to protect, and the
-    // denial would point at a cindy_ios_simulator tool the gate has removed.
-    expect(
-      shouldEnforceIOSSimulatorShellPolicy({
-        pluginAccessAllowed: false,
-        hostRuntimeActive: false,
-      }),
-    ).toBe(false);
-  });
-
-  it('keeps protecting a runtime this process already installed', () => {
-    // An instance booted while the plugin was enabled stays Cindy-owned after a
-    // disable, so a shell shutdown would race Cindy's own cleanup.
-    expect(
-      shouldEnforceIOSSimulatorShellPolicy({
-        pluginAccessAllowed: false,
-        hostRuntimeActive: true,
-      }),
-    ).toBe(true);
   });
 });

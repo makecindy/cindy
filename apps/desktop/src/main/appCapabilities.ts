@@ -37,18 +37,18 @@ export function deriveAppCapabilities(
 }
 
 export function getAppCapabilities(): AppCapabilities {
-  return deriveAppCapabilities(
-    getActiveAppSession().mode,
-    isAppSessionBoundaryPending(),
-  );
+  const session = getActiveAppSession();
+  return deriveAppCapabilities(session.mode, isAppSessionBoundaryPending());
 }
 
 export function requireAppCapability(
   capability: keyof AppCapabilities,
   message = 'This feature requires a Cindy account.',
 ): void {
-  if (getAppCapabilities()[capability]) return;
-  if (isAppSessionBoundaryPending()) {
+  const session = getActiveAppSession();
+  const boundaryPending = isAppSessionBoundaryPending();
+  if (deriveAppCapabilities(session.mode, boundaryPending)[capability]) return;
+  if (boundaryPending) {
     throwIpcError(
       'PRECONDITION_FAILED',
       'App session is switching; retry after the owner boundary settles.',

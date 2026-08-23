@@ -7,12 +7,26 @@
 
 ## Agent 启动入口
 
-Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域：
+Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。用户只说
+「启动开发版 / 启动测试版 / 看当前改动」且没有指定模式时，使用当前 worktree 的
+命名隔离沙箱，不要默认共享正式登录态：
 
 ```bash
-pnpm restart:desktop:remote --region=global
-pnpm restart:desktop:remote --region=cn
+pnpm restart:desktop:remote --region=global -- --isolated=@worktree
+pnpm restart:desktop:remote --region=cn -- --isolated=@worktree
 ```
+
+`--isolated=@worktree` 按 checkout 目录名派生稳定沙箱名（去掉前导 `cindy-`，
+再加路径短哈希，例如 `cindy-local-ollama-models` → `local-ollama-models-a1b2c3`）。
+同一 worktree 下次还用这个名字，登录态会留在这份沙箱里。
+
+只有用户明确说「共享登录 / 不要重新登录 / 用现有数据 / 不要关当前实例」时才加
+`--preserve-running`。不要把「用户没提模式」理解成共享。
+
+启动命令结束时必须出现一行 `DESKTOP_DEV_VERDICT=ready` 才算成功；看到
+`DESKTOP_DEV_VERDICT=failed` 或根本没有 verdict 行，不得声称开发版已起来。
+失败时把 `code` / `message` 交给用户。若有 `next=` 且用户没有点名必须共享，
+可以执行那条 next 命令重试。不要给启动命令接会吞退出码的管道。
 
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
 「跳过登录」（应用内显示为「未登录」，无需账号即可使用本机 agent；代码内部标识仍为
@@ -20,26 +34,35 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
 `pnpm dev:desktop` 或 `pnpm dev:desktop:remote` 绕过包装脚本。
 
 启动包装会先停止**当前 checkout** 已有的 Desktop dev 进程；其他 worktree／命名沙箱的
-实例不受影响。必须尊重宿主提供的并行或保活工作流；如果脚本因为当前 Agent 运行在
-Cindy 内部而拒绝重启，或因目标 userData 被其他 checkout 占用而中止，不要换命令绕过，
-应把提示交给用户。
+实例不受影响。必须尊重宿主提供的并行或保活工作流。脚本只在宿主是**当前 checkout**
+的 desktop dev 时拒绝重启（杀掉宿主会连这次启动一起收掉）。宿主是正式版或另一个
+worktree 时可以起隔离沙箱；从另一个 checkout 的 desktop dev 里起共享实例仍会拒绝，
+避免两份进程抢同一份正式 profile。若因当前 checkout 宿主拒绝、或目标 userData 被其他
+checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户。
 
 ## 可选启动参数
 
-两个 restart 命令都支持下列参数；**用户没提就不要主动加**（不带 = 共库 + 正常调度）。
-这些参数只对 dev 生效，不影响用户机器上的正式版。
+两个 restart 命令都支持下列参数。脚本本身不加这些旗标时仍是共库 + 正常调度（给人在
+终端里手跑）。**Agent 例外**见上一节：用户只说启动开发版时必须加
+`--isolated=@worktree`。这些参数只对 dev 生效，不影响用户机器上的正式版。
 
 - `--region=cn|global`（默认 `global`）：切换构建身份与仓内端点清单；中国大陆版
   必须显式传 `--region=cn`，读取 `config/endpoint.json`。
-- `--isolated` / `--isolated=<名字>`：使用独立 userData 沙箱，数据库、登录态、会话、定时
+- `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、登录态、会话、定时
   任务与设备身份都与正式版彻底隔离（首次需重新登录）；命名沙箱每个名字一条独立沙箱，
-  名字限 `A-Za-z0-9_-`、≤32 字符。用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
-  数据」时用。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
+  名字限 `A-Za-z0-9_-`、≤32 字符。`@worktree` 是保留名，按当前 checkout 目录派生沙箱名。
+  用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
+  数据」时用；Agent 把「启动开发版」也落在这条路径。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
   （见 [`database-and-migrations.md`](database-and-migrations.md)）。沙箱（及任何 dev
   userData 覆写）内不触发首登旧数据迁移（mToc）：不探测老目录、不弹确认窗、不把正式
-  数据复制进沙箱。
-- `--passive`：定时任务被动模式，本实例不自动触发 schedule，但数据仍与其它实例共享；
-  多开导致定时任务重复、需要让位给 primary 时用。共享 userData 的 passive 实例对
+  数据复制进沙箱。**`--isolated` 不得落在任一正式 profile 上**：显式 `XDT_USER_DATA_DIR`
+  若指向 CN / Global / Dev 任一正式目录（不限当前构建区域），启动器与主进程都 fail closed。isolated 会换独立 deviceId，
+  正式目录里的 refresh token 属于正式版设备，叠在一起必然 `DEVICE_MISMATCH`，再删盘会
+  把正式版踢下线（2026-08-16）。
+- `--passive`：定时任务被动模式，本实例不自动触发 schedule。多开导致定时任务重复、
+  需要让位给 primary 时用。它可以和 `--isolated` 组合（隔离沙箱只看 UI、不跑定时任务
+  是合法的）。**共库只读契约不是这个旗标本身**，而是解析后的正式 profile + passive
+  才落地。共享正式 profile 的 passive 实例对
   userData 布局保持只读：不执行 owner-namespace 迁移（claim 推迟到下次独占启动），
   legacy 数据导入（`hasLegacyOwnerNamespaceClaim` 门控的 secret／IM／brain 搬账）
   一并等待。非 passive 实例执行该迁移前也会先查 `.dev-instances` 实例注册表
@@ -58,17 +81,21 @@ Cindy 内部而拒绝重启，或因目标 userData 被其他 checkout 占用而
   refresh token——那写入的是有效凭证，primary 侧由 replacement-retry 消化。反过来让
   passive 停止续期，会使它的 access token 过期后再无替换途径（primary 的续期只更新磁盘
   token，不更新 passive 进程的内存态，而直接走 `apiFetch` 的路径没有 401 refresh/retry）。
-- `--preserve-running`：并行 dev，不停止任何已有 Cindy dev 进程，每个新实例强制 passive
-  并共享当前区域的 userData／登录态；启动前必须由 `.dev-instances` 存活记录证明已运行
+- `--preserve-running`：启动编排，不是运行期模式。默认 restart 本来就不会关正式版和
+  其它 worktree，只替换**当前 checkout** 的旧 dev；本旗标连这份旧 dev 也保留，再并排
+  开一个共库预览，并强制 `--passive`。启动前必须由 `.dev-instances` 存活记录证明已运行
   实例与目标区域一致，旧记录没有 region 或跨区域都会 fail closed。仅供能证明实例归属的
-  上层编排，或用户明确「不要关当前实例／不要重新登录」时用。仅支持 remote，禁止与
-  `--isolated` 组合。共享实例若只发现没有 realm 的旧版裸 refresh token，也不得猜区域迁移
-  或轮换，保持本进程登出，交给同区域独占实例完成凭证迁移。
+  上层编排，或用户明确「不要关当前实例／不要重新登录」时用。仅支持 remote。禁止与
+  `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。共享实例若只发现没有 realm 的旧版裸
+  refresh token，也不得猜区域迁移或轮换，保持本进程登出，交给同区域独占实例完成凭证迁移。
 
 已手动设 `XDT_USER_DATA_DIR` 时尊重用户值，不覆盖，也不探测或迁移正式区域目录。
+唯一例外：`--isolated` / `XDT_ISOLATED=1` 把该目录指到正式 profile 时直接拒绝启动。
 
 正式版目录保持历史兼容：CN → `Cindy`，Global → `CindyGlobal`，不在启动时改名或搬迁用户数据。
 非隔离 dev 也使用当前区域对应的正式 profile；`--isolated` 沙箱再按相同区域映射派生目录。
+**dev writer 不得把正式 profile 升到当前 checkout 比安装版更新的 schema**：有 pending
+migration 就拒绝启动，改用 `--isolated=<名字>`。`--preserve-running` / 共库 passive 仍只读。
 跨区域共享、登录态迁移或旧版本回滚应使用显式隔离目录，避免不同构建误用同一 profile。
 
 ### 并行多开 dev
@@ -119,8 +146,8 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 ## 分层验证
 
 本节指导**开发过程中的增量验证**；提交（commit／PR）前的强制门禁以
-`development-workflow.md` 的「提交前测试门禁」为准（仓库根 `pnpm test:unit` 与相关
-package 的 typecheck 全部通过）。开发过程中根据实际改动选择最小但充分的检查：
+`development-workflow.md` 的「提交前测试门禁」为准（仓库根 `pnpm test:unit:related` 与相关
+package 的 typecheck 全部通过；CI 仍跑完整 `pnpm test:unit`）。开发过程中根据实际改动选择最小但充分的检查：
 
 ```bash
 pnpm --filter desktop typecheck
@@ -128,6 +155,7 @@ pnpm --filter desktop lint
 pnpm --filter desktop exec vitest run <测试文件路径>
 pnpm --filter desktop test
 pnpm build
+pnpm test:unit:related
 pnpm test:unit
 ```
 

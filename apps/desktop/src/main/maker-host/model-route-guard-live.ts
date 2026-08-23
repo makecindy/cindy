@@ -35,7 +35,9 @@ import {
 } from './model-plane/modelPlanePolicy.js';
 import {
   checkModelRoute,
+  materializeExclusiveProviderRoute,
   resolveLenientRoute,
+  shouldApplyExclusiveProviderReroute,
   type ModelRouteGuardOptions,
   type ModelRouteVerdict,
 } from './model-route-guard.js';
@@ -180,6 +182,28 @@ export async function verdictForModelRoute(
   return checkModelRoute(views, agent, model, providerId, guardOptions);
 }
 
+/** Resume 旧会话:只钉死独占来源,不把停用轴 reject 套到已在跑的会话上。 */
+export async function pinExclusiveSessionProvider(
+  agent: AgentKind,
+  model: string,
+  providerId: string | null,
+): Promise<string | undefined> {
+  let views: ProviderView[];
+  try {
+    views = await listRouteGuardProviders();
+  } catch {
+    return undefined;
+  }
+  const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
+  return exclusive.kind === 'pin' ? exclusive.providerId : undefined;
+}
+
+export function shouldApplyExclusiveProviderRerouteLive(
+  providerId: string | null | undefined,
+): boolean {
+  return shouldApplyExclusiveProviderReroute(providerId, getActiveCatalog().providers);
+}
+
 /**
  * resolveLenientRoute 的桌面接线壳(语义见 model-route-guard.ts 头注):IM control:new /
  * learn 蒸馏等自动化直建会话入口用。目录读取失败按「原样放行」处理。
@@ -206,6 +230,13 @@ export async function resolveLenientSessionRoute(
     // 目录故障降级:override-only 保守裁决(同 overrideOnlyVerdict 语义)。命中即
     // 逐级丢弃;目录不可得时没有 pick 兜底可用,model 置空由调用方失败收口。
     if (!model) return { model, providerId, degraded: false };
+    const exclusive = materializeExclusiveProviderRoute([], agent, model, providerId);
+    if (exclusive.kind === 'reject') {
+      return { model: undefined, providerId: null, degraded: true };
+    }
+    if (exclusive.kind === 'pin') {
+      return { model, providerId: exclusive.providerId, degraded: false };
+    }
     if (checkModelRoute([], agent, model, providerId, guardOptions).kind === 'reject') {
       return { model: undefined, providerId: null, degraded: true };
     }

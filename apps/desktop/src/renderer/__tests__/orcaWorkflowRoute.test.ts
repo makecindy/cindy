@@ -364,7 +364,23 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('sets passive collaboration sidebar collapsed state during the route layout declaration', () => {
     expect(sessionViewSource).toContain('useLayoutEffect(() => {');
-    expect(sessionViewSource).toContain('declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord });');
+    expect(sessionViewSource).toContain(
+      'declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });',
+    );
+    // The declaration is multi-line since the Subagents entry also follows
+    // durable Pi runs (a task switched off Pi keeps the tab while its runs
+    // exist), so the attribute and its expression are pinned separately.
+    expect(sessionViewSource).toContain('subagentsAvailable={');
+    expect(sessionViewSource).toContain(
+      "(session.agentKind === 'pi' && !session.remoteHostId) || durablePiRunsPresent",
+    );
+    // The harness alone must not declare the entry for an SSH-hosted task:
+    // `agents/pi` disables the durable Subagent extension whenever
+    // `remoteHostId` is set, so such a task can never produce a run and the tab
+    // would stay empty while its controls addressed the local filesystem.
+    expect(sessionViewSource).not.toContain(
+      "session ? session.agentKind === 'pi' || durablePiRunsPresent : undefined",
+    );
     expect(mainLayoutSource).toContain('const declareRightSidebarSessionId = useCallback');
     expect(mainLayoutSource).toContain('const nextCollapsed = hasInitialCollapsed');
     expect(mainLayoutSource).toContain('setIsRightSidebarCollapsed(nextCollapsed);');
@@ -410,6 +426,14 @@ describe('OrcaWorkflowRoute source invariants', () => {
   });
 
   it('does not navigate the detached sidebar window to settings from the worker toolbar', () => {
+    // 硬上限时 + 按钮跳转到协同设置（codex P1 逃生口），但分离侧栏窗口与 device-link 受控面板
+    // 不能整壳替换成设置路由（前者固定 /sidebar-window 壳路由，后者上限走 device-link 远程路径）。
+    // 实现用 onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings} 在调用处守卫：
+    // 两类面板下传 undefined，+ 按钮回退为 disabled（不再呈现点了没反应的「设置 · 协同」按钮）。
+    expect(workerPanelSource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
+    expect(workerPanelSource).toContain('onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}');
+    expect(workerPanelSource).toContain("navigate('/settings?section=collaboration')");
+    expect(workerPanelSource).not.toContain('settingsEnabled');
     expect(workersTabBodySource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
     expect(workersTabBodySource).toContain('<OrcaWorkerPanel {...workerPanelProps} />');
     expect(workersTabBodySource).toContain('<RoutedOrcaWorkerPanel {...workerPanelProps} />');
@@ -439,6 +463,11 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'open-terminal', sessionId })");
     expect(mainLayoutSource).toContain('const windowState = getRsbWindowUiState();');
     expect(mainLayoutSource).toContain('const currentSessionId = rightSidebarSessionIdRef.current;');
+    expect(mainLayoutSource).toContain('sessionId: targetSessionId');
+    expect(mainLayoutSource).toContain(
+      "if (visibility === 'open' && opts.userInitiated !== false)",
+    );
+    expect(mainLayoutSource).toContain('navigateToSessionRef.current?.(targetSessionId)');
   });
 
   it('passes Orca lead vendor options when sending from the plain lead route', () => {

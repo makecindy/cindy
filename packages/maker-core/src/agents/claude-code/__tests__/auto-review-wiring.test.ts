@@ -22,7 +22,11 @@ import type {
   McpToolApprovalContext,
   McpToolApprovalPolicy,
 } from '../../base-agent.js';
-import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
+import {
+  AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
+  AUTO_REVIEW_UNAVAILABLE_CODE,
+  type AutoReviewRequest,
+} from '../../shared/auto-review-decision.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
@@ -584,9 +588,11 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     expect(second.behavior).toBe('deny');
     await settle();
 
-    // 两次都被拒,但只说一次 —— 逐条提示会把 Auto 退化成比 Ask 更烦的东西。
-    expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain('[AUTO_REVIEW_UNAVAILABLE]');
+    // 两次都被拒,但每种提示只说一次 —— 逐条提示会把 Auto 退化成比 Ask 更烦的东西。
+    // 没有 resolver 时确认卡也送不出去,所以还会有一条未送达纠正,同样去重。
+    expect(notices.filter((message) => message.includes('[AUTO_REVIEW_UNAVAILABLE]'))).toHaveLength(1);
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toHaveLength(1);
+    expect(notices).toHaveLength(2);
     await handle.close();
   });
 
@@ -601,6 +607,102 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     // 模型判定的 block 按 Auto 本意保持静默 —— 只把 reason 喂给模型,不打扰用户。
     expect(notices).toHaveLength(0);
     await handle.close();
+  });
+
+  it.each([
+    'timeout',
+    'hook_interaction_timeout',
+    'no_resolver_attached',
+    'resolver_threw',
+    'card send failed: slack timeout',
+  ] as const)('does not treat a missing confirmation as a user rejection after auto-review fails (%s)', async (reason) => {
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer: async () => {
+        throw new Error('reviewer offline');
+      },
+      attachResolver: false,
+    });
+    handle.setInteractionResolver(async () => ({
+      kind: 'permission',
+      behavior: 'deny',
+      reason,
+    }));
+    const { notices } = startNoticeCollector(handle);
+
+    const result = await canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: `undelivered-${reason}` },
+    );
+    expect(result.behavior).toBe('deny');
+    await settle();
+
+    expect(notices.some((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toBe(true);
+    expect(notices.some((message) => message.includes('not a user rejection'))).toBe(true);
+    await handle.close();
+  });
+
+  it('keeps a real user deny distinct from a missing confirmation', async () => {
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer: async () => {
+        throw new Error('reviewer offline');
+      },
+      attachResolver: false,
+    });
+    handle.setInteractionResolver(async () => ({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'User denied',
+    }));
+    const { notices } = startNoticeCollector(handle);
+
+    const result = await canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: 'user-deny' },
+    );
+    expect(result.behavior).toBe('deny');
+    await settle();
+
+    expect(notices.some((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toBe(false);
+    await handle.close();
+  });
+
+  it.each([
+    'close',
+    'setPermissionMode',
+  ] as const)('does not treat a system-dismissed confirmation as a user rejection after auto-review fails (%s)', async (action) => {
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer: async () => {
+        throw new Error('reviewer offline');
+      },
+      attachResolver: false,
+    });
+    let resolverCalled = false;
+    handle.setInteractionResolver(() => {
+      resolverCalled = true;
+      return new Promise<InteractionDecision>(() => {});
+    });
+    const { notices } = startNoticeCollector(handle);
+
+    const pending = canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: `dismissed-${action}` },
+    );
+    await vi.waitFor(() => expect(resolverCalled).toBe(true));
+
+    if (action === 'close') {
+      await handle.close();
+    } else {
+      await handle.setPermissionMode?.('ask');
+    }
+    await expect(pending).resolves.toMatchObject({ behavior: 'deny' });
+    await settle();
+
+    expect(notices.some((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toBe(true);
+    expect(notices.some((message) => message.includes('not a user rejection'))).toBe(true);
+    if (action !== 'close') await handle.close();
   });
 
   /**
@@ -652,12 +754,14 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await canUseTool('Write', { file_path: '/tmp/t1.conf' }, { toolUseID: 'turn1-a' });
     await canUseTool('Write', { file_path: '/tmp/t2.conf' }, { toolUseID: 'turn1-b' });
     await settle();
-    expect(notices).toHaveLength(1); // 同一轮内两次被拒 → 仍只一条
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`))).toHaveLength(1);
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toHaveLength(1);
 
     await handle.send({ type: 'user', content: 'Try something else then.' });
     await canUseTool('Write', { file_path: '/tmp/t3.conf' }, { toolUseID: 'turn2-a' });
     await settle();
-    expect(notices).toHaveLength(2); // 新一轮 → 重新武装
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`))).toHaveLength(2);
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toHaveLength(2);
     await handle.close();
   });
 
@@ -672,14 +776,16 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
 
     await canUseTool('Write', { file_path: '/tmp/c.conf' }, { toolUseID: 'n4' });
     await settle();
-    expect(notices).toHaveLength(1);
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`))).toHaveLength(1);
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toHaveLength(1);
 
     // 用户自己动过档位之后又回到 Auto、又不可用 → 有权再看到一次。
     await handle.setPermissionMode?.('ask');
     await handle.setPermissionMode?.('auto');
     await canUseTool('Write', { file_path: '/tmp/d.conf' }, { toolUseID: 'n5' });
     await settle();
-    expect(notices).toHaveLength(2);
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`))).toHaveLength(2);
+    expect(notices.filter((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toHaveLength(2);
     await handle.close();
   });
 });

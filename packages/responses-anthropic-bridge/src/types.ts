@@ -81,6 +81,24 @@ export interface ResponsesAnthropicProviderConfig {
   imageCodec?: AnthropicImageCodec;
   /** Called after a non-2xx response, before the translated error is returned. */
   onUpstreamError?: (info: ResponsesAnthropicErrorInfo) => void | Promise<void>;
+  /**
+   * Called once for the final upstream response — success or not — before the body
+   * is read or translated. Intermediate responses consumed by an internal retry
+   * (401/403 credential refresh, 413 image downscale) are not reported.
+   *
+   * Provider-agnostic response metadata only: the bridge does not interpret these
+   * headers. Best effort — the call is fire-and-forget and never blocks or fails
+   * the response, so a consumer must not rely on it for correctness.
+   */
+  onUpstreamResponse?: (info: ResponsesAnthropicResponseInfo) => void | Promise<void>;
+}
+
+export interface ResponsesAnthropicResponseInfo {
+  status: number;
+  /** Final upstream response headers. Iterating a Fetch `Headers` lowercases names. */
+  responseHeaders: Headers;
+  /** Provider-owned request headers actually sent upstream for this attempt. */
+  requestHeaders: Readonly<Record<string, string>>;
 }
 
 export interface ResponsesAnthropicHandleArgs {

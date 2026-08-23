@@ -363,12 +363,13 @@ export function piSubscriptionUsageModelKey(model: string): string {
  *   - codex → 订阅直连(chatgpt/ / xai/)registry 参考价 → OpenAI registry 参考价
  *     → Anthropic registry 参考价(Codex 显式选内置 anthropic 的 Claude.ai 订阅轮;
  *     模型 id 只会命中各自 provider 的路由,依次尝试不会串价)
- *   - pi → 先按订阅直连估价,再依次回退 Codex(OpenAI)与 Anthropic registry 参考价
+ *   - pi → 先按订阅直连估价(agent=pi,才能命中设置里的 Pi 价格覆盖),
+ *     再依次回退 Codex(OpenAI)与 Anthropic registry 参考价
  *     (Pi 可跨三类 provider,按模型 id 路由,依次尝试不会串价)
  *   - claude-code → Anthropic registry 参考价
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
-function getSubscriptionValuePriceFor(
+export function getSubscriptionValuePriceFor(
   agentKind: 'claude-code' | 'codex' | 'pi',
   model: string,
   pricing: ModelPricingMap | null,
@@ -384,12 +385,15 @@ function getSubscriptionValuePriceFor(
   }
   if (agentKind === 'pi') {
     return (
-      getSubscriptionDirectValuePrice(model, undefined, pricing, at, overrides) ??
+      getSubscriptionDirectValuePrice(model, 'pi', pricing, at, overrides) ??
       getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
       getClaudeSubscriptionValuePrice(model, pricing, at, overrides)
     );
   }
-  return getClaudeSubscriptionValuePrice(model, pricing, at, overrides);
+  return (
+    getSubscriptionDirectValuePrice(model, 'claude-code', pricing, at, overrides) ??
+    getClaudeSubscriptionValuePrice(model, pricing, at, overrides)
+  );
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {
@@ -546,7 +550,9 @@ export async function readUsageHistoryWith(
     estimateReasons: ['subscription-value'],
   });
   const keepCompatibleMoney = (money: RegionalMoney): RegionalMoney =>
-    money.currency === ledgerCurrency ? money : zeroActual();
+    money.currency === ledgerCurrency
+      ? money
+      : { ...money, amount: 0, currency: ledgerCurrency };
   const addOrZero = (
     values: RegionalMoney[],
     kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
@@ -605,6 +611,7 @@ export async function readUsageHistoryWith(
   const priceOverrides = deps.getModelPriceOverridesSnapshot();
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
     isSubscriptionUsageModel(r.model) &&
+    r.money.kind !== 'value-estimate' &&
     !getSubscriptionValuePriceFor(
       r.agentKind === 'codex' ? 'codex' : r.agentKind === 'pi' ? 'pi' : 'claude-code',
       displayModelName(r.model),
@@ -646,7 +653,7 @@ export async function readUsageHistoryWith(
       };
       byKey.set(key, agg);
     }
-    if (row.money.amount > 0) {
+    if (row.money.amount > 0 && row.money.kind === 'actual-cost') {
       agg.money =
         agg.money.amount > 0
           ? (addCompatibleRegionalMoney([agg.money, row.money], ledgerCurrency) ?? row.money)
@@ -656,12 +663,17 @@ export async function readUsageHistoryWith(
     agg.outputTokens += row.outputTokens;
     agg.cacheReadTokens += row.cacheReadTokens;
     agg.cacheCreateTokens += row.cacheCreateTokens;
-    if (row.money.amount === 0 && isSubscriptionUsageModel(row.model)) {
-      const estimate = computePriceQuoteTurnMoney(
-        row,
-        getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
-        ledgerCurrency,
-      );
+    if (isSubscriptionUsageModel(row.model)) {
+      const estimate =
+        row.money.kind === 'value-estimate' && row.money.amount > 0
+          ? row.money
+          : row.money.kind !== 'value-estimate' && row.money.amount === 0
+            ? computePriceQuoteTurnMoney(
+                row,
+                getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
+                ledgerCurrency,
+              )
+            : null;
       if (estimate?.amount) {
         const estimates = subscriptionEstimatesByKey.get(key) ?? [];
         estimates.push(estimate);
@@ -688,17 +700,19 @@ export async function readUsageHistoryWith(
         ? ('pi' as const)
         : ('claude-code' as const);
     const model = displayModelName(row.model);
-    const apiMoney = row.money;
-    const subscriptionEstimateMoney =
-      apiMoney.amount === 0 && isSubscriptionUsageModel(row.model)
-        ? (computePriceQuoteTurnMoney(
-            row,
-            getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
-            ledgerCurrency,
-          ) ?? zeroEstimate())
-        : zeroEstimate();
-    const money =
-      apiMoney.amount > 0 ? apiMoney : subscriptionEstimateMoney;
+    const apiMoney = row.money.kind === 'actual-cost' ? row.money : zeroActual();
+    const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model)
+      ? row.money.kind === 'value-estimate' && row.money.amount > 0
+        ? row.money
+        : row.money.kind !== 'value-estimate'
+          ? (computePriceQuoteTurnMoney(
+              row,
+              getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
+              ledgerCurrency,
+            ) ?? zeroEstimate())
+          : zeroEstimate()
+      : zeroEstimate();
+    const money = apiMoney.amount > 0 ? apiMoney : subscriptionEstimateMoney;
     return {
       day: row.day,
       agentKind,

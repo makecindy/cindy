@@ -36,6 +36,7 @@ import {
   type HandoffSourceMessage,
 } from './agentHandoff.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
@@ -382,7 +383,9 @@ export async function performSessionAgentSwitch(
       model,
       typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
     );
-    if (reroute && typeof normalizedProviderId !== 'string') normalizedProviderId = reroute;
+    if (reroute && shouldApplyExclusiveProviderRerouteLive(normalizedProviderId)) {
+      normalizedProviderId = reroute;
+    }
   }
 
   const row = await deps.getSessionRow(sessionId);

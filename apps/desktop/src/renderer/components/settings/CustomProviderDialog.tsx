@@ -15,21 +15,21 @@
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
@@ -40,10 +40,13 @@ import {
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomProvider,
+  customProviderWireProtocolForSave,
+  piCatalogProviderIdAfterRouteEdit,
   readCustomProviderKey,
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
   setCustomProviderModelReasoningEffort,
+  setCustomProviderModelPiApi,
   setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
   type RuntimeKeys,
@@ -56,6 +59,7 @@ import {
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
+  resolveProviderConnectionProbeRoute,
   restoreHydratedApiKey,
   stripCredentialHeaders,
   type CustomProviderAuthMode,
@@ -89,12 +93,17 @@ import {
 import type {
   AgentKind,
   CustomProviderConfig,
+  PiModelApi,
   ProviderPreset,
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { SettingsTextInput } from './SettingsTextInput';
 import { CURRENT_CINDY_REGION } from '@/../shared/brandRegion';
+import {
+  configuredPresetAgents,
+  isConfiguredPresetRuntime,
+} from '@/../shared/piRuntimeInitialization';
 
 /**
  * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
@@ -115,24 +124,26 @@ const DIALOG_FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-const TAB_META: Record<DialogAgentKind, { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }> =
-  {
-    'claude-code': {
-      Mark: ClaudeMark,
-      labelKey: 'settings.providers.custom.protocol.claude',
-      helpKey: 'settings.providers.custom.protocol.claudeDesc',
-    },
-    codex: {
-      Mark: CodexMark,
-      labelKey: 'settings.providers.custom.protocol.codex',
-      helpKey: 'settings.providers.custom.protocol.codexDesc',
-    },
-    pi: {
-      Mark: PiMark,
-      labelKey: 'settings.providers.custom.protocol.pi',
-      helpKey: 'settings.providers.custom.protocol.piDesc',
-    },
-  };
+const TAB_META: Record<
+  DialogAgentKind,
+  { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }
+> = {
+  'claude-code': {
+    Mark: ClaudeMark,
+    labelKey: 'settings.providers.custom.protocol.claude',
+    helpKey: 'settings.providers.custom.protocol.claudeDesc',
+  },
+  codex: {
+    Mark: CodexMark,
+    labelKey: 'settings.providers.custom.protocol.codex',
+    helpKey: 'settings.providers.custom.protocol.codexDesc',
+  },
+  pi: {
+    Mark: PiMark,
+    labelKey: 'settings.providers.custom.protocol.pi',
+    helpKey: 'settings.providers.custom.protocol.piDesc',
+  },
+};
 
 /** pi 默认 wire protocol:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。 */
 const PI_DEFAULT_WIRE: ProviderWireProtocol = 'openai-chat';
@@ -162,7 +173,10 @@ interface ModelPickerState {
   query: string;
 }
 type DialogChildLayer =
-  { kind: 'preset-menu' } | { kind: 'model-picker'; value: ModelPickerState } | null;
+  | { kind: 'preset-menu' }
+  | { kind: 'model-picker'; value: ModelPickerState }
+  | { kind: 'model-protocol'; agent: DialogAgentKind; index: number }
+  | null;
 interface HeaderRow {
   name: string;
   value: string;
@@ -172,6 +186,8 @@ interface RuntimeFields extends RuntimeFillDraft {
   headers: HeaderRow[];
   /** 隐藏字段：列模型端点（预设 / 已存配置快照进来），「获取模型列表」用；不在表单展示。 */
   modelsUrl: string;
+  /** 隐藏字段：从 Pi 官方目录生成该 runtime；编辑保存必须无损保留。 */
+  piCatalogProviderId?: string;
 }
 
 /** 每个 runtime Tab 的「测试连接」状态（idle → testing → ok/fail）。 */
@@ -192,6 +208,7 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     models: [{ id: '', name: '' }],
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
+    piCatalogProviderId: undefined,
   };
 }
 
@@ -216,6 +233,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
             : [{ name: '', value: '' }],
         modelsUrl: rc.modelsUrl ?? '',
+        piCatalogProviderId: rc.piCatalogProviderId,
         headersState: rc.headersState,
       };
     }
@@ -342,6 +360,99 @@ function PresetDropdown({
   );
 }
 
+const PI_MODEL_PROTOCOL_INHERIT = 'inherit';
+
+const PI_MODEL_PROTOCOL_OPTIONS: readonly {
+  value: PiModelApi | typeof PI_MODEL_PROTOCOL_INHERIT;
+  labelKey: string;
+}[] = [
+  { value: PI_MODEL_PROTOCOL_INHERIT, labelKey: 'settings.providers.custom.modelProtocol.inherit' },
+  { value: 'anthropic-messages', labelKey: 'settings.providers.custom.modelProtocol.messages' },
+  { value: 'openai-completions', labelKey: 'settings.providers.custom.modelProtocol.chat' },
+  { value: 'openai-responses', labelKey: 'settings.providers.custom.modelProtocol.responses' },
+  { value: 'google-generative-ai', labelKey: 'settings.providers.custom.modelProtocol.google' },
+];
+
+export function PiModelProtocolDropdown({
+  modelName,
+  value,
+  open,
+  onOpenChange,
+  onChange,
+}: {
+  modelName: string;
+  value: PiModelApi | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChange: (value: PiModelApi | undefined) => void;
+}) {
+  const { t } = useTranslation();
+  const selectedValue = value ?? PI_MODEL_PROTOCOL_INHERIT;
+  const selected =
+    PI_MODEL_PROTOCOL_OPTIONS.find((option) => option.value === selectedValue) ??
+    PI_MODEL_PROTOCOL_OPTIONS[0];
+  const label = t('settings.providers.custom.modelProtocol.ariaLabel', {
+    model: modelName || t('settings.providers.custom.fields.modelIdPlaceholder'),
+  });
+  return (
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          className={cn(
+            'flex h-9 w-44 items-center justify-between rounded-full border px-3 text-12 outline-none transition-colors',
+            'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+            'focus-visible:border-[var(--settings-input-border-focus)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          )}
+        >
+          <span className="truncate">{t(selected.labelKey)}</span>
+          <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        onEscapeKeyDown={(event) => {
+          if (event.isComposing || event.keyCode === 229) event.preventDefault();
+        }}
+        className={cn(
+          'z-[10001] w-max min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-16px)] rounded-xl p-2',
+          'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)]',
+        )}
+      >
+        <DropdownMenuRadioGroup
+          className="flex flex-col gap-[2px]"
+          value={selectedValue}
+          onValueChange={(nextValue) =>
+            onChange(
+              nextValue === PI_MODEL_PROTOCOL_INHERIT ? undefined : (nextValue as PiModelApi),
+            )
+          }
+          aria-label={label}
+        >
+          {PI_MODEL_PROTOCOL_OPTIONS.map((option) => {
+            return (
+              <DropdownMenuRadioItem
+                key={option.value}
+                value={option.value}
+                className={cn(
+                  'rounded-[8px] py-2 pl-8 pr-3 text-left text-12 font-medium',
+                  'text-[var(--settings-input-text)] focus:bg-[var(--cmd-palette-item-hover)]',
+                )}
+              >
+                <span className="truncate">{t(option.labelKey)}</span>
+              </DropdownMenuRadioItem>
+            );
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 // ── 主组件 ─────────────────────────────────────────────────────────────────
 
 export function CustomProviderDialog({
@@ -421,9 +532,7 @@ export function CustomProviderDialog({
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
   const presetMenuOpen = childLayer?.kind === 'preset-menu';
   const [keyHydrationReady, setKeyHydrationReady] = useState(!editing);
-  const [keyHydrationFailed, setKeyHydrationFailed] = useState<
-    Record<DialogAgentKind, boolean>
-  >({
+  const [keyHydrationFailed, setKeyHydrationFailed] = useState<Record<DialogAgentKind, boolean>>({
     'claude-code': false,
     codex: false,
     pi: false,
@@ -431,6 +540,7 @@ export function CustomProviderDialog({
   const runtimeFillTriggerRef = useRef<HTMLButtonElement>(null);
   const modelPickerTriggerRef = useRef<HTMLButtonElement>(null);
   const modelFetchInFlightRef = useRef(false);
+  const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
   // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
@@ -469,6 +579,9 @@ export function CustomProviderDialog({
       if (event.key !== 'Escape') return;
       // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      // 单选协议菜单由 Radix 自己完成键盘关闭和焦点归还；这里只保留表单层级
+      // 记录，避免 window capture 抢先吞掉它的 Escape。
+      if (childLayerRef.current?.kind === 'model-protocol') return;
       // 在 Radix 的 document capture 之前由唯一 owner 结算；否则菜单的 80ms
       // 退场层仍可能 preventDefault，吞掉刚打开的模型选择器的 Escape。
       event.preventDefault();
@@ -477,6 +590,24 @@ export function CustomProviderDialog({
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [dismissTopmostLayer]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (event.target !== scrimRef.current) return;
+      if (!childLayerRef.current && !runtimeFillRef.current) return;
+
+      // This must run before Radix's document-capture outside-dismiss. The
+      // scrim gesture belongs to the dialog's current child layer; consuming
+      // it here prevents Radix from committing a closed popover before the
+      // form can settle that layer exactly once.
+      event.preventDefault();
+      event.stopPropagation();
+      dismissTopmostLayer();
+    };
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
   }, [dismissTopmostLayer]);
 
   useEffect(() => {
@@ -502,11 +633,17 @@ export function CustomProviderDialog({
   const rtRef = useRef(rt);
   /** 唯一的 rt 写入口：状态更新的同时同步镜像进 rtRef（updater 幂等，StrictMode 双调无害）。 */
   const setRtSynced = useCallback(
-    (fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>) => {
+    (
+      fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>,
+    ) => {
       setRt((prev) => {
-        const next = fn(prev);
-        rtRef.current = next;
-        return next;
+        const updated = fn(prev);
+        // Do not consume the catalog marker while the user is still editing.
+        // A temporary route/model change can be reverted before Save; marker
+        // ownership is decided once below from the persisted baseline and the
+        // final serialized values.
+        rtRef.current = updated;
+        return updated;
       });
     },
     [],
@@ -548,6 +685,10 @@ export function CustomProviderDialog({
         wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
+        ...(agent === 'pi'
+          ? { modelPiApi: rc.models.find((model) => model.id.trim().length > 0)?.piApi }
+          : {}),
+        modelRoute: rc.models.find((model) => model.id.trim().length > 0)?.route,
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
@@ -575,15 +716,19 @@ export function CustomProviderDialog({
     [savedBaselineFor],
   );
 
-  const changeAuthMode = useCallback((mode: CustomProviderAuthMode) => {
-    setAuthMode(mode);
-    if (mode !== 'apiKey') return;
-    setRtSynced((prev) =>
-      Object.fromEntries(
-        AGENTS.map((agent) => [agent, restoreHydratedKey(agent, prev[agent])]),
-      ) as Record<DialogAgentKind, RuntimeFields>,
-    );
-  }, [restoreHydratedKey, setRtSynced]);
+  const changeAuthMode = useCallback(
+    (mode: CustomProviderAuthMode) => {
+      setAuthMode(mode);
+      if (mode !== 'apiKey') return;
+      setRtSynced(
+        (prev) =>
+          Object.fromEntries(
+            AGENTS.map((agent) => [agent, restoreHydratedKey(agent, prev[agent])]),
+          ) as Record<DialogAgentKind, RuntimeFields>,
+      );
+    },
+    [restoreHydratedKey, setRtSynced],
+  );
 
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
@@ -613,7 +758,7 @@ export function CustomProviderDialog({
         const next = { ...prev };
         for (const a of AGENTS) {
           const rc = p.runtimes[a];
-          if (!rc) {
+          if (!isConfiguredPresetRuntime(a, rc)) {
             next[a] = emptyRuntime(a);
             continue;
           }
@@ -628,6 +773,7 @@ export function CustomProviderDialog({
                 ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
                 : [{ name: '', value: '' }],
             modelsUrl: rc.modelsUrl ?? '',
+            piCatalogProviderId: rc.piCatalogProviderId,
           };
         }
         return next;
@@ -638,7 +784,7 @@ export function CustomProviderDialog({
       // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
       // 卡死报错却找不到对应输入框(review P1)。
       setWindowDrafts({});
-      const first = AGENTS.find((a) => p.runtimes[a]);
+      const first = configuredPresetAgents(p)[0];
       if (first) setActiveTab(first);
     },
     [i18n.language, setRtSynced],
@@ -657,7 +803,11 @@ export function CustomProviderDialog({
     setKeyHydrationFailed({ 'claude-code': false, codex: false, pi: false });
     const revisionAtStart = { ...keyEditRevisionRef.current };
     void (async () => {
-      const nextHas: Record<DialogAgentKind, boolean> = { 'claude-code': false, codex: false, pi: false };
+      const nextHas: Record<DialogAgentKind, boolean> = {
+        'claude-code': false,
+        codex: false,
+        pi: false,
+      };
       const fetched: Partial<Record<DialogAgentKind, string>> = {};
       const failed: Record<DialogAgentKind, boolean> = {
         'claude-code': false,
@@ -839,7 +989,9 @@ export function CustomProviderDialog({
       );
     });
     if (hasUnreviewedConflict) {
-      setRuntimeFill((prev) => (prev ? { ...prev, stage: 'confirm', targets: freshTargets } : prev));
+      setRuntimeFill((prev) =>
+        prev ? { ...prev, stage: 'confirm', targets: freshTargets } : prev,
+      );
       return;
     }
 
@@ -931,7 +1083,10 @@ export function CustomProviderDialog({
     (agent: DialogAgentKind, wireProtocol: ProviderWireProtocol) => {
       setRtSynced((prev) => ({
         ...prev,
-        [agent]: { ...prev[agent], wireProtocol },
+        [agent]: {
+          ...prev[agent],
+          wireProtocol,
+        },
       }));
       setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
@@ -945,12 +1100,19 @@ export function CustomProviderDialog({
     const agent = activeTab;
     const rf = rt[agent];
     const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
-    const baseUrl = rf.baseUrl.trim();
-    const firstModel = rf.models.map((m) => m.id.trim()).find((id) => id.length > 0);
-    if (!baseUrl || !firstModel) {
+    const defaultBaseUrl = rf.baseUrl.trim();
+    const firstModelConfig = rf.models.find((model) => model.id.trim().length > 0);
+    const firstModel = firstModelConfig?.id.trim();
+    if (!defaultBaseUrl || !firstModel) {
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
     }
+    const probeRoute = resolveProviderConnectionProbeRoute(agent, probeFields);
+    if (!probeRoute) {
+      toast.error(t('settings.providers.custom.test.unsupportedProtocol'));
+      return;
+    }
+    const { baseUrl, wireProtocol: probeWireProtocol, requestPath: probeRequestPath } = probeRoute;
     if (!areProviderRequestUrlsAllowed(authMode, baseUrl)) {
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
       return;
@@ -977,8 +1139,8 @@ export function CustomProviderDialog({
       );
     const useSaved = Boolean(
       initial?.id &&
-        savedBaseline &&
-        connectionTestCanUseSaved(probeFields, savedBaseline, authMode),
+      savedBaseline &&
+      connectionTestCanUseSaved(probeFields, savedBaseline, authMode),
     );
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
@@ -992,24 +1154,18 @@ export function CustomProviderDialog({
                 baseUrl,
                 modelId: firstModel,
                 authMethod: authMode,
-                wireProtocol: rf.wireProtocol,
-                ...(agent !== 'pi' && rf.requestPath.trim()
-                  ? { requestPath: rf.requestPath.trim() }
-                  : {}),
-                apiKey:
-                  authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
+                wireProtocol: probeWireProtocol,
+                ...(probeRequestPath ? { requestPath: probeRequestPath } : {}),
+                apiKey: authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
                 ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
               },
             },
       );
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi'
-            ? { ...rtRef.current[agent], requestPath: '' }
-            : rtRef.current[agent],
+          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
           authModeRef.current,
-        ) !==
-        requestSig
+        ) !== requestSig
       )
         return;
       setTest((prev) => ({
@@ -1021,12 +1177,9 @@ export function CustomProviderDialog({
     } catch (e) {
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi'
-            ? { ...rtRef.current[agent], requestPath: '' }
-            : rtRef.current[agent],
+          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
           authModeRef.current,
-        ) !==
-        requestSig
+        ) !== requestSig
       )
         return;
       const ipc = extractIpcError(e);
@@ -1050,7 +1203,8 @@ export function CustomProviderDialog({
       fetchingModels['claude-code'] ||
       fetchingModels.codex ||
       fetchingModels.pi
-    ) return; // 单飞（按钮已禁用，兜底）
+    )
+      return; // 单飞（按钮已禁用，兜底）
     const baseUrl = rf.baseUrl.trim();
     if (!baseUrl) {
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
@@ -1076,14 +1230,11 @@ export function CustomProviderDialog({
     const canSendApiKey =
       authMode !== 'apiKey' ||
       !savedBaseline ||
-      canSendHydratedApiKey(
-        rf,
-        savedBaseline,
-        authMode,
-        keyEditRevisionRef.current[agent],
-      );
+      canSendHydratedApiKey(rf, savedBaseline, authMode, keyEditRevisionRef.current[agent]);
     const reuseSaved = Boolean(
-      initial?.id && savedBaseline && modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
+      initial?.id &&
+      savedBaseline &&
+      modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
     );
     modelFetchInFlightRef.current = true;
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
@@ -1108,11 +1259,19 @@ export function CustomProviderDialog({
           .map((m) => ({
             id: m.id.trim(),
             name: m.name.trim(),
+            ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+            ...(m.route ? { route: { ...m.route } } : {}),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
             ...(m.reasoning === true && m.reasoningEfforts?.length
-              ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+              ? {
+                  reasoning: true,
+                  reasoningEfforts: [...m.reasoningEfforts],
+                  ...(m.reasoningDefaultEffort
+                    ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                    : {}),
+                }
               : {}),
           }))
           .filter((m) => m.id.length > 0);
@@ -1132,11 +1291,19 @@ export function CustomProviderDialog({
             return {
               id: m.id,
               name: cur?.name || m.name,
+              ...(agent === 'pi' && cur?.piApi ? { piApi: cur.piApi } : {}),
+              ...(cur?.route ? { route: { ...cur.route } } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(cur?.reasoning === true && cur.reasoningEfforts?.length
-                ? { reasoning: true, reasoningEfforts: [...cur.reasoningEfforts] }
+                ? {
+                    reasoning: true,
+                    reasoningEfforts: [...cur.reasoningEfforts],
+                    ...(cur.reasoningDefaultEffort
+                      ? { reasoningDefaultEffort: cur.reasoningDefaultEffort }
+                      : {}),
+                  }
                 : {}),
             };
           }),
@@ -1196,14 +1363,24 @@ export function CustomProviderDialog({
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       const reasoning = latest ? latest.reasoning : m.reasoning;
       const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
+      const piApi = latest ? latest.piApi : m.piApi;
+      const reasoningDefaultEffort = latest
+        ? latest.reasoningDefaultEffort
+        : m.reasoningDefaultEffort;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
+        ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
+        ...((latest?.route ?? m.route) ? { route: { ...(latest?.route ?? m.route)! } } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
         ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
         ...(reasoning === true && reasoningEfforts?.length
-          ? { reasoning: true, reasoningEfforts: [...reasoningEfforts] }
+          ? {
+              reasoning: true,
+              reasoningEfforts: [...reasoningEfforts],
+              ...(reasoningDefaultEffort ? { reasoningDefaultEffort } : {}),
+            }
           : {}),
       };
     });
@@ -1213,11 +1390,19 @@ export function CustomProviderDialog({
         merged.push({
           id,
           name: m.name.trim() || id,
+          ...(picker.agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+          ...(m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            ? {
+                reasoning: true,
+                reasoningEfforts: [...m.reasoningEfforts],
+                ...(m.reasoningDefaultEffort
+                  ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                  : {}),
+              }
             : {}),
         });
       }
@@ -1341,11 +1526,19 @@ export function CustomProviderDialog({
         .map((m) => ({
           id: m.id.trim(),
           name: m.name.trim(),
+          ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+          ...(m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            ? {
+                reasoning: true,
+                reasoningEfforts: [...m.reasoningEfforts],
+                ...(m.reasoningDefaultEffort
+                  ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                  : {}),
+              }
             : {}),
         }))
         .filter((m) => m.id && m.name);
@@ -1368,14 +1561,34 @@ export function CustomProviderDialog({
       }
       const savedHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
       const defaultProtocol = defaultWireFor(a);
+      const savedWireProtocol = customProviderWireProtocolForSave(
+        a,
+        rf.wireProtocol,
+        defaultProtocol,
+      );
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
         ...(requestPath ? { requestPath } : {}),
-        ...(rf.wireProtocol !== defaultProtocol ? { wireProtocol: rf.wireProtocol } : {}),
+        ...(savedWireProtocol ? { wireProtocol: savedWireProtocol } : {}),
         models,
         ...(Object.keys(savedHeaders).length > 0 ? { headers: savedHeaders } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
+        ...(a === 'pi' && rf.piCatalogProviderId
+          ? { piCatalogProviderId: rf.piCatalogProviderId }
+          : {}),
       };
+      if (a === 'pi' && initial?.runtimes.pi?.piCatalogProviderId) {
+        const savedPiCatalogProviderId = piCatalogProviderIdAfterRouteEdit(
+          a,
+          initial.runtimes.pi,
+          runtimes.pi!,
+        );
+        if (savedPiCatalogProviderId) {
+          runtimes.pi!.piCatalogProviderId = savedPiCatalogProviderId;
+        } else {
+          delete runtimes.pi!.piCatalogProviderId;
+        }
+      }
       // OAuth 形态不收集 per-runtime API key（鉴权走 Runner 的 Bearer）。
       if (
         authMode === 'apiKey' &&
@@ -1505,27 +1718,35 @@ export function CustomProviderDialog({
   ]);
 
   const activeSavedBaseline = savedBaselineFor(activeTab);
-  const activeKeyCanRemainSaved =
-    hasKey[activeTab] &&
+  // 共享判据：当前表单的端点相对已存基线是否未变。密钥与请求头都只在
+  // 端点未变时继续有效——main 侧改端点后会清掉已存头，renderer 的徽标
+  // 必须同步消失，否则继续宣称「已配置」会误导用户。
+  const activeSavedEndpointUnchanged =
     activeSavedBaseline != null &&
     f.baseUrl.trim() === activeSavedBaseline.baseUrl.trim() &&
     f.modelsUrl.trim() === activeSavedBaseline.modelsUrl.trim();
+  const activeKeyCanRemainSaved = hasKey[activeTab] && activeSavedEndpointUnchanged;
+  // 已存密文头徽标的判据：端点未变 + 仍是 apiKey 鉴权（none 模式会剥凭证头）
+  // + 确实配置过头。headersState 是不可变初值，端点一变就必须隐藏。
+  const activeHeadersCanRemainSaved =
+    initial?.runtimes[activeTab]?.headersState === 'configured' &&
+    authMode === 'apiKey' &&
+    activeSavedEndpointUnchanged;
   const keyPlaceholder = activeKeyCanRemainSaved
     ? t('settings.providers.custom.fields.apiKeyEditPlaceholder')
     : t('settings.providers.custom.fields.apiKeyPlaceholder');
 
   return (
     <div
+      ref={scrimRef}
+      data-custom-provider-dialog-scrim="true"
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
       onPointerDown={(event) => {
         // pointerdown 时先按当前层级结算，避免 Popover 的 outside-dismiss 在随后
         // click 前把状态改成 closed，令同一次手势继续误关底层表单。
-        if (
-          event.button === 0 &&
-          event.target === event.currentTarget &&
-          !saving &&
-          !runtimeFill
-        ) {
+        if (event.button === 0 && event.target === event.currentTarget && !saving && !runtimeFill) {
+          event.preventDefault();
+          event.stopPropagation();
           dismissTopmostLayer();
         }
       }}
@@ -1730,7 +1951,10 @@ export function CustomProviderDialog({
                     type="button"
                     role="tab"
                     aria-selected={active}
-                    onClick={() => setActiveTab(a)}
+                    onClick={() => {
+                      setChildLayer(null);
+                      setActiveTab(a);
+                    }}
                     className={cn(
                       'flex h-[26px] flex-1 items-center justify-center gap-1.5 rounded-full px-2 text-13 leading-none transition-colors',
                       active ? 'font-medium' : 'font-normal',
@@ -1791,28 +2015,32 @@ export function CustomProviderDialog({
                           : undefined
                       }
                     >
-                      {t(activeTab === 'pi'
-                        ? `settings.providers.custom.wireProtocol.pi${
-                            option.value === 'anthropic-messages'
-                              ? 'Anthropic'
-                              : option.value === 'openai-responses'
-                                ? 'Responses'
-                                : 'Chat'
-                          }`
-                        : option.labelKey)}
+                      {t(
+                        activeTab === 'pi'
+                          ? `settings.providers.custom.wireProtocol.pi${
+                              option.value === 'anthropic-messages'
+                                ? 'Anthropic'
+                                : option.value === 'openai-responses'
+                                  ? 'Responses'
+                                  : 'Chat'
+                            }`
+                          : option.labelKey,
+                      )}
                     </button>
                   ))}
                 </div>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t(activeTab === 'pi'
-                    ? `settings.providers.custom.wireProtocol.pi${
-                        f.wireProtocol === 'anthropic-messages'
-                          ? 'AnthropicHelp'
-                          : f.wireProtocol === 'openai-chat'
-                            ? 'ChatHelp'
-                            : 'ResponsesHelp'
-                      }`
-                    : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey)}
+                  {t(
+                    activeTab === 'pi'
+                      ? `settings.providers.custom.wireProtocol.pi${
+                          f.wireProtocol === 'anthropic-messages'
+                            ? 'AnthropicHelp'
+                            : f.wireProtocol === 'openai-chat'
+                              ? 'ChatHelp'
+                              : 'ResponsesHelp'
+                        }`
+                      : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey,
+                  )}
                 </span>
               </div>
             )}
@@ -1961,8 +2189,8 @@ export function CustomProviderDialog({
                         <SettingsTextInput
                           surface="ivory"
                           value={
-                            windowDrafts[`${activeTab}:${i}`]
-                            ?? (m.contextWindow != null ? String(m.contextWindow) : '')
+                            windowDrafts[`${activeTab}:${i}`] ??
+                            (m.contextWindow != null ? String(m.contextWindow) : '')
                           }
                           onBlur={() =>
                             setWindowDrafts((drafts) => {
@@ -2009,6 +2237,13 @@ export function CustomProviderDialog({
                       <button
                         type="button"
                         onClick={() => {
+                          setChildLayer((layer) => {
+                            if (layer?.kind !== 'model-protocol' || layer.agent !== activeTab) {
+                              return layer;
+                            }
+                            if (layer.index === i) return null;
+                            return layer.index > i ? { ...layer, index: layer.index - 1 } : layer;
+                          });
                           // 只重映射受影响 runtime 的草稿键(删行后同 tab 后续行号
                           // 前移),其它行/另一 runtime 的未提交草稿必须原样保留——
                           // 全量清空会让保存守卫看不到别行的非法文本而静默存旧值
@@ -2041,6 +2276,38 @@ export function CustomProviderDialog({
                       </button>
                       {activeTab === 'pi' && (
                         <div className="flex basis-full flex-col gap-2 pr-12 text-[var(--settings-section-desc)]">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="flex min-w-0 flex-col gap-0.5 leading-snug">
+                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
+                                {t('settings.providers.custom.modelProtocol.label')}
+                              </span>
+                              <span className="text-11">
+                                {t('settings.providers.custom.modelProtocol.help')}
+                              </span>
+                            </span>
+                            <PiModelProtocolDropdown
+                              modelName={m.name || m.id}
+                              value={m.piApi}
+                              open={
+                                childLayer?.kind === 'model-protocol' &&
+                                childLayer.agent === activeTab &&
+                                childLayer.index === i
+                              }
+                              onOpenChange={(open) =>
+                                setChildLayer(
+                                  open
+                                    ? { kind: 'model-protocol', agent: activeTab, index: i }
+                                    : null,
+                                )
+                              }
+                              onChange={(piApi) =>
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  models: setCustomProviderModelPiApi(x.models, i, piApi),
+                                }))
+                              }
+                            />
+                          </div>
                           <label className="flex cursor-pointer items-start gap-2">
                             <input
                               type="checkbox"
@@ -2155,7 +2422,22 @@ export function CustomProviderDialog({
 
                 {/* 请求头（可选） */}
                 <div className="flex flex-col gap-2">
-                  <FieldLabel>{t('settings.providers.custom.fields.headers')}</FieldLabel>
+                  <div className="flex items-center gap-2">
+                    <FieldLabel>{t('settings.providers.custom.fields.headers')}</FieldLabel>
+                    {/* 已存密文头时给明确徽标 —— 明文不回读进 renderer,无徽标会让人误以为没存上。 */}
+                    {activeHeadersCanRemainSaved && (
+                      <span
+                        className="flex items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
+                        style={{
+                          backgroundColor: 'var(--settings-btn-secondary-bg)',
+                          color: 'var(--settings-section-desc)',
+                        }}
+                      >
+                        <Check size={11} strokeWidth={2.5} />
+                        {t('settings.providers.custom.runtimeFill.values.configured')}
+                      </span>
+                    )}
+                  </div>
                   {f.headers.map((h, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <div className="flex-1">
@@ -2430,7 +2712,7 @@ export function ModelPickerOverlay({
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-5 pb-1 pt-4">
+          <div className="flex items-center px-5 pb-1 pt-4">
             <div className="flex min-w-0 flex-col gap-0.5">
               <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
                 {t('settings.providers.custom.fetch.pickerTitle', {
@@ -2447,14 +2729,6 @@ export function ModelPickerOverlay({
                 })}
               </Dialog.Description>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label={t('settings.providers.custom.cancel')}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            >
-              <X size={16} />
-            </button>
           </div>
           {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
           <div className="flex flex-col gap-2 px-5 pt-2">
@@ -2506,7 +2780,7 @@ export function ModelPickerOverlay({
                     role="checkbox"
                     aria-checked={isSelected}
                     onClick={() => toggle(m.id)}
-                    className="flex w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-left hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    className="flex w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-left hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     <span
                       className={cn(

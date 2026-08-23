@@ -9,7 +9,8 @@
  *         renderer modelVisibilityPrefs(不变)。
  *       · **「⋯」菜单 = 停用动作**(所有行,hover 显现):停用 = 准入关,不可被任何
  *         新路由选中。存储 = main 侧 model-disable-store,经 PROVIDER_LIST 的
- *         model.disabled 标志回读,写走 setModelDisable IPC。
+ *         model.disabled 标志回读,写走 setModelDisable IPC。本机 Ollama 行额外
+ *         提供「删除」:会清掉磁盘上的模型文件,并移出 Cindy 目录。
  *       · **底部「已停用」分区 = 停用状态**:停用的行离开原分组、沉到列表底部的
  *         折叠区(复用分组折叠交互,默认展开),行内「启用此模型」即飞回原分组。
  *         "下沉"是停用在整个设置页的统一隐喻(左栏停用的供应商同样沉底)。
@@ -17,7 +18,7 @@
  *     选择面板(modelList.ts 硬排除),没有显示轴 ⇒ 行内**没有开关**,只有「⋯」停用;
  *     其启用状态控制媒体生成等专属链路能否使用它。
  *   - 普通模式:对话模型行恒为一个开关,一次拨动同时写该模型全部可用 agent 的可见性
- *     override;分歧(双端可用但可见性不同)以「已在 X 隐藏」chip 提示,点击进入分别调整。
+ *     override;分歧(多端可用但可见性不同)以「已在 X / Y 隐藏」chip 提示,点击进入分别调整。
  *   - 分别调整模式:对话模型行统一变为两列(列头 Claude Code / Codex),模型在某 agent
  *     不可用时该格显示「—」。停用行不在分组里,不参与分别模式(停用不分 agent,一停全停)。
  *
@@ -32,12 +33,14 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
 import {
   groupModelsForDisplay,
   groupOf,
@@ -46,10 +49,11 @@ import {
 } from '@/components/new-chat/sourceSwitch';
 import {
   isModelEnabled,
-  setManyVisibility,
+  setModelVisibilities,
   setModelVisibility,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
+import { LocalPackagingTag } from './LocalPackagingTag';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 
 import { isAgentSelectableModel } from '@cindy/model-providers';
@@ -236,11 +240,16 @@ export function isCapabilityRow(row: UnionModelRow, userProvider: boolean): bool
   return !!rep && !isAgentSelectableModel(rep, { userProvider });
 }
 
-/** 分歧 = 双端可用且可见性不同(仅对话模型行有意义)。 */
+/** 分歧 = 多端可用且可见性不同(仅对话模型行有意义)。 */
 export function isRowDiverged(providerId: string, row: UnionModelRow): boolean {
   if (row.avail.length < 2) return false;
   const values = row.avail.map((a) => rowEnabled(providerId, row, a));
   return values.some((v) => v !== values[0]);
+}
+
+/** 该行当前隐藏的全部 agent;普通模式的分歧 chip 必须完整展示,不能只取首个。 */
+export function getHiddenAgents(providerId: string, row: UnionModelRow): AgentKind[] {
+  return row.avail.filter((agent) => rowEnabled(providerId, row, agent) === false);
 }
 
 /**
@@ -301,6 +310,8 @@ export function UnifiedModelList({
   refreshDisabled,
   refreshIdleLabel,
   emptyMessage,
+  compactWhenEmpty,
+  compact,
 }: {
   provider: ProviderView;
   /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
@@ -312,8 +323,13 @@ export function UnifiedModelList({
   refreshIdleLabel?: string;
   /** 模型真源当前为空时的说明；搜索无结果仍使用 noResults。 */
   emptyMessage?: string;
+  /** 空列表不抢剩余高度(本机 Ollama:把空间留给下方推荐/下载)。 */
+  compactWhenEmpty?: boolean;
+  /** 有内容时也不抢剩余高度,高度跟行数走(本机 Ollama 已安装列表)。 */
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const [query, setQuery] = useState('');
   const [splitMode, setSplitMode] = useState(false);
   const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>(loadCollapsedMap);
@@ -394,6 +410,26 @@ export function UnifiedModelList({
     [provider.id, t],
   );
 
+  const deleteInstalledModel = useCallback(
+    async (row: UnionModelRow) => {
+      const ok = await confirm({
+        title: t('settings.providers.local.deleteModelConfirmTitle', { name: row.name }),
+        description: t('settings.providers.local.deleteModelConfirmBody', { name: row.name }),
+        confirmText: t('settings.providers.local.deleteModelConfirm'),
+        cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
+        confirmVariant: 'destructive',
+      });
+      if (!ok) return;
+      try {
+        await window.electronAPI.maker.localModelDelete(row.id);
+        toast.success(t('settings.providers.local.deleteModelDone', { name: row.name }));
+      } catch {
+        toast.error(t('settings.providers.local.deleteModelFailed'));
+      }
+    },
+    [confirm, t],
+  );
+
   /** 组级恢复默认(kind:'reset'):删除本供应商整组停用 override —— 供应商级标志、
    *  全部逐模型条目,以及指向已下架模型的**陈旧条目**(它们不渲染成行,逐行启用永远
    *  清不掉;若该模型日后回到目录会被静默停用)。乐观覆盖同 setRowDisabled 口径;
@@ -467,38 +503,46 @@ export function UnifiedModelList({
   const refreshLabel = refreshing
     ? t('settings.providers.models.refreshingAria')
     : (refreshIdleLabel ?? t('settings.providers.models.refreshAria'));
+  const showVisibilityWriteFailure = useCallback(() => {
+    toast.error(t('settings.providers.models.visibilityWriteFailed'));
+  }, [t]);
 
   /** 单开关(显示轴):一次写该行全部可用 agent(分歧行拨动即归一)。写入用各 agent 的
    *  **真实模型 id**(桥接投影行两端 id 不同:chatgpt/gpt-5.5 vs gpt-5.5),不能用规范化后的 row.id。 */
   const toggleRow = useCallback(
     (row: UnionModelRow) => {
       const next = !rowAnyEnabled(provider.id, row);
-      for (const a of row.avail) {
-        const m = row.byAgent[a];
-        if (m) setModelVisibility(a, provider.id, m.id, next);
+      const targets = row.avail.flatMap((agent) => {
+        const model = row.byAgent[agent];
+        return model ? [{ agent, modelId: model.id }] : [];
+      });
+      if (setModelVisibilities(provider.id, targets, next) === false) {
+        showVisibilityWriteFailure();
       }
     },
-    [provider.id],
+    [provider.id, showVisibilityWriteFailure],
   );
 
-  /** 全部显示 / 隐藏:逐 agent 批量写(单 agent 一次落盘)。只作用于**对话模型的显示轴**
+  /** 全部显示 / 隐藏:跨 agent 一次落盘。只作用于**对话模型的显示轴**
    *  —— 能力模型没有显示轴,停用行没有可显示态,都不写(写了 = 无效 override 污染存储,
    *  且历史上会把图像模型漏进选择器)。停用判定含乐观覆盖(pendingDisabled,按规范化
    *  行 key):刚停用、快照未回来的行同样不写(PR #744 review)。 */
   const handleBulk = useCallback(() => {
     const next = !allOn;
-    for (const agent of provider.agents) {
-      const ids = (provider.models[agent] ?? [])
+    const targets = provider.agents.flatMap((agent) =>
+      (provider.models[agent] ?? [])
         .filter(
           (m) =>
             isAgentSelectableModel(m, { userProvider: provider.source === 'user' }) &&
             (pendingDisabled[canonicalModelKey(provider, agent, m.id)] ?? m.disabled === true) !==
               true,
         )
-        .map((m) => m.id);
-      setManyVisibility(agent, provider.id, ids, next);
+        .map((model) => ({ agent, modelId: model.id })),
+    );
+    if (setModelVisibilities(provider.id, targets, next) === false) {
+      showVisibilityWriteFailure();
     }
-  }, [allOn, provider, pendingDisabled]);
+  }, [allOn, provider, pendingDisabled, showVisibilityWriteFailure]);
 
   /** 行级「⋯」菜单(hover 显现;菜单打开期间保持可见):停用动作的唯一入口。 */
   const rowMenu = (row: UnionModelRow) => (
@@ -526,14 +570,29 @@ export function UnifiedModelList({
         <DropdownMenuItem onClick={() => setRowDisabled(row, true)}>
           {t('settings.providers.models.disableModel')}
         </DropdownMenuItem>
+        {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
+          <DropdownMenuItem
+            className="text-[var(--error-fg)] focus:text-[var(--error-fg)]"
+            onClick={() => void deleteInstalledModel(row)}
+          >
+            {t('settings.providers.local.deleteModel')}
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 
+  const listEmpty = groups.length === 0 && disabledRows.length === 0 && !query.trim();
+  const compactEmpty = Boolean(compactWhenEmpty && listEmpty);
+  const compactList = Boolean(compact) || compactEmpty;
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className={cn('flex min-h-0 flex-col', compactList ? 'shrink-0' : 'flex-1')}>
       {/* 工具行:标题(开关语义的唯一说明,**常驻**,不被搜索框挤掉 —— 2026-07-28 用户
-          反馈)+ 搜索 + 刷新(自定义) + 分别调整(双 agent) + 全部开关 */}
+          反馈)+ 搜索 + 刷新(自定义) + 分别调整(双 agent) + 全部开关。
+          本机 Ollama 空列表不渲染工具行:没有可显示的模型时,「在模型选择中显示」
+          没有对象,空间留给下方推荐。 */}
+      {!compactEmpty && (
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5">
         <span className="shrink-0 text-13 font-medium" style={{ color: 'var(--text-secondary)' }}>
           {t('settings.providers.models.available')}
@@ -596,6 +655,7 @@ export function UnifiedModelList({
           </button>
         )}
       </div>
+      )}
 
       {/* 分别模式列头(与行内双列同宽对齐)。 */}
       {splitMode && (
@@ -617,12 +677,15 @@ export function UnifiedModelList({
       {/* 分组 + 模型行 + 底部「已停用」分区:唯一滚动区,与上方固定工具行以
           1px 细线分隔。视觉左右边距 20px = 容器 px-3 + 行 px-2(行悬停底色要包住内容)。 */}
       <div
-        className="min-h-0 flex-1 overflow-y-auto border-t"
+        className={cn('min-h-0 overflow-y-auto border-t', compactList ? 'shrink-0' : 'flex-1')}
         style={{ borderColor: 'var(--settings-theme-card-border)' }}
       >
-        <div className="flex flex-col gap-4 px-3 pb-4 pt-1.5">
+        <div className={cn('flex flex-col gap-4 px-3 pt-1.5', compactList ? 'pb-2' : 'pb-4')}>
           {groups.length === 0 && disabledRows.length === 0 ? (
-            <div className="py-4 text-center text-13" style={{ color: 'var(--text-tertiary)' }}>
+            <div
+              className={cn(compactEmpty ? 'px-2 py-2 text-left' : 'py-4 text-center', 'text-13')}
+              style={{ color: 'var(--text-tertiary)' }}
+            >
               {query.trim()
                 ? t('settings.providers.models.noResults')
                 : (emptyMessage ?? t('settings.providers.models.noResults'))}
@@ -707,13 +770,17 @@ export function UnifiedModelList({
                         .map((a) => `${AGENT_LABEL[a]} ${formatContextWindow(row.byAgent[a]!.contextWindow)}`)
                         .join(' · ')
                     : undefined;
-                  const hiddenAgent = diverged
-                    ? row.avail.find((a) => rowEnabled(provider.id, row, a) === false)
-                    : undefined;
+                  const hiddenAgents = diverged ? getHiddenAgents(provider.id, row) : [];
+                  const divergedChipLabel =
+                    hiddenAgents.length > 0
+                      ? t('settings.providers.models.divergedChip', {
+                          agent: hiddenAgents.map((agent) => AGENT_LABEL[agent]).join(' / '),
+                        })
+                      : '';
                   return (
                     <div
                       key={row.id}
-                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--surface-hover)]"
+                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                     >
                       <span
                         className="min-w-0 truncate text-14 font-medium"
@@ -726,6 +793,9 @@ export function UnifiedModelList({
                       >
                         {rep.name}
                       </span>
+                      {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                        <LocalPackagingTag libraryName={row.id} />
+                      )}
                       {capNote && (
                         /* 注记可收缩截断:窄栏(最小窗口右栏 ~275px)下先压缩次要
                             元数据,保住右侧上下文/菜单/开关列(PR #1102 review 第五轮);
@@ -739,17 +809,18 @@ export function UnifiedModelList({
                         </span>
                       )}
                       <span className="min-w-0 flex-1" />
-                      {!splitMode && diverged && hiddenAgent && (
+                      {!splitMode && diverged && hiddenAgents.length > 0 && (
                         <button
                           type="button"
                           onClick={() => setSplitMode(true)}
-                          className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
+                          className="flex h-[18px] min-w-0 max-w-32 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
                           style={{
                             backgroundColor: 'var(--surface-chip)',
                             color: 'var(--text-secondary)',
                           }}
+                          title={divergedChipLabel}
                         >
-                          {t('settings.providers.models.divergedChip', { agent: AGENT_LABEL[hiddenAgent] })}
+                          <span className="truncate">{divergedChipLabel}</span>
                         </button>
                       )}
                       {/* 固定 44px 右对齐列:上下扫读时数字齐成一条线;合成媒体行
@@ -785,7 +856,11 @@ export function UnifiedModelList({
                                   {m ? (
                                     <Switch
                                       checked={isModelEnabled(a, provider.id, m)}
-                                      onCheckedChange={(v) => setModelVisibility(a, provider.id, m.id, v)}
+                                      onCheckedChange={(v) => {
+                                        if (setModelVisibility(a, provider.id, m.id, v) === false) {
+                                          showVisibilityWriteFailure();
+                                        }
+                                      }}
                                       aria-label={`${rep.name} · ${AGENT_LABEL[a]}`}
                                     />
                                   ) : (
@@ -892,6 +967,16 @@ export function UnifiedModelList({
                         >
                           {t('settings.providers.models.enableModel')}
                         </button>
+                        {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                          <button
+                            type="button"
+                            onClick={() => void deleteInstalledModel(row)}
+                            className="flex h-6 shrink-0 items-center rounded-full px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                            style={{ color: 'var(--error-fg)' }}
+                          >
+                            {t('settings.providers.local.deleteModel')}
+                          </button>
+                        )}
                       </div>
                     );
                   })}

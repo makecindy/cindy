@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   buildQueuePanelSummary,
   buildQueueRowPresentation,
@@ -39,6 +40,10 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  beforeAll(async () => {
+    await i18n.changeLanguage('zh-CN');
+  });
+
   it('builds a text-only queued message that matches the desktop coordinator payload shape', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:03.000Z'));
     const queued = buildQueuedTextMessage(session(), '  hello mobile  ', new Date(), 'q-1');
@@ -527,7 +532,7 @@ describe('inputProjection', () => {
       },
       queueLength: projection.pendingQueue.length,
     });
-    expect(locked.hint).toBe('这条消息正在编辑中,桌面端会暂停自动发送。');
+    expect(locked.hint).toBe('这条消息正在编辑中，桌面端会暂停自动发送。');
     expect(locked.actions.edit.disabledReason).toBe('这条队列消息正在编辑中，完成后再操作。');
   });
 

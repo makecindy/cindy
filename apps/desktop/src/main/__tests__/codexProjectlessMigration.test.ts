@@ -3,10 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-// Migration runner loads drizzle scripts through CommonJS require.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const migration = require('../../../drizzle/scripts/0025_reclassify_codex_projectless_dialogues.ts') as {
-  run: (db: unknown, options?: { codexHomes?: string[] }) => void;
+// Production keeps migration helpers CommonJS; Vitest loads the TS helper through
+// its transformer and consumes the CommonJS default export.
+const { default: migration } = (await import('../../../drizzle/scripts/0025_reclassify_codex_projectless_dialogues')) as {
+  default: { run: (db: unknown, options?: { codexHomes?: string[] }) => void };
 };
 
 let codexHome: string;

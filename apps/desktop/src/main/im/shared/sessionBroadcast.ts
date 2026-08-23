@@ -26,3 +26,21 @@ export function broadcastSessionCreated(sessionId: string): void {
     }
   }
 }
+
+/**
+ * 广播「session 行字段已更新」(标题回写等)到本机所有窗口 + device-link
+ * 控制端。与 created 同一条 tap 通道; 放本模块是因为它只依赖 electron —
+ * fbotTitle 那层还拖着 maker-ipc/title 的重型链, sessionRepo 不能为一条
+ * 广播消息反向 import 它。
+ */
+export function broadcastSessionPatched(sessionId: string, patch: Record<string, unknown>): void {
+  tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    try {
+      win.webContents.send('local-db:sessions:patched', { sessionId, patch });
+    } catch {
+      // best-effort UI 刷新失败不影响 IM 业务
+    }
+  }
+}

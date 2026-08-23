@@ -72,6 +72,9 @@ describe("model registry", () => {
   });
 
   it("normalizes the ChatGPT bridge id and selects OpenAI long-context bands", () => {
+    // 2026-08-16 随上游目录收敛:XD 网关不再拆独立条目,而是作为 `openai/*` 条目的
+    // 额外 route;窗口等元数据**以服务端目录快照为准**(本地不再维护拆分值,快照
+    // 08-14 起两条路由同为 372K)。这里只锁「同一条目、双路由可解析」的结构。
     expect(
       findModelRegistryRoute(registry, "openai", "gpt-5.6-sol", "codex"),
     ).toMatchObject({
@@ -82,11 +85,22 @@ describe("model registry", () => {
       },
     });
     expect(
+      findModelRegistryRoute(registry, "xd", "gpt-5.6-sol", "codex"),
+    ).toMatchObject({
+      entry: { id: "openai/gpt-5.6-sol", perAgent: { codex: { contextWindow: 372_000 } } },
+    });
+    expect(
       resolveModelReferencePrice(registry, "openai", "chatgpt/gpt-5.6-sol", {
         agent: "claude-code",
         inputTokens: 272_000,
       })?.price,
     ).toMatchObject({ inputPerMtok: 5, outputPerMtok: 30 });
+    expect(
+      resolveModelReferencePrice(registry, "openai", "chatgpt/gpt-5.6-sol[1m]", {
+        agent: "claude-code",
+        inputTokens: 272_001,
+      })?.price,
+    ).toMatchObject({ inputPerMtok: 10, outputPerMtok: 45 });
     expect(
       resolveModelReferencePrice(registry, "openai", "gpt-5.6-sol", {
         agent: "codex",
@@ -101,6 +115,16 @@ describe("model registry", () => {
   });
 
   it("selects xAI token bands and time-effective Anthropic prices", () => {
+    expect(
+      resolveModelReferencePrice(registry, "xai", "xai/grok-4.6", {
+        inputTokens: 199_999,
+      })?.price,
+    ).toMatchObject({ inputPerMtok: 2, outputPerMtok: 6, cacheReadPerMtok: 0.5 });
+    expect(
+      resolveModelReferencePrice(registry, "xai", "xai/grok-4.6", {
+        inputTokens: 200_000,
+      })?.price,
+    ).toMatchObject({ inputPerMtok: 2, outputPerMtok: 6, cacheReadPerMtok: 0.5 });
     expect(
       resolveModelReferencePrice(registry, "xai", "xai/grok-4.5", {
         inputTokens: 199_999,

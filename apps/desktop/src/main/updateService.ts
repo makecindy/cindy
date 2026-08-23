@@ -26,9 +26,15 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 
+import {
+  acquirePiSubagentLaunchFence,
+  hasActivePiSubagentRunsSync,
+  requestStopAllPiSubagentRunsSync,
+  stopAllPiSubagentRunsForExit,
+} from '@cindy/maker-core/pi-subagent-runs';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
-import { fetchManifest, getBaseUrl, isDev } from './manifestService';
+import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifest } from './manifestService';
 import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
@@ -40,6 +46,14 @@ import {
   resetAutoUpdateSettings,
   writeAutoRelaunchOnIdle,
 } from './auto-update-settings-store';
+import {
+  isEnableBetaUserCustomized,
+  readUpdateChannelSettings,
+  resetUpdateChannelSettings,
+  tryEnableUncustomizedBetaAtomic,
+  writeEnableBeta,
+} from './updateChannelStore';
+import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer';
 import {
   AUTO_UPDATE_IDLE_THRESHOLD_SECONDS,
   getAutoRelaunchBlockReason,
@@ -91,6 +105,12 @@ interface PatchInfo {
    * fails (deterministic — retry won't help) or when the threshold is hit.
    */
   applyAttempts?: number;
+  /**
+   * 下载这份补丁时的有效渠道。共库另一实例在本进程停机期间切过渠道后,
+   * 冷启动读盘对账会丢掉这份旧包,避免 manifest 失败时把旧渠道 zip 当匹配补丁装上。
+   * 旧 patch-info 没有这个字段,保持原行为。
+   */
+  enableBeta?: boolean;
 }
 
 /**
@@ -134,11 +154,33 @@ const STARTUP_MANIFEST_TIMEOUT_MS = 8_000;
 let currentStatus: UpdateStatus = 'idle';
 let readyVersion: string | undefined;
 let readyFilePath: string | undefined;
+/** 当前 staged 补丁对应的渠道代际。延迟清理用它区分「同路径上的新旧包」。 */
+let readyChannelEpoch: number | undefined;
+/**
+ * 更新渠道代际计数:用户在下载进行中关掉 beta(clearStagedPatch)时 +1,
+ * 让 in-flight 的 checkForUpdate 在写回 patch-info / 恢复旧 patch 前察觉
+ * 「渠道已变」,放弃本次下载产物,避免 opt-out 后仍被装到 beta 版本。
+ */
+let updateChannelEpoch = 0;
+/** 本进程上次看到的有效渠道。别的共库实例改开关后,用这个发现跨进程渠道变化。 */
+let observedEnableBeta = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoRelaunchPollTimer: ReturnType<typeof setInterval> | null = null;
 let isRelaunching = false;
 let lastErrorCode: string | undefined;
 let autoRelaunchInProgress = false;
+/** 资格检查(含异步 busyProbe)进行中的次数。这段窗口暂缓清补丁。 */
+let autoRelaunchDecisionDepth = 0;
+/**
+ * 资格检查期间要求作废的那份旧补丁。
+ * 用路径 + 代际一起记:release / beta 资产 basename 相同时,新包会写回同一
+ * readyFilePath,只比路径会把刚下好的新渠道补丁清掉。
+ */
+let deferredStagedPatch: { path?: string; epoch?: number } | undefined;
+/** 并发渠道写入各自持有一次 hold。失败只能放自己那次,不能清掉别人的保护。 */
+let pendingChannelChangeHolds = 0;
+/** 已经落盘成功的渠道切换。后续失败写入不能把这笔作废请求清掉。 */
+let committedChannelChangeInvalidation = false;
 let lastAutoRelaunchBlockReason: AutoRelaunchBlockReason | null = null;
 let lastBusyAtMs: number | null = null;
 let lastResumeAtMs: number | null = null;
@@ -158,6 +200,22 @@ function broadcastStatus(payload: UpdateStatusPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('update-status', payload);
+    }
+  }
+}
+
+function channelSettingsWire() {
+  return {
+    enableBeta: readUpdateChannelSettings().enableBeta,
+    isCustomized: isEnableBetaUserCustomized(),
+  };
+}
+
+function broadcastChannelSettings(): void {
+  const payload = channelSettingsWire();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('update-channel-settings', payload);
     }
   }
 }
@@ -297,24 +355,50 @@ async function requestAutoRelaunch(
 ): Promise<AutoRelaunchRequestResult> {
   // The startup/splash apply path uses the lighter gate (no idle/busy checks —
   // nothing is in flight at launch); background triggers keep the full policy.
-  const blockReason = useStartupPolicy
-    ? await getStartupRelaunchBlockReason()
-    : await getAutoRelaunchBlockReasonForCurrentState();
-  if (blockReason) {
-    if (blockReason !== lastAutoRelaunchBlockReason) {
-      lastAutoRelaunchBlockReason = blockReason;
-      if (readAutoUpdateSettings().autoRelaunchOnIdle && currentStatus === 'ready') {
-        log.info('auto relaunch blocked (%s)', blockReason);
+  // 资格检查开始就抬深度:后台路径会 await busyProbe,这段空窗里 clearStagedPatch
+  // 若放行,随后 executeRelaunch 会走 no_ready_file。
+  autoRelaunchDecisionDepth += 1;
+  try {
+    const blockReason = useStartupPolicy
+      ? await getStartupRelaunchBlockReason()
+      : await getAutoRelaunchBlockReasonForCurrentState();
+    if (blockReason) {
+      if (blockReason !== lastAutoRelaunchBlockReason) {
+        lastAutoRelaunchBlockReason = blockReason;
+        if (readAutoUpdateSettings().autoRelaunchOnIdle && currentStatus === 'ready') {
+          log.info('auto relaunch blocked (%s)', blockReason);
+        }
       }
+      return { accepted: false, blockReason };
     }
-    return { accepted: false, blockReason };
-  }
 
-  lastAutoRelaunchBlockReason = null;
-  autoRelaunchInProgress = true;
-  log.info('auto relaunch conditions met (%s), applying update v%s', reason, readyVersion ?? '<unknown>');
-  executeRelaunch(theme);
-  return { accepted: true };
+    if (syncObservedUpdateChannel()) {
+      log.info('auto relaunch aborted — shared update channel changed');
+      markCommittedChannelChangeInvalidation();
+      return { accepted: false, blockReason: 'not-ready' };
+    }
+
+    if (shouldAbortStagedPatchApply()) {
+      log.info('auto relaunch aborted — update channel changed during eligibility check');
+      return { accepted: false, blockReason: 'not-ready' };
+    }
+
+    if (!readyFilePath || !fs.existsSync(readyFilePath)) {
+      log.info('auto relaunch aborted — staged patch disappeared during eligibility check');
+      return { accepted: false, blockReason: 'not-ready' };
+    }
+
+    lastAutoRelaunchBlockReason = null;
+    autoRelaunchInProgress = true;
+    log.info('auto relaunch conditions met (%s), applying update v%s', reason, readyVersion ?? '<unknown>');
+    void executeRelaunch(theme);
+    return { accepted: true };
+  } finally {
+    autoRelaunchDecisionDepth = Math.max(0, autoRelaunchDecisionDepth - 1);
+    if (autoRelaunchDecisionDepth === 0 && !isRelaunching && !autoRelaunchInProgress) {
+      flushDeferredStagedPatchClear();
+    }
+  }
 }
 
 async function evaluateAutoRelaunch(reason: string): Promise<void> {
@@ -505,6 +589,23 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
     return { action: 'check' };
   }
 
+  const currentEnableBeta = readUpdateChannelSettings().enableBeta;
+  if (typeof patchInfo.enableBeta === 'boolean' && patchInfo.enableBeta !== currentEnableBeta) {
+    log.info(
+      'discarding staged patch v%s from another update channel (patch=%s current=%s)',
+      patchInfo.version,
+      patchInfo.enableBeta ? 'beta' : 'release',
+      currentEnableBeta ? 'beta' : 'release',
+    );
+    try { fs.unlinkSync(patchFilePath); } catch { /* ignore */ }
+    removePatchInfo();
+    const flag = readReloginFlag();
+    if (flag?.version === patchInfo.version) {
+      clearReloginFlag();
+    }
+    return { action: 'check' };
+  }
+
   const currentVersion = app.getVersion();
   if (patchInfo.version === currentVersion) {
     // Patch matches current version → already applied; clean up and re-check.
@@ -527,6 +628,7 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
   // Patch present, awaiting relaunch.
   readyVersion = patchInfo.version;
   readyFilePath = patchFilePath;
+  readyChannelEpoch = updateChannelEpoch;
   return { action: 'relaunch', version: patchInfo.version };
 }
 
@@ -543,6 +645,183 @@ function writePatchInfo(info: PatchInfo): void {
 
 function removePatchInfo(): void {
   try { fs.unlinkSync(path.join(getUpdatesDir(), PATCH_INFO_FILE)); } catch { /* ignore */ }
+}
+
+function isUpdateApplyCommitted(): boolean {
+  return isRelaunching || autoRelaunchInProgress;
+}
+
+function invalidateInFlightChannelDownloads(): void {
+  updateChannelEpoch += 1;
+  clearCachedManifest();
+}
+
+function readObservedEnableBetaFromDisk(): boolean {
+  return readUpdateChannelSettings().enableBeta;
+}
+
+function restoreObservedEnableBetaFromDisk(): boolean {
+  const enableBeta = readObservedEnableBetaFromDisk();
+  const changed = enableBeta !== observedEnableBeta;
+  observedEnableBeta = enableBeta;
+  return changed;
+}
+
+function syncObservedUpdateChannel(): boolean {
+  if (pendingChannelChangeHolds > 0) return false;
+  const enableBeta = readObservedEnableBetaFromDisk();
+  if (enableBeta === observedEnableBeta) return false;
+  observedEnableBeta = enableBeta;
+  invalidateInFlightChannelDownloads();
+  return true;
+}
+
+function shouldAbortStagedPatchApply(): boolean {
+  if (pendingChannelChangeHolds > 0) return true;
+  if (!deferredStagedPatch) return false;
+  return !isCurrentPatchNewerThanDeferred(deferredStagedPatch);
+}
+
+function rememberDeferredStagedPatch(): void {
+  deferredStagedPatch = {
+    path: readyFilePath ?? deferredStagedPatch?.path,
+    epoch: readyChannelEpoch ?? deferredStagedPatch?.epoch,
+  };
+}
+
+function markCommittedChannelChangeInvalidation(): void {
+  committedChannelChangeInvalidation = true;
+  rememberDeferredStagedPatch();
+}
+
+function clearChannelChangeInvalidation(): void {
+  pendingChannelChangeHolds = 0;
+  committedChannelChangeInvalidation = false;
+  deferredStagedPatch = undefined;
+}
+
+/** 先拦住 apply,不删 zip / patch-info。写入没成功时还能继续用这份补丁。 */
+function holdStagedPatchForPendingChannelChange(): void {
+  pendingChannelChangeHolds += 1;
+  rememberDeferredStagedPatch();
+}
+
+/** 只放掉本次未提交的 hold。已落盘或共库已切渠道的作废请求必须留下。 */
+function releasePendingChannelChangeHold(): void {
+  pendingChannelChangeHolds = Math.max(0, pendingChannelChangeHolds - 1);
+  if (pendingChannelChangeHolds === 0 && !committedChannelChangeInvalidation) {
+    deferredStagedPatch = undefined;
+  }
+}
+
+/**
+ * 本次写入没提交。磁盘若已被别的实例改过,转成交割作废,不能把别人的标记清掉。
+ */
+function abandonPendingChannelChangeHold(): void {
+  if (restoreObservedEnableBetaFromDisk()) {
+    commitPendingChannelChange();
+    return;
+  }
+  releasePendingChannelChangeHold();
+}
+
+/** 本次写入已经改到盘上。后续失败的并发写入不能再放开 apply。 */
+function commitPendingChannelChange(): void {
+  pendingChannelChangeHolds = Math.max(0, pendingChannelChangeHolds - 1);
+  markCommittedChannelChangeInvalidation();
+}
+
+function isCurrentPatchNewerThanDeferred(
+  stale: { path?: string; epoch?: number },
+): boolean {
+  if (readyChannelEpoch != null && stale.epoch != null) {
+    return readyChannelEpoch > stale.epoch;
+  }
+  return Boolean(readyFilePath && readyFilePath !== stale.path);
+}
+
+function discardStagedPatchFiles(): void {
+  const discardedVersion = readyVersion;
+  if (readyFilePath) {
+    try { fs.unlinkSync(readyFilePath); } catch { /* ignore */ }
+  }
+  readyVersion = undefined;
+  readyFilePath = undefined;
+  readyChannelEpoch = undefined;
+  removePatchInfo();
+  const flag = discardedVersion ? readReloginFlag() : null;
+  if (flag?.version === discardedVersion) {
+    clearReloginFlag();
+  }
+  if (
+    currentStatus === 'ready' ||
+    currentStatus === 'superseding' ||
+    currentStatus === 'downloading'
+  ) {
+    setStatus('idle');
+  }
+}
+
+function flushDeferredStagedPatchClear(): void {
+  if (!deferredStagedPatch) return;
+  if (isUpdateApplyCommitted() || autoRelaunchDecisionDepth > 0) return;
+  if (pendingChannelChangeHolds > 0) return;
+  const stale = deferredStagedPatch;
+  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
+    // 新渠道下载还在飞:不要再推进代际,也不要删同路径 dest。
+    // 标记先留着——下载失败若把旧补丁快照写回来,后续还能再清。
+    if (readyChannelEpoch === stale.epoch) {
+      readyVersion = undefined;
+      readyFilePath = undefined;
+      readyChannelEpoch = undefined;
+    }
+    return;
+  }
+  clearChannelChangeInvalidation();
+  if (isCurrentPatchNewerThanDeferred(stale)) {
+    log.info('keeping newer staged patch after deferred channel-change clear');
+    if (stale.path && stale.path !== readyFilePath) {
+      try { fs.unlinkSync(stale.path); } catch { /* ignore */ }
+    }
+    return;
+  }
+  discardStagedPatchFiles();
+}
+
+/**
+ * 渠道切换重启前把未应用的旧补丁从盘上拿掉。
+ * 延迟清理只活在内存里,这里不补清的话,下次启动仍可能把旧渠道 zip 当匹配补丁装上。
+ */
+function discardUnappliedStagedPatchForChannelRelaunch(): void {
+  if (isUpdateApplyCommitted()) return;
+  clearChannelChangeInvalidation();
+  discardStagedPatchFiles();
+}
+
+/**
+ * 清掉已 staged 的补丁(ready 态):删 zip + patch-info.json,状态回 idle。
+ * 切渠道时调用——opt-out 后不能仍让 staged 的旧渠道 patch 在下次启动/后台
+ * 轮询里被装上去(切渠道不等于切版本,必须把旧渠道的补丁作废)。
+ * 已经开始应用时不能清,否则 executeRelaunch 会走 no_ready_file。
+ * 资格检查还在等 busyProbe 时先记下 zip,但立刻丢掉 patch-info,
+ * 避免用户马上切渠道重启后旧补丁跨进程复活。
+ */
+function clearStagedPatch(): void {
+  if (isUpdateApplyCommitted()) {
+    log.info('skipping staged patch clear — update apply already in flight');
+    return;
+  }
+  if (autoRelaunchDecisionDepth > 0) {
+    rememberDeferredStagedPatch();
+    // 立刻作废旧渠道 in-flight 下载,避免下载完成后又把旧补丁写成 ready。
+    invalidateInFlightChannelDownloads();
+    // patch-info 立刻拿掉:渠道重启走 app.quit(),等不到 probe/finally。
+    removePatchInfo();
+    log.info('deferring staged patch clear until auto-relaunch eligibility settles');
+    return;
+  }
+  invalidateInFlightChannelDownloads();
+  discardStagedPatchFiles();
 }
 
 function incrementApplyAttempts(): void {
@@ -677,6 +956,16 @@ export function isVersionlessAppVersion(version: string): boolean {
 
 async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<CheckForUpdateResult> {
   log.info('checkForUpdate() called, currentStatus=%s', currentStatus);
+  // 先跟共享设置对一次有效渠道:共库另一实例改过开关时,本进程内存代际还停在旧值。
+  if (syncObservedUpdateChannel()) {
+    log.info('shared update channel changed — discarding staged patch before check');
+    clearStagedPatch();
+    return 'idle';
+  }
+  // 快照发起时的渠道代际;下载期间若用户 opt-out(clearStagedPatch 递增),
+  // 成功/失败写回前都据此作废本次产物。
+  const channelEpochAtStart = updateChannelEpoch;
+  const channelEnableBetaAtStart = observedEnableBeta;
 
   if (isVersionlessAppVersion(app.getVersion())) {
     log.info('Versionless build (placeholder %s) — in-app update disabled', app.getVersion());
@@ -696,6 +985,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const wasReady = currentStatus === 'ready';
   const previousReadyVersion = wasReady ? readyVersion : undefined;
   const previousReadyFilePath = wasReady ? readyFilePath : undefined;
+  const previousReadyChannelEpoch = wasReady ? readyChannelEpoch : undefined;
 
   // 只有非 ready 路径才广播 'checking' — wasReady 路径下广播 checking 会让 banner
   // 的可见条件(status === 'ready' || 'superseding')瞬间不满足,banner 抖一下。
@@ -842,12 +1132,25 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       cleanOldFiles(fileName);
     }
 
+    // 下载期间用户切渠道(渠道代际已变):放弃这次下载的产物,不写 patch-info。
+    // 否则会重新落盘一份旧渠道 patch,用户切渠道后仍被呈现旧版本更新。
+    if (channelEpochAtStart !== updateChannelEpoch) {
+      log.info('update channel changed during download — discarding patch v%s', latestVersion);
+      try { fs.unlinkSync(destPath); } catch { /* ignore */ }
+      // 必须 setStatus:切渠道可能发生在请求仍在 checking 阶段时(clearStagedPatch
+      // 不覆盖 checking),本分支之前已被 setStatus('downloading'),不归位的话
+      // update-check-now 会一直 short-circuit 返回 downloading。
+      setStatus('idle');
+      return 'idle';
+    }
+
     const requireRelogin = manifest.app.requireRelogin === true;
     writePatchInfo({
       version: latestVersion,
       fileName,
       sha256: asset.sha256.toLowerCase(),
       requireRelogin,
+      enableBeta: channelEnableBetaAtStart,
     });
     // release-relogin-on-update: drop the marker the moment we've committed a
     // good patch on disk. Doing it here (rather than inside the platform
@@ -859,6 +1162,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     }
     readyVersion = latestVersion;
     readyFilePath = result.path;
+    readyChannelEpoch = updateChannelEpoch;
     setStatus('ready', { version: latestVersion });
     return 'ready';
   } catch (err) {
@@ -875,9 +1179,27 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     // readyFilePath 全都没动过,直接重新广播 ready 让 banner 按钮从 loading 恢复成可点。
     // 下一次 30min 轮询会再次尝试 b。
     if (wasReady) {
+      // 下载期间用户切渠道:旧 patch 已被作废,不能从局部快照恢复。
+      // 代际在下载开始前就可能已经推进过,所以还要看旧补丁自己的代际。
+      const staleChannelPatch =
+        channelEpochAtStart !== updateChannelEpoch ||
+        (previousReadyChannelEpoch != null && previousReadyChannelEpoch !== updateChannelEpoch);
+      if (staleChannelPatch) {
+        log.info('update channel changed during superseding download — not restoring stale patch');
+        if (previousReadyFilePath) {
+          try { fs.unlinkSync(previousReadyFilePath); } catch { /* ignore */ }
+        }
+        readyVersion = undefined;
+        readyFilePath = undefined;
+        readyChannelEpoch = undefined;
+        removePatchInfo();
+        setStatus('idle');
+        return 'idle';
+      }
       log.info('Superseding download failed — rolling back to ready v%s', previousReadyVersion);
       readyVersion = previousReadyVersion;
       readyFilePath = previousReadyFilePath;
+      readyChannelEpoch = previousReadyChannelEpoch;
       setStatus('ready', { version: previousReadyVersion });
       return 'ready';
     }
@@ -905,8 +1227,27 @@ function handleApplyFailure(reason: string): void {
   removePatchInfo();
   readyVersion = undefined;
   readyFilePath = undefined;
+  readyChannelEpoch = undefined;
   isRelaunching = false;
   autoRelaunchInProgress = false;
+  // Every failure exit converges here, including the two that fire *after*
+  // `executeRelaunch` has already returned: the Windows updater registers its
+  // `error` and 5s spawn-timeout callbacks and returns immediately, so
+  // `isRelaunching` was still true when the outer `finally` checked it and the
+  // fence was skipped. It then stood for the rest of the process's life, and
+  // every durable Subagent launch this host attempted was refused as "Cindy is
+  // restarting". Releasing here covers the synchronous refusals too, where it
+  // is simply redundant — `clearSubagentLaunchFence` nulls the handle first, so
+  // the outer `finally` finds nothing left to do.
+  //
+  // Not awaited, because nothing here can: this is a `void` handler called from
+  // a child-process event. Nothing reads the outcome — the only consumer is the
+  // next launch attempt — and the release itself is serialised behind the
+  // fence's per-file work chain. The success path never reaches this function:
+  // a spawned updater ends in `forceQuit()`, and the fence is meant to stand.
+  void clearSubagentLaunchFence().catch((err: unknown) => {
+    log.error('clearing the Subagent launch fence after a failed apply failed: %s', String(err));
+  });
   setStatus('error', { errorCode: 'updater_spawn_failed' });
 }
 
@@ -1019,6 +1360,14 @@ function forceQuit(): void {
   // build_app uses detached process groups, so parent exit does not reliably
   // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
   abortIOSSimulatorOperationsForExit();
+  // Residual window only, and now a millisecond-scale one: `executeRelaunch`
+  // reclaimed this runtime's runners and then confirmed the agent home was
+  // still quiet, refusing to get here otherwise. What is left is the gap
+  // between that confirmation and this exit. Stays synchronous by necessity —
+  // awaiting anything here can pop a dialog and stall the updater's pid poll.
+  requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
+    hostPid: process.pid,
+  });
   // Node 子进程同理——before-quit 的 destroyAll 不会触发,这里同步 kill。
   try { getGhostNodeRuntimeBroker().destroyAll(); } catch { /* best-effort */ }
   for (const win of BrowserWindow.getAllWindows()) {
@@ -1067,7 +1416,123 @@ function executeUpdateMacOS(zipPath: string): void {
   forceQuit();
 }
 
-function executeRelaunch(theme: 'light' | 'dark'): void {
+/**
+ * Live launch fence, held from the first reclaim pass until the process exits.
+ * Cleared on every cancellation path, so a refused relaunch cannot leave this
+ * host unable to start Subagents.
+ */
+let releaseSubagentLaunchFence: (() => Promise<void>) | null = null;
+
+async function clearSubagentLaunchFence(): Promise<void> {
+  const release = releaseSubagentLaunchFence;
+  releaseSubagentLaunchFence = null;
+  if (release) await release().catch(() => undefined);
+}
+
+/** Total ceiling for the reclaim, including every re-check round. */
+const SUBAGENT_RECLAIM_TOTAL_MS = 6_000;
+/** Rounds before we stop trying and cancel the relaunch instead. */
+const SUBAGENT_RECLAIM_MAX_ROUNDS = 3;
+
+/**
+ * One reclaim pass over this runtime's durable Subagent runners.
+ *
+ * Budget: 2s for the stop mailbox plus a 1.5s ceiling on the escalation (the
+ * reclaims run concurrently), with a 4s race as the hard stop so a wedged probe
+ * can never hold the update — and never pops a dialog, which is the whole
+ * reason this path bypasses the graceful chain.
+ */
+async function reclaimSubagentRunnersOnce(agentHome: string): Promise<boolean> {
+  try {
+    return await Promise.race([
+      stopAllPiSubagentRunsForExit(agentHome, 2_000, {
+        // Scoped to this process so an update relaunch never kills a concurrent
+        // instance's Subagents out of the shared agent home.
+        hostPid: process.pid,
+        killUnresponsiveRunners: true,
+        // Inside the 4s ceiling below, leaving the 2s stop wait its own room.
+        killBudgetMs: 1_500,
+      }),
+      new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), 4_000); }),
+    ]);
+  } catch (err) {
+    log.error('Subagent reclaim before update relaunch failed: %s', String(err));
+    return false;
+  }
+}
+
+/**
+ * Reclaim until the agent home is *stable*, not merely until one pass says so.
+ *
+ * A single pass proves nothing about the moment after it: the parent task is
+ * still running while we work, so it can launch another durable runner between
+ * the last scan and `process.exit(0)` — and that one would survive the update
+ * with credentials nobody is left holding. Stability here means a pass returned
+ * true and a fresh scan afterwards finds nothing active; anything else gets
+ * another round, up to a hard ceiling. Failing to reach it cancels the
+ * relaunch, which is the same verdict as failing to reclaim.
+ */
+async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
+  const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+  // Close the door before the first sweep, not after the last one. The spawn
+  // that has to be prevented happens inside the Pi process, in an extension the
+  // Host never calls, so re-scanning can only ever narrow the window — the
+  // fence removes it. The loop below then clears whatever was already in flight
+  // when the door closed. Released by the caller on every exit path.
+  releaseSubagentLaunchFence = await acquirePiSubagentLaunchFence(agentHome).catch((err) => {
+    log.error('Could not raise the Subagent launch fence: %s', String(err));
+    return null;
+  });
+  if (!releaseSubagentLaunchFence) return false;
+  const deadline = Date.now() + SUBAGENT_RECLAIM_TOTAL_MS;
+  for (let round = 1; round <= SUBAGENT_RECLAIM_MAX_ROUNDS; round += 1) {
+    if (!await reclaimSubagentRunnersOnce(agentHome)) return false;
+    let stillActive: boolean;
+    try {
+      stillActive = hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid });
+    } catch (err) {
+      // An unreadable agent home cannot be called stable.
+      log.error('Subagent stability re-check failed: %s', String(err));
+      return false;
+    }
+    if (!stillActive) return true;
+    log.warn('A durable Subagent run appeared after reclaim round %d; retrying', round);
+    if (Date.now() >= deadline) break;
+  }
+  return false;
+}
+
+/**
+ * Never rejects.
+ *
+ * This became async so the Subagent reclaim could be awaited before the updater
+ * spawns, and that quietly changed the failure contract: a throw used to reach
+ * the caller synchronously, but both call sites are fire-and-forget, so after
+ * the change *any* throw became an unhandled rejection. CI caught it on the
+ * first `statSync` after the gate (the staged patch had been cleaned up under a
+ * finished test), failing the whole run while every assertion passed. Production
+ * has the same shape: a patch file that disappears between the readiness check
+ * and the spawn.
+ */
+async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
+  try {
+    await executeRelaunchUnguarded(theme);
+  } catch (err) {
+    log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
+    try {
+      handleApplyFailure('relaunch_failed');
+    } catch (cleanupErr) {
+      log.error('executeRelaunch() failure cleanup also failed: %s', String(cleanupErr));
+    }
+  } finally {
+    // Any return from here that is not `process.exit` means the relaunch did
+    // not happen, so the fence must come down — including the early returns
+    // inside the guarded body.
+    if (!isRelaunching) await clearSubagentLaunchFence();
+  }
+}
+
+async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -1084,10 +1549,48 @@ function executeRelaunch(theme: 'light' | 'dark'): void {
     return;
   }
 
+  if (syncObservedUpdateChannel() || shouldAbortStagedPatchApply()) {
+    const pendingHold = pendingChannelChangeHolds > 0;
+    log.info(
+      pendingHold || shouldAbortStagedPatchApply()
+        ? 'executeRelaunch() aborted — update channel changed during eligibility check'
+        : 'executeRelaunch() aborted — shared update channel changed',
+    );
+    isRelaunching = false;
+    autoRelaunchInProgress = false;
+    // 写入还没落盘,或当前已经是新渠道补丁:只拦住 apply,别把 zip 清掉。
+    if (
+      pendingHold
+      || (deferredStagedPatch && isCurrentPatchNewerThanDeferred(deferredStagedPatch))
+    ) {
+      return;
+    }
+    // 标志先放下,否则 clearStagedPatch 会当成 apply 已提交而跳过。
+    clearStagedPatch();
+    return;
+  }
+
   log.info('executeRelaunch() called, theme=%s, readyFilePath=%s', theme, maskPath(readyFilePath));
   if (!readyFilePath || !fs.existsSync(readyFilePath)) {
     log.error('No ready update file to apply');
     handleApplyFailure('no_ready_file');
+    return;
+  }
+
+  // Gate *before* the updater is spawned, not inside forceQuit: once the
+  // updater script is running it polls our pid and SIGKILLs us after 120s
+  // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
+  // process alive — it only delays the kill. Refusing here is the last point
+  // where "do not relaunch" is still a real outcome.
+  //
+  // A runner we cannot confirm stopped holds direct BYOM credentials inherited
+  // through its spawn env, and the relaunched app has no handle to it.
+  if (!await reclaimSubagentRunnersForRelaunch()) {
+    log.error(
+      'executeRelaunch() cancelled — PI Subagent runners could not be confirmed stopped; '
+      + 'update relaunch aborted rather than leaving them running unsupervised',
+    );
+    handleApplyFailure('subagent_reclaim_unconfirmed');
     return;
   }
 
@@ -1132,7 +1635,7 @@ export function initUpdateService(): void {
     // default and the .env'd-out look most users have.
     const resolved = theme === 'light' || theme === 'dark' ? theme : 'dark';
     resolvedRelaunchTheme = resolved;
-    executeRelaunch(resolved);
+    void executeRelaunch(resolved);
   });
 
   ipcMain.handle(
@@ -1181,6 +1684,92 @@ export function initUpdateService(): void {
     resetAutoUpdateSettings();
     void evaluateAutoRelaunch('settings-reset');
     return autoUpdateSettingsWire();
+  });
+
+  // beta 测试渠道(设备级)开关。开关本身即时落盘,但 manifest 通道只在
+  // 下一次 fetchManifest(后台轮询)或重启后才会切换;设置页打开后引导用户重启。
+  // 这些 handler 写本地设置 / 触发重启,按 electron-security-and-process-boundaries.md
+  // §5 必须做 trusted-renderer 来源断言——utility/Ghost 等带 preload 的窗口不应能改
+  // 更新设置或重启应用(旧 update-auto-settings 没断言是历史债,不构成豁免)。
+  ipcMain.handle('update-channel-settings-get', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return channelSettingsWire();
+  });
+
+  ipcMain.handle('update-channel-settings-set', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!payload || typeof payload !== 'object') {
+      throwIpcError('INVALID_PARAMS', 'update channel settings payload required');
+    }
+    const next = (payload as { enableBeta?: unknown }).enableBeta;
+    if (typeof next !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enableBeta required (boolean)');
+    }
+    const wasBeta = readUpdateChannelSettings().enableBeta;
+    // 先拦住 apply 再等落盘:writeEnableBeta 可能卡住跨进程锁。
+    // 真正写成之后再删 zip;写入失败则放开 hold,旧补丁还能用。
+    // 写入前不要改 observedEnableBeta:失败路径会按磁盘对账,
+    // 乐观改成目标值会把「磁盘没变」误判成别人已经切过渠道。
+    if (wasBeta !== next) {
+      holdStagedPatchForPendingChannelChange();
+    }
+    try {
+      await writeEnableBeta(next);
+    } catch (err) {
+      if (wasBeta !== next) {
+        abandonPendingChannelChangeHold();
+      }
+      log.error('writeEnableBeta failed:', err);
+      throwIpcError('INTERNAL', 'failed to write update channel settings');
+    }
+    if (wasBeta !== next) {
+      observedEnableBeta = next;
+      commitPendingChannelChange();
+      clearStagedPatch();
+    }
+    return channelSettingsWire();
+  });
+
+  ipcMain.handle('update-channel-settings-reset', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const wasBeta = readUpdateChannelSettings().enableBeta;
+    if (wasBeta) {
+      holdStagedPatchForPendingChannelChange();
+    }
+    try {
+      await resetUpdateChannelSettings();
+    } catch (err) {
+      if (wasBeta) {
+        abandonPendingChannelChangeHold();
+      }
+      log.error('resetUpdateChannelSettings failed:', err);
+      throwIpcError('INTERNAL', 'failed to reset update channel settings');
+    }
+    if (wasBeta) {
+      observedEnableBeta = false;
+      commitPendingChannelChange();
+      clearStagedPatch();
+    }
+    return channelSettingsWire();
+  });
+
+  // 打开 beta 前的预检:探测 manifest-{platform}-beta.json 是否可达。
+  ipcMain.handle('update-channel-probe-beta', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const available = await probeBetaManifest();
+    return { available };
+  });
+
+  // 用户主动重启:让 beta 通道切换在下次冷启动的 manifest 拉取前生效。
+  // 用 app.quit() 而非 app.exit(0):切渠道重启不是 updater 替换场景,没有独立更新器
+  // 进程负责收尾,必须走 before-quit 链优雅停掉 Codex/IM/后台服务、落盘本地状态。
+  // app.relaunch() 只是标记「退出后重启」,真正触发重启的是 app.quit() 的退出流程。
+  ipcMain.handle('update-channel-relaunch', (event) => {
+    assertTrustedAppRendererEvent(event);
+    log.info('relaunch requested for update channel change');
+    discardUnappliedStagedPatchForChannelRelaunch();
+    app.relaunch();
+    app.quit();
   });
 
   ipcMain.on('update-set-relaunch-theme', (_event, theme: 'light' | 'dark') => {
@@ -1275,6 +1864,7 @@ export function initUpdateService(): void {
         );
         readyVersion = undefined;
         readyFilePath = undefined;
+        readyChannelEpoch = undefined;
       }
 
       // Step 3: download (re-using the manifest we already have). Route through
@@ -1339,7 +1929,42 @@ export function initUpdateService(): void {
     }, POLL_INTERVAL_MS);
   }, FIRST_CHECK_DELAY_MS);
 
+  observedEnableBeta = readUpdateChannelSettings().enableBeta;
   log.info('Initialized — first check in 10s, polling every 30min');
+}
+
+/**
+ * 登录态落地后给尚未自定义过开关的设备打开 beta。
+ * 渠道从关变开时作废已 staged 的旧渠道补丁,与设置页手动打开同一口径。
+ * 不 relaunch:本次进程继续走当前通道,下次冷启动 / 用户自行重启再生效。
+ */
+export async function enableUncustomizedBetaChannel(
+  shouldWrite: () => boolean = () => true,
+): Promise<boolean> {
+  const wasBeta = readUpdateChannelSettings().enableBeta;
+  // 先拦住 apply 再等落盘。身份守卫拒绝或写入失败时,旧补丁还得能用。
+  if (!wasBeta) {
+    holdStagedPatchForPendingChannelChange();
+  }
+  try {
+    const wrote = await tryEnableUncustomizedBetaAtomic(shouldWrite);
+    if (wrote && !wasBeta) {
+      observedEnableBeta = true;
+      commitPendingChannelChange();
+      clearStagedPatch();
+      broadcastChannelSettings();
+      return wrote;
+    }
+    if (!wasBeta) {
+      abandonPendingChannelChangeHold();
+    }
+    return wrote;
+  } catch (err) {
+    if (!wasBeta) {
+      abandonPendingChannelChangeHold();
+    }
+    throw err;
+  }
 }
 
 export function stopUpdateService(): void {

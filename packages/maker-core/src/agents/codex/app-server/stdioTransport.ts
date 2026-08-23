@@ -61,6 +61,8 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     // Windows: 不开 shell, 直接走 binary; 走 shell 会带来 env injection 风险
     // 且 stdio piping 行为不可控。
     shell: false,
+    // Windows 上 app-server 及其控制台句柄不应打断桌面端 UI。
+    windowsHide: true,
     // Linux/macOS: 跟父进程同 process group, 父进程退出时一并被收割。
     detached: false,
   });

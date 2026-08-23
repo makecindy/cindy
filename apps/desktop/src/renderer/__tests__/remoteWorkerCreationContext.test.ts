@@ -45,8 +45,8 @@ describe('remote Orca Worker creation context', () => {
     );
 
     expect(sessionView).toContain('deviceId={remoteDeviceId}');
-    expect(workerPanel).toContain('deviceId={deviceId}');
-    expect(workersTabBody).toContain('deviceId: leadSession?.deviceLinkDeviceId');
+    expect(workerPanel).toContain('deviceId={deviceId ?? undefined}');
+    expect(workersTabBody).toContain('deviceId: ctx.deviceLinkDeviceId');
   });
 
   it('never uses the controller API key to gate a remote model row', () => {

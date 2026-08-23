@@ -1282,6 +1282,8 @@ describe('dispatcher 核心语义', () => {
     await tick();
     const firstSessionId = fr.calls[0]?.sessionId;
     expect(firstSessionId).toBeTruthy();
+    expect(fr.calls[0]).toMatchObject({ isNew: true, prompt: '干活' });
+    expect(fr.calls[0]).not.toHaveProperty('replacementOfSessionId');
 
     d.handleDispatch(
       'conn-1',
@@ -1394,6 +1396,114 @@ describe('dispatcher 核心语义', () => {
     });
     expect(fr.calls).toHaveLength(1);
     expect(bindings.get('conn-1', externalKey)).toBe(replacementSessionId);
+    fr.finish();
+  });
+
+  it('replacement 再次失效时仍从最初任务恢复原始需求，不把“再试试”当上下文', async () => {
+    const dd = dialogueDep();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const bindings = memoryBindings();
+    const externalKey = 'team-slack:C1:replacement-context';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep, bindings });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'original',
+        externalKey,
+        sessionId: null,
+        workspace: 'xdmaker',
+        prompt: '检查支付回调失败的问题并修复',
+      }),
+      c.send,
+    );
+    await tick();
+    const originalSessionId = fr.calls[0]?.sessionId;
+    expect(originalSessionId).toBeTruthy();
+    bindings.set('conn-1', externalKey, originalSessionId!);
+    sessions[originalSessionId!] = { workingDir: WS_DIR, usable: false };
+    fr.finish({ status: 'error', errorMessage: 'token expired' });
+    await tick();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'retry',
+        externalKey,
+        sessionId: originalSessionId,
+        workspace: null,
+        prompt: '再试试',
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls[1]).toMatchObject({
+      isNew: true,
+      replacementOfSessionId: originalSessionId,
+      replacementPrompt: '检查支付回调失败的问题并修复',
+      prompt: '再试试',
+    });
+    const firstReplacementId = fr.calls[1]?.sessionId;
+    expect(firstReplacementId).toBeTruthy();
+    sessions[firstReplacementId!] = { workingDir: WS_DIR, usable: false };
+    fr.finish({ status: 'error', errorMessage: 'models not ready' });
+    await tick();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'retry-again',
+        externalKey,
+        sessionId: firstReplacementId,
+        workspace: null,
+        prompt: '再试一次',
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls[2]).toMatchObject({
+      isNew: true,
+      replacementOfSessionId: originalSessionId,
+      replacementPrompt: '检查支付回调失败的问题并修复',
+      prompt: '再试一次',
+    });
+    fr.finish();
+  });
+
+  it('显式失效目标不属于当前 lane 时不读取它的上下文', async () => {
+    const dd = dialogueDep();
+    const fr = fakeRunner({
+      sessions: {
+        'private-session': {
+          workingDir: path.join(DIALOGUE_ROOT, '2026-07-07', 'private-session'),
+          usable: false,
+        },
+      },
+    });
+    const externalKey = 'team-slack:C1:foreign-stale';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'foreign-stale',
+        externalKey,
+        sessionId: 'private-session',
+        workspace: null,
+        prompt: '再试试',
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls[0]).toMatchObject({ isNew: true, prompt: '再试试' });
+    expect(fr.calls[0]).not.toHaveProperty('replacementOfSessionId');
+    expect(fr.calls[0]).not.toHaveProperty('replacementPrompt');
     fr.finish();
   });
 

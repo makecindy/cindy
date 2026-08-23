@@ -1,4 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import {
+  mkdirSync,
+  mkdtempSync,
+  promises as fsPromises,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { Maker, type CreateSessionOptions } from './maker.js';
@@ -12,6 +21,7 @@ import {
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
 import type { AgentKind, PermissionMode } from './types/common.js';
 import type { AgentEvent } from './types/events.js';
+import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 
 /** A generator that never completes — simulates a live session handle. */
 async function* neverEndingIterator(): AsyncGenerator<AgentEvent> {
@@ -103,8 +113,38 @@ function createAgent(
       extraDirs: { supported: false },
     },
     startSession,
+    async dispose() {},
   } as unknown as BaseAgent;
 }
+
+describe('Maker Pi managed-package skill boundary', () => {
+  it('allows package skills only for previews and ordinary local Pi tasks', async () => {
+    const storage = createStorage();
+    const base = {
+      agentKind: 'pi' as const,
+      workDir: '/repo',
+      title: 'Pi',
+      model: 'm',
+    };
+    await storage.create({ id: 'local', ...base });
+    await storage.create({ id: 'review', ...base, reviewMode: true });
+    await storage.create({ id: 'remote', ...base, remoteHostId: 'ssh-host' });
+    const agent = createAgent(async () => {
+      throw new Error('not used');
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [] }));
+    const maker = new Maker({ agents: { pi: agent }, storage, logger: createLogger() });
+
+    await maker.listAgentSkills('pi', { workingDir: '/repo' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'local' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'review' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'remote' });
+
+    expect(vi.mocked(agent.listAgentSkills).mock.calls.map(([options]) => (
+      options.includeManagedPiPackages
+    ))).toEqual([true, true, false, false]);
+  });
+});
 
 function createHandle(args: {
   id: string;
@@ -231,6 +271,356 @@ describe('Maker session creation singleflight', () => {
 
     await expect(maker.createSession({ ...options })).resolves.toBeInstanceOf(Session);
     expect(startSession).toHaveBeenCalledTimes(2);
+  });
+
+  // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage 写
+  // 失败时, PI(无 codexThreadClaim)的 handle 也必须 close, 否则远端残留。
+  it('closes the agent handle when session storage fails (non-Codex/PI path)', async () => {
+    const closeSpy = vi.fn(async () => undefined);
+    const startSession = vi.fn(async () => {
+      const h = createHandle({ id: 'pi-handle', agentKind: 'pi' });
+      h.close = closeSpy;
+      return h;
+    });
+    const storage = createStorage();
+    const origCreate = storage.create;
+    storage.create = vi.fn(async () => {
+      throw new Error('db lock');
+    });
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-storage-fail',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    };
+
+    await expect(maker.createSession(options)).rejects.toThrow('db lock');
+    // handle 被 close(agent-agnostic 回滚) —— 即使没有 codexThreadClaim。
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(startSession).toHaveBeenCalledTimes(1);
+    void origCreate;
+  });
+
+  it('blocks a replacement spawn until an unpublished handle is confirmed closed', async () => {
+    let cleanupCanSucceed = false;
+    const firstClose = vi.fn(async () => {
+      if (!cleanupCanSucceed) throw new Error('termination unconfirmed');
+    });
+    const firstHandle = createHandle({ id: 'pi-orphan', agentKind: 'pi' });
+    firstHandle.close = firstClose;
+    const replacementHandle = createHandle({ id: 'pi-replacement', agentKind: 'pi' });
+    const startSession = vi.fn()
+      .mockResolvedValueOnce(firstHandle)
+      .mockResolvedValueOnce(replacementHandle);
+    const storage = createStorage();
+    const originalCreate = storage.create;
+    storage.create = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('db lock'))
+      .mockImplementation((input) => originalCreate.call(storage, input));
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-storage-cleanup-fail',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    };
+
+    await expect(maker.createSession(options)).rejects.toThrow('db lock');
+    await expect(maker.createSession(options)).rejects.toThrow('termination unconfirmed');
+    expect(startSession).toHaveBeenCalledTimes(1);
+
+    cleanupCanSucceed = true;
+    await expect(maker.createSession(options)).resolves.toBeInstanceOf(Session);
+    expect(firstClose).toHaveBeenCalledTimes(3);
+    expect(startSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries quarantined unpublished handles during shutdown and remains idempotent', async () => {
+    let cleanupCanSucceed = false;
+    const close = vi.fn(async () => {
+      if (!cleanupCanSucceed) throw new Error('termination unconfirmed');
+    });
+    const failedHandle = createHandle({ id: 'pi-orphan', agentKind: 'pi' });
+    failedHandle.close = close;
+    const storage = createStorage();
+    storage.create = vi.fn(async () => {
+      throw new Error('db lock');
+    });
+    const maker = new Maker({
+      agents: { pi: createAgent(async () => failedHandle, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-shutdown-cleanup',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    };
+
+    await expect(maker.createSession(options)).rejects.toThrow('db lock');
+    expect(close).toHaveBeenCalledTimes(1);
+
+    cleanupCanSucceed = true;
+    await maker.shutdown();
+    await maker.shutdown();
+
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('reclaims a cleanup entry registered after shutdown begins', async () => {
+    const storageStarted = createDeferred();
+    const storageGate = createDeferred();
+    let closeAttempt = 0;
+    const close = vi.fn(async () => {
+      closeAttempt += 1;
+      if (closeAttempt === 1) throw new Error('termination unconfirmed');
+    });
+    const failedHandle = createHandle({ id: 'pi-late-orphan', agentKind: 'pi' });
+    failedHandle.close = close;
+    const storage = createStorage();
+    storage.create = vi.fn(async () => {
+      storageStarted.resolve();
+      await storageGate.promise;
+      throw new Error('db lock');
+    });
+    const maker = new Maker({
+      agents: { pi: createAgent(async () => failedHandle, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-late-shutdown-cleanup',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    };
+
+    const creating = maker.createSession(options);
+    await storageStarted.promise;
+    const shuttingDown = maker.shutdown();
+    storageGate.resolve();
+
+    await expect(creating).rejects.toThrow('db lock');
+    await shuttingDown;
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains an active session owner when shutdown detach is unconfirmed and retries it later', async () => {
+    let closeAttempts = 0;
+    const close = vi.fn(async () => {
+      closeAttempts += 1;
+      if (closeAttempts === 1) throw new Error('termination unconfirmed');
+    });
+    const handle = createHandle({ id: 'active-pi-thread', agentKind: 'pi' });
+    handle.close = close;
+    const maker = new Maker({
+      agents: { pi: createAgent(async () => handle, 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const session = await maker.createSession({
+      id: 'session-active-cleanup-retry',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+
+    await maker.shutdown();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(session.getStatus()).toBe('error');
+    expect(maker.listActiveSessions()).toEqual([session]);
+
+    await maker.shutdown();
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(session.getStatus()).toBe('closed');
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('reports which sessions failed to detach instead of resolving as if none did', async () => {
+    // The caller that matters is the account boundary: it hands the runtime to
+    // a different owner right after this resolves. A PI session whose detach
+    // threw may still have a live process owning durable children that hold
+    // credentials the outgoing account cannot revoke, so "shutdown resolved"
+    // was never the same statement as "nothing survived".
+    const failing = createHandle({ id: 'stuck-pi-thread', agentKind: 'pi' });
+    failing.close = vi.fn(async () => { throw new Error('termination unconfirmed'); });
+    const clean = createHandle({ id: 'clean-claude-thread', agentKind: 'claude-code' });
+    const maker = new Maker({
+      agents: {
+        pi: createAgent(async () => failing, 'pi'),
+        'claude-code': createAgent(async () => clean, 'claude-code'),
+      },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'session-detach-report-pi', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+    });
+    await maker.createSession({
+      id: 'session-detach-report-cc', agentKind: 'claude-code', workingDir: '/repo', model: 'cc-model',
+    });
+
+    const report = await maker.shutdown();
+
+    expect(report.sessionFailures).toHaveLength(1);
+    expect(report.sessionFailures[0]).toMatchObject({
+      sessionId: 'session-detach-report-pi',
+      agentKind: 'pi',
+    });
+    expect((report.sessionFailures[0]!.error as Error).message).toMatch(/termination unconfirmed/);
+  });
+
+  it('detaches active sessions before the creation barrier and reclaims late publications', async () => {
+    const lifecycleStarted = createDeferred();
+    const lifecycleGate = createDeferred();
+    const initialClose = vi.fn(async () => undefined);
+    const lateClose = vi.fn(async () => undefined);
+    const initialHandle = createHandle({ id: 'initial-pi-thread', agentKind: 'pi' });
+    initialHandle.close = initialClose;
+    const lateHandle = createHandle({ id: 'late-pi-thread', agentKind: 'pi' });
+    lateHandle.close = lateClose;
+    const startSession = vi.fn(async (opts: CreateSessionOptions) =>
+      opts.id === 'session-initial' ? initialHandle : lateHandle,
+    );
+    const agent = createAgent(startSession, 'pi');
+    const dispose = vi.fn(async () => undefined);
+    agent.dispose = dispose;
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: async (sessionId) => {
+          if (sessionId !== 'session-late') return;
+          lifecycleStarted.resolve();
+          await lifecycleGate.promise;
+        },
+      },
+    });
+
+    await maker.createSession({
+      id: 'session-initial',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    const creatingLate = maker.createSession({
+      id: 'session-late',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    await lifecycleStarted.promise;
+
+    const shuttingDown = maker.shutdown();
+    await vi.waitFor(() => expect(initialClose).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+    expect(lateClose).not.toHaveBeenCalled();
+
+    lifecycleGate.resolve();
+    await creatingLate;
+    await shuttingDown;
+
+    expect(initialClose).toHaveBeenCalledTimes(1);
+    expect(lateClose).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(maker.listActiveSessions()).toEqual([]);
+
+    await maker.shutdown();
+    expect(initialClose).toHaveBeenCalledTimes(1);
+    expect(lateClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes an agent again after a lifecycle-blocked startup clears the creation barrier', async () => {
+    const lifecycleStarted = createDeferred();
+    const lifecycleGate = createDeferred();
+    const close = vi.fn(async () => undefined);
+    const handle = createHandle({ id: 'late-codex-thread' });
+    handle.close = close;
+    const startSession = vi.fn(async () => handle);
+    const agent = createAgent(startSession);
+    const dispose = vi.fn(async () => undefined);
+    agent.dispose = dispose;
+    const maker = new Maker({
+      agents: { codex: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: async () => {
+          lifecycleStarted.resolve();
+          await lifecycleGate.promise;
+        },
+      },
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-late-codex-host',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    };
+
+    const creating = maker.createSession(options);
+    await lifecycleStarted.promise;
+    const shuttingDown = maker.shutdown();
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+    expect(startSession).not.toHaveBeenCalled();
+
+    lifecycleGate.resolve();
+    await creating;
+    await shuttingDown;
+
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('fences replacement creation while late shutdown cleanup is in flight', async () => {
+    const closeGate = createDeferred();
+    let closeAttempt = 0;
+    const failedClose = vi.fn(async () => {
+      closeAttempt += 1;
+      if (closeAttempt === 1) throw new Error('termination unconfirmed');
+      await closeGate.promise;
+    });
+    const failedHandle = createHandle({ id: 'pi-orphan', agentKind: 'pi' });
+    failedHandle.close = failedClose;
+    const startSession = vi.fn().mockResolvedValue(failedHandle);
+    const storage = createStorage();
+    storage.create = vi.fn(async () => {
+      throw new Error('db lock');
+    });
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-shutdown-owner-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    };
+
+    await expect(maker.createSession(options)).rejects.toThrow('db lock');
+    const shuttingDown = maker.shutdown();
+    await vi.waitFor(() => expect(failedClose).toHaveBeenCalledTimes(2));
+    await expect(maker.createSession(options)).rejects.toThrow(/shutting down/);
+    expect(startSession).toHaveBeenCalledTimes(1);
+
+    closeGate.resolve();
+    await shuttingDown;
+    expect(failedClose).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a second business task using the same live Codex thread until close completes', async () => {
@@ -913,7 +1303,93 @@ describe('Maker session capabilities', () => {
 });
 
 describe('Maker Pi runtime skill status', () => {
-  it('marks only project skills confirmed by the matching live session as loaded', async () => {
+  it('keeps managed skills pinned to the active session launch snapshot', async () => {
+    const managedPath = '/managed/context-mode/SKILL.md';
+    const agent = createAgent(async (opts) => {
+      const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+      handle.getRuntimeCapabilities = () => ({
+        sessionId: opts.sessionId,
+        capturedAt: '2026-08-16T00:00:00.000Z',
+        generation: 1,
+        status: 'loaded',
+        source: 'pi:get_commands',
+        commands: [],
+        managedPackageSkills: [
+          {
+            sourcePath: managedPath,
+            name: 'context-mode-old',
+            description: 'Launch-time name',
+            runtimeCommandName: 'skill:context-mode-old',
+          },
+          {
+            sourcePath: '/managed/unproven/SKILL.md',
+            name: 'unproven-at-launch',
+          },
+        ],
+      });
+      return handle;
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({
+      skills: [
+        {
+          kind: 'agent-skill' as const,
+          name: 'context-mode-renamed',
+          source: 'skill' as const,
+          scope: 'user' as const,
+          path: managedPath,
+          runtimeStatus: 'approved' as const,
+          runtimeCommandName: 'skill:context-mode-renamed',
+        },
+        {
+          kind: 'agent-skill' as const,
+          name: 'installed-after-start',
+          source: 'skill' as const,
+          scope: 'user' as const,
+          path: '/managed/new/SKILL.md',
+          runtimeStatus: 'approved' as const,
+          runtimeCommandName: 'skill:installed-after-start',
+        },
+      ],
+    }));
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'managed-snapshot',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'm',
+    });
+
+    const active = await maker.listAgentSkills('pi', {
+      workingDir: '/repo',
+      sessionId: 'managed-snapshot',
+    });
+    const preview = await maker.listAgentSkills('pi', { workingDir: '/repo' });
+
+    expect(active.skills).toEqual([
+      expect.objectContaining({
+        name: 'context-mode-old',
+        path: managedPath,
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:context-mode-old',
+      }),
+      expect.objectContaining({
+        name: 'unproven-at-launch',
+        runtimeStatus: 'unknown',
+      }),
+    ]);
+    expect(active.skills.some((skill) => skill.name === 'installed-after-start')).toBe(false);
+    expect(preview.skills.map((skill) => skill.name)).toEqual([
+      'context-mode-renamed',
+      'installed-after-start',
+    ]);
+    expect(preview.skills.every((skill) => skill.runtimeStatus === 'approved')).toBe(true);
+  });
+
+  it('fails partial project mappings closed without leaking them across live sessions', async () => {
     const agent = createAgent(async (opts) => {
       const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
       handle.getRuntimeCapabilities = () => ({
@@ -922,16 +1398,53 @@ describe('Maker Pi runtime skill status', () => {
         generation: 1,
         status: 'loaded',
         source: 'pi:get_commands',
+        projectResources: {
+          status: 'approved',
+          reason: 'runtime-skills-confirmed',
+          approvalRevision: `rev-${opts.sessionId}`,
+          requestedSkillCount: 1,
+          loadedSkillCount: 1,
+          loadedSkills: [{
+            sourcePath: `/repo/.pi/skills/${opts.sessionId}-skill`,
+            runtimePath: `/isolated/${opts.sessionId}/project-resources/skills/0/${opts.sessionId}-skill`,
+            commandName: `skill:${opts.sessionId}-frontmatter-name`,
+          }],
+        },
         commands: [
           {
-            name: `skill:${opts.sessionId}-skill`,
+            name: `skill:${opts.sessionId}-frontmatter-name`,
             source: 'skill',
-            sourceInfo: { source: 'auto', scope: 'project', baseDir: '/repo/.pi' },
+            sourceInfo: {
+              source: 'local',
+              scope: 'temporary',
+              baseDir: `/isolated/${opts.sessionId}/project-resources/skills/0/${opts.sessionId}-skill`,
+              path: `/isolated/${opts.sessionId}/project-resources/skills/0/${opts.sessionId}-skill/SKILL.md`,
+            },
+          },
+          {
+            name: 'skill:single-file-frontmatter-name',
+            source: 'skill',
+            sourceInfo: {
+              source: 'local',
+              scope: 'temporary',
+              baseDir: '/repo/.pi/skills',
+              path: '/repo/.pi/skills/single-file.md',
+            },
           },
           {
             name: 'skill:user-collision',
             source: 'skill',
             sourceInfo: { source: 'auto', scope: 'user', baseDir: '/home/.agents/skills' },
+          },
+          {
+            name: 'skill:malformed-collision',
+            source: 'skill',
+            sourceInfo: {
+              source: 'local',
+              scope: 'temporary',
+              baseDir: '/repo/.pi/skills/malformed-collision',
+              path: '/other/SKILL.md',
+            },
           },
         ],
       });
@@ -950,7 +1463,9 @@ describe('Maker Pi runtime skill status', () => {
         projectSkill('one-skill', '/repo/.pi/skills/one-skill'),
         projectSkill('one-skill', '/repo/.agents/skills/one-skill'),
         projectSkill('two-skill', '/repo/.pi/skills/two-skill'),
+        projectSkill('single-file', '/repo/.pi/skills/single-file.md'),
         projectSkill('user-collision', '/repo/.pi/skills/user-collision'),
+        projectSkill('malformed-collision', '/repo/.pi/skills/malformed-collision'),
       ],
     }));
     const maker = new Maker({
@@ -980,24 +1495,167 @@ describe('Maker Pi runtime skill status', () => {
     });
 
     expect(one.skills.map((skill) => [skill.name, skill.runtimeStatus])).toEqual([
-      ['one-skill', 'loaded'],
+      ['one-skill', 'discovered'],
       ['one-skill', 'discovered'],
       ['two-skill', 'discovered'],
+      ['single-file', 'loaded'],
       ['user-collision', 'discovered'],
+      ['malformed-collision', 'discovered'],
     ]);
     expect(one.skills[0]).toMatchObject({
       name: 'one-skill',
+      runtimeStatus: 'discovered',
+    });
+    expect(one.skills[3]).toMatchObject({
+      name: 'single-file',
       runtimeStatus: 'loaded',
-      runtimeCommandName: 'skill:one-skill',
+      runtimeCommandName: 'skill:single-file-frontmatter-name',
     });
     expect(two.skills.map((skill) => [skill.name, skill.runtimeStatus])).toEqual([
       ['one-skill', 'discovered'],
       ['one-skill', 'discovered'],
-      ['two-skill', 'loaded'],
+      ['two-skill', 'discovered'],
+      ['single-file', 'loaded'],
       ['user-collision', 'discovered'],
+      ['malformed-collision', 'discovered'],
     ]);
+    expect(one.errors).toContainEqual(expect.objectContaining({
+      path: '/repo/.pi/skills/one-skill',
+    }));
+    expect(two.errors).toContainEqual(expect.objectContaining({
+      path: '/repo/.pi/skills/two-skill',
+    }));
     expect(preview.skills.every((skill) => skill.runtimeStatus === 'discovered')).toBe(true);
     expect(wrongProject.skills.every((skill) => skill.runtimeStatus === 'discovered')).toBe(true);
+  });
+
+  it('keeps a project skill discovered when its source no longer matches the launch snapshot', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-skill-source-')));
+    const repoRoot = path.join(root, 'repo');
+    const sourcePath = path.join(repoRoot, '.pi', 'skills', 'demo');
+    const runtimePath = path.join(root, 'config-home', 'project-resources', 'skills', '0', 'demo');
+    const writeSkill = (skillRoot: string, skillContent: string, assetContent: string): void => {
+      mkdirSync(path.join(skillRoot, 'assets'), { recursive: true });
+      writeFileSync(path.join(skillRoot, 'SKILL.md'), skillContent);
+      writeFileSync(path.join(skillRoot, 'assets', 'fixture.txt'), assetContent);
+    };
+    try {
+      writeSkill(sourcePath, '# approved\n', 'approved asset\n');
+      writeSkill(runtimePath, '# approved\n', 'approved asset\n');
+      const snapshotFingerprint = await fingerprintPiProjectSkillEntrypoint(runtimePath, runtimePath);
+      const sourceFingerprint = await fingerprintPiProjectSkillEntrypoint(sourcePath, repoRoot);
+      expect(snapshotFingerprint?.contentDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(sourceFingerprint?.sourceStateDigest).toMatch(/^[a-f0-9]{64}$/);
+
+      const agent = createAgent(async (opts) => {
+        const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+        handle.getRuntimeCapabilities = () => ({
+          sessionId: opts.sessionId,
+          capturedAt: '2026-08-11T00:00:00.000Z',
+          generation: 1,
+          status: 'loaded',
+          source: 'pi:get_commands',
+          projectResources: {
+            status: 'approved',
+            reason: 'runtime-skills-confirmed',
+            approvalRevision: 'rev-source-snapshot',
+            requestedSkillCount: 1,
+            loadedSkillCount: 1,
+            loadedSkills: [{
+              sourcePath,
+              runtimePath,
+              commandName: 'skill:demo',
+              snapshotDigest: snapshotFingerprint!.contentDigest,
+              sourceFingerprint: sourceFingerprint!.sourceStateDigest,
+              canonicalRepoRoot: repoRoot,
+            }],
+          },
+          commands: [{
+            name: 'skill:demo',
+            source: 'skill',
+            sourceInfo: {
+              source: 'local',
+              scope: 'temporary',
+              baseDir: runtimePath,
+              path: path.join(runtimePath, 'SKILL.md'),
+            },
+          }],
+        });
+        return handle;
+      }, 'pi');
+      agent.listAgentSkills = vi.fn(async () => ({
+        skills: [{
+          kind: 'agent-skill' as const,
+          name: 'demo',
+          source: 'skill' as const,
+          scope: 'repo' as const,
+          path: sourcePath,
+          runtimeStatus: 'discovered' as const,
+        }],
+      }));
+      const maker = new Maker({
+        agents: { pi: agent },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      await maker.createSession({
+        id: 'source-snapshot',
+        agentKind: 'pi',
+        workingDir: repoRoot,
+        model: 'm',
+      });
+
+      const initial = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(initial.skills[0]).toMatchObject({ runtimeStatus: 'loaded' });
+
+      const realRealpath = fsPromises.realpath.bind(fsPromises);
+      let delayed = false;
+      vi.spyOn(fsPromises, 'realpath').mockImplementation(async (...args) => {
+        if (!delayed) {
+          delayed = true;
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        return realRealpath(...args);
+      });
+      const slowFilesystem = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(delayed).toBe(true);
+      expect(slowFilesystem.skills[0]).toMatchObject({ runtimeStatus: 'loaded' });
+      vi.restoreAllMocks();
+
+      writeFileSync(path.join(sourcePath, 'assets', 'fixture.txt'), 'changed! asset\n');
+      const changedAsset = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(changedAsset.skills[0]).toMatchObject({ runtimeStatus: 'discovered' });
+      expect(changedAsset.errors).toContainEqual(expect.objectContaining({ path: sourcePath }));
+
+      writeFileSync(path.join(sourcePath, 'SKILL.md'), '# changed in place\n');
+      const changedFile = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(changedFile.skills[0]).toMatchObject({ runtimeStatus: 'discovered' });
+      expect(changedFile.errors).toContainEqual(expect.objectContaining({ path: sourcePath }));
+
+      rmSync(sourcePath, { recursive: true, force: true });
+      writeSkill(sourcePath, '# approved\n', 'replacement asset\n');
+      const replacedDirectory = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(replacedDirectory.skills[0]).toMatchObject({ runtimeStatus: 'discovered' });
+      expect(replacedDirectory.errors?.[0]?.message).toContain('restart the session');
+    } finally {
+      vi.restoreAllMocks();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1983,7 +2641,9 @@ describe('Session turn send guard', () => {
     releaseEnd();
     await closed;
 
-    await expect(sendPromise).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(sendPromise).rejects.toMatchObject({
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+    });
     expect(terminalErrors).toContainEqual(expect.objectContaining({
       type: 'error',
       data: expect.objectContaining({
@@ -2071,7 +2731,9 @@ describe('Session turn send guard', () => {
       });
     });
 
-    await session.send('first');
+    await expect(session.send('first')).rejects.toMatchObject({
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+    });
     await statusChanged;
     await session.abort();
 
@@ -2196,7 +2858,9 @@ describe('Session turn send guard', () => {
     const sendPromise = session.send('first');
     await closed;
     releaseSend();
-    await sendPromise;
+    await expect(sendPromise).rejects.toMatchObject({
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+    });
 
     expect(terminalReasons).toEqual(['original_terminal']);
   });
@@ -2286,7 +2950,9 @@ describe('Session turn send guard', () => {
     releaseCrash();
     await closed;
 
-    await expect(secondSend).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(secondSend).rejects.toMatchObject({
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+    });
     expect(terminalReasons).toEqual(['prior_terminal', 'session_event_loop_crashed']);
   });
 

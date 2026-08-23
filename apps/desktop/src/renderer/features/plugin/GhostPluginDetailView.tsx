@@ -27,6 +27,7 @@ import {
   GraduationCap,
   KeyRound,
   LayoutTemplate,
+  Library,
   MapPin,
   Megaphone,
   MessageCircleQuestion,
@@ -45,6 +46,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
+import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostErrandPrefs } from '@/cindy-brain/GhostErrandPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -58,6 +60,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,
@@ -83,6 +86,11 @@ interface GhostPluginDetailViewProps {
   onUse: () => void;
   /** 头部更新 CTA:市场有新版本时走市场更新确认流。 */
   onUpdate: () => void;
+  /**
+   * 缺少批准状态时的恢复入口(重新走一次完整权限确认)。可选:仅插件页宿主注入;
+   * 未注入时按钮不出现,门控见下方 `needsReapproval && !detail.builtin && onReapprove`。
+   */
+  onReapprove?: () => void;
   /** ⋮ 菜单的兜底路径:从本地 .cindy 文件更新。 */
   onUpdateFromFile: () => void;
   /** 市场存在新版本时的目标版本号;设置后头部展示显著的更新按钮。 */
@@ -109,6 +117,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   notify: Megaphone,
   confirm: MessageCircleQuestion,
   fs: FilePen,
+  library: Library,
   'session-context': MapPin,
   pick: FolderOpen,
   preview: AppWindow,
@@ -150,6 +159,7 @@ export function GhostPluginDetailView({
   onToggle,
   onUse,
   onUpdate,
+  onReapprove,
   onUpdateFromFile,
   updateVersion,
   updateBusy = false,
@@ -163,7 +173,10 @@ export function GhostPluginDetailView({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
-  const enabled = enabledOverride ?? detail.enabled;
+  // 未批准的安装不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
+  // 看起来只是"被关掉了"),再喂 main 改版的 primaryAction/primaryEnabled。
+  const needsReapproval = detail.approvalState !== 'approved';
+  const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
   const primaryAction = ghostPrimaryAction(detail);
   const primaryEnabled =
     enabled &&
@@ -260,12 +273,32 @@ export function GhostPluginDetailView({
               className="plugin-detail-actions flex shrink-0 flex-nowrap items-center gap-1.5"
               style={WINDOW_NO_DRAG_STYLE}
             >
-              {updateVersion ? (
+              {needsReapproval && !detail.builtin && onReapprove ? (
+                <button
+                  type="button"
+                  onClick={onReapprove}
+                  disabled={updateBusy}
+                  className={cn(
+                    'inline-flex h-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 text-13 font-medium text-[var(--text-primary)]',
+                    'transition-[background-color,border-color,transform,opacity] duration-150 hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
+                  )}
+                >
+                  {t('settings.ghosts.reapproval.action')}
+                </button>
+              ) : updateVersion ? (
                 // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
                 <button
                   type="button"
                   onClick={onUpdate}
                   disabled={updateBusy}
+                  aria-label={
+                    updateVersion === detail.version
+                      ? t('settings.ghosts.market.update')
+                      : t('settings.ghosts.market.updateTo', { version: updateVersion })
+                  }
+                  aria-busy={updateBusy || undefined}
                   className={cn(
                     'inline-flex h-10 items-center justify-center gap-1.5 rounded-full px-5 text-13 font-medium',
                     'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -274,10 +307,16 @@ export function GhostPluginDetailView({
                     'disabled:cursor-wait disabled:opacity-60 disabled:active:scale-100',
                   )}
                 >
-                  <ArrowUp size={14} aria-hidden="true" />
-                  {updateVersion === detail.version
-                    ? t('settings.ghosts.market.update')
-                    : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                  {updateBusy ? (
+                    <Spinner size={14} />
+                  ) : (
+                    <>
+                      <ArrowUp size={14} aria-hidden="true" />
+                      {updateVersion === detail.version
+                        ? t('settings.ghosts.market.update')
+                        : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                    </>
+                  )}
                 </button>
               ) : null}
               {primaryAction !== 'manage' ? (
@@ -310,9 +349,10 @@ export function GhostPluginDetailView({
               <button
                 type="button"
                 onClick={() => {
-                  if (!toggleDisabled) onToggle(!enabled);
+                  // 未批准的安装不可切换启用(点了 Main 也会拒);与 updateBusy 同级门控。
+                  if (!toggleDisabled && !needsReapproval) onToggle(!enabled);
                 }}
-                disabled={toggleDisabled}
+                disabled={toggleDisabled || needsReapproval}
                 aria-pressed={enabled}
                 aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
                 className={cn(
@@ -335,7 +375,7 @@ export function GhostPluginDetailView({
                 </span>
                 <Switch
                   checked={enabled}
-                  disabled={toggleDisabled}
+                  disabled={toggleDisabled || needsReapproval}
                   aria-hidden="true"
                   tabIndex={-1}
                   className="pointer-events-none"
@@ -414,6 +454,29 @@ export function GhostPluginDetailView({
               </button>
             ) : null}
           </div>
+
+          {needsReapproval ? (
+            <div
+              className={cn(
+                'mt-5 rounded-xl px-4 py-3.5',
+                DETAIL_SURFACE_CLASS,
+              )}
+              role="status"
+            >
+              <p className="text-13 font-medium text-[var(--text-primary)]">
+                {t('settings.ghosts.reapproval.noticeTitle')}
+              </p>
+              <p className="mt-1 text-13 leading-5 text-[var(--text-secondary)]">
+                {t(
+                  detail.builtin
+                    ? 'settings.ghosts.reapproval.bodyBuiltinRestart'
+                    : detail.approvalState === 'invalid'
+                      ? 'settings.ghosts.reapproval.bodyInvalid'
+                      : 'settings.ghosts.reapproval.bodyLegacy',
+                )}
+              </p>
+            </div>
+          ) : null}
         </header>
 
         {hasConfiguration ? (
@@ -473,6 +536,8 @@ export function GhostPluginDetailView({
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
+
+        <GhostLibrarySection ghostId={detail.id} slots={ghost?.manifest.slots ?? []} />
 
         <DetailsSection detail={detail} panelStatus={panelStatus} />
       </article>

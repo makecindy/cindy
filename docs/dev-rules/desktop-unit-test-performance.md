@@ -70,8 +70,8 @@ Desktop 测试按成本拆成默认层与显式层：
   派生的本机回环端口锁。
 
 远端 `client-ci` 以独立并行 job 在每个 PR、`main` push 和手动触发时运行完整
-`git-integration` 层；本地提交前门禁仍只要求默认 `test:unit`，修改真实 Git 行为时可按需
-显式补跑完整层。
+`git-integration` 层；本地提交前门禁默认是 `test:unit:related`，修改真实 Git 行为时可按需
+显式补跑完整层。CI 仍跑完整 `test:unit`。
 
 因此同一仓库的多个 worktree 可以并行完成默认单测；只有显式运行完整 Git 集成层时才排队：
 

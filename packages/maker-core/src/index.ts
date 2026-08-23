@@ -40,6 +40,16 @@ export type {
   DynamicToolCallResponse,
 } from './agents/codex/app-server/protocol.js';
 
+// pi transport interface — host 实现自定义 transport (SSH-bridged remote pi) 时需要。
+export type {
+  PiTransport,
+  PiTransportCloseInfo,
+  PiLineHandler,
+  PiCloseHandler,
+} from './agents/pi/transport.js';
+// pi 远端 agentHome 文件操作原语(host 经 SSH 实现)。
+export type { PiRemoteFileOps } from './agents/base-agent.js';
+
 // core
 export * from './session.js';
 export * from './session-send-outcome.js';

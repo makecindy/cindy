@@ -11,8 +11,13 @@ import type {
   GhostSetupErrorCode,
   GhostSetupStepPhase,
 } from '../../shared/ghost.js';
+import { randomUUID } from 'node:crypto';
 import { GHOST_SECRET_VALUE_MAX_CHARS, isGhostSetupErrorCode } from '../../shared/ghost.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import {
+  isDesktopOnlyConfirmationRequestId,
+  projectDesktopOnlyConfirmationRequestId,
+} from './desktopOnlyConfirmationProjection.js';
 
 export interface GhostSetupInteractionStep {
   id: string;
@@ -237,6 +242,27 @@ export class GhostSetupInteractionBridge {
     }
   }
 
+  /** Account/data-owner boundary: cancel every actionable setup request before lease drain. */
+  cleanupAll(reason: 'session_closed' | 'session_aborted'): void {
+    for (const entry of Array.from(this.pending.values())) {
+      if (entry.completed) continue;
+      void Promise.resolve(
+        entry.onCommand({
+          kind: 'plugin_setup',
+          action: 'cancel',
+          expectedRevision: entry.snapshot.revision,
+          cleanupReason: reason,
+        }),
+      ).catch((error) => {
+        this.deps.logger?.warn('plugin setup account-boundary cleanup failed', {
+          requestId: entry.snapshot.requestId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
   pendingSnapshots(sessionId?: string): Array<{
     sessionId: string;
     request: GhostSetupInteractionSnapshot;
@@ -346,6 +372,19 @@ function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
   );
 }
 
+// Device Link must not receive a host confirmation's real request id: it is the
+// capability checked by the trusted Desktop resolver. A process-keyed HMAC
+// keeps request/dismissal correlation stable without retaining source ids.
+
+function projectDesktopOnlyConfirmation(request: Record<string, unknown>): Record<string, unknown> | null {
+  const requestId = request.requestId;
+  if (typeof requestId !== 'string' || requestId.length === 0) return null;
+  // Preserve only the known kind so mobile can render its existing read-only
+  // guidance. Drafts, file paths, previews, identities, and the real id stay
+  // on the controlled Desktop.
+  return { kind: request.kind, requestId: projectDesktopOnlyConfirmationRequestId(requestId) };
+}
+
 /**
  * Host-owned confirmations stay on the trusted Desktop. This keeps their
  * request ids and local payload details (for example file paths and previews)
@@ -353,8 +392,22 @@ function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
  * projection used for remote status/cancellation.
  */
 export function projectInteractionRequestForRemote<T>(request: T): T | null {
-  if (isDesktopOnlyConfirmationRequest(request)) return null;
+  if (isDesktopOnlyConfirmationRequest(request)) {
+    return projectDesktopOnlyConfirmation(request as Record<string, unknown>) as T | null;
+  }
   return sanitizeGhostSetupRequestForRemote(request);
+}
+
+/** Rewrites a Host-only dismissal to the same opaque id exposed by its request projection. */
+export function projectInteractionDismissedForRemote<T>(payload: T): T {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const requestId = (payload as { requestId?: unknown }).requestId;
+  if (typeof requestId !== 'string') return payload;
+  if (!isDesktopOnlyConfirmationRequestId(requestId)) return payload;
+  return {
+    ...(payload as Record<string, unknown>),
+    requestId: projectDesktopOnlyConfirmationRequestId(requestId),
+  } as T;
 }
 
 export function projectPendingInteractionsForRemote<T extends { request: unknown }>(

@@ -1,14 +1,15 @@
 /**
  * SidebarTopNav —— 侧栏顶部常驻动作/导航列表(取代原 HorizontalTabbar)。
  * ---------------------------------------------------------------------------
- * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins / 搜索 / 远程机器。
+ * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins /
+ * 最小化插件面板恢复入口(按需) / 搜索。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
  *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
- *     就地展开成搜索框,结果 overlay 由下方功能槽(CCAgentSidebarUpper)绘制。搜索状态经
- *     ConversationSearchProvider 的 context 共享(行在此、overlay 在功能槽,两者是兄弟子树)。
- *   - 远程机器(MachineSwitcherMenu):末行,同款行样式的文字下拉,过滤下方会话列表
- *     的机器范围;无任何相关远程机器时组件自身 return null,不占行。
+ *     就地展开成搜索框,结果由下方功能槽(CCAgentSidebarUpper)替换列表绘制。搜索状态经
+ *     ConversationSearchProvider 的 context 共享(行在此、结果在功能槽,两者是兄弟子树)。
+ *   - 远程机器切换 2026-08-13 起不再占行:并入主列表段头标题(「全部任务」即
+ *     范围下拉,见 MachineSwitcherMenu 头注),省一行且标题不再与范围脱节。
  * 去掉了原来的「项目(Bot)」标签 —— 项目即默认主视图,无单独入口。
  * rail 态的搜索仍是 CollapsedView 里独立的 ConversationSearchBox 图标弹窗(不走本行 / context)。
  *
@@ -26,8 +27,8 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
+import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
-import { MachineSwitcherMenu } from '@/features/cc-agent/sidebar/MachineSwitcherMenu';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
 
@@ -41,7 +42,22 @@ const ROW_CLASS =
 const ROW_ACTIVE_CLASS =
   'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)] hover:bg-sidebar-item-active';
 
-export function SidebarTopNav(): React.ReactElement {
+/**
+ * 渲染范围。任务列表页把「新建」以外的行搬进列表滚动区(向上滚时一起滚走,
+ * 对齐 Codex;2026-08-12 用户裁决),因此本组件要能分两段渲染:
+ *   - 'all'(默认):常驻行全渲染。非 cc-agent 视图(插件页 / Skill 页等)沿用,
+ *     那些页的侧栏没有长列表,不存在滚动需求。
+ *   - 'pinned':只渲染「新建」——Shell 顶部固定段。
+ *   - 'scrollable':渲染其余行(自动任务 / 插件 / 按需恢复入口 / 搜索),由 cc-agent
+ *     的侧栏滚动容器在列表最上方绘制。
+ */
+export type SidebarTopNavSection = 'all' | 'pinned' | 'scrollable';
+
+export function SidebarTopNav({
+  section = 'all',
+}: {
+  section?: SidebarTopNavSection;
+} = {}): React.ReactElement {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { activeKey, navigateToView } = useActiveMainView();
@@ -64,71 +80,114 @@ export function SidebarTopNav(): React.ReactElement {
   // 用户在 plugins / 设置等视图输入搜索时,先切回 cc-agent 视图,结果才有处显示(同视图为 no-op)。
   const ensureConversationView = useCallback(() => navigateToView('cc-agent'), [navigateToView]);
 
+  const showPinned = section !== 'scrollable';
+  const showScrollable = section !== 'pinned';
+  const pinSearch = section === 'scrollable' && search.query.trim().length > 0;
+  const automationsRow = showScrollable ? (
+    <button
+      onClick={() => navigate('/cc-agent/scheduled')}
+      className={cn(ROW_CLASS, onScheduleMatch && ROW_ACTIVE_CLASS)}
+      aria-label={t('ccAgent.layout.automations')}
+      aria-current={onScheduleMatch ? 'page' : undefined}
+    >
+      <Timer
+        size={15}
+        strokeWidth={1.8}
+        className={cn(
+          'shrink-0',
+          // 选中反相胶囊上图标跟随 active 前景(图标自带显式色,行级 text 覆盖不到它)。
+          onScheduleMatch
+            ? 'text-sidebar-item-active-foreground'
+            : 'text-[var(--sidebar-nav-text)]',
+        )}
+      />
+      <span className="leading-none">{t('ccAgent.layout.automations')}</span>
+    </button>
+  ) : null;
+  const pluginsRow = showScrollable ? (
+    <button
+      onClick={() => navigateToView('plugins')}
+      className={cn(ROW_CLASS, activeKey === 'plugins' && ROW_ACTIVE_CLASS)}
+      aria-label={t('sidebar.tabs.plugins')}
+      aria-current={activeKey === 'plugins' ? 'page' : undefined}
+    >
+      <Plug
+        size={15}
+        strokeWidth={1.8}
+        className={cn(
+          'shrink-0',
+          // 同上:选中反相胶囊上图标跟随 active 前景。
+          activeKey === 'plugins'
+            ? 'text-sidebar-item-active-foreground'
+            : 'text-[var(--sidebar-nav-text)]',
+        )}
+      />
+      <span className="leading-none">{t('sidebar.tabs.plugins')}</span>
+      {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
+    </button>
+  ) : null;
+  const restoreRow = showScrollable ? (
+    <GhostPanelRestoreEntry variant="row" className={ROW_CLASS} />
+  ) : null;
+  const searchRow = showScrollable ? (
+    <SidebarInlineSearch
+      search={search}
+      allKnownProjects={allKnownProjects}
+      openSignal={openSignal}
+      onSearchActive={ensureConversationView}
+    />
+  ) : null;
+
+  // 滚动段把搜索行拆成滚动容器的直接子项:sticky 才能钉在结果列表上,
+  // 不被短导航父盒的底边提前带走。输入框仍是同一份实例。
+  if (section === 'scrollable') {
+    return (
+      <>
+        <div className="flex flex-col gap-0.5 pr-3 pl-3">
+          {automationsRow}
+          {pluginsRow}
+          {restoreRow}
+        </div>
+        <div
+          className={cn(
+            // -mt-1.5 抵消滚动容器 gap-2,与上面两行仍保持 gap-0.5。
+            'px-3 pb-2.5 -mt-1.5',
+            pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]',
+          )}
+        >
+          {searchRow}
+        </div>
+      </>
+    );
+  }
+
   return (
     // pt-1(原 2.5):顶行 chrome 收窄到 46px 后,列表整体上提贴近顶行(对齐 Codex)。
-    <div className="flex flex-col gap-0.5 pt-1 pr-3 pb-2.5 pl-3">
-      {/* 1. 新建 —— 图标 15/1.8 + meta 灰:与项目行的文件夹图标同规格同色
-          (2026-07 用户定稿,对齐 Codex;文字仍用 foreground)。 */}
-      <button onClick={handleNew} className={ROW_CLASS} aria-label={t('ccAgent.layout.new')}>
-        <CirclePlus
-          size={15}
-          strokeWidth={1.8}
-          className="shrink-0 text-[var(--sidebar-nav-text)]"
-        />
-        <span className="leading-none">{t('ccAgent.layout.new')}</span>
-      </button>
-
-      {/* 2. 自动任务 —— 仅作导航入口,不再在此提示自动化任务的运行状态(dot 已移除,
-          未读 / 运行状态由下方各 schedule 组头承载)。 */}
-      <button
-        onClick={() => navigate('/cc-agent/scheduled')}
-        className={cn(ROW_CLASS, onScheduleMatch && ROW_ACTIVE_CLASS)}
-        aria-label={t('ccAgent.layout.automations')}
-        aria-current={onScheduleMatch ? 'page' : undefined}
-      >
-        <Timer
-          size={15}
-          strokeWidth={1.8}
-          className={cn(
-            'shrink-0',
-            // 选中反相胶囊上图标跟随 active 前景(图标自带显式色,行级 text 覆盖不到它)。
-            onScheduleMatch ? 'text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)]',
-          )}
-        />
-        <span className="leading-none">{t('ccAgent.layout.automations')}</span>
-      </button>
-
-      {/* 3. Plugins —— Plugin / Skill 在页面顶部 Tab 内切换 */}
-      <button
-        onClick={() => navigateToView('plugins')}
-        className={cn(ROW_CLASS, activeKey === 'plugins' && ROW_ACTIVE_CLASS)}
-        aria-label={t('sidebar.tabs.plugins')}
-        aria-current={activeKey === 'plugins' ? 'page' : undefined}
-      >
-        <Plug
-          size={15}
-          strokeWidth={1.8}
-          className={cn(
-            'shrink-0',
-            // 同上:选中反相胶囊上图标跟随 active 前景。
-            activeKey === 'plugins' ? 'text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)]',
-          )}
-        />
-        <span className="leading-none">{t('sidebar.tabs.plugins')}</span>
-        {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
-      </button>
-
-      {/* 4. 搜索 —— 静息态与上面三行同款;hover / 聚焦就地展开成搜索框 */}
-      <SidebarInlineSearch
-        search={search}
-        allKnownProjects={allKnownProjects}
-        openSignal={openSignal}
-        onSearchActive={ensureConversationView}
-      />
-
-      {/* 5. 远程机器 —— 同款行样式的文字下拉(过滤下方会话列表的机器范围);
-          无相关远程机器时组件自身 return null,不占行。 */}
-      <MachineSwitcherMenu />
+    // 分段渲染时(section≠'all')两段各自成块,由调用方分别放进固定区 / 滚动区;
+    // padding 保持同一套,两段拼起来的视觉与整块渲染一致。pinned 段不带 pb,
+    // 让滚动段紧随其后(行距仍由滚动段容器的 gap 承担)。
+    <div
+      className={cn(
+        'flex flex-col gap-0.5 pt-1 pr-3 pl-3',
+        section === 'pinned' ? 'pb-0.5' : 'pb-2.5',
+      )}
+    >
+      {showPinned && (
+        /* 1. 新建 —— 图标 15/1.8 + meta 灰:与项目行的文件夹图标同规格同色
+          (2026-07 用户定稿,对齐 Codex;文字仍用 foreground)。 */
+        <button onClick={handleNew} className={ROW_CLASS} aria-label={t('ccAgent.layout.new')}>
+          <CirclePlus
+            size={15}
+            strokeWidth={1.8}
+            className="shrink-0 text-[var(--sidebar-nav-text)]"
+          />
+          <span className="leading-none">{t('ccAgent.layout.new')}</span>
+        </button>
+      )}
+      {automationsRow}
+      {pluginsRow}
+      {restoreRow}
+      {searchRow}
     </div>
   );
 }

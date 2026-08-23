@@ -41,8 +41,28 @@ describe('passive shared-userData instance auth isolation', () => {
     // packaged 恒不设置该 env,但仍保留 isPackaged 双保险,防 ambient env 污染线上语义。
     expect(body).toContain('!app.isPackaged');
     expect(body).toContain("process.env.XDT_PASSIVE_SHARED_USER_DATA === '1'");
-    // 不新增判定通道:isolated 沙箱有独立 userData 与 deviceId,不该出现在这条判定里。
+    // 不新增判定通道:是否共库由启动期 profileKind 落地成这个 env,本函数只读结果。
     expect(body).not.toContain('XDT_ISOLATED');
+  });
+
+  it('DEVICE_MISMATCH 只登出本进程,不删磁盘 refresh token', () => {
+    expect(authSource).toContain("action.kind === 'foreign-device'");
+    expect(authSource).toContain(
+      'cold-start refresh: DEVICE_MISMATCH — this process starts logged out and keeps the persisted refresh token',
+    );
+    expect(authSource).toContain(
+      'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',
+    );
+    const runtimeIdx = authSource.indexOf(
+      'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',
+    );
+    const preserveIdx = authSource.indexOf('preservePersistedRefreshToken: true', runtimeIdx);
+    expect(preserveIdx).toBeGreaterThan(runtimeIdx);
+    expect(authSource).toContain('let foreignDeviceLocalSignOut = false');
+    expect(authSource).toContain("foreignDeviceLocalSignOut = true");
+    expect(authSource).toContain(
+      "if (foreignDeviceLocalSignOut) {",
+    );
   });
 
   it('clearAuth:passive 共享实例不删磁盘 refresh token', () => {
@@ -207,6 +227,30 @@ describe('passive shared-userData instance auth isolation', () => {
     const body = sliceBody('export function clearAccountDeletionReceipt(): void {', '\n}\n');
     expect(body).not.toContain('isPassiveSharedUserDataInstance');
     expect(body).toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
+  });
+
+  it('passive 登录不得在 owner gate 前消费共享 receipt 或 relogin marker', () => {
+    const acceptStart = authSource.indexOf('async function acceptLoginOutcome(');
+    const acceptEnd = authSource.indexOf('\n}\n\nasync function runLoginAction', acceptStart);
+    const acceptBody = authSource.slice(acceptStart, acceptEnd);
+    const acceptGuard = acceptBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    expect(acceptGuard).toBeGreaterThan(-1);
+    expect(acceptBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
+      acceptGuard,
+    );
+
+    const completeStart = authSource.indexOf('async function completeLogin(');
+    const completeEnd = authSource.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
+    const completeBody = authSource.slice(completeStart, completeEnd);
+    const completeGuard = completeBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    expect(completeGuard).toBeGreaterThan(-1);
+    expect(completeBody.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
+      completeGuard,
+    );
+    expect(completeBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
+      completeGuard,
+    );
+    expect(completeBody.indexOf('clearReloginFlag();')).toBeGreaterThan(completeGuard);
   });
 
   it('冷启动确定性失效:passive 不删盘,非 passive 也只做 compare-and-delete', () => {

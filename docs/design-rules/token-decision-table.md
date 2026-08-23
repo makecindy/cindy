@@ -192,7 +192,7 @@ export const loginColors = {
 | **页底** | **`#F2F2ED`** | surface / titlebar / panel | 0 |
 | 柔和 hover | `#F0F0EB` | surface-hover-soft | −1.7% |
 | 通用 hover/chip | `#EEEEE9` | surface-hover / chip | −3.3% |
-| 侧栏 | `#EEEEE9` @ 90% 玻璃 | 独立面(玻璃遮盖度用户调参) | −3.3% |
+| 侧栏 | `#EEEEE9` @ 85% 玻璃 | 独立面(玻璃遮盖度用户调参) | −3.3% |
 | 下拉行 hover | `#EFEFEA` | model-item-hover(锚定弹层面板 −11.9%) | — |
 | 菜单 hover | `#E8E8E3` | settings-menu-bg-hover | −8.1% |
 | 边框 | `#E4E4DF` | border-default(冷 `#DCDFE3` 转暖) | −11.2% |
@@ -201,8 +201,10 @@ export const loginColors = {
 ### 9.3 Dark 面阶梯(中性近黑,自 2026-07 值整体平移)
 
 页底 `#181818` / 柔和 hover `#191919` / hover-chip `#1D1D1D` / 卡片 `#1F1F1F` /
-composer pill `#272727` / 菜单 hover `#282828` / 文件纸片 `#292929` / 下拉行 hover `#2B2B2B` /
+composer pill `#272727` / 菜单 hover / 卡片锚定选中 `#282828`(`settings-menu-bg-hover` 与 `settings-menu-bg-selected`) /
+文件纸片 `#292929` / 下拉行 hover `#2B2B2B` /
 禁用底 `#323232` / 边框 `#313131` / 弱档 `#3E3E3E` / 侧栏玻璃 `rgba(5,5,5,0.85)`(用户调参 2026-08-11)。
+`settings-menu-bg-selected` 暗色从页底锚定 `#1D1D1D` 抬到卡片之上(2026-08-13):近黑压缩后该 token 比卡片还暗,设置卡上的选中行会隐形;先与菜单 hover 同档,不改全局 `--surface-chip`。
 **已知债**: 近黑压缩使层次观感只保留 2026-07 版的 ~65%,修复方案(等亮度阶梯)与实测数据
 记录于 [issue #2559](https://github.com/makecindy/cindy/issues/2559),独立一轮处理。
 

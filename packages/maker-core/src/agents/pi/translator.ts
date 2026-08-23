@@ -16,15 +16,40 @@
  */
 
 import type { Logger } from '../../interfaces/logger.js';
-import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  holdStandaloneStopTokenDelta,
+  stripInternalWebCitations,
+  type StandaloneStopTokenHold,
+} from '@cindy/maker-shared/internal-citation';
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
+import type { UsageSegment } from '../shared/usage-tracker.js';
+import {
+  UPSTREAM_OVERLOAD_REASON,
+  formatOverloadRetryMessage,
+  parseOverloadError,
+} from '../shared/overload-error.js';
+import {
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '../shared/context-overflow-error.js';
+import {
+  UPSTREAM_STREAM_INTERRUPTED_REASON,
+  isStreamInterruptedErrorMessage,
+} from '../shared/stream-interrupt-error.js';
+import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
-import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
+import {
+  parsePiSubagentProgress,
+  type PiSubagentUsage,
+  type PiSubagentUsageSegment,
+} from './subagent-progress.js';
 
 interface PiUsage {
   input?: number;
@@ -32,6 +57,8 @@ interface PiUsage {
   cacheRead?: number;
   cacheWrite?: number;
   cost?: { total?: number };
+  /** Anthropic bridge metadata: the tier accepted for this concrete request. */
+  service_tier?: string;
 }
 
 interface PiAssistantMessage {
@@ -52,6 +79,7 @@ interface PiPendingAssistantError {
   sdkError: string;
   errorStatus?: 401 | 429 | 529;
   usageLimit?: true;
+  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON;
 }
 
 interface PiThinkingBlock {
@@ -62,6 +90,8 @@ interface PiThinkingBlock {
 
 export interface PiTranslateContext {
   logger: Logger;
+  /** Host-owned live tariff selector fallback when the provider response has no accepted tier. */
+  getPriceVariant?: () => 'standard' | 'priority';
   /** get_state 拿到的 contextWindow(模型切换时更新)。 */
   contextWindow: number;
   /** turn 内累计 input+output;turn 结束 reset。 */
@@ -71,6 +101,12 @@ export interface PiTranslateContext {
   turnOutput: number;
   turnCacheRead: number;
   turnCacheWrite: number;
+  turnUsageSegments: UsageSegment[];
+  turnUsageSegmentsComplete: boolean;
+  turnUsageSegmentSeq: number;
+  /** Price variants latched by message_start until their matching message_end. */
+  pendingPriceVariants: Array<'standard' | 'priority'>;
+  turnSettled: boolean;
   /** 最后一次 API call 的 context 占用(input + cacheRead + cacheWrite)。 */
   contextTokens: number;
   /** 跨 turn 累计成本。 */
@@ -81,6 +117,11 @@ export interface PiTranslateContext {
   thinkingSeq: number;
   /** contentIndex → 当前消息内的 thinking block 状态。 */
   thinkingBlocks: Map<number, PiThinkingBlock>;
+  /**
+   * contentIndex → 独立停止符暂存。text_delta 可能把 `<|eos|>` 拆开，
+   * 必须按本块判定，不能和别的 text block 共用。
+   */
+  streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
   /**
    * 本 turn 最后一条 assistant 消息的全文(每次非空 message_end 覆盖;agent_start 重置)。
    * 用于 agent_settled 的 done.data.result —— 与 CC/Codex 对齐:register.ts 的
@@ -96,6 +137,8 @@ export interface PiTranslateContext {
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
+  /** Open generation interval start; 0 while tools/user waits own the turn. */
+  generationOpenAt: number;
   /** False when any reported output lacks compatible parent generation timing. */
   generationTimingReliable: boolean;
   generationHeartbeatAt: number;
@@ -106,6 +149,8 @@ export interface PiTranslateContext {
    * 用来算增量,避免同一批用量被反复加进 turn 记账。与其它 turn 计数器同点(agent_start)清空。
    */
   delegatedUsage: Map<string, PiSubagentUsage>;
+  delegatedUsageSegmentIds: Set<string>;
+  delegatedUsageIncompleteTaskIds: Set<string>;
   /**
    * Tool calls explicitly identified as Cindy's PI Subagent extension.
    *
@@ -114,32 +159,57 @@ export interface PiTranslateContext {
    * reduce it into the preceding live-card state.
    */
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
+  /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
+  hostAutoCompactInFlight: boolean;
+  /** Optional rewrite for ctx_doctor tool result text (Cindy-managed package paths). */
+  rewriteToolResultText?: (text: string) => string;
+  /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
+  toolNamesByCallId: Map<string, string>;
+  /**
+   * compaction_start 锁存的 turnScope。end/boundary 必须复用，不能按结束时的
+   * isStreaming 重判——idle compact 期间用户开了新 turn 时，重判会把后台边界
+   * 当成前台事件，截断正在流式的 assistant。
+   */
+  compactTurnScope: 'background' | 'turn' | null;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
   return {
     logger,
+    getPriceVariant: undefined,
     contextWindow: 0,
     turnTokens: 0,
     turnInput: 0,
     turnOutput: 0,
     turnCacheRead: 0,
     turnCacheWrite: 0,
+    turnUsageSegments: [],
+    turnUsageSegmentsComplete: true,
+    turnUsageSegmentSeq: 0,
+    pendingPriceVariants: [],
+    turnSettled: false,
     contextTokens: 0,
     costUsd: 0,
     isStreaming: false,
     thinkingSeq: 0,
     thinkingBlocks: new Map(),
+    streamStopTokenByIndex: new Map(),
     finalAssistantText: '',
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
+    generationOpenAt: 0,
     generationTimingReliable: true,
     generationHeartbeatAt: 0,
     generationHeartbeatTimer: null,
     generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
+    delegatedUsageSegmentIds: new Set(),
+    delegatedUsageIncompleteTaskIds: new Set(),
     subagentToolCalls: new Map(),
+    toolNamesByCallId: new Map(),
     pendingAssistantError: null,
+    hostAutoCompactInFlight: false,
+    compactTurnScope: null,
   };
 }
 
@@ -150,6 +220,7 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   if (ctx.generationHeartbeatTimer !== null) clearInterval(ctx.generationHeartbeatTimer);
   ctx.generationHeartbeatTimer = null;
   ctx.generationHeartbeatAt = 0;
+  ctx.generationOpenAt = 0;
 }
 
 /** Release translator-owned resources when a Pi session ends outside a normal turn boundary. */
@@ -157,7 +228,9 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.isStreaming = false;
   ctx.pendingAssistantError = null;
+  ctx.compactTurnScope = null;
   ctx.subagentToolCalls.clear();
+  ctx.toolNamesByCallId.clear();
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -175,18 +248,27 @@ function startPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.generationHeartbeatReliable = true;
   ctx.generationHeartbeatAt = Date.now();
+  ctx.generationOpenAt = ctx.generationHeartbeatAt;
   const timer = setInterval(() => samplePiGenerationHeartbeat(ctx), PI_GENERATION_HEARTBEAT_MS);
   timer.unref?.();
   ctx.generationHeartbeatTimer = timer;
 }
 
 export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
-  return {
-    tokenUsage: ctx.turnTokens,
-    contextTokens: ctx.contextTokens,
-    contextWindow: ctx.contextWindow,
-    costUsd: ctx.costUsd,
-  };
+  return attachLiveGeneration(
+    {
+      tokenUsage: ctx.turnTokens,
+      contextTokens: ctx.contextTokens,
+      contextWindow: ctx.contextWindow,
+      costUsd: ctx.costUsd,
+    },
+    {
+      outputTokens: ctx.turnOutput,
+      closedDurationMs: ctx.generationDurationMs,
+      openStartedAt: ctx.generationOpenAt > 0 ? ctx.generationOpenAt : null,
+      reliable: ctx.generationTimingReliable && ctx.generationHeartbeatReliable,
+    },
+  );
 }
 
 function pushStatus(
@@ -194,15 +276,45 @@ function pushStatus(
   ctx: PiTranslateContext,
   text: string,
   isRunning: boolean,
+  extras?: Pick<AgentEvent, 'turnScope'>,
 ): void {
   queue.push({
     type: 'status',
     data: { status: text, ...usageSnapshotOf(ctx), isRunning },
     source: 'pi',
+    ...(extras?.turnScope ? { turnScope: extras.turnScope } : {}),
   });
 }
 
-function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined): void {
+/** Idle compact is not a product turn; mark it background so host/UI do not latch busy. */
+function idleCompactScope(ctx: PiTranslateContext): Pick<AgentEvent, 'turnScope'> | undefined {
+  return ctx.isStreaming ? undefined : { turnScope: 'background' };
+}
+
+function latchCompactTurnScope(
+  ctx: PiTranslateContext,
+): Pick<AgentEvent, 'turnScope'> | undefined {
+  const scope = idleCompactScope(ctx);
+  ctx.compactTurnScope = scope?.turnScope === 'background' ? 'background' : 'turn';
+  return scope;
+}
+
+function takeCompactTurnScope(
+  ctx: PiTranslateContext,
+): Pick<AgentEvent, 'turnScope'> | undefined {
+  const latched = ctx.compactTurnScope;
+  ctx.compactTurnScope = null;
+  if (latched === 'background') return { turnScope: 'background' };
+  if (latched === 'turn') return undefined;
+  return idleCompactScope(ctx);
+}
+
+function applyUsage(
+  ctx: PiTranslateContext,
+  usage: PiUsage | undefined,
+  model?: string,
+  priceVariant?: 'standard' | 'priority',
+): void {
   if (!usage) return;
   const input = usage.input ?? 0;
   const output = usage.output ?? 0;
@@ -216,6 +328,22 @@ function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined): void {
   ctx.contextTokens = input + cacheRead + cacheWrite;
   const cost = usage.cost?.total;
   if (typeof cost === 'number' && Number.isFinite(cost)) ctx.costUsd += cost;
+  ctx.turnUsageSegments.push({
+    id: `pi:${++ctx.turnUsageSegmentSeq}`,
+    ...(model ? { model } : {}),
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheCreateTokens: cacheWrite,
+    ...(typeof cost === 'number' && Number.isFinite(cost) ? { costUsd: cost } : {}),
+    ...(priceVariant ? { priceVariant } : {}),
+  });
+}
+
+function priceVariantFromServiceTier(value: unknown): 'standard' | 'priority' | undefined {
+  if (value === 'priority') return 'priority';
+  if (value === 'default' || value === 'standard') return 'standard';
+  return undefined;
 }
 
 /**
@@ -231,8 +359,64 @@ function applyDelegatedUsage(
   ctx: PiTranslateContext,
   taskId: string,
   cumulative: PiSubagentUsage | undefined,
+  segments: PiSubagentUsageSegment[] | undefined,
 ): void {
-  if (!cumulative || !taskId) return;
+  if (!taskId) return;
+  const segmentTotals = segments?.reduce<PiSubagentUsage>(
+    (sum, segment) => ({
+      input: sum.input + segment.input,
+      output: sum.output + segment.output,
+      cacheRead: sum.cacheRead + segment.cacheRead,
+      cacheWrite: sum.cacheWrite + segment.cacheWrite,
+      cost: sum.cost + segment.cost,
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+  );
+  const segmentsMatchCumulative =
+    cumulative === undefined ||
+    (segmentTotals !== undefined &&
+      segmentTotals.input === cumulative.input &&
+      segmentTotals.output === cumulative.output &&
+      segmentTotals.cacheRead === cumulative.cacheRead &&
+      segmentTotals.cacheWrite === cumulative.cacheWrite &&
+      Math.abs(segmentTotals.cost - cumulative.cost) < 1e-9);
+  if (
+    segments?.length &&
+    segmentsMatchCumulative &&
+    !ctx.delegatedUsageIncompleteTaskIds.has(taskId)
+  ) {
+    for (const segment of segments) {
+      const identity = `${taskId}:${segment.id}`;
+      if (ctx.delegatedUsageSegmentIds.has(identity)) continue;
+      ctx.delegatedUsageSegmentIds.add(identity);
+      ctx.turnTokens += segment.input + segment.output;
+      ctx.turnInput += segment.input;
+      ctx.turnOutput += segment.output;
+      ctx.turnCacheRead += segment.cacheRead;
+      ctx.turnCacheWrite += segment.cacheWrite;
+      ctx.costUsd += segment.cost;
+      ctx.turnUsageSegments.push({
+        id: `pi-child:${identity}`,
+        ...(segment.model ? { model: segment.model } : {}),
+        inputTokens: segment.input,
+        outputTokens: segment.output,
+        cacheReadTokens: segment.cacheRead,
+        cacheCreateTokens: segment.cacheWrite,
+        ...(segment.cost > 0 ? { costUsd: segment.cost } : {}),
+      });
+      if (segment.output > 0) ctx.generationTimingReliable = false;
+    }
+    if (cumulative) ctx.delegatedUsage.set(taskId, cumulative);
+    return;
+  }
+  if (segments?.length && !segmentsMatchCumulative) {
+    // A partial segment list cannot safely price the unassigned residual. Once
+    // this task falls back to its cumulative total, keep it unpriceable for the
+    // rest of the turn so a later full snapshot cannot double-count usage.
+    ctx.delegatedUsageIncompleteTaskIds.add(taskId);
+    ctx.turnUsageSegmentsComplete = false;
+  }
+  if (!cumulative) return;
   const previous = ctx.delegatedUsage.get(taskId);
   const delta = {
     input: Math.max(0, cumulative.input - (previous?.input ?? 0)),
@@ -248,6 +432,11 @@ function applyDelegatedUsage(
   ctx.turnCacheRead += delta.cacheRead;
   ctx.turnCacheWrite += delta.cacheWrite;
   ctx.costUsd += delta.cost;
+  if (delta.input || delta.output || delta.cacheRead || delta.cacheWrite || delta.cost) {
+    // Older runner payloads expose only a cumulative task total. Preserve token
+    // accounting, but do not pretend that this delta is one provider request.
+    ctx.turnUsageSegmentsComplete = false;
+  }
   // Child progress exposes wall-clock card duration, not generation-only time.
   // Once child output joins the numerator, parent-only timing cannot produce a
   // compatible TPS denominator, so retain usage but omit speed for this turn.
@@ -257,7 +446,10 @@ function applyDelegatedUsage(
 function assistantTextOf(message: PiAssistantMessage): string {
   const parts: string[] = [];
   for (const block of message.content ?? []) {
-    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const visible = stripInternalWebCitations(block.text);
+      if (visible.length > 0) parts.push(visible);
+    }
   }
   return parts.join('\n\n');
 }
@@ -270,7 +462,30 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
     sdkError: redactedError,
     ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
+    ...(isContextOverflowErrorMessage(redactedError)
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : isStreamInterruptedErrorMessage(redactedError)
+        ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+        : {}),
   };
+}
+
+function parsePiAutoRetryProgress(
+  event: PiRpcEvent,
+): { attempt: number; maxAttempts: number } | null {
+  const attempt = event.attempt;
+  const maxAttempts = event.maxAttempts;
+  if (
+    typeof attempt !== 'number'
+    || typeof maxAttempts !== 'number'
+    || !Number.isSafeInteger(attempt)
+    || !Number.isSafeInteger(maxAttempts)
+    || attempt < 1
+    || maxAttempts < attempt
+  ) {
+    return null;
+  }
+  return { attempt, maxAttempts };
 }
 
 function toolResultFullText(result: unknown): string {
@@ -313,6 +528,16 @@ function isRedactedThinkingDelta(delta: Record<string, unknown>, contentIndex: n
 }
 
 /** 主入口:一帧 pi RPC 事件 → 0..n 个 AgentEvent。 */
+/** Pi v0.83: 取消/失败的 compaction_end 也发，但 result 为 null。不得当成压缩成功。 */
+export function isFailedOrAbortedPiCompaction(event: Pick<PiRpcEvent, 'type'> & {
+  aborted?: unknown;
+  result?: unknown;
+}): boolean {
+  if (event.type !== 'compaction_end') return false;
+  if (event.aborted === true) return true;
+  return event.result == null;
+}
+
 export function translatePiEvent(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
@@ -326,6 +551,11 @@ export function translatePiEvent(
       ctx.turnOutput = 0;
       ctx.turnCacheRead = 0;
       ctx.turnCacheWrite = 0;
+      ctx.turnUsageSegments = [];
+      ctx.turnUsageSegmentsComplete = true;
+      ctx.turnUsageSegmentSeq = 0;
+      ctx.pendingPriceVariants = [];
+      ctx.turnSettled = false;
       ctx.finalAssistantText = '';
       ctx.pendingAssistantError = null;
       ctx.turnWallClockStartedAt = Date.now();
@@ -335,7 +565,11 @@ export function translatePiEvent(
       // 与其它 turn 计数器同点清:新 turn 的委派用量不该跟上一 turn 的累计值作差,
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
+      ctx.delegatedUsageSegmentIds.clear();
+      ctx.delegatedUsageIncompleteTaskIds.clear();
       ctx.subagentToolCalls.clear();
+      ctx.toolNamesByCallId.clear();
+      ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -345,7 +579,14 @@ export function translatePiEvent(
 
     case 'message_start': {
       ctx.thinkingBlocks.clear();
+      ctx.streamStopTokenByIndex.clear();
+      const message = event.message as { usage?: PiUsage } | undefined;
+      const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
+      ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
+      // Tell the UI generation is active so it can tick the TPS denominator
+      // locally between sparse message_end usage reports.
+      pushStatus(queue, ctx, 'Working…', true);
       return;
     }
 
@@ -359,7 +600,11 @@ export function translatePiEvent(
     case 'message_end': {
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
-      applyUsage(ctx, message.usage);
+      const pendingPriceVariant = ctx.pendingPriceVariants.shift();
+      const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
+      const priceVariant =
+        pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
+      applyUsage(ctx, message.usage, message.model, priceVariant);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);
       const messageDurationMs =
@@ -412,6 +657,7 @@ export function translatePiEvent(
       const toolUseId = String(event.toolCallId ?? '');
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
+      if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
       queue.push({
         type: 'tool_use',
         data: {
@@ -421,17 +667,36 @@ export function translatePiEvent(
         },
         source: 'pi',
       });
-      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId) {
-        const rawTitle = toolArgs.agent;
+      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
+        const rawTitle = toolArgs.title;
+        const taskFallback = typeof toolArgs.task === 'string' && toolArgs.task.trim()
+          ? toolArgs.task.trim().replace(/\s+/g, ' ').slice(0, 120)
+          : Array.isArray(toolArgs.tasks)
+            ? toolArgs.tasks
+                .map((task) => {
+                  if (!task || typeof task !== 'object') return '';
+                  const item = task as Record<string, unknown>;
+                  const value = typeof item.title === 'string' && item.title.trim()
+                    ? item.title
+                    : item.task;
+                  return typeof value === 'string'
+                    ? value.trim().replace(/\s+/g, ' ').slice(0, 60)
+                    : '';
+                })
+                .filter(Boolean)
+                .join(' · ')
+                .slice(0, 120)
+            : '';
         const title = typeof rawTitle === 'string' && rawTitle.trim()
-          ? rawTitle.trim().slice(0, 96)
-          : undefined;
+          ? rawTitle.trim().slice(0, 120)
+          : taskFallback || undefined;
         const update: AgentTaskUpdateEventData = {
           provider: 'pi',
           taskId: toolUseId,
           parentToolUseId: toolUseId,
           status: 'running',
           ...(title ? { title } : {}),
+          ...(toolArgs.async === true ? { taskType: 'pi_subagent' } : {}),
           subagentObservation: {
             kind: 'spawn',
             logicalSubagentId: toolUseId,
@@ -461,7 +726,12 @@ export function translatePiEvent(
         // 委派用量并进本 turn 的记账。子代理是独立 pi 进程,它的请求不走父进程的 usage 流,
         // 不在这里显式并进来,done.data.usage 与 register.ts 持久化的 session token/cost
         // 就会漏掉全部子代理花费(review)。
-        applyDelegatedUsage(ctx, progress.update.taskId, progress.delegatedUsage);
+        applyDelegatedUsage(
+          ctx,
+          progress.update.taskId,
+          progress.delegatedUsage,
+          progress.delegatedUsageSegments,
+        );
         queue.push({ type: 'agent_task_update', data: progress.update, source: 'pi' });
       }
       return;
@@ -470,7 +740,16 @@ export function translatePiEvent(
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');
       const isError = event.isError === true;
-      const fullText = toolResultFullText(event.result);
+      const rawText = toolResultFullText(event.result);
+      const toolName = String(
+        event.toolName
+          ?? (toolUseId ? ctx.toolNamesByCallId.get(toolUseId) : undefined)
+          ?? '',
+      );
+      if (toolUseId) ctx.toolNamesByCallId.delete(toolUseId);
+      const fullText = isContextModeDoctorToolName(toolName) && ctx.rewriteToolResultText
+        ? ctx.rewriteToolResultText(rawText)
+        : rawText;
       queue.push({
         type: 'tool_result_full',
         data: { toolUseId, fullText, isError },
@@ -489,6 +768,7 @@ export function translatePiEvent(
         // may finish the wrapper with isError=true after the child stopped.
         // Only a still-running child is completed/failed by the wrapper frame.
         const status = subagentToolCall.status === 'running'
+          && !subagentSpawnResultIndicatesRunning(PI_SUBAGENT_TOOL_NAME, fullText)
           ? (isError ? 'failed' : 'completed')
           : subagentToolCall.status;
         queue.push({
@@ -522,7 +802,10 @@ export function translatePiEvent(
       return;
 
     case 'agent_settled': {
+      if (ctx.turnSettled) return;
+      ctx.turnSettled = true;
       ctx.isStreaming = false;
+      ctx.pendingPriceVariants = [];
       stopPiGenerationHeartbeat(ctx);
       const pendingAssistantError = ctx.pendingAssistantError;
       ctx.pendingAssistantError = null;
@@ -551,6 +834,8 @@ export function translatePiEvent(
             outputTokens: ctx.turnOutput,
             cacheReadTokens: ctx.turnCacheRead,
             cacheCreationTokens: ctx.turnCacheWrite,
+            segments: ctx.turnUsageSegments.map((segment) => ({ ...segment })),
+            segmentsComplete: ctx.turnUsageSegmentsComplete,
             // durationMs is deliberately generation-only. If Pi does not report a
             // per-assistant generation duration, omit it instead of charging tool
             // execution / user waits to TPS.
@@ -571,16 +856,37 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_start': {
+      // A provider retry may begin without a matching message_end for the
+      // failed request. Drop any stale latch so the next request samples its
+      // own tariff at message_start.
+      ctx.pendingPriceVariants = [];
+      // 走 CC/Codex 同一套 `(auto-retry N/M)` 跨 agent 协议。这个后缀在 mobile /
+      // Telegram 投影里**只表示过载**，不能拿去编码未分类 5xx —— 否则手机会把普通
+      // 供应商故障显示成「模型服务繁忙」。
+      //
+      // 第 1 次不透出：单次抖动 pi 一次重试就过，提示只会闪一下徒增噪音
+      // （与 claude-code translator 的 api_retry 防噪口径一致）。
+      // 未分类错误同样静默：渠道 / 手机没有对应本地化契约，CC 也只透过载类。
+      const progress = parsePiAutoRetryProgress(event);
+      if (!progress || progress.attempt < 2) return;
       const sdkError = typeof event.errorMessage === 'string'
         ? redactSensitiveText(event.errorMessage)
         : undefined;
+      const rawMessage = (sdkError && sdkError.trim())
+        || ctx.pendingAssistantError?.message
+        || '';
+      const signals = extractNonSecretErrorSignals(rawMessage);
+      const errorStatus = ctx.pendingAssistantError?.errorStatus ?? signals.errorStatus;
+      if (parseOverloadError(rawMessage, errorStatus) === null) return;
       queue.push({
         type: 'error',
         data: {
-          message: `Transient provider error, retrying (${String(event.attempt)}/${String(event.maxAttempts)})…`,
+          message: formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
           isTerminal: false,
           willRetry: true,
-          sdkError,
+          reason: UPSTREAM_OVERLOAD_REASON,
+          ...(sdkError ? { sdkError } : {}),
+          ...(errorStatus !== undefined ? { errorStatus } : {}),
         },
         source: 'pi',
       });
@@ -611,20 +917,32 @@ export function translatePiEvent(
     }
 
     case 'compaction_start': {
-      pushStatus(queue, ctx, 'Compacting context…', true);
+      // Host auto-compact 发在 agent_settled 之后(isStreaming=false)。若这里
+      // 无条件 isRunning=true 而不标 background，desktop tracker 会当成新一轮产品 turn。
+      // 在 start 锁存 scope：end 时 isStreaming 可能已因新 turn 变 true。
+      pushStatus(queue, ctx, 'Compacting context…', true, latchCompactTurnScope(ctx));
       return;
     }
 
     case 'compaction_end': {
+      const compactScope = takeCompactTurnScope(ctx);
+      if (isFailedOrAbortedPiCompaction(event)) {
+        // 失败/取消不是压缩边界。手动压缩仍要收口 Compacting 状态，避免圆环卡 running。
+        if (event.reason === 'manual' && !ctx.isStreaming) {
+          pushStatus(queue, ctx, 'Done', false, compactScope);
+        }
+        return;
+      }
       const result = event.result as { tokensBefore?: number; estimatedTokensAfter?: number } | null;
       queue.push({
         type: 'compact_boundary',
         data: {
-          trigger: event.reason === 'manual' ? 'manual' : 'auto',
+          trigger: event.reason === 'manual' && !ctx.hostAutoCompactInFlight ? 'manual' : 'auto',
           preTokens: result?.tokensBefore,
           postTokens: result?.estimatedTokensAfter,
         },
         source: 'pi',
+        ...compactScope,
       });
       if (result && typeof result.estimatedTokensAfter === 'number') {
         ctx.contextTokens = result.estimatedTokensAfter;
@@ -633,8 +951,9 @@ export function translatePiEvent(
       // 若不收口,renderer 圆环会永久卡 running、新 contextTokens 也送不回去。
       // 仅 manual 收口:auto 压缩发生在活跃 turn 内(turn 结束经 agent_settled 自然收口),
       // 且若压缩期间用户已开始新 turn(ctx.isStreaming)也不能收口,否则会误杀新 turn。
+      // idle compact 的 status 带 turnScope=background，产品 turn 位不再闪。
       if (event.reason === 'manual' && !ctx.isStreaming) {
-        pushStatus(queue, ctx, 'Done', false);
+        pushStatus(queue, ctx, 'Done', false, compactScope);
       }
       return;
     }
@@ -671,7 +990,13 @@ function handleAssistantDelta(
   switch (delta.type) {
     case 'text_delta': {
       if (typeof delta.delta === 'string' && delta.delta.length > 0) {
-        queue.push({ type: 'text', data: { text: delta.delta, isFinal: false }, source: 'pi' });
+        const buffer = ctx.streamStopTokenByIndex.get(contentIndex)
+          ?? { pending: '', emitted: false };
+        const visible = holdStandaloneStopTokenDelta(buffer, delta.delta);
+        ctx.streamStopTokenByIndex.set(contentIndex, buffer);
+        if (visible && visible.length > 0) {
+          queue.push({ type: 'text', data: { text: visible, isFinal: false }, source: 'pi' });
+        }
       }
       return;
     }

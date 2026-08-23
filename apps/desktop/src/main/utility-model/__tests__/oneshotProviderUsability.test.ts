@@ -117,6 +117,19 @@ describe('hasOneshotProviderCredential · 自定义供应商', () => {
     expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
   });
 
+  it('legacy custom xai 的 OAuth 凭证仍按存储 id 读取', () => {
+    const oauth = { issuer: 'https://issuer.example.com' } as never;
+    const p = custom(
+      'custom:xai',
+      { codex: { upstream: 'https://up.example.com', authStrategy: 'oauth-token' } },
+      { method: 'oauth', oauth },
+    );
+    vi.mocked(readCachedGenericOAuthAccessToken).mockReturnValue('cached' as never);
+
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
+    expect(readCachedGenericOAuthAccessToken).toHaveBeenCalledWith('xai', oauth);
+  });
+
   it('不支持的鉴权策略 / 缺 routing → 不可用', () => {
     const bespoke = custom('c4', { codex: { upstream: 'https://up.example.com', authStrategy: 'bespoke' as never } });
     expect(hasOneshotProviderCredential(bespoke, 'codex')).toBe(false);

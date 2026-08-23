@@ -65,6 +65,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children: ReactNode }) => children,
   Tooltip: {
     Provider: ({ children }: { children: ReactNode }) => children,
     Root: ({ children }: { children: ReactNode }) => children,
@@ -91,7 +92,13 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 vi.mock('@/components/sidebar/WorktreeBadge', () => ({
   WorktreeBadge: ({ sessionId }: { sessionId: string }) =>
-    mocks.worktreeSessionIds.has(sessionId) ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT') : null,
+    mocks.worktreeSessionIds.has(sessionId)
+      ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT')
+      : null,
+}));
+
+vi.mock('@/contexts/WorktreeContext', () => ({
+  useWorktreeForSession: () => null,
 }));
 
 vi.mock('@/state/agentIslandActivity', () => ({
@@ -139,8 +146,10 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({
-  scheduleFocusPath: (scheduleId: string) => `/cc-agent/scheduled?focus=${encodeURIComponent(scheduleId)}`,
-  useSessionBoundSchedules: (sessionId: string) => mocks.boundSchedulesBySession.get(sessionId) ?? [],
+  scheduleFocusPath: (scheduleId: string) =>
+    `/cc-agent/scheduled?focus=${encodeURIComponent(scheduleId)}`,
+  useSessionBoundSchedules: (sessionId: string) =>
+    mocks.boundSchedulesBySession.get(sessionId) ?? [],
 }));
 
 vi.mock('@/features/scheduler/lib/scheduleSidebarIndexRuns', () => ({
@@ -158,7 +167,7 @@ function scheduleForCase(id: string, status: 'active' | 'paused') {
   };
 }
 
-function renderCase(caseId: string) {
+function renderCase(caseId: string, overrides: Record<string, unknown> = {}) {
   const visualCase = sessionCardVisualCases.find((item) => item.id === caseId);
   if (!visualCase) throw new Error(`Missing visual case: ${caseId}`);
   if (visualCase.boundSchedule) {
@@ -183,9 +192,19 @@ function renderCase(caseId: string) {
         onRename: vi.fn(),
         onTogglePin: vi.fn(),
         projectOptions: [],
+        ...overrides,
       }),
     ),
   );
+}
+
+/** 取本次渲染的行根元素(带 data-sidebar-session-row 标记)。 */
+function sessionRowEl(): HTMLElement {
+  const el = screen
+    .getByTestId('visual-case')
+    .querySelector('[data-sidebar-session-row="true"]') as HTMLElement | null;
+  if (!el) throw new Error('session row not found');
+  return el;
 }
 
 describe('SessionCard visual cases', () => {
@@ -223,9 +242,40 @@ describe('SessionCard visual cases', () => {
     ]);
   });
 
+  // 2026-08-12 用户反馈:列表模式下选中会改变行高,把上下行推移、列表跳动。
+  // 根因是 active 态加了真实 border 而未选中时没有——列表行高由内容撑开,
+  // 1px 边框直接把该行加高 2px。改用 inset shadow(画在盒内、不参与布局),
+  // 与 SessionItem(文字模式)当年的修法一致。
+  it('列表模式:选中态不引入改变盒模型的 border(行高与未选中一致)', () => {
+    renderCase('short-idle-cc', { variant: 'list', isActive: true });
+    const activeRow = sessionRowEl();
+    // 描边走 inset shadow,不是 border —— 后者会撑高行。
+    expect(activeRow.className).toContain(
+      'shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]',
+    );
+    expect(activeRow.className).not.toMatch(/(^|\s)border(\s|$)/);
+    expect(activeRow.className).not.toContain('border-[var(--sidebar-item-active-border)]');
+
+    cleanup();
+    renderCase('short-idle-cc', { variant: 'list', isActive: false });
+    const idleRow = sessionRowEl();
+    // 未选中同样没有 border —— 两态盒模型一致,切换不产生高度差。
+    expect(idleRow.className).not.toMatch(/(^|\s)border(\s|$)/);
+  });
+
+  it('卡片模式的 border 恒定存在(只换颜色),不因选中而改变布局', () => {
+    renderCase('short-idle-cc', { variant: 'card', isActive: true });
+    expect(sessionRowEl().className).toMatch(/(^|\s)border(\s|$)/);
+    cleanup();
+    renderCase('short-idle-cc', { variant: 'card', isActive: false });
+    expect(sessionRowEl().className).toMatch(/(^|\s)border(\s|$)/);
+  });
+
   it('prefetches a new task on primary pointerdown before navigation', () => {
     renderCase('short-idle-cc');
-    const card = screen.getByTestId('visual-case').querySelector('[data-sidebar-session-row="true"]');
+    const card = screen
+      .getByTestId('visual-case')
+      .querySelector('[data-sidebar-session-row="true"]');
     expect(card).not.toBeNull();
 
     fireEvent.pointerDown(card!, { button: 0, pointerType: 'mouse' });
@@ -288,12 +338,17 @@ describe('SessionCard visual cases', () => {
       );
 
       const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
-      const title = within(card!).getByText(visualCase.session.title);
+      const title = within(card!).getByText(visualCase.session.title, {
+        selector: variant === 'list' ? '.sidebar-title-marquee__ellipsis' : undefined,
+      });
       const actionButton = card?.querySelector<HTMLButtonElement>(
         'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
       );
       expect(card?.draggable).toBe(true);
+      expect(card?.className).toContain('cursor-pointer');
+      expect(card?.className).not.toContain('cursor-grab');
       expect(card?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
+      expect(title.className).not.toContain('cursor-grab');
       expect(actionButton).not.toBeNull();
 
       fireEvent.pointerDown(title, { button: 0, pointerType: 'mouse' });
@@ -341,13 +396,17 @@ describe('SessionCard visual cases', () => {
       const visualCase = sessionCardVisualCases.find((item) => item.id === id);
       expect(card).not.toBeNull();
       expect(card?.className).toContain('rounded-xl');
-      expect(root.textContent).toContain(visualCase?.session.title.replace('[Schedule] ', '').slice(0, 4));
+      expect(root.textContent).toContain(
+        visualCase?.session.title.replace('[Schedule] ', '').slice(0, 4),
+      );
     },
   );
 
   it('keeps single-line cards naturally shorter than long summary cards', () => {
     renderCase('short-idle-cc');
-    const shortCard = screen.getByTestId('visual-case').querySelector('[data-sidebar-session-row="true"]');
+    const shortCard = screen
+      .getByTestId('visual-case')
+      .querySelector('[data-sidebar-session-row="true"]');
     expect(shortCard?.className).not.toContain('h-full');
     cleanup();
 
@@ -367,8 +426,10 @@ describe('SessionCard visual cases', () => {
 
   it('uses the unified Timer for automation cases without a bound schedule', () => {
     renderCase('automation-timer');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBe('由自动化创建');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer')).not.toBeNull();
+    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer'),
+    ).not.toBeNull();
   });
 
   it('stops keyboard activation on the automation title action from opening the card', () => {
@@ -399,7 +460,9 @@ describe('SessionCard visual cases', () => {
   it('stops keyboard activation on the schedule badge from opening the card', () => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'schedule-bound-active');
     if (!visualCase) throw new Error('Missing schedule visual case');
-    mocks.boundSchedulesBySession.set(visualCase.session.id, [scheduleForCase(visualCase.session.id, 'active')]);
+    mocks.boundSchedulesBySession.set(visualCase.session.id, [
+      scheduleForCase(visualCase.session.id, 'active'),
+    ]);
     const onClick = vi.fn();
 
     render(
@@ -461,10 +524,12 @@ describe('SessionCard visual cases', () => {
     cleanup();
 
     // list 变体保持原有标题前缀契约不变:自动化图标仍在标题里。
-    const { container: listContainer } = render(createElement(SessionCard, { ...commonProps, variant: 'list' }));
+    const { container: listContainer } = render(
+      createElement(SessionCard, { ...commonProps, variant: 'list' }),
+    );
     const listTitleRow = Array.from(listContainer.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') &&
+        node.className.includes('h-[22px]') &&
         node.textContent?.includes('自动化日报巡检') &&
         node.querySelector('[aria-label="查看自动化任务"]'),
     );
@@ -496,7 +561,7 @@ describe('SessionCard visual cases', () => {
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
     const titleRow = Array.from(card.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') && node.textContent?.includes(visualCase.session.title),
+        node.className.includes('h-[22px]') && node.textContent?.includes(visualCase.session.title),
     );
     expect(titleRow).toBeTruthy();
     const statusIconSlot = Array.from(titleRow!.querySelectorAll<HTMLElement>('span')).find(
@@ -598,14 +663,17 @@ describe('SessionCard visual cases', () => {
       expect(action.className).toContain('size-5');
       expect(action.className).toContain('rounded-md');
       expect(action.className).toContain('text-sidebar-action-icon');
+      expect(action.className).not.toMatch(/(?:^|\s)bg-sidebar(?:\s|$)/);
       expect(action.className).not.toContain('size-6');
       expect(action.className).not.toContain('bg-[var(--cmd-palette-bg)]');
       expect(action.className).not.toContain('border-sidebar-border');
       expect(action.querySelector('svg')?.getAttribute('width')).toBe('14');
     }
-    const listTimeFade = listContainer.querySelector('time')?.parentElement;
+    // C 期起 time 包在 SessionInfoMeta 的 span 里;最近的 div 祖先才是让位容器。
+    // 信息层与操作占位叠在同一格,槽根仍是 group/slot,中间多一层 max-content grid。
+    const listTimeFade = listContainer.querySelector('time')?.closest('div');
     expect(listTimeFade?.className).toContain('group-focus-within/slot:opacity-0');
-    expect(listTimeFade?.parentElement?.className).toContain('group/slot');
+    expect(listTimeFade?.closest('[class*="group/slot"]')?.className).toContain('group/slot');
     cleanup();
 
     const { container: activeListContainer } = render(
@@ -615,6 +683,7 @@ describe('SessionCard visual cases', () => {
       name: moreActionsName,
     });
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
+    expect(activeListMore.className).not.toContain('bg-sidebar-item-active');
     expect(activeListMore.className).toContain(
       'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
     );
@@ -631,38 +700,52 @@ describe('SessionCard visual cases', () => {
     expect(cardMore.querySelector('svg')?.getAttribute('width')).toBe('13');
   });
 
-  it.each(['list', 'card'] as const)('keeps the %s archive confirmation pill on one line', (variant) => {
-    const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
-    if (!visualCase) throw new Error('Missing idle visual case');
+  it.each(['list', 'card'] as const)(
+    'keeps the %s archive confirmation pill on one line',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+      if (!visualCase) throw new Error('Missing idle visual case');
 
-    const { container } = render(
-      createElement(SessionCard, {
-        session: visualCase.session,
-        variant: variant === 'list' ? 'list' : undefined,
-        isActive: false,
-        isRunning: false,
-        isAttached: false,
-        hasAttentionNotification: false,
-        isSelected: false,
-        onClick: vi.fn(),
-        onAction: vi.fn(),
-        onRename: vi.fn(),
-        onTogglePin: vi.fn(),
-        projectOptions: [],
-      }),
-    );
+      const { container } = render(
+        createElement(SessionCard, {
+          session: visualCase.session,
+          variant: variant === 'list' ? 'list' : undefined,
+          isActive: false,
+          isRunning: false,
+          isAttached: false,
+          hasAttentionNotification: false,
+          isSelected: false,
+          onClick: vi.fn(),
+          onAction: vi.fn(),
+          onRename: vi.fn(),
+          onTogglePin: vi.fn(),
+          projectOptions: [],
+        }),
+      );
 
-    fireEvent.click(screen.getByRole('button', { name: '归档' }));
-    const confirmPill = screen.getByRole('button', { name: '归档' });
-    expect(confirmPill.className).toContain('w-max');
-    expect(confirmPill.className).toContain('min-w-14');
-    expect(confirmPill.className).toContain('whitespace-nowrap');
-    expect(confirmPill.className).toContain('var(--surface-elevated)');
-    expect(confirmPill.className).not.toContain('transparent');
-    if (variant === 'list') {
-      expect(container.querySelector('time')?.parentElement?.className).toContain('invisible');
-    }
-  });
+      fireEvent.click(screen.getByRole('button', { name: '归档' }));
+      const confirmPill = screen.getByRole('button', { name: '归档' });
+      expect(confirmPill.className).toContain('w-max');
+      expect(confirmPill.className).toContain('min-w-14');
+      expect(confirmPill.className).toContain('whitespace-nowrap');
+      expect(confirmPill.className).toContain('var(--surface-elevated)');
+      expect(confirmPill.className).not.toContain('transparent');
+      if (variant === 'list') {
+        // 让位容器是 time 最近的 div 祖先(time 嵌在 SessionInfoMeta span 内)。
+        expect(container.querySelector('time')?.closest('div')?.className).toContain('invisible');
+        const confirmReserve = Array.from(container.querySelectorAll<HTMLElement>('span')).find(
+          (node) =>
+            node.getAttribute('aria-hidden') === 'true' &&
+            node.className.includes('w-max') &&
+            node.textContent === '归档',
+        );
+        expect(confirmReserve).toBeTruthy();
+        expect(confirmReserve?.className).toContain('px-[9px]');
+        expect(confirmReserve?.className).toContain('text-11');
+        expect(confirmReserve?.className).not.toContain('inline-block h-[22px] w-14');
+      }
+    },
+  );
 
   it('keeps running card mode on the stable preview while list mode can show live detail', () => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
@@ -688,59 +771,66 @@ describe('SessionCard visual cases', () => {
     expect(cardContainer.textContent).not.toContain('正在实时扫描并刷新当前执行步骤');
     cleanup();
 
-    const { container: listContainer } = render(createElement(SessionCard, { ...commonProps, variant: 'list' }));
+    const { container: listContainer } = render(
+      createElement(SessionCard, { ...commonProps, variant: 'list' }),
+    );
     expect(listContainer.textContent).toContain('正在实时扫描并刷新当前执行步骤');
   });
 
-  it.each(['list', 'card'] as const)('keeps running %s text colors identical to idle', (variant) => {
-    const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
-    if (!visualCase) throw new Error('Missing running visual case');
+  it.each(['list', 'card'] as const)(
+    'keeps running %s text colors identical to idle',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
+      if (!visualCase) throw new Error('Missing running visual case');
 
-    const renderColors = (isRunning: boolean) => {
-      const { container } = render(
-        createElement(SessionCard, {
-          session: visualCase.session,
-          variant: variant === 'list' ? 'list' : undefined,
-          isActive: false,
-          isRunning,
-          isAttached: false,
-          hasAttentionNotification: false,
-          isSelected: false,
-          onClick: vi.fn(),
-          onAction: vi.fn(),
-          onRename: vi.fn(),
-          onTogglePin: vi.fn(),
-          projectOptions: [],
-        }),
-      );
-      const title =
-        variant === 'list'
-          ? Array.from(container.querySelectorAll('span')).find(
-              (node) => node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
-            )
-          : Array.from(container.querySelectorAll('div')).find((node) =>
-              node.className.includes('[-webkit-line-clamp:2]'),
-            );
-      const preview = Array.from(container.querySelectorAll('p')).find((node) =>
-        node.textContent?.includes('正在分析本周项目数据与异常波动。'),
-      );
-      const time = container.querySelector('time');
-      const colors = [title, preview, time].map((node) =>
-        node?.className
-          .split(' ')
-          .filter(
-            (className) =>
-              className === 'text-foreground' ||
-              className.startsWith('text-[var(--text-') ||
-              className === 'text-[var(--cmd-palette-item-meta)]',
-          ),
-      );
-      cleanup();
-      return colors;
-    };
+      const renderColors = (isRunning: boolean) => {
+        const { container } = render(
+          createElement(SessionCard, {
+            session: visualCase.session,
+            variant: variant === 'list' ? 'list' : undefined,
+            isActive: false,
+            isRunning,
+            isAttached: false,
+            hasAttentionNotification: false,
+            isSelected: false,
+            onClick: vi.fn(),
+            onAction: vi.fn(),
+            onRename: vi.fn(),
+            onTogglePin: vi.fn(),
+            projectOptions: [],
+          }),
+        );
+        const title =
+          variant === 'list'
+            ? Array.from(container.querySelectorAll('span')).find(
+                (node) =>
+                  node.className.includes('truncate') &&
+                  node.textContent?.includes(visualCase.session.title),
+              )
+            : Array.from(container.querySelectorAll('div')).find((node) =>
+                node.className.includes('[-webkit-line-clamp:2]'),
+              );
+        const preview = Array.from(container.querySelectorAll('p')).find((node) =>
+          node.textContent?.includes('正在分析本周项目数据与异常波动。'),
+        );
+        const time = container.querySelector('time');
+        const colors = [title, preview, time].map((node) =>
+          node?.className
+            .split(' ')
+            .filter(
+              (className) =>
+                className === 'text-foreground' ||
+                className.startsWith('text-[var(--text-') ||
+                className === 'text-[var(--cmd-palette-item-meta)]',
+            ),
+        );
+        cleanup();
+        return colors;
+      };
 
-    expect(renderColors(true)).toEqual(renderColors(false));
-  });
+      expect(renderColors(true)).toEqual(renderColors(false));
+    },
+  );
 
   it.each([
     ['done', 'var(--card-status-done)'],
@@ -771,10 +861,13 @@ describe('SessionCard visual cases', () => {
     const rightStatus = container.querySelector(`[data-sidebar-right-status="${kind}"]`);
     expect(rightStatus?.className).toContain('right-2.5');
     expect(rightStatus?.className).toContain('bottom-2');
-    expect((rightStatus?.firstElementChild as HTMLElement | null)?.style.backgroundColor).toBe(color);
+    expect((rightStatus?.firstElementChild as HTMLElement | null)?.style.backgroundColor).toBe(
+      color,
+    );
 
-    const title = Array.from(container.querySelectorAll('span')).find((node) =>
-      node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
+    const title = Array.from(container.querySelectorAll('span')).find(
+      (node) =>
+        node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
     );
     expect(
       Array.from(title?.querySelectorAll('span') ?? []).some((node) =>

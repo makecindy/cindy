@@ -129,12 +129,15 @@ export function LoginHandoffProvider({
   children,
   authResolved,
   authenticated,
+  coverHeld = false,
 }: {
   children: ReactNode;
   /** auth 初始化完成(= !isInitializing;App.tsx 内层 host 从 useAuth 取,避免本模块传递性引入 AuthContext 重依赖)。 */
   authResolved: boolean;
   /** auth 初始化结果分支(仅在 authResolved 后读)。 */
   authenticated: boolean;
+  /** 已登录但 LocalDbGate 还不能画主界面时由 App 壳下传,避免本模块 import AppShellCover/Auth。 */
+  coverHeld?: boolean;
 }) {
   const [phase, setPhase] = useState<LoginHandoffPhase>('boot');
   const [branch, setBranch] = useState<LoginHandoffBranch>(null);
@@ -235,12 +238,12 @@ export function LoginHandoffProvider({
       panelBottomReserve,
       isPlaying,
       // startup 期(含 boot/播放中/brand-exit)恒挂以维持不透明白底全盖;done 后
-      // 一律跟随登录面板存在:authenticated 淡出完成且无面板 → 卸载;之后登出
-      // 回 /login,LoginPage 上报面板挂载 → 品牌层重挂(phase 恒 done = 终态:
-      // 品牌固定登录位、Slogan 直落可见、无过渡不重播——playedRef 语义不变)。
+      // 跟随登录面板或 AppShellCover:登录页要品牌底;已登录但 LocalDbGate 还在
+      // checking 时也要留着,避免登录成功卸面板后露出默认白底。登出回 /login
+      // 由 LoginPage 上报面板挂载重挂(phase 恒 done = 终态,不重播)。
       // 判定刻意不绑 branch:绑死会让 authenticated 冷启动后登出的 /login 永久
       // 丢失品牌层(登录页只剩悬空白面板,2026-07-20 对抗 review P1)。
-      brandStageMounted: phase !== 'done' ? true : panelMounted,
+      brandStageMounted: phase !== 'done' ? true : panelMounted || coverHeld,
       brandExiting: phase === 'brand-exit',
       panelRevealed: phase === 'panel' || phase === 'slogan' || phase === 'done',
       sloganRevealed: phase === 'slogan' || phase === 'done',
@@ -254,6 +257,7 @@ export function LoginHandoffProvider({
     phase,
     branch,
     panelMounted,
+    coverHeld,
     panelBottomReserve,
     reportBrandAssetsReady,
     reportSplashExited,

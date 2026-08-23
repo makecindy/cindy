@@ -4,6 +4,7 @@ import {
   BackHandler,
   Easing,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
   type TextInputProps,
@@ -23,6 +24,7 @@ import {
   LOGIN_METHOD_ROW,
   LOGIN_SOCIAL,
   LOGIN_SPINNER,
+  LOGIN_SSO_ORG_HISTORY,
   LOGIN_SUBTITLE,
   LOGIN_TEXT_LINK,
   LOGIN_TITLE,
@@ -501,6 +503,8 @@ export function LoginSkinInput({
   center,
   top = LOGIN_CONTROL.inputY,
   testID,
+  onFocus: onInputFocus,
+  onBlur: onInputBlur,
   ...inputProps
 }: {
   value: string;
@@ -525,9 +529,15 @@ export function LoginSkinInput({
     <TextInput
       {...inputProps}
       editable={editable}
-      onBlur={() => setFocused(false)}
+      onBlur={(event) => {
+        setFocused(false);
+        onInputBlur?.(event);
+      }}
       onChangeText={onChangeText}
-      onFocus={() => setFocused(true)}
+      onFocus={(event) => {
+        setFocused(true);
+        onInputFocus?.(event);
+      }}
       placeholder={placeholder}
       placeholderTextColor={colors.login.controlPlaceholder}
       style={[
@@ -549,6 +559,79 @@ export function LoginSkinInput({
       testID={testID}
       value={value}
     />
+  );
+}
+
+/** Visual-only recent organization menu used by the SSO identifier field. */
+export function LoginSsoOrgHistoryList({
+  entries,
+  value,
+  onSelect,
+}: {
+  entries: readonly string[];
+  value: string;
+  onSelect: (entry: string) => void;
+}) {
+  const { colors } = useTheme();
+  const selectedKey = value.trim().toLowerCase();
+  return (
+    <View
+      accessibilityRole="menu"
+      style={{
+        backgroundColor: colors.login.panelBg,
+        borderColor: colors.login.controlBorder,
+        borderRadius: LOGIN_SSO_ORG_HISTORY.radius,
+        borderWidth: 1,
+        left: LOGIN_SSO_ORG_HISTORY.x,
+        maxHeight: LOGIN_SSO_ORG_HISTORY.maxHeight,
+        overflow: 'hidden',
+        position: 'absolute',
+        top: LOGIN_SSO_ORG_HISTORY.y,
+        width: LOGIN_SSO_ORG_HISTORY.width,
+        zIndex: 4,
+      }}
+      testID="login.ssoOrgHistoryList"
+    >
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {entries.map((entry, index) => {
+          const selected = entry.toLowerCase() === selectedKey;
+          return (
+            <Pressable
+              accessibilityRole="menuitem"
+              accessibilityState={{ selected }}
+              key={entry.toLowerCase()}
+              onPress={() => onSelect(entry)}
+              style={({ pressed }) => ({
+                backgroundColor:
+                  selected || pressed
+                    ? colors.login.actionControlBg
+                    : 'transparent',
+                borderRadius: LOGIN_SSO_ORG_HISTORY.rowRadius,
+                justifyContent: 'center',
+                minHeight: LOGIN_SSO_ORG_HISTORY.rowMinHeight,
+                paddingHorizontal: LOGIN_SSO_ORG_HISTORY.paddingX,
+                paddingVertical: LOGIN_SSO_ORG_HISTORY.paddingY,
+              })}
+              testID={`login.ssoOrgHistoryOption.${index}`}
+            >
+              <Text
+                style={{
+                  color: colors.login.controlText,
+                  fontSize: LOGIN_SSO_ORG_HISTORY.font,
+                  fontWeight: fontWeight.medium,
+                  lineHeight: LOGIN_SSO_ORG_HISTORY.lineHeight,
+                }}
+              >
+                {entry}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 }
 

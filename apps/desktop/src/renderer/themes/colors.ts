@@ -1,11 +1,5 @@
 import { registerColor } from './color-registry';
-
-function createNotAllowedCursor(stroke: string): string {
-  const encodedStroke = stroke.startsWith('#')
-    ? `%23${stroke.slice(1)}`
-    : encodeURIComponent(stroke);
-  return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='${encodedStroke}' stroke-width='2.6'/%3E%3Cpath d='M9.2 22.8 22.8 9.2' fill='none' stroke='${encodedStroke}' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E") 16 16, not-allowed`;
-}
+import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from './effortTierColors';
 
 /* === P3.2: Semantic slot tokens === */
 registerColor('surface', {
@@ -189,10 +183,6 @@ registerColor('text-placeholder', {
   light: '#c4c4c4',
   dark: '#525252',
 }, 'Placeholder 文字 — 必须读着像空(比 tertiary 更淡);统一 slot,各输入面 placeholder alias 均收口于此');
-registerColor('cursor-not-allowed', {
-  light: createNotAllowedCursor('#373737'),
-  dark: createNotAllowedCursor('#d4d4d4'),
-}, 'Windows disabled cursor SVG (完整 cursor 值,可由主题覆盖)');
 registerColor('accent-cta-bg', {
   light: '#262626',
   dark: '#ffffff',
@@ -1063,6 +1053,53 @@ registerColor('model-section-label', {
   light: 'var(--text-secondary)',
   dark: 'var(--text-secondary)',
 }, 'Stone — "Effort" header');
+// 统一模型选择器(model-selector-unified §1.3 / §1.5)
+registerColor('favorite-star', {
+  light: '#d99a06',
+  dark: '#e8b425',
+}, 'Gold — 收藏 ☆ 点亮态');
+// 推理强度档位绝对色:同一档在 Light / Dark 下必须是同一个颜色(档色表达「这一档有多强」,
+// 不表达界面明暗层次),故 light === dark。数值正本在 themes/effortTierColors.ts —— 滑杆拖动
+// 要在相邻档色之间逐帧插值,必须拿到数值 hex,故那份表是源、这里从它注册,两处不可能漂移。
+for (const [tier, hex] of Object.entries(EFFORT_TIER_COLORS)) {
+  registerColor(`effort-tier-${tier}`, { light: hex, dark: hex }, `推理强度档位色 — ${tier}`);
+}
+// 价格档($ 串)三档色:同为跨主题固定功能色(价格档表达「贵不贵」,不随明暗主题变),
+// 数值正本同在 themes/effortTierColors.ts。
+for (const [tier, hex] of Object.entries(PRICE_TIER_COLORS)) {
+  registerColor(`price-tier-${tier}`, { light: hex, dark: hex }, `价格档位色 — ${tier}`);
+}
+// Fast(插队加速)开启态的强调蓝 —— 与档位色 / 价格档色同一类**跨主题固定功能色**
+// (DESIGN.md §10 语义豁免):它表达的是「这一格开着 Fast」这个功能态,不表达界面明暗层次,
+// 两种模式给同一个值是**有意决策**,不是漏配 dark。配置浮层里的按钮底色由组件用 color-mix
+// 从同一个 var 派生,不另存第二份数值。只在浮层内部用(外侧闪电保持中性色,规格 §1.3)。
+registerColor('fast-accent', {
+  light: '#3B9EFF',
+  dark: '#3B9EFF',
+}, 'Fast 开启态强调蓝(light/dark 同值,跨主题固定功能色)');
+// 引擎徽标(badge 列表样式的行首 22px 标识)的品牌标识色 —— 与档位色 / 价格档色 /
+// Fast 强调蓝同一类**跨主题固定功能色**(DESIGN.md §10 语义豁免):它表达的是「这一行
+// 现在挂在哪个引擎上」这个身份,不表达界面明暗层次,**light / dark 同值是有意决策**,
+// 不是漏配 dark —— 同一个引擎在两种主题下换个颜色,用户会以为自己换了引擎。
+// 各自来源:
+//   · cc    = Anthropic 陶土橙,与 ClaudeMark 的 brand variant 同一支色;
+//   · codex = Codex 官方渐变的中段蓝(CodexMark brand 的 0.5 stop);
+//   · pi    = 上游无官方品牌色,取一支与前两者可区分的紫(统一选择器设计稿 v7)。
+// 徽标底色(14%)与描边(30%)由组件用 color-mix 从**同一个 var** 派生,PiMark 的
+// currentColor 也接同一个 var —— TS 侧不再持有这三个 hex,不会出现「组件拿常量、
+// 主题拿 token」两条路各画各的。
+registerColor('engine-badge-cc', {
+  light: '#d97757',
+  dark: '#d97757',
+}, 'Claude Code 引擎徽标色 — Anthropic 陶土橙(light/dark 同值)');
+registerColor('engine-badge-codex', {
+  light: '#7a9dff',
+  dark: '#7a9dff',
+}, 'Codex 引擎徽标色 — 官方渐变中段蓝(light/dark 同值)');
+registerColor('engine-badge-pi', {
+  light: '#a78bfa',
+  dark: '#a78bfa',
+}, 'Pi 引擎徽标色 — 自选紫,上游无官方品牌色(light/dark 同值)');
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',
@@ -1296,6 +1333,14 @@ registerColor('diff-add-fg', {
   light: '#22863a',
   dark: '#7ee787',
 }, 'GitHub Diff Green (Light)');
+registerColor('pr-open-on-light', {
+  light: '#2EA043',
+  dark: '#2EA043',
+}, 'Sidebar PR open green on light surfaces (unselected Light / selected Dark pill)');
+registerColor('pr-open-on-dark', {
+  light: '#3FB950',
+  dark: '#3FB950',
+}, 'Sidebar PR open green on dark surfaces (unselected Dark / selected Light pill)');
 registerColor('diff-add-bg', {
   light: '#f0fff4',
   dark: '#033a16',
@@ -1712,6 +1757,10 @@ registerColor('card-status-awaiting', {
   light: '#19D2C1',
   dark: '#19D2C1',
 }, '状态点 — 待用户回复/选择 (设计定稿 2026-07-17 #19D2C1,取代 #00D9C5 冻结红线;light/dark 同值)');
+registerColor('sidebar-draft-indicator', {
+  light: '#0B726B',
+  dark: 'var(--card-status-awaiting)',
+}, '侧边栏草稿/暂停队列铅笔 — light 深青保证透明侧栏上的小图形对比度,dark 复用 awaiting 青色');
 registerColor('card-status-error', {
   light: '#D91F37',
   dark: '#D91F37',
@@ -2014,6 +2063,12 @@ registerColor('text-selection-bg', {
   light: 'var(--focus-ring-soft)',
   dark: 'var(--focus-ring-soft)',
 }, '文字选中背景(焦点离开宿主窗口时仍保持清晰可见)');
+// 小胶囊(引擎选择、rail 格)的选中「浮起」阴影 —— 比 shadow-menu 轻一个量级:
+// 26px 高的 chip 套 4px/16px 的菜单阴影会糊成一团灰。Dark 下加深,否则在深底上看不见。
+registerColor('shadow-chip-raised', {
+  light: '0 1px 2px rgba(0, 0, 0, 0.12)',
+  dark: '0 1px 2px rgba(0, 0, 0, 0.4)',
+}, '小胶囊选中态的浮起 shadow');
 registerColor('shadow-menu', {
   light: '0 4px 16px rgba(0, 0, 0, 0.15)',
   dark: '0 4px 16px rgba(0, 0, 0, 0.5)',
