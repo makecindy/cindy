@@ -151,11 +151,7 @@ function registryEffortMetadata(
         (stripped.has(entry.id) || stripped.has(route.modelId)),
     ),
   );
-  const fallbackUnique = [
-    ...new Map(fallbackMatches.map((entry) => [entry.id, entry])).values(),
-  ];
-  if (fallbackUnique.length !== 1) return undefined;
-  return toRegistryEffortMetadata(fallbackUnique[0]!, agent);
+  return consensusRegistryEffortMetadata(fallbackMatches, agent);
 }
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */

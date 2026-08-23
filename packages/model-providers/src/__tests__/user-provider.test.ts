@@ -336,6 +336,85 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     },
   );
 
+  it.each(["xd/gpt-5.6-sol", "chatgpt/gpt-5.6-sol"])(
+    "inherits equivalent Registry effort metadata after stripping the prefix from %s",
+    (modelId) => {
+      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+      if (!registry) throw new Error("missing bundled model registry");
+      const baseEntry = registry.models.find(
+        (entry) => entry.id === "openai/gpt-5.6-sol",
+      );
+      if (!baseEntry) throw new Error("missing gpt-5.6-sol registry entry");
+      const first = structuredClone(baseEntry);
+      first.id = "first/gpt-5.6-sol";
+      first.routes = first.routes
+        .filter((route) => route.agents.includes("codex"))
+        .map((route) => ({ ...route, modelId: "gpt-5.6-sol" }));
+      const second = structuredClone(first);
+      second.id = "second/gpt-5.6-sol";
+      registry.models = [first, second];
+
+      const provider = buildUserProvider(
+        {
+          id: "prefixed-relay",
+          name: "Prefixed Relay",
+          runtimes: {
+            codex: {
+              baseUrl: "https://relay.example/v1",
+              models: [{ id: modelId, name: modelId }],
+            },
+          },
+        },
+        { modelRegistry: registry },
+      );
+
+      expect(provider.models.codex?.[0]).toMatchObject({
+        efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultEffort: "high",
+      });
+    },
+  );
+
+  it("rejects conflicting Registry effort metadata after prefix stripping", () => {
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+    if (!registry) throw new Error("missing bundled model registry");
+    const baseEntry = registry.models.find(
+      (entry) => entry.id === "openai/gpt-5.6-sol",
+    );
+    if (!baseEntry) throw new Error("missing gpt-5.6-sol registry entry");
+    const first = structuredClone(baseEntry);
+    first.id = "first/gpt-5.6-sol";
+    first.routes = first.routes
+      .filter((route) => route.agents.includes("codex"))
+      .map((route) => ({ ...route, modelId: "gpt-5.6-sol" }));
+    const second = structuredClone(first);
+    second.id = "second/gpt-5.6-sol";
+    second.perAgent = {
+      ...second.perAgent,
+      codex: { efforts: ["low", "medium", "high"], defaultEffort: "high" },
+    };
+    registry.models = [first, second];
+
+    const provider = buildUserProvider(
+      {
+        id: "conflicting-prefixed-relay",
+        name: "Conflicting Prefixed Relay",
+        runtimes: {
+          codex: {
+            baseUrl: "https://relay.example/v1",
+            models: [{ id: "xd/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
+          },
+        },
+      },
+      { modelRegistry: registry },
+    );
+
+    expect(provider.models.codex?.[0]).toMatchObject({
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
+    });
+  });
+
     it('falls back safely for conflicting matches, missing target routes and invalid defaults', () => {
     const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
     if (!registry) throw new Error("missing bundled model registry");
