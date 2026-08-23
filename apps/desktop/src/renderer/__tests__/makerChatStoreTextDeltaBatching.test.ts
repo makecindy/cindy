@@ -206,7 +206,7 @@ function projection(
 function activeTurnRecoveryItem(
   text = 'hello gateway',
   clientId = 'user-client',
-  providerId: string | null = 'xd',
+  providerId: string | null | undefined = 'xd',
 ): AgentInputQueuedMessage {
   return {
     clientId,
@@ -226,11 +226,25 @@ function activeTurnRecoveryItem(
       agentKind: 'claude-code',
       workingDir: WORKING_DIR,
       model: MODEL,
-      providerId,
+      ...(providerId !== undefined ? { providerId } : {}),
       effort: EFFORT,
       permissionMode: PERMISSION_MODE,
     },
   };
+}
+
+function emitGatewayProxyTokenFailure(
+  data: Record<string, unknown>,
+  source: 'claude-code' | 'codex' = 'claude-code',
+): void {
+  onEvent?.({
+    sessionId: SESSION_ID,
+    event: { type: 'error', source, data },
+  });
+  onEvent?.({
+    sessionId: SESSION_ID,
+    event: { type: 'done', source, data: { is_error: true } },
+  });
 }
 
 function installElectronBridge(): void {
@@ -2261,17 +2275,10 @@ describe('makerChatStore text delta batching', () => {
       }),
     );
 
-    onEvent?.({
-      sessionId: SESSION_ID,
-      event: {
-        type: 'error',
-        source: 'claude-code',
-        data: {
-          isTerminal: true,
-          reason: 'gateway-proxy-token-invalid',
-          message: LITELLM_INVALID_PROXY_TOKEN,
-        },
-      },
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
     });
     await flushPromises();
 
@@ -2292,25 +2299,14 @@ describe('makerChatStore text delta batching', () => {
         errorRetryText: 'retry:user-client',
       }),
     );
-    onEvent?.({
-      sessionId: SESSION_ID,
-      event: {
-        type: 'error',
-        source: 'claude-code',
-        data: {
-          isTerminal: true,
-          reason: 'gateway-proxy-token-invalid',
-          message: LITELLM_INVALID_PROXY_TOKEN,
-        },
-      },
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
     });
     await flushPromises();
     expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
 
-    onEvent?.({
-      sessionId: SESSION_ID,
-      event: { type: 'done', source: 'claude-code', data: { is_error: true } },
-    });
     const retriedItem = activeTurnRecoveryItem('hello gateway', 'retry-client');
     retriedItem.supersedesUserClientId = 'user-client';
     onInputProjection?.(
@@ -2320,17 +2316,10 @@ describe('makerChatStore text delta batching', () => {
         errorRetryText: 'retry:retry-client',
       }),
     );
-    onEvent?.({
-      sessionId: SESSION_ID,
-      event: {
-        type: 'error',
-        source: 'claude-code',
-        data: {
-          isTerminal: true,
-          reason: 'gateway-proxy-token-invalid',
-          message: LITELLM_INVALID_PROXY_TOKEN,
-        },
-      },
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
     });
     await flushPromises();
 
@@ -2355,17 +2344,10 @@ describe('makerChatStore text delta batching', () => {
       }),
     );
 
-    onEvent?.({
-      sessionId: SESSION_ID,
-      event: {
-        type: 'error',
-        source: 'claude-code',
-        data: {
-          isTerminal: true,
-          reason: 'gateway-proxy-token-invalid',
-          message: LITELLM_INVALID_PROXY_TOKEN,
-        },
-      },
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
     });
     await flushPromises();
 
@@ -2401,6 +2383,80 @@ describe('makerChatStore text delta batching', () => {
     expect(input.retryLastError).not.toHaveBeenCalled();
     expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('does not guess Cindy credentials when queued createOpts omitted providerId', async () => {
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'claude-code',
+      remoteHostId: null,
+      providerId: 'custom-litellm',
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    const omittedProviderItem = activeTurnRecoveryItem('hello omitted provider', 'omit-client');
+    delete omittedProviderItem.createOpts.providerId;
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: {
+          kind: 'active-turn',
+          item: omittedProviderItem,
+        },
+        errorRetryText: 'retry:omit-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('waits for the failed turn done before refreshing Cindy credentials', async () => {
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'codex',
+        data: {
+          isTerminal: true,
+          reason: 'gateway-proxy-token-invalid',
+          message: LITELLM_INVALID_PROXY_TOKEN,
+        },
+      },
+    });
+    await flushPromises();
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'done', source: 'codex', data: { is_error: true } },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(input.retryLastError).toHaveBeenCalledOnce();
   });
 
   it('fails closed instead of guessing a retry target when active-turn recovery is missing', async () => {
