@@ -116,18 +116,80 @@ describe('deriveNavRailEntries', () => {
     expect(entries[0].attachmentsOnly).toBe(1);
   });
 
-  it('回答摘要取该轮第一条非空 assistant 正文,跳过 thinking / tool 行', () => {
+  it('回答摘要取该轮最后一条非空 assistant 正文,跳过 thinking / tool 行', () => {
     const messages = [
       msg({ clientId: 'u1', role: 'user', content: '第一问' }),
       msg({ clientId: 'th1', role: 'thinking', content: '推理过程' }),
       msg({ clientId: 't1', role: 'tool_use', content: '{"cmd":"ls"}' }),
       msg({ clientId: 'a1', role: 'assistant', content: '  我先看下\n项目结构  ' }),
-      msg({ clientId: 'a2', role: 'assistant', content: '后续补充,不该覆盖首条' }),
+      msg({ clientId: 'a2', role: 'assistant', content: '结论:入口在右键,不在 0 尺寸节点。' }),
       msg({ clientId: 'u2', role: 'user', content: '第二问(流式中,尚无回答)' }),
     ];
     const entries = deriveNavRailEntries(messages);
-    expect(entries[0].answerExcerpt).toBe('我先看下 项目结构');
+    expect(entries[0].answerExcerpt).toBe('结论:入口在右键,不在 0 尺寸节点。');
     expect(entries[1].answerExcerpt).toBeUndefined();
+  });
+
+  it('开工叙述会被同轮最终回答覆盖', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '这个点不到吧' }),
+      msg({
+        clientId: 'a1',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点不是给人点的，只是拿来锚菜单。我先核对它会不会一打开就被 Radix 关掉。',
+      }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点本身点不到。\n\n它不是入口。入口是定时器按钮的右键。',
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe(
+      '对，那个 0 尺寸节点本身点不到。 它不是入口。入口是定时器按钮的右键。',
+    );
+  });
+
+  it('已收尾的最终回答不会被后续开工叙述盖回去', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '这个点不到吧' }),
+      msg({
+        clientId: 'a1',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+        turnCompleted: true,
+      }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '我先核对展开态菜单会不会一打开就被关掉。',
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe(
+      '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+    );
+  });
+
+  it('同轮后一条收尾正文覆盖前一条收尾正文', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '继续' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '先交了 PR。', turnCompleted: true }),
+      msg({ clientId: 'a2', role: 'assistant', content: '菜单已经改到组头右键。', turnCompleted: true }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('菜单已经改到组头右键。');
+  });
+
+  it('系统卡不占用回答摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '真正的回答', turnCompleted: true }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '本轮费用 $0.12',
+        systemCardType: 'cost',
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
   });
 
   it('提问之前的 assistant 消息不会挂到任何条目上', () => {
