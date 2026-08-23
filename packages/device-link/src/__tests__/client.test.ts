@@ -3350,6 +3350,35 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('可解析但协议无效的入站帧不会刷新 heartbeat 活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const invalidFrames = [
+      { v: PROTOCOL_VERSION + 1, kind: 'pong' },
+      { v: PROTOCOL_VERSION, kind: 'future-kind' },
+      {
+        v: PROTOCOL_VERSION,
+        kind: 'presence-changed',
+        payload: { online: true },
+      },
+    ] as unknown as Envelope[];
+    let index = 0;
+    const activity = setInterval(() => {
+      ws.push(invalidFrames[index % invalidFrames.length]);
+      index += 1;
+    }, 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
   it('getToken 返回 null:不建连,按退避重试', async () => {
     const h = makeHarness({ token: null });
     h.client.start();

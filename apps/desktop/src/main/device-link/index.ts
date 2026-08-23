@@ -1179,6 +1179,7 @@ function teardownActiveLink(): void {
   for (const timer of subscriptionReplayRetryTimers.values()) clearTimeout(timer);
   subscriptionReplayRetryTimers.clear();
   subscriptionReplayInFlight.clear();
+  subscriptionReplayPendingReruns.clear();
   presenceAvailableByDevice.clear();
   revokedByRemote.clear();
   // 词典同步驱动是进程级的,**不随单次链路起停**:多实例仲裁的 demote → acquire
@@ -1231,6 +1232,12 @@ const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeo
 /** 同一设备的 subscribe 重放只能有一个物理请求在途；ws-online / presence / 熔断恢复
  * 可能同一时刻触发多个入口，重复请求会把短暂抖动放大成恢复洪峰。 */
 const subscriptionReplayInFlight = new Set<string>();
+/**
+ * 同一设备在重放请求在途期间收到的后续恢复信号。单飞门不能把这些信号
+ * 静默吞掉：首个请求可能随后以永久错误结束，而 presence-online / ws-online
+ * 的最新快照仍需要再跑一次订阅恢复。
+ */
+const subscriptionReplayPendingReruns = new Map<string, string>();
 
 /**
  * 订阅重放的永久失败判据:这些码代表「重试同一动作不可能改变结果」的终态
@@ -1284,6 +1291,7 @@ function cancelSubscriptionReplay(deviceId: string): void {
     clearTimeout(timer);
     subscriptionReplayRetryTimers.delete(deviceId);
   }
+  subscriptionReplayPendingReruns.delete(deviceId);
 }
 
 function replayDeviceSubscription(
@@ -1294,8 +1302,12 @@ function replayDeviceSubscription(
   generation?: number,
 ): void {
   // 不打断已有请求的代次/退避；迟到失败由原代自行结算，下一次定向触发会在
-  // 请求结束后再进入。这样多个恢复入口不会并发灌同一设备的订阅。
-  if (subscriptionReplayInFlight.has(deviceId)) return;
+  // 请求结束后再进入。这样多个恢复入口不会并发灌同一设备的订阅；但不能
+  // 丢掉后来的恢复信号，否则旧请求以永久错误结束后会留下缺流窗口。
+  if (subscriptionReplayInFlight.has(deviceId)) {
+    subscriptionReplayPendingReruns.set(deviceId, reason);
+    return;
+  }
   // 外部触发(无 generation)翻代:顶掉挂起的 timer,同时使旧代在途请求失效。
   let gen: number;
   if (generation === undefined) {
@@ -1345,6 +1357,12 @@ function replayDeviceSubscription(
     subscriptionReplayRetryTimers.set(deviceId, timer);
   }).finally(() => {
     subscriptionReplayInFlight.delete(deviceId);
+    const pendingReason = subscriptionReplayPendingReruns.get(deviceId);
+    if (!pendingReason) return;
+    subscriptionReplayPendingReruns.delete(deviceId);
+    if (linkTornDown || client?.getStatus() !== 'online') return;
+    // 按 settle 时的最新订阅快照重跑，而不是复用触发时可能已经过期的 topics。
+    replayActiveSubscriptions(`${pendingReason}-pending`, deviceId);
   });
 }
 

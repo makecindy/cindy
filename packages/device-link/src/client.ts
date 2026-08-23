@@ -1640,13 +1640,20 @@ export class DeviceLinkClient {
   // ─── 内部:入站分发 ─────────────────────────────────────────────────────────
 
   private handleMessage(raw: string): void {
-    let env: Envelope;
+    let parsed: unknown;
     try {
-      env = JSON.parse(raw) as Envelope;
+      parsed = JSON.parse(raw) as unknown;
     } catch {
       this.log.warn('dropping unparseable frame');
       return;
     }
+    if (!isValidInboundEnvelope(parsed)) {
+      this.log.warn('dropping invalid device-link frame');
+      return;
+    }
+    const env = parsed;
+    // 只有通过协议版本、kind 和最小 payload 形状校验的帧才算连接活性。
+    // 可解析但非法的 JSON 不能持续喂掉 heartbeat miss，否则坏连接会一直 online。
     this.lastInboundAt = Date.now();
 
     const ack = parseTransportAck(env);
@@ -3566,6 +3573,105 @@ function closeReasonToString(reason: unknown): string {
   if (typeof reason === 'string') return reason;
   const text = String(reason);
   return text === '[object Object]' ? '' : text;
+}
+
+const DEVICE_LINK_ENVELOPE_KINDS: ReadonlySet<string> = new Set([
+  'hello',
+  'hello-ack',
+  'presence-set',
+  'presence-changed',
+  'ping',
+  'pong',
+  'notify',
+  'link-open',
+  'link-accept',
+  'link-close',
+  'invoke',
+  'invoke-result',
+  'push',
+  'relay-error',
+]);
+
+/**
+ * 入站帧的轻量运行时校验。它不复制完整隧道协议 validator，只拦截会让
+ * heartbeat 误判为“仍有流量”的明显坏帧；各业务 handler 继续负责更深的字段校验。
+ */
+function isValidInboundEnvelope(value: unknown): value is Envelope {
+  if (!isRecord(value) || value.v !== PROTOCOL_VERSION || typeof value.kind !== 'string') {
+    return false;
+  }
+  if (!DEVICE_LINK_ENVELOPE_KINDS.has(value.kind)) return false;
+
+  const payload = value.payload;
+  // 可靠传输帧把原业务 payload 包在 transport marker/data 中；该形状由
+  // parseTransportPayload 负责完整校验，不能再按 legacy channel/payload 解释。
+  if (
+    isReliableKind(value.kind as Envelope['kind'])
+    && parseTransportPayload(payload) !== null
+  ) return true;
+  switch (value.kind) {
+    case 'ping':
+    case 'pong':
+      return payload === undefined || payload === null;
+    case 'hello-ack':
+      return isRecord(payload)
+        && typeof payload.serverProtocolVersion === 'number'
+        && Number.isFinite(payload.serverProtocolVersion)
+        && typeof payload.deviceId === 'string'
+        && payload.deviceId.length > 0
+        && typeof payload.userId === 'string'
+        && payload.userId.length > 0;
+    case 'presence-changed':
+      return isRecord(payload)
+        && typeof payload.deviceId === 'string'
+        && payload.deviceId.length > 0
+        && typeof payload.online === 'boolean';
+    case 'relay-error':
+      return isRecord(payload)
+        && typeof payload.code === 'string'
+        && typeof payload.message === 'string';
+    case 'invoke':
+      return isRecord(payload)
+        && typeof payload.channel === 'string'
+        && Array.isArray(payload.args);
+    case 'invoke-result':
+      if (!isRecord(payload) || typeof payload.ok !== 'boolean') return false;
+      if (payload.ok) return true;
+      return isRecord(payload.error)
+        && typeof payload.error.code === 'string'
+        && typeof payload.error.message === 'string';
+    case 'push':
+      return isRecord(payload)
+        && typeof payload.channel === 'string'
+        && Object.prototype.hasOwnProperty.call(payload, 'payload');
+    case 'link-open':
+      return isRecord(payload)
+        && typeof payload.controllerName === 'string'
+        && typeof payload.protocolVersion === 'number'
+        && Number.isFinite(payload.protocolVersion)
+        && typeof payload.appVersion === 'string';
+    case 'link-accept':
+      return isRecord(payload)
+        && typeof payload.appVersion === 'string'
+        && typeof payload.allowlistHash === 'string';
+    case 'link-close':
+      return isRecord(payload) && typeof payload.reason === 'string';
+    case 'presence-set':
+      return isRecord(payload)
+        && (payload.remoteControlEnabled === undefined
+          || typeof payload.remoteControlEnabled === 'boolean')
+        && (payload.busy === undefined || typeof payload.busy === 'boolean');
+    case 'notify':
+      return isRecord(payload)
+        && typeof payload.category === 'string'
+        && typeof payload.title === 'string'
+        && typeof payload.deepLink === 'string'
+        && typeof payload.collapseId === 'string';
+    case 'hello':
+      return isRecord(payload);
+    default:
+      return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

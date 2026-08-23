@@ -48,6 +48,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // 永久放弃后的唯一恢复事件(#1520 review P1)。
     expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
+    expect(deviceLinkHost).toContain('const subscriptionReplayPendingReruns = new Map<string, string>();');
+    expect(deviceLinkHost).toContain('replayActiveSubscriptions(`${pendingReason}-pending`, deviceId);');
   });
 
   it('每个 relay 连接代上线时从设备目录补齐已在线控制端展示名', () => {
