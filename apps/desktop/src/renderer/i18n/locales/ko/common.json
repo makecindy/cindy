@@ -7160,7 +7160,7 @@
       "dismissTitle": "이 중단 알림 닫기"
     },
     "unreadFailedScheduleBanner": {
-      "text": "이 자동 작업이 완료되지 않았습니다.",
+      "text": "이 예약 작업이 완료되지 않았습니다.",
       "markAsRead": "읽음으로 표시",
       "markAsReadTitle": "이 실패 읽지 않음 표시를 지웁니다"
     },

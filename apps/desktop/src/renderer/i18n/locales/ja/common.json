@@ -7160,7 +7160,7 @@
       "dismissTitle": "この中断通知を閉じる"
     },
     "unreadFailedScheduleBanner": {
-      "text": "この自動タスクは完了しませんでした。",
+      "text": "このスケジュール実行は完了しませんでした。",
       "markAsRead": "既読にする",
       "markAsReadTitle": "この失敗の未読を消す"
     },

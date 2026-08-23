@@ -7160,7 +7160,7 @@
       "dismissTitle": "关闭此中断提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "这次自动任务没有完成。",
+      "text": "这次定时任务没有完成。",
       "markAsRead": "标为已读",
       "markAsReadTitle": "清除这条失败未读"
     },

@@ -7159,7 +7159,7 @@
       "dismissTitle": "關閉此中斷提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "這次自動任務沒有完成。",
+      "text": "這次定時任務沒有完成。",
       "markAsRead": "標為已讀",
       "markAsReadTitle": "清除這條失敗未讀"
     },

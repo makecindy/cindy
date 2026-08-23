@@ -530,7 +530,7 @@ describe('automation-generated sessions', () => {
     expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
     expect(sessionViewSource).toContain('unreadFailedScheduleRunIds.length > 0');
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
-    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('这次自动任务没有完成。');
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('这次定时任务没有完成。');
     expect(zh.chat.unreadFailedScheduleBanner.markAsRead).toBe('标为已读');
   });
 
