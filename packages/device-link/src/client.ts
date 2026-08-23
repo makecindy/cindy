@@ -3631,9 +3631,10 @@ function isValidInboundEnvelope(value: unknown): value is Envelope {
         && typeof payload.code === 'string'
         && typeof payload.message === 'string';
     case 'invoke':
-      return isRecord(payload)
-        && typeof payload.channel === 'string'
-        && Array.isArray(payload.args);
+      // invoke 的 payload 由 Desktop runInvoke 做业务层校验。即使旧版或
+      // 异常控制端缺少 channel/args，也必须继续进入 dispatch，生成结构化
+      // invoke-result；这里不能把 wire 分发语义改成静默丢帧。
+      return true;
     case 'invoke-result':
       if (!isRecord(payload) || typeof payload.ok !== 'boolean') return false;
       if (payload.ok) return true;

@@ -3422,6 +3422,31 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('畸形 invoke 仍交给业务层生成结构化拒绝', async () => {
+    const h = makeHarness();
+    const frames: Envelope[] = [];
+    h.client.onFrame((e) => frames.push(e));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      src: 'dev-a',
+      payload: { channel: 'maker:send' },
+    });
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      payload: { channel: 'maker:send' },
+    });
+    h.client.stop();
+  });
+
   it('epoch 守卫:过期 socket 的迟到 close/message 回调被忽略,不触发额外重连', async () => {
     const h = makeHarness();
     h.client.start();
