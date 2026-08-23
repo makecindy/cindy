@@ -8,7 +8,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import pptxgen from 'pptxgenjs';
+import * as pptxgenModule from 'pptxgenjs';
+import type pptxgen from 'pptxgenjs';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
@@ -55,6 +56,25 @@ export const PPTX_SUPPORTED_IMAGE_EXT: ReadonlySet<string> = new Set([
 
 export function isSupportedPptxImage(filePath: string): boolean {
   return PPTX_SUPPORTED_IMAGE_EXT.has(path.extname(filePath).toLowerCase());
+}
+
+type PptxGenConstructor = new () => pptxgen;
+
+/**
+ * pptxgenjs 是 CommonJS 包：Vitest / 打包后 ESM 会直接给构造器，tsx 按源码
+ * 运行时可能给一层或两层 default wrapper。只写 default import 会让
+ * 单测通过、真实工具运行却在 `new` 处失败。这里做有界的 CJS/ESM 归一。
+ */
+export function resolvePptxGenConstructor(moduleValue: unknown): PptxGenConstructor {
+  let candidate = moduleValue;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!candidate || typeof candidate !== 'object' || !('default' in candidate)) break;
+    candidate = (candidate as { default: unknown }).default;
+  }
+  if (typeof candidate !== 'function') {
+    throw new TypeError('pptxgenjs did not expose a constructor');
+  }
+  return candidate as PptxGenConstructor;
 }
 
 const DESCRIPTION = [
@@ -158,7 +178,8 @@ export function registerMakePptxTool(
           imageAbsByIndex.set(index, imageAbs);
         }
 
-        const pptx = new pptxgen();
+        const PptxGen = resolvePptxGenConstructor(pptxgenModule);
+        const pptx = new PptxGen();
         // **不是 LAYOUT_16x9**:那个在 pptxgenjs 里是 10" × 5.625",而 pptxMasters 的
         // 几何常量按 13.333" × 7.5" 写(现代 PowerPoint 的宽屏默认)。两边对不上的
         // 后果不是「小一点」——页脚与页码定位在 y=7.02,整个落在页面外,**从来没

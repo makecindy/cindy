@@ -26,7 +26,11 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
-import { isSupportedPptxImage, PPTX_THEMES } from '../cindy-docs/make_pptx.js';
+import {
+  isSupportedPptxImage,
+  PPTX_THEMES,
+  resolvePptxGenConstructor,
+} from '../cindy-docs/make_pptx.js';
 import { writeOutputFile } from '../cindy-docs/_paths.js';
 import type {
   DocsMcpDeps,
@@ -376,6 +380,16 @@ describe('make_xlsx', () => {
 });
 
 describe('make_pptx', () => {
+  it('accepts direct and wrapped pptxgenjs constructors', () => {
+    class FakePptx {}
+    expect(resolvePptxGenConstructor(FakePptx)).toBe(FakePptx);
+    expect(resolvePptxGenConstructor({ default: FakePptx })).toBe(FakePptx);
+    expect(resolvePptxGenConstructor({ default: { default: FakePptx } })).toBe(FakePptx);
+    expect(() => resolvePptxGenConstructor({ default: {} })).toThrow(
+      'pptxgenjs did not expose a constructor',
+    );
+  });
+
   it('生成真 pptx,标题/要点/备注都在,深浅主题背景不同', async () => {
     const client = await connect();
     const light = await callTool(client, 'make_pptx', {
