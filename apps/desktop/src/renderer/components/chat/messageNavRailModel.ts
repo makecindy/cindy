@@ -129,8 +129,8 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  * 回答不再盖到上一问(旧的 first-wins 碰巧挡住了这条;改 last-wins 后必须显式切)。
  * steer 插话不是边界,回答仍归上一问。
  *
- * 候选只在「可能成为本轮摘要」时才规范化;规范化后为空则丢掉,保留上一条
- * 有效摘要。避免流式每次重算都对整段历史跑一遍 normalizeExcerpt。
+ * 本轮只收集候选原文,收尾时从后往前规范化到第一条非空摘要。收尾标记
+ * 即使正文规范化为空也封轮,避免后续未收尾进度盖掉已有摘要。
  *
  * 注意输入是全量已加载 messages 而非 visibleRenderItems —— 导航条要覆盖
  * 整段已加载历史,渲染窗口外的目标由跳转侧扩窗解决(见 MessageStream 的
@@ -141,12 +141,20 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
   const entries: NavRailEntry[] = [];
   let lastOwnsAnswers = false;
   let lastExcerptSealed = false;
-  let pendingExcerpt: string | null = null;
+  let pendingAnswers: ChatMessage[] = [];
 
   const flushPendingAnswer = () => {
     const last = entries[entries.length - 1];
-    if (last && pendingExcerpt) last.answerExcerpt = pendingExcerpt;
-    pendingExcerpt = null;
+    if (last) {
+      for (let i = pendingAnswers.length - 1; i >= 0; i--) {
+        const excerpt = normalizeExcerpt(pendingAnswers[i].content);
+        if (excerpt) {
+          last.answerExcerpt = excerpt;
+          break;
+        }
+      }
+    }
+    pendingAnswers = [];
   };
 
   const closeAnswerTurn = () => {
@@ -202,10 +210,8 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
     if (!lastOwnsAnswers || !isNavRailAnswerCandidate(m)) continue;
     const sealed = isSealedAssistantAnswer(m);
     if (sealed || !lastExcerptSealed) {
-      const excerpt = normalizeExcerpt(m.content);
-      if (!excerpt) continue;
-      pendingExcerpt = excerpt;
-      lastExcerptSealed = sealed;
+      pendingAnswers.push(m);
+      if (sealed) lastExcerptSealed = true;
     }
   }
   flushPendingAnswer();
