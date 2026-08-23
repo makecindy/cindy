@@ -3350,6 +3350,65 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('多 peer 心跳:一个 peer 静默时健康 peer 的 link 与在途请求零感知', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 8,
+        pongMissLimit: 1,
+        requestTimeoutMs: 200,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+    await establishInboundReliableLink(h, 'heartbeat-silent-stream', 1, 'peer-silent');
+    await establishInboundReliableLink(h, 'heartbeat-healthy-stream', 1, 'peer-healthy');
+    expect(h.client.isLinkReady('peer-silent')).toBe(true);
+    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+    // peer-silent 此后不再发送任何帧；peer-healthy 上保留一个真实在途请求。
+    const healthyPending = h.client.invoke('peer-healthy', {
+      channel: 'local-db:sessions:list',
+      args: [10],
+    }, 200);
+    const healthyInvoke = ws.sent
+      .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
+      .at(-1)!;
+    const socketsBefore = h.sockets.length;
+
+    // relay 仍持续报告健康 peer 的有效入站活动，但 pong 丢失。heartbeat 必须按
+    // 共享 socket 的真实活性判断，不能因另一 peer 静默拆掉所有 link。
+    const activity = setInterval(() => {
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'presence-changed',
+        payload: { deviceId: 'peer-healthy', online: true, deviceName: 'Healthy' },
+      });
+    }, 4);
+    await tick(50);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(false);
+    expect(h.sockets).toHaveLength(socketsBefore);
+    expect(h.client.isLinkReady('peer-silent')).toBe(true);
+    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: healthyInvoke.id,
+      src: 'peer-healthy',
+      payload: { ok: true, result: ['healthy-ok'] },
+    });
+    await expect(healthyPending).resolves.toMatchObject({
+      ok: true,
+      result: ['healthy-ok'],
+    });
+    h.client.stop();
+  });
+
   it('可解析但协议无效的入站帧不会刷新 heartbeat 活性', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
     h.client.start();
@@ -3439,17 +3498,18 @@ describe('DeviceLinkClient', () => {
     await tick();
     h.current().ack();
     await establishInboundReliableLink(h, 'heartbeat-missing-id-stream');
+    const ws = h.current();
 
     const malformed = encodeReliableFrames({
       v: PROTOCOL_VERSION,
       kind: 'invoke',
       payload: { channel: 'maker:valid-looking', args: [] },
     }, 'heartbeat-missing-id-stream', 1)[0]!;
-    const activity = setInterval(() => h.current().push(malformed), 4);
-    for (let i = 0; i < 40 && !h.current().terminated; i++) await tick(10);
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
     clearInterval(activity);
 
-    expect(h.current().terminated).toBe(true);
+    expect(ws.terminated).toBe(true);
     expect(h.client.getStatus()).toBe('connecting');
     h.client.stop();
   });
