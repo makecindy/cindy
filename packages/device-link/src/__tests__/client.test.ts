@@ -3359,6 +3359,7 @@ describe('DeviceLinkClient', () => {
   });
 
   it('多 peer 心跳:一个 peer 静默时健康 peer 的 link 与在途请求零感知', async () => {
+    vi.useFakeTimers();
     const h = makeHarness({
       timing: {
         pingIntervalMs: 8,
@@ -3367,54 +3368,77 @@ describe('DeviceLinkClient', () => {
         transportRetryIntervalMs: 60_000,
       },
     });
-    h.client.start();
-    await tick();
-    const ws = h.current();
-    ws.ack();
-    await establishInboundReliableLink(h, 'heartbeat-silent-stream', 1, 'peer-silent');
-    await establishInboundReliableLink(h, 'heartbeat-healthy-stream', 1, 'peer-healthy');
-    expect(h.client.isLinkReady('peer-silent')).toBe(true);
-    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+    let healthyPending: Promise<unknown> | null = null;
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      const silentLink = establishInboundReliableLink(
+        h,
+        'heartbeat-silent-stream',
+        1,
+        'peer-silent',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await silentLink;
+      const healthyLink = establishInboundReliableLink(
+        h,
+        'heartbeat-healthy-stream',
+        1,
+        'peer-healthy',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await healthyLink;
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
 
-    // peer-silent 此后不再发送任何帧；peer-healthy 上保留一个真实在途请求。
-    const healthyPending = h.client.invoke('peer-healthy', {
-      channel: 'local-db:sessions:list',
-      args: [10],
-    }, 200);
-    const healthyInvoke = ws.sent
-      .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
-      .at(-1)!;
-    const socketsBefore = h.sockets.length;
+      // peer-silent 此后不再发送任何帧；peer-healthy 上保留一个真实在途请求。
+      healthyPending = h.client.invoke('peer-healthy', {
+        channel: 'local-db:sessions:list',
+        args: [10],
+      }, 200);
+      const healthyInvoke = ws.sent
+        .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
+        .at(-1)!;
+      const socketsBefore = h.sockets.length;
 
-    // relay 仍持续报告健康 peer 的有效入站活动，但 pong 丢失。heartbeat 必须按
-    // 共享 socket 的真实活性判断，不能因另一 peer 静默拆掉所有 link。
-    const activity = setInterval(() => {
+      // relay 仍持续报告健康 peer 的有效入站活动，但 pong 丢失。heartbeat 必须按
+      // 共享 socket 的真实活性判断，不能因另一 peer 静默拆掉所有 link。
+      activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'peer-healthy', online: true, deviceName: 'Healthy' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      activity = null;
+
+      expect(ws.terminated).toBe(false);
+      expect(h.sockets).toHaveLength(socketsBefore);
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
       ws.push({
         v: PROTOCOL_VERSION,
-        kind: 'presence-changed',
-        payload: { deviceId: 'peer-healthy', online: true, deviceName: 'Healthy' },
+        kind: 'invoke-result',
+        id: healthyInvoke.id,
+        src: 'peer-healthy',
+        payload: { ok: true, result: ['healthy-ok'] },
       });
-    }, 4);
-    await tick(50);
-    clearInterval(activity);
-
-    expect(ws.terminated).toBe(false);
-    expect(h.sockets).toHaveLength(socketsBefore);
-    expect(h.client.isLinkReady('peer-silent')).toBe(true);
-    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
-
-    ws.push({
-      v: PROTOCOL_VERSION,
-      kind: 'invoke-result',
-      id: healthyInvoke.id,
-      src: 'peer-healthy',
-      payload: { ok: true, result: ['healthy-ok'] },
-    });
-    await expect(healthyPending).resolves.toMatchObject({
-      ok: true,
-      result: ['healthy-ok'],
-    });
-    h.client.stop();
+      await expect(healthyPending).resolves.toMatchObject({
+        ok: true,
+        result: ['healthy-ok'],
+      });
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      await healthyPending?.catch(() => undefined);
+      vi.useRealTimers();
+    }
   });
 
   it('可解析但协议无效的入站帧不会刷新 heartbeat 活性', async () => {
