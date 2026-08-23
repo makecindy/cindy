@@ -946,8 +946,10 @@ export function getMaker(): Maker {
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
       binaryPath: claudePath,
       logger: desktopMakerLogger,
-      getClaudeProxySessionAuth: (sessionId) =>
-        isAnthropicCompatProxyReady() ? getClaudeProxySessionAuth(sessionId) : null,
+      getClaudeProxySessionAuth: (sessionId, sessionInstanceId) =>
+        isAnthropicCompatProxyReady()
+          ? getClaudeProxySessionAuth(sessionId, sessionInstanceId)
+          : null,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
         noteOpaqueWrite: noteOpaqueTurnChange,

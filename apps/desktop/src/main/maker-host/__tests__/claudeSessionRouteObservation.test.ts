@@ -159,7 +159,6 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(decision).toEqual({
       upstreamOverride: 'https://api.kimi.com/coding',
       headerOverride: { authorization: 'Bearer kimi-token' },
-      headerDelete: ['x-cindy-cc-session-id', 'x-cindy-cc-session-token'],
     });
     expect(routeMocks.resolveSessionRouteDecision).toHaveBeenCalledWith(
       'sess-fresh-kimi',
@@ -180,11 +179,47 @@ describe('claude session route observation (routing transform ② 段)', () => {
     );
     const writeHead = vi.fn();
     const end = vi.fn();
-    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    const resolvedDecision = await Promise.resolve(decision);
+    await resolvedDecision?.localHandler?.({ res: { writeHead, end } } as never);
     expect(writeHead).toHaveBeenCalledWith(401, expect.any(Object));
     expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
       error: { code: 'invalid_cc_session_token' },
     });
+  });
+
+  it('revokes a replaced or disposed session-instance attestation', async () => {
+    const oldAuth = getClaudeProxySessionAuth('sess-fresh-kimi', 'instance-old')!;
+    const currentAuth = getClaudeProxySessionAuth('sess-fresh-kimi', 'instance-current')!;
+    const transform = createModelRoutingTransform();
+
+    const oldDecision = await Promise.resolve(transform(
+      { model: 'k3' },
+      ctxWith({
+        'x-cindy-cc-session-id': oldAuth.sessionId,
+        'x-cindy-cc-session-token': oldAuth.token,
+      }),
+    ));
+    expect(oldDecision?.localHandler).toBeTypeOf('function');
+
+    oldAuth.dispose();
+    const activeDecision = await Promise.resolve(transform(
+      { model: 'k3' },
+      ctxWith({
+        'x-cindy-cc-session-id': currentAuth.sessionId,
+        'x-cindy-cc-session-token': currentAuth.token,
+      }),
+    ));
+    expect(activeDecision?.localHandler).not.toBeTypeOf('function');
+
+    currentAuth.dispose();
+    const disposedDecision = await Promise.resolve(transform(
+      { model: 'k3' },
+      ctxWith({
+        'x-cindy-cc-session-id': currentAuth.sessionId,
+        'x-cindy-cc-session-token': currentAuth.token,
+      }),
+    ));
+    expect(disposedDecision?.localHandler).toBeTypeOf('function');
   });
 
   it('records gateway for an explicitly selected XD passthrough with a frozen child key', () => {

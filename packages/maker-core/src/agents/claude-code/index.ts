@@ -1088,7 +1088,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       authState.authSource,
     );
     const proxySessionAuth = !opts.remoteHostId && opts.sessionId
-      ? this.deps.getClaudeProxySessionAuth?.(opts.sessionId) ?? null
+      ? this.deps.getClaudeProxySessionAuth?.(opts.sessionId, opts.sessionInstanceId) ?? null
       : null;
 
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
@@ -1102,20 +1102,26 @@ export class ClaudeCodeAgent extends BaseAgent {
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
     );
-    const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
-      credentialMode,
-      sessionProviderId: opts.providerId ?? null,
-      proxyHeaders: proxySessionAuth
-        ? {
-            'x-cindy-cc-session-id': proxySessionAuth.sessionId,
-            'x-cindy-cc-session-token': proxySessionAuth.token,
-          }
-        : undefined,
-      modelContextWindows: providerRoutedModels,
-      // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
-      // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
-      subagentModel: null,
-    });
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
+        credentialMode,
+        sessionProviderId: opts.providerId ?? null,
+        proxyHeaders: proxySessionAuth
+          ? {
+              'x-cindy-cc-session-id': proxySessionAuth.sessionId,
+              'x-cindy-cc-session-token': proxySessionAuth.token,
+            }
+          : undefined,
+        modelContextWindows: providerRoutedModels,
+        // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
+        // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
+        subagentModel: null,
+      });
+    } catch (error) {
+      proxySessionAuth?.dispose();
+      throw error;
+    }
 
     // 「Subagent 模型」设置的默认值语义(见 subagent-model-default.ts):
     // 平台的 CLAUDE_CODE_SUBAGENT_MODEL 是最高优先级**强制覆盖**,会静默盖掉用户手写
@@ -6000,6 +6006,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         turnInFlight = false;
         clearBridgeState();
         closed = true;
+        proxySessionAuth?.dispose();
         try {
           // 任何挂着的 interaction 强制 deny + emit dismissed, 防止 host 卡住等永远不会来的回应
           dismissAllPending('session_closed', 'deny');

@@ -481,7 +481,10 @@ export interface AgentDeps {
    * the SDK has emitted its own session id. The token is host-owned and never
    * reaches an upstream provider.
    */
-  getClaudeProxySessionAuth?: (sessionId: string) => { sessionId: string; token: string } | null;
+  getClaudeProxySessionAuth?: (
+    sessionId: string,
+    sessionInstanceId?: string,
+  ) => { sessionId: string; token: string; dispose: () => void } | null;
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;
