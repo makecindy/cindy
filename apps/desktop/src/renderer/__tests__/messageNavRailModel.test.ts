@@ -272,6 +272,16 @@ describe('deriveNavRailEntries', () => {
     expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
   });
 
+  it('封轮后的下一 SDK turn 在再次封轮时提交新摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '第一轮结论。', turnCompleted: true }),
+      msg({ clientId: 'a2', role: 'assistant', content: '第二轮真正的结论。' }),
+      msg({ clientId: 'a3', role: 'assistant', content: '', turnCompleted: true }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('第二轮真正的结论。');
+  });
+
   it('hook 消息(带 userText):预览取干净原文,不取 content 里的 agent prompt', () => {
     const messages = [
       msg({

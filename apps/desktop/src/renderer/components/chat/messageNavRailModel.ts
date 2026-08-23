@@ -124,13 +124,10 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  * - isSyntheticTrigger:合成指令行渲染 null,没有可滚动的锚点;
  * - systemCardType:user 位次上的系统卡(compact / learn …),不是用户提问。
  *
- * 回答摘要只属于最近一根可见刻度,且只在该刻度仍「拥有」后续回答时更新。
- * 合成续跑 / 系统卡 user 行不画刻度,但会结束上一根刻度的归属 —— 其后的
- * 回答不再盖到上一问(旧的 first-wins 碰巧挡住了这条;改 last-wins 后必须显式切)。
- * steer 插话不是边界,回答仍归上一问。
- *
- * 本轮只收集候选原文,收尾时从后往前规范化到第一条非空摘要。收尾标记
- * 即使正文为空或规范化后为空也封轮,避免后续未收尾进度盖掉已有摘要。
+ * 回答摘要只属于最近一根可见刻度。一根刻度下可以有多个 SDK turn:
+ * 封轮(turnCompleted / 费用 / 用量,含空 wrap-up)提交当前候选;封轮后的
+ * 未收尾进度只暂存,要等下一次封轮才提交。合成续跑 / 系统卡 user 行结束
+ * 整根刻度归属;steer 插话不是边界。
  *
  * 注意输入是全量已加载 messages 而非 visibleRenderItems —— 导航条要覆盖
  * 整段已加载历史,渲染窗口外的目标由跳转侧扩窗解决(见 MessageStream 的
@@ -142,23 +139,35 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
   let lastOwnsAnswers = false;
   let lastExcerptSealed = false;
   let pendingAnswers: ChatMessage[] = [];
+  let committedExcerpt: string | null = null;
 
-  const flushPendingAnswer = () => {
-    const last = entries[entries.length - 1];
-    if (last) {
-      for (let i = pendingAnswers.length - 1; i >= 0; i--) {
-        const excerpt = normalizeExcerpt(pendingAnswers[i].content);
-        if (excerpt) {
-          last.answerExcerpt = excerpt;
-          break;
-        }
-      }
+  const excerptFromPending = (): string | null => {
+    for (let i = pendingAnswers.length - 1; i >= 0; i--) {
+      const excerpt = normalizeExcerpt(pendingAnswers[i].content);
+      if (excerpt) return excerpt;
     }
+    return null;
+  };
+
+  const commitPendingIfAny = () => {
+    const excerpt = excerptFromPending();
+    if (excerpt) committedExcerpt = excerpt;
     pendingAnswers = [];
   };
 
+  const applyToLastEntry = () => {
+    const last = entries[entries.length - 1];
+    if (last) {
+      const live = lastExcerptSealed ? null : excerptFromPending();
+      const excerpt = live ?? committedExcerpt;
+      if (excerpt) last.answerExcerpt = excerpt;
+    }
+    pendingAnswers = [];
+    committedExcerpt = null;
+  };
+
   const closeAnswerTurn = () => {
-    flushPendingAnswer();
+    applyToLastEntry();
     lastOwnsAnswers = false;
     lastExcerptSealed = false;
   };
@@ -210,12 +219,13 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
     if (!lastOwnsAnswers) continue;
     if (m.role !== 'assistant' || m.systemCardType) continue;
     const sealed = isSealedAssistantAnswer(m);
-    const accept = sealed || !lastExcerptSealed;
-    if (sealed) lastExcerptSealed = true;
-    if (!accept || m.content.trim().length === 0) continue;
-    pendingAnswers.push(m);
+    if (m.content.trim().length > 0) pendingAnswers.push(m);
+    if (sealed) {
+      commitPendingIfAny();
+      lastExcerptSealed = true;
+    }
   }
-  flushPendingAnswer();
+  applyToLastEntry();
   return entries;
 }
 
