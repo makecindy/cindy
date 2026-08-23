@@ -51,7 +51,7 @@ export function ErrorMessageCard({
   const text = isStreamInterrupted
     ? t('chat.errorBanner.streamInterruptedNoRetry')
     : isGatewayProxyTokenInvalid
-      ? t('chat.errorBanner.gatewayProxyTokenInvalid')
+      ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
       : i18nKey
         ? t(i18nKey)
         : unwrapped;

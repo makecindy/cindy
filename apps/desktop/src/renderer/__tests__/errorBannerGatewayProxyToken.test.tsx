@@ -16,6 +16,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -32,6 +33,7 @@ vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
 }));
 
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { ErrorMessageCard } from '@/components/chat/ErrorMessageCard';
 
 const LITELLM_401 =
   'Failed to authenticate. API Error: 401 Authentication Error, Invalid proxy server token passed. Received API Key = [REDACTED], Key Hash (Token) =[REDACTED] Unable to find token in cache or `LiteLLM_VerificationTokenTable`';
@@ -107,5 +109,21 @@ describe('ErrorBanner — LiteLLM 网关凭据失效', () => {
 
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(LITELLM_401)).toBeTruthy();
+  });
+});
+
+describe('ErrorMessageCard — LiteLLM 网关凭据失效', () => {
+  it('uses history copy that does not ask the user to click Retry', () => {
+    render(
+      createElement(ErrorMessageCard, {
+        message: LITELLM_401,
+        reason: 'gateway-proxy-token-invalid',
+        providerId: 'xd',
+      }),
+    );
+
+    expect(screen.getByText('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.gatewayProxyTokenInvalid')).toBeNull();
+    expect(screen.queryByText(/LiteLLM_VerificationTokenTable/)).toBeNull();
   });
 });
