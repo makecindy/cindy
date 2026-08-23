@@ -15,7 +15,7 @@ import { createMovedAliasResolver, type ResolveMovedAliases } from './moved-alia
 import {
   indexAliasRemovalMarkers,
   isAliasRemovalMarkerKey,
-  readAliasVisibleCount,
+  readAliasStateVisibleCount,
 } from './alias-removal';
 import {
   hasDictionaryKey,
@@ -166,7 +166,7 @@ function mergeLiveAliases(
     const removalIndex = indexAliasRemovalMarkers(aliases);
     for (const [aliasKey, alias] of Object.entries(aliases)) {
       if (isAliasRemovalMarkerKey(aliasKey)) continue;
-      const count = readAliasVisibleCount(alias.counters, removalIndex.get(aliasKey));
+      const count = readAliasStateVisibleCount(alias, removalIndex.get(aliasKey));
       if (count === 0) continue;
       const existing = totals.get(aliasKey);
       if (!existing) {

@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_TOMBSTONE_TTL_MS,
   createEmptySyncState,
   createHlcClock,
   dictionaryTermKey,
@@ -20,7 +21,10 @@ import {
   renameTerm,
   replaceTermAliases,
 } from "../dictionary-sync";
-import { isAliasRemovalMarkerKey } from "../dictionary-sync/alias-removal";
+import {
+  isAliasRemovalMarkerKey,
+  parseAliasRemovalMarker,
+} from "../dictionary-sync/alias-removal";
 
 function learnedBase() {
   let state = createEmptySyncState();
@@ -379,6 +383,190 @@ describe("词典别名编辑", () => {
     );
     expect(Object.keys(aliases)).toHaveLength(2);
     expect(materializeDictionary(removed.state).entries[0].aliases).toEqual([]);
+  });
+
+  it("未到期的别名删除下界保持不动，到期后与原别名成组回收", () => {
+    const base = learnedBase();
+    const removed = replaceTermAliases(base.state, base.clock, {
+      termKey: "Vibe Coding",
+      aliases: [],
+      nowMs: 2_000,
+    });
+
+    expect(
+      gcTombstones(removed.state, {
+        nowMs: 3_000,
+        ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+      }),
+    ).toBe(removed.state);
+
+    const before = materializeDictionary(removed.state);
+    const collected = gcTombstones(removed.state, {
+      nowMs: 2_000 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    expect(materializeDictionary(collected)).toEqual(before);
+    const record = collected.records[dictionaryTermKey("Vibe Coding")];
+    expect(Object.keys(listLiveIncarnations(record)[0].aliases)).toEqual([]);
+  });
+
+  it("过期前重新添加的别名不被回收，再次删除会刷新回收期限", () => {
+    const base = learnedBase();
+    const removed = replaceTermAliases(base.state, base.clock, {
+      termKey: "Vibe Coding",
+      aliases: [],
+      nowMs: 2_000,
+    });
+    const restored = replaceTermAliases(removed.state, removed.clock, {
+      termKey: "Vibe Coding",
+      aliases: ["web coding"],
+      nowMs: 3_000,
+    });
+    const collectedAfterFirstTtl = gcTombstones(restored.state, {
+      nowMs: 2_000 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    expect(
+      materializeDictionary(collectedAfterFirstTtl).entries[0].aliases.map(
+        (alias) => alias.text,
+      ),
+    ).toEqual(["web coding"]);
+
+    const removedAgain = replaceTermAliases(restored.state, restored.clock, {
+      termKey: "Vibe Coding",
+      aliases: [],
+      nowMs: 4_000,
+    });
+    const keptByRefreshedDeadline = gcTombstones(removedAgain.state, {
+      nowMs: 2_000 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    const keptRecord = keptByRefreshedDeadline.records[dictionaryTermKey("Vibe Coding")];
+    const keptAliases = listLiveIncarnations(keptRecord)[0].aliases;
+    expect(keptAliases["web coding"]).toBeDefined();
+    expect(Object.keys(keptAliases).filter(isAliasRemovalMarkerKey)).toHaveLength(1);
+    expect(materializeDictionary(keptByRefreshedDeadline).entries[0].aliases).toEqual([]);
+
+    const collected = gcTombstones(removedAgain.state, {
+      nowMs: 4_000 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    const record = collected.records[dictionaryTermKey("Vibe Coding")];
+    expect(Object.keys(listLiveIncarnations(record)[0].aliases)).toEqual([]);
+  });
+
+  it("同一别名的多节点删除下界到期后一起回收", () => {
+    const base = learnedBase();
+    const learnedOnB = recordLearningEvent(
+      base.state,
+      createHlcClock("node-b", 3_000),
+      {
+        text: "Vibe Coding",
+        aliases: ["web coding"],
+        stage: "entry",
+        nowMs: 3_000,
+      },
+    );
+    const removed = replaceTermAliases(learnedOnB.state, learnedOnB.clock, {
+      termKey: "Vibe Coding",
+      aliases: [],
+      nowMs: 4_000,
+    });
+    const recordBefore = removed.state.records[dictionaryTermKey("Vibe Coding")];
+    const aliasesBefore = listLiveIncarnations(recordBefore)[0].aliases;
+    const webCodingMarkers = Object.entries(aliasesBefore).filter(
+      ([aliasKey, alias]) =>
+        parseAliasRemovalMarker(aliasKey, alias)?.aliasKey === "web coding",
+    );
+    expect(webCodingMarkers).toHaveLength(2);
+
+    const collected = gcTombstones(removed.state, {
+      nowMs: 4_000 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    const recordAfter = collected.records[dictionaryTermKey("Vibe Coding")];
+    expect(Object.keys(listLiveIncarnations(recordAfter)[0].aliases)).toEqual([]);
+  });
+
+  it("TTL 回收后同节点重加别名，旧副本的删除下界不会吞掉新值", () => {
+    const base = learnedBase();
+    const removed = replaceTermAliases(base.state, base.clock, {
+      termKey: "Vibe Coding",
+      aliases: [],
+      nowMs: 2_000,
+    });
+    const collected = gcTombstones(removed.state, {
+      nowMs: 2_000 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    const restoredAt = 2_000 + DEFAULT_TOMBSTONE_TTL_MS + 2;
+    const restored = replaceTermAliases(collected, removed.clock, {
+      termKey: "Vibe Coding",
+      aliases: ["web coding"],
+      nowMs: restoredAt,
+    });
+
+    const mergedWithOldRemoval = mergeSyncStates(restored.state, removed.state);
+    expect(
+      materializeDictionary(mergedWithOldRemoval).entries[0].aliases.map(
+        (alias) => [alias.text, alias.count],
+      ),
+    ).toEqual([["web coding", 1]]);
+
+    const removedAgain = replaceTermAliases(
+      mergedWithOldRemoval,
+      restored.clock,
+      {
+        termKey: "Vibe Coding",
+        aliases: [],
+        nowMs: restoredAt + 1,
+      },
+    );
+    expect(materializeDictionary(removedAgain.state).entries[0].aliases).toEqual([]);
+    const beforeRefreshedTtl = gcTombstones(removedAgain.state, {
+      nowMs: restoredAt + 2,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    const keptRecord = beforeRefreshedTtl.records[dictionaryTermKey("Vibe Coding")];
+    const keptAliases = listLiveIncarnations(keptRecord)[0].aliases;
+    expect(keptAliases["web coding"]).toBeDefined();
+    expect(Object.keys(keptAliases).filter(isAliasRemovalMarkerKey)).toHaveLength(1);
+    expect(materializeDictionary(beforeRefreshedTtl).entries[0].aliases).toEqual([]);
+
+    const collectedAgain = gcTombstones(removedAgain.state, {
+      nowMs: restoredAt + 1 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    const record = collectedAgain.records[dictionaryTermKey("Vibe Coding")];
+    expect(Object.keys(listLiveIncarnations(record)[0].aliases)).toEqual([]);
+  });
+
+  it("连续替换为不同别名时，过期回收后状态只保留当前别名", () => {
+    const base = learnedBase();
+    let state = base.state;
+    let clock = base.clock;
+    for (let round = 0; round < 100; round += 1) {
+      const edited = replaceTermAliases(state, clock, {
+        termKey: "Vibe Coding",
+        aliases: [`alias-${round}`],
+        nowMs: 2_000 + round,
+      });
+      state = edited.state;
+      clock = edited.clock;
+    }
+
+    const recordBefore = state.records[dictionaryTermKey("Vibe Coding")];
+    expect(Object.keys(listLiveIncarnations(recordBefore)[0].aliases).length).toBeGreaterThan(100);
+
+    const collected = gcTombstones(state, {
+      nowMs: 2_099 + DEFAULT_TOMBSTONE_TTL_MS + 1,
+      ttlMs: DEFAULT_TOMBSTONE_TTL_MS,
+    });
+    const recordAfter = collected.records[dictionaryTermKey("Vibe Coding")];
+    expect(Object.keys(listLiveIncarnations(recordAfter)[0].aliases)).toEqual(["alias-99"]);
+    expect(materializeDictionary(collected).entries[0].aliases.map((alias) => alias.text)).toEqual([
+      "alias-99",
+    ]);
   });
 
   it("删除标记可承载点号、Unicode 别名和特殊节点身份", () => {

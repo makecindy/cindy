@@ -185,9 +185,14 @@ export class VoiceInputDataStore {
     const editableAliasKeys = new Set(
       visibleEntry?.aliases.map((alias) => dictionaryTermKey(alias.text)) ?? [],
     );
+    const submittedAliasKeys = new Set(aliases.map((alias) => dictionaryTermKey(alias)));
+    const visibleAliasesUnchanged =
+      submittedAliasKeys.size === editableAliasKeys.size &&
+      [...submittedAliasKeys].every((aliasKey) => editableAliasKeys.has(aliasKey));
     // UI 按产品上限只展示前 8 个别名。更低权重的别名仍属于同步正本，原样保存时
-    // 不能把用户根本没看见的第 9 个及之后条目当作删除。
-    const hiddenAliases = aliases.length > 0
+    // 不能把用户根本没看见的第 9 个及之后条目当作删除；但用户增删或替换了
+    // 任一可见项时，提交集合就是完整显式意图，否则新别名可能立刻被隐藏高频项挤出。
+    const hiddenAliases = visibleAliasesUnchanged
       ? allEntry?.aliases
           .filter((alias) => !editableAliasKeys.has(dictionaryTermKey(alias.text)))
           .map((alias) => alias.text) ?? []

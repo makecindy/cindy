@@ -182,6 +182,41 @@ describe('词典同步落盘 —— 写入路径', () => {
     ).toEqual([]);
   });
 
+  it('替换可见别名时以提交集合为准，不让隐藏高频别名挤掉新值', () => {
+    writeDictionaryFile({ dictionaryEntries: [] });
+    voiceInputDataStore.getSettings();
+    const aliases = Array.from({ length: 10 }, (_, index) => `alias-${index}`);
+    for (const [index, alias] of aliases.entries()) {
+      for (let count = 0; count < aliases.length - index; count += 1) {
+        voiceDictionarySyncStore.mutate((state, clock) =>
+          recordLearningEvent(state, clock, {
+            text: 'Vibe Coding',
+            aliases: [alias],
+            stage: 'entry',
+            nowMs: 1_000 + index,
+          }),
+        );
+      }
+    }
+    const entry = voiceDictionarySyncStore.materialize().entries[0];
+    expect(entry.aliases).toHaveLength(8);
+
+    const submittedAliases = [
+      ...entry.aliases.slice(1).map((alias) => alias.text),
+      'brand new alias',
+    ];
+    voiceInputDataStore.editDictionaryEntry(entry.id, entry.text, submittedAliases);
+
+    const visibleAliases = voiceDictionarySyncStore.materialize().entries[0].aliases;
+    expect(visibleAliases.map((alias) => alias.text)).toContain('brand new alias');
+    expect(visibleAliases.map((alias) => alias.text)).not.toContain(entry.aliases[0].text);
+    const allAliases = materializeDictionary(voiceDictionarySyncStore.getState(), {
+      ...DEFAULT_MATERIALIZE_LIMITS,
+      maxAliases: Number.MAX_SAFE_INTEGER,
+    }).entries[0].aliases;
+    expect(allAliases.map((alias) => alias.text).sort()).toEqual(submittedAliases.sort());
+  });
+
   it('通用 settings 更新不能整份覆盖词典(会绕过同步状态)', () => {
     writeDictionaryFile({ dictionaryEntries: [] });
     voiceInputDataStore.addManualDictionaryEntry('Cindy');
