@@ -380,7 +380,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
   it('空态 / 远程 loading-error / 连接中占位都挂范围标题(2026-08-13 第 4 轮 P1)', () => {
     const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
-    expect(headerSource).toContain('<MachineSwitcherMenu onOpenDisplaySettings=');
+    expect(headerSource).toMatch(
+      /<MachineSwitcherMenu[\s\S]*?filter=\{filter\}[\s\S]*?onOpenDisplaySettings=/,
+    );
     expect(headerSource).not.toContain('filterActiveBadge');
     expect(headerSource).toContain('<SidebarFilterPopover');
     expect(projectsSectionSource).toContain('<MainListScopeHeader');
@@ -554,7 +556,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
     expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
     expect(menuSource).toMatch(
-      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
+      /<span className="truncate leading-none">\{triggerText\}<\/span>[\s\S]*?<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
     );
     expect(menuSource).toContain('<Loader2 size={12} strokeWidth={1.8} />');
   });
