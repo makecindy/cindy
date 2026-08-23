@@ -5,6 +5,7 @@ import { useUpdates } from 'expo-updates';
 import { useRouter } from 'expo-router';
 import { Children, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
+  Alert,
   FlatList,
   Image,
   Linking,
@@ -69,6 +70,7 @@ import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   refreshMobileVoiceDictionary,
+  subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import {
   buildMobileVoiceDictionaryEntryViews,
@@ -87,7 +89,9 @@ import {
   type ManualUpdateCheckOutcome,
 } from '@/update/manualUpdateCheck';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
-import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
+import { useUpdateChannelGate } from '@/update/useUpdateChannelGate';
+import { useBetaChannel } from '@/update/useBetaChannel';
+import { probeBetaChannel } from '@/update/fetchLatestRelease';
 import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
@@ -118,8 +122,7 @@ export default function SettingsScreen() {
   const { locale, setLocale } = useLocale();
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
-  const deviceLink = useDeviceLink();
-  const { lastPresenceSnapshot, status } = deviceLink;
+  const { lastPresenceSnapshot, status, invoke } = useDeviceLink();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
@@ -140,6 +143,9 @@ export default function SettingsScreen() {
   // 相反;放行点击会让 toggleAnalytics 对着真值取反,做出与所见相反的动作。
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const [analyticsMessage, setAnalyticsMessage] = useState<string | null>(null);
+  // beta 测试渠道(设备级)开关。真相在 betaChannelStore;hydrate 完成前禁用,避免对陈旧值取反。
+  const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
+  const [betaBusy, setBetaBusy] = useState(false);
   const updateCheckInFlightRef = useRef(false);
   // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。
   const [dictionaryScreenOpen, setDictionaryScreenOpen] = useState(false);
@@ -191,11 +197,11 @@ export default function SettingsScreen() {
   // t 依赖同 overview:行构造走 i18n.t,语言切换时重算。
   const updateInfoRows = useMemo(() => buildMobileUpdateInfoRows(currentlyRunning), [currentlyRunning, t]);
   const otaVersion = useMemo(() => currentMobileOtaVersion(currentlyRunning), [currentlyRunning, t]);
-  const canaryChannel = useCanaryChannelGate(IS_OTA_SELFHOST);
+  const updateChannel = useUpdateChannelGate(IS_OTA_SELFHOST);
   // 允许整包分发时统一入口先查整包;TestFlight 等禁用整包的环境直接进入 JS OTA。
   const { checkNow: checkBundleUpdate } = useBundleUpdatePrompt({
     auto: false,
-    isCanary: canaryChannel.isCanary,
+    channel: updateChannel.channel,
   });
   const bundleCheckEnabled = shouldCheckBundleUpdate({
     isSelfHosted: IS_OTA_SELFHOST,
@@ -604,6 +610,40 @@ export default function SettingsScreen() {
     setDebugExpanded((value) => !value);
   }, []);
 
+  // beta 测试渠道开关:落盘即时生效,但 manifest 通道只在下次冷启动/后台轮询切换。
+  // 打开后引导用户手动重启,让下次启动的更新检查前就切到 beta。
+  const toggleBeta = useCallback(async () => {
+    if (betaBusy) return;
+    setBetaBusy(true);
+    const next = !betaEnabled;
+    try {
+      if (next) {
+        // 打开 beta 前预检(与桌面端 probeBetaManifest 对称):探测 /latest?channel=beta
+        // 是否可达。服务端未部署 beta 时拒绝开启,避免设备静默收不到 OTA/整包/强更记录。
+        const available = await probeBetaChannel(
+          Platform.OS === 'android' ? 'android' : 'ios',
+        );
+        if (!available) {
+          Alert.alert(t('settings.betaChannel.title'), t('settings.betaChannel.unavailable'));
+          return; // 不落盘,开关保持关闭
+        }
+      }
+      await setBetaEnabled(next);
+      if (next) {
+        Alert.alert(
+          t('settings.betaChannel.title'),
+          t('settings.betaChannel.restartHint'),
+          [{ text: t('settings.betaChannel.ok'), style: 'default' }],
+        );
+      }
+    } catch {
+      // 只可能是本机存储异常;store 会回推真值,这里仅提示未保存成功。
+      Alert.alert(t('settings.betaChannel.title'), t('settings.betaChannel.saveFailed'));
+    } finally {
+      setBetaBusy(false);
+    }
+  }, [betaBusy, betaEnabled, setBetaEnabled, t]);
+
   /* ── 使用统计(TapDB)开关 ──
      语义是 opt-out:用户在登录页同意《隐私政策》后默认开启,这里随时可关。
      关闭后立即解绑账号标识、不再主动上报;原生 SDK 不支持反初始化,本次进程内
@@ -682,7 +722,7 @@ export default function SettingsScreen() {
     void Promise.all(
       online.map((host) => refreshMobileVoiceDictionary(
         host.deviceId,
-        () => deviceLink.invoke<MobileVoiceDictionarySnapshotResult>(
+        () => invoke<MobileVoiceDictionarySnapshotResult>(
           host.deviceId,
           DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
           [],
@@ -694,16 +734,36 @@ export default function SettingsScreen() {
       // 缓存写在模块里,组件靠这个计数触发重渲染。
       setDictionaryRevision((value) => value + 1);
     });
-  }, [desktopDevices, deviceLink]);
+  }, [desktopDevices, invoke]);
 
+  // 页面打开后再由 effect 读取缓存和刷新。设备清单本身是异步 REST 请求，不能只
+  // 捕获点击瞬间的 desktopDevices=[]，否则清单稍后到达时历史缓存永远不会 hydrate。
   const openVoiceDictionary = useCallback(() => {
     setDictionaryScreenOpen(true);
-    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。
+  }, []);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen || desktopDevices.length === 0) return;
+    let cancelled = false;
+    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。这个 effect
+    // 同时依赖 desktopDevices，因此设备清单在页面打开后才到达时也会走同一条路径。
     void Promise.all(desktopDevices.map((host) => hydrateMobileVoiceDictionary(host.deviceId)))
-      .then(() => setDictionaryRevision((value) => value + 1))
+      .then(() => {
+        if (!cancelled) setDictionaryRevision((value) => value + 1);
+      })
       .catch(() => undefined);
     refreshVoiceDictionary();
-  }, [desktopDevices, refreshVoiceDictionary]);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopDevices, dictionaryScreenOpen, refreshVoiceDictionary]);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen) return;
+    return subscribeMobileVoiceDictionaryCache(() => {
+      setDictionaryRevision((value) => value + 1);
+    });
+  }, [dictionaryScreenOpen]);
 
   // dictionaryRevision 只作为依赖存在:缓存是模块级的,刷新完成后靠它触发重算。
   const dictionaryEntries = useMemo(
@@ -941,6 +1001,20 @@ export default function SettingsScreen() {
                     <InfoRow key={row.id} detail={row.detail} label={row.label} testID={`settings.row.${row.id}`} value={row.value} />
                   )
                 )),
+                <View key="beta-channel-toggle" style={styles.switchRow} testID="settings.betaChannelToggleRow">
+                  <View style={styles.switchTexts}>
+                    <Text style={styles.rowLabel}>{t('settings.betaChannel.title')}</Text>
+                    <Text style={styles.hint}>{t('settings.betaChannel.description')}</Text>
+                  </View>
+                  <Switch
+                    accessibilityLabel={t('settings.betaChannel.title')}
+                    disabled={betaBusy || !betaReady}
+                    onValueChange={() => void toggleBeta()}
+                    testID="settings.betaChannelToggle"
+                    trackColor={{ true: colors.inputCaret }}
+                    value={betaEnabled}
+                  />
+                </View>,
                 ...updateInfoRows.map((row) => (
                   <InfoRow key={row.id} label={row.label} testID={`settings.updateInfo.${row.id}`} value={row.value} />
                 )),

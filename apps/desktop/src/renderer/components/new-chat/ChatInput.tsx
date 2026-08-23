@@ -115,11 +115,20 @@ import {
   getEffortChangeCoordinator,
   isSessionScopeCurrent,
 } from './effortChangeQueue';
+import {
+  applyVoiceResultToSerializedText,
+  armDetachedVoiceDraftPersist,
+  editorOwnsSourceDraft,
+  mergeDetachedVoiceTextIntoDocument,
+  resolveSourceOwnedComposerExtras,
+  voiceLocksCurrentComposer,
+} from './composerSendOwnership';
 import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './composerSendSnapshot';
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
 import {
   confirmAgentSwitchRisk,
+  isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
@@ -141,6 +150,7 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
+import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapabilityInvocation';
 import {
   focusComposerEndNextFrame,
   hostCapabilityForGhost,
@@ -153,6 +163,7 @@ import {
   addPlanModeComposerCommand,
   consumePlanModeComposerCommand,
   isPlanModeComposerCommandText,
+  planModeComposerDraftText,
   shouldPreservePlanModeComposerDraft,
 } from './planModeComposerCommand';
 import { PendingQueuePanel } from './PendingQueuePanel';
@@ -164,7 +175,6 @@ import {
   findGhostByCommand,
   parseGhostCommandWord,
 } from '@/cindy-brain/ghostCommand';
-import { expandHostCapabilityInvocation } from '@/cindy-brain/hostCapabilityInvocation';
 import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -228,10 +238,10 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-  slashCommandInvocationName,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
+import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import {
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   getAtDirectoryCompletionQuery,
@@ -262,21 +272,37 @@ import {
   resolveComposerEnterIntent,
   useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
+import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
+import {
+  beginPromptRecommendationPrediction,
+  dismissPromptRecommendation,
+  resolvePromptRecommendationPrediction,
+  usePromptRecommendation,
+} from '@/lib/promptRecommendationStore';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
 import {
   composerRenderSnapshot,
   shouldRefreshComposerRender,
   type ComposerRenderSnapshot,
 } from './composerRenderGate';
+import { shouldShowComposerPromptRecommendation } from './composerPromptRecommendation';
 import { createComposerFrameScheduler } from './composerFrameScheduler';
-import { serializeEditorContent, serializeEditorSlice } from './composerContentSerialization';
 import {
+  serializeEditorContent,
+  serializeEditorSlice,
+  type SerializedComposerContent,
+} from './composerContentSerialization';
+import {
+  composerDocumentContainsHostCapabilityChip,
   composerDocumentContainsList,
   normalizeComposerDocumentJSON,
   plainTextToComposerDocument,
+  stripHostCapabilityChips,
 } from '@/lib/composerListDocument';
 import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
+import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -288,14 +314,26 @@ import {
   resolveProviderModelEfforts,
 } from '@/lib/providerModels';
 import {
+  clearProviderModelEffort,
+  clearProviderModelFast,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
   getProviderModelFast,
   setProviderModelFast,
+  getProviderModelThinking,
+  setProviderModelThinking,
+  useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import { useModelPickerLayout } from '@/state/modelPickerLayout';
+import {
+  setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
+  useSessionFavoriteAnchor,
+  type SessionFavoriteAnchor,
+} from '@/state/favoriteAnchorMemory';
 import {
   getDraft,
+  patchVendorPrefs,
   patchVendorPrefsPreservingModelChoice,
   setEffortForModel,
   setFastModeForModel,
@@ -327,6 +365,7 @@ import {
 import { VoiceInputPointerHintLayer } from '@/voice-input/VoiceInputPointerHintLayer';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
+import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
@@ -358,6 +397,19 @@ const ComposerHardBreak = HardBreak.extend({
 // 自然宽度（permission + model + voice + send 等）估，实测可微调。
 const TOOLBAR_DENSE_MAX_WIDTH = 520;
 const TOOLBAR_COMPACT_MAX_WIDTH = 448;
+const TOOLBAR_NARROW_MAX_WIDTH = 600;
+const TOOLBAR_ULTRA_COMPACT_MAX_WIDTH = 420;
+
+type ToolbarWidthMode = 'unmeasured' | 'wide' | 'narrow' | 'dense' | 'compact' | 'ultra';
+
+function resolveToolbarWidthMode(width: number): ToolbarWidthMode {
+  if (width < TOOLBAR_ULTRA_COMPACT_MAX_WIDTH) return 'ultra';
+  if (width < TOOLBAR_COMPACT_MAX_WIDTH) return 'compact';
+  if (width < TOOLBAR_DENSE_MAX_WIDTH) return 'dense';
+  if (width < TOOLBAR_NARROW_MAX_WIDTH) return 'narrow';
+  return 'wide';
+}
+
 function isVoiceInputIdleLike(state: VoiceInputState): boolean {
   return state === 'idle' || state === 'done' || state === 'error';
 }
@@ -437,7 +489,7 @@ interface ChatInputProps {
    * 此时模型 / fast / effort / 权限档 等**能力全部从被控端读**(经隧道),控制端"忘掉"本地能力。
    * 由 CCAgentSessionView(reactive remoteDeviceId)/ NewMakerDraftRoute(目标设备)传入;本地会话 undefined。
    */
-  deviceLinkDeviceId?: string;
+  deviceLinkDeviceId?: string | null;
   /**
    * device-link「纯显示镜像」记忆 override:非空时优先于本机全局模型预设注入 ModelSelector,
    * 用于远程草稿 / 远程会话——非选中行读被控端镜像、改动经隧道写穿被控端,绝不碰控制端本地记忆
@@ -630,6 +682,11 @@ interface ChatInputProps {
    */
   focusOnStorageKeyChange?: boolean;
   /**
+   * Whether this composer should consume hardware send / voice / text commands.
+   * Split panes keep every ChatInput mounted; only the focused owner may act.
+   */
+  ownsHardwareComposerActions?: boolean;
+  /**
    * 附加只读引用目录列表(绝对路径)。
    * 与 onExtraDirsChange 成对出现:
    *   - 创建时(NewMakerDraftRoute):传 draft.extraDirs + 写 newMakerDraft store
@@ -692,6 +749,42 @@ interface ChatInputProps {
    * 状态完全由 parent 持有 (controlled);ChatInput 只做展示与事件转发。
    */
   collaboration?: CollaborationMenuConfig;
+  /**
+   * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
+   *
+   * 传入 = 这条 composer 的模型 pill 用统一面板,而且它是**草稿**:面板里的一行自带引擎
+   * (推荐 ⊕ 用户 override ⊕ 收藏副本),所以选中要连引擎一起落 —— ChatInput 把
+   * (vendor, providerId, modelId, effort, fast, 收藏锚点) 一次交给草稿层写 newMakerDraft,
+   * 不走 onProviderDidChange / onModelDidChange 那条按「当前引擎」二次解析的链路(它在
+   * 跨引擎行上会拿旧引擎的档位表把档清空)。
+   *
+   * 已建会话不传:那边换引擎有损,跨引擎行走 performAgentSwitch 事务(M6)。
+   *
+   * `modelId` 是**选中引擎的 wire model id**(不是面板行的归一化 id):它会直接落进
+   * `lastByVendor.model` 并原样进 createSession,写错就是首条请求路由到一个不存在的模型。
+   */
+  onUnifiedDraftSelect?: (selection: {
+    vendor: 'cc' | 'codex' | 'pi';
+    providerId: string;
+    /** 选中引擎的 **wire model id**。 */
+    modelId: string;
+    effort?: Effort;
+    fast: boolean;
+    favoriteUid: string | null;
+  }) => void;
+  /**
+   * 统一面板里被选中的收藏锚点 uid(与 onUnifiedDraftSelect 成对,由草稿层持有)。
+   * 语义见 ModelSelectorProps.selectedFavoriteUid。
+   */
+  selectedFavoriteUid?: string | null;
+}
+
+/** 统一模型选择器联合列表的候选引擎全集(与 SELECTABLE_VENDORS 同一顺序)。 */
+const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/** AgentKind → NewMaker vendor(useAvailableAgents 用 vendor 口径)。 */
+function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' {
+  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
 }
 
 function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
@@ -943,7 +1036,7 @@ export function ChatInput({
   sessionOrcaRole,
   initialWorkingDir,
   remoteHostId,
-  deviceLinkDeviceId,
+  deviceLinkDeviceId: _deviceLinkDeviceId,
   modelMemoryOverride,
   initialModel,
   initialEffort,
@@ -990,6 +1083,7 @@ export function ChatInput({
   draftKey,
   disableAutofocus = false,
   focusOnStorageKeyChange = false,
+  ownsHardwareComposerActions = true,
   extraDirs,
   onExtraDirsChange,
   onNewGoal,
@@ -1003,10 +1097,46 @@ export function ChatInput({
   compactMiddleToolbarSlot,
   topSlot,
   collaboration,
+  onUnifiedDraftSelect,
+  selectedFavoriteUid = null,
 }: ChatInputProps) {
+  // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
+  // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
+  const deviceLinkDeviceId = _deviceLinkDeviceId;
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
+  // ── 推荐提示词 ────────────────────────────────────────────────────
+  // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
+  const { enabled: recommendationEnabled } = usePromptRecommendationPreference();
+  // 推荐状态按 sessionId 存在组件外：切换 session 时同步读取各自条目，后台完成与
+  // 分屏也共享同一份结果；App 重启后自然清空，不把一次性推荐持久化成业务真相。
+  const recommendation = usePromptRecommendation(sessionId);
+  // 推荐词渲染成一层 overlay 盖在编辑器上(原生 placeholder 由 CSS 隐藏)——
+  // Tiptap Placeholder 的文本在 extension 创建时定型,运行期改不动,所以不走它。
+  const recommendedPrompt = recommendation?.phase === 'ready' ? recommendation.prompt : null;
+  // handleKeyDown 是稳定闭包,读不到本轮 render,走 ref 取当前 session 的值。
+  const recommendedPromptRef = useRef<string | null>(null);
+  recommendedPromptRef.current = recommendedPrompt;
+  const recommendationRef = useRef(recommendation);
+  recommendationRef.current = recommendation;
+  const showRecommendationRef = useRef(false);
+  // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
+  const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
+  // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
+  // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
+  const voiceDraftTextRef = useRef('');
+  const composerFullyEmptyRef = useRef<() => boolean>(() => true);
+  composerFullyEmptyRef.current = () => {
+    const ed = editorRef.current;
+    if (!ed || ed.isDestroyed) return false;
+    return (
+      composerDocIsEmpty(ed.state.doc) &&
+      latestAttachmentsRef.current.length === 0 &&
+      browserCommentsRef.current.length === 0 &&
+      voiceDraftTextRef.current.length === 0
+    );
+  };
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
   const composerSendShortcutLabel = getComposerSendShortcutLabel(
     composerSendShortcutPreference,
@@ -1077,8 +1207,124 @@ export function ChatInput({
   // Tiptap editorProps can't read React state, so we use refs.
   const onStopRef = useRef(onStop);
   onStopRef.current = onStop;
+  const handleStop = useCallback(() => {
+    onStop?.();
+  }, [onStop]);
   const showStopButtonRef = useRef(showStopButton);
   showStopButtonRef.current = showStopButton;
+
+  // turnGen 继续作为 renderer 侧请求代次；跨 session / 新 turn 的真实归属由
+  // promptRecommendationStore 的 sessionId + completion revision + requestSeq 保证。
+  const turnGenRef = useRef(0);
+  const prevShowStopRender = useRef(false);
+  const prevSessionIdRef = useRef(sessionId);
+  if (prevSessionIdRef.current !== sessionId) {
+    prevSessionIdRef.current = sessionId;
+    turnGenRef.current += 1;
+    prevShowStopRender.current = false;
+    // stable key handler 在下一次 render 前也不能接受上一 session 的推荐。
+    showRecommendationRef.current = false;
+  }
+  useLayoutEffect(() => {
+    const turnStarting = showStopButton && !prevShowStopRender.current;
+    prevShowStopRender.current = showStopButton;
+    if (turnStarting) {
+      turnGenRef.current += 1;
+      showRecommendationRef.current = false;
+      if (sessionId) dismissPromptRecommendation(sessionId);
+    }
+  });
+  useEffect(() => {
+    if (!recommendationEnabled && sessionId) {
+      showRecommendationRef.current = false;
+      dismissPromptRecommendation(sessionId);
+    }
+  }, [recommendationEnabled, sessionId]);
+
+  // messages 是可选 prop。只把「是否已有历史」放进 deps，避免流式 delta 让预测 effect
+  // 每个 token 都重跑；真正素材仍由 main 从 DB 读取，renderer payload 不作为信任来源。
+  const messagesRef = useRef(messages ?? []);
+  messagesRef.current = messages ?? [];
+  const hasPredictionMessages = (messages?.length ?? 0) > 0;
+  useEffect(() => {
+    if (!sessionId || recommendation?.phase !== 'candidate') return;
+    if (!recommendationEnabled) {
+      dismissPromptRecommendation(sessionId, recommendation.revision);
+      return;
+    }
+    // remote / review/read-only 保持原有 fail-closed 语义。deviceLinkDeviceId=undefined
+    // 是归属尚未解析的暂态，先保留 candidate；解析为本地 null 后再继续。
+    if (deviceLinkDeviceId === undefined || runtimeAgentKind == null || !hasPredictionMessages) {
+      return;
+    }
+    if (deviceLinkDeviceId !== null || remoteHostId || disabled) {
+      dismissPromptRecommendation(sessionId, recommendation.revision);
+      return;
+    }
+    const ed = editorRef.current;
+    if (!ed || ed.isDestroyed) return;
+    // ChatInput/Editor 在 session 间复用。目标 storageKey 的草稿尚未水合时，editor 里仍是
+    // 上一 session 的正文；此时判非空会误删目标 session candidate。等水合代次推进后重试。
+    if (
+      !hasHydratedRef.current ||
+      storageKeyForDraftRef.current !== storageKey ||
+      isRestoringRef.current
+    ) {
+      return;
+    }
+    // candidate 首次进入前台时已有草稿/附件/评论/语音稿，沿用旧逻辑：不发付费调用。
+    if (!composerFullyEmptyRef.current()) {
+      dismissPromptRecommendation(sessionId, recommendation.revision);
+      return;
+    }
+
+    const requestSeq = beginPromptRecommendationPrediction(sessionId, recommendation.revision);
+    if (requestSeq == null) return;
+    const requestSessionId = sessionId;
+    const requestRevision = recommendation.revision;
+    const requestTurnGen = turnGenRef.current;
+    const contextMsgs = messagesRef.current.slice(-20).map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+    window.electronAPI.maker
+      .predictNextPrompt({
+        sessionId: requestSessionId,
+        agentKind: runtimeAgentKind,
+        messages: contextMsgs,
+        workingDir: workingDirRef.current ?? undefined,
+        turnGen: requestTurnGen,
+        completionRevision: requestRevision,
+      })
+      .then((result) => {
+        // 结果按原 session + completion revision 落入 Store；即使用户已切到其它
+        // session，也只更新原 session，切回时再展示，不污染当前输入框。
+        resolvePromptRecommendationPrediction(
+          requestSessionId,
+          requestRevision,
+          requestSeq,
+          result?.prompt ?? null,
+        );
+      })
+      .catch(() => {
+        resolvePromptRecommendationPrediction(requestSessionId, requestRevision, requestSeq, null);
+        // 预测失败静默处理:不显示推荐,也不回落任何默认文案。
+      });
+  }, [
+    composerHydrationGeneration,
+    deviceLinkDeviceId,
+    disabled,
+    hasPredictionMessages,
+    recommendation?.phase,
+    recommendation?.revision,
+    recommendationEnabled,
+    remoteHostId,
+    runtimeAgentKind,
+    sessionId,
+    storageKey,
+  ]);
+
   // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
   // BEFORE falling through to the existing stop / history shortcuts. That
   // way the user's mental model stays consistent: esc = "back out of the
@@ -1111,20 +1357,30 @@ export function ChatInput({
   // ── 工具行宽度自适应 ────────────────────────────────────────────────
   // 测 input card（mergedCardRef）实际宽度，窄宽时自动收紧工具行。主会话被右栏
   // 拖宽压窄时据此折叠，行为对齐 doc rail（doc rail 仍按 denseToolbar 强制收紧，
-  // 二者取 OR）。ResizeObserver 只读宽度、值不变时 React 跳过 setState，不影响
-  // 输入热路径。
-  const [toolbarWidth, setToolbarWidth] = useState<number | null>(null);
+  // 二者取 OR）。窗口连续 resize 时只在跨越离散断点后更新 React；同一档位内的
+  // 逐像素变化完全交给 CSS 布局，不再重渲染整棵 ChatInput。
+  const [toolbarWidthMode, setToolbarWidthMode] = useState<ToolbarWidthMode>('unmeasured');
   useLayoutEffect(() => {
     const el = mergedCardRef.current;
     if (!el) return;
-    const update = () => setToolbarWidth(el.clientWidth);
+    const update = () => {
+      const nextMode = resolveToolbarWidthMode(el.clientWidth);
+      setToolbarWidthMode((currentMode) => (currentMode === nextMode ? currentMode : nextMode));
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const autoDenseToolbar = toolbarWidth != null && toolbarWidth < TOOLBAR_DENSE_MAX_WIDTH;
-  const autoCompactToolbar = toolbarWidth != null && toolbarWidth < TOOLBAR_COMPACT_MAX_WIDTH;
+  const toolbarWidthMeasured = toolbarWidthMode !== 'unmeasured';
+  const autoNarrowToolbar =
+    toolbarWidthMode === 'narrow' ||
+    toolbarWidthMode === 'dense' ||
+    toolbarWidthMode === 'compact' ||
+    toolbarWidthMode === 'ultra';
+  const autoDenseToolbar =
+    toolbarWidthMode === 'dense' || toolbarWidthMode === 'compact' || toolbarWidthMode === 'ultra';
+  const autoCompactToolbar = toolbarWidthMode === 'compact' || toolbarWidthMode === 'ultra';
   const effectiveDenseToolbar = denseToolbar || autoDenseToolbar;
   const effectiveCompactToolbar = compactToolbar || autoCompactToolbar;
 
@@ -1270,8 +1526,26 @@ export function ChatInput({
   workingDirRef.current = workingDir;
   const remoteHostIdRef = useRef<string | null | undefined>(remoteHostId);
   remoteHostIdRef.current = remoteHostId;
-  const deviceLinkDeviceIdRef = useRef<string | undefined>(deviceLinkDeviceId);
+  const deviceLinkDeviceIdRef = useRef<string | null | undefined>(deviceLinkDeviceId);
   deviceLinkDeviceIdRef.current = deviceLinkDeviceId;
+  // Host capability 芯片只在「已确认本机」的 composer 里有效:SSH(remoteHostId)或
+  // device-link 远程会话若恢复本地草稿里序列化的芯片,发送路径会因
+  // TARGET_UNAVAILABLE 中断、逼用户手动删芯片。这里把「归一化 + 已确认远程剥芯片」
+  // 收口成一个入口,供草稿恢复路径统一复用。
+  // 三态:deviceLinkDeviceId = string(远程) / null(本机) / undefined(归属未解析)。
+  // 冷打开/重载时首帧归属尚未回流(undefined),不能当远程把已存本机草稿的芯片剥掉
+  // —— 只在「已确认远程」(SSH remoteHostId 或 deviceLinkDeviceId 为 string)时剥离,
+  // 未解析(undefined)时延后决定、保留芯片;随后本机(null)自然保留,若解析成远程则由
+  // 发送路径的 hostCapabilityGhost 谓词 fail-closed 兜底。
+  const normalizeRestoredComposerDraft = (
+    draftText: JSONContent | null | undefined,
+  ): JSONContent | null => {
+    if (!draftText) return null;
+    const normalized = normalizeComposerDocumentJSON(draftText);
+    const isConfirmedRemote =
+      !!remoteHostIdRef.current || typeof deviceLinkDeviceIdRef.current === 'string';
+    return isConfirmedRemote ? stripHostCapabilityChips(normalized) : normalized;
+  };
   const tRef = useRef(t);
   tRef.current = t;
   // 长文本粘贴 chip 的点击编辑目标。保存时用 nodePos + originalText 双重校验，
@@ -1372,6 +1646,37 @@ export function ChatInput({
   // 「目标 Agent + 目标模型 + 旧来源」的混合状态；null 仍表示跟随目标引擎默认路由。
   const activeProviderId = agentSwitchIntent ? agentSwitchIntent.providerId : selectedProviderId;
 
+  /**
+   * 会话内经统一面板选中的**收藏锚点**(model-selector-unified §1.5,2026-08-17 review 第三轮 G4)。
+   *
+   * 它曾经刻意只是**渲染进程内存态**(重启 / 刷新 / 换会话即忘),理由是「只是 UI 选中提示,
+   * 忘掉等价于从没选过收藏」。Chris 2026-08-19 实测推翻了这条取舍:收藏区置顶、模型行在下面,
+   * 锚点一忘,面板就回落到模型行打勾并把列表滚到那一行 —— 用户看到的是「我明明选了收藏第 3
+   * 个,打开选单默认焦点永远在下面不在收藏」。所以改成按 sessionId 持久化到
+   * `favoriteAnchorMemory`(renderer localStorage,按 owner 分区、LRU 100 条),换会话 / 重启后
+   * 仍勾在那一条上。**仍不是用户数据**:不落库、不进 device-link payload,丢了只回落模型行。
+   *
+   * 读走 `useSessionFavoriteAnchor`(useSyncExternalStore)而不是本地 state:锚点的真相在 store,
+   * 再挂一份组件态就要为「换会话 / 跨窗口写入 / 换账号分区」各补一条同步,那正是内存态时代
+   * 的三个 effect。写走 `setSessionFavoriteAnchorMemory`,同步落盘。
+   *
+   * 草稿的同名锚点在 NewMakerDraftRoute(经 `selectedFavoriteUid` prop 传进来),两者不共用:
+   * 草稿的锚点按 vendor 分槽、跟着草稿走,会话的锚点按 sessionId 分槽、跟着会话走。
+   */
+  const sessionFavoriteAnchor = useSessionFavoriteAnchor(sessionId ?? null);
+  const setSessionFavoriteAnchor = useCallback(
+    (next: SessionFavoriteAnchor | null): void => {
+      // ★ 绑**发起这次选择时的** sessionId(闭包捕获的那一份),不是 currentSessionIdRef。
+      // 跨引擎选中要等一整条切换事务,收尾时用户可能已经切走会话:读 ref 会把这条锚点记到
+      // **新**会话头上(那条会话根本没选过这份收藏,面板会凭空打勾)。锚点描述的是「发起
+      // 选择的那条会话选了哪一条收藏」,写回它永远正确;它是否**过期**由显示端的派生校验
+      // (effectiveSelectedFavoriteUid 比 wire id / 来源 / 引擎)兜住,不需要靠写入时机去防。
+      if (!sessionId) return;
+      setSessionFavoriteAnchorMemory(sessionId, next);
+    },
+    [sessionId],
+  );
+
   // 乐观切换解除:props(被控端 echo 回流的 mirror)追上目标三元组即交回 props;否则 5s 兜底解除
   // (被控端把 effort 降级等导致永不相等时,避免 selector 永久置灰)。
   useEffect(() => {
@@ -1390,9 +1695,9 @@ export function ChatInput({
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link 远程会话:能力(模型 / fast / effort)从被控端读;本地会话 deviceLinkDeviceId undefined → 本地。
-  const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId);
-  const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId);
-  const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId);
+  const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId ?? undefined);
+  const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId ?? undefined);
+  const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId ?? undefined);
   const activeAgentCapabilities =
     agentKind === 'codex'
       ? codexCaps.capabilities
@@ -1431,7 +1736,7 @@ export function ChatInput({
   // 断链期间发出的读回会失败(catch 吞掉),断链期间被控端 / 另一控制端改的意图其
   // sessions:patched 推送也收不到 —— 恢复连接后必须重读一次,否则 composer 会一直
   // 停在过期引擎上。非 connected → connected 的每次跃迁 +1,驱动下方 effect 重跑。
-  const remoteConnStatus = useRemoteSessionConnection(deviceLinkDeviceId);
+  const remoteConnStatus = useRemoteSessionConnection(deviceLinkDeviceId ?? undefined);
   const [remoteReconnectEpoch, setRemoteReconnectEpoch] = useState(0);
   const remoteWasConnectedRef = useRef(false);
   useEffect(() => {
@@ -1517,7 +1822,7 @@ export function ChatInput({
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(deviceLinkDeviceId);
+  const remoteProviders = useDeviceProviders(deviceLinkDeviceId ?? undefined);
   const providers = deviceLinkDeviceId ? remoteProviders.providers : localProviders.providers;
   const sendProviders = filterChatBridgedCodexProviders(
     providers,
@@ -1533,7 +1838,7 @@ export function ChatInput({
   // provider 目录，且真实读取失败时 fail closed。只有结构化 unsupported 才允许旧端回退。
   const { loading: localProvidersLoading } = useConnectedSource(currentModelAgentKind, activeModel);
   const remoteModelListStatus = resolveRemoteModelListStatus({
-    deviceId: deviceLinkDeviceId,
+    deviceId: deviceLinkDeviceId ?? undefined,
     agentKind: currentModelAgentKind,
     cc: ccCaps,
     codex: codexCaps,
@@ -1543,6 +1848,30 @@ export function ChatInput({
   const providersLoading = deviceLinkDeviceId
     ? remoteModelListStatus === 'loading'
     : localProvidersLoading;
+  // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关 —— **能力级**那一半
+  // (下面还要叠形态偏好才是真正启用,见 unifiedPanelCapable / unifiedPanelActive;
+  // NewMakerDraftRoute 的 unifiedModelPanelEnabled / unifiedModelPanelActive 与这两级逐字对应)。
+  //
+  // 这一级唯一的降级条件是**没有供应商目录可用**:联合列表(unifiedModelEntries)只认目录里的
+  // (provider, agent) 条目,而老被控端不支持 provider:list 时控制端只有一份拍平的
+  // capabilities —— 那种情况下开了统一面板就是一张空列表(见 ModelSelector.unifiedPanel
+  // 的「已知边界」)。unsupported 是**结构化**判定(isDeviceProvidersUnsupportedError),
+  // 不是 providers.length===0:后者在首帧加载中恒成立,拿它当条件会让面板每次打开先闪
+  // 一下旧版布局。
+  const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;
+  // 联合列表参与哪些引擎 —— 以**运行时注册结果**为准(device-link 取被控端的)。
+  // 撤掉新会话工具条的 AgentSelect 后,它的 hiddenVendors 门禁就落到这里:Pi 二进制缺失
+  // 时模型目录照样投影 Pi 模型,只看目录会让用户一路选到 requireAgent 的 not-registered。
+  // 未加载完成 → 传 undefined(fail-open,不隐藏任何引擎);当前引擎恒在列。
+  const { availableVendors: runtimeAvailableVendors, loaded: runtimeAgentsLoaded } =
+    useAvailableAgents(deviceLinkDeviceId);
+  const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
+    if (!runtimeAgentsLoaded) return undefined;
+    const kinds = UNIFIED_AGENT_KINDS.filter(
+      (kind) => kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),
+    );
+    return kinds.length > 0 ? kinds : undefined;
+  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind]);
   // 已有 device-link 任务在断链时仍有 pinned deviceId + renderer outbox 可接住发送，
   // 不能因为被控端 provider 目录暂时拉不到就禁用 composer。远程草稿没有既有 session
   // 可以排队，仍与本地任务一样保留来源门禁。
@@ -1618,6 +1947,7 @@ export function ChatInput({
   //     该会话切走后再切回此模型,才会采用最新全局预设。
   //   - 首页草稿无 live 会话,NewMakerDraftRoute 会把当前显示模型的 props 也从全局预设派生。
   //   - device-link 必须使用被控端镜像 override;旧被控端拿不到镜像时宁可无记忆,也不掺控制端本机。
+  useProviderModelMemoryVersion();
   const modelMemory = useMemo<ModelMemoryAccessors | undefined>(() => {
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
     if (modelMemoryOverride) return modelMemoryOverride;
@@ -1628,6 +1958,12 @@ export function ChatInput({
       setChoice: setProviderModelChoice,
       getFast: getProviderModelFast,
       setFast: setProviderModelFast,
+      getThinking: getProviderModelThinking,
+      setThinking: setProviderModelThinking,
+      // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
+      // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
+      clearEffort: clearProviderModelEffort,
+      clearFast: clearProviderModelFast,
     };
   }, [deviceLinkDeviceId, modelMemoryOverride]);
 
@@ -2032,6 +2368,36 @@ export function ChatInput({
           return true;
         }
 
+        // Tab — 填入推荐提示词(编辑器为空 + 推荐激活 + 无修饰键)。
+        // 放在 captureKey 之后:palette 打开时 Tab 归 palette。
+        // 放在 cycle-permission-mode 之前:裸 Tab 不会误触 Shift+Tab 权限轮切。
+        if (
+          event.key === 'Tab' &&
+          !event.shiftKey &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.repeat &&
+          !event.isComposing &&
+          showRecommendationRef.current &&
+          recommendedPromptRef.current &&
+          !composerMutationLockedRef.current
+        ) {
+          if (composerFullyEmptyRef.current()) {
+            const prompt = recommendedPromptRef.current;
+            if (!prompt) return false;
+            event.preventDefault();
+            const activeRecommendation = recommendationRef.current;
+            // 先消费 Store 条目(overlay 与正文同位置,不先撤会有一帧重叠),再插入文本。
+            showRecommendationRef.current = false;
+            if (sessionId && activeRecommendation) {
+              dismissPromptRecommendation(sessionId, activeRecommendation.revision);
+            }
+            view.dispatch(view.state.tr.insertText(prompt));
+            return true;
+          }
+        }
+
         // cycle-permission-mode (registry 默认 Shift+Tab, 用户可改绑) —— 输入框
         // 聚焦时轮切会话权限模式。放在 captureKey 之后: palette 打开时 Tab 归
         // palette。IME composition / repeat 跳过; 可用模式不足 2 个时不消费,
@@ -2232,6 +2598,9 @@ export function ChatInput({
       if (syntheticRangeEnd !== null && transaction.docChanged) {
         syntheticAtRangeEndRef.current = transaction.mapping.map(syntheticRangeEnd, 1);
       }
+      // 普通输入只通过 showRecommendationOverlay 隐藏 session 级推荐，不销毁它；
+      // 用户把正文重新清空时即可恢复。发送路径会在 clearContent 前同步消费 Store 条目，
+      // 因而不会复活上一轮推荐。
       if (
         !suppressListNormalizationRef.current &&
         !ed.view.composing &&
@@ -2513,15 +2882,19 @@ export function ChatInput({
     [installedGhosts, workingDir],
   );
   const pluginAvailableIds = useMemo(
-    () => new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
+    () =>
+      new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
     [ghostsForCommand],
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
   // Host 入口或未生效项保留展示但置灰(entry 级 disabled + 原因)。
   const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(() => {
-    // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
-    // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
-    if (deviceLinkDeviceId) return [];
+    // device-link 会话的插件运行在被控端；控制端清单既不代表远端已安装
+    // 状态，选择后也无法用本地 InstalledGhost 解析并插入命令。fail-closed：
+    // 仅 deviceLinkDeviceId === null（已确认本机）才展示；undefined（所有权
+    // 尚未解析）与 string（远程）一律隐藏，避免 bootstrap/重连窗口期把控制端
+    // 本地插件项泄漏进可能落为远程的会话。
+    if (deviceLinkDeviceId !== null) return [];
     return pluginsForMenu.map((ghost) => {
       const hasCommand = !!ghost.manifest.command;
       const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
@@ -2581,17 +2954,124 @@ export function ChatInput({
     }
   }, [confirmDialog, t]);
 
+  const voiceOwnerStorageKeyRef = useRef<string | undefined>(undefined);
+  const frozenVoiceSendRef = useRef<{
+    kind: 'send' | 'persist';
+    sourceStorageKey: string;
+    serialized: SerializedComposerContent;
+    attachments: AttachedFile[];
+    comments: BrowserCommentDraftItem[];
+  } | null>(null);
   const voiceInputOptions = useMemo(
-    () => ({ onMicrophonePermissionRequired: handleVoiceInputPermissionRequired }),
+    () => ({
+      onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
+      shouldApplyToEditor: () =>
+        voiceOwnerStorageKeyRef.current === undefined ||
+        voiceOwnerStorageKeyRef.current === storageKeyForDraftRef.current,
+      getDraftStorageKey: () => storageKeyForDraftRef.current,
+    }),
     [handleVoiceInputPermissionRequired],
   );
 
+  const voiceInputBusyRef = useRef(false);
+  const voiceInputStopAndSendPromiseRef = useRef<Promise<void> | null>(null);
+
+  // Declared before useVoiceInput so React 19 runs this cleanup first
+  // (declaration order). Arm must be visible before the voice hook decides
+  // whether to cancel or settle; otherwise the run is cancelled and a later
+  // unmount can skip microphone teardown.
+  useEffect(() => {
+    if (!editor) return;
+    const dataOwnerAtEffect = editorDataOwnerRef.current;
+    return () => {
+      if (!isDataOwnerGenerationCurrent(dataOwnerAtEffect)) {
+        draftSaveSchedulerRef.current?.cancel();
+        return;
+      }
+      draftSaveSchedulerRef.current?.flush();
+      const editorStorageKey = storageKeyForDraftRef.current;
+      if (!editorStorageKey) return;
+      const existing = getComposerDraft(editorStorageKey);
+      const hasText = !isEditorEmpty(editor);
+      if (hasText || existing) {
+        saveComposerDraft(
+          editorStorageKey,
+          {
+            text: editor.getJSON(),
+            attachments: existing?.attachments ?? [],
+            quotes: existing?.quotes ?? [],
+            browserComments: existing?.browserComments ?? [],
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
+          },
+          { silent: true },
+        );
+      }
+      const persistKey = voiceOwnerStorageKeyRef.current ?? editorStorageKey;
+      // Only arm the composer that still owns this voice run. After a session
+      // switch the switch effect already persists to the source; do not write
+      // the source preview into the destination draft.
+      if (
+        voiceInputBusyRef.current &&
+        !voiceInputStopAndSendPromiseRef.current &&
+        persistKey &&
+        persistKey === editorStorageKey
+      ) {
+        armDetachedVoiceDraftPersist(persistKey, voiceDraftTextRef.current.trim());
+      }
+    };
+  }, [editor]);
+
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
-  const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;
+  if (voiceInput.isBusy) {
+    if (voiceOwnerStorageKeyRef.current === undefined) {
+      voiceOwnerStorageKeyRef.current = storageKeyForDraftRef.current ?? storageKey;
+    }
+  } else {
+    voiceOwnerStorageKeyRef.current = undefined;
+    if (frozenVoiceSendRef.current?.kind === 'persist') {
+      frozenVoiceSendRef.current = null;
+    }
+  }
+  voiceDraftTextRef.current = voiceInput.draftText;
+  const voiceBusyOnCurrentComposer = voiceLocksCurrentComposer({
+    isBusy: voiceInput.isBusy,
+    ownerStorageKey: voiceOwnerStorageKeyRef.current,
+    currentStorageKey: storageKeyForDraftRef.current,
+  });
+  const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
   composerMutationLockedRef.current = composerMutationLocked;
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
   }, [composerMutationLocked, editor]);
+
+  // 附件/浏览器评论/语音/锁定保持原有「失效」语义（不同于普通文字输入的暂时隐藏）。
+  // 同步清 ref，避免稳定闭包里的 Tab 在 React 重渲染前填入已隐藏推荐。
+  useEffect(() => {
+    const activeRecommendation = recommendationRef.current;
+    if (
+      sessionId &&
+      activeRecommendation &&
+      (attachments.length > 0 ||
+        browserComments.length > 0 ||
+        composerMutationLocked ||
+        (voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0))
+    ) {
+      showRecommendationRef.current = false;
+      dismissPromptRecommendation(sessionId, activeRecommendation.revision);
+    }
+  }, [
+    attachments.length,
+    browserComments.length,
+    composerMutationLocked,
+    sessionId,
+    voiceBusyOnCurrentComposer,
+    voiceInput.draftText,
+  ]);
+
   const captureSendFocusForRestore = useComposerSendFocusRestore(
     editor,
     composerMutationLocked,
@@ -2645,13 +3125,12 @@ export function ChatInput({
   const voiceShortcutRef = useRef(voiceInputSettings.shortcut);
   const voiceInputStateRef = useRef(voiceInput.state);
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
-  const voiceInputBusyRef = useRef(voiceInput.isBusy);
   voiceInputBusyRef.current = voiceInput.isBusy;
+  voiceDraftTextRef.current = voiceInput.draftText;
   const voiceInputCancelRef = useRef(voiceInput.cancel);
   const voiceInputStopAndSendRef = useRef<
     (deliveryMode?: MessageDeliveryMode) => void | Promise<void>
   >(() => {});
-  const voiceInputStopAndSendPromiseRef = useRef<Promise<void> | null>(null);
   const voiceInputCanStopAndSendRef = useRef(false);
   const composerCanSubmitRef = useRef(false);
   const handleVoiceInputStartRef = useRef(handleVoiceInputStart);
@@ -2680,6 +3159,9 @@ export function ChatInput({
   const localVoiceShortcutHandledAtRef = useRef(0);
   const globalVoiceShortcutStartHandledAtRef = useRef(0);
   const globalVoiceShortcutSuppressReleaseFromLocalRef = useRef(false);
+  const workLouderVoiceGestureRef = useRef<ReturnType<
+    typeof createWorkLouderCodexVoiceGesture
+  > | null>(null);
 
   useEffect(() => {
     voiceShortcutRef.current = voiceInputSettings.shortcut;
@@ -2737,10 +3219,14 @@ export function ChatInput({
       }
       const platform = window.electronAPI?.platform;
       if (event.key === 'Escape' && !event.repeat && !event.isComposing) {
+        const voiceOwnsCurrentComposer =
+          voiceOwnerStorageKeyRef.current === undefined ||
+          voiceOwnerStorageKeyRef.current === storageKeyForDraftRef.current;
         if (
-          currentState === 'listening' ||
-          currentState === 'submitting' ||
-          currentState === 'refining'
+          voiceOwnsCurrentComposer &&
+          (currentState === 'listening' ||
+            currentState === 'submitting' ||
+            currentState === 'refining')
         ) {
           event.preventDefault();
           clearPressTimer();
@@ -3010,29 +3496,32 @@ export function ChatInput({
   // While dictation holds the editor read-only the native caret disappears;
   // the decoration renders a mic-shaped caret at the insertion point instead
   // (listening = animated level bars, submitting/refining = spinner).
-  const voiceCaretState: VoiceInputCaretState | null = voiceInput.isListening
-    ? 'listening'
-    : voiceInput.isBusy
-      ? 'processing'
-      : null;
+  const voiceCaretState: VoiceInputCaretState | null = !voiceBusyOnCurrentComposer
+    ? null
+    : voiceInput.isListening
+      ? 'listening'
+      : voiceInput.isBusy
+        ? 'processing'
+        : null;
 
   useEffect(() => {
     setVoiceInputDraftDecoration(
       editor,
-      voiceInput.draftText,
-      voiceInput.draftSource,
-      voiceInput.draftRange,
+      voiceBusyOnCurrentComposer ? voiceInput.draftText : '',
+      voiceBusyOnCurrentComposer ? voiceInput.draftSource : null,
+      voiceBusyOnCurrentComposer ? voiceInput.draftRange : null,
       voiceCaretState,
     );
     // Caret-only (no draft text yet) must also stay visible: the insertion
     // point can sit outside the viewport when the composer is scrolled.
-    if (voiceInput.draftText || voiceCaretState) {
+    if (voiceBusyOnCurrentComposer && (voiceInput.draftText || voiceCaretState)) {
       requestAnimationFrame(() => {
         if (editor) scrollVoiceInputDraftEndIntoView(editor);
       });
     }
   }, [
     editor,
+    voiceBusyOnCurrentComposer,
     voiceCaretState,
     voiceInput.draftRange,
     voiceInput.draftSource,
@@ -3040,39 +3529,8 @@ export function ChatInput({
   ]);
 
   // Route changes such as Chat -> Settings unmount the composer immediately.
-  // `onUpdate` is still the primary "instant save" path, but this cleanup
-  // snapshots the final editor state before React tears the instance down.
-  useEffect(() => {
-    if (!editor) return;
-    const dataOwnerAtEffect = editorDataOwnerRef.current;
-    return () => {
-      if (!isDataOwnerGenerationCurrent(dataOwnerAtEffect)) {
-        draftSaveSchedulerRef.current?.cancel();
-        return;
-      }
-      draftSaveSchedulerRef.current?.flush();
-      const editorStorageKey = storageKeyForDraftRef.current;
-      if (!editorStorageKey) return;
-      const existing = getComposerDraft(editorStorageKey);
-      const hasText = !isEditorEmpty(editor);
-      if (!hasText && !existing) return;
-      saveComposerDraft(
-        editorStorageKey,
-        {
-          text: editor.getJSON(),
-          attachments: existing?.attachments ?? [],
-          quotes: existing?.quotes ?? [],
-          browserComments: existing?.browserComments ?? [],
-          ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-          ...(existing?.pendingHostCapabilityGhostId
-            ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-            : {}),
-          ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
-        },
-        { silent: true },
-      );
-    };
-  }, [editor]);
+  // Draft snapshot + detached-voice arm run in the earlier effect declared
+  // before useVoiceInput, so React 19 cleanup arms persist first.
 
   // ── composer-draft-per-session: restore on storageKey change ────────
   // Whenever the parent switches `storageKey` (= `draftKey ?? sessionId`),
@@ -3114,7 +3572,7 @@ export function ChatInput({
         if (draftDocument && composerDocIsEmpty(editor.state.doc)) {
           isRestoringRef.current = true;
           try {
-            editor.commands.setContent(normalizeComposerDocumentJSON(draftDocument));
+            editor.commands.setContent(normalizeRestoredComposerDraft(draftDocument));
           } finally {
             isRestoringRef.current = false;
           }
@@ -3125,6 +3583,7 @@ export function ChatInput({
       editorDataOwnerRef.current = dataOwnerAtTransition;
       // composer-draft-mount-race 修复 (issue #40):放行后续 onUpdate 写 store。
       hasHydratedRef.current = true;
+      setComposerHydrationGeneration((generation) => generation + 1);
       if (
         focusOnStorageKeyChangeRef.current &&
         !disableAutofocusRef.current &&
@@ -3174,7 +3633,7 @@ export function ChatInput({
       try {
         const draft = storageKey !== undefined ? getComposerDraft(storageKey) : undefined;
         if (draft?.text) {
-          editor.commands.setContent(normalizeComposerDocumentJSON(draft.text));
+          editor.commands.setContent(normalizeRestoredComposerDraft(draft.text));
         } else {
           editor.commands.clearContent();
         }
@@ -3186,6 +3645,7 @@ export function ChatInput({
       editorDataOwnerRef.current = dataOwnerAtTransition;
       storageKeyTransitionRecoveryRef.current = null;
       hasHydratedRef.current = true;
+      setComposerHydrationGeneration((generation) => generation + 1);
 
       // Reset history-browse bookkeeping when switching sessions —
       // arrow-key history was relative to the previous session.
@@ -3206,29 +3666,78 @@ export function ChatInput({
     };
 
     const pendingStopAndSend = voiceInputStopAndSendPromiseRef.current;
-    if (pendingStopAndSend || voiceInputBusyRef.current) {
-      void (async () => {
-        try {
-          if (pendingStopAndSend) {
-            await pendingStopAndSend;
-          } else {
-            await voiceInputStopRef.current({ waitForRefinement: true });
-          }
-        } finally {
-          if (isCurrentTransition()) {
-            saveCurrentEditorDraft();
-          }
-          restoreNextDraft();
-        }
-      })();
-      return () => {
-        cancelled = true;
-      };
+    const wasBusyWithoutSend = !pendingStopAndSend && voiceInputBusyRef.current;
+    const submittedAtSwitch = wasBusyWithoutSend ? voiceInput.getLastSubmittedText().trim() : '';
+    const unlandedPreview =
+      wasBusyWithoutSend && !submittedAtSwitch ? voiceDraftTextRef.current.trim() : '';
+    const voiceOwnerKey = voiceOwnerStorageKeyRef.current ?? prevEditorKey;
+    if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey && voiceOwnerKey) {
+      const existingFreeze = frozenVoiceSendRef.current;
+      if (
+        prevEditorKey === voiceOwnerKey &&
+        (!existingFreeze || existingFreeze.sourceStorageKey === voiceOwnerKey)
+      ) {
+        const sourceDraft = getComposerDraft(prevEditorKey);
+        frozenVoiceSendRef.current = {
+          kind: pendingStopAndSend ? 'send' : 'persist',
+          sourceStorageKey: voiceOwnerKey,
+          serialized: serializeEditorContent(editor),
+          attachments: [...(sourceDraft?.attachments ?? [])],
+          comments: [...(sourceDraft?.browserComments ?? browserCommentsRef.current)],
+        };
+      }
     }
 
-    // storageKey actually changed — swap the editor's content.
+    // storageKey actually changed — swap the editor's content immediately so
+    // the next task never paints the previous session's listening/refining text.
     saveCurrentEditorDraft();
     restoreNextDraft();
+    // The reused composer now shows the destination draft. Drop the source
+    // send lock so the next task is immediately editable.
+    setSendDispatchInFlight(false);
+    if (wasBusyWithoutSend && prevEditorKey && prevEditorKey === voiceOwnerKey) {
+      const sourceKey = prevEditorKey;
+      const persistDetachedVoice = (previousVoiceText: string, nextVoiceText: string) => {
+        if (!nextVoiceText) return;
+        const existing = getComposerDraft(sourceKey);
+        saveComposerDraft(
+          sourceKey,
+          {
+            text: mergeDetachedVoiceTextIntoDocument(
+              existing?.text,
+              previousVoiceText,
+              nextVoiceText,
+            ),
+            attachments: existing?.attachments ?? [],
+            quotes: existing?.quotes ?? [],
+            browserComments: existing?.browserComments ?? [],
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
+          },
+          { silent: latestStorageKeyRef.current !== sourceKey },
+        );
+      };
+      // Submitted text is already in the editor snapshot. Only persist a
+      // still-ghost listening preview, then upgrade it after stop/refine.
+      if (unlandedPreview) persistDetachedVoice('', unlandedPreview);
+      void (async () => {
+        try {
+          await voiceInputStopRef.current({ waitForRefinement: true });
+        } catch {
+          const submitted = voiceInput.getLastSubmittedText().trim();
+          if (submitted && unlandedPreview) persistDetachedVoice(unlandedPreview, submitted);
+          return;
+        }
+        const submitted = voiceInput.getLastSubmittedText().trim();
+        const refined = voiceInput.getLastRefinement()?.refinedText.trim() ?? '';
+        const nextVoice = refined || submitted;
+        if (!nextVoice) return;
+        persistDetachedVoice(unlandedPreview || submittedAtSwitch, nextVoice);
+      })();
+    }
   }, [editor, storageKey]);
 
   // ── External draft writes for the CURRENT session (e.g. rewind / fork
@@ -3254,7 +3763,7 @@ export function ChatInput({
       // "编辑器为空"一律折叠成 null。两侧判空口径必须一致,否则每次外部草稿通知都
       // 会拿一份空文档整段 setContent:doc 被原地重建,所有按位置存活的状态(语音
       // 草稿锚点等)被迫跨整篇映射(#720 后语音录音时首行多一个空行的成因)。
-      const draftDocument = draft.text ? normalizeComposerDocumentJSON(draft.text) : null;
+      const draftDocument = normalizeRestoredComposerDraft(draft.text);
       const normalizedDraftText =
         draftDocument && tiptapDocHasContent(draftDocument) ? draftDocument : null;
       const textUnchanged =
@@ -3278,10 +3787,31 @@ export function ChatInput({
     });
   }, [editor, storageKey]);
 
+  // device-link 归属解析成「已确认远程」后补剥 Host capability 芯片。草稿恢复
+  // 效果依赖 [editor, storageKey],归属从 undefined(未解析)→ 远程 string 时不会
+  // 重跑,而 normalizeRestoredComposerDraft 在未解析阶段保留了芯片(不能把已存本机
+  // 草稿的芯片当远程剥掉);这里监听归属转译,一旦确认远程就把当前编辑器内容里残留
+  // 的 Host 芯片剥掉,避免发送路径被 TARGET_UNAVAILABLE 拦截、逼用户手动删芯片。
+  const prevConfirmedRemoteRef = useRef<boolean>(false);
+  useEffect(() => {
+    const isConfirmedRemote = !!remoteHostId || typeof deviceLinkDeviceId === 'string';
+    const becameRemote = isConfirmedRemote && !prevConfirmedRemoteRef.current;
+    prevConfirmedRemoteRef.current = isConfirmedRemote;
+    if (!becameRemote || !editor) return;
+    const doc = editor.getJSON();
+    if (!composerDocumentContainsHostCapabilityChip(doc)) return;
+    isRestoringRef.current = true;
+    try {
+      editor.commands.setContent(stripHostCapabilityChips(doc));
+    } finally {
+      isRestoringRef.current = false;
+    }
+  }, [editor, remoteHostId, deviceLinkDeviceId]);
+
   // Plugin page routed entry: wait until the editor has hydrated its existing
-  // draft, then reuse the same placement path as the in-composer selectors.
-  // Command and Host-capability Plugins intentionally use separate handoff
-  // fields because only commands expand through `ghost_call`.
+  // draft, then reuse the exact same insertion/focus path as the in-composer
+  // `$` / `+` selectors. This preserves body text and replaces an existing
+  // Plugin command instead of treating the command as prefilled plain text.
   useEffect(() => {
     if (!editor || !storageKey || !hasHydratedRef.current) return;
     const draft = getComposerDraft(storageKey);
@@ -3309,6 +3839,23 @@ export function ChatInput({
       const ghost = ghostsForCommand.find(
         (candidate) => candidate.manifest.id === draft.pendingHostCapabilityGhostId,
       );
+      // 远程/未解析归属不恢复 Host capability 芯片(与 `+` 菜单和发送路径的
+      // fail-closed 同口径):SSH(remoteHostId)或 device-link(deviceLinkDeviceId
+      // !== null,含未解析)会话若恢复芯片,发送时会被 TARGET_UNAVAILABLE 拦截,
+      // 阻塞用户发送正文。仅已确认本机(deviceLinkDeviceId === null 且无
+      // remoteHostId)才恢复,否则静默丢弃芯片意图。
+      const dlDeviceId = deviceLinkDeviceIdRef.current;
+      const canPlaceHostCapability = !remoteHostIdRef.current && dlDeviceId === null;
+      // 归属未解析(deviceLinkDeviceId === undefined)且非 SSH 时延后决定:不清除
+      // pendingHostCapabilityGhostId,等归属解析后 effect 重跑。若此时清除,
+      // 后续解析成本机也无法恢复芯片,Host 插件(如 iOS Simulator)的"使用"
+      // handoff 会静默丢失。
+      // SSH(remoteHostId 已解析)时:即使 dlDeviceId === undefined,SSH 会话
+      // 永远无法放置 Host capability 芯片,直接清除 pendingHostCapabilityGhostId,
+      // 避免残留芯片在后续依赖变化时延迟插入已失效的能力。
+      if (dlDeviceId === undefined && !remoteHostIdRef.current) {
+        return;
+      }
       saveComposerDraft(
         storageKey,
         {
@@ -3318,7 +3865,9 @@ export function ChatInput({
         },
         { silent: true },
       );
-      if (ghost) placeHostCapabilityAtComposerStart(editor, ghost, installedGhosts);
+      if (ghost && canPlaceHostCapability) {
+        placeHostCapabilityAtComposerStart(editor, ghost, installedGhosts);
+      }
       return;
     }
 
@@ -3332,7 +3881,7 @@ export function ChatInput({
       { silent: true },
     );
     focusComposerEndNextFrame(editor);
-  }, [editor, ghostsForCommand, installedGhosts, storageKey]);
+  }, [editor, ghostsForCommand, installedGhosts, storageKey, deviceLinkDeviceId, remoteHostId]);
 
   // browser-comment-chip:挂载 / 会话切换时从草稿恢复评论胶囊。
   useEffect(() => {
@@ -3465,9 +4014,7 @@ export function ChatInput({
   );
 
   // ── Slash / At panel state ─────────────────────────────────────────
-  const trigger: TriggerState = editor
-    ? detectTrigger(editor)
-    : { kind: 'none' };
+  const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
@@ -3487,6 +4034,8 @@ export function ChatInput({
     status: 'loading',
     commands: EMPTY_SLASH_COMMANDS,
   });
+  const [piRuntimeCommandStatus, setPiRuntimeCommandStatus] =
+    useState<PiPackageCommandRuntimeStatus | null>(null);
   const slashCommandsReady = isSlashCommandRosterReady(
     slashCommandLoadState,
     slashCommandContextKey,
@@ -3523,8 +4072,16 @@ export function ChatInput({
       loadAllCommands(
         paletteAgentKind,
         workingDir,
-        { ...opts, skipAgentSkills: isRemoteSession, sessionId },
-        deviceLinkDeviceId,
+        {
+          ...opts,
+          skipAgentSkills: isRemoteSession,
+          sessionId,
+          allowManagedPiPackagePreview: !isRemoteSession,
+          onPiRuntimeStatus: (status) => {
+            if (slashCommandLoadSeqRef.current === seq) setPiRuntimeCommandStatus(status);
+          },
+        },
+        deviceLinkDeviceId ?? undefined,
       )
         .then((cmds) => {
           if (slashCommandLoadSeqRef.current === seq) {
@@ -3554,10 +4111,18 @@ export function ChatInput({
   );
   useEffect(() => {
     piRuntimeRetryRef.current = 0;
+    setPiRuntimeCommandStatus(null);
   }, [slashCommandContextKey]);
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
+  useEffect(
+    () =>
+      window.electronAPI.maker.onPiPackagesChanged(() => {
+        reloadSlashCommands({ forceReload: true });
+      }),
+    [reloadSlashCommands],
+  );
   // Slash 指令与 $意识一致:doc 保持可逐字编辑的普通文本,完整命中当前 roster
   // 时才由 decoration 显示确认胶囊。异步 roster 刷新不进入 keystroke 热路径。
   useEffect(() => {
@@ -3649,9 +4214,10 @@ export function ChatInput({
             if (atScanSeqRef.current !== seq || !partial.success) return;
             setAtState((prev) => ({
               kind: 'ready',
-              items: preservePreviousItems && prev.kind === 'ready'
-                ? mergeAtResourceItems(prev.items, partial.items)
-                : partial.items,
+              items:
+                preservePreviousItems && prev.kind === 'ready'
+                  ? mergeAtResourceItems(prev.items, partial.items)
+                  : partial.items,
               truncated: partial.truncated || (prev.kind === 'ready' && prev.truncated),
               searching: true,
             }));
@@ -3815,10 +4381,7 @@ export function ChatInput({
     workingDir,
   ]);
 
-  const atResources = useMemo(
-    () => (atState.kind === 'ready' ? atState.items : []),
-    [atState],
-  );
+  const atResources = useMemo(() => (atState.kind === 'ready' ? atState.items : []), [atState]);
 
   const filteredAt = useMemo(
     () =>
@@ -3846,12 +4409,12 @@ export function ChatInput({
 
   // Keep keyboard focus on an executable row when filtering or runtime status changes.
   useEffect(() => {
-    setSlashFocus((current) => (
-      current >= filteredCommands.length
-      || (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
+    setSlashFocus((current) =>
+      current >= filteredCommands.length ||
+      (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
         ? firstAvailableSlashCommandIndex(filteredCommands)
-        : current
-    ));
+        : current,
+    );
   }, [filteredCommands]);
   useEffect(() => {
     if (
@@ -3871,13 +4434,14 @@ export function ChatInput({
     if (normalizedQuery === atLastScanQueryRef.current) return;
     atLastScanQueryRef.current = normalizedQuery;
     const seq = ++atScanSeqRef.current;
-    setAtState((prev) => prev.kind === 'ready'
-      ? { ...prev, searching: true }
-      : prev);
-    atQueryScanTimerRef.current = window.setTimeout(() => {
-      atQueryScanTimerRef.current = null;
-      runAtScan(normalizedQuery, seq);
-    }, normalizedQuery ? 200 : 0);
+    setAtState((prev) => (prev.kind === 'ready' ? { ...prev, searching: true } : prev));
+    atQueryScanTimerRef.current = window.setTimeout(
+      () => {
+        atQueryScanTimerRef.current = null;
+        runAtScan(normalizedQuery, seq);
+      },
+      normalizedQuery ? 200 : 0,
+    );
     return () => {
       if (atQueryScanTimerRef.current !== null) {
         window.clearTimeout(atQueryScanTimerRef.current);
@@ -3911,9 +4475,7 @@ export function ChatInput({
 
   const slashOpen = trigger.kind === 'slash' && suppressedSlashAt !== trigger.from;
   const typedAtOpen =
-    effectiveAt?.activation === 'typed' &&
-    !isRemoteSession &&
-    suppressedAtAt !== effectiveAt.from;
+    effectiveAt?.activation === 'typed' && !isRemoteSession && suppressedAtAt !== effectiveAt.from;
   const syntheticAtOpen = effectiveAt?.activation === 'synthetic';
   const atOpen = typedAtOpen || syntheticAtOpen;
 
@@ -3935,7 +4497,9 @@ export function ChatInput({
       return;
     }
     if (paletteAgentKind !== 'pi' || !sessionId) return;
-    if (!hasUnavailableProjectSkillPreview(mergedCommands)) return;
+    const waitingForRuntimeCommands = piRuntimeCommandStatus === 'pending';
+    const waitingForProjectSkills = hasUnavailableProjectSkillPreview(mergedCommands);
+    if (!waitingForRuntimeCommands && !waitingForProjectSkills) return;
     const attempt = piRuntimeRetryRef.current;
     if (attempt >= PI_RUNTIME_SKILL_RETRY_DELAYS_MS.length) return;
     piRuntimeRetryRef.current = attempt + 1;
@@ -3943,7 +4507,14 @@ export function ChatInput({
       reloadSlashCommands({ forceReload: true });
     }, PI_RUNTIME_SKILL_RETRY_DELAYS_MS[attempt]);
     return () => window.clearTimeout(timer);
-  }, [mergedCommands, paletteAgentKind, reloadSlashCommands, sessionId, slashOpen]);
+  }, [
+    mergedCommands,
+    paletteAgentKind,
+    piRuntimeCommandStatus,
+    reloadSlashCommands,
+    sessionId,
+    slashOpen,
+  ]);
 
   // ── Panel → editor bridge for keyboard nav ─────────────────────────
   // The editor's `handleKeyDown` fires before React re-renders, so we need
@@ -4036,7 +4607,8 @@ export function ChatInput({
       if (
         !editor ||
         editor.isDestroyed ||
-        trigger.kind !== 'slash' || composerMutationLockedRef.current ||
+        trigger.kind !== 'slash' ||
+        composerMutationLockedRef.current ||
         editor.view.composing ||
         isSlashCommandUnavailable(cmd)
       ) {
@@ -4086,15 +4658,8 @@ export function ChatInput({
             // 识别并追加机器指令,序列化零特判。
             tr.replaceWith(from, runEnd, editor.schema.text(`$${cmd.name} `));
           } else {
-            // Slash 也保持纯文本;SlashCommandDecoration 只负责视觉确认,
-            // Backspace / 光标移动因此与普通文字完全一致。
-            replaceSlashCommandRunWithText(
-              tr,
-              editor.schema,
-              from,
-              runEnd,
-              slashCommandInvocationName(cmd),
-            );
+            // 展示层写入人类名(`/git`);Pi 线路名(`/skill:git`)只在发送期改写。
+            replaceSlashCommandRunWithText(tr, editor.schema, from, runEnd, cmd.name);
           }
           return true;
         })
@@ -4166,17 +4731,11 @@ export function ChatInput({
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
-        const ghost = filterGhostsForWorkdir(
-          installedGhostsRef.current,
-          workingDirRef.current,
-        ).find((candidate) => candidate.manifest.id === selectedItem.pluginId);
+        const ghost = installedGhostsRef.current.find(
+          (candidate) => candidate.manifest.id === selectedItem.pluginId,
+        );
         if (!ghost?.enabled) return;
-        const useHostCapability =
-          !ghost.manifest.command &&
-          !remoteHostId &&
-          !deviceLinkDeviceId &&
-          hostCapabilityForGhost(ghost) !== null;
-        if (!ghost.manifest.command && !useHostCapability) return;
+
         editor
           .chain()
           .focus()
@@ -4185,11 +4744,16 @@ export function ChatInput({
             return true;
           })
           .run();
+
         if (ghost.manifest.command) {
           placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
         } else {
-          placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);
+          const hostCap = hostCapabilityForGhost(ghost);
+          if (hostCap) {
+            placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);
+          }
         }
+
         closeAtPanel();
         return;
       }
@@ -4248,15 +4812,7 @@ export function ChatInput({
         .run();
       closeAtPanel();
     },
-    [
-      closeAtPanel,
-      deviceLinkDeviceId,
-      editor,
-      effectiveAt,
-      remoteHostId,
-      resolveEffectiveAtRange,
-      setSyntheticAtAnchor,
-    ],
+    [closeAtPanel, editor, effectiveAt, resolveEffectiveAtRange, setSyntheticAtAnchor],
   );
 
   const handleComposerSuggestionSelect = useCallback(
@@ -4283,33 +4839,28 @@ export function ChatInput({
     [closeAtPanel, editor, insertAtResource, resolveEffectiveAtRange],
   );
 
-  const handleComposerSuggestionOpenChange = useCallback((nextOpen: boolean) => {
-    if (!nextOpen) {
-      setSyntheticAtAnchor(null);
-      return;
-    }
-    if (!editor || editor.isDestroyed || composerMutationLocked) return;
-    if (trigger.kind === 'slash') {
-      setSuppressedSlashAt(trigger.from);
-    } else if (trigger.kind === 'at') {
-      setSuppressedAtAt(trigger.from);
-    }
-    setSyntheticAtAnchor(editor.state.selection.from);
-    setAtFocus(0);
-    editor.commands.focus();
-  }, [
-    composerMutationLocked,
-    editor,
-    setSyntheticAtAnchor,
-    trigger,
-  ]);
-  const composerSuggestionFocusTarget = useCallback(
-    () => editor?.view.dom ?? null,
-    [editor],
+  const handleComposerSuggestionOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        setSyntheticAtAnchor(null);
+        return;
+      }
+      if (!editor || editor.isDestroyed || composerMutationLocked) return;
+      if (trigger.kind === 'slash') {
+        setSuppressedSlashAt(trigger.from);
+      } else if (trigger.kind === 'at') {
+        setSuppressedAtAt(trigger.from);
+      }
+      setSyntheticAtAnchor(editor.state.selection.from);
+      setAtFocus(0);
+      editor.commands.focus();
+    },
+    [composerMutationLocked, editor, setSyntheticAtAnchor, trigger],
   );
+  const composerSuggestionFocusTarget = useCallback(() => editor?.view.dom ?? null, [editor]);
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
-  const dispatchSendInFlightRef = useRef(false);
+  const dispatchSendInFlightKeysRef = useRef(new Set<string>());
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
@@ -4320,9 +4871,10 @@ export function ChatInput({
       // React 的 disabled 状态可能尚未完成下一帧渲染；同步读协调器兜住点击、快捷键、
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
       if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
-      if (dispatchSendInFlightRef.current) return;
       const sourceSessionId = sessionId;
       const sourceStorageKey = storageKey;
+      const sendInFlightKey = sourceStorageKey ?? sourceSessionId ?? '__draft__';
+      if (dispatchSendInFlightKeysRef.current.has(sendInFlightKey)) return;
       const optimisticallyClearRemoteComposer = Boolean(deviceLinkDeviceId && sourceSessionId);
       // Device-link sends freeze the entire composer at click time. Any remote
       // reference hydration happens against this immutable payload after the
@@ -4348,116 +4900,143 @@ export function ChatInput({
         : () => {};
       if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
-      dispatchSendInFlightRef.current = true;
+      dispatchSendInFlightKeysRef.current.add(sendInFlightKey);
+      // 发送新消息时立即递增 turnGen，并在任何 await / clearContent 前消费来源 session
+      // 的推荐：旧 Promise 不能落地，正文程序化清空时也不会闪回上一轮推荐。
+      turnGenRef.current += 1;
+      showRecommendationRef.current = false;
+      if (sourceSessionId) dismissPromptRecommendation(sourceSessionId);
       // Local/SSH sends keep the live composer while references and runtime
       // settings settle; remote sends must stay editable after their
-      // click-time snapshot is cleared.
-      if (!optimisticallyClearRemoteComposer) {
+      // click-time snapshot is cleared. A background source send after a
+      // session switch must not lock the newly restored composer.
+      const lockCurrentComposer =
+        !optimisticallyClearRemoteComposer && storageKeyForDraftRef.current === sourceStorageKey;
+      if (lockCurrentComposer) {
         captureSendFocusForRestore();
         setSendDispatchInFlight(true);
       }
       try {
         let serializedContent = serializedAtClick;
+        let frozenVoiceSend = frozenVoiceSendRef.current;
         if (!serializedContent) {
-          await resolveSessionMessageReferencesForSend(editor);
-          // Local/SSH keeps the live editor until acceptance. A routed ChatInput
-          // may have switched sessions during hydration; never serialize or
-          // clear the newly hydrated composer with the old send continuation.
           if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;
-          if (
-            editor.isDestroyed ||
-            latestStorageKeyRef.current !== sourceStorageKey ||
-            storageKeyForDraftRef.current !== sourceStorageKey
-          ) {
-            return;
+          const editorOwnsSource = editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          });
+          if (editorOwnsSource) {
+            await resolveSessionMessageReferencesForSend(editor);
+            if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;
+            if (
+              editorOwnsSourceDraft({
+                editorDestroyed: editor.isDestroyed,
+                editorStorageKey: storageKeyForDraftRef.current,
+                sourceStorageKey,
+              })
+            ) {
+              serializedContent = serializeEditorContent(editor);
+              if (frozenVoiceSendRef.current?.sourceStorageKey === sourceStorageKey) {
+                frozenVoiceSendRef.current = null;
+              }
+            }
           }
-          serializedContent = serializeEditorContent(editor);
+          // Switch during hydration may have just frozen the source send.
+          frozenVoiceSend = frozenVoiceSendRef.current;
+          if (!serializedContent) {
+            if (
+              !frozenVoiceSend ||
+              frozenVoiceSend.kind !== 'send' ||
+              frozenVoiceSend.sourceStorageKey !== sourceStorageKey
+            ) {
+              return;
+            }
+            const submitted = voiceInput.getLastSubmittedText();
+            const refined = voiceInput.getLastRefinement()?.refinedText ?? '';
+            serializedContent = {
+              ...frozenVoiceSend.serialized,
+              text: applyVoiceResultToSerializedText(
+                frozenVoiceSend.serialized.text,
+                submitted,
+                refined,
+              ),
+            };
+            frozenVoiceSendRef.current = null;
+          }
         }
         const {
-          text: serializedEditorText,
+          text: editorText,
           mentions,
           hasQuotes,
           agentReferences: serializedAgentReferences,
           pastedTextRanges,
           slashCommandRanges,
-          hostCapability: serializedHostCapability,
+          hostCapability,
         } = serializedContent;
-        let editorText = serializedEditorText;
         let agentReferences = serializedAgentReferences;
+        const sourceDraftExtras =
+          sourceStorageKey !== undefined ? getComposerDraft(sourceStorageKey) : undefined;
+        const frozenExtras =
+          frozenVoiceSend?.sourceStorageKey === sourceStorageKey ? frozenVoiceSend : null;
+        const sourceOwnedExtras = resolveSourceOwnedComposerExtras({
+          editorOwnsSource: editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          }),
+          liveAttachments: latestAttachmentsRef.current,
+          liveComments: browserCommentsRef.current,
+          sourceAttachments: frozenExtras?.attachments ?? sourceDraftExtras?.attachments,
+          sourceComments: frozenExtras?.comments ?? sourceDraftExtras?.browserComments,
+        });
         const attachmentsForSend = optimisticallyClearRemoteComposer
           ? attachmentsBeforeOptimisticClear
-          : [...latestAttachmentsRef.current];
+          : sourceOwnedExtras.attachments;
         const commentsForSend = optimisticallyClearRemoteComposer
           ? commentsBeforeOptimisticClear
-          : [...browserCommentsRef.current];
-        // Resolve the structured capability atom against the current enabled,
-        // workdir-scoped Plugin roster. Draft data is presentation state only;
-        // it cannot grant a Host route after the Plugin is disabled/uninstalled.
-        const eligibleGhosts = filterGhostsForWorkdir(
-          installedGhostsRef.current,
-          workingDirRef.current,
-        );
-        const canUseLocalHostCapability = !remoteHostId && !deviceLinkDeviceId;
-        const hostCapabilityGhost =
-          serializedHostCapability && canUseLocalHostCapability
-            ? (eligibleGhosts.find(
-                (candidate) =>
-                  candidate.enabled &&
-                  candidate.manifest.id === serializedHostCapability.ghostId &&
-                  hostCapabilityForGhost(candidate) === serializedHostCapability.capability,
-              ) ?? null)
-            : null;
-        if (serializedHostCapability && !hostCapabilityGhost) {
-          toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));
-          return;
-        }
-        const hostCapability =
-          serializedHostCapability && hostCapabilityGhost
-            ? {
-                capability: serializedHostCapability.capability,
-                ghostId: hostCapabilityGhost.manifest.id,
-                name: hostCapabilityGhost.manifest.name,
-              }
-            : null;
-        // A capability chip is metadata, not an automatic visible prefix. Use
-        // the localized default only when the user sent the chip by itself;
-        // otherwise preserve their body byte-for-byte and avoid duplication.
-        if (hostCapability && !editorText.trim()) {
-          editorText =
-            hostCapability.capability === 'ios-simulator'
-              ? t('rightSidebar.iosSimulator.startPrompt')
-              : hostCapability.name;
-        }
+          : sourceOwnedExtras.comments;
         if (
-          !serializedHostCapability &&
+          !hostCapability &&
           isPlanModeComposerCommandText(
             editorText,
             planModeEntry !== undefined,
             slashCommandsReady ? mergedCommands : null,
           )
         ) {
-          planModeEntry?.onToggle(!planModeEntry.enabled);
-          isRestoringRef.current = true;
-          try {
-            editor.commands.clearContent(true);
-          } finally {
-            isRestoringRef.current = false;
+          const editorOwnsSource = editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          });
+          const existingDraft = sourceStorageKey ? getComposerDraft(sourceStorageKey) : undefined;
+          // Capture this before consuming `/plan`, which clears the live editor.
+          const draftText = planModeComposerDraftText(
+            editorOwnsSource,
+            editorOwnsSource ? editor.getJSON() : null,
+            existingDraft?.text,
+            true,
+          );
+          if (editorOwnsSource) {
+            planModeEntry?.onToggle(!planModeEntry.enabled);
+            isRestoringRef.current = true;
+            try {
+              editor.commands.clearContent(true);
+            } finally {
+              isRestoringRef.current = false;
+            }
+            historyIndexRef.current = -1;
+            hydratedHistoryDocumentRef.current = null;
+            draftRef.current = null;
           }
-          historyIndexRef.current = -1;
-          hydratedHistoryDocumentRef.current = null;
-          draftRef.current = null;
           if (sourceStorageKey) {
             if (
-              shouldPreservePlanModeComposerDraft(
-                attachmentsForSend.length,
-                commentsForSend.length,
-              )
+              shouldPreservePlanModeComposerDraft(attachmentsForSend.length, commentsForSend.length)
             ) {
-              const existingDraft = getComposerDraft(sourceStorageKey);
               saveComposerDraft(
                 sourceStorageKey,
                 {
-                  text: editor.getJSON(),
+                  text: draftText,
                   attachments: attachmentsForSend,
                   quotes: existingDraft?.quotes ?? [],
                   browserComments: commentsForSend,
@@ -4475,8 +5054,9 @@ export function ChatInput({
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
         // caption 对应)。
         const text = formatBrowserCommentsForSend(commentsForSend, editorText);
-        // Allow send if there is text OR attachments(纯引用 / 纯评论无输入也可发送)
-        if (!text && attachmentsForSend.length === 0) return;
+        // Allow send if there is text, attachments, or a host-capability chip
+        // (host-capability chips carry routing metadata but no visible text).
+        if (!text && attachmentsForSend.length === 0 && !hostCapability) return;
 
         // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
         // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
@@ -4558,19 +5138,45 @@ export function ChatInput({
         // 追加"必须走 cindy 总机"的机器指令;未命中原样发送。
         // 读取 useInstalledGhosts 的最新窗口级快照。ghosts:changed 会原子更新
         // 该快照;发送路径无需同步 IPC,仍按当前工作目录执行同一禁用判定。
+        const eligibleGhosts = filterGhostsForWorkdir(
+          installedGhostsRef.current,
+          workingDirRef.current,
+        );
         const ghostCommandWord = parseGhostCommandWord(text);
-        const usedGhost = hostCapabilityGhost
-          ? hostCapabilityGhost
-          : ghostCommandWord
-            ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
-            : null;
-        const textToSend = hostCapability
-          ? expandHostCapabilityInvocation(
-              text,
-              hostCapability,
-              t('rightSidebar.iosSimulator.startPrompt'),
-            )
-          : expandGhostCommand(text, eligibleGhosts);
+        // Host-capability 芯片同样计入最近插件使用(与 $command 路径对齐)：
+        // 从 eligibleGhosts 解析出仍有效(启用 + workdir + manifest 一致 + 非远程会话)
+        // 的 host 插件对象交给 usedGhost，使发送后 markUsed 能更新该插件的最近使用排序。
+        const hostCapabilityGhost =
+          hostCapability !== undefined && !remoteHostId && deviceLinkDeviceId === null
+            ? eligibleGhosts.find(
+                (g) =>
+                  g.manifest.id === hostCapability.ghostId &&
+                  g.enabled &&
+                  hostCapabilityForGhost(g) === hostCapability.capability,
+              )
+            : undefined;
+        const usedGhost = ghostCommandWord
+          ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
+          : (hostCapabilityGhost ?? null);
+        const textToSend = expandGhostCommand(text, eligibleGhosts);
+        // 发送前校验 host-capability 插件仍处于启用且 workdir 可用的状态。
+        // 若用户在插入芯片后停用/卸载了该插件，芯片内序列化的 ghostId/capability
+        // 已失时效，不应再展开 Host 路由指令（fail-closed）。
+        // 额外收口(remote session + manifest 一致性)：
+        //   - SSH(remoteHostId)/device-link(deviceLinkDeviceId) 远程会话不展开控制端 Host 路由；
+        //     deviceLinkDeviceId 仅 null（已确认本机）放行，undefined（所有权未解析）fail-closed；
+        //   - 插件更新后芯片保留旧 capability 时，manifest 当前声明必须仍匹配才放行。
+        const isHostCapabilityValid = hostCapabilityGhost !== undefined;
+        // 校验失败(插件停用/卸载/超 workdir/远程会话)时不静默退化为普通文本发送:
+        // 芯片承载的是用户选择的能力路由意图,退化发送会丢失 Host 路由,仅芯片消息还会
+        // 以空文本派发,静默丢弃用户意图。直接提示并拦截,让用户修复插件状态后重发。
+        if (hostCapability && !isHostCapabilityValid) {
+          toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));
+          return;
+        }
+        const routedText = hostCapability
+          ? expandHostCapabilityInvocation(textToSend, hostCapability, hostCapability.name)
+          : textToSend;
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
           latestAttachmentsRef.current,
@@ -4588,27 +5194,46 @@ export function ChatInput({
           });
         };
         const clearSentComposer = (options?: { preserveNewerContent?: boolean }) => {
+          const editorOwnsSource = editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          });
           const isCurrentComposer =
-            latestStorageKeyRef.current === sourceStorageKey &&
-            storageKeyForDraftRef.current === sourceStorageKey &&
-            !editor.isDestroyed;
+            latestStorageKeyRef.current === sourceStorageKey && editorOwnsSource;
           // Local/SSH sends keep the live composer until onSend is accepted.
-          // If the async send crossed a session/editor switch or the user
-          // changed the snapshot while it was in flight, leave the current
-          // draft untouched rather than clearing newer input.
+          // If the user kept typing on the same session, leave that newer
+          // draft untouched. A route switch is not "newer input": the reused
+          // editor may still hold the source document because restoreNextDraft
+          // was deferred for voice stop/refine/send.
           if (
             !optimisticallyClearRemoteComposer &&
-            (!isCurrentComposer ||
-              !isComposerSendSnapshotCurrent(
-                sendSnapshot,
-                editor.getJSON(),
-                latestAttachmentsRef.current,
-                browserCommentsRef.current,
-              ))
+            isCurrentComposer &&
+            !isComposerSendSnapshotCurrent(
+              sendSnapshot,
+              editor.getJSON(),
+              latestAttachmentsRef.current,
+              browserCommentsRef.current,
+            )
           ) {
             return;
           }
           if (!isCurrentComposer) {
+            if (!optimisticallyClearRemoteComposer) {
+              if (editorOwnsSource) {
+                isRestoringRef.current = true;
+                try {
+                  editor.commands.clearContent(true);
+                } finally {
+                  isRestoringRef.current = false;
+                }
+                historyIndexRef.current = -1;
+                hydratedHistoryDocumentRef.current = null;
+                draftRef.current = null;
+              }
+              if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
+              return;
+            }
             if (!options?.preserveNewerContent || !sourceStorageKey) {
               if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
               return;
@@ -4702,11 +5327,6 @@ export function ChatInput({
                   attachments: [...next.attachments],
                   quotes: existing?.quotes ?? [],
                   browserComments: [...next.browserComments],
-                  ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-                  ...(existing?.pendingHostCapabilityGhostId
-                    ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-                    : {}),
-                  ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
                 },
                 { silent: true, preserveRemoteOptimisticRecovery: true },
               );
@@ -4881,7 +5501,10 @@ export function ChatInput({
             const coordinator = effortChangeCoordinatorRef.current;
             let runtimeSettled = false;
             let timeoutId: ReturnType<typeof setTimeout> | undefined;
-            setSendDispatchInFlight(true);
+            const lockComposerForEffort =
+              !optimisticallyClearRemoteComposer &&
+              storageKeyForDraftRef.current === sourceStorageKey;
+            if (lockComposerForEffort) setSendDispatchInFlight(true);
             try {
               await Promise.race([
                 coordinator.awaitRuntimeSettled(sessionId).then(() => {
@@ -4893,7 +5516,9 @@ export function ChatInput({
               ]);
             } finally {
               if (timeoutId !== undefined) clearTimeout(timeoutId);
-              setSendDispatchInFlight(false);
+              if (lockComposerForEffort && storageKeyForDraftRef.current === sourceStorageKey) {
+                setSendDispatchInFlight(false);
+              }
             }
 
             // 不把 timeout 写成全局 dirty：若迟到的是「持久化失败、runtime 尚未触碰」，旧实现
@@ -4903,11 +5528,11 @@ export function ChatInput({
               if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
               return;
             }
-            // 路由切换后复用的编辑器不能把 A 会话的内容送进 B，也不能清掉 B 的草稿。
-            if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) {
-              if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
-              return;
-            }
+            // onSend is the click-time closure and still targets the source
+            // session. A route change while effort settles (or while voice
+            // refine was deferred) must not cancel that pinned send; clearing
+            // the live composer is gated separately so session B's draft is
+            // never wiped.
             if (coordinator.isRuntimeDirty(sessionId)) {
               toast.error(t('newChat.chatInput.effortRuntimeDirty'));
               if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
@@ -4918,7 +5543,7 @@ export function ChatInput({
             effortForSend = coordinator.getCommittedEffort(sessionId) ?? activeEffort;
           }
           result = await onSend(
-            textToSend,
+            routedText,
             activeModel,
             effortForSend,
             activePermissionMode,
@@ -4949,8 +5574,10 @@ export function ChatInput({
         markRecentPluginUsage();
         if (!optimisticallyClearRemoteComposer) clearSentComposer();
       } finally {
-        dispatchSendInFlightRef.current = false;
-        setSendDispatchInFlight(false);
+        dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);
+        if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
+          setSendDispatchInFlight(false);
+        }
         finishAgentSendDispatch();
       }
     },
@@ -4980,10 +5607,10 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
-      slashCommandsReady,
-      mergedCommands,
       planModeEntry,
       captureSendFocusForRestore,
+      slashCommandsReady,
+      mergedCommands,
     ],
   );
   useEffect(() => {
@@ -5000,7 +5627,7 @@ export function ChatInput({
 
   const handleClickSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
-      if (voiceInput.isBusy) {
+      if (voiceBusyOnCurrentComposer) {
         const currentCanSend = !isEditorEmpty(editor) || hasAttachments;
         if (!voiceInput.isListening && !currentCanSend && voiceInput.draftText.trim().length === 0)
           return;
@@ -5034,6 +5661,7 @@ export function ChatInput({
       editor,
       handleVoiceInputStop,
       hasAttachments,
+      voiceBusyOnCurrentComposer,
       voiceInput.draftText,
       voiceInput.isBusy,
       voiceInput.isListening,
@@ -5138,7 +5766,7 @@ export function ChatInput({
   const modelFastSupported = useCallback(
     (targetModelId: string, providerId: string | null): boolean =>
       resolveFastSupported({
-        deviceId: deviceLinkDeviceId,
+        deviceId: deviceLinkDeviceId ?? undefined,
         deviceProviders: remoteProviders.providers,
         localProviders: localProviders.providers,
         capabilities:
@@ -5181,33 +5809,36 @@ export function ChatInput({
         activeProviderId?: string | null;
         memoryProviderId?: string | null;
         remoteDeviceId?: string;
+        /** 跨引擎换模时写目标 Agent 的草稿槽,缺省用当前任务引擎。 */
+        agentKind?: AgentKind;
+        /** 已有任务里换模 / 换来源时为 true,下次新建跟随这次选择。只改思考档 / Fast 保持 false。 */
+        markModelChoice?: boolean;
       } = {},
     ) => {
-      if (!sessionId || !currentModelAgentKind || !modelId) return;
+      const agentKind = opts.agentKind ?? currentModelAgentKind;
+      if (!sessionId || !agentKind || !modelId) return;
       const activeProviderId =
         opts.activeProviderId !== undefined ? opts.activeProviderId : selectedProviderId;
       const memoryProviderId =
         opts.memoryProviderId !== undefined ? opts.memoryProviderId : effectiveSourceId;
       const remoteDeviceId =
         opts.remoteDeviceId ?? getSessionDeviceId(sessionId) ?? deviceLinkDeviceId;
+      const markModelChoice = opts.markModelChoice === true;
       if (!remoteDeviceId) {
-        const vendor =
-          currentModelAgentKind === 'codex'
-            ? 'codex'
-            : currentModelAgentKind === 'pi'
-              ? 'pi'
-              : 'cc';
-        patchVendorPrefsPreservingModelChoice(vendor, {
-          model: modelId,
-          providerId: activeProviderId ?? null,
+        const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
+        const persistPrefs = markModelChoice ? patchVendorPrefs : patchVendorPrefsPreservingModelChoice;
+        persistPrefs(vendor, {
+          // 换模才带配对并打标记。本机只改思考档 / Fast 不写回活动模型,
+          // 避免未打标用户把区域默认改成当前任务模型。
+          ...(markModelChoice ? { model: modelId, providerId: activeProviderId ?? null } : {}),
           ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
         });
         if (memoryProviderId) {
           if (patch.effort !== undefined) {
-            setProviderModelChoice(currentModelAgentKind, memoryProviderId, modelId, patch.effort);
+            setProviderModelChoice(agentKind, memoryProviderId, modelId, patch.effort);
           }
           if (patch.fast !== undefined) {
-            setProviderModelFast(currentModelAgentKind, memoryProviderId, modelId, patch.fast);
+            setProviderModelFast(agentKind, memoryProviderId, modelId, patch.fast);
           }
         }
         if (patch.effort !== undefined) setEffortForModel(modelId, patch.effort);
@@ -5217,11 +5848,11 @@ export function ChatInput({
       window.electronAPI.deviceLink
         .invoke(remoteDeviceId, 'maker:apply-new-maker-draft-pref', [
           {
-            agent: currentModelAgentKind,
+            agent: agentKind,
             providerId: activeProviderId ?? '',
             modelId,
             active: true,
-            markModelChoice: false,
+            markModelChoice,
             ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
             ...(patch.fast !== undefined ? { fast: patch.fast } : {}),
           },
@@ -5254,6 +5885,11 @@ export function ChatInput({
     [onFastModeChange, t],
   );
 
+  /**
+   * 返回值 = **这次 Fast 写入真的落下去了没有**(2026-08-17 review 第三轮 G2)。统一面板的
+   * 三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 / 编辑选中收藏)按它决定要不要收尾:
+   * 报假成功会让 override / 记忆 / 收藏被清掉,而任务还在旧配置上跑。其余调用方无视返回值。
+   */
   const handleFastModeChange = useCallback(
     async (
       enabled: boolean,
@@ -5261,26 +5897,28 @@ export function ChatInput({
       effort = activeEffort,
       syncDraft = true,
       memoryProviderId = effectiveSourceId,
-    ) => {
-      if (settingsLocked) return;
+    ): Promise<boolean> => {
+      if (settingsLocked) return false;
       // 切换意图期:Fast 改动是"更新意图"而不是改当前会话实时状态(否则普通
       // SET_FAST 链路会让 main 清意图、renderer 乐观态失配)。经 ref 调用——
       // performAgentSwitch 声明在本回调之后(TDZ)。
       if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitchRef.current(intent.target, intent.model, intent.providerId, {
-          fastMode: enabled,
-          effort: intent.effort as Effort | undefined,
-        });
-        return;
+        // await 而非 fire-and-forget:意图重登记是不是真的成功,是这次 Fast 写入的唯一结果。
+        return (
+          (await performAgentSwitchRef.current(intent.target, intent.model, intent.providerId, {
+            fastMode: enabled,
+            effort: intent.effort as Effort | undefined,
+          })) !== false
+        );
       }
-      const sourceRemoteDeviceId = sessionId
-        ? (deviceLinkDeviceId ?? getSessionDeviceId(sessionId))
-        : deviceLinkDeviceId;
+      const sourceRemoteDeviceId =
+        (sessionId ? (deviceLinkDeviceId ?? getSessionDeviceId(sessionId)) : deviceLinkDeviceId) ??
+        undefined;
       const persisted = await persistFastModeChange(enabled, {
         remoteDeviceId: sourceRemoteDeviceId,
       });
-      if (!persisted) return;
+      if (!persisted) return false;
       if (modelId && currentModelAgentKind && memoryProviderId) {
         modelMemory?.setFast(currentModelAgentKind, memoryProviderId, modelId, enabled);
       }
@@ -5291,6 +5929,7 @@ export function ChatInput({
           { remoteDeviceId: sourceRemoteDeviceId },
         );
       }
+      return true;
     },
     [
       sessionId,
@@ -5308,9 +5947,8 @@ export function ChatInput({
 
   /**
    * 切模型前的上下文容量护栏(大窗口 → 小窗口场景)。
-   * 为什么必须在**切换前**拦: `/compact` 自救本身是一次 LLM 调用, 要把全量历史喂给
-   * "当前模型" —— 切到小窗口模型之后连压缩请求都可能超限, 只有还没切走的大窗口模型
-   * 能读完整历史。分级语义见 shared/modelSwitchAssessment.ts。
+   * 分级语义见 shared/modelSwitchAssessment.ts。overflow 确认后由 host 交接换窗,
+   * 不要再建议用户先 /compact —— 小窗口模型压整段历史同样会失败。
    * 返回 false = 用户取消, 调用方直接放弃本次切换(无任何副作用)。
    * fail-open: 占用未知(0)/ 目标窗口未知 / 阈值读取失败都不拦。
    */
@@ -5354,12 +5992,17 @@ export function ChatInput({
       // 期望用户先取消回去压缩(点上下文圆环)或新开会话, "仍然切换"是次选。
       return confirmDialog({
         title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-        description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', vars),
+        description: t(
+          remoteHostId
+            ? 'newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote'
+            : 'newChat.chatInput.modelSwitchContextGuard.overflowDescription',
+          vars,
+        ),
         confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
         cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
       });
     },
-    [sessionId, confirmDialog, t],
+    [sessionId, remoteHostId, confirmDialog, t],
   );
 
   // session-agent-switch 意图制:选中「只属于另一家引擎」的模型 → 只向 main 登记
@@ -5382,10 +6025,17 @@ export function ChatInput({
     ) => void | boolean | Promise<void | boolean>;
   }>({ byProvider: () => {}, byModel: () => {} });
   const confirmAgentBrowseSwitch = useCallback(
-    () =>
+    (targetAgent: 'claude-code' | 'codex' | 'pi' | null) =>
       confirmAgentSwitchRisk({
-        // 意图存在 = 用户进入目标浏览态时已经确认过；改选与撤销均不重复弹。
-        hasSwitchIntent: !!sessionId && !!makerChatStore.getAgentSwitchIntent(sessionId),
+        // 只有「目标就是会话正在跑的真实引擎」才不必再问(回原引擎 = same-engine no-op,
+        // 不重建上下文)。挂着的切换意图不算已经确认过(Chris 2026-08-20):Claude 任务里
+        // 点了 Pi 收藏、意图挂上但还没发消息,再点另一条非当前引擎的模型/收藏,仍然要问。
+        // 真源必须用 `runtimeAgentKind`,绝不能用 vendorKey / 意图目标 —— 那两个在意图期
+        // 会翻到目标引擎,把「继续切到意图目标」错判成同引擎、把确认框跳过。
+        hasSwitchIntent:
+          !!sessionId &&
+          !!targetAgent &&
+          runtimeAgentKind != null && runtimeAgentKind === targetAgent,
         confirm: confirmDialog,
         copy: {
           title: t('newChat.chatInput.agentSwitch.confirmation.title'),
@@ -5395,7 +6045,7 @@ export function ChatInput({
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
       }),
-    [sessionId, confirmDialog, t],
+    [sessionId, runtimeAgentKind, confirmDialog, t],
   );
   const performAgentSwitch = useCallback(
     async (
@@ -5407,11 +6057,20 @@ export function ChatInput({
         effort?: Effort;
         fastMode?: boolean;
       },
-    ) => {
-      if (!sessionId) return;
+    ): Promise<boolean> => {
+      // ★ 返回值 = **本端请求的完整配置真的落到会话上了没有**(2026-08-17 review 确立
+      // 「登记成功才 true」;2026-08-19 review P2 再收紧一档)。此前本函数只返回 void,
+      // 调用方(统一面板的跨引擎链路)拿不到结果,只能在「确认框过了」这一刻就返回
+      // true —— 面板据此做的清理动作(恢复推荐清 override / 删收藏)会在事务其实失败或
+      // 被拒时照样执行,把用户原来的配置抹掉。凡是「没把这次选择落到会话上」的出口一律
+      // 返 false;登记成功但**权威回声显示 effort / Fast 已被别处改动**(见 apply-intent
+      // 分支末尾的 isAgentSwitchEchoConfigConsistent)同样返 false —— 三元组落了不等于
+      // 这份完整配置落了,调用方挂在 true 上的持久化收尾(清 override / 提交・删除收藏
+      // 编辑 / 写收藏锚点)一律不做。只有完整配置原样成为权威意图 / 已应用才返 true。
+      if (!sessionId) return false;
       // 发送的引用水合 / 预检也可能 await。以同步登记的 session 级发送 token 为准，
       // 防止「先点发送、后选引擎」被异步准备反转成先登记切换再 maker:send。
-      if (hasPendingAgentSendDispatch(sessionId)) return;
+      if (hasPendingAgentSendDispatch(sessionId)) return false;
       // 本次点选无论落到哪个分支(登记意图 / 撤销意图 / 立即切换),都算一次本端写入:
       // 在途的远程意图读回据此作废,不会用旧快照盖掉用户刚做的选择。
       const sourceSessionId = sessionId;
@@ -5450,7 +6109,7 @@ export function ChatInput({
             : !!providerId &&
               !!modelMemory &&
               resolveFastSupported({
-                deviceId: deviceLinkDeviceId,
+                deviceId: deviceLinkDeviceId ?? undefined,
                 deviceProviders: remoteProviders.providers,
                 localProviders: localProviders.providers,
                 capabilities:
@@ -5485,18 +6144,40 @@ export function ChatInput({
         // device-link 往返期间可以切到另一个任务:同一路由下 ChatInput 会带着新
         // sessionId 继续渲染,sameEngineReselectRef 等闭包也已指向新会话。旧会话的
         // 响应绝不能借最新的 ref 把模型/来源写进当前会话。
-        if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;
+        if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return false;
         // 远程往返期间状态可能已被更新的选择超车:用户又点了一次(写序号变),或另一个
         // 控制端 / 被控端的权威 sessions:patched 先到(修订号变)。此时这次 ack 携带的是
         // **旧**选择,落下去会让选择器显示过期引擎,而被控端按新意图执行下一条消息。
         // 丢弃即可——被控端每次意图变更都会广播,权威值随 push 收敛。
         // 注意两类守卫作用域不同(见 resolveAgentSwitchAckAction):同引擎 no-op 的清除
         // 回流本就由本次调用引起,不能拿修订号变化把自己判成 stale。
+        //
+        // deferred 分支同理:main **先广播 sessions:patched(带 agentSwitchIntent)、后返回
+        // invoke reply**,push 处理必然先于 ack 到达并把修订号推走 —— 单看修订号,每一次正常
+        // 登记都会被自己的回声判成 stale(Chris 2026-08-19 实测「会话内换引擎整条链都不生效,
+        // 但下一条消息还是切了」的主根因)。所以额外交出「此刻的权威值是不是逐字就是本次登记
+        // 的那一份」:相等 = 变化来自本次登记的回声,应用它不会覆盖任何更新的外部选择。
+        // 只比 target / model / providerId —— effort / fastMode 可能被 main 按目标引擎归一化后
+        // 才投影(见 projectPendingAgentSwitchIntent),比它们会把合法回声误判成不匹配。
+        //
+        // providerId 还要再让一步:本端传 `null` 的语义是**「我没指定来源,跟随默认路由」**
+        // (flat 退化行 / 意图期改选模型的分支),而 main 完全可以在登记时把它解析成一个
+        // 具体来源再投影回来。此时严格相等会把每一次 null 调用都判成「被外部超车」,等于
+        // 在那条路径上原样退回本次要修的 bug。所以:传了具体来源就必须逐字相等;传 null 时
+        // 只认 target + model —— main 解析出什么来源,都是我这一份意图。
+        // 「用户又点了一次」仍由写序号守卫独立覆盖,不靠这一维。
+        const registeredIntent = makerChatStore.getAgentSwitchIntent(sourceSessionId);
+        const registeredIntentMatchesCurrent =
+          registeredIntent !== null &&
+          registeredIntent.target === targetAgentKind &&
+          registeredIntent.model === newModelId &&
+          (providerId === null || registeredIntent.providerId === providerId);
         const ackAction = resolveAgentSwitchAckAction({
           deferred: result.deferred === true,
           switched: result.switched,
           sameEngineRevision: result.sameEngineRevision,
           sameEngineSuperseded: result.sameEngineSuperseded,
+          registeredIntentMatchesCurrent,
           freshness: {
             cancelled: false,
             writeSeqAtStart: writeSeq,
@@ -5505,17 +6186,60 @@ export function ChatInput({
             intentRevNow: makerChatStore.getAgentSwitchIntentRev(sourceSessionId),
           },
         });
-        if (ackAction === 'discard') return;
+        // 被更新的选择超车 → 这次点选没有落地(权威值属于后来那次),按「没切」上报:
+        // 调用方的清理若按成功走,清掉的是**用户最新那次选择**对应的配置。
+        if (ackAction === 'discard') return false;
         if (ackAction === 'apply-intent') {
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
-          makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
-            model: newModelId,
-            providerId,
-            effort: newEffort,
-            fastMode: targetFast,
-          });
+          //
+          // ★ 回声已匹配时**一个字段都不重写**(2026-08-19 review 两轮 P1 的合并收口):
+          // 走到值匹配出口 = `sessions:patched` 权威回声已先于 ack 落进 store,此刻 store 里
+          // 就是 main 的 pending intent 快照 —— 再用本端的旧值 note 一遍只可能把它改坏:
+          //   · providerId:本端传 null(跟随默认路由)而 main 解析成了具体来源 → null 盖掉
+          //     权威来源,意图期改选按错误路由走;
+          //   · effort / fastMode:另一控制端在本次往返期间只改了同一 intent 的档位 / Fast
+          //     (target/model/provider 不变,匹配判定刻意不比这两维)→ 本端旧
+          //     newEffort/targetFast 盖掉外部权威值,选择器与下一条消息实际采用的配置分叉;
+          //     本端自己的登记同理 —— main 可能按目标引擎归一化 effort 后才投影。
+          // 且回声已经到过,不会再有第二次权威回流来纠正。回声未到(修订号未变的常规路径)
+          // 才写本端解析值,稍后到达的权威回声会自然覆盖收敛。
+          if (!registeredIntentMatchesCurrent) {
+            makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
+              model: newModelId,
+              providerId,
+              effort: newEffort,
+              fastMode: targetFast,
+            });
+          }
+          // 跨引擎点选也是用户显式选模:记到目标 vendor,下次用该引擎新建跟随这次选择。
+          // 真切换可能推迟到下一条消息,但选择已经做出。
+          //
+          // ★ 偏好同步与上面的 note-skip 同族(2026-08-19 review P2):回声已匹配时,写进
+          // newMakerDraft / providerModelMemory / 远端 apply-new-maker-draft-pref 的也必须是
+          // **权威快照里的值** —— 拿本端旧 newEffort / targetFast / providerId 去同步,另一
+          // 控制端只改 effort / Fast(或 main 归一化 / 解析来源)的场景里,下一次新建任务会
+          // 采用过期偏好,还会把权威值从偏好面盖掉。权威快照缺某字段(如不可调模型没有
+          // effort)时该维**不写**,而不是回落本端旧值 —— 写一个 main 都没有的档同样是分叉。
+          const authoritative = registeredIntentMatchesCurrent ? registeredIntent : null;
+          const syncedEffort = authoritative ? authoritative.effort : newEffort;
+          const syncedFast = authoritative ? authoritative.fastMode : targetFast;
+          const syncedProviderId = authoritative ? authoritative.providerId : providerId;
+          syncSessionDraftModelPrefs(
+            newModelId,
+            {
+              ...(syncedEffort ? { effort: syncedEffort } : {}),
+              ...(syncedFast !== undefined ? { fast: syncedFast } : {}),
+            },
+            {
+              activeProviderId: syncedProviderId,
+              memoryProviderId: syncedProviderId,
+              remoteDeviceId: deviceLinkDeviceId ?? undefined,
+              agentKind: targetAgentKind,
+              markModelChoice: true,
+            },
+          );
           if (makerChatStore.getSnapshot(sourceSessionId).agentStatus.isRunning) {
             toast.success(
               t('newChat.chatInput.agentSwitch.deferred', {
@@ -5530,7 +6254,20 @@ export function ChatInput({
               { duration: 4000 },
             );
           }
-          return;
+          // ★ 完整配置权威性(2026-08-19 review P2 的最后一环):三元组回声匹配放行的是
+          // 「这份变化来自本次登记」,但 effort / Fast 刻意不进匹配判据 —— 于是另一控制端
+          // 在往返期间只改同一意图的档位 / Fast 时,走到这里的仍是「登记成功」。上面的
+          // note-skip 与权威快照同步已保证**展示与偏好**不被本端旧值污染;这里再保证
+          // **返回值**不撒谎:权威 effort / Fast 与本端这次请求不一致 = 本端的完整配置
+          // 并没有成为会话将要采用的配置,按「未完整应用」返 false,调用方挂在成功上的
+          // 持久化收尾(统一面板 onApplied 的清 override / 提交・删除收藏编辑,以及
+          // onCrossEngineSelect 的收藏锚点写入)一律不做 —— 旧锚点由派生校验自然失效,
+          // 不会出现「面板勾着一条配置早已不同的收藏」。
+          return isAgentSwitchEchoConfigConsistent({
+            authoritative,
+            requestedEffort: newEffort,
+            requestedFastMode: targetFast,
+          });
         }
         if (ackAction === 'same-engine-reselect') {
           // 同引擎 no-op = 用户选回当前引擎:撤销展示意图(幂等,被控端可能已清并回流),
@@ -5548,19 +6285,36 @@ export function ChatInput({
                 result.sameEngineRevision,
               )
             : await sameEngineReselectRef.current.byModel(newModelId, result.sameEngineRevision);
-          if (applied === false) return;
+          // 被更新的选择超车(byProvider / byModel 自带修订号守卫)→ 同样按「没切」上报。
+          if (applied === false) return false;
           makerChatStore.clearAgentSwitchIntent(sourceSessionId);
-          return;
+          return true;
         }
         // 立即切换路径(harness / registry 缺省兜底,生产不走):维持旧收敛语义。
         makerChatStore.noteAgentSwitched(sourceSessionId, targetAgentKind);
+        syncSessionDraftModelPrefs(
+          newModelId,
+          { effort: newEffort, fast: targetFast },
+          {
+            activeProviderId: providerId,
+            memoryProviderId: providerId,
+            remoteDeviceId: deviceLinkDeviceId ?? undefined,
+            agentKind: targetAgentKind,
+            markModelChoice: true,
+          },
+        );
         if (!result.engineReady) {
           toast.error(t('newChat.chatInput.agentSwitch.engineNotReady'), { duration: 4000 });
         }
+        // 立即切换已经落库(noteAgentSwitched + 草稿同步):engineReady 只影响提示,
+        // 不改变「这次选择已应用」这一事实。
+        return true;
       } catch (err) {
         toast.error(
           t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.agentSwitch.failed' })),
         );
+        // 切换事务抛错 = 没切成:调用方不得在此之上做「成功才做」的清理。
+        return false;
       } finally {
         exclusiveTurn.release();
         finishAgentSwitchOperation();
@@ -5579,12 +6333,240 @@ export function ChatInput({
       localProviders.providers,
       ccCaps.capabilities,
       codexCaps.capabilities,
+      piCaps.capabilities,
+      syncSessionDraftModelPrefs,
     ],
   );
   // 声明顺序在 performAgentSwitch 之前的 handler(handleFastModeChange)经此 ref
   // 调用,避免 TDZ;每次渲染刷新指向最新闭包。
   const performAgentSwitchRef = useRef(performAgentSwitch);
   performAgentSwitchRef.current = performAgentSwitch;
+
+  // ── 统一模型选择器 · 会话内形态(model-selector-unified M6)────────────────────
+  // 旧的两步分段(先切引擎 tab、再选模型)在统一面板下不渲染,取而代之的是
+  // 「同引擎视图默认 + 显式跨引擎入口 + 行浮层引擎胶囊」。**执行链路一个字没变**:
+  // 跨引擎选中仍然是 confirmAgentBrowseSwitch(同一份确认与「不再提示」偏好)
+  // → performAgentSwitch(意图登记与上下文容量护栏全在那边)。
+  //
+  // Fast 与 effort 同规则:面板交出来的 `fast` 是按**目标引擎**解析并过完能力门控的值
+  // (行记忆 / 收藏副本 / 恢复推荐的显式关),那是用户看着点下去的配置,显式传进
+  // overrides.fastMode(2026-08-17 review:留给事务按目标记忆重解析,收藏 Fast 与记忆值
+  // 不同、或恢复推荐要明确关 Fast 时,界面配置与运行态分离)。**旧引擎的实时 fastMode
+  // 仍然绝不进这条链路**——缺省(面板拿不到目标配置的入口)时由 performAgentSwitch 按
+  // 目标重解析,两条路都不读旧引擎的值。
+  // effort 同样显式传:面板行(以及收藏副本)已经按目标引擎解析好档位。
+  //
+  // `modelId` 在契约上**已经是目标引擎的 wire model id**(面板按
+  // `capabilities[targetAgent].wireModelId` 交出来)。这里对它零加工直接进切换事务 ——
+  // 任何"顺手归一化 / 加前缀"都会让 SET_MODEL 落一个目标引擎目录里不存在的 id。
+  //
+  // `currentAgent` = **待切换意图目标优先**(2026-08-17 review):跨引擎意图登记后、真切换
+  // 落地前,activeModel / activeEffort / fastMode / activeProviderId 展示的全是意图目标值,
+  // 面板的 live / keep / pinned 引擎必须用同一口径 —— 仍取旧 vendorKey 会把意图中的目标
+  // 模型画成旧引擎:浮层摆出旧引擎的档位集合,而意图期的深度 / Fast 回调
+  // (performAgentSwitch(intent.target, …))按**目标**能力校验,用户选的旧引擎档位被静默
+  // 回落。写侧本就全部落在意图目标上(performModelChange / performProviderChange /
+  // handleEffortChange / handleFastModeChange 的意图分支),这里只是让显示端对齐;
+  // composerEngineMarkVendor / 锚点派生校验早已同口径。意图清除(发送后 patched 回流)时
+  // vendorKey 收敛成同一个值,口径无缝交回。
+  const intentTargetAgent = agentSwitchIntent?.target ?? null;
+  const sessionEngineFilter = useMemo(() => {
+    if (!unifiedModelPanelEnabled) return undefined;
+    if (!sessionId || !vendorKey || remoteHostId || !sessionAgentSwitchSupported) return undefined;
+    const currentAgent = intentTargetAgent ?? vendorKeyToAgentKind(vendorKey);
+    if (!currentAgent) return undefined;
+    return {
+      currentAgent,
+      // 跨引擎确认 / 切换路由只认任务**正在跑**的引擎,不认挂着的意图目标。
+      // 意图期 currentAgent 会翻到 Pi,若用它判断,点 Pi 收藏会被当成同引擎、不弹确认、
+      // 还不带收藏里的思维(Chris 2026-08-20)。
+      runtimeAgent: runtimeAgentKind ?? undefined,
+      onCrossEngineSelect: async ({
+        providerId,
+        modelId,
+        targetAgent,
+        effort,
+        fast,
+        favoriteUid = null,
+      }: {
+        providerId: string;
+        modelId: string;
+        targetAgent: AgentKind;
+        effort: Effort | '';
+        fast?: boolean;
+        favoriteUid?: string | null;
+      }): Promise<boolean> => {
+        // 取消 = 什么都不改;返回 false 让选择器留在原地(用户还能挑别的行)。
+        // 目标显式传给确认门:同一目标不重复弹,换目标要重新确认(见 confirmAgentBrowseSwitch)。
+        if (!(await confirmAgentBrowseSwitch(targetAgent))) return false;
+        // ★ 必须 await 并**透传事务的真实结果**(2026-08-17 review)。此前这里 fire-and-forget
+        // 之后立即 return true —— 那个 true 只表示「确认框过了」,不表示切换登记成功。
+        // 面板侧把「成功才做」的清理(恢复推荐清 override / 删除选中收藏)挂在这个提前
+        // 布尔上,于是 switchSessionAgent 抛错、或 pending send 把切换挡掉时,用户的
+        // override / 收藏已经被清掉,原配置无从恢复。
+        //
+        // 代价是面板会在事务在途期间多停留一会儿:这段时间由 ModelSelector 的
+        // keepOpenForAgentConfirmation 保命锁按住(它已经覆盖整个 await 期),面板本身在
+        // 切换 in-flight 期间是置灰的,不会出现「面板可点却在切换中」的中间态。
+        const applied = await performAgentSwitchRef.current(
+          targetAgent,
+          modelId,
+          providerId,
+          // fast 只认**面板显式给的目标值**;缺省时不传,由 performAgentSwitch 按目标
+          // 重解析。旧引擎的实时 Fast(本组件同名 state)不进这条链路。
+          effort || fast !== undefined
+            ? {
+                ...(effort ? { effort } : {}),
+                ...(fast !== undefined ? { fastMode: fast } : {}),
+              }
+            : undefined,
+        );
+        // 收藏锚点只在事务**真成功**后才记(G4):确认框被取消 / 登记失败时这次选择根本没
+        // 发生,记下来会让面板在一条没被采用的收藏上打勾。选普通模型行 → favoriteUid 为
+        // null → 顺带把上一条锚点清掉。
+        // 「真成功」自 2026-08-19 review P2 起含**完整配置一致**:登记成功但权威回声里的
+        // effort / Fast 已被另一控制端改走时 applied 为 false —— 锚点不写(那份收藏副本
+        // 不再是会话将要采用的配置),旧锚点因 model / 引擎已变而被派生校验自然判失效,
+        // 面板不会勾住任何一条配置对不上的收藏。
+        if (applied) {
+          setSessionFavoriteAnchor(
+            favoriteUid
+              ? {
+                  uid: favoriteUid,
+                  wireModelId: modelId,
+                  engine: agentKindToVendor(targetAgent),
+                  providerId,
+                }
+              : null,
+          );
+        }
+        return applied;
+      },
+    };
+  }, [
+    unifiedModelPanelEnabled,
+    sessionId,
+    vendorKey,
+    intentTargetAgent,
+    remoteHostId,
+    runtimeAgentKind,
+    sessionAgentSwitchSupported,
+    confirmAgentBrowseSwitch,
+    // 锚点写入绑的是**这一份闭包里的** sessionId(见 setSessionFavoriteAnchor):它随会话
+    // 变化换新引用,必须进依赖,否则事务收尾会用上一条会话的 setter 写错分槽。
+    setSessionFavoriteAnchor,
+  ]);
+
+  // composer pill 尾部引擎小标的取值(model-selector-unified §1.1,Chris 2026-08-12 裁决:
+  // pill 不再写 harness 名字文本)。与 agentIdentity **同一口径**,不另起一套:
+  //   · 已建会话:身份由 session / runtime 确认后才画;切换意图期画目标引擎;
+  //     身份未加载时 resolveModelSelectorAgentIdentity 返回 undefined → 不画
+  //     (绝不拿 vendorKey 的 Claude Code 回退冒充,见 runtimeAgentKind 的 prop 说明);
+  //   · 草稿:没有 session 身份可言,当前引擎就是 vendorKey 本身。
+  const composerEngineMarkVendor = sessionId
+    ? (resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??
+      null)
+    : (vendorKey ?? null);
+
+  /**
+   * 下发给统一面板的收藏锚点:草稿用调用方(NewMakerDraftRoute)持有的那一份,会话用上面
+   * 那份内存态。
+   *
+   * 收藏是**独立选中项**(Chris 2026-08-20):选中身份就是那条收藏的 uid,不拿正在跑的
+   * 模型 / 引擎 / 思维去对副本 —— 对上才会勾,等于让下面的同名模型行把焦点抢走(点了
+   * Pi 收藏、任务还停在 Claude 时必现)。uid 指向的收藏被删 / 换账号后查无此条,由面板
+   * 侧 activeFavoriteUid 兜底。用户点普通模型行时 favoriteUid 显式置 null,那才是离开
+   * 这条收藏。
+   */
+  const effectiveSelectedFavoriteUid = sessionId
+    ? (sessionFavoriteAnchor?.uid ?? null)
+    : selectedFavoriteUid;
+
+  // 会话内拿不到跨引擎切换事务(SSH 远程会话 / 被控端不支持 session-agent-switch /
+  // Orca 会话)时,统一面板**不能**摆出其它引擎的行:useUnifiedRowActions.selectRow 只有在
+  // 传了 sessionEngineFilter 时才把跨引擎行改道给切换事务,没有它时跨引擎行会被当普通选中
+  // 交给单引擎链路(onProviderChange 只换 model / provider),等于把另一个引擎的模型
+  // 直接塞进当前会话。与旧面板同待遇:这类会话把联合列表锁定在当前引擎(旧版本来就是
+  // 单引擎列表)。
+  //
+  // 锁定用的必须是**已确认**的会话引擎,不能用 vendorKey 派生的 agentKind:
+  // CCAgentSessionView 的 vendorKey 走 dbToMakerAgentKind(session?.agentKind),元数据到达
+  // 前回退成 'cc'。而 sessionOrcaRole 在同一窗口里是 undefined(≠ null)→
+  // sessionAgentSwitchSupported=false → 没有 sessionEngineFilter → 走到这条锁定分支。
+  // 两件事撞在一起的后果不是"闪一下":Codex 会话会摆出一张**纯 Claude** 的列表,而且此时
+  // 没有跨引擎兜底,点任意一行都会把 Claude 模型经 onProviderChange 塞进 Codex 会话
+  // (bug4)。所以身份未确认时不锁 —— 回落旧面板一帧,等 runtimeAgentKind 落地再进统一面板。
+  const sessionEngineConfirmed = !sessionId || runtimeAgentKind != null;
+  const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;
+  const lockedSessionAgentKind =
+    inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null;
+  // 形态偏好(三档并存,Chris 2026-08-17):'original' = 最原始选择器(含旧 harness
+  // 分段切换,agentSwitch 因 unifiedPanelActive=false 自动回来);'classic'/'badge' =
+  // 新选择器 A/B 版。capable 表示统一面板**可用**(老面板 footer 据此摆「尝试新
+  // 选择器」入口),active 才真正启用。
+  const modelPickerLayoutPref = useModelPickerLayout();
+  const unifiedPanelCapable =
+    unifiedModelPanelEnabled && (!inSessionEngineLocked || lockedSessionAgentKind !== null);
+  const unifiedPanelActive = unifiedPanelCapable && modelPickerLayoutPref !== 'original';
+  const effectiveUnifiedAgents = useMemo<readonly AgentKind[] | undefined>(
+    () => (lockedSessionAgentKind ? [lockedSessionAgentKind] : unifiedAgents),
+    [lockedSessionAgentKind, unifiedAgents],
+  );
+
+  // ── 统一模型选择器 · 新会话形态(model-selector-unified M5)────────────────────
+  // 草稿里换引擎是无损的(会话还没建),所以选中一行 = 直接把它整份配置写下去。
+  // 深度 / Fast 记忆按**目标引擎**槽写:草稿的生效 Fast 是从这份记忆派生的
+  // (NewMakerDraftRoute.resolveDraftFast),收藏副本带来的 Fast 只有落进这里才真生效;
+  // 不写就会出现「选了收藏的 Opus·Fast,pill 上却没有闪电」。
+  //
+  // ── id 口径(数据层把同一模型的多引擎条目合并成一行之后)────────────────────
+  // 面板的行身份是**归一化 id**(`rowModelId`),而每个引擎真正能发出去的是各自的
+  // **wire id**(`capabilities[engine].wireModelId`,如 cc 侧的 `chatgpt/gpt-5.6-luna`
+  // 对 codex 侧的 `gpt-5.6-luna`)。`selection.modelId` 在契约上**已经是选中引擎的
+  // wire id**,本函数因此对它零加工:
+  //   · 写 providerModelMemory —— 键必须是 wire id(记忆表的既有消费方全按 wire id 存取,
+  //     混进归一化 id 会读不回来,表现为"设过的档下次不认");
+  //   · 交给草稿层 —— 它会落进 lastByVendor.model,并原样进 createSession。
+  // `rowModelId` 只在需要指回"面板上那一行"时有用(收藏锚点等),**绝不能当发送 id**,
+  // 所以这里只接收、不消费,也不往下游传。
+  const handleUnifiedDraftSelect = useCallback(
+    (selection: {
+      providerId: string;
+      /** 选中引擎的 **wire model id** —— 唯一可发送、可当记忆键的那个 id。 */
+      modelId: string;
+      effort?: Effort;
+      engine: 'cc' | 'codex' | 'pi';
+      fast: boolean;
+      favoriteUid: string | null;
+      /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
+      rowModelId?: string;
+    }) => {
+      if (sessionId || settingsLocked) return;
+      const targetKind = vendorKeyToAgentKind(selection.engine);
+      if (targetKind && selection.providerId) {
+        if (selection.effort) {
+          modelMemory?.setEffort(
+            targetKind,
+            selection.providerId,
+            selection.modelId,
+            selection.effort,
+          );
+        }
+        modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast);
+      }
+      // 乐观来源:草稿没有 SSoT 回流,pill 的来源图标靠这份本地态即时跟上。
+      setSelectedProviderId(selection.providerId);
+      onUnifiedDraftSelect?.({
+        vendor: selection.engine,
+        providerId: selection.providerId,
+        modelId: selection.modelId,
+        ...(selection.effort ? { effort: selection.effort } : {}),
+        fast: selection.fast,
+        favoriteUid: selection.favoriteUid,
+      });
+    },
+    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],
+  );
 
   const performModelChange = useCallback(
     async (newModelId: string, expectedAgentSwitchRevision?: number) => {
@@ -5612,8 +6594,10 @@ export function ChatInput({
         makerChatStore.getAgentSwitchIntent(sessionId)
       ) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitch(intent.target, newModelId, null);
-        return;
+        // ★ await 并**透传真实结果**(Chris 2026-08-19):此前是 fire-and-forget + `return`,
+        // 返回 undefined 被上游读成「已应用」——意图期内改选模型时,登记失败 / 被超车的
+        // 那一路会被当成成功,后续持久化照跑,而会话上的意图其实一个字没变。
+        return await performAgentSwitch(intent.target, newModelId, null);
       }
       let rollbackModelAfterPersistFailure: { model: string; seq: number } | null = null;
       const committedActiveEffort =
@@ -5628,7 +6612,10 @@ export function ChatInput({
 
       // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
       // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(newModelId, effectiveSourceId);
+      const { efforts, defaultEffort } = resolveModelEfforts(
+        newModelId,
+        effectiveSourceId,
+      );
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
@@ -5700,7 +6687,7 @@ export function ChatInput({
             syncSessionDraftModelPrefs(
               newModelId,
               { effort: newEffort, fast: fastPersisted ? restoredFast : fastMode },
-              { remoteDeviceId: sourceRemoteDeviceId },
+              { remoteDeviceId: sourceRemoteDeviceId, markModelChoice: true },
             );
             if (remoteDeferred && isSourceSessionCurrent()) {
               toast.success(t('newChat.chatInput.credentialSwitchDeferred'), { duration: 4000 });
@@ -5734,7 +6721,13 @@ export function ChatInput({
               // 默认 success 1200ms 读不完这句;拉长到 4s。
               toast.success(t('newChat.chatInput.credentialSwitchDeferred'), { duration: 4000 });
             }
-            syncSessionDraftModelPrefs(newModelId, { effort: newEffort, fast: restoredFast });
+            syncSessionDraftModelPrefs(
+              newModelId,
+              { effort: newEffort, fast: restoredFast },
+              {
+                markModelChoice: true,
+              },
+            );
             if (currentModelAgentKind && effectiveSourceId) {
               modelMemory?.setFast(
                 currentModelAgentKind,
@@ -5835,17 +6828,23 @@ export function ChatInput({
     [deviceLinkDeviceId, performModelChange, sessionId],
   );
 
+  /**
+   * 返回值 = **这次深度写入真的落下去了没有**(2026-08-17 review 第三轮 G2,口径同
+   * handleFastModeChange)。统一面板的「先应用、后清存储」入口按它决定要不要收尾。
+   */
   const handleEffortChange = useCallback(
-    async (newEffort: Effort) => {
-      if (settingsLocked) return;
+    async (newEffort: Effort): Promise<boolean> => {
+      if (settingsLocked) return false;
       // 切换意图期:effort 改动 = 更新意图(重登记),不走普通 setEffort 链路。
       if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitch(intent.target, intent.model, intent.providerId, {
-          effort: newEffort,
-          fastMode: intent.fastMode,
-        });
-        return;
+        // await 而非 fire-and-forget:意图重登记成功与否就是这次深度写入的结果。
+        return (
+          (await performAgentSwitch(intent.target, intent.model, intent.providerId, {
+            effort: newEffort,
+            fastMode: intent.fastMode,
+          })) !== false
+        );
       }
       // 用户在当前模型上显式选了 effort → 记下来, 切走再切回来时能恢复
       if (activeModel) {
@@ -5876,7 +6875,7 @@ export function ChatInput({
                   ),
                 );
               }
-              return;
+              return false;
             } finally {
               if (isSessionScopeCurrent(sessionId, currentSessionIdRef.current))
                 setRemoteSwitchInFlight(false);
@@ -5905,13 +6904,13 @@ export function ChatInput({
                 if (activeModel) rememberProviderChoice(activeModel, effort);
               },
             });
-            return;
+            return true;
           }
           // 远程会话由被控端 patch 回流；把稳定 device scope 一并传给父级，避免 relay
           // origin 短暂缺失时被误当成本地 session patch。
           onEffortDidChange?.(newEffort, sessionId, remoteDeviceId);
           if (activeModel) rememberProviderChoice(activeModel, newEffort);
-          return;
+          return true;
         }
 
         // 草稿态:全本地生效(同 handleModelChange 草稿分支)。onEffortDidChange → 父级
@@ -5919,8 +6918,10 @@ export function ChatInput({
         // 不再写服务端默认偏好——此前 await 服务端成功才刷 UI,token 失效时表现为"档位点不动"。
         onEffortDidChange?.(newEffort);
         if (activeModel) rememberProviderChoice(activeModel, newEffort);
+        return true;
       } catch (err) {
         log.warn('effort change failed:', err);
+        return false;
       }
     },
     [
@@ -5938,6 +6939,101 @@ export function ChatInput({
       settingsLocked,
     ],
   );
+
+  useEffect(() => {
+    const gesture = createWorkLouderCodexVoiceGesture({
+      longPressMs: VOICE_INPUT_LONG_PRESS_MS,
+      getState: () => voiceInputStateRef.current,
+      start: () => handleVoiceInputStartRef.current(),
+      stop: () => voiceInputStopRef.current(),
+    });
+    workLouderVoiceGestureRef.current = gesture;
+    return () => {
+      gesture.dispose();
+      if (workLouderVoiceGestureRef.current === gesture) {
+        workLouderVoiceGestureRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ownsHardwareComposerActions) {
+      workLouderVoiceGestureRef.current?.cancelHeldPress();
+    }
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'voice' && !ownsHardwareComposerActions) {
+        workLouderVoiceGestureRef.current?.cancelHeldPress();
+        return false;
+      }
+      if (!ownsHardwareComposerActions) return false;
+      if (action.type === 'skill') {
+        if (!editor || editor.isDestroyed || composerMutationLocked) return false;
+        editor.chain().focus().insertContent(`$${action.name} `).run();
+        return true;
+      }
+      if (action.type === 'composer-text') {
+        if (!editor || editor.isDestroyed || composerMutationLocked) return false;
+        editor.chain().focus().insertContent(action.text).run();
+        return true;
+      }
+      if (action.type === 'voice') {
+        // One path for the key: the gesture already covers tap-to-start,
+        // tap-again-to-stop, and hold-to-talk, matching Cindy's microphone.
+        workLouderVoiceGestureRef.current?.handle({ phase: action.phase });
+        return true;
+      }
+      if (action.type !== 'command') return false;
+      switch (action.commandId) {
+        case 'composer.submit':
+          void handleClickSend();
+          return true;
+        case 'composer.toggleFastMode':
+          void handleFastModeChange(!fastMode);
+          return true;
+        case 'composer.togglePlanMode':
+          if (!planModeEntry) return false;
+          planModeEntry.onToggle(!planModeEntry.enabled);
+          return true;
+        case 'composer.focus':
+          editor?.commands.focus('end');
+          return true;
+        case 'composer.addFiles':
+        case 'composer.addPhotos':
+          suggestionFileInputRef.current?.click();
+          return true;
+        case 'composer.increaseReasoningEffort':
+        case 'composer.decreaseReasoningEffort': {
+          const { efforts } = resolveModelEfforts(activeModel, effectiveSourceId);
+          if (efforts.length === 0) return false;
+          const currentIndex = Math.max(0, efforts.indexOf(activeEffort));
+          const delta = action.commandId === 'composer.increaseReasoningEffort' ? 1 : -1;
+          const next = efforts[Math.max(0, Math.min(efforts.length - 1, currentIndex + delta))];
+          if (!next || next === activeEffort) return true;
+          void handleEffortChange(next);
+          return true;
+        }
+        default:
+          return false;
+      }
+    });
+  }, [
+    activeEffort,
+    activeModel,
+    composerMutationLocked,
+    editor,
+    ownsHardwareComposerActions,
+    effectiveSourceId,
+    fastMode,
+    handleClickSend,
+    handleEffortChange,
+    handleFastModeChange,
+    handleVoiceInputPlainStop,
+    handleVoiceInputStart,
+    planModeEntry,
+    resolveModelEfforts,
+    voiceInput.isBusy,
+    voiceInput.isListening,
+  ]);
 
   // per-session 来源切换。镜像 model 持久化路径(handleModelChange 里的
   // `sessionService.update({ model }) + maker.setModel`):
@@ -6017,8 +7113,13 @@ export function ChatInput({
         makerChatStore.getAgentSwitchIntent(sessionId)
       ) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitch(intent.target, reconciledModelId ?? intent.model, newProviderId);
-        return;
+        // 同 performModelChange:await 并透传真实结果,别把「意图重登记失败」当成已应用
+        // (Chris 2026-08-19)。
+        return await performAgentSwitch(
+          intent.target,
+          reconciledModelId ?? intent.model,
+          newProviderId,
+        );
       }
       let rollbackProviderAfterPersistFailure: {
         model: string;
@@ -6104,6 +7205,7 @@ export function ChatInput({
             activeProviderId: newProviderId,
             memoryProviderId: newProviderId,
             remoteDeviceId: sourceRemoteDeviceId,
+            markModelChoice: true,
           },
         );
         onModelDidChange?.(targetModel);
@@ -6161,7 +7263,11 @@ export function ChatInput({
           syncSessionDraftModelPrefs(
             modelId,
             { effort: eff, fast: restoredFast },
-            { activeProviderId: newProviderId, memoryProviderId: newProviderId },
+            {
+              activeProviderId: newProviderId,
+              memoryProviderId: newProviderId,
+              markModelChoice: true,
+            },
           );
           if (currentModelAgentKind && newProviderId) {
             modelMemory?.setFast(currentModelAgentKind, newProviderId, modelId, restoredFast);
@@ -6369,7 +7475,11 @@ export function ChatInput({
         if (sessionId) {
           await sessionService.update(sessionId, { workingDir: folderPath });
         }
-        // Server succeeded → update UI
+        // Server succeeded → update UI。只有真实的同 session 目录修改才作废推荐；
+        // session 切换时 initialWorkingDir 水合不走这里，不能误删目标 session 的缓存。
+        turnGenRef.current += 1;
+        showRecommendationRef.current = false;
+        if (sessionId) dismissPromptRecommendation(sessionId);
         setWorkingDir(folderPath);
         onWorkingDirChange?.(folderPath);
       } catch {
@@ -6382,7 +7492,24 @@ export function ChatInput({
   const hasMessage = !isEditorEmpty(editor);
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
   const canSend = hasMessage || hasAttachments || browserComments.length > 0;
-  const hasVoiceDraftText = voiceInput.draftText.trim().length > 0;
+  const hasVoiceDraftText = voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
+  // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
+  // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
+  const showRecommendationOverlay = shouldShowComposerPromptRecommendation({
+    enabled: recommendationEnabled,
+    hydrated:
+      hasHydratedRef.current &&
+      storageKeyForDraftRef.current === storageKey &&
+      !isRestoringRef.current,
+    prompt: recommendedPrompt,
+    hasMessage,
+    hasAttachments,
+    hasBrowserComments: browserComments.length > 0,
+    hasVoiceDraftText,
+    mutationLocked: composerMutationLocked,
+  });
+  // handleKeyDown 的稳定闭包只按真实可见性接受 Tab，避免隐藏推荐被误填入。
+  showRecommendationRef.current = showRecommendationOverlay;
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   const sendButtonDisabled = Boolean(
     disabled ||
@@ -6396,9 +7523,9 @@ export function ChatInput({
     // host 尚未完成切换意图登记时不能发送，否则 maker:send 可能先被旧引擎消费。
     agentSwitchInFlight ||
     sendDispatchInFlight ||
-    (!voiceInput.isListening && !canSend && !hasVoiceDraftText) ||
-    voiceInput.state === 'submitting' ||
-    voiceInput.state === 'refining',
+    (!voiceBusyOnCurrentComposer && !canSend && !hasVoiceDraftText) ||
+    (voiceBusyOnCurrentComposer &&
+      (voiceInput.state === 'submitting' || voiceInput.state === 'refining')),
   );
   // Send / Stop 双槽语义 (voice busy = voiceInput.isBusy = listening|submitting|refining,
   // 判定为何用 isBusy 而不是 isListening 见下方第三段):
@@ -6425,9 +7552,9 @@ export function ChatInput({
   // (listening + submitting + refining), 让槽位从开录到润色结束保持不变; 润色期间主槽是
   // 禁用态 Send (见 sendButtonDisabled), 停止任务的能力由次槽 Stop 承担.
   const mainSlotIsStop =
-    showStopButton && (sendDispatchInFlight || (!canSend && !voiceInput.isBusy));
+    showStopButton && (sendDispatchInFlight || (!canSend && !voiceBusyOnCurrentComposer));
   const showSecondaryStop =
-    showStopButton && (canSend || voiceInput.isBusy) && !sendDispatchInFlight;
+    showStopButton && (canSend || voiceBusyOnCurrentComposer) && !sendDispatchInFlight;
   useEffect(() => {
     voiceInputCanStopAndSendRef.current = !sendButtonDisabled;
     composerCanSubmitRef.current = !sendButtonDisabled;
@@ -6456,10 +7583,11 @@ export function ChatInput({
   // split-pane 同时打开侧栏 / 会话 / 浏览器时，普通会话 composer 也会落到窄容器。
   // 这里必须按 card 实际宽度统一切 compact，而不是只照顾 create-agent；否则普通
   // 会话仍走两组 max-content flex，长模型名会把权限入口挤进语音 / 发送固定动作区。
-  const useNarrowToolbar = narrowToolbar || (toolbarWidth != null && toolbarWidth < 600);
+  const useNarrowToolbar = narrowToolbar || autoNarrowToolbar;
   const useCompactMiddleToolbar =
-    isCreateAgentVariant && (toolbarWidth == null ? narrowToolbar : toolbarWidth < 600);
-  const useUltraCompactToolbar = useNarrowToolbar && (toolbarWidth == null || toolbarWidth < 420);
+    isCreateAgentVariant && (toolbarWidthMeasured ? autoNarrowToolbar : narrowToolbar);
+  const useUltraCompactToolbar =
+    useNarrowToolbar && (!toolbarWidthMeasured || toolbarWidthMode === 'ultra');
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
@@ -6818,20 +7946,54 @@ export function ChatInput({
             {/* Editor — 用负 margin 向右破出容器的 px-[11px],让 scrollbar 贴到圆角边;
              内层 ProseMirror 加 pr-[11px] 作为文字 gutter,视觉上文字宽度与原先一致。 */}
             <VoiceInputPointerHintLayer
-              active={voiceInput.isBusy}
+              active={voiceBusyOnCurrentComposer}
               state={voiceInput.state}
               className="w-full"
             >
-              <EditorContent
-                editor={editor}
-                className={cn(
-                  'w-[calc(100%+11px)] -mr-[11px]',
-                  // Disabled gets the same visual cue as the old textarea
-                  composerMutationLocked && 'cursor-not-allowed opacity-60',
-                  voiceInput.isBusy && 'cursor-default',
+              <div
+                className="relative w-full"
+                // 推荐词生效时由 CSS 关掉原生 placeholder,避免两行字叠在一起。
+                data-recommendation-active={showRecommendationOverlay ? 'true' : undefined}
+              >
+                <EditorContent
+                  editor={editor}
+                  className={cn(
+                    'w-[calc(100%+11px)] -mr-[11px]',
+                    // Disabled gets the same visual cue as the old textarea
+                    composerMutationLocked && 'cursor-not-allowed opacity-60',
+                    voiceBusyOnCurrentComposer && 'cursor-default',
+                  )}
+                  data-voice-draft-active={
+                    voiceBusyOnCurrentComposer && voiceInput.draftText ? 'true' : undefined
+                  }
+                />
+                {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
+                    py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
+                    向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
+                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
+                {showRecommendationOverlay && (
+                  <div
+                    className={cn(
+                      'pointer-events-none absolute left-0 top-0 flex w-full min-w-0 items-center truncate py-[3px]',
+                      'text-15 leading-[1.467] font-normal',
+                      'text-[var(--chat-input-placeholder-subtle)]',
+                    )}
+                    aria-hidden="true"
+                  >
+                    <span className="min-w-0 flex-1 truncate">{recommendedPrompt}</span>
+                    <kbd
+                      className={cn(
+                        'ml-1.5 inline-flex shrink-0 items-center rounded-full border',
+                        'border-[var(--chat-input-border)] bg-[var(--perm-code-bg)]',
+                        'px-1 py-[1px] text-11 font-normal',
+                        'text-[var(--status-bar-meta)]',
+                      )}
+                    >
+                      {t('newChat.chatInput.recommendationShortcut')}
+                    </kbd>
+                  </div>
                 )}
-                data-voice-draft-active={voiceInput.draftText ? 'true' : undefined}
-              />
+              </div>
             </VoiceInputPointerHintLayer>
 
             {inSessionGoalEnabled && (
@@ -6942,7 +8104,7 @@ export function ChatInput({
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}
-                  deviceId={deviceLinkDeviceId}
+                  deviceId={deviceLinkDeviceId ?? undefined}
                   disabled={composerEditorLocked || settingsLocked}
                   dense={effectiveDenseToolbar}
                   iconOnly={useUltraCompactToolbar}
@@ -6971,6 +8133,10 @@ export function ChatInput({
                   ))}
                 <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
                   <ModelSelector
+                    // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
+                    // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
+                    // 会让"当前选中的那一行"在合并行上错位,也会把归一化 id 顺着
+                    // onProviderChange 漏回会话。
                     modelId={activeModel}
                     effort={activeEffort}
                     onModelChange={handleModelChange}
@@ -6978,6 +8144,48 @@ export function ChatInput({
                     // 意图期显示目标引擎下解析出的 fast(apply 时才落库),无意图走真实态。
                     fastMode={agentSwitchIntent?.fastMode ?? fastMode}
                     onFastModeChange={handleFastModeChange}
+                    thinkingEnabled={
+                      currentModelAgentKind && effectiveSourceId
+                        ? (modelMemory?.getThinking?.(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                          ) ??
+                          (!deviceLinkDeviceId
+                            ? getProviderModelThinking(
+                                currentModelAgentKind,
+                                effectiveSourceId,
+                                activeModel,
+                              )
+                            : undefined) ??
+                          true)
+                        : true
+                    }
+                    onThinkingChange={async (enabled) => {
+                      if (currentModelAgentKind && effectiveSourceId) {
+                        if (modelMemory?.setThinking) {
+                          modelMemory.setThinking(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                            enabled,
+                          );
+                        } else if (!deviceLinkDeviceId) {
+                          setProviderModelThinking(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                            enabled,
+                          );
+                        }
+                      }
+                      if (sessionId) {
+                        const api = deviceLinkDeviceId
+                          ? makerApiForDevice(deviceLinkDeviceId)
+                          : window.electronAPI.maker;
+                        await api.setThinkingEnabled(sessionId, enabled);
+                      }
+                    }}
                     modelMemory={modelMemory}
                     vendorKey={vendorKey}
                     // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成
@@ -6991,20 +8199,64 @@ export function ChatInput({
                           )
                         : undefined
                     }
+                    // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
+                    // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
+                    // GhostErrand / 设置)本版一律不开。
+                    // pill 形态(model-selector-unified §1.1):不写 harness 名字,改成
+                    // 「模型名 + 引擎小标 + 思考深度」。会话内取已确认 / 意图中的引擎
+                    // (agentIdentity 同一口径:身份没加载完就不画,不拿 vendorKey 的
+                    // Claude Code 回退冒充);草稿直接取当前引擎。
+                    // original 形态不传:老 pill 仍写 harness 名字文本(agentIdentity),
+                    // 引擎小标是统一面板时代的形态,别把两代形态混在一颗 pill 上。
+                    engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}
+                    unifiedPanel={unifiedPanelActive}
+                    // 统一面板「可用但未启用」(original 形态)时,老面板 footer 摆
+                    // 「尝试新选择器」入口 —— 可用性与启用态分开传,设置类入口两者皆无。
+                    unifiedPanelAvailable={unifiedPanelCapable}
+                    // 联合列表只列**运行时已注册**的引擎(撤掉 AgentSelect 后接住它的
+                    // hiddenVendors 门禁);未加载时不传 = 不隐藏任何引擎。会话内没有
+                    // 跨引擎切换事务可走时锁定当前引擎(见 inSessionEngineLocked)。
+                    unifiedAgents={effectiveUnifiedAgents}
+                    // 会话内:同引擎过滤 + 跨引擎走 performAgentSwitch(见 sessionEngineFilter)。
+                    sessionEngineFilter={sessionEngineFilter}
+                    // 新会话:选中直通,引擎跟着模型一起落进草稿(见 handleUnifiedDraftSelect)。
+                    onUnifiedSelect={
+                      !sessionId && unifiedPanelActive && onUnifiedDraftSelect
+                        ? handleUnifiedDraftSelect
+                        : undefined
+                    }
+                    // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
+                    selectedFavoriteUid={effectiveSelectedFavoriteUid}
+                    // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在
+                    // sessionEngineFilter.onCrossEngineSelect 里按事务真实结果自行记录)。
+                    onSessionFavoriteAnchorChange={
+                      sessionId && unifiedPanelActive ? setSessionFavoriteAnchor : undefined
+                    }
                     // session-agent-switch:已建会话提供显式两步引擎切换(列表顶部
                     // Claude/Codex 分段,先选 Agent 再选模型)。device-link 远程会话同样
                     // 支持(隧道到被控端执行,与手机端同一套 channel),入口按被控端能力位
                     // 门控。草稿(无 sessionId)与 SSH 远程会话仍不传。
+                    //
+                    // 统一面板下**刻意不传**:那两步分段已被「同引擎默认 + 显式跨引擎入口 +
+                    // 行浮层引擎胶囊」完整取代(见 ModelSelectorContentProps.sessionEngineFilter
+                    // 的 prop 说明),两者同时传会得到一个永远不渲染的分段。
                     agentSwitch={
-                      sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported
+                      !unifiedPanelActive &&
+                      sessionId &&
+                      vendorKey &&
+                      !remoteHostId &&
+                      sessionAgentSwitchSupported
                         ? {
                             currentVendor: vendorKey,
-                            confirmBrowseSwitch: confirmAgentBrowseSwitch,
+                            // 两步分段的目标是 vendor 口径,确认门按 AgentKind 判(与意图
+                            // 记录同形),在边界上转一次 —— 见 confirmAgentBrowseSwitch。
+                            confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi') =>
+                              confirmAgentBrowseSwitch(vendorKeyToAgentKind(targetVendor)),
                             onSwitch: performAgentSwitch,
                           }
                         : undefined
                     }
-                    deviceId={deviceLinkDeviceId}
+                    deviceId={deviceLinkDeviceId ?? undefined}
                     // SSH 远程会话隐藏订阅直连模型(chatgpt/ / xai/):bridge 只挂在本地 compat-proxy,
                     // 远程模式走 remoteEndpoint 不经翻译,选了必失败。
                     excludeSubscriptionDirect={!!remoteHostId}
@@ -7047,16 +8299,20 @@ export function ChatInput({
                   {showSecondaryStop && (
                     <SendButton
                       disabled={false}
-                      onClick={onStop ?? (() => {})}
+                      onClick={handleStop}
                       isStreaming
                       visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     />
                   )}
                   <VoiceInputButton
-                    state={voiceInput.state}
+                    state={voiceBusyOnCurrentComposer ? voiceInput.state : 'idle'}
                     // The surrounding controls stay locked during voice input, but
                     // this control must remain enabled so the recording can stop.
-                    disabled={composerEditorLocked || !editor}
+                    disabled={
+                      composerEditorLocked ||
+                      !editor ||
+                      (voiceInput.isBusy && !voiceBusyOnCurrentComposer)
+                    }
                     shortcutLabel={voiceInputShortcutLabel}
                     onStart={handleVoiceInputStart}
                     onStop={handleVoiceInputPlainStop}
@@ -7068,11 +8324,24 @@ export function ChatInput({
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}
                   />
-                  <span ref={sendButtonRef} className="inline-flex rounded-full">
+                  {/* mousedown 吃掉默认行为:否则点发送会把焦点从 contenteditable
+                      挪到 button 上,发完光标就没了(接着打字要先点回输入框),
+                      推荐提示词的 Tab 也会因为编辑器失焦而落到原生焦点导航上。
+                      只压默认的「点击聚焦」,click 照常触发,键盘 Tab 聚焦不受影响。 */}
+                  <span
+                    ref={sendButtonRef}
+                    className="inline-flex rounded-full"
+                    onMouseDown={(event) => {
+                      // 只在编辑器已聚焦时压默认聚焦:点发送会先把焦点从
+                      // contenteditable 挪到 button 上,发完光标就没了;
+                      // 编辑器未聚焦时保留按钮正常聚焦行为(可访问性)。
+                      if (editor?.isFocused) event.preventDefault();
+                    }}
+                  >
                     {mainSlotIsStop ? (
                       <SendButton
                         disabled={false}
-                        onClick={onStop ?? (() => {})}
+                        onClick={handleStop}
                         isStreaming
                         visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                       />

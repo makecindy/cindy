@@ -36,6 +36,7 @@ function getSidebarRowOrder(node: HTMLElement): number | null {
 
 function isRenderedVisible(node: HTMLElement): boolean {
   const view = node.ownerDocument?.defaultView;
+  if (isCoveredBySearchOverlay(node)) return false;
   for (let current: HTMLElement | null = node; current != null; current = current.parentElement) {
     if (current.hasAttribute?.('hidden')) return false;
 
@@ -47,6 +48,21 @@ function isRenderedVisible(node: HTMLElement): boolean {
     if (style.opacity !== '' && Number(style.opacity) === 0) return false;
   }
   return true;
+}
+
+/** Sidebar search sits on top of the real list without hiding it. */
+function isCoveredBySearchOverlay(node: HTMLElement): boolean {
+  if (typeof node.closest !== 'function') return false;
+  if (node.closest('[data-conversation-search-overlay]')) return false;
+  const root = node.ownerDocument;
+  if (!root) return false;
+  for (const overlay of root.querySelectorAll('[data-conversation-search-overlay]')) {
+    if (!(overlay instanceof HTMLElement)) continue;
+    if (overlay.contains(node)) continue;
+    const ancestor = node.closest('aside, [data-sidebar], nav');
+    if (ancestor && ancestor.contains(overlay)) return true;
+  }
+  return false;
 }
 
 export function pickSessionIdAfterRemoval(

@@ -35,6 +35,36 @@ export function isSubscriptionDirectModel(model: string | null | undefined): boo
   return SUBSCRIPTION_DIRECT_MODEL_PREFIXES.some((prefix) => model.startsWith(prefix));
 }
 
+/**
+ * xAI / SuperGrok 的独占户口:只能走 SuperGrok,不能 fail-open 进 Cindy LiteLLM。
+ *
+ * - `xai/grok-*` 已是订阅前缀
+ * - 裸 `grok-*` 是官方 / Pi 目录 id
+ * - `x-ai/grok-*` 是网关/OpenRouter 命名空间,Cindy 网关可能认,不算独占
+ */
+export function isExclusiveXaiModelId(model: string | null | undefined): boolean {
+  if (!model) return false;
+  const id = model.trim().replace(/\[1m\]$/i, '');
+  if (!id) return false;
+  if (id.startsWith(XAI_MODEL_PREFIX)) {
+    return id.slice(XAI_MODEL_PREFIX.length).startsWith('grok');
+  }
+  if (id.includes('/')) return false;
+  return id.startsWith('grok');
+}
+
+/** 订阅前缀 ∪ xAI 独占裸 id。compat-proxy 与记账必须共用,避免路由当订阅、账单当网关。 */
+export function isSubscriptionDirectRoute(model: string | null | undefined): boolean {
+  return isSubscriptionDirectModel(model) || isExclusiveXaiModelId(model);
+}
+
+/** 独占 Grok 的目录/报价身份:裸 grok-4.6 → xai/grok-4.6。非独占返回 null。 */
+export function exclusiveXaiCatalogModelId(model: string | null | undefined): string | null {
+  if (!isExclusiveXaiModelId(model) || !model) return null;
+  const id = model.trim().replace(/\[1m\]$/i, '');
+  return id.startsWith(XAI_MODEL_PREFIX) ? id : `${XAI_MODEL_PREFIX}${id}`;
+}
+
 // 仅用于分组展示, 不参与持久化或 onModelChange 数据流。
 // 对话厂商组(anthropic..ungrouped)在前;非对话类型组(image/tts/stt/realtime/video/embedding/
 // compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、

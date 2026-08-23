@@ -88,6 +88,8 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
       query: z.string().optional(),
       screenshot_out_file: z.string().optional(),
       session: z.string().optional(),
+      max_elements: z.number().int().positive().optional().describe("Maximum number of accessibility tree elements to return. Use to limit context size for complex windows like Chrome."),
+      max_depth: z.number().int().positive().optional().describe("Maximum depth of the accessibility tree to traverse. Use to limit tree depth for complex windows."),
     },
   },
   {

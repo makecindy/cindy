@@ -48,4 +48,20 @@ describe('model pricing prewarm ordering', () => {
     expect(nextIpc).toBeGreaterThan(earlyUsageIpc);
     expect(source.slice(earlyUsageIpc, nextIpc)).not.toContain('prewarmModelPricing');
   });
+
+  it('does not block owner ensureReady on staged attachment bookkeeping', () => {
+    const onReady = source.slice(
+      source.indexOf('onReady: async (userId) => {'),
+      source.indexOf('onReadyError:'),
+    );
+    expect(onReady).toContain('STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS');
+    expect(onReady).toContain('setTimeout(() => {');
+    expect(onReady).toContain('void sweepStagedChatAttachmentsOnStartup({');
+    expect(onReady).toContain('loadProtectedPaths: listPersistedChatAttachmentPaths');
+    expect(onReady).not.toMatch(/await listPersistedChatAttachmentPaths\(\)/);
+    expect(onReady).not.toMatch(/await sweepStagedChatAttachmentsOnStartup\(/);
+    expect(onReady.indexOf('setTimeout(() => {')).toBeLessThan(
+      onReady.indexOf('void sweepStagedChatAttachmentsOnStartup({'),
+    );
+  });
 });

@@ -20,6 +20,7 @@ vi.mock('@/lib/logger', () => ({
 
 const mocks = {
   worktreeListAll: vi.fn(),
+  worktreeDetectCwd: vi.fn(),
   listeners: new Set<(payload: { sessionId: string }) => void>(),
 };
 
@@ -34,11 +35,18 @@ function Probe() {
 
 beforeEach(() => {
   mocks.worktreeListAll.mockReset();
+  mocks.worktreeDetectCwd.mockReset();
+  mocks.worktreeDetectCwd.mockResolvedValue({
+    isInsideWorktree: true,
+    isGitRepo: true,
+    gitInstalled: true,
+  });
   mocks.listeners.clear();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
       worktreeListAll: mocks.worktreeListAll,
+      worktreeDetectCwd: mocks.worktreeDetectCwd,
       onWorktreeChanged: (cb: (payload: { sessionId: string }) => void) => {
         mocks.listeners.add(cb);
         return () => mocks.listeners.delete(cb);
@@ -68,9 +76,7 @@ describe('WorktreeContext recycle refresh', () => {
     });
 
     // 回收链跑完，store 里已经没有那条了。
-    mocks.worktreeListAll.mockResolvedValueOnce([
-      { sessionId: 'other', path: '/tmp/wt/other' },
-    ]);
+    mocks.worktreeListAll.mockResolvedValueOnce([{ sessionId: 'other', path: '/tmp/wt/other' }]);
     await act(async () => {
       emitWorktreeChanged('archived-one');
     });
@@ -103,9 +109,7 @@ describe('WorktreeContext recycle refresh', () => {
       configurable: true,
       value: { worktreeListAll: mocks.worktreeListAll },
     });
-    mocks.worktreeListAll.mockResolvedValue([
-      { sessionId: 'only', path: '/tmp/wt/only' },
-    ]);
+    mocks.worktreeListAll.mockResolvedValue([{ sessionId: 'only', path: '/tmp/wt/only' }]);
 
     const view = render(
       <WorktreeProvider>
@@ -115,6 +119,28 @@ describe('WorktreeContext recycle refresh', () => {
 
     await waitFor(() => {
       expect(view.getByTestId('ids').textContent).toBe('only');
+    });
+  });
+
+  it('drops store entries whose directories are no longer linked worktrees', async () => {
+    mocks.worktreeListAll.mockResolvedValue([
+      { sessionId: 'gone', path: '/tmp/wt/gone' },
+      { sessionId: 'live', path: '/tmp/wt/live' },
+    ]);
+    mocks.worktreeDetectCwd.mockImplementation(async ({ cwd }: { cwd: string }) => ({
+      isInsideWorktree: cwd === '/tmp/wt/live',
+      isGitRepo: true,
+      gitInstalled: true,
+    }));
+
+    const view = render(
+      <WorktreeProvider>
+        <Probe />
+      </WorktreeProvider>,
+    );
+
+    await waitFor(() => {
+      expect(view.getByTestId('ids').textContent).toBe('live');
     });
   });
 });

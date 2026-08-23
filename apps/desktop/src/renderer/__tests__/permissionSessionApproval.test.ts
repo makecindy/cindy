@@ -190,6 +190,7 @@ describe('permission interaction IPC', () => {
       displayName: undefined,
       description: 'Allow the lizi_feishu MCP server to run tool "call_tool"?',
       suggestions,
+      autoReviewUnavailable: false,
     });
   });
 

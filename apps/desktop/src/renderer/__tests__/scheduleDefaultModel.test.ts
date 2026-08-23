@@ -114,40 +114,37 @@ describe('getScheduleDefaultModel 三级回退', () => {
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-6');
   });
 
-  it('三级:已有会话同步 New Maker 草稿默认不打显式选择标记 → 调度仍走 Sonnet 兜底', async () => {
+  it('三级:已有任务只改思考档不打显式选择标记 → 调度仍走 Sonnet 兜底', async () => {
     const draft = await import('@/state/newMakerDraft');
     draft.patchVendorPrefsPreservingModelChoice('cc', {
-      model: 'claude-opus-4-8',
       effort: 'high',
     });
     const { getScheduleDefaultModel } = await loadModule();
-    expect(draft.getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
     expect(draft.getPersistedVendorModel('cc')).toBe('');
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-6');
   });
 
-  it('三级:旧 New Maker 显式选模被会话同步覆盖后不污染调度默认模型', async () => {
+  it('三级:已有任务换模后调度跟随这次选择', async () => {
     const draft = await import('@/state/newMakerDraft');
     draft.patchVendorPrefs('cc', { model: 'claude-opus-4-8' });
     expect(draft.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
 
-    draft.patchVendorPrefsPreservingModelChoice('cc', {
+    draft.patchVendorPrefs('cc', {
       model: 'claude-sonnet-4-7',
       effort: 'high',
     });
 
     const { getScheduleDefaultModel } = await loadModule();
     expect(draft.getDraft().lastByVendor.cc.model).toBe('claude-sonnet-4-7');
-    expect(draft.getPersistedVendorModel('cc')).toBe('');
-    expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-6');
+    expect(draft.getPersistedVendorModel('cc')).toBe('claude-sonnet-4-7');
+    expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-7');
   });
 
-  it('三级:旧 New Maker 显式选模被同 model 会话同步更新后仍作为调度默认模型', async () => {
+  it('三级:旧显式选模后只改思考档,调度仍用原来的模型', async () => {
     const draft = await import('@/state/newMakerDraft');
     draft.patchVendorPrefs('cc', { model: 'claude-opus-4-8' });
 
     draft.patchVendorPrefsPreservingModelChoice('cc', {
-      model: 'claude-opus-4-8',
       effort: 'high',
     });
 

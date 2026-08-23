@@ -10,7 +10,10 @@ import { modelSupportsFastMode, type ProviderView } from '@cindy/model-providers
 import type { SectionModel } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
 
-import { MOBILE_EFFORT_LABELS } from '@cindy/maker-shared/agent-capabilities';
+import {
+  compactEnglishEffortLabel,
+  MOBILE_EFFORT_LABELS,
+} from '@cindy/maker-shared/agent-capabilities';
 
 import { i18n } from '@/i18n';
 
@@ -94,19 +97,50 @@ export function buildRowMetaLine(args: {
 }
 
 /**
- * effort 档展示名(桌面 effortLabelFor 同序):模型级 effortDisplayNames 覆盖 →
- * agent capabilities effortLevels 的 label(normalize 已换中文词表)→ 中文词表
- * (capabilities 未加载时的兜底)→ 原 id。
+ * effort 档完整展示名(桌面 modelEffortLabel 同序):客户端 i18n → 模型级
+ * effortDisplayNames → agent capabilities effortLevels → 简中兼容词表 → 原 id。
  */
 export function effortLabelFor(
   model: Pick<PickerRowModel, 'effortDisplayNames'>,
   effort: string,
   capabilities: MobileAgentCapabilities | null,
 ): string {
+  const localized = i18n.t(`models.options.effortLevels.${effort}`, { defaultValue: '' });
+  if (localized) return localized;
   const override = model.effortDisplayNames?.[effort];
   if (override) return override;
   const level = capabilities?.effortLevels.find((l) => l.id === effort);
   return level?.label ?? MOBILE_EFFORT_LABELS[effort] ?? effort;
+}
+
+/**
+ * 一级列表使用稳定 effort id 生成英文短码，避免被控端下发的长文案或混合语言挤占模型名。
+ * 非英文界面继续使用完整本地化标签；完整英文名称仍由模型选项页展示。
+ */
+export function compactEffortLabelFor(
+  model: Pick<PickerRowModel, 'effortDisplayNames'>,
+  effort: string,
+  capabilities: MobileAgentCapabilities | null,
+): string {
+  const fullLabel = effortLabelFor(model, effort, capabilities);
+  const language = (i18n.resolvedLanguage ?? i18n.language).toLowerCase();
+  if (!language.startsWith('en')) {
+    return fullLabel;
+  }
+
+  return compactEnglishEffortLabel(effort, fullLabel);
+}
+
+/** 父 Pressable 的完整无障碍名称：基础选择动作 + 当前可见元信息的完整语义。 */
+export function modelRowAccessibilityLabel(args: {
+  baseLabel: string;
+  subscriptionLabel?: string | null;
+  effortLabel?: string | null;
+  fastLabel?: string | null;
+}): string {
+  return [args.baseLabel, args.subscriptionLabel, args.effortLabel, args.fastLabel]
+    .filter((label): label is string => !!label)
+    .join(', ');
 }
 
 /** 选中行判定:分段模式比 (providerId, modelId) 双键;flat(providerId null)只比模型 id。 */

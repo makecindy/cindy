@@ -183,6 +183,28 @@ describe('interaction shared model', () => {
     });
   });
 
+  it('marks auto-review unavailable handoffs so mobile can localize the confirmation copy', () => {
+    const presentation = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-unavailable',
+      toolName: 'Bash',
+      description: 'Automatic review could not finish, so this action needs your confirmation.',
+      metadata: { autoReviewUnavailable: true },
+      input: { command: 'npx tsc --noEmit' },
+    });
+
+    expect(presentation.autoReviewUnavailable).toBe(true);
+    expect(presentation.description).toBe(
+      'Automatic review could not finish, so this action needs your confirmation.',
+    );
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-plain',
+      toolName: 'Bash',
+      description: 'Allow this command?',
+    }).autoReviewUnavailable).toBe(false);
+  });
+
   it('builds ask question review presentation for mobile answer cards', () => {
     const presentation = buildAskQuestionReviewPresentation({
       currentIndex: 4,
@@ -438,7 +460,7 @@ describe('interaction shared model', () => {
     });
 
     expect(buildPendingInteractionQueuePresentation(interactions, { readOnly: true }).hint)
-      .toBe('协作只读模式，仅展示电脑端请求。');
+      .toBe('协同只读模式，仅展示电脑端请求。');
     expect(buildPendingInteractionQueuePresentation([])).toMatchObject({
       active: null,
       countLabel: '当前',

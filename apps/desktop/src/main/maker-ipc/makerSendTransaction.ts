@@ -5,9 +5,7 @@ import {
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
-import {
-  CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
-} from '@cindy/maker-shared/agent-input-projection';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import {
   createHostSendFailure,
@@ -64,6 +62,7 @@ type MakerSendOptions = {
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
+    agentFacingWireContent?: unknown;
     sdkSessionId?: unknown;
     delivery?: unknown;
     shouldBroadcast?: unknown;
@@ -215,6 +214,11 @@ export interface MakerSendTransactionDeps {
    */
   applyPendingAgentSwitch?(sessionId: string): Promise<void>;
   /**
+   * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
+   * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
+   */
+  prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  /**
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
@@ -222,12 +226,14 @@ export interface MakerSendTransactionDeps {
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   /**
-   * 计划对账:会话里若有未收口的旧计划(未盖终态章且有未完成步骤),返回一段
-   * "顺手收拾"指示文本,与交接同通道前置进 wire payload(不进落库显示)。每次
-   * 发送现算,无 pending 状态、无 consume——旧清单被 agent 更新/清掉后,下一轮
-   * 自然算不出注入。undefined = 不启用(测试最小 harness)。
+   * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
+   * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
    */
-  peekPlanReconcileNote?(sessionId: string): Promise<string | null>;
+  peekPlanReconcileNote?(sessionId: string): Promise<{
+    note: string;
+    sealedTurnId?: string;
+  } | null>;
+  consumeSealedPlanReconcileNote?(sessionId: string, turnId: string): void | Promise<void>;
   /**
    * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
@@ -259,6 +265,7 @@ type ResolveSessionResult =
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   clientId: string;
   content: unknown;
+  agentFacingWireContent?: IpcUserMessage;
   sdkSessionId?: string;
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
@@ -277,6 +284,9 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   return {
     clientId: persist.clientId,
     content: persist.content,
+    ...(persist.agentFacingWireContent && typeof persist.agentFacingWireContent === 'object'
+      ? { agentFacingWireContent: persist.agentFacingWireContent as IpcUserMessage }
+      : {}),
     ...(typeof persist.sdkSessionId === 'string' ? { sdkSessionId: persist.sdkSessionId } : {}),
     ...(persist.autoResume === true ? { autoResume: true as const } : {}),
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
@@ -594,6 +604,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
       await deps.applyPendingAgentSwitch?.(sessionId);
+      await deps.prepareUnhealthySession?.(sessionId);
       let sess = deps.getSession(sessionId);
       // Maker keeps a failed Session registered until its real handle cleanup
       // succeeds. It is not a reusable send target: route it through the
@@ -801,9 +812,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       })();
       const startsWithSlashCommand =
         reconcileSlashRanges !== undefined
-          ? reconcileSlashRanges.some(
-              (range) => (range as { start?: unknown } | null)?.start === 0,
-            )
+          ? reconcileSlashRanges.some((range) => (range as { start?: unknown } | null)?.start === 0)
           : reconcilePersistText.startsWith('/');
       const isOrdinaryUserTurn =
         soForReconcile.origin === undefined &&
@@ -813,11 +822,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         (reconcilePersistText.length > 0 || reconcileHasAttachments) &&
         !startsWithSlashCommand &&
         !reconcilePersistText.startsWith('[UI_ACTION_TRIGGER]');
-      const planReconcileNote = isOrdinaryUserTurn
+      const planReconcile = isOrdinaryUserTurn
         ? ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null)
         : null;
-      const withPlanReconcile = planReconcileNote
-        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcileNote)
+      const withPlanReconcile = planReconcile
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcile.note)
         : withHandoff;
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
@@ -827,8 +836,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
       // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
       const mobileClientNote =
-        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true)
-        && shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true) &&
+        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildMobileClientPromptNote()
           : null;
       const outgoing = mobileClientNote
@@ -1006,10 +1015,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         ...(persistUserMessage.recoveryCheckpoint
                           ? { recoveryCheckpoint: persistUserMessage.recoveryCheckpoint }
                           : {}),
-                        ...(persistUserMessage.origin ? { origin: persistUserMessage.origin } : {}),
-                        // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
-                        // 对齐,renderer 据此渲染"由自动化任务发送"标签。
-                        ...(so.origin ? { origin: so.origin } : {}),
+                        ...(persistUserMessage.agentFacingWireContent
+                          ? { agentFacingWireContent: persistUserMessage.agentFacingWireContent }
+                          : {}),
+                        // 队列来源写入 agentMeta,不发给 maker-core。Orca 只在 persist
+                        // 上;scheduler 直发可能只在 sendOpts.origin 上。
+                        ...((persistUserMessage.origin ?? so.origin)
+                          ? { origin: persistUserMessage.origin ?? so.origin }
+                          : {}),
                       },
                     },
                     persistUserMessage.shouldBroadcast ||
@@ -1076,6 +1089,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (pendingHandoff && sendResult.accepted) {
           // 只有跨过不可逆 dispatch 边界才消费;未派发保留 pending 下次重试。
           deps.consumePendingHandoff?.(sessionId);
+        }
+        if (planReconcile?.sealedTurnId && sendResult.accepted) {
+          try {
+            await deps.consumeSealedPlanReconcileNote?.(sessionId, planReconcile.sealedTurnId);
+          } catch (err) {
+            deps.log.warn('send: completed plan guard consume failed', {
+              sessionId,
+              turnId: planReconcile.sealedTurnId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         if (userPromptPreviewSessionId && userPromptPreviewClientId) {
           if (sendResult.accepted) {

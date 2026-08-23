@@ -19,7 +19,7 @@
 
 import { EventEmitter } from 'node:events';
 
-import type { BrowserWindow, WebContents } from 'electron';
+import type { BrowserWindow, Session, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const nativeSurfaceMocks = vi.hoisted(() => ({
@@ -32,7 +32,11 @@ vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
 }));
 
-import { BROWSER_PARTITION } from '../../shared/webviewPartition';
+import {
+  BROWSER_PARTITION,
+  LOGIN_CAPTCHA_CANCEL_HASH,
+  LOGIN_CAPTCHA_PARTITION,
+} from '../../shared/webviewPartition';
 import { getEffectiveAppShortcuts, type AppShortcutId } from '../../shared/appShortcuts';
 import {
   BLANK_POPUP_WINDOW_WEB_PREFERENCES,
@@ -43,11 +47,17 @@ import {
   setRsbPopupOpenerReportSubscriber,
   RSB_BROWSER_POPUP_CHANNEL,
   applyGhostWebviewHardening,
+  applyLoginCaptchaWebviewHardening,
   applyWebviewHardening,
+  hardenLoginCaptchaSession,
+  installGhostGuestNavigationHandlers,
   installBrowserGuestHandlers,
   installDeferredPopupRouter,
+  installLoginCaptchaGuestHandlers,
+  isAllowedLoginCaptchaUrl,
   isGuestShortcutKeyDownType,
   resolveGuestShortcutAction,
+  setLoginCaptchaOriginResolver,
   setRsbPopupOpenerResolver,
 } from '../webview-security';
 
@@ -305,6 +315,236 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
     expect('allowpopups' in params).toBe(false);
     expect('disablewebsecurity' in params).toBe(false);
     expect('webpreferences' in params).toBe(false);
+  });
+});
+
+describe('applyLoginCaptchaWebviewHardening(登录 captcha webview)', () => {
+  it('与意识面板同级锁死:保留内存分区、零 preload、零 popup', () => {
+    const webPreferences: Record<string, unknown> = {
+      nodeIntegration: true,
+      nodeIntegrationInSubFrames: true,
+      nodeIntegrationInWorker: true,
+      contextIsolation: false,
+      sandbox: false,
+      webviewTag: true,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
+      plugins: true,
+      preload: '/tmp/evil-preload.js',
+    };
+    const params: Record<string, string> = {
+      src: 'https://auth.example.com/captcha/turnstile?theme=dark',
+      partition: LOGIN_CAPTCHA_PARTITION,
+      disablewebsecurity: 'true',
+      webpreferences: 'nodeIntegration=1',
+      allowpopups: 'true',
+    };
+
+    applyLoginCaptchaWebviewHardening(webPreferences, params);
+
+    expect(webPreferences.sandbox).toBe(true);
+    expect(webPreferences.nodeIntegration).toBe(false);
+    expect(webPreferences.nodeIntegrationInSubFrames).toBe(false);
+    expect(webPreferences.nodeIntegrationInWorker).toBe(false);
+    expect(webPreferences.contextIsolation).toBe(true);
+    expect(webPreferences.webSecurity).toBe(true);
+    expect(webPreferences.allowRunningInsecureContent).toBe(false);
+    expect(webPreferences.webviewTag).toBe(false);
+    expect(webPreferences.plugins).toBe(false);
+    expect('preload' in webPreferences).toBe(false);
+    expect(params.partition).toBe(LOGIN_CAPTCHA_PARTITION);
+    expect('allowpopups' in params).toBe(false);
+    expect('disablewebsecurity' in params).toBe(false);
+    expect('webpreferences' in params).toBe(false);
+  });
+
+  it('对专属 session 的权限与下载都默认拒绝', () => {
+    const setPermissionRequestHandler = vi.fn();
+    const setPermissionCheckHandler = vi.fn();
+    const on = vi.fn();
+
+    hardenLoginCaptchaSession({
+      setPermissionRequestHandler,
+      setPermissionCheckHandler,
+      on,
+    } as unknown as Pick<
+      Session,
+      'setPermissionRequestHandler' | 'setPermissionCheckHandler' | 'on'
+    >);
+
+    expect(setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+    expect(setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+    expect(on).toHaveBeenCalledWith('will-download', expect.any(Function));
+
+    const callback = vi.fn();
+    const requestHandler = setPermissionRequestHandler.mock.calls[0]![0] as (
+      webContents: unknown,
+      permission: string,
+      callback: (allowed: boolean) => void,
+    ) => void;
+    requestHandler(undefined, 'media', callback);
+    expect(callback).toHaveBeenCalledWith(false);
+
+    const checkHandler = setPermissionCheckHandler.mock.calls[0]![0] as () => boolean;
+    expect(checkHandler()).toBe(false);
+
+    const preventDefault = vi.fn();
+    const downloadHandler = on.mock.calls[0]![1] as (event: {
+      preventDefault(): void;
+    }) => void;
+    downloadHandler({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('isAllowedLoginCaptchaUrl(captcha 附加/导航白名单)', () => {
+  afterEach(() => setLoginCaptchaOriginResolver(null));
+
+  it('resolver 未注入时 fail-closed', () => {
+    expect(isAllowedLoginCaptchaUrl('https://auth.example.com/captcha/turnstile')).toBe(false);
+  });
+
+  it('https + origin 命中 + 托管页精确路径才放行', () => {
+    setLoginCaptchaOriginResolver(() => ['https://auth.example.com']);
+    expect(isAllowedLoginCaptchaUrl('https://auth.example.com/captcha/turnstile')).toBe(true);
+    expect(
+      isAllowedLoginCaptchaUrl('https://auth.example.com/captcha/turnstile?theme=dark&lang=ja'),
+    ).toBe(true);
+    // 路径不精确、origin 不命中、协议降级一律拒
+    expect(isAllowedLoginCaptchaUrl('https://auth.example.com/captcha/other')).toBe(false);
+    expect(isAllowedLoginCaptchaUrl('https://auth.example.com/')).toBe(false);
+    expect(isAllowedLoginCaptchaUrl('https://evil.example.com/captcha/turnstile')).toBe(false);
+    expect(isAllowedLoginCaptchaUrl('http://auth.example.com/captcha/turnstile')).toBe(false);
+    expect(isAllowedLoginCaptchaUrl('not-a-url')).toBe(false);
+    expect(isAllowedLoginCaptchaUrl(undefined)).toBe(false);
+  });
+
+  it('loopback 上放行 http(本地 dev auth-server),非 loopback http 拒绝', () => {
+    setLoginCaptchaOriginResolver(() => [
+      'http://localhost:3344',
+      'http://127.0.0.1:3344',
+      'http://auth.internal:3344',
+    ]);
+    expect(isAllowedLoginCaptchaUrl('http://localhost:3344/captcha/turnstile')).toBe(true);
+    expect(isAllowedLoginCaptchaUrl('http://127.0.0.1:3344/captcha/turnstile')).toBe(true);
+    // 即便 resolver 误列了非 loopback 的 http origin,协议闸仍拒
+    expect(isAllowedLoginCaptchaUrl('http://auth.internal:3344/captcha/turnstile')).toBe(false);
+  });
+
+  it('resolver 抛错时 fail-closed', () => {
+    setLoginCaptchaOriginResolver(() => {
+      throw new Error('endpoints not ready');
+    });
+    expect(isAllowedLoginCaptchaUrl('https://auth.example.com/captcha/turnstile')).toBe(false);
+  });
+});
+
+describe('installLoginCaptchaGuestHandlers(captcha guest 导航闸)', () => {
+  afterEach(() => setLoginCaptchaOriginResolver(null));
+
+  it('拒绝 popup，并同时拦截越界普通导航与 HTTP redirect', () => {
+    setLoginCaptchaOriginResolver(() => ['https://auth.example.com']);
+    const guest = new EventEmitter() as EventEmitter & {
+      setWindowOpenHandler: ReturnType<typeof vi.fn>;
+      executeJavaScript: ReturnType<typeof vi.fn>;
+    };
+    guest.setWindowOpenHandler = vi.fn();
+    guest.executeJavaScript = vi.fn(async () => undefined);
+
+    installLoginCaptchaGuestHandlers(guest as unknown as WebContents);
+
+    expect(guest.setWindowOpenHandler).toHaveBeenCalledTimes(1);
+    expect(guest.setWindowOpenHandler.mock.calls[0]![0]({})).toEqual({ action: 'deny' });
+
+    const allowed = { preventDefault: vi.fn() };
+    guest.emit(
+      'will-redirect',
+      allowed,
+      'https://auth.example.com/captcha/turnstile?theme=dark',
+    );
+    expect(allowed.preventDefault).not.toHaveBeenCalled();
+
+    for (const eventName of ['will-navigate', 'will-redirect']) {
+      const blocked = { preventDefault: vi.fn() };
+      guest.emit(eventName, blocked, 'https://evil.example.com/captcha/turnstile');
+      expect(blocked.preventDefault).toHaveBeenCalledTimes(1);
+    }
+
+    const escapeEvent = { preventDefault: vi.fn() };
+    guest.emit('before-input-event', escapeEvent, { type: 'keyDown', key: 'Escape' });
+    expect(escapeEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(guest.executeJavaScript).toHaveBeenCalledWith(
+      `location.hash = ${JSON.stringify(LOGIN_CAPTCHA_CANCEL_HASH)}`,
+      true,
+    );
+  });
+});
+
+describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用导航链)', () => {
+  function makeHarness() {
+    let openHandler: (() => { action: 'deny' }) | null = null;
+    const guest = new EventEmitter() as EventEmitter & {
+      setWindowOpenHandler: ReturnType<typeof vi.fn>;
+    };
+    guest.setWindowOpenHandler = vi.fn((handler) => {
+      openHandler = handler;
+    });
+    const host = { id: 10 } as unknown as WebContents;
+    const preview = vi.fn();
+    const external = vi.fn();
+    installGhostGuestNavigationHandlers(host, guest as unknown as WebContents, 'xd-sites', {
+      preview,
+      external,
+    });
+    return { guest, host, preview, external, getOpenHandler: () => openHandler };
+  }
+
+  it('普通 HTTPS <a> 的 will-navigate 被拦下并带真实 host/guest 交给外链处理', () => {
+    const harness = makeHarness();
+    const event = { preventDefault: vi.fn() };
+
+    harness.guest.emit('will-navigate', event, 'https://workers.xd.team/workspace/published');
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.external).toHaveBeenCalledWith(
+      'xd-sites',
+      'https://workers.xd.team/workspace/published',
+      harness.host,
+      harness.guest,
+    );
+    expect(harness.preview).not.toHaveBeenCalled();
+  });
+
+  it('预览仍走既有处理，同 Ghost 协议普通页面仍允许原位导航', () => {
+    const harness = makeHarness();
+    const previewEvent = { preventDefault: vi.fn() };
+    const allowEvent = { preventDefault: vi.fn() };
+    const hash = 'a'.repeat(64);
+
+    harness.guest.emit('will-navigate', previewEvent, `cindy-ghost://xd-sites/preview/${hash}.png`);
+    harness.guest.emit('will-navigate', allowEvent, 'cindy-ghost://xd-sites/panel.html');
+
+    expect(previewEvent.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.preview).toHaveBeenCalledOnce();
+    expect(allowEvent.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('HTTP/自定义协议被静默拦下，不进入外链处理', () => {
+    const harness = makeHarness();
+    for (const url of ['http://workers.xd.team/', 'custom://workers.xd.team/']) {
+      const event = { preventDefault: vi.fn() };
+      harness.guest.emit('will-navigate', event, url);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    }
+    expect(harness.external).not.toHaveBeenCalled();
+  });
+
+  it('target=_blank / window.open 继续由 setWindowOpenHandler 一律 deny', () => {
+    const harness = makeHarness();
+
+    expect(harness.guest.setWindowOpenHandler).toHaveBeenCalledOnce();
+    expect(harness.getOpenHandler()?.()).toEqual({ action: 'deny' });
+    expect(harness.external).not.toHaveBeenCalled();
   });
 });
 

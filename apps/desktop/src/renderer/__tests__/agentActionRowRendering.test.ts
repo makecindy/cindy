@@ -354,6 +354,15 @@ describe('AgentActionRow — 行主文案', () => {
     expect(screen.getAllByText('查看工作区状态')).toHaveLength(1);
     expect(screen.queryByText(/^# /)).toBeNull();
   });
+
+  it('exposes the tool clientId as a viewport child anchor', () => {
+    const { container } = render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'Bash', { command: 'ls' }),
+      }),
+    );
+    expect(container.querySelector('[data-message-client-id="t1"]')).toBeTruthy();
+  });
 });
 
 describe('AgentActionsBlock — 状态判定与块头', () => {

@@ -16,6 +16,7 @@
  */
 
 import type {
+  AskUserQuestionItem,
   InteractionRequest,
   AgentKind,
   Effort,
@@ -25,12 +26,16 @@ import type { ProviderSection } from '@cindy/model-providers';
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { InteractiveCardSpec } from '@cindy/im';
 
+import { autoReviewUnavailablePromptLine } from './autoReviewUnavailablePrompt';
 import type { ImUiTextPack } from './types';
 import {
   composeInteractionModel,
+  needsAskMultiCard,
   truncateBlock,
+  truncateInline,
   BTN_LABEL_MAX,
   IM_PERMISSION_INPUT_PREVIEW_MAX,
+  MAX_OPTIONS,
   MAX_PLAN_LEN,
 } from './interactionCardModel';
 import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
@@ -54,6 +59,15 @@ export interface ImCardBuilders {
   buildAskUserCard(
     req: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
   ): InteractiveCardSpec | null;
+  /**
+   * 多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道): 按当前勾选态重建整卡。
+   * 首发与每次 ask:multi 按键后的原地 patch 共用, 保证两处渲染永不漂移。
+   */
+  buildAskMultiCard(args: {
+    requestId: string;
+    questions: AskUserQuestionItem[];
+    selections: ReadonlyMap<number, ReadonlySet<number>>;
+  }): InteractiveCardSpec;
   buildPlanReviewCard(
     req: Extract<InteractionRequest, { kind: 'plan_review' }>,
   ): InteractiveCardSpec;
@@ -105,20 +119,90 @@ export interface ImCardBuilders {
     sessions: RecentControlSession[];
   }): InteractiveCardSpec;
   buildResolvedCard(label: string): InteractiveCardSpec;
+  /** 「群会话不能用完全访问」失败时的私聊修复卡(仅提供 permissionModeFix 文案的渠道)。 */
+  buildPermissionModeFixCard(args: {
+    sessionId: string;
+    agentKind: AgentKind;
+    sessionTitle: string;
+  }): InteractiveCardSpec;
+  /** 授权卡收口: 保留原始正文 + 追加决策结果, 去掉按钮。 */
+  buildResolvedPermissionCard(
+    original: { title: string; body: string },
+    label: string,
+  ): InteractiveCardSpec;
 }
 
 export function createCardBuilders(
   ui: ImUiTextPack,
   getDefaultEffortFor: (modelId: string, agentKind?: AgentKind) => Effort,
 ): ImCardBuilders {
+  /**
+   * 多题/多选打勾卡: 逐问渲染问题正文, 每个选项一枚切换按钮(题号锚定到
+   * 正文的问题序号, 勾选态用 selectedMark 前缀反馈), 末尾一枚提交按钮一次性
+   * 上交全部已答问题。按钮 id/payload 与 cardActionHandler 的 ask:multi /
+   * ask:multi-submit 分支对应; 按键后的原地 patch 复用同一函数重建整卡。
+   */
+  function askMultiCard(args: {
+    requestId: string;
+    questions: AskUserQuestionItem[];
+    selections: ReadonlyMap<number, ReadonlySet<number>>;
+  }): InteractiveCardSpec {
+    const m = ui.cards.ask.multi!;
+    const bodyLines: string[] = [];
+    const buttons: InteractiveCardSpec['buttons'] = [];
+    // 单独一道多选题沿用单问卡标题观感; 多道题才用「确认几件事」总标题。
+    const title =
+      args.questions.length === 1
+        ? ui.cards.ask.title(args.questions[0].header || args.questions[0].question)
+        : m.title;
+    args.questions.forEach((question, qi) => {
+      const headerText = question.header || question.question;
+      const hint = question.multiSelect ? m.multiSelectHint : '';
+      bodyLines.push(`**${qi + 1}. ${headerText}**${hint}`);
+      if (question.header && question.header !== question.question) {
+        bodyLines.push(question.question);
+      }
+      const options = (question.options ?? []).slice(0, MAX_OPTIONS);
+      if (options.length === 0) {
+        // 自由文本问题无法在打勾卡里给输入框: 正文已在上面渲染, 不出按钮;
+        // 提交时该问按未答省略, agent 会追问。不要写 noOptionsHint —— 那句
+        // 「直接发文字」在打勾卡里没有对应输入路径。
+        return;
+      }
+      const selected = args.selections.get(qi);
+      options.forEach((opt, oi) => {
+        // 勾选前缀也占按钮文案预算; 按钮是单行, 用单行省略号截断
+        // (块级截断的换行后缀会掉进按钮文案)。
+        // 飞书 v1 单 action 模块最多 5 个按钮, 由 @cindy/im 的
+        // buildInteractiveCardV1 按模块拆分, 这里不截断选项。
+        const prefix = `${selected?.has(oi) === true ? m.selectedMark : ''}${qi + 1}·`;
+        buttons.push({
+          id: 'ask:multi',
+          label: prefix + truncateInline(opt.label, BTN_LABEL_MAX - prefix.length - 1),
+          type: 'default',
+          payload: { requestId: args.requestId, q: qi, o: oi },
+        });
+      });
+    });
+    buttons.push({
+      id: 'ask:multi-submit',
+      label: m.submitLabel,
+      type: 'primary',
+      payload: { requestId: args.requestId },
+    });
+    return { title, body: bodyLines.join('\n\n'), buttons };
+  }
+
   return {
     // ── permission ──────────────────────────────────────────────────────────
 
     buildPermissionCard(req) {
       const model = composeInteractionModel(req);
+      const params = `${ui.cards.permission.paramsLabel}\n\`\`\`json\n${previewInput(model.input)}\n\`\`\``;
+      const unavailable = autoReviewUnavailablePromptLine(req);
       return {
         title: ui.cards.permission.title(model.toolName),
-        body: `${ui.cards.permission.paramsLabel}\n\`\`\`json\n${previewInput(model.input)}\n\`\`\``,
+        body: unavailable ? `${unavailable}\n\n${params}` : params,
         buttons: [
           {
             id: 'permission:allow:once',
@@ -126,12 +210,14 @@ export function createCardBuilders(
             type: 'primary',
             payload: { requestId: req.requestId },
           },
-          {
+          // Auto 故障降级会标 forcePrompt：Claude 丢 permissionUpdates，
+          // Codex 把 acceptForSession 收成单次 allow。展示「总是允许」等于说谎。
+          ...(!unavailable ? [{
             id: 'permission:allow:always',
             label: ui.cards.permission.btnAllowAlways,
-            type: 'default',
+            type: 'default' as const,
             payload: { requestId: req.requestId },
-          },
+          }] : []),
           {
             id: 'permission:deny',
             label: ui.cards.permission.btnDeny,
@@ -145,10 +231,19 @@ export function createCardBuilders(
     // ── ask_user_question ───────────────────────────────────────────────────
     // v1 简化(只渲染第一问 / 至多 6 个选项 / multiSelect 降级单选)已收进
     // interactionCardModel.composeInteractionModel — 这里只做渲染。
+    // 例外: 渠道提供了 ui.cards.ask.multi(卡片可原地更新)且请求命中
+    // needsAskMultiCard(多题 / 含多选)时, 改发打勾卡。
 
     buildAskUserCard(req) {
       const model = composeInteractionModel(req);
       if (!model) return null;
+      if (model.kind === 'ask_user_question' && ui.cards.ask.multi && needsAskMultiCard(req)) {
+        return askMultiCard({
+          requestId: req.requestId,
+          questions: req.questions,
+          selections: new Map(),
+        });
+      }
 
       const { headerText, question } = model;
       const bodyExtra = model.questionBody ? `\n${model.questionBody}` : '';
@@ -194,6 +289,8 @@ export function createCardBuilders(
         })),
       };
     },
+
+    buildAskMultiCard: askMultiCard,
 
     // ── plan_review ─────────────────────────────────────────────────────────
 
@@ -519,6 +616,52 @@ export function createCardBuilders(
     buildResolvedCard(label) {
       return {
         body: label,
+        buttons: [],
+      };
+    },
+
+    /**
+     * 「群会话不能用完全访问」的私聊修复卡 — 一键把会话切回 auto。payload
+     * 带 sessionId + agentKind(cardAction 通道只带 senderId, 业务 id 走 payload)。
+     */
+    buildPermissionModeFixCard(args: {
+      sessionId: string;
+      agentKind: AgentKind;
+      sessionTitle: string;
+    }): InteractiveCardSpec {
+      const fixUi = ui.cards.permissionModeFix;
+      if (!fixUi) {
+        throw new Error('buildPermissionModeFixCard requires ui.cards.permissionModeFix (feishu)');
+      }
+      return {
+        title: fixUi.title,
+        body: fixUi.body(args.sessionTitle),
+        buttons: [
+          {
+            id: 'permissionMode:fix-auto',
+            label: fixUi.btnFix,
+            type: 'primary' as const,
+            payload: {
+              sessionId: args.sessionId,
+              agentKind: args.agentKind,
+            },
+          },
+        ],
+      };
+    },
+
+    /**
+     * 授权卡被点击后的收口形态: **保留原始正文**(工具名 + 参数预览 — 用户
+     * 需要看到自己刚刚批准的是什么), 去掉按钮, 末尾追加决策结果一行。
+     * 与 buildResolvedCard 的差异正在于不吞掉决策正文。
+     */
+    buildResolvedPermissionCard(
+      original: { title: string; body: string },
+      label: string,
+    ): InteractiveCardSpec {
+      return {
+        title: original.title,
+        body: `${original.body}\n\n${label}`,
         buttons: [],
       };
     },

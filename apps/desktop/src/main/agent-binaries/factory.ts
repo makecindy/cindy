@@ -55,6 +55,41 @@ function getVerifiedMarker(installSubdir: string, version: string): string {
   return path.join(getVersionDir(installSubdir, version), '.verified');
 }
 
+/**
+ * Find the latest locally installed and verified version.
+ * Scans the install root for directories containing a .verified marker file,
+ * then checks that the binary exists and is executable.
+ * Returns the binary path if found, null otherwise.
+ */
+function findLatestVerifiedBinary(
+  installSubdir: string,
+  binaryName: string,
+): { version: string; binaryPath: string } | null {
+  try {
+    const root = getInstallRoot(installSubdir);
+    const entries = fs.readdirSync(root, { withFileTypes: true });
+    const verified: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        fs.accessSync(getVerifiedMarker(installSubdir, entry.name));
+        verified.push(entry.name);
+      } catch { /* no .verified marker */ }
+    }
+    if (verified.length === 0) return null;
+    // Sort descending by version string (semver-like: higher = later)
+    verified.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const v of verified) {
+      const binPath = getFinalBinPath(installSubdir, v, binaryName);
+      try {
+        fs.accessSync(binPath, fs.constants.X_OK);
+        return { version: v, binaryPath: binPath };
+      } catch { /* binary missing or not executable */ }
+    }
+  } catch { /* install root doesn't exist or unreadable */ }
+  return null;
+}
+
 function isInstalled(installSubdir: string, version: string, binaryName: string): boolean {
   try {
     fs.accessSync(getFinalBinPath(installSubdir, version, binaryName), fs.constants.X_OK);
@@ -142,10 +177,23 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
     async prepare(opts) {
       const onProgress = opts?.onProgress;
       try {
+        const binaryName = deriveBinaryName();
         // 1. 拉 manifest（不带 dev fallback —— dev mode 归属在 Boss 2 包壳层）
         let manifest = getCachedManifest();
         if (!manifest) manifest = await fetchManifest(undefined, opts?.signal);
+        
+        // 2. manifest 获取失败时，检查本地已验证版本（离线 fallback）
         if (!manifest) {
+          // Optional assets (currently Pi) must remain disabled when the
+          // manifest is unavailable; a stale local install may have been
+          // withdrawn for this platform/channel and must not be resurrected.
+          const local = config.optionalAsset
+            ? null
+            : findLatestVerifiedBinary(config.installSubdir, binaryName);
+          if (local) {
+            emit({ status: 'ready', installedVersion: local.version, binaryPath: local.binaryPath }, onProgress);
+            return { ready: true, binaryPath: local.binaryPath };
+          }
           emit({
             status: 'failed',
             error: { code: 'manifest_failed', message: 'Failed to fetch manifest from CDN' },
@@ -153,7 +201,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           return { ready: false, binaryPath: '', error: 'manifest_failed' };
         }
 
-        // 2. 取 vendor asset
+        // 3. 取 vendor asset
         const asset: VendorAsset | undefined = getVendorAsset(manifest, config.manifestField);
         if (!asset) {
           emit({
@@ -182,7 +230,6 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         emit({ availableVersion: asset.version }, onProgress);
 
         // 3. 已安装命中
-        const binaryName = deriveBinaryName();
         const finalBinPath = getFinalBinPath(config.installSubdir, asset.version, binaryName);
         if (isInstalled(config.installSubdir, asset.version, binaryName)) {
           emit({
@@ -280,6 +327,21 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           throw err;
         }
         const code = err instanceof DownloadError ? err.code : 'unknown';
+        // P1 fix: download/extract failures should also try local fallback.
+        // A proxy that permits manifest URLs but blocks CDN binaries would
+        // otherwise leave the user stuck even when a verified local version
+        // exists.
+        const localFallback = config.optionalAsset
+          ? null
+          : findLatestVerifiedBinary(config.installSubdir, config.artifact.binaryName);
+        if (localFallback) {
+          emit({
+            status: 'ready',
+            installedVersion: localFallback.version,
+            binaryPath: localFallback.binaryPath,
+          }, opts?.onProgress);
+          return { ready: true, binaryPath: localFallback.binaryPath };
+        }
         emit({
           status: 'failed',
           error: { code, message },

@@ -313,6 +313,8 @@ function dispatchTx(readyDb, payload) {
       return sessionsSetStatus(readyDb, request.args);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(readyDb, request.args);
+    case 'context.rebuild':
+      return contextRebuild(readyDb, request.args);
     case 'message.delete':
       return messageDelete(readyDb, request.args);
     case 'im.deleteBindings':
@@ -403,6 +405,35 @@ function sessionAgentSwitchFallback(readyDb, args) {
         code: 'NOT_FOUND',
       });
     }
+  })();
+}
+
+// ⚠️ 与 worker/opHandlers/tx.ts 的同名事务保持一致。
+function contextRebuild(readyDb, args) {
+  const payload = asRecord(args, 'context.rebuild args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const markerId = expectString(payload.markerId, 'markerId');
+  const markerClientId = expectString(payload.markerClientId, 'markerClientId');
+  const markerContent = expectString(payload.markerContent, 'markerContent');
+  const markerCreatedAt = expectNumber(payload.markerCreatedAt, 'markerCreatedAt');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  return readyDb.transaction(() => {
+    const sessionResult = readyDb.prepare(
+      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+    ).run(updatedAt, sessionId, expectedClearedAt);
+    if (sessionResult.changes !== 1) {
+      throw Object.assign(new Error('Session missing or clear-boundary changed: ' + sessionId), {
+        code: 'PRECONDITION_FAILED',
+      });
+    }
+    // 只追加新边界。删掉更早的 context_rebuild 会让 fork 丢掉中间失效点。
+    readyDb.prepare(
+      "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
+    ).run(markerId, markerClientId, sessionId, markerContent, markerCreatedAt, markerCreatedAt);
   })();
 }
 
@@ -1140,9 +1171,9 @@ function rewindCommit(readyDb, args) {
       rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
     }
     if (sdkSessionId) {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0 WHERE id = ?').run(now, now, sessionId);
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL WHERE id = ?').run(now, now, sessionId);
     }
   })();
 }

@@ -77,6 +77,8 @@ export interface ListAgentSkillsOptions {
   /** Omit to list only agent-global skills without a project scope. */
   workingDir?: string;
   forceReload?: boolean;
+  /** Host-owned Pi boundary; renderer input must never set this directly. */
+  includeManagedPiPackages?: boolean;
 }
 
 export interface ListAgentSkillsResult {

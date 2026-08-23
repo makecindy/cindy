@@ -97,7 +97,9 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
   });
 
   it('gates renderer visible-session IPC on the full Agent Island support check', () => {
-    expect(mainLayoutSource).toContain("import { isAgentIslandSupported, toggleAgentIslandSoundEnabled } from '@/hooks/useAgentIslandSettings';");
+    expect(mainLayoutSource).toMatch(
+      /import\s*\{\s*isAgentIslandSupported,\s*toggleAgentIslandSoundEnabled,?\s*\}\s*from '@\/hooks\/useAgentIslandSettings';/,
+    );
     expect(mainLayoutSource).toContain('if (!isAgentIslandSupported()) return;');
     expect(mainLayoutSource).toContain('if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;');
     expect(orcaSplitViewSource).toContain("import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';");

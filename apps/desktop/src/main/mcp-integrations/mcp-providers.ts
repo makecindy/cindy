@@ -11,7 +11,11 @@ import {
 import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
-import { getCindyGhostsMcpDeps, type GhostGrantLiveSessionState } from './ghost.js';
+import {
+  getCindyGhostsMcpDeps,
+  type GhostGrantLiveSessionState,
+  type ToolResultImageDescription,
+} from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
@@ -31,7 +35,10 @@ import {
   listSessionsForHistory,
   getMessagesForHistory,
 } from '../localDb/chatHistoryReader.js';
-import { tryGetDbClient } from '../localDb/client/current.js';
+import {
+  isDbClientNotReadyError,
+  tryGetDbClient,
+} from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
 import {
   patchSessionMetaInDb,
@@ -67,6 +74,17 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
+   *  返回结构区分「有意跳过」(skipped:true, 视觉桥未开/模型不命中, 不告警)与
+   *  「真正尝试但失败」(skipped:false + null, 计入 attemptedCount 供告警)。 */
+  describeToolResultImage?: (input: {
+    imageUrl: string;
+    sessionId: string | null;
+    sessionInstanceId: string | null;
+    signal?: AbortSignal;
+  }) => Promise<ToolResultImageDescription>;
+  /** 工具结果图片全部描述失败时回调（视觉桥不可用告警）。缺失 = 不告警。 */
+  onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
@@ -79,7 +97,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       const s = tryGetOrcaCollabService();
       if (!s) return { ok: false, errorCode: 'HOST_NOT_READY' as const, message: 'orca collab service not initialized' } as R;
       try { return await fn(s, ...args); }
-      catch (err) { return { ok: false, errorCode: 'INTERNAL' as const, message: err instanceof Error ? err.message : String(err) } as R; }
+      catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL';
+        return { ok: false, errorCode, message } as R;
+      }
     };
   }
 
@@ -286,6 +308,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       logger: createLogger('mcp/cindy_helper'),
+      sessionQueue: {
+        listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
+        listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>
+          service.listSessionQueuedCounts(sessionIds)),
+      },
+      sessionControl: {
+        updateQueuedMessage: wrap((service, params) => service.updateSessionQueuedMessage(params)),
+        cancelQueuedMessage: wrap((service, params) => service.cancelSessionQueuedMessage(params)),
+        steerSession: wrap((service, params) => service.steerSession(params)),
+        stopSessionTurn: wrap((service, params) => service.stopSessionTurn(params)),
+        getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
+      },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -385,11 +419,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       history: {
         listWorkdirs: async (args) => {
           try { const page = await listWorkdirsForHistory(args); return { ok: true, page }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         listSessions: async (args) => {
           try { const page = await listSessionsForHistory(args); return { ok: true, page }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         getMessages: async (args) => {
           return readChatHistoryMessages(args, {
@@ -399,7 +433,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
         searchChatHistory: async (args) => {
           try { const result = await searchChatHistoryHybrid(args); return { ok: true, result }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
       },
       // submit_github_issue: 官方反馈提交(确认卡片 → serverApiFetch)。
@@ -498,6 +532,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       instance: createCindyGhostsMcpServer(
         getCindyGhostsMcpDeps(ctx, {
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          describeToolResultImage: deps.describeToolResultImage,
+          onToolResultImagesFailed: deps.onToolResultImagesFailed,
         }),
       ),
     }),

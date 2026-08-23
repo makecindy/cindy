@@ -181,6 +181,91 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
   });
 
+  it('首条 slash 带 consumePendingOpener: 首个文本回复 patch 开场白卡, 不另发', async () => {
+    const { handlers } = makeHarness();
+    const withMarkdown = vi.fn(async () => true);
+    const withCard = vi.fn(async () => true);
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      consumePendingOpener: { withMarkdown, withCard },
+    });
+
+    expect(handled).toBe(true);
+    expect(withMarkdown).toHaveBeenCalledWith('ou_user', ui.slash.help);
+    expect(mocks.sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('首条 slash 消费失败时回落正常发送', async () => {
+    const { handlers } = makeHarness();
+    const withMarkdown = vi.fn(async () => false);
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      consumePendingOpener: { withMarkdown, withCard: vi.fn(async () => false) },
+    });
+
+    expect(handled).toBe(true);
+    expect(withMarkdown).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.help);
+  });
+
+  it('opener patch 失败时回落正常发送(用户仍收到回复)', async () => {
+    const { handlers } = makeHarness();
+    const withMarkdown = vi.fn(async () => {
+      throw new Error('patch failed');
+    });
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      consumePendingOpener: { withMarkdown, withCard: vi.fn(async () => false) },
+    });
+
+    expect(handled).toBe(true);
+    expect(withMarkdown).toHaveBeenCalledTimes(1);
+    // patch 抛错不吞回复 — 回落正常发送。
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.help);
+  });
+
+  it('opener 卡片替换失败时回落正常发卡', async () => {
+    const { handlers } = makeHarness();
+    const withCard = vi.fn(async () => {
+      throw new Error('patch failed');
+    });
+
+    const handled = await handlers.handleSlashCommand('/ctr', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      consumePendingOpener: { withMarkdown: vi.fn(async () => false), withCard },
+    });
+
+    expect(handled).toBe(true);
+    expect(withCard).toHaveBeenCalledTimes(1);
+    expect(mocks.sendInteractiveCard).toHaveBeenCalled();
+  });
+
+  it('/ctr 发卡失败时不 enterControl(用户不会被锁死)', async () => {
+    const { enterControl } = await import('../controlState');
+    mocks.sendInteractiveCard.mockRejectedValueOnce(new Error('send failed'));
+    const { handlers } = makeHarness();
+
+    await handlers.handleSlashCommand('/ctr', SLASH_CTX);
+
+    expect(enterControl).not.toHaveBeenCalled();
+  });
+
+  it('/ctr 发卡成功才 enterControl', async () => {
+    const { enterControl } = await import('../controlState');
+    const { handlers } = makeHarness();
+
+    await handlers.handleSlashCommand('/ctr', SLASH_CTX);
+
+    expect(enterControl).toHaveBeenCalledWith('bot', 'ou_user');
+  });
+
   it('explains the persisted provider when /new defaults are unauthenticated', async () => {
     const prepared = { ...defaultRow, agentKind: 'codex' as const, model: 'gpt-5.5' };
     const repo = makeRepo({ prepareNewSession: vi.fn(async () => prepared) });

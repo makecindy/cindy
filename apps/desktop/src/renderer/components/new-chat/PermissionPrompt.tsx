@@ -78,7 +78,10 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 
 export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
   const { t } = useTranslation();
-  const { toolName, input, title, displayName, description, suggestions } = permission;
+  const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable } = permission;
+  const promptDescription = autoReviewUnavailable
+    ? t('newChat.permissionPrompt.autoReviewUnavailable')
+    : description;
 
   const displayTitle = displayName
     ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
@@ -165,9 +168,9 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
       </p>
 
       {/* Description */}
-      {description && (
+      {promptDescription && (
         <p className="mt-1.5 text-13 font-normal leading-tight text-[var(--status-bar-meta)]">
-          {description}
+          {promptDescription}
         </p>
       )}
 

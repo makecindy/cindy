@@ -20,6 +20,50 @@ describe('desktop auth IPC validation', () => {
     });
   });
 
+  it('accepts request-code with and without a bounded captchaToken', () => {
+    expect(
+      parseDesktopLoginAction({ type: 'request-code', kind: 'email', identifier: 'a@b.co' }),
+    ).toEqual({ type: 'request-code', kind: 'email', identifier: 'a@b.co' });
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: 'tok',
+      }),
+    ).toEqual({
+      type: 'request-code',
+      kind: 'email',
+      identifier: 'a@b.co',
+      captchaToken: 'tok',
+    });
+    // 携带即校验:超界/空/非字符串一律整条拒绝,不做静默剥离
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: 'a'.repeat(2049),
+      }),
+    ).toBeNull();
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: '',
+      }),
+    ).toBeNull();
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: 42,
+      }),
+    ).toBeNull();
+  });
+
   it('rejects unknown, incomplete, and oversized actions', () => {
     expect(parseDesktopLoginAction(null)).toBeNull();
     expect(parseDesktopLoginAction({ type: 'unknown' })).toBeNull();

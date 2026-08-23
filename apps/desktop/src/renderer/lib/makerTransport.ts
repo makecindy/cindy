@@ -52,6 +52,7 @@ export interface RoutableMaker {
   setEffort: FullMaker['setEffort'];
   setPermissionMode: FullMaker['setPermissionMode'];
   setFastMode: FullMaker['setFastMode'];
+  setThinkingEnabled: FullMaker['setThinkingEnabled'];
   setPlanMode: FullMaker['setPlanMode'];
   getSessionTree: FullMaker['getSessionTree'];
   navigateSessionTree: FullMaker['navigateSessionTree'];
@@ -72,6 +73,7 @@ export interface RoutableMaker {
   // (压缩的是被控端的会话上下文,控制端本机无该 live 会话,固定调本机必 null 静默失败)。
   compactSession: FullMaker['compactSession'];
   enableOrca: FullMaker['enableOrca'];
+  dispatchOrcaUiAssignment: FullMaker['dispatchOrcaUiAssignment'];
   disableOrca: FullMaker['disableOrca'];
   input: Pick<
     FullMaker['input'],
@@ -152,6 +154,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     setEffort: t('maker:set-effort') as FullMaker['setEffort'],
     setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
     setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],
+    setThinkingEnabled: t('maker:set-thinking-enabled') as FullMaker['setThinkingEnabled'],
     setPlanMode: t('maker:set-plan-mode') as FullMaker['setPlanMode'],
     getSessionTree: t('maker:get-session-tree') as FullMaker['getSessionTree'],
     navigateSessionTree: t('maker:navigate-session-tree') as FullMaker['navigateSessionTree'],
@@ -174,6 +177,9 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
         instructions === undefined ? [sessionId] : [sessionId, instructions],
       )) as FullMaker['compactSession'],
     enableOrca: t('maker:session:enable-orca') as FullMaker['enableOrca'],
+    dispatchOrcaUiAssignment: t(
+      'maker:worker:dispatch-ui-assignment',
+    ) as FullMaker['dispatchOrcaUiAssignment'],
     disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
     input: {
       enqueue: t('maker:input:enqueue') as FullMaker['input']['enqueue'],
@@ -210,9 +216,13 @@ export function makerApiForDevice(deviceId: string): RoutableMaker {
 export function agentCapabilitiesForDevice(
   deviceId: string,
   agentKind: 'claude-code' | 'codex' | 'pi',
-): Promise<{ supportsOrcaWorkerPermissionMode?: boolean }> {
+): Promise<{
+  supportsOrcaWorkerPermissionMode?: boolean;
+  supportsDeferredOrcaUiAssignment?: boolean;
+}> {
   return invokeRemote(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<{
     supportsOrcaWorkerPermissionMode?: boolean;
+    supportsDeferredOrcaUiAssignment?: boolean;
   }>;
 }
 

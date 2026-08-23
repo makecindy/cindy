@@ -115,6 +115,8 @@ export interface AgentCapabilities {
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
    */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /** 被控端支持把 UI initial_task 延后到 Lead 首条输入 accepted 后派发。 */
+  supportsDeferredOrcaUiAssignment?: boolean;
   /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
@@ -250,9 +252,15 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
   if (!isRecord(value)) {
     throw new Error('Invalid agent capabilities response');
   }
+  if (!Array.isArray(value.availableModels)) {
+    throw new Error('Invalid agent capabilities response');
+  }
+  // Same policy as the local model plane: drop a catalog row that cannot
+  // stand on its own (missing defaultEffort, extra junk) instead of
+  // rejecting the whole remote list. One stale model on the controlled
+  // machine was emptying the selector.
+  value.availableModels = value.availableModels.filter(isModelDescriptor);
   if (
-    !Array.isArray(value.availableModels) ||
-    !value.availableModels.every(isModelDescriptor) ||
     typeof value.hasFastMode !== 'boolean' ||
     !Array.isArray(value.effortLevels) ||
     !value.effortLevels.every(isNamedDescriptor) ||
@@ -261,6 +269,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
+    !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {
     throw new Error('Invalid agent capabilities response');

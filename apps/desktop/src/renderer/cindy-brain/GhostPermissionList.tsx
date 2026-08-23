@@ -23,6 +23,7 @@ import {
   GraduationCap,
   KeyRound,
   LayoutTemplate,
+  Library,
   MapPin,
   Megaphone,
   MessageCircleQuestion,
@@ -55,6 +56,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   notify: Megaphone,
   confirm: MessageCircleQuestion,
   fs: FilePen,
+  library: Library,
   'session-context': MapPin,
   pick: FolderOpen,
   preview: AppWindow,
@@ -267,6 +269,26 @@ export function GhostTrustSummary({ trust }: { trust: GhostTrustInfo }) {
   );
 }
 
+export function GhostOauthClientChangedAlert({ className }: { className?: string }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      className={cn(
+        'flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2 text-13 leading-5 text-[var(--text-secondary)]',
+        className,
+      )}
+    >
+      <ShieldAlert
+        size={16}
+        className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+        aria-hidden="true"
+      />
+      <span>{t('settings.ghosts.updateConfirm.oauthClientChanged')}</span>
+    </div>
+  );
+}
+
 export function GhostManualSummary({ count }: { count: number }) {
   const { t } = useTranslation();
   if (count <= 0) return null;
@@ -293,12 +315,15 @@ export function GhostInstallReview({
   trust,
   items,
   manualCount = 0,
+  extra,
 }: {
   description?: string;
   meta: string;
   trust: GhostTrustInfo;
   items: GhostPermissionItem[];
   manualCount?: number;
+  /** 追加内容(如 library 槽的存储位置行),渲染在权限清单下方。 */
+  extra?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -342,6 +367,7 @@ export function GhostInstallReview({
       <div className="mt-3 border-t border-[var(--border-default)] pt-3">
         <GhostPermissionList items={items} />
       </div>
+      {extra ? <div className="mt-3">{extra}</div> : null}
     </div>
   );
 }
@@ -434,25 +460,11 @@ export function GhostUpdateReview({
   diff: GhostPermissionDiff;
   manualCount?: number;
 }) {
-  const { t } = useTranslation();
   return (
     <div>
       {trust && <GhostTrustSummary trust={trust} />}
       {diff.builtinOauthClientChanged ? (
-        <div
-          role="alert"
-          className={cn(
-            trust && 'mt-3',
-            'flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2 text-13 leading-5 text-[var(--text-secondary)]',
-          )}
-        >
-          <ShieldAlert
-            size={16}
-            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
-            aria-hidden="true"
-          />
-          <span>{t('settings.ghosts.updateConfirm.oauthClientChanged')}</span>
-        </div>
+        <GhostOauthClientChangedAlert className={trust ? 'mt-3' : undefined} />
       ) : null}
       <GhostManualSummary count={manualCount} />
       <div

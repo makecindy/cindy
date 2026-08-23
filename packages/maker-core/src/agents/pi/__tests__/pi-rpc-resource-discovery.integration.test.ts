@@ -203,6 +203,20 @@ function canonicalPath(value: string): string {
   }
 }
 
+function expectedExplicitProjectSkillScope(fixture: Fixture): 'project' | 'temporary' {
+  if (process.platform === 'win32') return 'project';
+  // Pi v0.83.0 reports `project` on macOS when the lexical git root is already
+  // canonical. The default /var -> /private/var temp-dir alias instead yields
+  // `temporary`, so keep the fixture deterministic under either TMPDIR form.
+  if (
+    process.platform === 'darwin'
+    && path.resolve(fixture.repoRoot) === canonicalPath(fixture.repoRoot)
+  ) {
+    return 'project';
+  }
+  return 'temporary';
+}
+
 async function createFixture(prefix = 'pi-rpc-fixture-'): Promise<Fixture> {
   const root = mkdtempSync(path.join(tmpdir(), prefix));
   fixtureRoots.push(root);
@@ -677,6 +691,37 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
     }]);
   });
 
+  it('loads a shared global skill from the user .agents root without project approval', async () => {
+    const fixture = await createFixture('pi-rpc-shared-global-');
+    const sharedSkill = path.join(
+      fixture.root,
+      'home',
+      '.agents',
+      'skills',
+      'shared-global-skill',
+    );
+    writeSkill(sharedSkill, 'shared-global-skill');
+
+    const result = await runGetCommands({
+      binaryPath: PI_BINARY,
+      cwd: fixture.workingDir,
+      configHome: fixture.configHome,
+      sessionDir: fixture.sessionDir,
+      approve: false,
+    });
+
+    expect(result.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'skill:shared-global-skill',
+        source: 'skill',
+        sourceInfo: expect.objectContaining({
+          scope: 'user',
+          path: path.join(sharedSkill, 'SKILL.md'),
+        }),
+      }),
+    ]));
+  });
+
   it('scanner superset differs from unapproved runtime only by project trust', async () => {
     const fixture = await createFixture('pi-rpc-scanner-trust-gap-');
     const result = await runGetCommands({
@@ -868,7 +913,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
         sourceInfo: expect.objectContaining({
           path: path.join(explicitSkill, 'SKILL.md'),
           source: 'local',
-          scope: 'temporary',
+          scope: expectedExplicitProjectSkillScope(fixture),
         }),
       }),
     ]));
@@ -932,7 +977,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
           baseDir: path.dirname(explicitSkill),
           path: explicitSkill,
           source: 'local',
-          scope: 'temporary',
+          scope: expectedExplicitProjectSkillScope(fixture),
         }),
       }),
     ]));
@@ -962,7 +1007,11 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
     expect(duplicates).toHaveLength(1);
     expect(duplicates[0]).toMatchObject({
       source: 'skill',
-      sourceInfo: { baseDir: first, source: 'local', scope: 'temporary' },
+      sourceInfo: {
+        baseDir: first,
+        source: 'local',
+        scope: expectedExplicitProjectSkillScope(fixture),
+      },
     });
   });
 

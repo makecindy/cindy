@@ -9,10 +9,10 @@
  *   - logger 全可选,host 不传就静默(包本身永远不 console.log)
  */
 
-import type { Buffer } from 'node:buffer';
-import type { ServerResponse } from 'node:http';
+import type { Buffer } from "node:buffer";
+import type { ServerResponse } from "node:http";
 
-import type { OutboundProxyResolver } from './outbound-proxy.js';
+import type { OutboundProxyResolver } from "./outbound-proxy.js";
 
 /**
  * 请求 transform 上下文。
@@ -38,6 +38,9 @@ export interface RequestTransformCtx {
 /**
  * 请求 body transform。
  *
+ * 允许返回 Promise（视觉桥等需要出网调用的 transform 用）。引擎用 isPromiseLike
+ * 统一 await：同步 transform 返回值原样通过，语义与 async 化前逐字节一致。
+ *
  * @returns
  *   - 新的 body 对象 → 代理用它替换原 body 转发上游
  *   - null            → 不改写,这一步跳过(还会继续跑后续 transform;全部跳过则字节透传)
@@ -45,7 +48,7 @@ export interface RequestTransformCtx {
 export type RequestTransform = (
   body: unknown,
   ctx: RequestTransformCtx,
-) => unknown | null;
+) => unknown | null | Promise<unknown | null>;
 
 /**
  * 本地 handler —— 路由决策命中 `localHandler` 时,代理**不转发上游**,由 handler 直接消费
@@ -171,6 +174,18 @@ export interface RecoveryRule {
   onRetry?: (threadId: string, model: string) => void;
   /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */
   threadIdHeaders?: readonly string[];
+  /**
+   * 别的规则命中 400/422 时,是否把本规则的 strip 顺手叠上去。
+   * 默认 true(encrypted / empty thinking 这类对任意上游都安全)。
+   * 语义绑在特定上游的规则必须显式 false,否则会在 GPT 的
+   * invalid_encrypted_content 重试里改写 OpenAI 历史。
+   */
+  applyOnUnmatchedRetry?: boolean;
+  /**
+   * 本规则作为主匹配时,是否还叠其它 extra strip。默认 true。
+   * xAI ModelInput 必须 false:叠 encrypted-content 会删掉本来可回放的 reasoning blob。
+   */
+  allowExtraRules?: boolean;
 }
 
 /**

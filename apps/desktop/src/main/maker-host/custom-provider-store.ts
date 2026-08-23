@@ -21,13 +21,18 @@ import type {
   CustomProviderRuntimeConfig,
   OAuthProviderDescriptor,
   PiReasoningEffort,
+  PiModelApi,
+  ProviderWireProtocol,
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
+  effectivePiWireProtocol,
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
+  PI_MODEL_APIS,
+  preservesPiCatalogModels,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -38,35 +43,64 @@ export const CUSTOM_PROVIDER_ID_RE = /^[a-z0-9_-]+$/;
 /** 不可占用的内置来源 id。 */
 // 'cindy' 是 pi models.json 里网关 provider 的保留 id;自定义 provider 撞名会让其模型
 // 既被排除出网关块又不写入原生块 → --model 校验失败,故一并保留。
-const RESERVED_IDS = new Set(['anthropic', 'openai', 'xd', 'cindy']);
+const RESERVED_IDS = new Set(['anthropic', 'openai', 'xai', 'xd', 'cindy']);
 const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
 
+/**
+ * SQLite's INTEGER affinity still permits legacy text values in a non-STRICT
+ * table. Keep the write boundary numeric so a malformed stored timestamp cannot
+ * turn `updatedAt + 1` into NaN and poison the NOT NULL column.
+ */
+function nextUpdatedAt(now: number, stored: unknown): number {
+  const current = Number.isSafeInteger(now) ? now : Date.now();
+  const previous =
+    typeof stored === 'number'
+      ? stored
+      : typeof stored === 'string' && stored.trim().length > 0
+        ? Number(stored)
+        : Number.NaN;
+  if (!Number.isSafeInteger(previous)) return current;
+  // CAS contract: every successful write must produce a strictly different
+  // updated_at. When previous is at MAX_SAFE_INTEGER, incrementing is
+  // impossible; return current (a real timestamp) which is guaranteed to
+  // differ from the stale MAX_SAFE_INTEGER snapshot.
+  if (previous >= Number.MAX_SAFE_INTEGER) return current;
+  return Math.max(current, previous + 1);
+}
+
 /** 验证结果：ok 或带 code + message（供 handler 映射成 throwIpcError）。 */
 export type ValidationResult =
-  | { ok: true }
-  | { ok: false; code: 'INVALID_PARAMS'; message: string };
+  { ok: true } | { ok: false; code: 'INVALID_PARAMS'; message: string };
 
 function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
 }
 
+const CINDY_RUNTIME_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
 function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
-  return (
-    typeof value === 'string' &&
-    (PI_REASONING_EFFORTS as readonly string[]).includes(value)
-  );
+  return typeof value === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(value);
 }
 
-function parseStoredPiReasoningCapability(
+function isReasoningEffortForAgent(agent: string, value: unknown): boolean {
+  if (agent === 'pi') return isPiReasoningEffort(value);
+  return typeof value === 'string' && (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
+function isPiModelApi(value: unknown): value is PiModelApi {
+  return typeof value === 'string' && (PI_MODEL_APIS as readonly string[]).includes(value);
+}
+
+function parseStoredReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
-  if (agent !== 'pi' || model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
+  if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
-  const efforts = model.reasoningEfforts.filter(isPiReasoningEffort);
+  const efforts = model.reasoningEfforts.filter((item) => isReasoningEffortForAgent(agent, item));
   if (
     efforts.length === 0 ||
     efforts.length !== model.reasoningEfforts.length ||
@@ -74,7 +108,50 @@ function parseStoredPiReasoningCapability(
   ) {
     return {};
   }
-  return { reasoning: true, reasoningEfforts: efforts };
+  const defaultEffort =
+    isReasoningEffortForAgent(agent, model.reasoningDefaultEffort) &&
+    efforts.includes(model.reasoningDefaultEffort as string)
+      ? (model.reasoningDefaultEffort as ProviderRuntimeModelConfig['reasoningDefaultEffort'])
+      : undefined;
+  return {
+    reasoning: true,
+    reasoningEfforts: efforts as NonNullable<ProviderRuntimeModelConfig['reasoningEfforts']>,
+    ...(defaultEffort ? { reasoningDefaultEffort: defaultEffort } : {}),
+  };
+}
+
+function parseStoredModelRoute(
+  agent: AgentKind,
+  runtimeBaseUrl: string,
+  value: unknown,
+): ProviderRuntimeModelConfig['route'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const route = value as Record<string, unknown>;
+  if (typeof route.baseUrl !== 'string' || !isAllowedWireProtocol(agent, route.wireProtocol)) {
+    return undefined;
+  }
+  try {
+    const runtimeUrl = new URL(runtimeBaseUrl);
+    const routeUrl = new URL(route.baseUrl);
+    if (
+      (routeUrl.protocol !== 'http:' && routeUrl.protocol !== 'https:') ||
+      routeUrl.username ||
+      routeUrl.password ||
+      routeUrl.origin !== runtimeUrl.origin
+    ) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  if (route.requestPath !== undefined && !isProviderRequestPath(route.requestPath)) {
+    return undefined;
+  }
+  return {
+    baseUrl: route.baseUrl,
+    wireProtocol: route.wireProtocol,
+    ...(typeof route.requestPath === 'string' ? { requestPath: route.requestPath } : {}),
+  };
 }
 
 function validateNoAuthLoopbackBoundary(
@@ -90,8 +167,27 @@ function validateNoAuthLoopbackBoundary(
     if (runtime.modelsUrl !== undefined && !isLoopbackProviderUrl(runtime.modelsUrl)) {
       return invalid(`runtime '${agent}' modelsUrl must be loopback when auth method is none`);
     }
+    for (const model of runtime.models) {
+      if (model.route && !isLoopbackProviderUrl(model.route.baseUrl)) {
+        return invalid(
+          `runtime '${agent}' model '${model.id}' route.baseUrl must be loopback when auth method is none`,
+        );
+      }
+    }
   }
   return { ok: true };
+}
+
+function allowedWireProtocols(agent: string): readonly ProviderWireProtocol[] {
+  return agent === 'claude-code'
+    ? ['anthropic-messages']
+    : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+}
+
+function isAllowedWireProtocol(agent: string, value: unknown): value is ProviderWireProtocol {
+  return (
+    typeof value === 'string' && allowedWireProtocols(agent).includes(value as ProviderWireProtocol)
+  );
 }
 
 function validateRuntime(agent: string, rt: unknown): ValidationResult {
@@ -100,21 +196,19 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (typeof r.baseUrl !== 'string' || r.baseUrl.trim().length === 0) {
     return invalid(`runtime '${agent}' baseUrl required`);
   }
+  let runtimeUrl: URL;
   try {
-    const u = new URL(r.baseUrl);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    runtimeUrl = new URL(r.baseUrl);
+    if (runtimeUrl.protocol !== 'http:' && runtimeUrl.protocol !== 'https:') {
       return invalid(`runtime '${agent}' baseUrl must be http(s)`);
     }
-    if (u.username || u.password) {
+    if (runtimeUrl.username || runtimeUrl.password) {
       return invalid(`runtime '${agent}' baseUrl must not contain embedded credentials`);
     }
   } catch {
     return invalid(`runtime '${agent}' baseUrl is not a valid URL`);
   }
-  if (
-    r.requestPath !== undefined
-    && !isProviderRequestPath(r.requestPath)
-  ) {
+  if (r.requestPath !== undefined && !isProviderRequestPath(r.requestPath)) {
     return invalid(`runtime '${agent}' requestPath invalid`);
   }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
@@ -128,12 +222,10 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' model.name required`);
     }
     if (
-      mm.contextWindow !== undefined
-      && (
-        typeof mm.contextWindow !== 'number'
-        || !Number.isFinite(mm.contextWindow)
-        || mm.contextWindow <= 0
-      )
+      mm.contextWindow !== undefined &&
+      (typeof mm.contextWindow !== 'number' ||
+        !Number.isFinite(mm.contextWindow) ||
+        mm.contextWindow <= 0)
     ) {
       return invalid(`runtime '${agent}' model.contextWindow must be a positive number`);
     }
@@ -143,9 +235,40 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
-    const hasReasoningCapability = mm.reasoning !== undefined || mm.reasoningEfforts !== undefined;
-    if (hasReasoningCapability && agent !== 'pi') {
-      return invalid(`runtime '${agent}' reasoning capability is only supported for pi models`);
+    if (mm.piApi !== undefined && (agent !== 'pi' || !isPiModelApi(mm.piApi))) {
+      return invalid(`runtime '${agent}' model.piApi invalid`);
+    }
+    if (mm.route !== undefined) {
+      if (!mm.route || typeof mm.route !== 'object' || Array.isArray(mm.route)) {
+        return invalid(`runtime '${agent}' model.route must be an object`);
+      }
+      const route = mm.route as Record<string, unknown>;
+      if (typeof route.baseUrl !== 'string' || route.baseUrl.trim().length === 0) {
+        return invalid(`runtime '${agent}' model.route.baseUrl required`);
+      }
+      let routeUrl: URL;
+      try {
+        routeUrl = new URL(route.baseUrl);
+      } catch {
+        return invalid(`runtime '${agent}' model.route.baseUrl is not a valid URL`);
+      }
+      if (routeUrl.protocol !== 'http:' && routeUrl.protocol !== 'https:') {
+        return invalid(`runtime '${agent}' model.route.baseUrl must be http(s)`);
+      }
+      if (routeUrl.username || routeUrl.password) {
+        return invalid(
+          `runtime '${agent}' model.route.baseUrl must not contain embedded credentials`,
+        );
+      }
+      if (routeUrl.origin !== runtimeUrl.origin) {
+        return invalid(`runtime '${agent}' model.route.baseUrl must use the runtime origin`);
+      }
+      if (!isAllowedWireProtocol(agent, route.wireProtocol)) {
+        return invalid(`runtime '${agent}' model.route.wireProtocol invalid`);
+      }
+      if (route.requestPath !== undefined && !isProviderRequestPath(route.requestPath)) {
+        return invalid(`runtime '${agent}' model.route.requestPath invalid`);
+      }
     }
     if (mm.reasoning !== undefined && typeof mm.reasoning !== 'boolean') {
       return invalid(`runtime '${agent}' model.reasoning must be a boolean`);
@@ -155,22 +278,29 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         return invalid(`runtime '${agent}' model.reasoningEfforts must be a non-empty array`);
       }
       if (
-        mm.reasoningEfforts.some((effort) => !isPiReasoningEffort(effort)) ||
+        mm.reasoningEfforts.some((effort) => !isReasoningEffortForAgent(agent, effort)) ||
         new Set(mm.reasoningEfforts).size !== mm.reasoningEfforts.length
       ) {
         return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
       }
-    } else if (mm.reasoningEfforts !== undefined) {
-      return invalid(`runtime '${agent}' model.reasoningEfforts requires reasoning=true`);
+      if (
+        mm.reasoningDefaultEffort !== undefined &&
+        (!isReasoningEffortForAgent(agent, mm.reasoningDefaultEffort) ||
+          !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort))
+      ) {
+        return invalid(`runtime '${agent}' model.reasoningDefaultEffort invalid`);
+      }
+    } else if (mm.reasoningEfforts !== undefined || mm.reasoningDefaultEffort !== undefined) {
+      return invalid(`runtime '${agent}' reasoning metadata requires reasoning=true`);
     }
+  }
+  if (agent === 'pi' && r.wireProtocol === undefined) {
+    return invalid("runtime 'pi' wireProtocol required");
   }
   if (r.wireProtocol !== undefined) {
     // Pi 是多协议 harness；Codex 也具备 Responses / Chat / Anthropic bridge。
     // Claude Code 只接受原生 Anthropic Messages。
-    const allowed = agent === 'claude-code'
-      ? ['anthropic-messages']
-      : ['openai-responses', 'openai-chat', 'anthropic-messages'];
-    if (typeof r.wireProtocol !== 'string' || !allowed.includes(r.wireProtocol)) {
+    if (!isAllowedWireProtocol(agent, r.wireProtocol)) {
       return invalid(`runtime '${agent}' wireProtocol invalid`);
     }
   }
@@ -196,6 +326,14 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     } catch {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }
+  }
+  if (
+    r.piCatalogProviderId !== undefined &&
+    (agent !== 'pi' ||
+      typeof r.piCatalogProviderId !== 'string' ||
+      !/^[a-z0-9-]+$/.test(r.piCatalogProviderId))
+  ) {
+    return invalid(`runtime '${agent}' piCatalogProviderId invalid`);
   }
   return { ok: true };
 }
@@ -243,18 +381,16 @@ function validateAuthSection(auth: unknown): ValidationResult {
   const unknownField = Object.keys(o).find((field) => !allowedFields.has(field));
   if (unknownField) return invalid(`auth.oauth.${unknownField} is not allowed`);
   if (
-    flow === 'authorization-code'
-    && (o.deviceAuthorizationUrl !== undefined || o.extraDeviceParams !== undefined)
+    flow === 'authorization-code' &&
+    (o.deviceAuthorizationUrl !== undefined || o.extraDeviceParams !== undefined)
   ) {
     return invalid('auth.oauth device-code fields not allowed for authorization-code');
   }
   if (
-    flow === 'device-code'
-    && (
-      o.authorizeUrl !== undefined
-      || o.extraAuthParams !== undefined
-      || o.redirectPort !== undefined
-    )
+    flow === 'device-code' &&
+    (o.authorizeUrl !== undefined ||
+      o.extraAuthParams !== undefined ||
+      o.redirectPort !== undefined)
   ) {
     return invalid('auth.oauth authorization-code fields not allowed for device-code');
   }
@@ -283,12 +419,11 @@ function validateAuthSection(auth: unknown): ValidationResult {
   }
   if (o.redirectPort !== undefined) {
     if (
-      flow !== 'authorization-code'
-      ||
-      typeof o.redirectPort !== 'number'
-      || !Number.isInteger(o.redirectPort)
-      || o.redirectPort <= 0
-      || o.redirectPort >= 65536
+      flow !== 'authorization-code' ||
+      typeof o.redirectPort !== 'number' ||
+      !Number.isInteger(o.redirectPort) ||
+      o.redirectPort <= 0 ||
+      o.redirectPort >= 65536
     ) {
       return invalid('auth.oauth.redirectPort invalid');
     }
@@ -299,16 +434,11 @@ function validateAuthSection(auth: unknown): ValidationResult {
       return invalid(`auth.oauth.${field} invalid`);
     }
     if (
-      Object.values(o[field] as Record<string, unknown>).some(
-        (value) => typeof value !== 'string',
-      )
+      Object.values(o[field] as Record<string, unknown>).some((value) => typeof value !== 'string')
     ) {
       return invalid(`auth.oauth.${field} invalid`);
     }
-    const collision = findReservedOAuthExtraParam(
-      o[field] as Record<string, unknown>,
-      flow,
-    );
+    const collision = findReservedOAuthExtraParam(o[field] as Record<string, unknown>, flow);
     if (collision) {
       return invalid(`auth.oauth.${field} cannot override '${collision}'`);
     }
@@ -317,10 +447,10 @@ function validateAuthSection(auth: unknown): ValidationResult {
     try {
       const url = new URL(String(o.modelsDiscoveryUrl));
       if (
-        typeof o.modelsDiscoveryUrl !== 'string'
-        || url.protocol !== 'https:'
-        || url.username
-        || url.password
+        typeof o.modelsDiscoveryUrl !== 'string' ||
+        url.protocol !== 'https:' ||
+        url.username ||
+        url.password
       ) {
         return invalid('auth.oauth.modelsDiscoveryUrl must be https');
       }
@@ -332,14 +462,19 @@ function validateAuthSection(auth: unknown): ValidationResult {
 }
 
 /** 纯函数：校验一份自定义供应商配置的结构合法性（per-runtime）。 */
-export function validateCustomProviderConfig(config: unknown): ValidationResult {
+export function validateCustomProviderConfig(
+  config: unknown,
+  options: { allowLegacyXai?: boolean } = {},
+): ValidationResult {
   if (!config || typeof config !== 'object') return invalid('config must be an object');
   const c = config as Record<string, unknown>;
 
   if (typeof c.id !== 'string' || c.id.length === 0) return invalid('id required');
   if (c.id.length > MAX_ID_LEN) return invalid(`id too long (max ${MAX_ID_LEN})`);
   if (!CUSTOM_PROVIDER_ID_RE.test(c.id)) return invalid('id must match /^[a-z0-9_-]+$/');
-  if (RESERVED_IDS.has(c.id)) return invalid(`id '${c.id}' is reserved`);
+  if (RESERVED_IDS.has(c.id) && !(c.id === 'xai' && options.allowLegacyXai === true)) {
+    return invalid(`id '${c.id}' is reserved`);
+  }
 
   if (typeof c.name !== 'string' || c.name.trim().length === 0) return invalid('name required');
   if (c.name.length > MAX_NAME_LEN) return invalid(`name too long (max ${MAX_NAME_LEN})`);
@@ -376,12 +511,31 @@ function normalizeRuntime(
     .map((m) => ({
       id: m.id.trim(),
       name: m.name.trim(),
+      ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+      ...(m.route
+        ? {
+            route: {
+              baseUrl: m.route.baseUrl.trim(),
+              wireProtocol: m.route.wireProtocol,
+              ...(m.route.requestPath?.trim() ? { requestPath: m.route.requestPath.trim() } : {}),
+            },
+          }
+        : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-      ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
-        ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-        : {}),
+      ...(m.reasoning === true && m.reasoningEfforts?.length
+        ? {
+            reasoning: true,
+            reasoningEfforts: [...m.reasoningEfforts],
+            ...(m.reasoningDefaultEffort
+              ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+              : {}),
+          }
+        : m.reasoning === false
+          ? { reasoning: false }
+          : {}),
+      ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
     }))
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
@@ -394,6 +548,7 @@ function normalizeRuntime(
     out.requestPath = rt.requestPath.trim();
   }
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
+  if (agent === 'pi' && rt.piCatalogProviderId) out.piCatalogProviderId = rt.piCatalogProviderId;
   return out;
 }
 
@@ -442,6 +597,35 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
 }
 
 /**
+ * 官方目录标记只适用于用户尚未改写的预设快照。所有写入口都在 main 再比一次旧值，
+ * 避免非当前设置页（移动端、旧 renderer、异步发现）改了路由或模型后仍保留 marker，
+ * 继而在 Pi 启动时用官方模型整条覆盖用户显式配置。
+ */
+function invalidateEditedPiCatalogMarker(
+  previous: CustomProviderConfig,
+  next: CustomProviderConfig,
+): CustomProviderConfig {
+  const previousPi = previous.runtimes.pi;
+  const nextPi = next.runtimes.pi;
+  if (
+    !previousPi?.piCatalogProviderId ||
+    !nextPi?.piCatalogProviderId ||
+    previousPi.piCatalogProviderId !== nextPi.piCatalogProviderId
+  )
+    return next;
+  const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  const unchanged =
+    normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl) &&
+    effectivePiWireProtocol(previousPi.wireProtocol) ===
+      effectivePiWireProtocol(nextPi.wireProtocol) &&
+    preservesPiCatalogModels(previousPi.models, nextPi.models);
+  if (unchanged) return next;
+  const pi = { ...nextPi };
+  delete pi.piCatalogProviderId;
+  return { ...next, runtimes: { ...next.runtimes, pi } };
+}
+
+/**
  * 把授权后自动发现的模型 additions-only 合并进自定义供应商配置的指定 runtime（纯函数）。
  * 已有 id first-wins（用户手填 / 上次发现的条目不被覆盖）；无新增返回 null（调用方免写库）。
  * 持久化发现结果是自定义 OAuth 供应商「重启后模型仍在」的保证——内存 augment 会随进程消失。
@@ -468,7 +652,9 @@ export function mergeDiscoveredModelsIntoConfig(
           ...fresh.map((m) => ({
             id: m.id,
             name: m.name,
-            ...(typeof m.contextWindow === 'number' && Number.isFinite(m.contextWindow) && m.contextWindow > 0
+            ...(typeof m.contextWindow === 'number' &&
+            Number.isFinite(m.contextWindow) &&
+            m.contextWindow > 0
               ? { contextWindow: Math.floor(m.contextWindow) }
               : {}),
           })),
@@ -494,6 +680,13 @@ function parseAuth(raw: string | null): CustomProviderConfig['auth'] {
   return undefined;
 }
 
+/**
+ * 计算写回的 `updatedAt`：既要严格大于库里的旧值（`updateCustomProviderIfUnchanged` 依赖它
+ * 做乐观锁），也要不早于当前时刻。
+ *
+ * 必须先转数值再 +1：`updated_at` 列声明为 INTEGER，但 SQLite 非 STRICT 表允许存入文本，
+ * 而 `rowToConfig` 只读 id/name/runtimes/auth、不校验该列。一旦某行存的是字符串，
+ * `existing.updatedAt + 1` 会退化成字符串拼接，`Math.max` 得到 NaN，写入 NOT NULL 整数列
 /** 安全解析 runtimes JSON（坏数据兜底为 {}，逐字段防御）。 */
 function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRuntimeConfig>> {
   let v: unknown;
@@ -509,33 +702,47 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     const rt = obj[agent];
     if (!rt || typeof rt !== 'object') continue;
     const r = rt as Record<string, unknown>;
+    const baseUrl = typeof r.baseUrl === 'string' ? r.baseUrl : '';
     const models = Array.isArray(r.models)
       ? r.models
-          .filter((m): m is Record<string, unknown> =>
-            !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
+          .filter(
+            (m): m is Record<string, unknown> =>
+              !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
           )
-          .map((m) => ({
-            id: String(m.id),
-            name: String(m.name ?? ''),
-            ...(typeof m.contextWindow === 'number'
-              && Number.isFinite(m.contextWindow)
-              && m.contextWindow > 0
-              ? { contextWindow: m.contextWindow }
-              : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-            ...parseStoredPiReasoningCapability(agent, m),
-          }))
+          .map((m) => {
+            const route = parseStoredModelRoute(agent, baseUrl, m.route);
+            return {
+              id: String(m.id),
+              name: String(m.name ?? ''),
+              ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
+              ...(route ? { route } : {}),
+              ...(typeof m.contextWindow === 'number' &&
+              Number.isFinite(m.contextWindow) &&
+              m.contextWindow > 0
+                ? { contextWindow: m.contextWindow }
+                : {}),
+              ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...parseStoredReasoningCapability(agent, m),
+              ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
+            };
+          })
       : [];
     const entry: CustomProviderRuntimeConfig = {
-      baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : '',
+      baseUrl,
       models,
     };
     if (
       typeof r.wireProtocol === 'string' &&
-      (r.wireProtocol === 'anthropic-messages' || r.wireProtocol === 'openai-responses' || r.wireProtocol === 'openai-chat')
+      (r.wireProtocol === 'anthropic-messages' ||
+        r.wireProtocol === 'openai-responses' ||
+        r.wireProtocol === 'openai-chat')
     ) {
       entry.wireProtocol = r.wireProtocol;
+    } else if (agent === 'pi' && r.wireProtocol === undefined) {
+      // 旧版把 Pi 的缺省协议解释为 Chat。新写入口已要求显式 wireProtocol；仅在读取
+      // 历史持久化记录时把旧语义物化，避免运行时重新猜测或按供应商穷举兼容。
+      entry.wireProtocol = 'openai-chat';
     }
     if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;
@@ -544,6 +751,13 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       entry.headers = r.headers as Record<string, string>;
     }
     if (typeof r.modelsUrl === 'string' && r.modelsUrl.length > 0) entry.modelsUrl = r.modelsUrl;
+    if (
+      agent === 'pi' &&
+      typeof r.piCatalogProviderId === 'string' &&
+      /^[a-z0-9-]+$/.test(r.piCatalogProviderId)
+    ) {
+      entry.piCatalogProviderId = r.piCatalogProviderId;
+    }
     out[agent] = entry;
   }
   return out;
@@ -618,17 +832,20 @@ export async function updateCustomProvider(
   config: CustomProviderConfig,
   now: number = Date.now(),
 ): Promise<CustomProviderConfig | null> {
-  const c = normalizeConfig({ ...config, id });
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return null;
+  const c = invalidateEditedPiCatalogMarker(
+    rowToConfig(existing),
+    normalizeConfig({ ...config, id }),
+  );
   await db
     .update(customProviders)
     .set({
       name: c.name,
       runtimes: JSON.stringify(c.runtimes),
       auth: c.auth ? JSON.stringify(c.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: nextUpdatedAt(now, existing.updatedAt),
     })
     .where(eq(customProviders.id, id));
   return c;
@@ -645,29 +862,30 @@ export async function updateCustomProviderIfUnchanged(
   now: number = Date.now(),
 ): Promise<boolean> {
   const expectedConfig = normalizeConfig({ ...expected, id });
-  const nextConfig = normalizeConfig({ ...config, id });
+  const nextConfig = invalidateEditedPiCatalogMarker(
+    expectedConfig,
+    normalizeConfig({ ...config, id }),
+  );
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return false;
   const expectedRuntimes = JSON.stringify(expectedConfig.runtimes);
   const expectedAuth = expectedConfig.auth ? JSON.stringify(expectedConfig.auth) : null;
   if (
-    existing.name !== expectedConfig.name
-    || existing.runtimes !== expectedRuntimes
-    || existing.auth !== expectedAuth
-  ) return false;
+    existing.name !== expectedConfig.name ||
+    existing.runtimes !== expectedRuntimes ||
+    existing.auth !== expectedAuth
+  )
+    return false;
   const result = await db
     .update(customProviders)
     .set({
       name: nextConfig.name,
       runtimes: JSON.stringify(nextConfig.runtimes),
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: nextUpdatedAt(now, existing.updatedAt),
     })
-    .where(and(
-      eq(customProviders.id, id),
-      eq(customProviders.updatedAt, existing.updatedAt),
-    ));
+    .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));
   return result.changes === 1;
 }
 

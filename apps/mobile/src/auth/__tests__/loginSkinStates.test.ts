@@ -10,6 +10,11 @@ import {
   type AuthRegion,
 } from '@cindy/auth-client';
 import { createScenarioFetch } from '@cindy/auth-client/fixtures';
+import {
+  LOGIN_CONTROL,
+  LOGIN_SSO_ORG_HISTORY,
+} from '../loginSkinLayout';
+import { loginSizes } from '../../theme/tokens';
 
 /**
  * PR4a 全登录态测试(SC-1 harness 真链 + SC-7 slice pr4a 状态行)。
@@ -161,15 +166,30 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
 
   it('sso-org-empty:企业 ID 子视图空态接线(placeholder/hint/返回)', () => {
     expect(loginSource).toContain('testID="login.ssoOrgInput"');
+    expect(loginSource).toContain('hydrateSsoOrgHistory()');
+    expect(loginSource).toContain('<LoginSsoOrgHistoryList');
+    expect(loginSource).toContain('accessibilityRole="combobox"');
+    expect(loginSource).not.toContain('setSsoOrgHistoryOpen(history.length > 1)');
+    expect(loginSource).not.toContain('setSsoOrgHistoryOpen(ssoOrgHistory.length > 1)');
     expect(loginSource).toContain("loginText('ssoOrgTitle')");
     expect(loginSource).toContain("loginText('ssoOrgPlaceholder')");
     expect(loginSource).toContain("loginText('ssoOrgHint')");
+    expect(LOGIN_SSO_ORG_HISTORY.y).toBe(
+      LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8,
+    );
+    expect(
+      LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight,
+    ).toBeLessThanOrEqual(loginSizes.panelHeight);
+    expect(controlsSource).toContain('showsVerticalScrollIndicator={false}');
     // 返回钮:子视图退回首屏输入(不整体 reset)
     expect(loginSource).toContain('setSsoOrgMode(false);');
   });
 
   it('sso-org-filled:企业 ID 直接发现，仅在状态机判定跨区后确认', () => {
     expect(loginSource).toContain("type: 'discover-sso-org'");
+    expect(loginSource).toContain(
+      'setSsoOrgHistory(getSsoOrgHistorySnapshot())',
+    );
     expect(loginSource).toContain("auth.loginState?.step === 'realm-confirmation'");
     expect(loginSource).toContain("type: 'confirm-sso-realm'");
     expect(loginSource).toContain("type: 'cancel-sso-realm'");

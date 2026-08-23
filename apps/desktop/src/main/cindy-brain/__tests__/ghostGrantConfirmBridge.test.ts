@@ -55,7 +55,9 @@ describe('GhostGrantConfirmBridge', () => {
         items: PAYLOAD.items,
       },
     });
-    expect((payload as { request: { requestId: string } }).request.requestId).toBeTruthy();
+    expect((payload as { request: { requestId: string } }).request.requestId).toMatch(
+      /^desktop-confirm-source-/,
+    );
     expect(bridge.pendingSnapshots('other-session')).toEqual([]);
     expect(bridge.pendingSnapshots('sess-1')).toEqual([
       { sessionId: 'sess-1', request: (payload as { request: unknown }).request },
@@ -132,5 +134,18 @@ describe('GhostGrantConfirmBridge', () => {
     const requestId2 = lastRequestId(broadcast);
     expect(bridge.resolve(requestId2, { confirmed: true })).toBe(true);
     await expect(p2).resolves.toEqual({ confirmed: true, allowDirs: false });
+  });
+
+  it('cleanupAll fails closed every pending grant at an account boundary', async () => {
+    const broadcast = vi.fn();
+    const bridge = new GhostGrantConfirmBridge({ broadcast });
+    const p1 = bridge.request('sess-1', PAYLOAD);
+    const p2 = bridge.request('sess-2', PAYLOAD);
+
+    bridge.cleanupAll('session_aborted');
+
+    await expect(p1).resolves.toEqual({ confirmed: false, reason: 'session_aborted' });
+    await expect(p2).resolves.toEqual({ confirmed: false, reason: 'session_aborted' });
+    expect(bridge.pendingSnapshots()).toEqual([]);
   });
 });

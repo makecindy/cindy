@@ -32,7 +32,14 @@
  * 3s 安全兜底防"点完不动"卡住乐观态,与 CHIP_JUMP_SAFETY_MS 同源经验值。
  */
 
-import { useCallback, useEffect, useRef, useState, type WheelEvent as ReactWheelEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -48,6 +55,8 @@ import {
   pickActiveNavId,
   pickVisibleNavRange,
   planNavRailTicks,
+  planNavRailTickWidth,
+  planNavRailTickProgress,
   type NavRailEntry,
 } from './messageNavRailModel';
 import { forwardNavRailWheel } from './messageNavRailWheel';
@@ -74,6 +83,8 @@ export interface MessageNavRailProps {
   scrollRef: { readonly current: HTMLDivElement | null };
   /** 内容列 maxWidth(与 MessageStream contentRef 的 maxWidth 同值)。 */
   contentMaxWidth: number;
+  /** ResizeObserver 测量时读取最新宽度，避免把连续像素变化回灌给 React。 */
+  getContentMaxWidth?: () => number;
   /** 底部输入 overlay 高度(resolvedBottomPadding),刻度带避开这段。 */
   bottomOffset: number;
   /** 点击刻度 → 跳到该提问。目标可能在渲染窗口外,由父级扩窗后滚动。 */
@@ -93,6 +104,7 @@ export function MessageNavRail({
   entries,
   scrollRef,
   contentMaxWidth,
+  getContentMaxWidth,
   bottomOffset,
   onJump,
   onNavCoverageChange,
@@ -105,6 +117,8 @@ export function MessageNavRail({
   // 测量与渲染之间 entries 可能已更新,按 id 回查最稳。
   const [visibleRange, setVisibleRange] = useState<{ startId: string; endId: string } | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [scrubId, setScrubId] = useState<string | null>(null);
   const [hasRoom, setHasRoom] = useState(false);
   const [availHeight, setAvailHeight] = useState(0);
   // 淡入淡出:挂载即亮(给切进会话的用户一个初始定位),此后随活动唤醒。
@@ -114,6 +128,15 @@ export function MessageNavRail({
   const pendingTimerRef = useRef<number | null>(null);
   const idleTimerRef = useRef<number | null>(null);
   const hoveringRef = useRef(false);
+  const railRef = useRef<HTMLElement | null>(null);
+  const scrubRef = useRef<{
+    pointerId: number;
+    startY: number;
+    moved: boolean;
+    lastJumpedIndex: number | null;
+    button: HTMLButtonElement;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
   // 容器左缘缓存,给高频 mousemove 的左缘唤醒判定用,免得每次事件都
   // getBoundingClientRect 强制布局读;measure(scroll/resize 都会触发)时刷新。
   const containerLeftRef = useRef(0);
@@ -130,6 +153,8 @@ export function MessageNavRail({
   }
   const contentMaxWidthRef = useRef(contentMaxWidth);
   contentMaxWidthRef.current = contentMaxWidth;
+  const getContentMaxWidthRef = useRef(getContentMaxWidth);
+  getContentMaxWidthRef.current = getContentMaxWidth;
   const bottomOffsetRef = useRef(bottomOffset);
   bottomOffsetRef.current = bottomOffset;
 
@@ -138,6 +163,9 @@ export function MessageNavRail({
     setActiveId(null);
     setVisibleRange(null);
     setPendingId(null);
+    setHoveredId(null);
+    setScrubId(null);
+    scrubRef.current = null;
     setAwake(true);
   }, [resetKey]);
 
@@ -166,7 +194,8 @@ export function MessageNavRail({
     if (!root) return;
     const containerRect = root.getBoundingClientRect();
     containerLeftRef.current = containerRect.left;
-    const roomOk = hasNavRailRoom(containerRect.width, contentMaxWidthRef.current);
+    const liveContentMaxWidth = getContentMaxWidthRef.current?.() || contentMaxWidthRef.current;
+    const roomOk = hasNavRailRoom(containerRect.width, liveContentMaxWidth);
     setHasRoom(roomOk);
     const avail = Math.max(
       0,
@@ -266,7 +295,7 @@ export function MessageNavRail({
   // availHeight 与纵向出场门槛会停在旧值直到下次滚动(PR #830 review)。
   useEffect(() => {
     scheduleMeasure();
-  }, [entries, bottomOffset, contentMaxWidth, scheduleMeasure]);
+  }, [entries, bottomOffset, contentMaxWidth, getContentMaxWidth, scheduleMeasure]);
 
   // 挂载亮相的那次也要按空闲节奏淡出。
   useEffect(() => {
@@ -312,6 +341,10 @@ export function MessageNavRail({
 
   const handleTickClick = useCallback(
     (clientId: string) => {
+      if (suppressClickRef.current) {
+        suppressClickRef.current = false;
+        return;
+      }
       setPendingId(clientId);
       if (pendingTimerRef.current !== null) {
         window.clearTimeout(pendingTimerRef.current);
@@ -323,6 +356,85 @@ export function MessageNavRail({
       onJump(clientId);
     },
     [onJump],
+  );
+
+  const findScrubIndex = useCallback((clientY: number): number | null => {
+    const rail = railRef.current;
+    if (!rail) return null;
+    let nearest: { index: number; distance: number } | null = null;
+    for (const button of rail.querySelectorAll<HTMLButtonElement>('[data-message-nav-index]')) {
+      const index = Number(button.dataset.messageNavIndex);
+      if (!Number.isInteger(index)) continue;
+      const rect = button.getBoundingClientRect();
+      const distance = Math.abs(clientY - (rect.top + rect.height / 2));
+      if (nearest === null || distance < nearest.distance) nearest = { index, distance };
+    }
+    return nearest?.index ?? null;
+  }, []);
+
+  const jumpToScrubIndex = useCallback(
+    (index: number) => {
+      const entry = entries[index];
+      if (!entry) return;
+      setScrubId(entry.id);
+      const scrub = scrubRef.current;
+      if (scrub?.lastJumpedIndex === index) return;
+      if (scrub) scrub.lastJumpedIndex = index;
+      setPendingId(entry.id);
+      if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = window.setTimeout(() => {
+        pendingTimerRef.current = null;
+        setPendingId(null);
+      }, PENDING_SAFETY_MS);
+      onJump(entry.id);
+    },
+    [entries, onJump],
+  );
+
+  const handleTickPointerDown = useCallback(
+    (index: number, event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      suppressClickRef.current = false;
+      const button = event.currentTarget;
+      scrubRef.current = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        moved: false,
+        lastJumpedIndex: null,
+        button,
+      };
+      setScrubId(entries[index]?.id ?? null);
+      wake();
+      button.setPointerCapture?.(event.pointerId);
+    },
+    [entries, wake],
+  );
+
+  const handleTickPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const scrub = scrubRef.current;
+      if (!scrub || scrub.pointerId !== event.pointerId) return;
+      if (!scrub.moved && Math.abs(event.clientY - scrub.startY) < 3) return;
+      scrub.moved = true;
+      const index = findScrubIndex(event.clientY);
+      if (index !== null) jumpToScrubIndex(index);
+    },
+    [findScrubIndex, jumpToScrubIndex],
+  );
+
+  const finishScrub = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>, suppressFollowUpClick: boolean) => {
+      const scrub = scrubRef.current;
+      if (!scrub || scrub.pointerId !== event.pointerId) return;
+      if (scrub.button.hasPointerCapture?.(event.pointerId)) {
+        scrub.button.releasePointerCapture?.(event.pointerId);
+      }
+      suppressClickRef.current = suppressFollowUpClick && scrub.moved;
+      scrubRef.current = null;
+      setScrubId(null);
+    },
+    [],
   );
 
   const handleTickMouseEnter = useCallback(() => {
@@ -376,6 +488,7 @@ export function MessageNavRail({
 
   return (
     <nav
+      ref={railRef}
       aria-label={t('chat.messageNavRail.aria')}
       // 容器不吃事件,只有刻度自身 pointer-events-auto(空闲减淡时也可点,
       // 见 tickEvents 注释),不挡左缘留白里的文字选择;justify-center 让
@@ -435,24 +548,32 @@ export function MessageNavRail({
               : '');
           const isActive = entry.id === displayActiveId;
           const fullIdx = plan.startIndex + i;
-          // 该轮次的内容当前正显示在视口里 → 提亮(Codex 同款"屏上内容高亮");
+          const interactionId = scrubId ?? hoveredId;
+          const interactionIndex =
+            interactionId == null ? -1 : entries.findIndex((item) => item.id === interactionId);
+          const interactionDistance =
+            interactionIndex < 0 ? null : Math.abs(fullIdx - interactionIndex);
+          // 该轮次的内容当前正显示在视口里 → 提亮"屏上内容高亮";
           // 当前项在提亮之上再加长,两个信号分工:范围 = 在看什么,长刻度 = 读到哪。
           const inView = rangeStartIdx >= 0 && fullIdx >= rangeStartIdx && fullIdx <= rangeEndIdx;
           // 自动化提问是系统注入的重复性消息,用更短的刻度保留其导航入口,
           // 同时让手动提问成为更容易扫到的主节奏。当前项仍比普通自动刻度更长,
           // 保持点击跳转后的定位反馈。
-          const tickWidthClass = isActive
-            ? entry.isAutomation
-              ? 'w-3'
-              : 'w-4'
-            : inView
-              ? entry.isAutomation
-                ? 'w-2.5'
-                : 'w-3'
-              : entry.isAutomation
-                ? 'w-2'
-                : 'w-3';
-          const tickHoverWidthClass = entry.isAutomation ? 'group-hover:w-3' : 'group-hover:w-3.5';
+          const tickWidthClass = planNavRailTickWidth({
+            distance: interactionDistance,
+            isActive,
+            inView,
+            isAutomation: entry.isAutomation,
+          });
+          const tickOpacityClass =
+            interactionDistance === 0
+              ? 'opacity-100'
+              : interactionDistance !== null
+                ? 'opacity-[0.65]'
+                : isActive
+                  ? 'opacity-90'
+                  : 'opacity-[0.65]';
+          const markerProgress = planNavRailTickProgress(interactionDistance);
           return (
             <Tooltip.Root key={entry.id}>
               <Tooltip.Trigger asChild>
@@ -464,9 +585,25 @@ export function MessageNavRail({
                   })}
                   aria-current={isActive ? 'true' : undefined}
                   data-message-nav-automation={entry.isAutomation ? 'true' : undefined}
+                  data-message-nav-index={fullIdx}
                   onClick={() => handleTickClick(entry.id)}
-                  onMouseEnter={handleTickMouseEnter}
-                  onMouseLeave={handleTickMouseLeave}
+                  onMouseLeave={() => {
+                    handleTickMouseLeave();
+                    setHoveredId((current) => (current === entry.id ? null : current));
+                  }}
+                  onPointerEnter={() => {
+                    setHoveredId(entry.id);
+                    handleTickMouseEnter();
+                  }}
+                  onPointerDown={(event) => handleTickPointerDown(fullIdx, event)}
+                  onPointerMove={handleTickPointerMove}
+                  onPointerUp={(event) => finishScrub(event, true)}
+                  onPointerCancel={(event) => finishScrub(event, false)}
+                  onLostPointerCapture={(event) => finishScrub(event, false)}
+                  onMouseEnter={() => {
+                    setHoveredId(entry.id);
+                    handleTickMouseEnter();
+                  }}
                   // 命中区吃满整格纵距,刻度线本体只有 2px 高。焦点环用全局
                   // --focus-ring token(AgentTaskCard 同款),键盘 Tab 可见
                   // (PR #830 review:纯 outline-none 会让键盘用户丢焦点)。
@@ -481,15 +618,19 @@ export function MessageNavRail({
                       // §14.4 禁硬编码 duration / cubic-bezier:base 档
                       // (200ms)与原先的 duration-200 同值,曲线取尺寸插值的
                       // ease-move。过渡属性从 all 收窄到实际会变的两项。
-                      'h-[2px] rounded-full',
-                      'transition-[width,background-color] duration-[var(--motion-base)]',
+                      'h-[2px] w-[26px] origin-left rounded-full',
+                      'transition-[transform,background-color] duration-[var(--motion-base)]',
                       'ease-[var(--motion-ease-move)]',
                       tickWidthClass,
-                      inView || isActive
+                      tickOpacityClass,
+                      interactionDistance === 0 ||
+                        (interactionDistance === null && (isActive || inView))
                         ? 'bg-[var(--text-primary)]'
-                        : 'bg-[var(--border-default)] group-hover:bg-[var(--text-secondary)]',
-                      tickHoverWidthClass,
+                        : 'bg-[var(--text-secondary)] group-hover:bg-[var(--text-primary)]',
                     )}
+                    style={{
+                      transform: `scaleX(${0.2308 + 0.7692 * markerProgress})`,
+                    }}
                   />
                 </button>
               </Tooltip.Trigger>

@@ -11,6 +11,29 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 上下文已满时的引擎边界
+
+同一模型上，占用达到设置页自动压缩阈值且尚未满窗时，host 先替用户压缩（Claude Code
+注入 `/compact`，Pi 调 compact RPC）。本机占用 ≥ 100%，或 host／bridge 自动 compact 已确定性
+失败（空摘要、compact 路径上的 invalid-request 400）时，走
+`host-controlled rollover + model-controlled bounded retrieval`：host 关闭旧原生窗口、写交接并
+在下一次发送前 fresh bootstrap，不再继续 compact。Claude Code 普通用户轮次结束后的静默
+`/compact` 与 rewind／cancellation 桥接 `/compact` 必须共用同一套失败分类：确定性失败锁存
+`needsRollover`，瞬时失败 `onCompactCanceled` 等下一轮再压。Stop、graceful-stop 或
+upstream idle watchdog 打断静默 `/compact` 时只清 fired，不得在本次 compact 收尾立刻再注入。
+该锁存只活在当前 live
+controller／进程内；重启后没有 live handle 时不凭估算换窗。Orca 空闲 live 直发必须先走与
+`sendToSessionInternal` 相同的 `prepareUnhealthySession`，不能把消息打进应被关闭的旧窗口。切到更小窗口模型的 `danger`／`overflow`
+预检仍按 `assessModelSwitchContext`，与同模型 compact 解耦。不要关闭 Claude Code SDK 的自动
+压缩；本地 Pi 继续 `set_auto_compaction: false`，避免两个压缩器抢状态。远端没有本地换窗，
+host compact 必须仍可用，满窗也不跳过。明确 `context-overflow` 且本轮没有助手输出或
+工具副作用时，host 才会对失败的 user 消息做一次 wire-only replay；有副作用或分类不确定时必须
+fail closed。compact 失败触发的换窗同样 fail closed，不得自动 replay 已有副作用的用户消息。
+PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
+timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
+自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。手动压缩入口不受此规则影响，
+手动 compact 失败不得锁存换窗。
+
 > **适用范围与增量原则**：Agent 能力归属（下节 1）与代码优先确定性（下节 2）按增量
 > 适用——约束新增和正在修改的代码，不要求为统一形式专项重构存量。但**核心指标不变量
 > （下节 3）与 system prompt 改动门禁（下节 4）对所有触及相关路径的改动都生效，不分

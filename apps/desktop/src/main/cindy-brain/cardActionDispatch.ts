@@ -25,6 +25,7 @@ import {
   type GhostPipeEventPush,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
 
 export interface CardActionDispatchDeps {
   /** 内存卡片服务:in-flight + 宽限窗内的条目(归属 + 会话;命中最快)。 */
@@ -56,6 +57,7 @@ export interface CardActionDispatchDeps {
    * (老卡无会话归属)时不上报。
    */
   onActivityStart?(key: string, sessionId: string): void;
+  ownerScope?: GhostOwnerScope;
   now?(): number;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -102,8 +104,28 @@ export class GhostCardActionDispatcher {
     // 归属:内存优先(快),持久兜底(settle/重启后仍成立)。查无 = 拒
     // (不区分"卡不存在"与"不属于任何在场意识",不给探测面)。
     // sessionId 一并取出:重建被清扫条目、登记衍生卡位都要续会话归属。
+    let capturedOwner: unknown;
+    if (this.deps.ownerScope) {
+      try {
+        capturedOwner = this.deps.ownerScope.capture();
+      } catch {
+        return { ok: false, reason: 'owner-boundary' };
+      }
+      if (!isGhostOwnerScopeUsable(this.deps.ownerScope, capturedOwner)) {
+        return { ok: false, reason: 'owner-boundary' };
+      }
+    }
+
+    const ownerUsable = (): boolean =>
+      isGhostOwnerScopeUsable(this.deps.ownerScope, capturedOwner);
+    const rejectStaleOwner = (ghostId?: string): CardActionResult => {
+      if (ghostId) this.deps.ownerScope?.onInvalidated?.(ghostId);
+      return { ok: false, reason: 'owner-boundary' };
+    };
+
     let info = this.deps.resolveLiveInfo(callId);
     if (!info) info = await this.deps.resolvePersistedCard(callId);
+    if (!ownerUsable()) return rejectStaleOwner(info?.ghostId);
     if (!info) {
       this.deps.log?.warn('card-action rejected: unknown card', { callId });
       return { ok: false, reason: 'unknown-card' };
@@ -134,8 +156,14 @@ export class GhostCardActionDispatcher {
     }
 
     try {
-      if (!this.deps.isRunning(ghostId)) await this.deps.wake(ghost);
+      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      if (!this.deps.isRunning(ghostId)) {
+        await this.deps.wake(ghost);
+        if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      }
+      // 卡片路径只发这一张一次性票；不另记面板手势，避免一次点击两份凭据。
       const userActionToken = this.deps.issueUserActionToken?.(ghostId, sessionId) ?? null;
+      if (!ownerUsable()) return rejectStaleOwner(ghostId);
       this.deps.sendToGhost(ghostId, {
         type: 'event',
         name: 'card-action',

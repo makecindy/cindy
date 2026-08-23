@@ -56,6 +56,7 @@ interface ProviderMemory {
   lastModel: string;
   effortByModel: Record<string, Effort>;
   fastByModel: Record<string, boolean>;
+  thinkingByModel: Record<string, boolean>;
 }
 
 /** getProviderModelChoice 的返回形状(该来源上次的 model + 其 effort)。供 resolveSourceSwitch 消费。 */
@@ -82,7 +83,12 @@ function sanitize(raw: unknown): Record<string, ProviderMemory> {
   const out: Record<string, ProviderMemory> = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!k || !v || typeof v !== 'object') continue;
-    const rec = v as { lastModel?: unknown; effortByModel?: unknown; fastByModel?: unknown };
+    const rec = v as {
+      lastModel?: unknown;
+      effortByModel?: unknown;
+      fastByModel?: unknown;
+      thinkingByModel?: unknown;
+    };
     const effortByModel: Record<string, Effort> = {};
     if (rec.effortByModel && typeof rec.effortByModel === 'object' && !Array.isArray(rec.effortByModel)) {
       for (const [mid, eff] of Object.entries(rec.effortByModel as Record<string, unknown>)) {
@@ -95,8 +101,23 @@ function sanitize(raw: unknown): Record<string, ProviderMemory> {
         if (mid && typeof fb === 'boolean') fastByModel[mid] = fb;
       }
     }
-    if (Object.keys(effortByModel).length === 0 && Object.keys(fastByModel).length === 0) continue;
-    out[k] = { lastModel: typeof rec.lastModel === 'string' ? rec.lastModel : '', effortByModel, fastByModel };
+    const thinkingByModel: Record<string, boolean> = {};
+    if (rec.thinkingByModel && typeof rec.thinkingByModel === 'object' && !Array.isArray(rec.thinkingByModel)) {
+      for (const [mid, tb] of Object.entries(rec.thinkingByModel as Record<string, unknown>)) {
+        if (mid && typeof tb === 'boolean') thinkingByModel[mid] = tb;
+      }
+    }
+    if (
+      Object.keys(effortByModel).length === 0 &&
+      Object.keys(fastByModel).length === 0 &&
+      Object.keys(thinkingByModel).length === 0
+    ) continue;
+    out[k] = {
+      lastModel: typeof rec.lastModel === 'string' ? rec.lastModel : '',
+      effortByModel,
+      fastByModel,
+      thinkingByModel,
+    };
   }
   return out;
 }
@@ -110,7 +131,12 @@ function migrateV1(raw: unknown): Record<string, ProviderMemory> {
     const model = (v as { model?: unknown }).model;
     const effort = (v as { effort?: unknown }).effort;
     if (typeof model === 'string' && model.length > 0 && typeof effort === 'string' && effort.length > 0) {
-      out[k] = { lastModel: model, effortByModel: { [model]: effort as Effort }, fastByModel: {} };
+      out[k] = {
+        lastModel: model,
+        effortByModel: { [model]: effort as Effort },
+        fastByModel: {},
+        thinkingByModel: {},
+      };
     }
   }
   return out;
@@ -188,7 +214,7 @@ export function getProviderModelChoice(
   const rec = load()[keyOf(agent, providerId)];
   if (!rec || !rec.lastModel) return undefined;
   const map = load();
-  const effort = map[presetKeyOf(agent)]?.effortByModel[rec.lastModel] ?? rec.effortByModel[rec.lastModel];
+  const effort = rec.effortByModel[rec.lastModel];
   return effort ? { model: rec.lastModel, effort } : undefined;
 }
 
@@ -203,7 +229,7 @@ export function getProviderModelEffort(
 ): Effort | undefined {
   if (!providerId || !model) return undefined;
   const map = load();
-  return map[presetKeyOf(agent)]?.effortByModel[model] ?? map[keyOf(agent, providerId)]?.effortByModel[model];
+  return map[keyOf(agent, providerId)]?.effortByModel[model];
 }
 
 function setModelEffort(
@@ -216,15 +242,9 @@ function setModelEffort(
   if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model || !effort) return;
   const map = load();
   const providerKey = keyOf(agent, providerId);
-  const presetKey = presetKeyOf(agent);
   const provider = map[providerKey];
-  const preset = map[presetKey];
   const lastModel = updateLastModel ? model : (provider?.lastModel ?? '');
-  if (
-    provider?.lastModel === lastModel &&
-    provider.effortByModel[model] === effort &&
-    preset?.effortByModel[model] === effort
-  ) return;
+  if (provider?.lastModel === lastModel && provider.effortByModel[model] === effort) return;
 
   persist({
     ...map,
@@ -232,11 +252,7 @@ function setModelEffort(
       lastModel,
       effortByModel: { ...(provider?.effortByModel ?? {}), [model]: effort },
       fastByModel: provider?.fastByModel ?? {},
-    },
-    [presetKey]: {
-      lastModel: '',
-      effortByModel: { ...(preset?.effortByModel ?? {}), [model]: effort },
-      fastByModel: preset?.fastByModel ?? {},
+      thinkingByModel: provider?.thinkingByModel ?? {},
     },
   });
 }
@@ -274,7 +290,7 @@ export function getProviderModelFast(
 ): boolean | undefined {
   if (!providerId || !model) return undefined;
   const map = load();
-  return map[presetKeyOf(agent)]?.fastByModel?.[model] ?? map[keyOf(agent, providerId)]?.fastByModel?.[model];
+  return map[keyOf(agent, providerId)]?.fastByModel?.[model];
 }
 
 /**
@@ -289,41 +305,143 @@ export function setProviderModelFast(
   if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
   const map = load();
   const providerKey = keyOf(agent, providerId);
-  const presetKey = presetKeyOf(agent);
   const provider = map[providerKey];
-  const preset = map[presetKey];
-  if (provider?.fastByModel?.[model] === enabled && preset?.fastByModel?.[model] === enabled) return;
+  if (provider?.fastByModel?.[model] === enabled) return;
   persist({
     ...map,
     [providerKey]: {
       lastModel: provider?.lastModel ?? '',
       effortByModel: provider?.effortByModel ?? {},
       fastByModel: { ...(provider?.fastByModel ?? {}), [model]: enabled },
+      thinkingByModel: provider?.thinkingByModel ?? {},
     },
-    [presetKey]: {
-      lastModel: '',
-      effortByModel: preset?.effortByModel ?? {},
-      fastByModel: { ...(preset?.fastByModel ?? {}), [model]: enabled },
+  });
+}
+
+export function getProviderModelThinking(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): boolean | undefined {
+  if (!providerId || !model) return undefined;
+  return load()[keyOf(agent, providerId)]?.thinkingByModel?.[model];
+}
+
+export function setProviderModelThinking(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+  enabled: boolean,
+): void {
+  if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
+  const map = load();
+  const providerKey = keyOf(agent, providerId);
+  const provider = map[providerKey];
+  if (provider?.thinkingByModel?.[model] === enabled) return;
+  persist({
+    ...map,
+    [providerKey]: {
+      lastModel: provider?.lastModel ?? '',
+      effortByModel: provider?.effortByModel ?? {},
+      fastByModel: provider?.fastByModel ?? {},
+      thinkingByModel: { ...(provider?.thinkingByModel ?? {}), [model]: enabled },
     },
   });
 }
 
 /**
- * 快照当前全部槽的 (effortByModel, fastByModel)(丢弃 lastModel)。用于 renderer → main 缓存和
- * device-link 控制端镜像被控设备的全局模型预设。深拷贝,调用方拿到的快照不随后续本地改动变化。
+ * 从某个槽里删掉一个模型键(effort / fast 任一维),不动同槽其余键与 lastModel。
+ * 槽不存在或该键本就没有 → 返回 null 表示「无事可做」(调用方据此短路,不做无意义落盘)。
+ */
+function withoutModelKey(
+  slot: ProviderMemory | undefined,
+  field: 'effortByModel' | 'fastByModel',
+  model: string,
+): ProviderMemory | null {
+  if (!slot || !(model in slot[field])) return null;
+  const nextField = { ...slot[field] };
+  delete nextField[model];
+  return { ...slot, [field]: nextField } as ProviderMemory;
+}
+
+/**
+ * **删除**某 (agent, 模型) 的深度记忆 —— 「恢复推荐 / 回落默认」的正确语义
+ * (configuration-and-overrides §4:override 表里没有该键 ⇒ 跟随当前版本的默认,而不是
+ * 把这一版的默认**快照**写进用户配置)。写快照的老做法会把用户钉死在旧默认上:服务端
+ * 之后改了推荐档,没自定义过的用户吃不到。
+ *
+ * 权威的 `${agent}:*` 全局槽与来源兼容副本**两处都要删**:读路径是「全局优先、来源兜底」
+ * (getProviderModelEffort),只删一处的话另一处会把旧值顶回来。
+ */
+export function clearProviderModelEffort(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): void {
+  if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
+  const map = load();
+  const providerKey = keyOf(agent, providerId);
+  const presetKey = presetKeyOf(agent);
+  const nextProvider = withoutModelKey(map[providerKey], 'effortByModel', model);
+  const nextPreset = withoutModelKey(map[presetKey], 'effortByModel', model);
+  if (!nextProvider && !nextPreset) return;
+  persist({
+    ...map,
+    ...(nextProvider ? { [providerKey]: nextProvider } : {}),
+    ...(nextPreset ? { [presetKey]: nextPreset } : {}),
+  });
+}
+
+/**
+ * **删除**某 (agent, 模型) 的 Fast 记忆。语义同 clearProviderModelEffort:
+ * 表里没有该键 ⇒ 跟随默认(读侧 `getProviderModelFast` 返回 undefined,调用方按「关」解释),
+ * 而不是落一份「显式 false」的快照 —— 后者同样是把当前默认固化成用户配置。
+ */
+export function clearProviderModelFast(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): void {
+  if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
+  const map = load();
+  const providerKey = keyOf(agent, providerId);
+  const presetKey = presetKeyOf(agent);
+  const nextProvider = withoutModelKey(map[providerKey], 'fastByModel', model);
+  const nextPreset = withoutModelKey(map[presetKey], 'fastByModel', model);
+  if (!nextProvider && !nextPreset) return;
+  persist({
+    ...map,
+    ...(nextProvider ? { [providerKey]: nextProvider } : {}),
+    ...(nextPreset ? { [presetKey]: nextPreset } : {}),
+  });
+}
+
+/**
+ * 快照当前全部槽的 (effortByModel, fastByModel, thinkingByModel)(丢弃 lastModel)。
+ * 用于 renderer → main 缓存和 device-link 控制端镜像被控设备的全局模型预设。
+ * 深拷贝,调用方拿到的快照不随后续本地改动变化。
  */
 export function snapshotForSeed(): Record<
   string,
-  { effortByModel: Record<string, Effort>; fastByModel: Record<string, boolean> }
+  {
+    effortByModel: Record<string, Effort>;
+    fastByModel: Record<string, boolean>;
+    thinkingByModel: Record<string, boolean>;
+  }
 > {
   const out: Record<
     string,
-    { effortByModel: Record<string, Effort>; fastByModel: Record<string, boolean> }
+    {
+      effortByModel: Record<string, Effort>;
+      fastByModel: Record<string, boolean>;
+      thinkingByModel: Record<string, boolean>;
+    }
   > = {};
   for (const [k, slot] of Object.entries(load())) {
     out[k] = {
       effortByModel: { ...slot.effortByModel },
       fastByModel: { ...slot.fastByModel },
+      thinkingByModel: { ...slot.thinkingByModel },
     };
   }
   return out;

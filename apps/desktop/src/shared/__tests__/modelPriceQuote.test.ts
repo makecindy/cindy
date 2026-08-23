@@ -87,6 +87,31 @@ describe('gatewayPricingCatalog', () => {
       costDiscount: 0.4,
     });
   });
+
+  it('preserves Fast/Priority baseline and long-context prices', () => {
+    const catalog = gatewayPricingCatalog(
+      [
+        model('fast-model', {
+          inputCostPerTokenPriority: 0.00001,
+          outputCostPerTokenPriority: 0.00006,
+          cacheReadInputTokenCostPriority: 0.000001,
+          inputCostPerTokenAbove272kTokensPriority: 0.00002,
+          outputCostPerTokenAbove272kTokensPriority: 0.00009,
+          cacheReadInputTokenCostAbove272kTokensPriority: 0.000002,
+        }),
+      ],
+      'USD',
+    );
+
+    expect(catalog.xd['fast-model']?.priority).toMatchObject({
+      inputPerMtok: 10,
+      outputPerMtok: 60,
+      cacheReadPerMtok: 1,
+      inputTokenPriceBands: [
+        { minInputTokens: 272_001, inputPerMtok: 20, outputPerMtok: 90, cacheReadPerMtok: 2 },
+      ],
+    });
+  });
 });
 
 describe('registryPricingCatalog', () => {

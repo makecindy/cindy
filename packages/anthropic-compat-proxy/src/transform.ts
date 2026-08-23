@@ -1122,8 +1122,9 @@ const TOOL_RESULT_IMAGE_OMITTED_TEXT =
   + 'and ask them to paste the relevant content as text or switch to a vision-capable '
   + 'model.]';
 
-function replaceToolResultImagesWithNotice(
+export function replaceToolResultImagesWithNotice(
   body: Record<string, unknown>,
+  noticeText = TOOL_RESULT_IMAGE_OMITTED_TEXT,
 ): Record<string, unknown> | null {
   const messages = body.messages;
   if (!Array.isArray(messages)) return null;
@@ -1141,7 +1142,7 @@ function replaceToolResultImagesWithNotice(
         if (!isPlainObject(inner) || inner.type !== 'image') return inner;
         replaced += 1;
         blockChanged = true;
-        return { type: 'text', text: TOOL_RESULT_IMAGE_OMITTED_TEXT };
+        return { type: 'text', text: noticeText };
       });
       if (!blockChanged) return block;
       msgChanged = true;

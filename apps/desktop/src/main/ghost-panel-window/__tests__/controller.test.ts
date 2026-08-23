@@ -103,7 +103,12 @@ function ghost(id: string, opts: { enabled?: boolean; position?: 'left' | 'tab' 
       ...(opts.position !== undefined ? { position: opts.position } : {}),
     },
   };
-  return { manifest, dir: `/fake/${id}`, enabled: opts.enabled ?? true };
+  return {
+    manifest,
+    dir: `/fake/${id}`,
+    enabled: opts.enabled ?? true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+  };
 }
 
 function makeHarness(detachableIds: Set<string>) {
@@ -358,7 +363,7 @@ describe('setDetached', () => {
 });
 
 describe('native minimize', () => {
-  it('routes native minimize to the renderer bubble action', () => {
+  it('routes native minimize to the renderer panel-minimize action', () => {
     const h = makeHarness(new Set(['a']));
     h.controller.setDetached('a', true);
     const win = h.created[0].win;

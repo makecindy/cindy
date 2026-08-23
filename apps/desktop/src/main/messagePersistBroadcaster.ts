@@ -36,16 +36,33 @@ import {
   broadcastMessageRow,
   broadcastMessageAgentMetaUpdate,
   createMessage as createDbMessage,
+  findVisibleToolUseMessageByAliases,
   patchMessageAgentMetaWithResult,
   updateMessageContent as updateDbMessageContent,
 } from './localDb/ipc/messages.js';
 import { getDbClient } from './localDb/client/current.js';
+import {
+  markCodexPlanInterrupted,
+  parseCodexPlanTerminal,
+  parseCodexPlanUpdate,
+  writeCodexPlanTerminal,
+  writeCodexPlanUpdate,
+} from './localDb/codexPlanState.js';
 import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
+import { getSubagentRunDetail } from './localDb/subagentRuns.js';
 import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import {
+  isAgentTaskToolName,
+  normalizeAgentTaskTerminalStatus,
+  normalizeAgentTaskUpdate,
+  type AgentTaskTerminalStatus,
+} from '@cindy/maker-shared/agent-task';
+import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-observation';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
 
@@ -72,6 +89,9 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
     clearBoundaryBySession.set(sessionId, parsed);
+    // A cleared transcript must not be revived by a late terminal update from an
+    // older background task. New tool calls repopulate this linkage after the boundary.
+    clearAgentTaskPersistState(sessionId);
   }
 }
 
@@ -154,6 +174,7 @@ const lastAgentMetaBySession = new Map<string, AgentMeta>();
  * 若 turnStartedAt <= clearBoundary，该 error 行必须 cap 在 clear 边界之下，防止出现在清空后的新会话。
  * resetTurnPersistState / clearSessionPersistState 时清除。 */
 const _turnStartedAtBySession = new Map<string, number>();
+const _turnAttemptTokenBySession = new Map<string, number>();
 const _turnDedupIdBySession = new Map<string, string>();
 let _turnDedupSeq = 0;
 
@@ -167,10 +188,13 @@ const _savedTurnDedupIdForDeferred = new Map<string, string>();
  * 只在首次调用（Map 中无条目）时写入，忽略后续 isRunning:true 的覆盖，
  * 防止 Claude 工具进度 / Codex stage 等 mid-turn 进度事件在 /clear 之后
  * 用 post-clear 时间戳覆盖原始 pre-clear 起点，导致 /clear 竞态 cap 失效。 */
-export function noteTurnStarted(sessionId: string): void {
+export function noteTurnStarted(sessionId: string, turnAttemptToken?: number): void {
   if (!_turnStartedAtBySession.has(sessionId)) {
     const now = Date.now();
     _turnStartedAtBySession.set(sessionId, now);
+    if (typeof turnAttemptToken === 'number') {
+      _turnAttemptTokenBySession.set(sessionId, turnAttemptToken);
+    }
     _turnDedupIdBySession.set(sessionId, `${now}:${++_turnDedupSeq}`);
     // 新 turn 第一次记录时，旧的 deferred 保存值已无效，清掉防止 deferred IPC 用到旧 turn 的时刻。
     _savedTurnStartedAtForDeferred.delete(sessionId);
@@ -517,6 +541,197 @@ const codexPlanRowByTurnToolUseId = new Map<
 
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
 const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>();
+/**
+ * Agent/Task terminal events are live-only, while the originating tool_use is durable.
+ * Keep their row id beyond per-turn resets so late background completion can patch the
+ * original row. Session cleanup owns reclamation.
+ */
+const agentTaskToolUsePersistIdBySession = new Map<string, Map<string, string>>();
+const pendingAgentTaskStatusBySession = new Map<string, Map<string, AgentTaskTerminalStatus>>();
+const agentTaskPersistScopeBySession = new Map<string, object>();
+
+type AgentTaskPersistLink = { alias: string; persistId: string };
+
+function clearAgentTaskPersistState(sessionId: string): void {
+  agentTaskToolUsePersistIdBySession.delete(sessionId);
+  pendingAgentTaskStatusBySession.delete(sessionId);
+  // An in-flight database recovery must not restore links after /clear or
+  // session cleanup. Deleting this identity invalidates its captured scope.
+  agentTaskPersistScopeBySession.delete(sessionId);
+}
+
+function captureAgentTaskPersistScope(sessionId: string): object {
+  const existing = agentTaskPersistScopeBySession.get(sessionId);
+  if (existing) return existing;
+  const scope = {};
+  agentTaskPersistScopeBySession.set(sessionId, scope);
+  return scope;
+}
+
+function findAgentTaskPersistLink(
+  sessionId: string,
+  aliases: readonly string[],
+): AgentTaskPersistLink | undefined {
+  const persistIds = agentTaskToolUsePersistIdBySession.get(sessionId);
+  for (const alias of aliases) {
+    const persistId = persistIds?.get(alias);
+    if (persistId) return { alias, persistId };
+  }
+  return undefined;
+}
+
+function rememberAgentTaskAliases(
+  sessionId: string,
+  aliases: readonly string[],
+  persistId: string,
+): void {
+  const persistIds = getOrCreateSessionMap(agentTaskToolUsePersistIdBySession, sessionId);
+  for (const alias of aliases) persistIds.set(alias, persistId);
+}
+
+async function patchAgentTaskTerminalStatus(
+  sessionId: string,
+  link: AgentTaskPersistLink,
+  status: AgentTaskTerminalStatus,
+  ownerScope: OwnerScope,
+): Promise<void> {
+  const isLinkCurrent = () =>
+    agentTaskToolUsePersistIdBySession.get(sessionId)?.get(link.alias) === link.persistId;
+  // /clear and session cleanup synchronously discard the linkage. Recheck at
+  // both async boundaries so an already-queued terminal update cannot patch
+  // or rebroadcast a row that no longer belongs to the visible transcript.
+  if (!isLinkCurrent()) return;
+  const patched = await patchMessageAgentMetaWithResult(sessionId, link.persistId, {
+    agentTaskStatus: status,
+  });
+  if (patched && isLinkCurrent()) {
+    await broadcastMessageAgentMetaUpdate(sessionId, link.persistId, ownerScope);
+  }
+}
+
+function clearRecoveredPendingAgentTaskStatus(
+  sessionId: string,
+  aliases: readonly string[],
+  status: AgentTaskTerminalStatus,
+): void {
+  const pending = pendingAgentTaskStatusBySession.get(sessionId);
+  if (!pending) return;
+  for (const alias of aliases) {
+    if (pending.get(alias) === status) pending.delete(alias);
+  }
+  if (pending.size === 0) pendingAgentTaskStatusBySession.delete(sessionId);
+}
+
+function agentTaskMetaForToolUse(
+  sessionId: string,
+  toolUseId: string,
+  toolName: string,
+  agentMeta: AgentMeta | null,
+): AgentMeta | null {
+  if (!toolUseId || !isAgentTaskToolName(toolName)) return agentMeta;
+  const pendingStatus = pendingAgentTaskStatusBySession.get(sessionId)?.get(toolUseId);
+  if (!pendingStatus) return agentMeta;
+  pendingAgentTaskStatusBySession.get(sessionId)?.delete(toolUseId);
+  return { ...(agentMeta ?? {}), agentTaskStatus: pendingStatus };
+}
+
+function rememberAgentTaskToolUse(
+  sessionId: string,
+  toolUseId: string,
+  toolName: string,
+  persistId: string,
+): void {
+  if (!toolUseId || !isAgentTaskToolName(toolName)) return;
+  rememberAgentTaskAliases(sessionId, [toolUseId], persistId);
+}
+
+/** Persist an exact terminal lifecycle fact for history replay. */
+export function onAgentTaskUpdateEvent(sessionId: string, data: unknown): boolean {
+  const update = normalizeAgentTaskUpdate(data);
+  if (
+    !update
+    || update.taskType === 'local_bash'
+    || update.taskType === 'local_workflow'
+  ) {
+    return false;
+  }
+
+  const aliases = [update.parentToolUseId, update.taskId]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  let link = findAgentTaskPersistLink(sessionId, aliases);
+
+  // A provider may introduce taskId beside parentToolUseId on a running update,
+  // then send a terminal update with taskId alone. Learn every alias as soon as
+  // any one of them resolves; running progress remains live-only.
+  if (link) rememberAgentTaskAliases(sessionId, aliases, link.persistId);
+
+  const observation = data && typeof data === 'object' && !Array.isArray(data)
+    ? normalizeSubagentObservation(
+        (data as Record<string, unknown>).subagentObservation,
+      )
+    : null;
+  // Codex spawn/control items can report `completed` while their descendants
+  // are still running. Only the harness-neutral terminal marker is lifecycle
+  // authority; status-only summaries remain live progress and must not win
+  // over later running updates during history replay.
+  const status = observation?.kind === 'terminal'
+    ? normalizeAgentTaskTerminalStatus(update.status)
+    : undefined;
+  if (!status) return false;
+  if (!link) {
+    const pending = getOrCreateSessionMap(pendingAgentTaskStatusBySession, sessionId);
+    const pendingAlias = update.parentToolUseId ?? update.taskId;
+    pending.set(pendingAlias, status);
+    const persistScope = captureAgentTaskPersistScope(sessionId);
+    const isTerminalStillPending = () =>
+      pendingAgentTaskStatusBySession.get(sessionId)?.get(pendingAlias) === status;
+    const isRecoveryCurrent = () =>
+      agentTaskPersistScopeBySession.get(sessionId) === persistScope
+      && isTerminalStillPending();
+    enqueueWrite(`agent_task_terminal_rehydrate:${sessionId}:${aliases.join(':')}`, async (ownerScope) => {
+      if (!isRecoveryCurrent()) return;
+
+      link = findAgentTaskPersistLink(sessionId, aliases);
+      if (!link) {
+        let resolvedAliases = aliases;
+        let persisted = await findVisibleToolUseMessageByAliases(sessionId, resolvedAliases);
+        if (!isRecoveryCurrent()) return;
+
+        // Claude task_updated events may carry only the runtime taskId. After
+        // restart, recover its durable parent tool-use alias from the existing
+        // Subagent projection before looking up the originating message row.
+        if (!persisted) {
+          const run = await getSubagentRunDetail(sessionId, update.provider, update.taskId);
+          if (!isRecoveryCurrent()) return;
+          if (run?.parentToolUseId && !resolvedAliases.includes(run.parentToolUseId)) {
+            resolvedAliases = [...resolvedAliases, run.parentToolUseId];
+            persisted = await findVisibleToolUseMessageByAliases(sessionId, resolvedAliases);
+            if (!isRecoveryCurrent()) return;
+          }
+        }
+        if (!persisted) return;
+        rememberAgentTaskAliases(
+          sessionId,
+          [...resolvedAliases, persisted.toolUseId],
+          persisted.clientId,
+        );
+        link = { alias: persisted.toolUseId, persistId: persisted.clientId };
+      } else {
+        rememberAgentTaskAliases(sessionId, aliases, link.persistId);
+      }
+
+      clearRecoveredPendingAgentTaskStatus(sessionId, aliases, status);
+      await patchAgentTaskTerminalStatus(sessionId, link, status, ownerScope);
+    });
+    return true;
+  }
+
+  const linkedTask = link;
+  enqueueWrite(`agent_task_terminal:${sessionId}:${linkedTask.persistId}`, async (ownerScope) => {
+    await patchAgentTaskTerminalStatus(sessionId, linkedTask, status, ownerScope);
+  });
+  return true;
+}
 
 interface BackgroundTurnPersistState {
   agentMeta: AgentMeta | null;
@@ -708,10 +923,32 @@ export function onToolUseEvent(
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
   backgroundTurnStartedAt?: number,
+  turnAttemptToken?: number,
 ): string | undefined {
   const createdAt = Date.now();
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
+
+  if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
+    const planUpdate = parseCodexPlanUpdate(data);
+    const currentTurnAttemptToken = _turnAttemptTokenBySession.get(sessionId);
+    const turnStartedAt =
+      currentTurnAttemptToken !== undefined && currentTurnAttemptToken !== turnAttemptToken
+        ? undefined
+        : _turnStartedAtBySession.get(sessionId);
+    if (planUpdate && !backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)) {
+      const clearBoundaryAtEnqueue = clearBoundaryBySession.get(sessionId);
+      enqueueWrite(`codex_plan_state_update:${sessionId}:${planUpdate.turnId}`, () => {
+        if (
+          clearBoundaryBySession.get(sessionId) !== clearBoundaryAtEnqueue ||
+          backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)
+        ) {
+          return Promise.resolve();
+        }
+        return writeCodexPlanUpdate(sessionId, planUpdate);
+      });
+    }
+  }
 
   if (scope === 'background') {
     if (backgroundTurnPredatesSessionClear(sessionId, backgroundTurnStartedAt)) {
@@ -735,12 +972,14 @@ export function onToolUseEvent(
       backgroundTurnPersistStatesBySession.set(sessionId, snapshots);
     }
     const persistId = createId();
+    const persistedMeta = agentTaskMetaForToolUse(sessionId, toolUseId, toolName, agentMeta);
+    rememberAgentTaskToolUse(sessionId, toolUseId, toolName, persistId);
     enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
       clientId: persistId,
       role: 'tool_use',
       content: { toolUseId, toolName, input: data.input },
       toolUseId: toolUseId || undefined,
-      agentMeta,
+      agentMeta: persistedMeta,
       createdAt,
     });
     return persistId;
@@ -768,7 +1007,13 @@ export function onToolUseEvent(
     return existingPersistId;
   }
   const persistId = createId();
-  const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
+  const meta = agentTaskMetaForToolUse(
+    sessionId,
+    toolUseId,
+    toolName,
+    agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null,
+  );
+  rememberAgentTaskToolUse(sessionId, toolUseId, toolName, persistId);
   noteAssistantTranscriptUuid(sessionId, meta);
   enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
     clientId: persistId,
@@ -804,6 +1049,12 @@ export function persistCodexPlanOnDone(
     | null
     | undefined,
 ): boolean {
+  const planTerminal = parseCodexPlanTerminal(data);
+  if (planTerminal) {
+    enqueueWrite(`codex_plan_state_terminal:${sessionId}:${planTerminal.turnId}`, () =>
+      writeCodexPlanTerminal(sessionId, planTerminal),
+    );
+  }
   const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
   if (!turnId) return false;
 
@@ -883,6 +1134,12 @@ export function persistCodexPlanOnTerminalError(sessionId: string, turnId?: stri
       ? planRow.input as Record<string, unknown>
       : null;
     if (!input || !Array.isArray(input.plan)) continue;
+    const ownedTurnId = toolUseId.startsWith('plan:') ? toolUseId.slice('plan:'.length) : '';
+    if (ownedTurnId) {
+      enqueueWrite(`codex_plan_state_error:${sessionId}:${ownedTurnId}`, () =>
+        markCodexPlanInterrupted(sessionId, ownedTurnId),
+      );
+    }
     enqueueWrite(`codex_plan_terminal_error:${sessionId}:${persistId}`, async (ownerScope) => {
       const updated = await updateDbMessageContent(sessionId, persistId, {
         toolUseId,
@@ -1369,6 +1626,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // clearCodexPlanRowsForSession(逻辑 turn 结束 / 会话清理)负责回收。
   lastAgentMetaBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
+  _turnAttemptTokenBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
   // turn 边界必须清 lastPersistedMsgBySession:within-turn 的重复 isFinal / result 兜底
   // 补推都在 done 之前已去重(translator fallback isFinal@translator.ts:897 早于 done@922,
@@ -1397,7 +1655,7 @@ export function onAssistantTextEvent(
   data: { text?: unknown; isFinal?: unknown; isFullText?: unknown },
   agentMeta: AgentMeta | null,
 ): string | undefined {
-  const text = typeof data.text === 'string' ? data.text : '';
+  const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;
 
@@ -1410,37 +1668,38 @@ export function onAssistantTextEvent(
       // 消息中相邻 text block 互相覆盖。
       if (
         isFullText ||
-        (text.length > block.text.length && text.startsWith(block.text))
+        (rawText.length > block.text.length && rawText.startsWith(block.text))
       ) {
-        block.text = text;
+        block.text = rawText;
       }
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
     }
     // 非流式 isFinal burst(result 兜底补推也走这):无在飞 block,立即落库。
-    if (text) {
+    const visible = stripInternalWebCitations(rawText);
+    if (visible) {
       // DUP-SKIP(对齐 renderer 老 757-762):若紧邻的上一条已落库消息正是内容完全
       // 相同的 assistant(典型:重复 isFinal / block flush 后又来同内容补推),复用其
       // persistId、不再 create,把重复行挡在 main 落库层。中间夹过别的消息则 last.role
       // 不是 assistant,不会误删合法的相同文本回复。
       const last = lastPersistedMsgBySession.get(sessionId);
-      if (last && last.role === 'assistant' && last.text === text) {
+      if (last && last.role === 'assistant' && last.text === visible) {
         return last.persistId;
       }
       const persistId = createId();
-      enqueuePersistAssistant(sessionId, persistId, text, agentMeta, Date.now());
+      enqueuePersistAssistant(sessionId, persistId, visible, agentMeta, Date.now());
       return persistId;
     }
     return undefined;
   }
 
-  // delta
+  // delta: accumulate the raw snapshot; strip only the completed block.
   let block = assistantBlocks.get(sessionId);
   if (!block) {
-    block = { persistId: createId(), text, agentMeta, createdAt: Date.now() };
+    block = { persistId: createId(), text: rawText, agentMeta, createdAt: Date.now() };
     assistantBlocks.set(sessionId, block);
   } else {
-    block.text += text;
+    block.text += rawText;
     if (agentMeta) block.agentMeta = agentMeta;
   }
   return block.persistId;
@@ -1461,11 +1720,12 @@ export function flushAssistantBlock(
   const block = assistantBlocks.get(sessionId);
   if (!block) return;
   assistantBlocks.delete(sessionId);
-  if (!block.text) return;
+  const visible = stripInternalWebCitations(block.text);
+  if (!visible) return;
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  enqueuePersistAssistant(sessionId, block.persistId, block.text, meta, block.createdAt);
+  enqueuePersistAssistant(sessionId, block.persistId, visible, meta, block.createdAt);
 }
 
 /**
@@ -1678,6 +1938,7 @@ export function clearSessionPersistState(sessionId: string): void {
   toolUseCreatedAtBySession.delete(sessionId);
   toolUseInfoBySession.delete(sessionId);
   updatableToolUsePersistIdBySession.delete(sessionId);
+  clearAgentTaskPersistState(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);
@@ -1687,6 +1948,7 @@ export function clearSessionPersistState(sessionId: string): void {
   lastAssistantTranscriptUuidBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
+  _turnAttemptTokenBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
   _savedTurnStartedAtForDeferred.delete(sessionId);
   _savedTurnDedupIdForDeferred.delete(sessionId);
