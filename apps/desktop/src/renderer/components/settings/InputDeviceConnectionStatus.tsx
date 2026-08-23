@@ -55,10 +55,10 @@ export function resolveInputDeviceStatusKey(input: {
 }): InputDeviceStatusKey {
   if (input.loading) return 'connecting';
   if (!input.enabled) return 'disabled';
-  if (input.present === false || input.connectionStatus === 'not-detected') return 'not-detected';
   if (input.connectionStatus === 'error' || input.connectionStatus === 'unavailable') {
     return input.connectionStatus;
   }
+  if (input.present === false || input.connectionStatus === 'not-detected') return 'not-detected';
   if (input.present === true || input.connectionStatus === 'connected') return 'connected';
   return 'connecting';
 }

@@ -32,6 +32,7 @@ export interface XboxGamepadHostDeps {
 
 const HELPER_RESTART_LIMIT = 3;
 const HELPER_RESTART_BASE_MS = 1_000;
+const HELPER_STABLE_MS = 10_000;
 
 export function createXboxGamepadHost(
   onMessage: (message: XboxGamepadHostMessage) => void,
@@ -42,7 +43,9 @@ export function createXboxGamepadHost(
   let wanted = false;
   let buffer = '';
   let consecutiveFailures = 0;
+  let crashAccounted = false;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
+  let stableTimer: ReturnType<typeof setTimeout> | null = null;
 
   const handleLine = (line: string): void => {
     const trimmed = line.trim();
@@ -54,22 +57,31 @@ export function createXboxGamepadHost(
         log[parsed.level](`[host] ${parsed.message}`);
         return;
       }
-      consecutiveFailures = 0;
       onMessage(parsed);
     } catch {
       log.debug('ignored malformed Xbox gamepad helper line');
     }
   };
 
-  const clearRestart = (): void => {
-    if (!restartTimer) return;
-    clearTimeout(restartTimer);
-    restartTimer = null;
+  const clearTimer = (timer: ReturnType<typeof setTimeout> | null): null => {
+    if (timer) clearTimeout(timer);
+    return null;
   };
 
-  const scheduleRestart = (): void => {
-    if (!wanted || restartTimer || consecutiveFailures >= HELPER_RESTART_LIMIT) return;
+  const clearRestart = (): void => {
+    restartTimer = clearTimer(restartTimer);
+  };
+
+  const clearStable = (): void => {
+    stableTimer = clearTimer(stableTimer);
+  };
+
+  const noteChildGone = (): void => {
+    clearStable();
+    if (!wanted || crashAccounted) return;
+    crashAccounted = true;
     consecutiveFailures += 1;
+    if (restartTimer || consecutiveFailures > HELPER_RESTART_LIMIT) return;
     const delayMs = HELPER_RESTART_BASE_MS * 2 ** (consecutiveFailures - 1);
     restartTimer = setTimeout(() => {
       restartTimer = null;
@@ -93,6 +105,12 @@ export function createXboxGamepadHost(
   const attach = (next: ChildProcessWithoutNullStreams): void => {
     child = next;
     starting = false;
+    crashAccounted = false;
+    clearStable();
+    stableTimer = setTimeout(() => {
+      if (child === next) consecutiveFailures = 0;
+    }, HELPER_STABLE_MS);
+    stableTimer.unref?.();
     next.stdout.setEncoding('utf8');
     next.stdout.on('data', (chunk: string) => {
       buffer += chunk;
@@ -113,13 +131,13 @@ export function createXboxGamepadHost(
       starting = false;
       if (!wanted) return;
       reportHostFailure(error.message);
-      scheduleRestart();
+      noteChildGone();
     });
     next.on('exit', (code, signal) => {
       if (child === next) child = null;
       if (!wanted) return;
       reportHostFailure(`Xbox gamepad helper exited unexpectedly (${code ?? signal ?? 'unknown'})`);
-      scheduleRestart();
+      noteChildGone();
     });
   };
 
@@ -129,7 +147,7 @@ export function createXboxGamepadHost(
   };
 
   const startChild = async (): Promise<void> => {
-    if (!wanted || child || starting) return;
+    if (!wanted || child || starting || consecutiveFailures > HELPER_RESTART_LIMIT) return;
     starting = true;
     try {
       const helperPath = await (deps.resolveHelperPath ?? resolveXboxGamepadHelperPath)();
@@ -145,7 +163,7 @@ export function createXboxGamepadHost(
       // Not `presence: false` — a helper that won't build is an error state, not
       // "no controller plugged in", and the settings page must say so.
       reportHostFailure(message);
-      scheduleRestart();
+      noteChildGone();
     }
   };
 
@@ -153,16 +171,17 @@ export function createXboxGamepadHost(
     start() {
       wanted = true;
       consecutiveFailures = 0;
+      crashAccounted = false;
       void startChild();
     },
     probe() {
       if (writeHelper('probe\n')) return;
-      consecutiveFailures = 0;
       void startChild();
     },
     stop() {
       wanted = false;
       clearRestart();
+      clearStable();
       const current = child;
       child = null;
       if (!current) return;

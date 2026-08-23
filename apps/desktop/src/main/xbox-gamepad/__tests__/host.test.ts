@@ -138,6 +138,37 @@ describe('XboxGamepadHost', () => {
     vi.useRealTimers();
   });
 
+  it('does not reset the restart budget when a helper emits presence then dies', async () => {
+    vi.useFakeTimers();
+    const spawnHelper = vi.fn(() => fakeChild());
+    const host = createXboxGamepadHost(vi.fn(), {
+      resolveHelperPath: async () => '/helper',
+      spawnHelper,
+    });
+
+    host.start();
+    await flush();
+    for (const delay of [1_000, 2_000, 4_000]) {
+      const current = spawnHelper.mock.results.at(-1)?.value as ReturnType<typeof fakeChild>;
+      (current.stdout as PassThrough).write(`${JSON.stringify({ kind: 'presence', present: false })}\n`);
+      current.emit('exit', 1, null);
+      await flush();
+      await vi.advanceTimersByTimeAsync(delay);
+      await flush();
+    }
+    expect(spawnHelper).toHaveBeenCalledTimes(4);
+    const last = spawnHelper.mock.results.at(-1)?.value as ReturnType<typeof fakeChild>;
+    (last.stdout as PassThrough).write(`${JSON.stringify({ kind: 'presence', present: false })}\n`);
+    last.emit('exit', 1, null);
+    await flush();
+    host.probe();
+    await vi.advanceTimersByTimeAsync(8_000);
+    await flush();
+    expect(spawnHelper).toHaveBeenCalledTimes(4);
+    host.stop();
+    vi.useRealTimers();
+  });
+
   it('lets an explicit probe retry after a crash', async () => {
     vi.useFakeTimers();
     const first = fakeChild();

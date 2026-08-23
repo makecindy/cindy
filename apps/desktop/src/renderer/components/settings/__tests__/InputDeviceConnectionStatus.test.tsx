@@ -38,5 +38,11 @@ describe('InputDeviceConnectionStatus', () => {
     expect(inputDeviceConnectionTone({ status: 'disabled', present: true })).toBe('connected');
     expect(inputDeviceConnectionTone({ status: 'disabled', present: false })).toBe('neutral');
     expect(inputDeviceConnectionTone({ status: 'not-detected', present: false })).toBe('neutral');
+    expect(
+      resolveInputDeviceStatusKey({ enabled: true, present: false, connectionStatus: 'error' }),
+    ).toBe('error');
+    expect(
+      resolveInputDeviceStatusKey({ enabled: true, present: false, connectionStatus: 'unavailable' }),
+    ).toBe('unavailable');
   });
 });
