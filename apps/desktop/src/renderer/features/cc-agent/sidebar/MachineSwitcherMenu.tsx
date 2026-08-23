@@ -136,6 +136,8 @@ export function MachineSwitcherMenu({
       <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
       <DropdownMenuItem
         className={MENU_ITEM_CLASS}
+        role="menuitemcheckbox"
+        aria-checked={filter.status === 'archived'}
         onSelect={() => {
           filter.setStatus('archived');
           ensureConversationListVisible();
