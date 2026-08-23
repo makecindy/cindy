@@ -2523,7 +2523,7 @@ export function VoiceInputSection() {
                                       'min-h-[76px] w-full resize-y rounded-lg px-3 py-2 text-12 leading-[1.45]',
                                       'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
                                       'text-[var(--settings-input-text)] outline-none transition-colors',
-                                      'placeholder:text-[var(--settings-section-sublabel)] placeholder:opacity-45',
+                                      'placeholder:text-[var(--text-placeholder)]',
                                       'focus-visible:border-[var(--settings-input-border-focus)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
                                     )}
                                   />
