@@ -385,6 +385,13 @@ describe('统一面板 · 会话内形态', () => {
     );
     const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
     expect(triple?.getAttribute('title')).toContain('Claude');
+    const sizer = document.querySelector('[data-width-sizer]');
+    const sizerGpt = Array.from(sizer?.querySelectorAll('[data-unified-anchor]') ?? []).find(
+      (node) => node.textContent?.includes('GPT-5.5'),
+    );
+    expect(sizerGpt?.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain(
+      'Codex',
+    );
     await act(async () => {
       fireEvent.click(rowFor('GPT-5.5'));
     });

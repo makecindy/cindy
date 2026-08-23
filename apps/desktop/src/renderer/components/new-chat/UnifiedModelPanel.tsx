@@ -440,7 +440,13 @@ export function UnifiedModelPanel({
   // 判据)在下方 effectiveEngineOf 里有一份**同构副本**(供 sections 过滤,避免把深度 / Fast
   // 的依赖打进列表重建)——改这里的引擎合成必须同步改那边。
   const configOf = useCallback(
-    (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedRowConfig => {
+    (
+      entry: UnifiedModelEntry,
+      favorite?: ModelFavoriteItem,
+      // 定宽 sizer 量的是「全部」视图,必须按那条轨解析,不能继承当前 effectiveRail
+      // (否则兼容行被钉成 π 后量到更窄的三元组,切「全部」再弹宽)。
+      railForConfig: UnifiedRailFilter = effectiveRail,
+    ): UnifiedRowConfig => {
       // 收藏条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
       if (favorite) {
         return resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable });
@@ -469,8 +475,8 @@ export function UnifiedModelPanel({
         // (Chris 2026-08-23:「π 轨里点就是 Pi」)。排序用的 effectiveEngineOf 不钉,
         // 所以主场在别处的行仍排在后面。用户显式 override 仍然优先。
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
-        ...(effectiveRail.kind === 'engine' && entry.candidates.includes(effectiveRail.agent)
-          ? { forceEngine: engineOfAgentKind(effectiveRail.agent) }
+        ...(railForConfig.kind === 'engine' && entry.candidates.includes(railForConfig.agent)
+          ? { forceEngine: engineOfAgentKind(railForConfig.agent) }
           : isSelectedModelRow && liveEngineAgent
             ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
             : {}),
@@ -1288,7 +1294,7 @@ export function UnifiedModelPanel({
                 <span className="truncate">{sectionLabel(section)}</span>
               </div>
               {section.rows.map((row) => {
-                const config = configOf(row.entry, row.favorite);
+                const config = configOf(row.entry, row.favorite, RAIL_ALL);
                 const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
                 return (
                   <UnifiedModelRow
