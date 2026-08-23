@@ -399,6 +399,40 @@ describe('统一面板 · 会话内形态', () => {
     expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'medium');
   });
 
+  it('同引擎轨未选中兼容行:浮层显式换引擎后 override 不被钉轨盖掉,再点行走跨引擎确认', async () => {
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+    });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('codex');
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
+    expect(triple?.getAttribute('title')).toContain('Codex');
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'xd',
+        modelId: 'gpt-5.5',
+        targetAgent: 'codex',
+      }),
+    );
+  });
+
   /**
    * Chris 2026-08-19 实测「一次打开内切 rail,面板弹开一些,感觉有点怪」:面板是 `w-max`
    * 且 morph 宿主 stickyWidth 只进不退,默认停在**最窄**的同引擎视图,切「全部」时二次撑宽。
