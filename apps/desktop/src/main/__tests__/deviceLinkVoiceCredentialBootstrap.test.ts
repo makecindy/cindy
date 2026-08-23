@@ -50,6 +50,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
     expect(deviceLinkHost).toContain('const subscriptionReplayPendingReruns = new Map<string, string>();');
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`${pendingReason}-pending`, deviceId);');
+    expect(deviceLinkHost).toContain('const subscriptionReplayInFlight = new Map<string, number>();');
+    expect(deviceLinkHost).toContain('if (subscriptionReplayInFlight.get(deviceId) !== gen) return;');
   });
 
   it('每个 relay 连接代上线时从设备目录补齐已在线控制端展示名', () => {

@@ -3379,6 +3379,59 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('畸形 invoke 继续分发但不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    h.client.onFrame((env) => frames.push(env));
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const malformed = {
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-heartbeat-invoke',
+      src: 'dev-b',
+      payload: { args: [] },
+    } as unknown as Envelope;
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('heartbeat idle 使用单调时钟，不受系统时间回拨影响', async () => {
+    const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+    let monotonicMs = 100;
+    const monotonic = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => monotonicMs);
+    const wallClock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await tick();
+      const ws = h.current();
+      ws.ack();
+      wallClock.mockReturnValue(-1_000_000);
+
+      for (let i = 0; i < 40 && !ws.terminated; i++) {
+        monotonicMs += 10;
+        await tick(10);
+      }
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      wallClock.mockRestore();
+      monotonic.mockRestore();
+    }
+  });
+
   it('getToken 返回 null:不建连,按退避重试', async () => {
     const h = makeHarness({ token: null });
     h.client.start();

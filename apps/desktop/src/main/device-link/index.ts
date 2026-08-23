@@ -1230,8 +1230,9 @@ const SUBSCRIPTION_REPLAY_RETRY_BASE_MS = 3_000;
 const SUBSCRIPTION_REPLAY_RETRY_MAX_MS = 30_000;
 const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** 同一设备的 subscribe 重放只能有一个物理请求在途；ws-online / presence / 熔断恢复
- * 可能同一时刻触发多个入口，重复请求会把短暂抖动放大成恢复洪峰。 */
-const subscriptionReplayInFlight = new Set<string>();
+ * 可能同一时刻触发多个入口，重复请求会把短暂抖动放大成恢复洪峰。值是请求代次，
+ * 让旧请求 settle 时不会误删新链路登记的请求。 */
+const subscriptionReplayInFlight = new Map<string, number>();
 /**
  * 同一设备在重放请求在途期间收到的后续恢复信号。单飞门不能把这些信号
  * 静默吞掉：首个请求可能随后以永久错误结束，而 presence-online / ws-online
@@ -1321,7 +1322,7 @@ function replayDeviceSubscription(
     clearTimeout(prev);
     subscriptionReplayRetryTimers.delete(deviceId);
   }
-  subscriptionReplayInFlight.add(deviceId);
+  subscriptionReplayInFlight.set(deviceId, gen);
   void remoteSubscribe(deviceId, topics).catch((err) => {
     // 旧代在途请求的迟到失败:已被新一轮取代,不再排重试也不动新代的登记。
     if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
@@ -1356,6 +1357,9 @@ function replayDeviceSubscription(
     timer.unref?.();
     subscriptionReplayRetryTimers.set(deviceId, timer);
   }).finally(() => {
+    // teardown → 重新 acquire 期间可能已经为同一设备登记了新请求；旧请求
+    // 只能清理自己的 in-flight / pending 状态，不能碰新代请求。
+    if (subscriptionReplayInFlight.get(deviceId) !== gen) return;
     subscriptionReplayInFlight.delete(deviceId);
     const pendingReason = subscriptionReplayPendingReruns.get(deviceId);
     if (!pendingReason) return;

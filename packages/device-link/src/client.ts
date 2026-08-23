@@ -1543,10 +1543,10 @@ export class DeviceLinkClient {
       this.pingTimer = null;
     }
     this.pongMisses = 0;
-    this.lastInboundAt = Date.now();
+    this.lastInboundAt = this.monotonicNow();
     this.pingTimer = setInterval(() => {
       if (this.status !== 'online') return;
-      const now = Date.now();
+      const now = this.monotonicNow();
       // pong 之外的有效入站帧同样证明 relay/socket 仍在工作。弱网下 pong
       // 可能丢在业务帧之后，不能因为单独的心跳计数把共享连接整条拆掉。
       if (now - this.lastInboundAt <= this.timing.pingIntervalMs) {
@@ -1647,14 +1647,19 @@ export class DeviceLinkClient {
       this.log.warn('dropping unparseable frame');
       return;
     }
-    if (!isValidInboundEnvelope(parsed)) {
+    if (!isKnownInboundEnvelope(parsed)) {
       this.log.warn('dropping invalid device-link frame');
       return;
     }
     const env = parsed;
-    // 只有通过协议版本、kind 和最小 payload 形状校验的帧才算连接活性。
-    // 可解析但非法的 JSON 不能持续喂掉 heartbeat miss，否则坏连接会一直 online。
-    this.lastInboundAt = Date.now();
+    const validForHeartbeat = isValidInboundEnvelope(env);
+    // 畸形 invoke 仍须进入 Desktop runInvoke 生成结构化拒绝，但不能因此
+    // 喂活 heartbeat；其它已知 kind 的非法 payload 直接丢弃。
+    if (!validForHeartbeat && env.kind !== 'invoke') {
+      this.log.warn(`dropping invalid device-link frame kind=${env.kind}`);
+      return;
+    }
+    if (validForHeartbeat) this.lastInboundAt = this.monotonicNow();
 
     const ack = parseTransportAck(env);
     if (ack) {
@@ -3592,24 +3597,39 @@ const DEVICE_LINK_ENVELOPE_KINDS: ReadonlySet<string> = new Set([
   'relay-error',
 ]);
 
-/**
- * 入站帧的轻量运行时校验。它不复制完整隧道协议 validator，只拦截会让
- * heartbeat 误判为“仍有流量”的明显坏帧；各业务 handler 继续负责更深的字段校验。
- */
-function isValidInboundEnvelope(value: unknown): value is Envelope {
+function isKnownInboundEnvelope(value: unknown): value is Envelope {
   if (!isRecord(value) || value.v !== PROTOCOL_VERSION || typeof value.kind !== 'string') {
     return false;
   }
-  if (!DEVICE_LINK_ENVELOPE_KINDS.has(value.kind)) return false;
+  return DEVICE_LINK_ENVELOPE_KINDS.has(value.kind);
+}
 
+/**
+ * 入站帧的轻量 heartbeat 活性校验。它不复制完整隧道协议 validator，只拦截会让
+ * heartbeat 误判为“仍有流量”的明显坏帧；业务分发仍由各自 handler 负责。
+ */
+function isValidInboundEnvelope(value: Envelope): boolean {
   const payload = value.payload;
   // 可靠传输帧把原业务 payload 包在 transport marker/data 中；该形状由
   // parseTransportPayload 负责完整校验，不能再按 legacy channel/payload 解释。
-  if (
-    isReliableKind(value.kind as Envelope['kind'])
-    && parseTransportPayload(payload) !== null
-  ) return true;
-  switch (value.kind) {
+  if (isReliableKind(value.kind)) {
+    const parsed = parseTransportPayload(payload);
+    if (parsed !== null) {
+      if (value.kind !== 'invoke') return true;
+      try {
+        const inner = decodeTransportJson(parsed.data);
+        return isRecord(inner)
+          && typeof inner.channel === 'string'
+          && Array.isArray(inner.args);
+      } catch {
+        return false;
+      }
+    }
+  }
+  // `isReliableKind` above narrows the union on its non-transport fallback path;
+  // switch on the wire string here so legacy invoke/push/result payloads remain
+  // eligible for their existing business-layer validation.
+  switch (value.kind as string) {
     case 'ping':
     case 'pong':
       return payload === undefined || payload === null;
@@ -3631,10 +3651,9 @@ function isValidInboundEnvelope(value: unknown): value is Envelope {
         && typeof payload.code === 'string'
         && typeof payload.message === 'string';
     case 'invoke':
-      // invoke 的 payload 由 Desktop runInvoke 做业务层校验。即使旧版或
-      // 异常控制端缺少 channel/args，也必须继续进入 dispatch，生成结构化
-      // invoke-result；这里不能把 wire 分发语义改成静默丢帧。
-      return true;
+      return isRecord(payload)
+        && typeof payload.channel === 'string'
+        && Array.isArray(payload.args);
     case 'invoke-result':
       if (!isRecord(payload) || typeof payload.ok !== 'boolean') return false;
       if (payload.ok) return true;
