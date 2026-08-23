@@ -20,6 +20,11 @@ function createHarness() {
     platformByDevice,
     nameByDevice,
     exchanged,
+    markPresence(deviceId: string, online: boolean, platform: string) {
+      markControllerPresenceFresh(freshness, deviceId);
+      onlineByDevice.set(deviceId, online);
+      platformByDevice.set(deviceId, platform);
+    },
     apply(
       devices: Parameters<typeof applyControllerPresenceDirectorySnapshot>[0]['devices'],
       requestEpoch = freshness.epoch,
@@ -134,8 +139,7 @@ describe('controller presence directory snapshot', () => {
 
   it('在线目录项缺平台时不清除实时 presence 已确认的在线状态与平台', () => {
     const h = createHarness();
-    h.onlineByDevice.set('peer-desktop', true);
-    h.platformByDevice.set('peer-desktop', 'darwin');
+    h.markPresence('peer-desktop', true, 'darwin');
 
     h.apply([
       {
@@ -153,8 +157,7 @@ describe('controller presence directory snapshot', () => {
 
   it('目录离线快照不把实时 presence 已确认的在线设备降级', () => {
     const h = createHarness();
-    h.onlineByDevice.set('peer-desktop', true);
-    h.platformByDevice.set('peer-desktop', 'darwin');
+    h.markPresence('peer-desktop', true, 'darwin');
 
     h.apply([
       {
@@ -174,8 +177,7 @@ describe('controller presence directory snapshot', () => {
 
   it('目录在线快照不把实时 presence 已确认的离线设备升级', () => {
     const h = createHarness();
-    h.onlineByDevice.set('peer-desktop', false);
-    h.platformByDevice.set('peer-desktop', 'win32');
+    h.markPresence('peer-desktop', false, 'win32');
 
     h.apply([
       {
@@ -189,6 +191,53 @@ describe('controller presence directory snapshot', () => {
     expect(h.onlineByDevice.get('peer-desktop')).toBe(false);
     expect(h.platformByDevice.get('peer-desktop')).toBe('win32');
     expect(h.exchanged).not.toHaveBeenCalled();
+  });
+
+  it('实时 presence 到达前，后续目录快照持续更新状态并只在上线边沿握手', () => {
+    const h = createHarness();
+
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        online: false,
+        platform: 'win32',
+        isSelf: false,
+      },
+    ]);
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        online: true,
+        platform: 'darwin',
+        isSelf: false,
+      },
+    ]);
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        online: true,
+        platform: 'darwin',
+        isSelf: false,
+      },
+    ]);
+
+    expect(h.onlineByDevice.get('peer-desktop')).toBe(true);
+    expect(h.platformByDevice.get('peer-desktop')).toBe('darwin');
+    expect(h.exchanged).toHaveBeenCalledTimes(1);
+    expect(h.exchanged).toHaveBeenCalledWith('peer-desktop', 'darwin');
+
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        online: false,
+        platform: 'win32',
+        isSelf: false,
+      },
+    ]);
+
+    expect(h.onlineByDevice.get('peer-desktop')).toBe(false);
+    expect(h.platformByDevice.get('peer-desktop')).toBe('win32');
+    expect(h.exchanged).toHaveBeenCalledTimes(1);
   });
 
   it('连接代重置后允许新目录重新初始化同一设备', () => {

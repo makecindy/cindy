@@ -44,6 +44,13 @@ function presenceChangedAfterRequest(
   return (tracker.epochByDevice.get(deviceId) ?? 0) > requestEpoch;
 }
 
+function hasRealtimePresence(
+  tracker: ControllerPresenceFreshnessTracker,
+  deviceId: string,
+): boolean {
+  return tracker.epochByDevice.has(deviceId);
+}
+
 function normalizeDirectoryName(device: ControllerPresenceDirectoryDevice): string | null {
   for (const value of [device.selfName, device.name]) {
     if (typeof value !== 'string') continue;
@@ -54,9 +61,10 @@ function normalizeDirectoryName(device: ControllerPresenceDirectoryDevice): stri
 }
 
 /**
- * presence 是增量流，新连接不会收到已经在线设备的历史状态。设备目录只承担冷启动
- * 补空：当前连接代已有明确 presence 状态时，无论目录返回在线还是离线都不覆盖，避免
- * 滞后的 REST 快照让在线状态双向误翻转；设备名仍可由目录独立更新。
+ * presence 是增量流，新连接不会收到已经在线设备的历史状态。实时 presence 到达前，
+ * 设备目录持续维护当前快照；一旦当前连接代见过该设备的实时 presence，目录无论返回
+ * 在线还是离线都不再覆盖状态与平台，避免滞后的 REST 快照双向误翻转。设备名仍可由
+ * 目录独立更新。
  *
  * 首次看到的在线设备若缺少可信平台值，保持为「在线状态未知」，让后续真实 presence
  * 仍会形成上线边沿，不会被不完整目录记录永久压住词典握手。
@@ -90,9 +98,9 @@ export function applyControllerPresenceDirectorySnapshot(options: {
     const name = normalizeDirectoryName(device);
     if (name) options.setName(deviceId, name);
 
-    const wasOnline = options.getOnline(deviceId);
-    if (wasOnline !== undefined) continue;
+    if (hasRealtimePresence(options.freshness, deviceId)) continue;
 
+    const wasOnline = options.getOnline(deviceId);
     if (device.online && platform === null) {
       options.setPlatform(deviceId, null);
       options.forgetOnline(deviceId);
@@ -101,7 +109,10 @@ export function applyControllerPresenceDirectorySnapshot(options: {
 
     options.setPlatform(deviceId, platform);
     options.setOnline(deviceId, device.online);
-    if (options.shouldNotifyPeerOnline({ deviceId, online: device.online, platform })) {
+    if (
+      wasOnline !== true &&
+      options.shouldNotifyPeerOnline({ deviceId, online: device.online, platform })
+    ) {
       options.onPeerBecameOnline(deviceId, platform);
     }
   }
