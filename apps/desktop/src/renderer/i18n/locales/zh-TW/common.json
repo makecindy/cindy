@@ -3492,6 +3492,12 @@
     },
     "shortcuts": {
       "title": "鍵盤快捷鍵",
+      "accessories": {
+        "title": "配件",
+        "description": "鍵盤、手把等輸入裝置",
+        "openAria": "打開配件",
+        "back": "返回"
+      },
       "resetAll": "恢復全部預設",
       "reset": "恢復預設",
       "recording": "按下新快捷鍵…",
@@ -3528,7 +3534,7 @@
           },
           "composer.submit": {
             "name": "傳送訊息",
-            "description": "傳送輸入框中的訊息"
+            "description": "傳送輸入框中的訊息；若有待確認的請求則改為批准"
           },
           "feedback": {
             "name": "傳送意見回饋",
@@ -3611,7 +3617,11 @@
           },
           "navigateBack": {
             "name": "返回",
-            "description": "在瀏覽記錄中返回"
+            "description": "返回上一頁；若有待確認的請求則改為拒絕"
+          },
+          "toggleFullscreen": {
+            "name": "切換全螢幕",
+            "description": "進入或退出全螢幕"
           },
           "composer.focus": {
             "name": "聚焦輸入框",
@@ -3631,7 +3641,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "用 Agent 鍵開啟任務，並用燈光顯示任務狀態。",
         "openAria": "開啟 Work Louder Codex Micro 設定",
         "back": "返回鍵盤快捷鍵",
@@ -3932,7 +3941,113 @@
       "edit": "編輯",
       "delete": "刪除",
       "deleteAria": "刪除 {{name}} 的快捷鍵",
-      "cancel": "取消"
+      "cancel": "取消",
+      "xboxGamepad": {
+        "title": "Xbox 手把",
+        "openAria": "打開 Xbox 手把設定",
+        "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
+        "back": "返回鍵盤快捷鍵",
+        "retry": "重試",
+        "layout": {
+          "title": "鍵位",
+          "description": "點按鍵位即可改它做什麼。按下手把時，圖上對應的鍵會亮起。",
+          "clickToEdit": "點按即可設定",
+          "editor": {
+            "title": "按鍵",
+            "description": "給這個按鍵選一個 Cindy 功能。未設定的按鍵不會做任何事。",
+            "done": "完成",
+            "assigned": "功能",
+            "assignedDescription": "按下時觸發。按住說話會在鬆開時結束。"
+          },
+          "reset": {
+            "title": "恢復預設鍵位",
+            "description": "只還原每個按鍵的功能，不會關掉手把。",
+            "button": "恢復預設鍵位"
+          }
+        },
+        "stick": {
+          "description": "搖桿可以捲動對話，也可以給四個方向分別指定功能。",
+          "customDescription": "搖桿進入這個方向時觸發一次。",
+          "mode": {
+            "label": "搖桿用途",
+            "description": "捲動對話會依推桿力度連續捲動；自訂則為每個方向單獨指定功能。",
+            "options": {
+              "conversation-scroll": "捲動對話",
+              "custom": "自訂方向"
+            }
+          }
+        },
+        "directions": {
+          "up": "上",
+          "right": "右",
+          "down": "下",
+          "left": "左"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "左搖桿按下",
+          "rs": "右搖桿按下",
+          "dpadUp": "方向鍵上",
+          "dpadDown": "方向鍵下",
+          "dpadLeft": "方向鍵左",
+          "dpadRight": "方向鍵右",
+          "leftStick": "左搖桿",
+          "rightStick": "右搖桿"
+        },
+        "actions": {
+          "none": "未設定",
+          "voice": "語音輸入",
+          "voiceDescription": "按住進行語音輸入，鬆開結束。",
+          "commands": "命令",
+          "skills": "技能",
+          "choose": "選擇功能"
+        },
+        "errors": {
+          "load": "無法讀取手把設定",
+          "save": "無法儲存手把設定"
+        },
+        "connection": {
+          "label": "連線",
+          "toggle": {
+            "label": "啟用",
+            "aria": "讓這個 Cindy 在前景時使用 Xbox 手把"
+          },
+          "status": {
+            "connecting": "正在連線",
+            "connected": "已連線",
+            "not-detected": "未偵測到",
+            "present": "已連線",
+            "disabled": "未啟用",
+            "error": "連線異常",
+            "unavailable": "目前系統暫不支援"
+          },
+          "descriptions": {
+            "connecting": "Cindy 正在尋找 Xbox 手把。",
+            "connected": "Cindy 在前景時會監聽這只手把。",
+            "disabled": "啟用後，Cindy 在前景時會監聽手把。",
+            "present": "啟用後，Cindy 在前景時會監聽手把。",
+            "not-detected": "請用 USB 或藍牙連接 Xbox 手把。",
+            "error": "Cindy 暫時無法讀取手把，正在重試。",
+            "unavailable": "這台電腦還不能讀取 Xbox 手把。"
+          }
+        },
+        "device": {
+          "usb": "有線",
+          "bluetooth": "藍牙",
+          "battery": "{{percent}}%",
+          "charging": "充電中 {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "插件",

@@ -1860,6 +1860,22 @@ interface ElectronAPI {
     ) => () => void;
   };
 
+  xboxGamepad: {
+    getState: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
+    setSettings: (
+      patch: import('../shared/xboxGamepad').XboxGamepadSettingsPatch,
+    ) => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
+    resetSettings: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
+    probe: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
+    setLayoutPreviewActive: (active: boolean) => Promise<void>;
+    onStateChanged: (
+      callback: (state: import('../shared/xboxGamepad').XboxGamepadState) => void,
+    ) => () => void;
+    onPreviewInput: (
+      callback: (input: import('../shared/xboxGamepad').XboxGamepadPreviewInput) => void,
+    ) => () => void;
+  };
+
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────
   // 「侧边栏在新窗口中显示」偏好 + 子窗口生命周期(main: right-sidebar-window/)。
   rightSidebarWindow: {
@@ -3565,6 +3581,7 @@ interface ElectronAPI {
   /** Query current fullscreen state synchronously on mount (covers IPC events
    *  that fired before the renderer had a chance to subscribe). */
   getFullscreenState: () => Promise<boolean>;
+  toggleFullscreen: () => Promise<boolean>;
 
   /** 窗口是否对用户不可见(最小化 / hide)。装饰动画闸门用它兜底 ——
    *  backgroundThrottling 关闭时 document.visibilityState 会一直停在 visible。 */

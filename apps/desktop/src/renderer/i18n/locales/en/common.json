@@ -3493,6 +3493,12 @@
     },
     "shortcuts": {
       "title": "Keyboard Shortcuts",
+      "accessories": {
+        "title": "Accessories",
+        "description": "Keyboards, gamepads, and other input devices",
+        "openAria": "Open accessories",
+        "back": "Back"
+      },
       "resetAll": "Reset all to defaults",
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
@@ -3529,7 +3535,7 @@
           },
           "composer.submit": {
             "name": "Send message",
-            "description": "Send the current composer message"
+            "description": "Send the composer message, or approve the pending request"
           },
           "feedback": {
             "name": "Send feedback",
@@ -3612,7 +3618,11 @@
           },
           "navigateBack": {
             "name": "Back",
-            "description": "Go back in navigation history"
+            "description": "Go back, or decline the pending request"
+          },
+          "toggleFullscreen": {
+            "name": "Toggle fullscreen",
+            "description": "Enter or exit fullscreen"
           },
           "composer.focus": {
             "name": "Focus composer",
@@ -3632,7 +3642,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
         "openAria": "Open Work Louder Codex Micro settings",
         "back": "Back to keyboard shortcuts",
@@ -3933,7 +3942,113 @@
       "edit": "Edit",
       "delete": "Delete",
       "deleteAria": "Delete shortcut for {{name}}",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "xboxGamepad": {
+        "title": "Xbox controller",
+        "openAria": "Open Xbox controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "back": "Back",
+        "retry": "Retry",
+        "layout": {
+          "title": "Controls",
+          "description": "Click a control to change what it does. Pressing the pad lights the matching control here.",
+          "clickToEdit": "Click to set",
+          "editor": {
+            "title": "Control",
+            "description": "Choose a Cindy action for this control. Unmapped controls do nothing.",
+            "done": "Done",
+            "assigned": "Action",
+            "assignedDescription": "Fires on press. Hold-to-talk ends when you release."
+          },
+          "reset": {
+            "title": "Reset mapping",
+            "description": "Restores each control’s action without turning the controller off.",
+            "button": "Reset mapping"
+          }
+        },
+        "stick": {
+          "description": "A stick can scroll the conversation, or fire a different action in each direction.",
+          "customDescription": "Fires once when the stick enters this direction.",
+          "mode": {
+            "label": "Stick mode",
+            "description": "Conversation scroll follows how far you push. Custom assigns an action per direction.",
+            "options": {
+              "conversation-scroll": "Scroll conversation",
+              "custom": "Custom directions"
+            }
+          }
+        },
+        "directions": {
+          "up": "Up",
+          "right": "Right",
+          "down": "Down",
+          "left": "Left"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "Left stick click",
+          "rs": "Right stick click",
+          "dpadUp": "D-pad up",
+          "dpadDown": "D-pad down",
+          "dpadLeft": "D-pad left",
+          "dpadRight": "D-pad right",
+          "leftStick": "Left stick",
+          "rightStick": "Right stick"
+        },
+        "actions": {
+          "none": "Unmapped",
+          "voice": "Voice input",
+          "voiceDescription": "Hold for voice input, release to stop.",
+          "commands": "Commands",
+          "skills": "Skills",
+          "choose": "Choose action"
+        },
+        "errors": {
+          "load": "Could not load controller settings",
+          "save": "Could not save controller settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "toggle": {
+            "label": "Enable",
+            "aria": "Let this Cindy use an Xbox controller while it is in the foreground"
+          },
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "present": "Connected",
+            "disabled": "Off",
+            "error": "Connection error",
+            "unavailable": "Not supported on this system"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for an Xbox controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect an Xbox controller with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read an Xbox controller yet."
+          }
+        },
+        "device": {
+          "usb": "Wired",
+          "bluetooth": "Bluetooth",
+          "battery": "{{percent}}%",
+          "charging": "Charging {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "Plugins",

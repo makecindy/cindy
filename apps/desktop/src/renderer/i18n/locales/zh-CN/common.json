@@ -3528,7 +3528,7 @@
           },
           "composer.submit": {
             "name": "发送消息",
-            "description": "发送输入框中的消息"
+            "description": "发送输入框中的消息；若有待确认的请求则改为批准"
           },
           "feedback": {
             "name": "发送反馈",
@@ -3611,7 +3611,7 @@
           },
           "navigateBack": {
             "name": "后退",
-            "description": "在浏览历史中后退"
+            "description": "返回上一页；若有待确认的请求则改为拒绝"
           },
           "composer.focus": {
             "name": "聚焦输入框",
@@ -3628,10 +3628,13 @@
           "conversation.scrollBottom": {
             "name": "跳到最新",
             "description": "滚动到最新一条消息"
+          },
+          "toggleFullscreen": {
+            "name": "切换全屏",
+            "description": "进入或退出全屏"
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "用 Agent 键打开任务，并用灯光显示任务状态。",
         "openAria": "打开 Work Louder Codex Micro 设置",
         "back": "返回键盘快捷键",
@@ -3656,7 +3659,7 @@
           "label": "连接",
           "toggle": {
             "label": "启用",
-            "aria": "让这个 Cindy 占用 Codex Micro"
+            "aria": "让这个 Cindy 在前台时使用 Xbox 手柄"
           },
           "status": {
             "connecting": "正在连接",
@@ -3665,16 +3668,16 @@
             "present": "已连接",
             "disabled": "未启用",
             "error": "连接异常",
-            "unavailable": "SDK 不可用"
+            "unavailable": "当前系统暂不支持"
           },
           "descriptions": {
-            "connecting": "Cindy 正在启动 Work Louder 设备服务。",
-            "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
-            "disabled": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
-            "present": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
-            "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
-            "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
-            "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
+            "connecting": "Cindy 正在查找 Xbox 手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接 Xbox 手柄。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取 Xbox 手柄。",
             "connection-timeout": "Work Louder 服务在规定时间内没有响应，Cindy 会自动重试。",
             "connection-failed": "Work Louder 服务启动失败，Cindy 会自动重试。",
             "permission-required": "macOS 拒绝了键盘访问，请在输入监控中允许 Cindy 后重试。",
@@ -3932,7 +3935,119 @@
       "edit": "编辑",
       "delete": "删除",
       "deleteAria": "删除 {{name}} 的快捷键",
-      "cancel": "取消"
+      "cancel": "取消",
+      "accessories": {
+        "title": "配件",
+        "description": "键盘、手柄等输入设备",
+        "openAria": "打开配件",
+        "back": "返回"
+      },
+      "xboxGamepad": {
+        "title": "Xbox 手柄",
+        "openAria": "打开 Xbox 手柄设置",
+        "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
+        "back": "返回键盘快捷键",
+        "retry": "重试",
+        "layout": {
+          "title": "键位",
+          "description": "点按键位即可改它做什么。按下手柄时，图上对应的键会亮起。",
+          "clickToEdit": "点按即可设置",
+          "editor": {
+            "title": "按键",
+            "description": "给这个按键选一个 Cindy 功能。未设置的按键不会做任何事。",
+            "done": "完成",
+            "assigned": "功能",
+            "assignedDescription": "按下时触发。按住说话会在松开时结束。"
+          },
+          "reset": {
+            "title": "恢复默认键位",
+            "description": "只还原每个按键的功能，不会关掉手柄。",
+            "button": "恢复默认键位"
+          }
+        },
+        "stick": {
+          "description": "摇杆可以滚动对话，也可以给四个方向分别指定功能。",
+          "customDescription": "摇杆进入这个方向时触发一次。",
+          "mode": {
+            "label": "摇杆用途",
+            "description": "滚动对话会按推杆力度连续滚动；自定义则为每个方向单独指定功能。",
+            "options": {
+              "conversation-scroll": "滚动对话",
+              "custom": "自定义方向"
+            }
+          }
+        },
+        "directions": {
+          "up": "上",
+          "right": "右",
+          "down": "下",
+          "left": "左"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "左摇杆按下",
+          "rs": "右摇杆按下",
+          "dpadUp": "方向键上",
+          "dpadDown": "方向键下",
+          "dpadLeft": "方向键左",
+          "dpadRight": "方向键右",
+          "leftStick": "左摇杆",
+          "rightStick": "右摇杆"
+        },
+        "actions": {
+          "none": "未设置",
+          "voice": "语音输入",
+          "voiceDescription": "按住进行语音输入，松开结束。",
+          "commands": "命令",
+          "skills": "技能",
+          "choose": "选择功能"
+        },
+        "errors": {
+          "load": "无法读取手柄设置",
+          "save": "无法保存手柄设置"
+        },
+        "connection": {
+          "label": "连接",
+          "toggle": {
+            "label": "启用",
+            "aria": "让这个 Cindy 在前台时使用 Xbox 手柄"
+          },
+          "status": {
+            "connecting": "正在连接",
+            "connected": "已连接",
+            "not-detected": "未检测到",
+            "present": "已连接",
+            "disabled": "未启用",
+            "error": "连接异常",
+            "unavailable": "当前系统暂不支持"
+          },
+          "descriptions": {
+            "connecting": "Cindy 正在查找 Xbox 手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接 Xbox 手柄。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取 Xbox 手柄。"
+          }
+        },
+        "device": {
+          "usb": "有线",
+          "bluetooth": "蓝牙",
+          "battery": "{{percent}}%",
+          "charging": "充电中 {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "插件",

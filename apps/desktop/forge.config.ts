@@ -996,6 +996,26 @@ function buildSwiftHelperForForgeArch(
   }
 }
 
+function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const src = path.join(__dirname, 'native', 'xbox-gamepad', 'macos-xbox-gamepad-helper.swift');
+  const destDir = path.join(__dirname, 'resources', 'tools', 'xbox-gamepad');
+  const dest = path.join(destDir, 'cindy-macos-xbox-gamepad-helper');
+  if (!fs.existsSync(src)) {
+    throw new Error(`[forge] Xbox gamepad helper source missing at ${src}`);
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_VOICE_HELPER_DEPLOYMENT_TARGET,
+    ['-framework', 'GameController'],
+    'Xbox gamepad helper',
+  );
+  fs.chmodSync(dest, 0o755);
+}
+
 function buildMacVoiceInputTextInsertionHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(__dirname, 'native', 'voice-input', 'macos-text-insertion-helper.swift');
@@ -1463,6 +1483,7 @@ const config: ForgeConfig = {
       buildWindowsVoiceInputFunctionKeyListener(targetPlatform);
       buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
+      buildMacXboxGamepadHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);

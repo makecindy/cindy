@@ -4343,6 +4343,15 @@ const registerIpcHandlers = () => {
     return win.isFullScreen() || win.isSimpleFullScreen();
   });
 
+  ipcMain.handle('toggle-fullscreen', (event): boolean => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? getWindow();
+    if (!win) return false;
+    const next = !(win.isFullScreen() || win.isSimpleFullScreen());
+    if (win.isSimpleFullScreen()) win.setSimpleFullScreen(false);
+    win.setFullScreen(next);
+    return next;
+  });
+
   // Find-in-page (F-FIP-1): renderer overlay drives Chromium's native page search.
   // start: returns the requestId Chromium assigns; renderer correlates with the
   // result event sent from createWindow's `found-in-page` listener.

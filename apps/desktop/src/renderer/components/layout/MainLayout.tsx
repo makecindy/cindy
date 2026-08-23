@@ -1188,6 +1188,9 @@ export function MainLayout() {
         case 'navigateForward':
           navigate(1);
           return true;
+        case 'toggleFullscreen':
+          void window.electronAPI?.toggleFullscreen?.();
+          return true;
         case 'toggleSidebar':
           handleToggleSidebar();
           return true;

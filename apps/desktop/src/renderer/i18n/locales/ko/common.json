@@ -3492,6 +3492,12 @@
     },
     "shortcuts": {
       "title": "키보드 단축키",
+      "accessories": {
+        "title": "액세서리",
+        "description": "키보드, 게임패드 등 입력 장치",
+        "openAria": "액세서리 열기",
+        "back": "뒤로"
+      },
       "resetAll": "모두 기본값으로 재설정",
       "reset": "기본값으로 재설정",
       "recording": "새 단축키를 누르세요…",
@@ -3528,7 +3534,7 @@
           },
           "composer.submit": {
             "name": "메시지 보내기",
-            "description": "입력창의 메시지를 보냅니다"
+            "description": "입력창의 메시지를 보내거나, 대기 중인 요청이 있으면 승인합니다"
           },
           "feedback": {
             "name": "피드백 보내기",
@@ -3611,7 +3617,11 @@
           },
           "navigateBack": {
             "name": "뒤로",
-            "description": "탐색 기록에서 뒤로 이동합니다"
+            "description": "이전 화면으로 돌아가거나, 대기 중인 요청이 있으면 거절합니다"
+          },
+          "toggleFullscreen": {
+            "name": "전체 화면 전환",
+            "description": "전체 화면을 시작하거나 종료합니다"
           },
           "composer.focus": {
             "name": "입력창에 포커스",
@@ -3631,7 +3641,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "Agent 키로 작업을 열고 조명으로 상태를 표시합니다.",
         "openAria": "Work Louder Codex Micro 설정 열기",
         "back": "키보드 단축키로 돌아가기",
@@ -3932,7 +3941,113 @@
       "edit": "편집",
       "delete": "삭제",
       "deleteAria": "{{name}} 단축키 삭제",
-      "cancel": "취소"
+      "cancel": "취소",
+      "xboxGamepad": {
+        "title": "Xbox 컨트롤러",
+        "openAria": "Xbox 컨트롤러 설정 열기",
+        "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
+        "back": "뒤로",
+        "retry": "다시 시도",
+        "layout": {
+          "title": "컨트롤러",
+          "description": "버튼을 눌러 동작을 바꿀 수 있습니다. 패드를 누르면 그림의 같은 위치가 켜집니다.",
+          "clickToEdit": "눌러서 설정",
+          "editor": {
+            "title": "버튼",
+            "description": "이 버튼에 Cindy 기능을 지정합니다. 지정하지 않은 버튼은 아무 것도 하지 않습니다.",
+            "done": "완료",
+            "assigned": "기능",
+            "assignedDescription": "누르면 실행됩니다. 눌러서 말하기는 떼면 끝납니다."
+          },
+          "reset": {
+            "title": "기본 키 배치 복원",
+            "description": "각 버튼의 기능만 되돌리며, 컨트롤러는 꺼지지 않습니다.",
+            "button": "기본 키 배치 복원"
+          }
+        },
+        "stick": {
+          "description": "스틱으로 대화를 스크롤하거나, 방향마다 다른 기능을 지정할 수 있습니다.",
+          "customDescription": "스틱이 이 방향으로 들어갈 때 한 번 실행됩니다.",
+          "mode": {
+            "label": "스틱 용도",
+            "description": "대화 스크롤은 기울인 정도에 따라 연속됩니다. 사용자 지정은 방향마다 기능을 정합니다.",
+            "options": {
+              "conversation-scroll": "대화 스크롤",
+              "custom": "방향 사용자 지정"
+            }
+          }
+        },
+        "directions": {
+          "up": "위",
+          "right": "오른쪽",
+          "down": "아래",
+          "left": "왼쪽"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "왼쪽 스틱 클릭",
+          "rs": "오른쪽 스틱 클릭",
+          "dpadUp": "십자키 위",
+          "dpadDown": "십자키 아래",
+          "dpadLeft": "십자키 왼쪽",
+          "dpadRight": "십자키 오른쪽",
+          "leftStick": "왼쪽 스틱",
+          "rightStick": "오른쪽 스틱"
+        },
+        "actions": {
+          "none": "지정 안 함",
+          "voice": "음성 입력",
+          "voiceDescription": "누르고 있는 동안 음성 입력하고, 떼면 끝납니다.",
+          "commands": "명령",
+          "skills": "스킬",
+          "choose": "기능 선택"
+        },
+        "errors": {
+          "load": "컨트롤러 설정을 불러올 수 없습니다",
+          "save": "컨트롤러 설정을 저장할 수 없습니다"
+        },
+        "connection": {
+          "label": "연결",
+          "toggle": {
+            "label": "사용",
+            "aria": "Cindy가 앞에 있을 때 Xbox 컨트롤러를 사용합니다"
+          },
+          "status": {
+            "connecting": "연결 중",
+            "connected": "연결됨",
+            "not-detected": "감지되지 않음",
+            "present": "연결됨",
+            "disabled": "꺼짐",
+            "error": "연결 오류",
+            "unavailable": "이 시스템에서는 지원되지 않음"
+          },
+          "descriptions": {
+            "connecting": "Cindy가 Xbox 컨트롤러를 찾고 있습니다.",
+            "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
+            "disabled": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "present": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "not-detected": "USB 또는 Bluetooth로 Xbox 컨트롤러를 연결하세요.",
+            "error": "Cindy가 컨트롤러를 읽지 못해 다시 시도하고 있습니다.",
+            "unavailable": "이 컴퓨터는 아직 Xbox 컨트롤러를 읽을 수 없습니다."
+          }
+        },
+        "device": {
+          "usb": "유선",
+          "bluetooth": "블루투스",
+          "battery": "{{percent}}%",
+          "charging": "충전 중 {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "플러그인",

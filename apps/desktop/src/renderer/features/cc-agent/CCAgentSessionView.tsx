@@ -1606,7 +1606,10 @@ export function CCAgentSessionView({
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type !== 'command') return false;
       if (!sessionId || !ownsHardwareTaskActions) return false;
-      if (action.commandId === 'approval.approve') {
+      if (
+        action.commandId === 'approval.approve' ||
+        action.commandId === 'composer.submit'
+      ) {
         if (pendingPermission) {
           respondToPermission({ behavior: 'allow' });
           return true;
@@ -1617,7 +1620,10 @@ export function CCAgentSessionView({
         }
         return false;
       }
-      if (action.commandId === 'approval.decline') {
+      if (
+        action.commandId === 'approval.decline' ||
+        action.commandId === 'navigateBack'
+      ) {
         if (pendingPermission) {
           respondToPermission({
             behavior: 'deny',
@@ -1630,6 +1636,7 @@ export function CCAgentSessionView({
           cancelPlanReview(pendingPlanReview.requestId);
           return true;
         }
+        return false;
       }
       if (action.commandId === 'forkTask') {
         if (!canNavigateSession) return false;

@@ -3492,6 +3492,12 @@
     },
     "shortcuts": {
       "title": "キーボードショートカット",
+      "accessories": {
+        "title": "アクセサリ",
+        "description": "キーボードやゲームパッドなどの入力デバイス",
+        "openAria": "アクセサリを開く",
+        "back": "戻る"
+      },
       "resetAll": "すべてデフォルトに戻す",
       "reset": "デフォルトに戻す",
       "recording": "新しいショートカットを入力…",
@@ -3528,7 +3534,7 @@
           },
           "composer.submit": {
             "name": "メッセージを送信",
-            "description": "入力欄のメッセージを送信します"
+            "description": "入力中のメッセージを送信します。承認待ちがあれば承認します"
           },
           "feedback": {
             "name": "フィードバックを送信",
@@ -3611,7 +3617,11 @@
           },
           "navigateBack": {
             "name": "戻る",
-            "description": "ナビゲーション履歴を戻ります"
+            "description": "前の画面に戻ります。承認待ちがあれば拒否します"
+          },
+          "toggleFullscreen": {
+            "name": "全画面を切り替え",
+            "description": "全画面表示の開始または終了"
           },
           "composer.focus": {
             "name": "入力欄にフォーカス",
@@ -3631,7 +3641,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "Agent キーでタスクを開き、ライトで状態を表示します。",
         "openAria": "Work Louder Codex Micro の設定を開く",
         "back": "キーボードショートカットに戻る",
@@ -3932,7 +3941,113 @@
       "edit": "編集",
       "delete": "削除",
       "deleteAria": "{{name}} のショートカットを削除",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "xboxGamepad": {
+        "title": "Xbox コントローラー",
+        "openAria": "Xbox コントローラー設定を開く",
+        "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
+        "back": "戻る",
+        "retry": "再試行",
+        "layout": {
+          "title": "コントローラー",
+          "description": "ボタンをタップして割り当てを変更できます。実機を押すと、図の同じ位置が点灯します。",
+          "clickToEdit": "タップして設定",
+          "editor": {
+            "title": "ボタン",
+            "description": "このボタンに Cindy の機能を割り当てます。未設定のボタンは何もしません。",
+            "done": "完了",
+            "assigned": "機能",
+            "assignedDescription": "押したときに実行します。押し話しは離すと終了します。"
+          },
+          "reset": {
+            "title": "割り当てをリセット",
+            "description": "各ボタンの機能だけを戻します。コントローラーはオフになりません。",
+            "button": "割り当てをリセット"
+          }
+        },
+        "stick": {
+          "description": "スティックは会話のスクロールにも、方向ごとの機能にも使えます。",
+          "customDescription": "スティックがこの方向に入ったときに 1 回実行します。",
+          "mode": {
+            "label": "スティックの用途",
+            "description": "会話スクロールは倒した量に応じて連続します。カスタムは方向ごとに機能を指定します。",
+            "options": {
+              "conversation-scroll": "会話をスクロール",
+              "custom": "方向をカスタム"
+            }
+          }
+        },
+        "directions": {
+          "up": "上",
+          "right": "右",
+          "down": "下",
+          "left": "左"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "左スティック押し込み",
+          "rs": "右スティック押し込み",
+          "dpadUp": "十字キー上",
+          "dpadDown": "十字キー下",
+          "dpadLeft": "十字キー左",
+          "dpadRight": "十字キー右",
+          "leftStick": "左スティック",
+          "rightStick": "右スティック"
+        },
+        "actions": {
+          "none": "未設定",
+          "voice": "音声入力",
+          "voiceDescription": "押している間音声入力し、離すと終了します。",
+          "commands": "コマンド",
+          "skills": "スキル",
+          "choose": "機能を選択"
+        },
+        "errors": {
+          "load": "コントローラー設定を読み込めませんでした",
+          "save": "コントローラー設定を保存できませんでした"
+        },
+        "connection": {
+          "label": "接続",
+          "toggle": {
+            "label": "有効にする",
+            "aria": "Cindy が前面にあるとき Xbox コントローラーを使う"
+          },
+          "status": {
+            "connecting": "接続中",
+            "connected": "接続済み",
+            "not-detected": "未検出",
+            "present": "接続済み",
+            "disabled": "オフ",
+            "error": "接続エラー",
+            "unavailable": "このシステムでは未対応"
+          },
+          "descriptions": {
+            "connecting": "Cindy は Xbox コントローラーを探しています。",
+            "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
+            "disabled": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "present": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "not-detected": "USB または Bluetooth で Xbox コントローラーを接続してください。",
+            "error": "Cindy はコントローラーを読み取れず、再試行しています。",
+            "unavailable": "このコンピューターはまだ Xbox コントローラーを読めません。"
+          }
+        },
+        "device": {
+          "usb": "有線",
+          "bluetooth": "Bluetooth",
+          "battery": "{{percent}}%",
+          "charging": "充電中 {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "プラグイン",
