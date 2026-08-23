@@ -83,7 +83,7 @@ export class XboxGamepadController {
       this.device = { ...XBOX_GAMEPAD_EMPTY_DEVICE };
       this.syncConnectionStatus();
       this.releaseHolds();
-      this.deps.preview?.(XBOX_GAMEPAD_EMPTY_PREVIEW);
+      this.emitPreview(XBOX_GAMEPAD_EMPTY_PREVIEW);
       this.emit();
       return;
     }
@@ -95,7 +95,7 @@ export class XboxGamepadController {
       this.syncConnectionStatus();
       if (!message.present) {
         this.releaseHolds();
-        this.deps.preview?.(XBOX_GAMEPAD_EMPTY_PREVIEW);
+        this.emitPreview(XBOX_GAMEPAD_EMPTY_PREVIEW);
       }
       this.emit();
       return;
@@ -104,7 +104,7 @@ export class XboxGamepadController {
     const frame = parseXboxGamepadFrame(message);
     if (!frame) return;
     this.hostError = null;
-    this.deps.preview?.(xboxGamepadPreviewFromFrame(frame));
+    this.emitPreview(xboxGamepadPreviewFromFrame(frame));
     if (!this.shouldDispatch()) {
       this.previousFrame = null;
       return;
@@ -120,12 +120,17 @@ export class XboxGamepadController {
     this.deviceName = null;
     this.device = { ...XBOX_GAMEPAD_EMPTY_DEVICE };
     this.releaseHolds();
-    this.deps.preview?.(XBOX_GAMEPAD_EMPTY_PREVIEW);
+    this.emitPreview(XBOX_GAMEPAD_EMPTY_PREVIEW);
     this.emit();
   }
 
   private shouldDispatch(): boolean {
     return this.settings.deviceEnabled && this.deps.isCindyFrontmost() && !this.layoutPreviewActive;
+  }
+
+  private emitPreview(input: XboxGamepadPreviewInput): void {
+    if (!this.layoutPreviewActive) return;
+    this.deps.preview?.(input);
   }
 
   private syncConnectionStatus(): void {

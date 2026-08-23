@@ -1168,7 +1168,7 @@ export function MainLayout() {
           navigate('/cc-agent/new');
           return true;
         case 'settings':
-          navigate('/settings?tab=shortcuts&workLouderCodex=1');
+          navigate('/settings?tab=shortcuts');
           return true;
         case 'manageTasks':
           navigate('/cc-agent/scheduled');

@@ -133,6 +133,10 @@ export function createXboxGamepadHost(
     starting = true;
     try {
       const helperPath = await (deps.resolveHelperPath ?? resolveXboxGamepadHelperPath)();
+      if (!wanted) {
+        starting = false;
+        return;
+      }
       const next = (deps.spawnHelper ?? defaultSpawnHelper)(helperPath);
       attach(next);
     } catch (error) {

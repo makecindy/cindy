@@ -34,8 +34,13 @@ function normalizeStick(raw: unknown, fallback: XboxGamepadStickBinding): XboxGa
     mode: isXboxGamepadStickMode(value.mode) ? value.mode : fallback.mode,
     directions: Object.fromEntries(
       XBOX_GAMEPAD_STICK_DIRECTIONS.map((direction) => {
+        if (!Object.prototype.hasOwnProperty.call(directionsRaw, direction)) {
+          return [direction, cloneXboxGamepadBinding(fallback.directions[direction])];
+        }
+        const rawDirection = directionsRaw[direction];
+        if (rawDirection === null) return [direction, null];
         const binding = cloneXboxGamepadBinding(
-          isXboxGamepadBinding(directionsRaw[direction]) ? directionsRaw[direction] : null,
+          isXboxGamepadBinding(rawDirection) ? rawDirection : fallback.directions[direction],
         );
         return [direction, binding?.type === 'voice' ? null : binding];
       }),

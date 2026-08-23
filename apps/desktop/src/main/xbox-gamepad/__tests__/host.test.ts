@@ -174,6 +174,26 @@ describe('XboxGamepadHost', () => {
     host.stop();
   });
 
+  it('does not spawn after stop wins the resolve race', async () => {
+    let finishResolve: ((path: string) => void) | undefined;
+    const spawnHelper = vi.fn(() => fakeChild());
+    const host = createXboxGamepadHost(vi.fn(), {
+      resolveHelperPath: () =>
+        new Promise((resolve) => {
+          finishResolve = resolve;
+        }),
+      spawnHelper,
+    });
+
+    host.start();
+    await flush();
+    host.stop();
+    finishResolve?.('/helper');
+    await flush();
+
+    expect(spawnHelper).not.toHaveBeenCalled();
+  });
+
   it('does not report host-error when the helper is stopped on purpose', async () => {
     const onMessage = vi.fn();
     const child = fakeChild();

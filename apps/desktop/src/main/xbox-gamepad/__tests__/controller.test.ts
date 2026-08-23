@@ -31,7 +31,7 @@ describe('XboxGamepadController', () => {
       triggers: XBOX_GAMEPAD_EMPTY_FRAME.triggers,
     });
     expect(dispatch).not.toHaveBeenCalled();
-    expect(preview).toHaveBeenCalled();
+    expect(preview).not.toHaveBeenCalled();
 
     controller.applySettings(enabledSettings());
     controller.handleHostMessage({
@@ -154,5 +154,22 @@ describe('XboxGamepadController', () => {
     expect(preview).toHaveBeenCalledWith(
       expect.objectContaining({ buttons: expect.objectContaining({ a: true }) }),
     );
+  });
+
+  it('does not broadcast preview frames until the layout editor holds the lease', () => {
+    const preview = vi.fn();
+    const controller = new XboxGamepadController({
+      isCindyFrontmost: () => true,
+      dispatch: vi.fn(),
+      preview,
+    });
+    controller.applySettings(enabledSettings());
+    controller.handleHostMessage({
+      kind: 'frame',
+      buttons: { ...XBOX_GAMEPAD_EMPTY_FRAME.buttons, a: true },
+      axes: XBOX_GAMEPAD_EMPTY_FRAME.axes,
+      triggers: XBOX_GAMEPAD_EMPTY_FRAME.triggers,
+    });
+    expect(preview).not.toHaveBeenCalled();
   });
 });

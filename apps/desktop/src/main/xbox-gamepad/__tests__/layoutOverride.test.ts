@@ -31,4 +31,18 @@ describe('xboxGamepadLayoutOverrides', () => {
     const defaults = createXboxGamepadDefaultLayout();
     expect(xboxGamepadLayoutOverrides(cloneXboxGamepadLayout(defaults), defaults)).toBeNull();
   });
+
+  it('persists only the changed stick mode or direction', () => {
+    const defaults = createXboxGamepadDefaultLayout();
+    const layout = cloneXboxGamepadLayout(defaults);
+    layout.sticks.right.mode = 'custom';
+    layout.sticks.right.directions.up = { type: 'command', commandId: 'newTask' };
+
+    expect(xboxGamepadLayoutOverrides(layout, defaults)?.sticks).toEqual({
+      right: {
+        mode: 'custom',
+        directions: { up: { type: 'command', commandId: 'newTask' } },
+      },
+    });
+  });
 });
