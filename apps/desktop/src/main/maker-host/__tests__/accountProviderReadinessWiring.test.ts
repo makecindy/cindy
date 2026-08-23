@@ -229,6 +229,19 @@ describe('account provider readiness wiring', () => {
     expect(clearAfterJoin).toBeGreaterThan(joinPrevious);
   });
 
+  it('resets the goal controller before the outgoing Maker is shut down', () => {
+    const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
+    const resetGoal = bootstrapSource.indexOf('resetGoalController();', teardown);
+    const makerShutdown = bootstrapSource.indexOf(
+      "await maker.shutdown({ reason: 'account-boundary' })",
+      teardown,
+    );
+
+    expect(teardown).toBeGreaterThanOrEqual(0);
+    expect(resetGoal).toBeGreaterThan(teardown);
+    expect(resetGoal).toBeLessThan(makerShutdown);
+  });
+
   it('stops every PI Subagent runner of the outgoing owner at the account boundary', () => {
     const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
     const makerShutdown = bootstrapSource.indexOf(
