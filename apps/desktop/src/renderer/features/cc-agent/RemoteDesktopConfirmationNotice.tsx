@@ -7,7 +7,7 @@ export function RemoteDesktopConfirmationNotice() {
 
   return (
     <div
-      className="flex w-full max-w-[914px] items-start gap-3 rounded-[8px] border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-4 py-3"
+      className="flex w-full max-w-[914px] items-start gap-3 rounded-[12px] border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-4 py-3"
       data-testid="remote-desktop-confirmation-notice"
       role="status"
     >

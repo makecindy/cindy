@@ -15,10 +15,13 @@ describe('RemoteDesktopConfirmationNotice', () => {
   it('renders a read-only status without confirmation actions', () => {
     render(<RemoteDesktopConfirmationNotice />);
 
-    expect(screen.getByRole('status').textContent).toContain(
+    const status = screen.getByRole('status');
+
+    expect(status.className).toContain('rounded-[12px]');
+    expect(status.textContent).toContain(
       'ccAgent.remoteDesktopConfirmation.title',
     );
-    expect(screen.getByRole('status').textContent).toContain(
+    expect(status.textContent).toContain(
       'ccAgent.remoteDesktopConfirmation.description',
     );
     expect(screen.queryByRole('button')).toBeNull();
