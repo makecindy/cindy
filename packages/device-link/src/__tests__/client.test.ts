@@ -3003,6 +3003,8 @@ describe('DeviceLinkClient', () => {
 
   it('同 id relay-error → 带 code reject', async () => {
     const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
     h.client.start();
     await tick();
     h.current().ack();
@@ -3016,6 +3018,56 @@ describe('DeviceLinkClient', () => {
       payload: { code: 'REMOTE_DISABLED', message: 'off' },
     });
     await expect(p).rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
+    expect(routeChanges).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it('pending DEVICE_OFFLINE 在 reject 前发出 peer route offline 事件', async () => {
+    const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const invoke = h.client.invoke('dev-b', { channel: 'x', args: [] });
+    const sent = h.current().sent.find((e) => e.kind === 'invoke')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: sent.id,
+      payload: { code: 'DEVICE_OFFLINE', message: 'offline' },
+    });
+
+    expect(routeChanges).toHaveLength(1);
+    expect(routeChanges[0]).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      connectionEpoch: expect.any(Number),
+    });
+    await expect(invoke).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    h.client.stop();
+  });
+
+  it('无 pending 的 DEVICE_OFFLINE 也发出单次 peer route offline 事件', async () => {
+    const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.client.sendPush('dev-b', 'maker:event', { stale: true });
+    const error = {
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      payload: { code: 'DEVICE_OFFLINE', message: 'offline', dst: 'dev-b' },
+    } as const;
+    h.current().push(error);
+    h.current().push(error);
+
+    expect(routeChanges).toHaveLength(1);
+    expect(routeChanges[0]).toMatchObject({ deviceId: 'dev-b', state: 'offline' });
     h.client.stop();
   });
 
@@ -3702,6 +3754,8 @@ describe('DeviceLinkClient', () => {
 
   it('epoch 守卫:过期 socket 的迟到 close/message 回调被忽略,不触发额外重连', async () => {
     const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
     h.client.start();
     await tick();
     h.current().ack();
@@ -3716,8 +3770,16 @@ describe('DeviceLinkClient', () => {
     // 把 this.ws=socket2 误清并再排一次重连 → socket3)。
     stale.emit('close', 1006);
     stale.emit('message', { toString: () => 'garbage-from-stale' });
+    stale.emit('message', {
+      toString: () => JSON.stringify({
+        v: PROTOCOL_VERSION,
+        kind: 'relay-error',
+        payload: { code: 'DEVICE_OFFLINE', message: 'stale', dst: 'dev-b' },
+      }),
+    });
     await tick(25);
     expect(h.sockets.length).toBe(2); // 没有因 stale 迟到事件多建连
+    expect(routeChanges).toHaveLength(0); // 旧 connection epoch 不能清新链路
 
     fresh.ack();
     expect(h.client.getStatus()).toBe('online'); // fresh 不受 stale 影响,正常 online

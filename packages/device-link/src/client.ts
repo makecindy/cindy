@@ -373,6 +373,20 @@ export interface DeviceLinkConnectionIssue {
 }
 
 /**
+ * Peer route lifecycle signal for host-side active-state cleanup.
+ *
+ * `DEVICE_OFFLINE` is a routing fact, not a request-level error only: the host
+ * must release the peer's active controller projection while retaining its
+ * remembered recovery intent. The connection epoch lets hosts ignore a late
+ * signal from an older WebSocket generation.
+ */
+export interface DeviceLinkPeerRouteStateChanged {
+  deviceId: string;
+  state: 'offline';
+  connectionEpoch: number;
+}
+
+/**
  * 从断连信息分类连接问题。返回 null = 普通断线(网络抖动 / 服务重启 / 4401 token
  * 轮换),按既有退避重连兜底即可,不打扰用户。
  *
@@ -614,6 +628,11 @@ export class DeviceLinkClient {
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
+  private peerRouteStateHandlers = new Set<
+    (change: DeviceLinkPeerRouteStateChanged) => void
+  >();
+  /** Avoid emitting the same authoritative route failure once per queued frame. */
+  private peerOfflineNotifiedEpoch = new Map<string, number>();
 
   constructor(opts: DeviceLinkClientOptions) {
     this.opts = opts;
@@ -833,6 +852,19 @@ export class DeviceLinkClient {
     return () => this.statusHandlers.delete(cb);
   }
 
+  /** Current WebSocket connection generation; useful for host-side stale-event guards. */
+  getConnectionEpoch(): number {
+    return this.connEpoch;
+  }
+
+  /** Subscribe to typed peer route lifecycle changes (currently authoritative offline). */
+  onPeerRouteStateChanged(
+    cb: (change: DeviceLinkPeerRouteStateChanged) => void,
+  ): () => void {
+    this.peerRouteStateHandlers.add(cb);
+    return () => this.peerRouteStateHandlers.delete(cb);
+  }
+
   getConnectionIssue(): DeviceLinkConnectionIssue | null {
     return this.connectionIssue;
   }
@@ -846,6 +878,28 @@ export class DeviceLinkClient {
   onPresenceChanged(cb: (snap: PresenceSnapshot) => void): () => void {
     this.presenceHandlers.add(cb);
     return () => this.presenceHandlers.delete(cb);
+  }
+
+  private notifyPeerRouteOffline(deviceId: string): void {
+    if (this.peerOfflineNotifiedEpoch.get(deviceId) === this.connEpoch) return;
+    this.peerOfflineNotifiedEpoch.set(deviceId, this.connEpoch);
+    if (this.peerRouteStateHandlers.size === 0) return;
+    const change: DeviceLinkPeerRouteStateChanged = {
+      deviceId,
+      state: 'offline',
+      connectionEpoch: this.connEpoch,
+    };
+    for (const cb of this.peerRouteStateHandlers) {
+      try {
+        cb(change);
+      } catch (err) {
+        this.log.error('device-link peer route state handler failed', err);
+      }
+    }
+  }
+
+  private markPeerRouteOnline(deviceId: string): void {
+    this.peerOfflineNotifiedEpoch.delete(deviceId);
   }
 
   /** 订阅入站隧道帧(invoke / link-open / link-close / push / 未配对的响应帧) */
@@ -1091,6 +1145,7 @@ export class DeviceLinkClient {
           : {}),
       },
     });
+    this.markPeerRouteOnline(dst);
     if (matchingOffer) {
       this.pendingInboundLinkOffers.delete(dst);
       this.setPeerCapabilities(
@@ -1847,6 +1902,7 @@ export class DeviceLinkClient {
               'outbound-accept',
             );
             const peer = this.getPeerTransport(env.src);
+            this.markPeerRouteOnline(env.src);
             peer.outboundExplicitlyClosed = false;
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
@@ -1877,8 +1933,16 @@ export class DeviceLinkClient {
           payload.code === 'DEVICE_OFFLINE'
           || payload.code === 'REMOTE_DISABLED'
         );
-        if (env.id && this.pending.has(env.id)) {
-          const p = this.pending.get(env.id)!;
+        const pending = env.id ? this.pending.get(env.id) : undefined;
+        const routeDeviceId = payload.dst ?? pending?.dst;
+        // DEVICE_OFFLINE is a peer route transition, not merely a rejected
+        // request. Emit it before the pending fast path so the host cannot
+        // miss it when the relay error is paired with an in-flight request.
+        if (payload.code === 'DEVICE_OFFLINE' && routeDeviceId) {
+          this.notifyPeerRouteOffline(routeDeviceId);
+        }
+        if (env.id && pending) {
+          const p = pending;
           this.pending.delete(env.id);
           // relay-error 代表原 invoke 没有交付到 peer。若它占用了可靠 stream 的 seq，
           // 不能只 reject 上层后把原请求留到重连重放，否则一个已向用户报错的写操作
