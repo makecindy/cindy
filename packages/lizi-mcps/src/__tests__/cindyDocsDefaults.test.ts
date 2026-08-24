@@ -23,7 +23,7 @@ import {
   PPTX_THEMES,
 } from '../cindy-docs/make_pptx.js';
 import { layoutSlots, SLIDE_H, SLIDE_W } from '../cindy-docs/pptxMasters.js';
-import { applyReportTemplate, htmlLooksUnstyled } from '../cindy-docs/pdfTemplate.js';
+import { applyReportTemplate, extractHtmlTitle, htmlLooksUnstyled } from '../cindy-docs/pdfTemplate.js';
 import { DOCS_THEMES, formatDocsDate, themeToArgb } from '../cindy-docs/themes.js';
 import type {
   DocsMcpDeps,
@@ -459,6 +459,13 @@ describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
 });
 
 describe('PDF 无样式 HTML 套报告模板', () => {
+  it('没有非空标题时让作品卡回退到文件名', () => {
+    expect(extractHtmlTitle('<p>正文</p>')).toBeUndefined();
+    expect(extractHtmlTitle('<title> </title><h1>\n</h1>')).toBeUndefined();
+    expect(extractHtmlTitle('<title>季度回顾</title>')).toBe('季度回顾');
+    expect(extractHtmlTitle('<h1>季度回顾</h1>')).toBe('季度回顾');
+  });
+
   it('htmlLooksUnstyled 只在没有 stylesheet 时为真', () => {
     expect(htmlLooksUnstyled('<h1>hi</h1>')).toBe(true);
     expect(htmlLooksUnstyled('<style>h1{color:red}</style><h1>hi</h1>')).toBe(false);

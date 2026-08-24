@@ -332,7 +332,7 @@ async function inlineLocalResources(root: string, baseDir: string, html: string)
     async (tag) => {
       const withSources = await rewriteHtmlAttributes(
         tag,
-        ['src', 'poster', 'data'],
+        ['src', 'poster', 'data', 'href', 'xlink:href'],
         async (reference) => (await snapshotLocalResource(context, baseDir, reference)) ?? reference,
       );
       return rewriteHtmlAttributes(

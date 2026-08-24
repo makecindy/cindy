@@ -995,6 +995,33 @@ describe('render_pdf', () => {
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
   });
 
+  it('快照 SVG image 的 href 与 xlink:href 本地资源', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'svg.html'),
+      '<svg><image href="./chart.png"/><image xlink:href=./chart.png /></svg>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'svg.html',
+      outPath: 'svg.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered.match(/data:image\/png;base64,/g)).toHaveLength(2);
+    expect(rendered).not.toContain('./chart.png');
+  });
+
   it('快照未加引号的本地资源属性', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');

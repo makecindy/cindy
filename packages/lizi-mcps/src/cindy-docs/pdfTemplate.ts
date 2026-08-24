@@ -30,12 +30,12 @@ function stripTags(raw: string): string {
   return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-export function extractHtmlTitle(html: string): string {
+export function extractHtmlTitle(html: string): string | undefined {
   const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   if (title?.[1] && stripTags(title[1]).length > 0) return stripTags(title[1]);
   const heading = html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
   if (heading?.[1] && stripTags(heading[1]).length > 0) return stripTags(heading[1]);
-  return '文档';
+  return undefined;
 }
 
 export function extractHtmlBody(html: string): string {
@@ -123,7 +123,7 @@ export function wrapInReportTemplate(html: string, theme: DocsTheme): string {
     '<html lang="zh-CN">',
     '<head>',
     '<meta charset="utf-8" />',
-    `<title>${escapeHtml(title)}</title>`,
+    `<title>${title ? escapeHtml(title) : ''}</title>`,
     `<style ${PDF_TEMPLATE_MARK}>`,
     reportTemplateCss(theme),
     '</style>',
