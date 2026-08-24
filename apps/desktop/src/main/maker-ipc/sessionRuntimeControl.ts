@@ -1,0 +1,267 @@
+import type { AgentKind, Effort } from '@cindy/maker-core';
+import {
+  connectedProvidersForAgent,
+  type CatalogModel,
+  type ProviderView,
+} from '@cindy/model-providers';
+
+export type SessionRuntimeMutationSource = 'agent' | 'fallback';
+
+export interface SessionRuntimeProfile {
+  agentKind: AgentKind;
+  model: string;
+  providerId: string | null;
+  effort: Effort | null;
+  fastMode: boolean;
+}
+
+export interface PendingSessionRuntimeMutation {
+  generation: number;
+  source: SessionRuntimeMutationSource;
+  profile: SessionRuntimeProfile;
+}
+
+export interface SessionRuntimeControlSnapshot {
+  generation: number;
+  effectiveOverride: SessionRuntimeProfile | null;
+  pending: PendingSessionRuntimeMutation | null;
+  fallbackHop: number;
+  visitedRoutes: string[];
+}
+
+interface SessionRuntimeControlState {
+  generation: number;
+  effectiveOverride: SessionRuntimeProfile | null;
+  pending: PendingSessionRuntimeMutation | null;
+  fallbackHop: number;
+  visitedRoutes: Set<string>;
+}
+
+const states = new Map<string, SessionRuntimeControlState>();
+
+function routeKey(profile: Pick<SessionRuntimeProfile, 'providerId' | 'model'>): string {
+  return `${profile.providerId ?? ''}\u0000${profile.model}`;
+}
+
+function stateFor(sessionId: string): SessionRuntimeControlState {
+  let state = states.get(sessionId);
+  if (!state) {
+    state = {
+      generation: 0,
+      effectiveOverride: null,
+      pending: null,
+      fallbackHop: 0,
+      visitedRoutes: new Set(),
+    };
+    states.set(sessionId, state);
+  }
+  return state;
+}
+
+export function sessionRuntimeGenerationMatches(
+  sessionId: string,
+  expectedGeneration: number | undefined,
+): boolean {
+  return expectedGeneration === undefined || (states.get(sessionId)?.generation ?? 0) === expectedGeneration;
+}
+
+export function recordUserSessionRuntimeMutation(sessionId: string): number {
+  const state = stateFor(sessionId);
+  state.generation += 1;
+  state.effectiveOverride = null;
+  state.pending = null;
+  state.fallbackHop = 0;
+  state.visitedRoutes.clear();
+  return state.generation;
+}
+
+export function recordUserSessionRuntimeAxisMutation(
+  sessionId: string,
+  patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,
+): number {
+  const state = stateFor(sessionId);
+  state.generation += 1;
+  state.pending = null;
+  state.fallbackHop = 0;
+  state.visitedRoutes.clear();
+  if (state.effectiveOverride) {
+    state.effectiveOverride = { ...state.effectiveOverride, ...patch };
+  }
+  return state.generation;
+}
+
+export function acceptSessionRuntimeMutation(params: {
+  sessionId: string;
+  source: SessionRuntimeMutationSource;
+  profile: SessionRuntimeProfile;
+  previousProfile?: SessionRuntimeProfile;
+  deferred: boolean;
+}): number {
+  const state = stateFor(params.sessionId);
+  state.generation += 1;
+  const accepted: PendingSessionRuntimeMutation = {
+    generation: state.generation,
+    source: params.source,
+    profile: params.profile,
+  };
+  state.pending = params.deferred ? accepted : null;
+  if (!params.deferred) state.effectiveOverride = params.profile;
+  if (params.source === 'fallback') {
+    state.fallbackHop += 1;
+    if (params.previousProfile) state.visitedRoutes.add(routeKey(params.previousProfile));
+    state.visitedRoutes.add(routeKey(params.profile));
+  } else {
+    state.fallbackHop = 0;
+    state.visitedRoutes.clear();
+  }
+  return state.generation;
+}
+
+export function settlePendingSessionRuntimeMutation(
+  sessionId: string,
+  generation: number,
+): boolean {
+  const state = stateFor(sessionId);
+  const pending = state.pending;
+  if (!pending || pending.generation !== generation || state.generation !== generation)
+    return false;
+  state.pending = null;
+  state.effectiveOverride = pending.profile;
+  return true;
+}
+
+export function getPendingSessionRuntimeMutation(
+  sessionId: string,
+): PendingSessionRuntimeMutation | null {
+  return states.get(sessionId)?.pending ?? null;
+}
+
+export function getSessionRuntimeControlSnapshot(sessionId: string): SessionRuntimeControlSnapshot {
+  const state = states.get(sessionId);
+  if (!state) {
+    return {
+      generation: 0,
+      effectiveOverride: null,
+      pending: null,
+      fallbackHop: 0,
+      visitedRoutes: [],
+    };
+  }
+  return {
+    generation: state.generation,
+    effectiveOverride: state.effectiveOverride,
+    pending: state.pending,
+    fallbackHop: state.fallbackHop,
+    visitedRoutes: [...state.visitedRoutes],
+  };
+}
+
+export function clearSessionRuntimeControlState(sessionId: string): void {
+  states.delete(sessionId);
+}
+
+const EFFORT_ORDER: readonly Effort[] = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+];
+
+export function resolveCompatibleSessionRuntimeEffort(
+  model: CatalogModel,
+  requested: Effort | null,
+): Effort | null {
+  if (model.efforts.length === 0) return null;
+  if (requested && model.efforts.includes(requested)) return requested;
+  if (model.defaultEffort && model.efforts.includes(model.defaultEffort))
+    return model.defaultEffort;
+  if (!requested) return model.efforts[0] ?? null;
+  const requestedRank = EFFORT_ORDER.indexOf(requested);
+  return (
+    [...model.efforts].sort(
+      (a, b) =>
+        Math.abs(EFFORT_ORDER.indexOf(a) - requestedRank) -
+        Math.abs(EFFORT_ORDER.indexOf(b) - requestedRank),
+    )[0] ?? null
+  );
+}
+
+export function resolveSessionRuntimeAxes(params: {
+  model: CatalogModel;
+  effort: Effort | null;
+  fastMode: boolean;
+  effortExplicit: boolean;
+  fastExplicit: boolean;
+}):
+  | { ok: true; effort: Effort | null; fastMode: boolean }
+  | { ok: false; reason: 'effort-unavailable' | 'fast-unavailable' } {
+  if (
+    params.effortExplicit &&
+    params.effort !== null &&
+    !params.model.efforts.includes(params.effort)
+  ) {
+    return { ok: false, reason: 'effort-unavailable' };
+  }
+  if (params.fastExplicit && params.fastMode && params.model.supportsFastMode !== true) {
+    return { ok: false, reason: 'fast-unavailable' };
+  }
+  return {
+    ok: true,
+    effort: resolveCompatibleSessionRuntimeEffort(params.model, params.effort),
+    fastMode: params.fastMode && params.model.supportsFastMode === true,
+  };
+}
+
+export function pickSessionRuntimeFallback(params: {
+  providers: readonly ProviderView[];
+  current: SessionRuntimeProfile;
+  visitedRoutes: readonly string[];
+  maxHops: number;
+  currentHop: number;
+}): SessionRuntimeProfile | null {
+  if (params.currentHop >= params.maxHops) return null;
+  const visited = new Set(params.visitedRoutes);
+  visited.add(routeKey(params.current));
+  const rail = connectedProvidersForAgent([...params.providers], params.current.agentKind);
+  const candidates: Array<{ providerId: string; model: CatalogModel }> = [];
+
+  for (const provider of rail) {
+    for (const model of provider.models[params.current.agentKind] ?? []) {
+      if (model.disabled || model.status === 'retired') continue;
+      if (model.id === params.current.model && provider.id !== params.current.providerId) {
+        candidates.push({ providerId: provider.id, model });
+      }
+    }
+  }
+  for (const provider of rail) {
+    for (const model of provider.models[params.current.agentKind] ?? []) {
+      if (model.disabled || model.status === 'retired') continue;
+      if (!model.newSessionDefault?.includes(params.current.agentKind)) continue;
+      candidates.push({ providerId: provider.id, model });
+    }
+  }
+
+  for (const candidate of candidates) {
+    const key = routeKey({ providerId: candidate.providerId, model: candidate.model.id });
+    if (visited.has(key)) continue;
+    const axes = resolveSessionRuntimeAxes({
+      model: candidate.model,
+      effort: params.current.effort,
+      fastMode: params.current.fastMode,
+      effortExplicit: false,
+      fastExplicit: false,
+    });
+    if (!axes.ok) continue;
+    return {
+      agentKind: params.current.agentKind,
+      model: candidate.model.id,
+      providerId: candidate.providerId,
+      effort: axes.effort,
+      fastMode: axes.fastMode,
+    };
+  }
+  return null;
+}

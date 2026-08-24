@@ -3156,6 +3156,18 @@
         "toggleFailed": "切換靜默加密內容重試失敗"
       }
     },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "任務模型自動降級",
+        "description": "連線或容量故障連續發生時，先切換到同名模型的其他已連線來源，再嘗試目前 Agent 明確推薦的模型；不會切換 Agent，也不會改掉你儲存的選擇。預設關閉。"
+      },
+      "toggleAria": "切換任務模型自動降級",
+      "toast": {
+        "enabled": "已開啟任務模型自動降級。",
+        "disabled": "已關閉任務模型自動降級。",
+        "toggleFailed": "切換任務模型自動降級失敗"
+      }
+    },
     "remoteControl": {
       "title": "遠端連線",
       "description": "在同帳號的裝置之間互相遠端操控，或透過 SSH 連線遠端主機。",

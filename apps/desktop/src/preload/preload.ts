@@ -6253,6 +6253,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       defaultEnabled: boolean;
       effective: 'immediate';
     }> => ipcRenderer.invoke('maker:silent-encrypted-retry:reset'),
+    sessionRuntimeFallbackGet: (): Promise<{
+      enabled: boolean;
+      isCustomized?: boolean;
+      defaultEnabled?: boolean;
+    }> => ipcRenderer.invoke('maker:session-runtime-fallback:get'),
+    sessionRuntimeFallbackSet: (
+      enabled: boolean,
+    ): Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }> => ipcRenderer.invoke('maker:session-runtime-fallback:set', enabled),
+    sessionRuntimeFallbackReset: (): Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }> => ipcRenderer.invoke('maker:session-runtime-fallback:reset'),
 
     // Claude Code 自动上下文压缩阈值。仅对新建会话生效。
     compactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:compaction:get-pct'),

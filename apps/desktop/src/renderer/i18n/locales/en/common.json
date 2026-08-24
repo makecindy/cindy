@@ -3165,6 +3165,18 @@
         "toggleFailed": "Failed to switch silent encrypted-content retry"
       }
     },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "Automatic task model fallback",
+        "description": "After repeated connection or capacity failures, try another connected source for the same model, then a model explicitly recommended for the current agent. It never switches agents or changes your saved selection. Off by default."
+      },
+      "toggleAria": "Toggle automatic task model fallback",
+      "toast": {
+        "enabled": "Automatic task model fallback is on.",
+        "disabled": "Automatic task model fallback is off.",
+        "toggleFailed": "Failed to change automatic task model fallback"
+      }
+    },
     "remoteControl": {
       "title": "Remote Connection",
       "description": "Control your other signed-in devices remotely, or connect to a remote host over SSH.",

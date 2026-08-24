@@ -1,0 +1,238 @@
+import { describe, expect, it } from 'vitest';
+import type { ProviderView } from '@cindy/model-providers';
+
+import {
+  acceptSessionRuntimeMutation,
+  getSessionRuntimeControlSnapshot,
+  pickSessionRuntimeFallback,
+  recordUserSessionRuntimeAxisMutation,
+  recordUserSessionRuntimeMutation,
+  resolveSessionRuntimeAxes,
+  sessionRuntimeGenerationMatches,
+  settlePendingSessionRuntimeMutation,
+  type SessionRuntimeProfile,
+} from '../sessionRuntimeControl.js';
+
+const current: SessionRuntimeProfile = {
+  agentKind: 'codex',
+  model: 'gpt-main',
+  providerId: 'openai',
+  effort: 'high',
+  fastMode: true,
+};
+
+function provider(
+  id: string,
+  models: Array<{
+    id: string;
+    defaults?: boolean;
+    efforts?: SessionRuntimeProfile['effort'][];
+    fast?: boolean;
+  }>,
+): ProviderView {
+  return {
+    id,
+    name: id,
+    source: 'builtin',
+    connected: true,
+    agents: ['codex'],
+    auth: { method: 'none' },
+    routing: { codex: { wireProtocol: 'openai-responses' } },
+    models: {
+      codex: models.map((model) => ({
+        id: model.id,
+        name: model.id,
+        contextWindow: 100_000,
+        efforts: (model.efforts ?? ['medium']) as never,
+        defaultEffort: (model.efforts?.[0] ?? 'medium') as never,
+        supportsFastMode: model.fast,
+        ...(model.defaults ? { newSessionDefault: ['codex'] } : {}),
+      })),
+    },
+  } as unknown as ProviderView;
+}
+
+describe('session runtime control state', () => {
+  it('uses one monotonic generation for deferred and settled mutations', () => {
+    const sessionId = 'runtime-generation';
+    expect(sessionRuntimeGenerationMatches(sessionId, 0)).toBe(true);
+    const generation = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: current,
+      deferred: true,
+    });
+    expect(generation).toBe(1);
+    expect(settlePendingSessionRuntimeMutation(sessionId, generation)).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation: 1,
+      pending: null,
+      effectiveOverride: current,
+    });
+  });
+
+  it('a user selection invalidates pending and fallback state', () => {
+    const sessionId = 'runtime-user-wins';
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'fallback',
+      profile: current,
+      deferred: true,
+    });
+    const generation = recordUserSessionRuntimeMutation(sessionId);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      pending: null,
+      effectiveOverride: null,
+      fallbackHop: 0,
+      visitedRoutes: [],
+    });
+  });
+
+  it('rejects a stale generation after a newer user mutation', () => {
+    const sessionId = 'runtime-stale-generation';
+    const observed = getSessionRuntimeControlSnapshot(sessionId).generation;
+    recordUserSessionRuntimeMutation(sessionId);
+    expect(sessionRuntimeGenerationMatches(sessionId, observed)).toBe(false);
+  });
+
+  it('a user effort change keeps an active temporary route but invalidates fallback progress', () => {
+    const sessionId = 'runtime-user-axis';
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'fallback',
+      profile: current,
+      deferred: false,
+    });
+    recordUserSessionRuntimeAxisMutation(sessionId, { effort: 'max' });
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      effectiveOverride: { ...current, effort: 'max' },
+      pending: null,
+      fallbackHop: 0,
+      visitedRoutes: [],
+    });
+  });
+});
+
+describe('session runtime fallback selection', () => {
+  it('rejects explicit unsupported axes and normalizes inherited axes', () => {
+    const model = provider('xd', [
+      { id: 'gpt-main', efforts: ['medium'], fast: false },
+    ]).models.codex![0]!;
+    expect(
+      resolveSessionRuntimeAxes({
+        model,
+        effort: 'ultra',
+        fastMode: false,
+        effortExplicit: true,
+        fastExplicit: false,
+      }),
+    ).toEqual({ ok: false, reason: 'effort-unavailable' });
+    expect(
+      resolveSessionRuntimeAxes({
+        model,
+        effort: 'high',
+        fastMode: true,
+        effortExplicit: false,
+        fastExplicit: false,
+      }),
+    ).toEqual({ ok: true, effort: 'medium', fastMode: false });
+  });
+
+  it('prefers the same model on another connected source', () => {
+    const result = pickSessionRuntimeFallback({
+      providers: [
+        provider('openai', [{ id: 'gpt-main' }]),
+        provider('xd', [{ id: 'gpt-main', efforts: ['medium'], fast: false }]),
+        provider('other', [{ id: 'recommended', defaults: true }]),
+      ],
+      current,
+      visitedRoutes: [],
+      currentHop: 0,
+      maxHops: 2,
+    });
+    expect(result).toMatchObject({
+      providerId: 'xd',
+      model: 'gpt-main',
+      effort: 'medium',
+      fastMode: false,
+    });
+  });
+
+  it('ignores disconnected sources even when they offer the same model', () => {
+    const disconnected = provider('disconnected', [{ id: 'gpt-main' }]);
+    disconnected.connected = false;
+    expect(
+      pickSessionRuntimeFallback({
+        providers: [provider('openai', [{ id: 'gpt-main' }]), disconnected],
+        current,
+        visitedRoutes: [],
+        currentHop: 0,
+        maxHops: 2,
+      }),
+    ).toBeNull();
+  });
+
+  it('uses only an explicitly declared same-harness default after exact-name routes', () => {
+    const providers = [
+      provider('openai', [{ id: 'gpt-main' }]),
+      provider('xd', [{ id: 'arbitrary-first' }, { id: 'recommended', defaults: true }]),
+    ];
+    expect(
+      pickSessionRuntimeFallback({
+        providers,
+        current,
+        visitedRoutes: [],
+        currentHop: 0,
+        maxHops: 2,
+      }),
+    ).toMatchObject({ providerId: 'xd', model: 'recommended' });
+  });
+
+  it('stops at the hop limit and never revisits a route', () => {
+    const providers = [provider('xd', [{ id: 'gpt-main' }])];
+    expect(
+      pickSessionRuntimeFallback({
+        providers,
+        current,
+        visitedRoutes: ['xd\u0000gpt-main'],
+        currentHop: 1,
+        maxHops: 2,
+      }),
+    ).toBeNull();
+    expect(
+      pickSessionRuntimeFallback({
+        providers,
+        current,
+        visitedRoutes: [],
+        currentHop: 2,
+        maxHops: 2,
+      }),
+    ).toBeNull();
+  });
+
+  it('persists the route being left so fallback cannot bounce A to B to A', () => {
+    const sessionId = 'runtime-no-bounce';
+    const next = { ...current, providerId: 'xd' };
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'fallback',
+      previousProfile: current,
+      profile: next,
+      deferred: false,
+    });
+    const state = getSessionRuntimeControlSnapshot(sessionId);
+    expect(state.visitedRoutes).toEqual(
+      expect.arrayContaining(['openai\u0000gpt-main', 'xd\u0000gpt-main']),
+    );
+    expect(
+      pickSessionRuntimeFallback({
+        providers: [provider('openai', [{ id: 'gpt-main' }])],
+        current: next,
+        visitedRoutes: state.visitedRoutes,
+        currentHop: state.fallbackHop,
+        maxHops: 2,
+      }),
+    ).toBeNull();
+  });
+});

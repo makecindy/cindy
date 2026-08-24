@@ -319,6 +319,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         steerSession: wrap((service, params) => service.steerSession(params)),
         stopSessionTurn: wrap((service, params) => service.stopSessionTurn(params)),
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
+        setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {

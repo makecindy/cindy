@@ -19,3 +19,5 @@
   身份命名与默认值方向、区域相关 UI 标注与对外口径。
 - [`task-and-conversation-naming.md`](task-and-conversation-naming.md)：`session` 的中文
   叫「任务」，任务 / 对话 / 消息的分层定义与判定规则，以及「任务」与 `task` 的歧义处理。
+- [`session-runtime-control.md`](session-runtime-control.md)：Agent 调整任务模型、来源、
+  推理强度与 Fast 的统一控制面，baseline/effective/pending 状态和自动降级边界。

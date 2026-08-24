@@ -35,7 +35,11 @@ import type {
   SessionSendResult,
   UserMessage,
 } from '@cindy/maker-core';
-import { storedCustomProviderId } from '@cindy/model-providers';
+import {
+  effectiveSourceIdForModel,
+  findCatalogModel,
+  storedCustomProviderId,
+} from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
@@ -813,10 +817,12 @@ import {
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
 import {
+  getSessionEffort,
   getSessionFastMode,
   setSessionEffort,
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
+import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
   getModelVisibilityMirrorSnapshot,
   syncModelVisibilityMirrorForOwner,
@@ -856,6 +862,19 @@ import {
   isLocalSessionBusy,
 } from '../maker-host/codex-credential-switch.js';
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
+import {
+  acceptSessionRuntimeMutation,
+  getPendingSessionRuntimeMutation,
+  getSessionRuntimeControlSnapshot,
+  pickSessionRuntimeFallback,
+  recordUserSessionRuntimeAxisMutation,
+  recordUserSessionRuntimeMutation,
+  resolveSessionRuntimeAxes,
+  sessionRuntimeGenerationMatches,
+  settlePendingSessionRuntimeMutation,
+  type SessionRuntimeMutationSource,
+  type SessionRuntimeProfile,
+} from './sessionRuntimeControl.js';
 import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
 import { normalizeDeviceLinkSetModelWireArgs } from './setModelWireArgs.js';
 import { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
@@ -1013,12 +1032,15 @@ const silentStopAutoResumeGuard = new SilentStopAutoResumeGuard({
 // 中断自动续跑守卫(上游把已有产出的 turn 打断 → 自动替用户点一次「继续」)。
 // 与 silent-stop 那份**额度独立记账**,理由见 interruptedTurnAutoResume.ts 文件头。
 const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
-  isEnabled: () => readInterruptedTurnAutoResumeSettings().enabled,
+  isEnabled: () =>
+    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled,
   log: {
     debug: (message, meta) => log.debug(message, meta),
     warn: (message, meta) => log.warn(message, meta),
   },
 });
+let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
+  null;
 
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」
@@ -1640,8 +1662,37 @@ interface OrcaCollabService {
   getSessionRuntime: (params: {
     targetSessionId: string;
   }) => Promise<
-    | { ok: true; runtime: Awaited<ReturnType<typeof readCanonicalSessionActivity>> }
+    | { ok: true; runtime: import('./sessionControlService.js').SessionRuntimeDetails }
     | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  setSessionRuntime: (params: {
+    targetSessionId: string;
+    expectedGeneration?: number;
+    patch: {
+      model?: string;
+      providerId?: string | null;
+      effort?: import('@cindy/maker-core').Effort;
+      fastMode?: boolean;
+    };
+  }) => Promise<
+    | {
+        ok: true;
+        status: 'applied' | 'deferred';
+        generation: number;
+        effectiveProfile: SessionRuntimeProfile;
+        pendingMutation: ReturnType<typeof getPendingSessionRuntimeMutation>;
+      }
+    | {
+        ok: false;
+        errorCode:
+          | 'NOT_FOUND'
+          | 'CONFLICT'
+          | 'INVALID_ARGS'
+          | 'ROUTE_UNAVAILABLE'
+          | 'HOST_NOT_READY'
+          | 'INTERNAL';
+        message: string;
+      }
   >;
   sendToSession: (params: {
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
@@ -3568,6 +3619,7 @@ async function settleSilentStopDone(
   noteClaudeSessionTurnState(sessionId, false);
   agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
   settlePendingCredentialSwitch(sessionId, `silent-stop:${reason}`);
+  settlePendingSessionRuntimeControlHolder?.(sessionId, `silent-stop:${reason}`);
   deferredCodexRestartHolder?.onSessionSettled();
   agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
   refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -4318,6 +4370,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // (review P2 2026-07-04)。apply 内部串行 + 幂等,fire-and-forget 安全;
         // planned upgrade close 等场景多唤一次也只是 no-op。
         settlePendingCredentialSwitch(session.id, `event:${event.type}`);
+        settlePendingSessionRuntimeControlHolder?.(session.id, `event:${event.type}`);
         deferredCodexRestartHolder?.onSessionSettled();
         agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
         refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
@@ -7308,6 +7361,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectProjectContext: boolean;
   }> {
     await options.waitForAccountProviderModelsReady();
+    const runtimeOverride =
+      typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
+    if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
+      o.model = runtimeOverride.model;
+      o.providerId = runtimeOverride.providerId;
+      if (runtimeOverride.effort) o.effort = runtimeOverride.effort;
+      o.fastMode = runtimeOverride.fastMode;
+    }
     await applyPersistedReviewMode(o);
     const didInjectOrcaInstructions = o.reviewMode === true ? false : applyOrcaInstructions(o);
     const didInjectProjectContext =
@@ -7376,7 +7437,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const db = getDbClient().drizzle;
       await persistAndHydrateSessionProvider({
         sessionId: session.id,
-        providerId: o.providerId,
+        providerId: runtimeOverride ? undefined : o.providerId,
         updateProviderId: async (targetSessionId, providerId) => {
           await db.update(sessions).set({ providerId }).where(eq(sessions.id, targetSessionId));
         },
@@ -7397,8 +7458,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .from(sessions)
         .where(eq(sessions.id, session.id))
         .limit(1);
-      if (efRow?.effort) setSessionEffort(session.id, efRow.effort);
-      setSessionFastMode(session.id, !!efRow?.fastMode);
+      if (runtimeOverride) {
+        if (runtimeOverride.effort) setSessionEffort(session.id, runtimeOverride.effort);
+        setSessionFastMode(session.id, runtimeOverride.fastMode);
+      } else {
+        if (efRow?.effort) setSessionEffort(session.id, efRow.effort);
+        setSessionFastMode(session.id, !!efRow?.fastMode);
+      }
     } catch (err) {
       log.debug('hydrate session provider failed (non-fatal)', {
         sessionId: session.id,
@@ -8629,6 +8695,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches: agentSwitchPending,
     onPendingSwitchChanged: (sessionId, intent) => {
+      if (intent) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
     },
     log,
@@ -10664,10 +10731,262 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   idleReleaseWatcher.start();
 
+  type InternalRuntimeSelectionOptions = {
+    source: 'user' | SessionRuntimeMutationSource;
+    expectedGeneration?: number;
+    deferWhileRunning?: boolean;
+    applyingPendingGeneration?: number;
+    previousProfile?: SessionRuntimeProfile;
+    effortExplicit?: boolean;
+    fastExplicit?: boolean;
+  };
+  let applySessionRuntimeSelection: (
+    sessionId: string,
+    model: string,
+    providerId: string | null | undefined,
+    selection: { effort: SessionRuntimeProfile['effort']; fastMode: boolean },
+    options: InternalRuntimeSelectionOptions,
+  ) => Promise<{
+    deferred: boolean;
+    superseded: boolean;
+    generation?: number;
+    effectiveProviderId?: string | null;
+  }> = async () => {
+    throw new Error('session runtime selection is not ready');
+  };
+  const settlingSessionRuntimeControls = new Set<string>();
+  const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
+    if (settlingSessionRuntimeControls.has(sessionId)) return;
+    const pending = getPendingSessionRuntimeMutation(sessionId);
+    if (!pending) return;
+    settlingSessionRuntimeControls.add(sessionId);
+    void (async () => {
+      try {
+        const result = await applySessionRuntimeSelection(
+          sessionId,
+          pending.profile.model,
+          pending.profile.providerId,
+          {
+            effort: pending.profile.effort ?? 'medium',
+            fastMode: pending.profile.fastMode,
+          },
+          {
+            source: pending.source,
+            expectedGeneration: pending.generation,
+            applyingPendingGeneration: pending.generation,
+            effortExplicit: true,
+            fastExplicit: true,
+          },
+        );
+        log.info('pending session runtime settled', {
+          sessionId,
+          reason,
+          generation: pending.generation,
+          superseded: result.superseded,
+        });
+      } catch (error) {
+        log.warn('pending session runtime settlement failed', {
+          sessionId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        settlingSessionRuntimeControls.delete(sessionId);
+      }
+    })();
+  };
+  settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;
+
+  const readSessionRuntimeProfiles = async (sessionId: string) => {
+    const meta = await maker.getSessionMeta(sessionId);
+    if (!meta) return null;
+    let baselineProviderId: string | null = null;
+    try {
+      const [row] = await getDbClient()
+        .drizzle.select({ providerId: sessions.providerId })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      baselineProviderId = row?.providerId?.trim() || null;
+    } catch (error) {
+      log.debug('session runtime baseline provider lookup failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const baseline: SessionRuntimeProfile = {
+      agentKind: meta.agentKind,
+      model: meta.model,
+      providerId: baselineProviderId,
+      effort: meta.effort ?? null,
+      fastMode: meta.fastMode === true,
+    };
+    const control = getSessionRuntimeControlSnapshot(sessionId);
+    const live = maker.getSession(sessionId);
+    const effective: SessionRuntimeProfile = control.effectiveOverride ?? {
+      agentKind: live?.agentKind ?? meta.agentKind,
+      model: live?.model ?? meta.model,
+      providerId: hasSessionProvider(sessionId)
+        ? getSessionProvider(sessionId)
+        : baselineProviderId,
+      effort:
+        (getSessionEffort(sessionId) as SessionRuntimeProfile['effort']) ?? meta.effort ?? null,
+      fastMode: live ? getSessionFastMode(sessionId) : meta.fastMode === true,
+    };
+    return { baseline, effective, control };
+  };
+
+  const maybeApplySessionRuntimeFallback = async (
+    sessionId: string,
+    attempt: number,
+  ): Promise<void> => {
+    if (!readSessionRuntimeFallbackSettings().enabled || attempt < 2) return;
+    try {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      if (!profiles) return;
+      // A previously accepted Agent/fallback mutation owns the next boundary.
+      // Do not let a later infrastructure retry replace that pending intent.
+      if (profiles.control.pending) return;
+      const providers = await getDesktopProviderService().listProviders({
+        allowSideEffects: false,
+        catalog: getActiveCatalog(),
+      });
+      const currentForFallback =
+        profiles.effective.providerId === null
+          ? {
+              ...profiles.effective,
+              providerId: effectiveSourceIdForModel(
+                providers,
+                null,
+                profiles.effective.model,
+                profiles.effective.agentKind,
+              ),
+            }
+          : profiles.effective;
+      const candidate = pickSessionRuntimeFallback({
+        providers,
+        current: currentForFallback,
+        visitedRoutes: profiles.control.visitedRoutes,
+        currentHop: profiles.control.fallbackHop,
+        maxHops: 2,
+      });
+      if (!candidate) return;
+      const result = await applySessionRuntimeSelection(
+        sessionId,
+        candidate.model,
+        candidate.providerId,
+        { effort: candidate.effort ?? 'medium', fastMode: candidate.fastMode },
+        {
+          source: 'fallback',
+          expectedGeneration: profiles.control.generation,
+          previousProfile: currentForFallback,
+          effortExplicit: true,
+          fastExplicit: true,
+        },
+      );
+      log.info('automatic session runtime fallback evaluated', {
+        sessionId,
+        attempt,
+        fromProviderId: currentForFallback.providerId,
+        fromModel: currentForFallback.model,
+        toProviderId: candidate.providerId,
+        toModel: candidate.model,
+        applied: !result.superseded,
+      });
+    } catch (error) {
+      log.warn('automatic session runtime fallback skipped after switch failure', {
+        sessionId,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   const sessionControlService = createSessionControlService({
     sessionExists: async (sessionId) => (await maker.getSessionMeta(sessionId)) !== null,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     getSessionActivitySnapshot: readCanonicalSessionActivity,
+    getSessionRuntimeDetails: async (sessionId) => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      if (!profiles) throw new Error(`session ${sessionId} not found`);
+      const activity = await readCanonicalSessionActivity(sessionId);
+      const turnControl = maker.getSession(sessionId)?.getTurnControlSnapshot();
+      return {
+        ...activity,
+        turnGeneration: turnControl?.turnGeneration ?? null,
+        gracefulStopState: turnControl?.gracefulStopState ?? 'none',
+        runtimeGeneration: profiles.control.generation,
+        baselineProfile: profiles.baseline,
+        effectiveProfile: profiles.effective,
+        pendingMutation: profiles.control.pending,
+        fallbackEnabled: readSessionRuntimeFallbackSettings().enabled,
+      };
+    },
+    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {
+      const profiles = await readSessionRuntimeProfiles(targetSessionId);
+      if (!profiles) {
+        return {
+          ok: false,
+          errorCode: 'NOT_FOUND',
+          message: `session ${targetSessionId} not found`,
+        };
+      }
+      const next: SessionRuntimeProfile = {
+        ...profiles.effective,
+        ...(patch.model !== undefined ? { model: patch.model } : {}),
+        ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+        ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+        ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
+      };
+      let response: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
+      try {
+        response = await applySessionRuntimeSelection(
+          targetSessionId,
+          next.model,
+          next.providerId,
+          { effort: next.effort ?? 'medium', fastMode: next.fastMode },
+        {
+          source: 'agent',
+          expectedGeneration,
+          deferWhileRunning: true,
+          effortExplicit: patch.effort !== undefined,
+          fastExplicit: patch.fastMode !== undefined,
+        },
+        );
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        if (
+          code === 'INVALID_PARAMS' ||
+          code === 'CREDENTIAL_SWITCH_BUSY' ||
+          code === 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' ||
+          code === 'REMOTE_PROVIDER_UPDATING' ||
+          code === 'REMOTE_PROVIDER_UNSUPPORTED' ||
+          code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
+        ) {
+          return {
+            ok: false,
+            errorCode: 'ROUTE_UNAVAILABLE',
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+        throw error;
+      }
+      if (response.superseded) {
+        return {
+          ok: false,
+          errorCode: 'CONFLICT',
+          message: `session runtime generation changed; read it again before retrying`,
+        };
+      }
+      const control = getSessionRuntimeControlSnapshot(targetSessionId);
+      return {
+        ok: true,
+        status: response.deferred ? 'deferred' : 'applied',
+        generation: response.generation ?? control.generation,
+        effectiveProfile: control.effectiveOverride ?? profiles.effective,
+        pendingMutation: control.pending,
+      };
+    },
     assertExternalInputAllowed: assertReviewExternalInputAllowed,
     createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
       const meta = await maker.getSessionMeta(targetSessionId);
@@ -10764,6 +11083,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     steerSession: (params) => sessionControlService.steerSession(params),
     stopSessionTurn: (params) => sessionControlService.stopSessionTurn(params),
     getSessionRuntime: (params) => sessionControlService.getSessionRuntime(params),
+    setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: sendToSessionInternal,
     enableOrca: enableOrcaInternal,
     disableOrca: disableOrcaInternal,
@@ -11667,6 +11987,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         markTurnEndedAfterPersistDrain(sessionId);
         noteClaudeSessionTurnState(sessionId, false);
         settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
+        settlePendingSessionRuntimeControlHolder?.(sessionId, `reconcile:${source}`);
         deferredCodexRestartHolder?.onSessionSettled();
         agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
         refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -11730,6 +12051,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       markTurnEndedAfterPersistDrain(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
       settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
+      settlePendingSessionRuntimeControlHolder?.(sessionId, `reconcile:${source}`);
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
       refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -12085,6 +12407,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (attempt) => {
           return (async () => {
             try {
+              await maybeApplySessionRuntimeFallback(sessionId, decision.attempt);
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
               // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
               // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚
@@ -13975,247 +14298,442 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // session 不存在(被 close / 还没 send 创建出来)就 no-op 不报错, 让 renderer
   // 可以乐观调用 (UI 更新先行, IPC 失败也不会回滚 UI, 老 agentManager 同语义)。
 
-  ipcMain.handle(
-    MAKER_INVOKE.SET_MODEL,
-    async (
-      _e,
-      sessionId: unknown,
-      model: unknown,
-      providerId?: unknown,
-      expectedAgentSwitchRevision?: unknown,
-      selection?: unknown,
-    ) => {
-      if (typeof sessionId !== 'string' || typeof model !== 'string') {
-        throwIpcError('INVALID_PARAMS', 'sessionId + model required');
-      }
-      const normalizedWireArgs = normalizeDeviceLinkSetModelWireArgs(
-        isDeviceLinkInvoke(),
-        deviceLinkInvokeControllerSupports(
-          CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-        ),
-        providerId,
-        expectedAgentSwitchRevision,
-        selection,
+  const handleSetModel = async (
+    _e: Electron.IpcMainInvokeEvent | undefined,
+    sessionId: unknown,
+    model: unknown,
+    providerId?: unknown,
+    expectedAgentSwitchRevision?: unknown,
+    selection?: unknown,
+    internalOptions: InternalRuntimeSelectionOptions = { source: 'user' },
+  ) => {
+    if (typeof sessionId !== 'string' || typeof model !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'sessionId + model required');
+    }
+    const normalizedWireArgs =
+      internalOptions.source === 'user'
+        ? normalizeDeviceLinkSetModelWireArgs(
+            isDeviceLinkInvoke(),
+            deviceLinkInvokeControllerSupports(
+              CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+            ),
+            providerId,
+            expectedAgentSwitchRevision,
+            selection,
+          )
+        : { providerId, expectedAgentSwitchRevision, selection };
+    providerId = normalizedWireArgs.providerId;
+    expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;
+    selection = normalizedWireArgs.selection;
+    if (
+      providerId !== undefined &&
+      providerId !== null &&
+      typeof providerId !== 'string'
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'providerId must be string, null, or undefined',
       );
-      providerId = normalizedWireArgs.providerId;
-      expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;
-      selection = normalizedWireArgs.selection;
-      if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
-        throwIpcError('INVALID_PARAMS', 'providerId must be string, null, or undefined');
-      }
+    }
+    if (
+      expectedAgentSwitchRevision !== undefined &&
+      (typeof expectedAgentSwitchRevision !== 'number' ||
+        !Number.isSafeInteger(expectedAgentSwitchRevision) ||
+        expectedAgentSwitchRevision < 0)
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'expectedAgentSwitchRevision must be a non-negative integer',
+      );
+    }
+    if (
+      selection !== undefined &&
+      (selection === null ||
+        typeof selection !== 'object' ||
+        Array.isArray(selection) ||
+        (typeof (selection as { effort?: unknown }).effort !== 'string' &&
+          !(
+            internalOptions.source !== 'user' &&
+            (selection as { effort?: unknown }).effort === null
+          )) ||
+        typeof (selection as { fastMode?: unknown }).fastMode !== 'boolean')
+    ) {
+      throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');
+    }
+    let atomicSelection = selection as
+      { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
+    // 与 send 事务共用 session 锁:发送时刻执行的跨引擎切换必须先落定,
+    // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
+    // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
+    return withSendToSessionLock(sessionId, async () => {
+      await assertReviewSettingsUnlocked(sessionId);
       if (
-        expectedAgentSwitchRevision !== undefined &&
-        (typeof expectedAgentSwitchRevision !== 'number' ||
-          !Number.isSafeInteger(expectedAgentSwitchRevision) ||
-          expectedAgentSwitchRevision < 0)
+        internalOptions.source !== 'user' &&
+        !sessionRuntimeGenerationMatches(
+          sessionId,
+          internalOptions.expectedGeneration,
+        )
       ) {
-        throwIpcError(
-          'INVALID_PARAMS',
-          'expectedAgentSwitchRevision must be a non-negative integer',
-        );
+        return { deferred: false, superseded: true };
       }
+      // 同引擎重选是 switch ack 后的第二段写入。另一控制端若在两段之间更新（含
+      // set→clear ABA），修订号已变化：旧 SET_MODEL 必须在任何 route/DB 副作用前让位。
       if (
-        selection !== undefined &&
-        (selection === null ||
-          typeof selection !== 'object' ||
-          Array.isArray(selection) ||
-          typeof (selection as { effort?: unknown }).effort !== 'string' ||
-          typeof (selection as { fastMode?: unknown }).fastMode !== 'boolean')
+        typeof expectedAgentSwitchRevision === 'number' &&
+        agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision
       ) {
-        throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');
+        return { deferred: false, superseded: true };
       }
-      const atomicSelection = selection as { effort: string; fastMode: boolean } | undefined;
-      // 与 send 事务共用 session 锁:发送时刻执行的跨引擎切换必须先落定,
-      // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
-      // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
-      return withSendToSessionLock(sessionId, async () => {
-        await assertReviewSettingsUnlocked(sessionId);
-        // 同引擎重选是 switch ack 后的第二段写入。另一控制端若在两段之间更新（含
-        // set→clear ABA），修订号已变化：旧 SET_MODEL 必须在任何 route/DB 副作用前让位。
-        if (
-          typeof expectedAgentSwitchRevision === 'number' &&
-          agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision
-        ) {
-          return { deferred: false, superseded: true };
+      // 停用轴准入(PR #744 review;第十二轮移入锁内):切换模型是一次新的路由选择,
+      // 不得切到用户停用的模型 / 来源(本机选择器已过滤,但本 channel 在 device-link
+      // allowlist 内,老控制端可直接点名)。裁决必须在拿到会话锁**之后**执行 ——
+      // 排队等待期间目标可能刚被停用,而同凭证族的变更即时生效、不经 deferred 收口
+      // 的重裁决,锁前裁决结果可能已过期。会话当前正用着的停用模型不受影响,这里只
+      // 拦「切过去」;隐式来源的原生默认落点被停用而有启用替代拷贝时,以显式来源
+      // 落地(与 bootstrapSession 同语义)。agentKind 读不到(会话行缺失等)时不拦。
+      // DB 存的是 'cc' | 'codex'(messages.agent_kind 口径),目录侧是 AgentKind。
+      const requestedProviderId = normalizeSessionProviderId(
+        typeof providerId === 'string' || providerId === null
+          ? providerId
+          : undefined,
+      );
+      let persistedProviderId: string | null = null;
+      let persistedProviderKnown = true;
+      if (requestedProviderId === undefined && !hasSessionProvider(sessionId)) {
+        try {
+          const db = getDbClient().drizzle;
+          const [row] = await db
+            .select({ providerId: sessions.providerId })
+            .from(sessions)
+            .where(eq(sessions.id, sessionId))
+            .limit(1);
+          persistedProviderId = row?.providerId?.trim() || null;
+          hydrateSessionProvider(sessionId, persistedProviderId);
+        } catch (err) {
+          persistedProviderKnown = false;
+          log.debug('set-model persisted provider lookup failed (non-fatal)', {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
-        // 停用轴准入(PR #744 review;第十二轮移入锁内):切换模型是一次新的路由选择,
-        // 不得切到用户停用的模型 / 来源(本机选择器已过滤,但本 channel 在 device-link
-        // allowlist 内,老控制端可直接点名)。裁决必须在拿到会话锁**之后**执行 ——
-        // 排队等待期间目标可能刚被停用,而同凭证族的变更即时生效、不经 deferred 收口
-        // 的重裁决,锁前裁决结果可能已过期。会话当前正用着的停用模型不受影响,这里只
-        // 拦「切过去」;隐式来源的原生默认落点被停用而有启用替代拷贝时,以显式来源
-        // 落地(与 bootstrapSession 同语义)。agentKind 读不到(会话行缺失等)时不拦。
-        // DB 存的是 'cc' | 'codex'(messages.agent_kind 口径),目录侧是 AgentKind。
-        const requestedProviderId = normalizeSessionProviderId(
-          typeof providerId === 'string' || providerId === null ? providerId : undefined,
+      }
+      const currentProviderId = resolveCurrentSetModelProviderId(
+        hasSessionProvider(sessionId),
+        getSessionProvider(sessionId),
+        persistedProviderId,
+      );
+      const guardProviderId = resolveSetModelGuardProviderId(
+        requestedProviderId,
+        currentProviderId,
+      );
+      let effectiveProviderId = requestedProviderId;
+      {
+        const dbAgentKind = getSessionDbAgentKind(sessionId);
+        if (dbAgentKind) {
+          const reroute = persistedProviderKnown
+            ? await assertModelRouteUsable(
+                dbToMakerAgentKind(dbAgentKind),
+                model,
+                guardProviderId,
+              )
+            : undefined;
+          effectiveProviderId = resolveExclusiveSetModelReroute(
+            requestedProviderId,
+            currentProviderId,
+            reroute,
+            persistedProviderKnown,
+            getActiveCatalog().providers,
+          );
+        }
+      }
+      if (internalOptions.source !== 'user' && atomicSelection) {
+        const meta = await maker.getSessionMeta(sessionId);
+        const runtimeAgentKind =
+          maker.getSession(sessionId)?.agentKind ??
+          (getSessionDbAgentKind(sessionId)
+            ? dbToMakerAgentKind(getSessionDbAgentKind(sessionId))
+            : meta?.agentKind);
+        if (!runtimeAgentKind) {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `session ${sessionId} has no runtime agent`,
+          );
+        }
+        const selectedProviderId =
+          normalizeSessionProviderId(effectiveProviderId) ?? currentProviderId;
+        const runtimeProviders = await getDesktopProviderService().listProviders({
+          allowSideEffects: false,
+          catalog: getActiveCatalog(),
+        });
+        const actualProviderId =
+          selectedProviderId ??
+          effectiveSourceIdForModel(
+            runtimeProviders,
+            null,
+            model,
+            runtimeAgentKind,
+          );
+        const provider = runtimeProviders.find(
+          (candidate) => candidate.id === actualProviderId,
         );
-        let persistedProviderId: string | null = null;
-        let persistedProviderKnown = true;
-        if (requestedProviderId === undefined && !hasSessionProvider(sessionId)) {
-          try {
-            const db = getDbClient().drizzle;
-            const [row] = await db
-              .select({ providerId: sessions.providerId })
+        const catalogModel = findCatalogModel(provider, model, runtimeAgentKind, {
+          exact: true,
+        });
+        if (!provider?.connected || !catalogModel) {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
+          );
+        }
+        const axes = resolveSessionRuntimeAxes({
+          model: catalogModel,
+          effort: atomicSelection.effort,
+          fastMode: atomicSelection.fastMode,
+          effortExplicit: internalOptions.effortExplicit === true,
+          fastExplicit: internalOptions.fastExplicit === true,
+        });
+        if (!axes.ok && axes.reason === 'effort-unavailable') {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `effort "${atomicSelection.effort}" is unavailable for model "${model}"`,
+          );
+        }
+        if (!axes.ok) {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `Fast is unavailable for model "${model}"`,
+          );
+        }
+        atomicSelection = {
+          effort: axes.effort,
+          fastMode: axes.fastMode,
+        };
+      }
+      if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
+        const meta = await maker.getSessionMeta(sessionId);
+        if (!meta) return { deferred: false, superseded: true };
+        const generation = acceptSessionRuntimeMutation({
+          sessionId,
+          source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
+          previousProfile: internalOptions.previousProfile,
+          deferred: true,
+          profile: {
+            agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
+            model,
+            providerId:
+              effectiveProviderId === undefined
+                ? getSessionProvider(sessionId)
+                : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+            effort: atomicSelection?.effort ?? null,
+            fastMode: atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
+          },
+        });
+        return {
+          deferred: true,
+          superseded: false,
+          generation,
+          effectiveProviderId:
+            normalizeSessionProviderId(effectiveProviderId) ?? null,
+        };
+      }
+      try {
+        const result = await applySetModelThenCancelAgentSwitchIntent(
+          agentSwitchPending,
+          sessionId,
+          () =>
+            applyRuntimeSetModelChange({
+              maker,
+              sessionId,
+              model,
+              providerId: effectiveProviderId,
+              ...(atomicSelection?.effort
+                ? {
+                    effort: atomicSelection.effort as
+                      | 'minimal'
+                      | 'low'
+                      | 'medium'
+                      | 'high'
+                      | 'xhigh'
+                      | 'max'
+                      | 'ultra',
+                  }
+                : {}),
+              isSessionInTurn,
+              registerPendingCredentialSwitch:
+                registerPendingCredentialSwitchForSession,
+              clearPendingCredentialSwitch:
+                clearPendingCredentialSwitchForSession,
+              wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
+              getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+              // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
+              // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
+              codexAuthInjection: getCodexProxyAuthInjectionState(),
+              logger: log,
+            }),
+          (id) =>
+            broadcastSessionPatched(id, {
+              agentSwitchIntent: null,
+              agentSwitchIntentCanceled: true,
+            }),
+        );
+        // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
+        // "任务结束后生效"而不是当成已即时切换。
+        const response = {
+          deferred: result.status === 'deferred',
+          superseded: false,
+        };
+        if (atomicSelection) {
+          // model/provider/effort/fast 是一次选择快照，必须在同一把 session 锁内收敛。
+          // applyRuntimeSetModelChange 可能 close + wake；若 effort/fast 留给 renderer
+          // 后续独立调用，queue drain 会用新 model + 旧偏好重建，跨控制端时还会发生
+          // 旧请求尾写覆盖新选择。
+          if (atomicSelection.effort)
+            setSessionEffort(sessionId, atomicSelection.effort);
+          setSessionFastMode(sessionId, atomicSelection.fastMode);
+          const sess = maker.getSession(sessionId);
+          if (
+            sess &&
+            result.status !== 'deferred' &&
+            !pendingCredentialSwitchHolder?.has(sessionId)
+          ) {
+            if (atomicSelection.effort) {
+              await sess.setEffort(
+                atomicSelection.effort as
+                  | 'minimal'
+                  | 'low'
+                  | 'medium'
+                  | 'high'
+                  | 'xhigh'
+                  | 'max'
+                  | 'ultra',
+              );
+            }
+            if (sess.agentKind === 'codex') {
+              await sess.setFastMode(atomicSelection.fastMode);
+            }
+          }
+        }
+        if (
+          internalOptions.source === 'user' &&
+          (isDeviceLinkInvoke() || atomicSelection)
+        ) {
+          // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
+          // 本地 renderer 的 sessionService.update 也有同一窗口。凡携带 selection 的
+          // 新调用都由 host 在解锁前一次落定全部字段。
+          const patch: Record<string, unknown> = { model };
+          if (effectiveProviderId !== undefined) {
+            patch.providerId = normalizeSessionProviderId(
+              typeof effectiveProviderId === 'string'
+                ? effectiveProviderId
+                : null,
+            );
+          }
+          if (atomicSelection) {
+            patch.effort = atomicSelection.effort;
+            patch.fastMode = atomicSelection.fastMode;
+          }
+          await persistSessionFields(sessionId, patch);
+          if (isDeviceLinkInvoke()) {
+            // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
+            markRemoteSettingPersistedInsideHandler(response);
+          }
+        }
+        if (!response.deferred) {
+          const currentAgentKind =
+            maker.getSession(sessionId)?.agentKind ??
+            dbToMakerAgentKind(getSessionDbAgentKind(sessionId));
+          const verifiedWindow = lookupVerifiedContextWindow(
+            (agentKind, modelId, pid) =>
+              resolveVerifiedContextWindow(
+                getActiveCatalog(),
+                dbToMakerAgentKind(agentKind),
+                pid,
+                modelId,
+              ),
+            model,
+            typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
+            currentAgentKind,
+          );
+          if (verifiedWindow) {
+            const [usage] = await getDbClient()
+              .drizzle.select({ contextTokens: sessions.contextTokens })
               .from(sessions)
               .where(eq(sessions.id, sessionId))
               .limit(1);
-            persistedProviderId = row?.providerId?.trim() || null;
-            hydrateSessionProvider(sessionId, persistedProviderId);
-          } catch (err) {
-            persistedProviderKnown = false;
-            log.debug('set-model persisted provider lookup failed (non-fatal)', {
+            await recordSessionContextSnapshot(
               sessionId,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-        const currentProviderId = resolveCurrentSetModelProviderId(
-          hasSessionProvider(sessionId),
-          getSessionProvider(sessionId),
-          persistedProviderId,
-        );
-        const guardProviderId = resolveSetModelGuardProviderId(
-          requestedProviderId,
-          currentProviderId,
-        );
-        let effectiveProviderId = requestedProviderId;
-        {
-          const dbAgentKind = getSessionDbAgentKind(sessionId);
-          if (dbAgentKind) {
-            const reroute = persistedProviderKnown
-              ? await assertModelRouteUsable(
-                  dbToMakerAgentKind(dbAgentKind),
-                  model,
-                  guardProviderId,
-                )
-              : undefined;
-            effectiveProviderId = resolveExclusiveSetModelReroute(
-              requestedProviderId,
-              currentProviderId,
-              reroute,
-              persistedProviderKnown,
-              getActiveCatalog().providers,
+              usage?.contextTokens ?? 0,
+              verifiedWindow,
             );
           }
         }
-        try {
-          const result = await applySetModelThenCancelAgentSwitchIntent(
-            agentSwitchPending,
-            sessionId,
-            () =>
-              applyRuntimeSetModelChange({
-                maker,
-                sessionId,
-                model,
-                providerId: effectiveProviderId,
-                ...(atomicSelection
-                  ? {
-                      effort: atomicSelection.effort as
-                        'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
-                    }
-                  : {}),
-                isSessionInTurn,
-                registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
-                clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
-                wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
-                getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
-                // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
-                // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
-                codexAuthInjection: getCodexProxyAuthInjectionState(),
-                logger: log,
-              }),
-            (id) =>
-              broadcastSessionPatched(id, {
-                agentSwitchIntent: null,
-                agentSwitchIntentCanceled: true,
-              }),
-          );
-          // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
-          // "任务结束后生效"而不是当成已即时切换。
-          const response = { deferred: result.status === 'deferred', superseded: false };
-          if (atomicSelection) {
-            // model/provider/effort/fast 是一次选择快照，必须在同一把 session 锁内收敛。
-            // applyRuntimeSetModelChange 可能 close + wake；若 effort/fast 留给 renderer
-            // 后续独立调用，queue drain 会用新 model + 旧偏好重建，跨控制端时还会发生
-            // 旧请求尾写覆盖新选择。
-            setSessionEffort(sessionId, atomicSelection.effort);
-            setSessionFastMode(sessionId, atomicSelection.fastMode);
-            const sess = maker.getSession(sessionId);
-            if (
-              sess &&
-              result.status !== 'deferred' &&
-              !pendingCredentialSwitchHolder?.has(sessionId)
-            ) {
-              await sess.setEffort(
-                atomicSelection.effort as
-                  'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
-              );
-              if (sess.agentKind === 'codex') {
-                await sess.setFastMode(atomicSelection.fastMode);
-              }
-            }
-          }
-          if (isDeviceLinkInvoke() || atomicSelection) {
-            // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
-            // 本地 renderer 的 sessionService.update 也有同一窗口。凡携带 selection 的
-            // 新调用都由 host 在解锁前一次落定全部字段。
-            const patch: Record<string, unknown> = { model };
-            if (effectiveProviderId !== undefined) {
-              patch.providerId = normalizeSessionProviderId(
-                typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
-              );
-            }
-            if (atomicSelection) {
-              patch.effort = atomicSelection.effort;
-              patch.fastMode = atomicSelection.fastMode;
-            }
-            await persistSessionFields(sessionId, patch);
-            if (isDeviceLinkInvoke()) {
-              // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
-              markRemoteSettingPersistedInsideHandler(response);
-            }
-          }
+        let generation: number;
+        if (internalOptions.source === 'user') {
+          generation = recordUserSessionRuntimeMutation(sessionId);
+        } else if (internalOptions.applyingPendingGeneration !== undefined) {
           if (!response.deferred) {
-            const currentAgentKind =
-              maker.getSession(sessionId)?.agentKind ??
-              dbToMakerAgentKind(getSessionDbAgentKind(sessionId));
-            const verifiedWindow = lookupVerifiedContextWindow(
-              (agentKind, modelId, pid) =>
-                resolveVerifiedContextWindow(
-                  getActiveCatalog(),
-                  dbToMakerAgentKind(agentKind),
-                  pid,
-                  modelId,
-                ),
-              model,
-              typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
-              currentAgentKind,
+            settlePendingSessionRuntimeMutation(
+              sessionId,
+              internalOptions.applyingPendingGeneration,
             );
-            if (verifiedWindow) {
-              const [usage] = await getDbClient()
-                .drizzle.select({ contextTokens: sessions.contextTokens })
-                .from(sessions)
-                .where(eq(sessions.id, sessionId))
-                .limit(1);
-              await recordSessionContextSnapshot(
-                sessionId,
-                usage?.contextTokens ?? 0,
-                verifiedWindow,
-              );
-            }
           }
-          return response;
-        } catch (err) {
-          if (err instanceof CredentialModeSwitchBusyError) {
-            // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
-            // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
-            throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
-          }
-          throw err;
+          generation = getSessionRuntimeControlSnapshot(sessionId).generation;
+        } else {
+          const meta = await maker.getSessionMeta(sessionId);
+          generation = acceptSessionRuntimeMutation({
+            sessionId,
+            source: internalOptions.source,
+            previousProfile: internalOptions.previousProfile,
+            deferred: response.deferred,
+            profile: {
+              agentKind:
+                maker.getSession(sessionId)?.agentKind ??
+                meta?.agentKind ??
+                'claude-code',
+              model,
+              providerId:
+                effectiveProviderId === undefined
+                  ? getSessionProvider(sessionId)
+                  : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+              effort: atomicSelection?.effort ?? null,
+              fastMode:
+                atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
+            },
+          });
         }
-      });
-    },
-  );
+        return {
+          ...response,
+          generation,
+          effectiveProviderId:
+            normalizeSessionProviderId(effectiveProviderId) ?? null,
+        };
+      } catch (err) {
+        if (err instanceof CredentialModeSwitchBusyError) {
+          // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
+          // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
+          throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
+        }
+        throw err;
+      }
+    });
+  };
+  applySessionRuntimeSelection = (
+    sessionId,
+    model,
+    providerId,
+    selection,
+    options,
+  ) =>
+    handleSetModel(
+      undefined,
+      sessionId,
+      model,
+      providerId,
+      undefined,
+      selection,
+      options,
+    );
+  ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel);
 
   ipcMain.handle(MAKER_INVOKE.SET_EFFORT, async (event, sessionId: unknown, effort: unknown) => {
     // 轮 24-I3 HIGH:会话变更型 IPC 统一 sender 校验(对齐 SET_PERMISSION_MODE)——
@@ -14227,6 +14745,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
     }
     await assertReviewSettingsUnlocked(sessionId);
+    recordUserSessionRuntimeAxisMutation(sessionId, {
+      effort: effort as SessionRuntimeProfile['effort'],
+    });
     // 记下会话 effort:responses-bridge 模型(chatgpt/ / xai/)的 effort 无法经请求体流到 bridge,
     // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(不影响 session 是否在跑)。
     setSessionEffort(sessionId, effort);
@@ -14569,6 +15090,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
       await assertReviewSettingsUnlocked(sessionId);
+      recordUserSessionRuntimeAxisMutation(sessionId, { fastMode: enabled });
       // 记下会话 Fast 态:responses-bridge 模型(chatgpt/ 前缀)的 fast 无法经请求体流到 bridge,
       // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(与 SET_EFFORT 的 effort 同机制)。
       setSessionFastMode(sessionId, enabled);

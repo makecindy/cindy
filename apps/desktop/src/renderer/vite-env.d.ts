@@ -5682,6 +5682,23 @@ interface ElectronAPI {
       defaultEnabled: boolean;
       effective: 'immediate';
     }>;
+    sessionRuntimeFallbackGet: () => Promise<{
+      enabled: boolean;
+      isCustomized?: boolean;
+      defaultEnabled?: boolean;
+    }>;
+    sessionRuntimeFallbackSet: (enabled: boolean) => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }>;
+    sessionRuntimeFallbackReset: () => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }>;
 
     /** Claude Code 自动上下文压缩触发百分比。仅对新建会话生效 */
     compactionGetPct: () => Promise<number>;
