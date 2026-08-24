@@ -1156,6 +1156,31 @@ describe('render_pdf', () => {
     expect(rendered).toContain('<img src="./missing.png">');
   });
 
+  it('只处理真实 style 元素,不处理脚本与注释中的 style 形状文本', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'style-raw-text-safe.html'),
+      `<script>const sample = '<style>.x{background:url(./missing.png)}</style>';</script><!-- <style>.x{background:url(./missing.png)}</style> --><style>.real{background:url(./chart.png)}</style>`,
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'style-raw-text-safe.html',
+      outPath: 'style-raw-text-safe.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('./missing.png');
+    expect(rendered).toContain('data:image/png;base64,');
+  });
+
   it('按 HTML base href 解析相对资源而不是固定使用 HTML 同目录', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.mkdir(path.join(workdir, 'assets'));
