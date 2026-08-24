@@ -7864,7 +7864,7 @@
       "showLess": "Show less",
       "artifactLabel": "Artifact",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows" }
+      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows", "bytes": "{{count}}" }
     },
     "turnChanges": {
       "title": "Changed {{count}} files",

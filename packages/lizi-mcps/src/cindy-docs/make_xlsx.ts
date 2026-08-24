@@ -63,24 +63,13 @@ const DESCRIPTION = [
  * 改成让调用方把算好的值一起给过来。模型本来就知道这个数,写下来是零成本的。
  */
 const FormulaCellSchema = z.object({
-  formula: z
-    .string()
-    .min(1)
-    .describe('Excel 公式,不带开头的等号,如 "SUM(B2:B10)"。'),
+  formula: z.string().min(1).describe('Excel 公式,不带开头的等号,如 "SUM(B2:B10)"。'),
   result: z
-    .union([z.string(), z.number(), z.boolean(), z.null()])
-    .describe(
-      '公式的计算结果(缓存值)。必填 —— 没有它,打开文件重算前这格是空的。',
-    ),
+    .union([z.string(), z.number(), z.boolean()])
+    .describe('公式的计算结果(缓存值)。必填 —— 没有它,打开文件重算前这格是空的。'),
 });
 
-const CellSchema = z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
-  z.null(),
-  FormulaCellSchema,
-]);
+const CellSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), FormulaCellSchema]);
 
 type FormulaCell = z.infer<typeof FormulaCellSchema>;
 
@@ -103,7 +92,7 @@ function toExcelValue(cell: unknown): unknown {
   if (isFormulaCell(cell)) {
     return {
       formula: normalizeFormula(cell.formula),
-      result: cell.result ?? undefined,
+      result: cell.result,
     };
   }
   return cell === null ? null : cell;
@@ -112,8 +101,7 @@ function toExcelValue(cell: unknown): unknown {
 function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';
   // 列宽按「用户会看到的东西」估:公式格显示的是结果,不是公式文本。
-  if (isFormulaCell(value))
-    return value.result === null ? '' : String(value.result);
+  if (isFormulaCell(value)) return value.result === null ? '' : String(value.result);
   return String(value);
 }
 
@@ -124,11 +112,7 @@ function numericSamples(values: unknown[]): number[] {
       out.push(value);
       continue;
     }
-    if (
-      isFormulaCell(value) &&
-      typeof value.result === 'number' &&
-      Number.isFinite(value.result)
-    ) {
+    if (isFormulaCell(value) && typeof value.result === 'number' && Number.isFinite(value.result)) {
       out.push(value.result);
     }
   }
@@ -151,9 +135,7 @@ export function inferNumberFormat(
     放宽到单字不会误伤:下面那道 0–1 区间闸把「汇率」「频率」这类大于 1 的挡在
     外面,匹配上了也不会套百分号。
   */
-  const looksPercent = /[%％]|率|占比|比例|百分|percent|rate|ratio|share/i.test(
-    label,
-  );
+  const looksPercent = /[%％]|率|占比|比例|百分|percent|rate|ratio|share/i.test(label);
   if (looksPercent && nums.every((n) => n >= 0 && n <= 1)) return '0.0%';
   if (nums.every((n) => Number.isInteger(n))) return '#,##0';
   return '#,##0.00';
@@ -168,10 +150,7 @@ export function inferNumberFormat(
  *
  * 只做宽度估算用,不追求和 Excel 的渲染逐像素一致。
  */
-export function formattedWidthSample(
-  text: string,
-  numFmt: string | undefined,
-): string {
+export function formattedWidthSample(text: string, numFmt: string | undefined): string {
   if (!numFmt) return text;
   const n = Number(text);
   if (!Number.isFinite(n) || text.trim() === '') return text;
@@ -193,9 +172,7 @@ export function formattedWidthSample(
  * 只看最后一行:整表都是公式的场景(比如一张纯计算表)不该每行都被强调。
  */
 export function isSummaryRow(row: readonly unknown[]): boolean {
-  const filled = row.filter(
-    (cell) => cell !== null && cell !== undefined && cell !== '',
-  );
+  const filled = row.filter((cell) => cell !== null && cell !== undefined && cell !== '');
   if (filled.length === 0) return false;
   const formulas = filled.filter((cell) => isFormulaCell(cell)).length;
   return formulas * 2 > filled.length;
@@ -289,31 +266,20 @@ export function registerMakeXlsxTool(
         )
         .min(1)
         .describe('工作表列表,至少一张。'),
-      outPath: z
-        .string()
-        .min(1)
-        .describe('输出 .xlsx 路径,工作目录内的相对路径或绝对路径。'),
+      outPath: z.string().min(1).describe('输出 .xlsx 路径,工作目录内的相对路径或绝对路径。'),
       theme: z
         .enum(['light', 'dark', 'navy'])
         .default('light')
         .describe('配色主题:light / dark / navy。影响表头色带和斑马纹。'),
-      zebra: z
-        .boolean()
-        .default(true)
-        .describe('数据行是否打斑马纹。默认 true。'),
-      overwrite: z
-        .boolean()
-        .default(false)
-        .describe('目标文件已存在时是否覆盖。默认 false。'),
+      zebra: z.boolean().default(true).describe('数据行是否打斑马纹。默认 true。'),
+      overwrite: z.boolean().default(false).describe('目标文件已存在时是否覆盖。默认 false。'),
     },
     handler: async ({ sheets, outPath, theme, zebra, overwrite }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.xlsx');
         const abs = await prepareOutputPath(root, outPath, overwrite);
-        const palette = resolveDocsTheme(
-          (theme ?? DEFAULT_DOCS_THEME) as DocsThemeName,
-        );
+        const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
 
         const workbook = new ExcelJS.Workbook();
         workbook.creator = 'Cindy';
@@ -360,9 +326,7 @@ export function registerMakeXlsxTool(
           // 最后一行是不是汇总行,决定它不打斑马纹、而是单独强调(见 isSummaryRow)。
           const lastIndex = sheet.rows.length - 1;
           const summaryIndex =
-            lastIndex >= 0 && isSummaryRow(sheet.rows[lastIndex]!)
-              ? lastIndex
-              : -1;
+            lastIndex >= 0 && isSummaryRow(sheet.rows[lastIndex]!) ? lastIndex : -1;
 
           for (const [rowIndex, row] of sheet.rows.entries()) {
             const excelRow = ws.addRow(row.map(toExcelValue));
@@ -411,10 +375,7 @@ export function registerMakeXlsxTool(
               );
             }
             const column = ws.getColumn(col + 1);
-            column.width = Math.min(
-              MAX_COL_WIDTH,
-              Math.max(MIN_COL_WIDTH, width + 2),
-            );
+            column.width = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, width + 2));
             if (numFmt) {
               column.numFmt = numFmt;
               column.alignment = { horizontal: 'right' };

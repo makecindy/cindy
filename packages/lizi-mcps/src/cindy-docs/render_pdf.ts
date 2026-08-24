@@ -187,6 +187,37 @@ async function inlineCssUrls(
   );
 }
 
+function splitSrcset(value: string): string[] {
+  const candidates: string[] = [];
+  let start = 0;
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const segment = value.slice(start, index);
+    if (value[index] === ',' && (/\s/.test(value[index + 1] ?? '') || /\s/.test(segment))) {
+      candidates.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  candidates.push(value.slice(start));
+  return candidates.map((candidate) => candidate.trim()).filter(Boolean);
+}
+
+async function inlineSrcset(
+  value: string,
+  baseDir: string,
+  context: ResourceSnapshotContext,
+): Promise<string> {
+  const candidates = splitSrcset(value);
+  const rewritten = await Promise.all(
+    candidates.map(async (candidate) => {
+      const match = candidate.match(/^(\S+)(?:\s+(.+))?$/);
+      if (!match) return candidate;
+      const snapshot = await snapshotLocalResource(context, baseDir, match[1]!);
+      return `${snapshot ?? match[1]}${match[2] ? ` ${match[2]}` : ''}`;
+    }),
+  );
+  return rewritten.join(', ');
+}
+
 async function snapshotLocalResource(
   context: ResourceSnapshotContext,
   baseDir: string,
@@ -260,21 +291,32 @@ async function inlineLocalResources(root: string, baseDir: string, html: string)
   rewritten = await replaceAsync(
     rewritten,
     /<(?:img|source|audio|video|track|object|input|image)\b[^>]*>/gi,
-    async (tag) =>
-      replaceAsync(
+    async (tag) => {
+      const withSources = await replaceAsync(
         tag,
         /(\s+(?:src|poster|data)\s*=\s*)(["'])([^"']*)\2/gi,
         async (match, prefix, quote, reference) => {
           const snapshot = await snapshotLocalResource(context, baseDir, reference);
           return snapshot ? `${prefix}${quote}${snapshot}${quote}` : match;
         },
-      ),
+      );
+      return replaceAsync(
+        withSources,
+        /(\s+srcset\s*=\s*)(["'])([^"']*)\2/gi,
+        async (match, prefix, quote, value) => {
+          const rewrittenSrcset = await inlineSrcset(value, baseDir, context);
+          return `${prefix}${quote}${rewrittenSrcset}${quote}`;
+        },
+      );
+    },
   );
   rewritten = await replaceAsync(
     rewritten,
     /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
-    async (match, opening, css, closing) =>
-      `${opening}${await inlineCssUrls(css, baseDir, context)}${closing}`,
+    async (match, opening, css, closing) => {
+      const imported = await inlineCssImports(css, baseDir, context);
+      return `${opening}${await inlineCssUrls(imported, baseDir, context)}${closing}`;
+    },
   );
   return replaceAsync(
     rewritten,
@@ -492,6 +534,7 @@ export function registerRenderPdfTool(
             format: 'pdf',
             title: extractHtmlTitle(snapshotHtml),
             theme,
+            summary: { kind: 'bytes', value: buffer.byteLength },
           }),
           ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
         });

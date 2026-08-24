@@ -29,14 +29,12 @@ export interface DocsArtifactMetadata {
   theme?: 'light' | 'dark' | 'navy';
   cover?: boolean;
   summary?: {
-    kind: 'pages' | 'slides' | 'sheets' | 'rows';
+    kind: 'pages' | 'slides' | 'sheets' | 'rows' | 'bytes';
     value: number;
   };
 }
 
-export function artifactMetadata(
-  metadata: DocsArtifactMetadata,
-): DocsArtifactMetadata {
+export function artifactMetadata(metadata: DocsArtifactMetadata): DocsArtifactMetadata {
   return metadata;
 }
 

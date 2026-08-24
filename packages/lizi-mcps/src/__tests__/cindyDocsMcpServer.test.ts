@@ -433,6 +433,19 @@ describe('make_xlsx', () => {
     expect((called as { isError?: boolean }).isError).toBe(true);
     expect(JSON.stringify(called)).toContain('result');
   });
+
+  it('公式 result:null 直接判参数错,空字符串才表示空缓存值', async () => {
+    const client = await connect();
+    const called = await client.callTool({
+      name: 'make_xlsx',
+      arguments: {
+        sheets: [{ name: 'S', rows: [[{ formula: 'SUM(A1:A2)', result: null }]] }],
+        outPath: 'null-result.xlsx',
+      },
+    });
+    expect((called as { isError?: boolean }).isError).toBe(true);
+    expect(JSON.stringify(called)).toContain('result');
+  });
 });
 
 describe('make_pptx', () => {
@@ -956,9 +969,10 @@ describe('render_pdf', () => {
       '.hero { background-image: url("./chart.png"); }',
       'utf8',
     );
+    await fs.writeFile(path.join(workdir, 'theme.css'), 'body { color: #123456; }', 'utf8');
     await fs.writeFile(
       path.join(workdir, 'src.html'),
-      '<html><head><link rel="stylesheet" href="./style.css"></head><body><img src="./chart.png"></body></html>',
+      '<html><head><link rel="stylesheet" href="./style.css"><style>@import "./theme.css";</style></head><body><img src="./chart.png" srcset="./chart.png 1x,./chart.png 2x"></body></html>',
       'utf8',
     );
     const client = await connect({
@@ -977,6 +991,7 @@ describe('render_pdf', () => {
     expect(rendered).toContain('data:image/png;base64,');
     expect(rendered).toContain('data:text/css;base64,');
     expect(rendered).not.toContain('./chart.png');
+    expect(rendered).not.toContain('./theme.css');
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
   });
 

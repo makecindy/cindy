@@ -7861,7 +7861,7 @@
       "showLess": "折りたたむ",
       "artifactLabel": "成果物",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} ページ", "slides": "{{count}} 枚のスライド", "sheets": "{{count}} シート", "rows": "{{count}} 行" }
+      "summary": { "pages": "{{count}} ページ", "slides": "{{count}} 枚のスライド", "sheets": "{{count}} シート", "rows": "{{count}} 行", "bytes": "{{count}}" }
     },
     "turnChanges": {
       "title": "{{count}} ファイルを変更",

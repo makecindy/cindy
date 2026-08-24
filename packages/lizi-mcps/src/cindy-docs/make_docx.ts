@@ -56,42 +56,22 @@ export function registerMakeDocxTool(
         .describe(
           '输出 .docx 路径,工作目录内的相对路径或绝对路径,如 documents/报告-2026-08-19.docx。',
         ),
-      title: z
-        .string()
-        .optional()
-        .describe('可选文档标题:写进 Word 文档属性;默认再生成一页封面。'),
-      subtitle: z
-        .string()
-        .optional()
-        .describe('封面副题 / 密级 / 来源一行。没给 title 时无效。'),
+      title: z.string().optional().describe('可选文档标题:写进 Word 文档属性;默认再生成一页封面。'),
+      subtitle: z.string().optional().describe('封面副题 / 密级 / 来源一行。没给 title 时无效。'),
       cover: z
         .boolean()
         .optional()
-        .describe(
-          '是否生成独立封面页。给了 title 时默认 true;没给 title 时无效。',
-        ),
+        .describe('是否生成独立封面页。给了 title 时默认 true;没给 title 时无效。'),
       theme: z
         .enum(['light', 'dark', 'navy'])
         .default('light')
-        .describe(
-          '配色主题:light / dark / navy。影响标题色、表头色带和斑马纹。',
-        ),
+        .describe('配色主题:light / dark / navy。影响标题色、表头色带和斑马纹。'),
       overwrite: z
         .boolean()
         .default(false)
-        .describe(
-          '目标文件已存在时是否覆盖。默认 false(存在即报 FILE_EXISTS)。',
-        ),
+        .describe('目标文件已存在时是否覆盖。默认 false(存在即报 FILE_EXISTS)。'),
     },
-    handler: async ({
-      markdown,
-      outPath,
-      title,
-      subtitle,
-      cover,
-      theme,
-      overwrite,
-    }) => {
+    handler: async ({ markdown, outPath, title, subtitle, cover, theme, overwrite }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.docx');
@@ -116,6 +96,7 @@ export function registerMakeDocxTool(
             ...(subtitle?.trim() ? { subtitle: subtitle.trim() } : {}),
             theme,
             cover: useCover,
+            summary: { kind: 'bytes', value: buffer.byteLength },
           }),
         });
       } catch (err) {
@@ -123,11 +104,7 @@ export function registerMakeDocxTool(
           return errorPayload(err.code, err.hint, { message: err.message });
         }
         const message = err instanceof Error ? err.message : String(err);
-        return errorPayload(
-          'DOCX_BUILD_FAILED',
-          `生成 Word 文档失败:${message}`,
-          { message },
-        );
+        return errorPayload('DOCX_BUILD_FAILED', `生成 Word 文档失败:${message}`, { message });
       }
     },
   });

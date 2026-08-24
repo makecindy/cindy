@@ -46,6 +46,19 @@ import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ModelLightbox } from './ModelLightbox';
 
+function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']): number | string {
+  if (!summary || summary.kind !== 'bytes') return summary?.value ?? '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = summary.value;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
 function DocumentCoverPreview({
   artifact,
   title,
@@ -64,7 +77,7 @@ function DocumentCoverPreview({
           {artifact.summary && (
             <span className="normal-case tracking-normal">
               {t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
-                count: artifact.summary.value,
+                count: formatArtifactSummaryValue(artifact.summary),
               })}
             </span>
           )}
@@ -105,7 +118,7 @@ function SlidePreview({ artifact, title }: { artifact: DocumentArtifactMetadata;
       {artifact.summary && (
         <span className="absolute bottom-2 right-2 rounded-[9999px] border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--text-tertiary)]">
           {t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
-            count: artifact.summary.value,
+            count: formatArtifactSummaryValue(artifact.summary),
           })}
         </span>
       )}
@@ -222,7 +235,9 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
   const formatLabel = format ? t(`chat.generatedFiles.formats.${format}`) : null;
   const artifactTitle = artifact?.title || file.name;
   const summaryLabel = artifact?.summary
-    ? t(`chat.generatedFiles.summary.${artifact.summary.kind}`, { count: artifact.summary.value })
+    ? t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
+        count: formatArtifactSummaryValue(artifact.summary),
+      })
     : null;
 
   return (

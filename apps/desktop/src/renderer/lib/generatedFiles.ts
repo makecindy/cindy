@@ -42,7 +42,7 @@ export interface GeneratedFileRef {
 
 export type DocumentArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
 export type DocumentArtifactSummary = {
-  kind: 'pages' | 'slides' | 'sheets' | 'rows';
+  kind: 'pages' | 'slides' | 'sheets' | 'rows' | 'bytes';
   value: number;
 };
 
@@ -185,7 +185,8 @@ export function extractDocumentArtifactMetadata(
     (summaryKind === 'pages' ||
       summaryKind === 'slides' ||
       summaryKind === 'sheets' ||
-      summaryKind === 'rows') &&
+      summaryKind === 'rows' ||
+      summaryKind === 'bytes') &&
     typeof summaryValue === 'number' &&
     Number.isFinite(summaryValue)
       ? { kind: summaryKind, value: summaryValue }
@@ -193,7 +194,11 @@ export function extractDocumentArtifactMetadata(
         ? { kind: 'slides' as const, value: inputRecord.slides.length }
         : name === 'make_xlsx' && Array.isArray(inputRecord?.sheets)
           ? { kind: 'sheets' as const, value: inputRecord.sheets.length }
-          : undefined;
+          : (name === 'make_docx' || name === 'render_pdf') &&
+              typeof result?.bytes === 'number' &&
+              Number.isFinite(result.bytes)
+            ? { kind: 'bytes' as const, value: result.bytes }
+            : undefined;
   const firstSlide =
     name === 'make_pptx'
       ? asRecord(Array.isArray(inputRecord?.slides) ? inputRecord.slides[0] : null)
@@ -740,11 +745,7 @@ export function collectGeneratedFiles(
       addPath(rawPath, 'tool');
     }
     const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
-    const artifact = extractDocumentArtifactMetadata(
-      toolName,
-      msg.toolInput,
-      resultContent,
-    );
+    const artifact = extractDocumentArtifactMetadata(toolName, msg.toolInput, resultContent);
     if (artifact) {
       const outputPath =
         typeof asRecord(msg.toolInput)?.outPath === 'string'
