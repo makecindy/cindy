@@ -240,7 +240,7 @@ async function replaceHtmlTagsAsync(
   predicate: (tag: string) => boolean,
   replacer: (tag: string) => Promise<string>,
 ): Promise<string> {
-  const rawTextTags = new Set(['script', 'style', 'textarea', 'title']);
+  const rawTextTags = new Set(['noscript', 'script', 'style', 'textarea', 'title']);
   const parts: string[] = [];
   let outputBytes = 0;
   const pushPart = (part: string): void => {
@@ -509,7 +509,7 @@ async function rewriteHtmlStyleElementsAsync(
     const tag = input.slice(start, end + 1);
     const opening = /^<\s*style\b/i.test(tag) && !/^<\s*\/style\b/i.test(tag);
     if (!opening) {
-      const raw = tag.match(/^<\s*(script|textarea|title)\b/i);
+      const raw = tag.match(/^<\s*(noscript|script|textarea|title)\b/i);
       if (raw) {
         const closing = new RegExp(`<\\/\\s*${raw[1]}\\s*>`, 'ig');
         closing.lastIndex = end + 1;

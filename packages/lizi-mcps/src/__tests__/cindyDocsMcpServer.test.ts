@@ -1156,6 +1156,31 @@ describe('render_pdf', () => {
     expect(rendered).toContain('<img src="./missing.png">');
   });
 
+  it('启用脚本时不快照 noscript 内的图片与样式资源', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(
+      path.join(workdir, 'noscript-safe.html'),
+      `<noscript><img src="./missing.png"><style>.fallback{background:url(./missing-bg.png)}</style></noscript><p>ok</p>`,
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'noscript-safe.html',
+      outPath: 'noscript-safe.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('<img src="./missing.png">');
+    expect(rendered).toContain('url(./missing-bg.png)');
+    expect(rendered).toContain('<p>ok</p>');
+  });
+
   it('只处理真实 style 元素,不处理脚本与注释中的 style 形状文本', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
