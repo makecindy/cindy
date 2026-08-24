@@ -21,6 +21,7 @@ import { captchaRequiredActionForVerificationKind, isValidEmail } from '@cindy/a
 import { cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
 import { setLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
+import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useLogin } from '@/hooks/useLogin';
 import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
@@ -61,11 +62,14 @@ import { shouldLabelRegion } from '../../../shared/regionCode';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 import { resolveIdentifierMethod } from '../../../shared/loginIdentifierMethod';
 import {
+  ACCOUNT_LIST,
   DRAG_BAR_HEIGHT,
   LOADING_RING,
   LOGIN_COLORS,
   LOGIN_DELETION_BUBBLE,
   LOGIN_LOCAL_MODE,
+  METHOD_ROW,
+  PANEL,
   SSO_ORG_HINT,
 } from './loginDesignTokens';
 import { PANEL_FIXED_SCALE } from './loginScale';
@@ -127,6 +131,13 @@ export function LoginPage() {
   } = useLogin();
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
+  const accountListRef = useRef<HTMLDivElement>(null);
+  const accountCount = loginState?.step === 'account-selection' ? loginState.accounts.length : 0;
+
+  useEffect(() => {
+    if (accountCount <= 3 || !accountListRef.current) return;
+    flashScrollbar(accountListRef.current);
+  }, [accountCount]);
 
   // 主题跟随(DESIGN.md §16.5):首次打开 Cindy → 亮色登录界面(默认);第二次起
   // → 跟随用户上一次使用的主题。首启亮色门在 bootstrap 已生效(品牌舞台首帧即
@@ -1004,6 +1015,14 @@ export function LoginPage() {
   /* ── account-selection(行样式复用方式行) ── */
   const renderAccountSelection = () => {
     if (loginState?.step !== 'account-selection') return null;
+    const viewportHeight = PANEL.height - ACCOUNT_LIST.top - ACCOUNT_LIST.bottom;
+    const contentHeight = Math.max(
+      viewportHeight,
+      ACCOUNT_LIST.rowTop +
+        (loginState.accounts.length - 1) * ACCOUNT_LIST.rowStep +
+        METHOD_ROW.height +
+        ACCOUNT_LIST.bottomPadding,
+    );
     return (
       <LoginPanel testId="login-panel-account-selection">
         <LoginBackButton disabled={isLoading} label={t('login.back')} onClick={reset} />
@@ -1011,23 +1030,37 @@ export function LoginPage() {
           title={t('login.chooseAccount')}
           subtitle={t('login.chooseAccountSubtitle')}
         />
-        {/* demo accountPanel 呈现仲裁:行 148/268(step 120),左 icon 统一企业默认形
-            (demo 两行均未传 icon 变体);副行 = 企业 meta / 个人身份 */}
-        {loginState.accounts.map((account, index) => (
-          <LoginMethodRow
-            key={account.id}
-            top={148 + index * 120}
-            disabled={isLoading}
-            title={account.displayName}
-            subtitle={
-              account.kind === 'org'
-                ? account.orgName || account.email || ''
-                : t('login.personalAccount')
-            }
-            logoUrl={account.kind === 'org' ? (account.orgLogoUrl ?? null) : null}
-            onClick={() => void dispatch({ type: 'select-account', accountId: account.id })}
-          />
-        ))}
+        {/* 标题区固定；身份卡片独立滚动。1–3 个身份保持原构图，更多身份不再
+            被面板的 overflow-hidden 裁掉。 */}
+        <div
+          ref={accountListRef}
+          data-testid="login-account-list"
+          className="absolute left-0 overflow-x-hidden overscroll-contain"
+          style={{
+            top: ACCOUNT_LIST.top,
+            width: PANEL.width,
+            height: viewportHeight,
+            overflowY: loginState.accounts.length > 3 ? 'auto' : 'hidden',
+          }}
+        >
+          <div className="relative" style={{ height: contentHeight }}>
+            {loginState.accounts.map((account, index) => (
+              <LoginMethodRow
+                key={account.id}
+                top={ACCOUNT_LIST.rowTop + index * ACCOUNT_LIST.rowStep}
+                disabled={isLoading}
+                title={account.displayName}
+                subtitle={
+                  account.kind === 'org'
+                    ? account.orgName || account.email || ''
+                    : t('login.personalAccount')
+                }
+                logoUrl={account.kind === 'org' ? (account.orgLogoUrl ?? null) : null}
+                onClick={() => void dispatch({ type: 'select-account', accountId: account.id })}
+              />
+            ))}
+          </div>
+        </div>
       </LoginPanel>
     );
   };
