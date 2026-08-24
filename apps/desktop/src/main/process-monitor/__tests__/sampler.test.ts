@@ -286,4 +286,30 @@ describe('createProcessMonitorSampler', () => {
       expect.objectContaining({ error: 'ps blew up' }),
     );
   });
+
+  it('Windows 预热首帧不等待 OS 扫描，完成后由下一 tick 补齐 agent', async () => {
+    let resolveScan!: (snapshot: OsProcessSnapshot) => void;
+    const pendingScan = new Promise<OsProcessSnapshot>((resolve) => {
+      resolveScan = resolve;
+    });
+    const { sampler } = makeHarness({
+      metrics: [metric({ pid: 100, type: 'Browser' })],
+      deps: {
+        deferOsScan: true,
+        scanOsProcesses: () => pendingScan,
+      },
+    });
+
+    const first = await sampler.sample();
+    expect(first.entries).toHaveLength(1);
+    expect(entryByPid(first, 100)?.kind).toBe('main');
+
+    resolveScan(
+      snapshotOf([osRow({ pid: 501, ppid: SELF_PID, cmdLineLower: 'x claude-marker y' })]),
+    );
+    await pendingScan;
+    await Promise.resolve();
+
+    expect(entryByPid(await sampler.sample(), 501)?.kind).toBe('agent-claude');
+  });
 });

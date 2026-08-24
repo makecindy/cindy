@@ -379,6 +379,7 @@ import {
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
+import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
@@ -8113,6 +8114,7 @@ onQuit(
   'sync',
 );
 onQuit('auth-manager', () => authManager.dispose(), 'sync');
+onQuit('windows-process-scan-workers', disposeWindowsProcessScanWorkers, 'sync');
 onQuit('resource-usage-window', () => resourceUsageWindowController.dispose(), 'sync');
 onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
 onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');
