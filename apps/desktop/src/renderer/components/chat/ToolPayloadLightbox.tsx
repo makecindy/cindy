@@ -552,7 +552,7 @@ export function ToolPayloadLightbox({
         >
           Esc
         </span>
-        <span className="text-12 text-white/40">or click backdrop to close</span>
+        <span className="text-12 text-white/40">{t('chat.textLightbox.closeHint')}</span>
       </div>
     </div>
   );

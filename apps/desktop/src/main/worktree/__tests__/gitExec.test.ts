@@ -14,12 +14,24 @@ type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
   killProcessTree: vi.fn(),
+  withCrossProcessLock: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({ execFile: mocks.execFile }));
 vi.mock('../../scheduler-host/proc-util', () => ({ killProcessTree: mocks.killProcessTree }));
+vi.mock('../../device-link/crossProcessLock', () => ({
+  withCrossProcessLock: mocks.withCrossProcessLock,
+}));
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 
-import { gitExec, GitExecError } from '../gitExec';
+import {
+  gitExec,
+  GitExecError,
+  normalizeSafeDirectorySpelling,
+  safeDirectorySpellings,
+} from '../gitExec';
 
 const realPlatform = process.platform;
 
@@ -146,6 +158,13 @@ beforeEach(() => {
   vi.useFakeTimers();
   mocks.execFile.mockReset();
   mocks.killProcessTree.mockReset();
+  mocks.withCrossProcessLock.mockReset();
+  // 默认按「持锁成功」直通, 让 dubious-ownership 的 read+add 序列可逐步驱动;
+  // 需要验证锁被使用时单独断言 mock 调用即可。
+  mocks.withCrossProcessLock.mockImplementation(
+    (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+      task({ held: true }),
+  );
 });
 
 afterEach(() => {
@@ -539,5 +558,139 @@ describe('gitExec timeoutMs', () => {
     state.gitCb!(null, 'ok', '');
     await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('gitExec dubious-ownership safe.directory', () => {
+  /**
+   * 只按调用顺序捕获每次 git execFile 的 args 与回调(不 spawn 真进程),
+   * 供 dubious-ownership 的「幂等 add + 重试一次」路径逐步驱动。
+   */
+  function installSequenceMock() {
+    const calls: string[][] = [];
+    const cbs: ExecCb[] = [];
+    mocks.execFile.mockImplementation(
+      (file: string, args: string[], _opts: unknown, cb?: ExecCb) => {
+        if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
+        calls.push(args as string[]);
+        cbs.push(cb as ExecCb);
+        return new EventEmitter();
+      },
+    );
+    return { calls, cbs };
+  }
+
+  async function flushDeep() {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  }
+
+  it('首次 dubious ownership → 幂等加入 safe.directory 后重试一次', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    expect(calls).toEqual([['status']]);
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    // read+add 必须包在跨进程锁里, 保证并发实例下仍是原子的
+    expect(mocks.withCrossProcessLock).toHaveBeenCalledTimes(1);
+
+    // 读取现有 safe.directory → 未配置(exit 1)按空处理
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    cbs[1](Object.assign(new Error('exit 1'), { code: 1 }), '', '');
+    await flushDeep();
+
+    // 尚不存在 → 幂等 add 一次
+    expect(calls[2]).toEqual(['config', '--global', '--add', 'safe.directory', '/repo']);
+    cbs[2](null, '', '');
+    await flushDeep();
+
+    // 重试原命令
+    expect(calls[3]).toEqual(['status']);
+    cbs[3](null, 'ok', '');
+    await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
+  });
+
+  it('路径已在 safe.directory 中 → 不重复 --add, 直接重试原命令', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    cbs[1](null, '/repo\n', '');
+    await flushDeep();
+
+    // 已存在 → 跳过 --add, 直接重试
+    expect(calls[2]).toEqual(['status']);
+    cbs[2](null, 'ok', '');
+    await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
+    expect(calls.some((a) => a.includes('--add'))).toBe(false);
+  });
+
+  it('--get-all 读取失败(非「键不存在」) → 不 --add, 原错误上抛', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    // 读取错误(exit 3 = 配置文件损坏/锁冲突)不得被当成「未配置」,后续 --add 不得发生
+    const readErr = Object.assign(new Error('bad config'), { code: 3 });
+    cbs[1](readErr, '', 'error: could not lock config file');
+    await flushDeep();
+
+    expect(calls.some((a) => a.includes('--add'))).toBe(false);
+    // 原 dubious-ownership 错误上抛(不再重试)
+    await expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('dubious ownership'),
+    });
+  });
+
+  it('未持锁(held:false) → 不做无锁 read+add, 原错误上抛', async () => {
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation((_lp, _opts, task) =>
+      task({ held: false, reason: 'busy' }),
+    );
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    // 锁未拿到 → 不得执行任何 config 读写, 原 dubious-ownership 错误上抛
+    expect(calls).toEqual([['status']]);
+    await expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('dubious ownership'),
+    });
+  });
+});
+
+describe('safe.directory path spelling', () => {
+  it('normalizes Windows backslashes to forward slashes', () => {
+    setPlatform('win32');
+    expect(normalizeSafeDirectorySpelling('C:\\repo\\.xdt-worktrees\\s1')).toBe(
+      'C:/repo/.xdt-worktrees/s1',
+    );
+    expect(normalizeSafeDirectorySpelling('C:/repo/.xdt-worktrees/s1')).toBe(
+      'C:/repo/.xdt-worktrees/s1',
+    );
+  });
+
+  it('returns the native spelling only on POSIX', () => {
+    setPlatform('linux');
+    expect(normalizeSafeDirectorySpelling('/repo/.xdt-worktrees/s1')).toBe(
+      '/repo/.xdt-worktrees/s1',
+    );
+    expect(safeDirectorySpellings('/repo/.xdt-worktrees/s1')).toEqual([
+      '/repo/.xdt-worktrees/s1',
+    ]);
+  });
+
+  it('covers both spellings on Windows for exact --fixed-value cleanup', () => {
+    setPlatform('win32');
+    expect(safeDirectorySpellings('C:\\repo\\s1')).toEqual(['C:/repo/s1', 'C:\\repo\\s1']);
+    expect(safeDirectorySpellings('C:/repo/s1')).toEqual(['C:/repo/s1']);
   });
 });

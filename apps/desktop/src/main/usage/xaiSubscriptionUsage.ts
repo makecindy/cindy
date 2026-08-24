@@ -6,6 +6,9 @@
  *
  * 请求头与模型发现共用 buildXaiCliProxyHeaders。邮箱/姓名/完整响应当场丢弃。
  * settings/billing 的 401/403/429 才控制配额可用性;5xx / 半成功无字段返回 null 保缓存。
+ * 仅当 currentPeriod.type=USAGE_PERIOD_TYPE_WEEKLY、窗口未结束、
+ * 且响应里没有 creditUsagePercent 键时,视为 0%(重置后常见)。
+ * 字段在但解不出数,仍当残缺 200 保缓存。
  */
 
 import { createHash } from 'node:crypto';
@@ -164,7 +167,7 @@ export async function fetchXaiSubscriptionUsageSnapshot(opts: {
     void userIdFromAccountUser(accountUser);
 
     const planLabel = parseXaiSettingsPlanLabel(settings.data);
-    const parsedCredits = parseXaiBillingCreditsConfig(credits.data);
+    const parsedCredits = parseXaiBillingCreditsConfig(credits.data, now);
     const subject = subjectFromUserinfo(userinfo);
     if (
       !settings.ok
@@ -172,7 +175,8 @@ export async function fetchXaiSubscriptionUsageSnapshot(opts: {
       || !parsedCredits
       || typeof parsedCredits.creditUsagePercent !== 'number'
     ) {
-      // 权威端点失败,或 200 但缺周用量百分比:残缺快照不能盖掉缓存。
+      // 权威端点失败,或 200 但没有仍开放的 weekly currentPeriod 可推出百分比:
+      // 残缺快照不能盖掉缓存。明确的未结束周窗口省略该字段已在 parse 里当成 0%。
       return null;
     }
     const snapshot = buildXaiSubscriptionUsageSnapshot({

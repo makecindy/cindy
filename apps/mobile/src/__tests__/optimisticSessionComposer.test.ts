@@ -228,35 +228,28 @@ describe('mobile optimistic composer while session is not ready', () => {
     const source = readSource(SCREEN);
     const outboxStart = source.indexOf('const dispatchOutboxItem = async (item: MobileOutboxItem) => {');
     const directStart = source.indexOf('const queuedDraft = buildQueuedTextMessage(');
-    const directEnd = source.indexOf('// applied:消息已在桌面队列', directStart);
+    const directEnd = source.indexOf('// 消息已由 A 路径落定', directStart);
     const outboxDispatch = source.slice(outboxStart, directStart);
     const directRecovery = source.slice(directStart, directEnd);
-    const unknownStart = outboxDispatch.indexOf('if (acceptanceUnknown) {');
-    const unknownEnd = outboxDispatch.indexOf('const applied = await', unknownStart);
-    const acceptanceUnknownRecovery = outboxDispatch.slice(unknownStart, unknownEnd);
 
     expect(source).toContain('const waitForConnection = (');
     expect(source).toContain('const waiting = outboxItemWaitingForConnection(item);');
     expect(source).toContain("if (result === 'deferred' || result === 'stopped') return;");
     expect(source).toContain("return 'stopped' as const;");
     expect(source).toContain('const safeToRetry = isSafelyUnsentOutboxEnqueueError(err);');
-    expect(source).toContain(
-      'const acceptanceUnknown = !safeToRetry && isAutoRecoveringRemoteError(err);',
-    );
     expect(source).toContain('if (safeToRetry) {\n          waitForConnection(err);');
-    // 回执不确定时只保留原 optimistic projection，不能把已开始写的消息重新交给
-    // page-local outbox / 草稿；后者离场时没有跨页 clientId owner。
-    expect(acceptanceUnknownRecovery).toContain('fresh.pendingQueue.some(');
-    expect(acceptanceUnknownRecovery).toContain('setError(formatRemoteError(err));');
-    expect(acceptanceUnknownRecovery).not.toContain('failItem(');
-    expect(acceptanceUnknownRecovery).not.toContain('waitForConnection(');
-    expect(acceptanceUnknownRecovery).not.toContain('salvageOutboxItem(');
-    expect(outboxDispatch).toContain('return fresh.pendingQueue.some(');
+    // 只有权威 projection / 已持久 user 行能证明已接收。没有权威证据时，outbox
+    // 回到既有失败/重试 owner，直发恢复草稿，不能留下无持久 owner 的转圈行。
+    expect(source).toContain('const accepted = fresh.pendingQueue.some(');
+    expect(outboxDispatch).toContain('failItem(formatRemoteError(err));');
+    expect(outboxDispatch).not.toContain('acceptanceUnknown');
     expect(source).not.toContain('shouldWaitForOutboxEnqueueRecovery');
     expect(source).toContain('isAutoRecoveringSessionReferencePreparationError(err)');
     expect(directRecovery).not.toContain('buildOutboxItem({');
     expect(directRecovery).not.toContain('salvageOutboxItem(');
     expect(directRecovery).not.toContain('updateOutbox(');
+    expect(directRecovery).not.toContain('acceptanceUnknown');
+    expect(directRecovery).toContain('restoreDirectSendDraftAfterFailure();');
     expect(directRecovery).toContain('在线直发一旦开始 enqueue 就不再转入本 PR 的页面 outbox');
   });
 

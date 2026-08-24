@@ -168,6 +168,14 @@ export interface AgentEvent {
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
   /**
+   * Session.turnGeneration captured when runEventLoop started the next() that
+   * dequeued this event. Adoption of a later generation must not overwrite it,
+   * so a leftover terminal keeps the older value after the next send. Host-only.
+   */
+  sessionTurnGeneration?: number;
+  /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
+  sessionInstanceId?: string;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later
@@ -286,6 +294,11 @@ export type InteractionDecision =
       kind: 'ask_user_question';
       /** 用户对每道问题的回答, key=question(或 header), value=用户回答 */
       answers: Record<string, string>;
+      /**
+       * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
+       * 不是用户 Skip。Codex detached continuation 据此不发起续跑 turn。
+       */
+      dismissed?: boolean;
     }
   | {
       kind: 'plan_review';

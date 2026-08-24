@@ -66,6 +66,7 @@ import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
+import { RemoteDesktopConfirmationNotice } from './RemoteDesktopConfirmationNotice';
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
@@ -203,10 +204,7 @@ import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions'
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
-import {
-  formatRunningTokenCount,
-  resolveRunningUsageMeta,
-} from './lib/runningTokenUsage';
+import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -735,14 +733,19 @@ export function CCAgentSessionView({
   // 历史 caveat(已不再适用):早期尝试过按 `rightSidebarCollapsed` 布尔即时切 compact,
   // 右栏 250ms transition 期间 parent 还是 stale 宽度,messageWidth 先扩出去顶过
   // parent → mx-auto 失效 → padding 被压成 0 → 视觉上消息"先顶到最左再缩回来"。
-  // 现在的方案由 hook 内 ResizeObserver 回调驱动 compact 切换,只在父宽**已经收敛**
-  // 的那一帧切, 该跳变彻底没有触发面。所以这里继续只传 isCompactRail,不要再叠
+  // 现在的方案由 hook 内 ResizeObserver 直接更新继承 CSS 宽度变量；React 只在
+  // compact 阈值跨越时切换一次。这里继续只传 isCompactRail,不要再叠
   // rightSidebarCollapsed 进来。
-  const { containerRef, messageWidth, inputWidth, inputPad, isCompact } = useProportionalWidth(
-    914,
-    { compact: isCompactRail },
-  );
-  const controlledBannerMaxWidth = getControlledBannerMaxWidth(inputWidth);
+  const {
+    containerRef,
+    messageWidth,
+    inputWidth,
+    inputPad,
+    inputHalfWidth,
+    isCompact,
+    getMessageWidth,
+  } = useProportionalWidth(914, { compact: isCompactRail });
+  const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
   // /ctr 接管态: attached=true 时把 ChatInput 替换为 TakeoverMask, 防止 desktop
   // 用户跟 IM 端 race; permission/ask/plan 三个 prompt 不替换 — 它们是 SDK 反向触
@@ -1558,6 +1561,7 @@ export function CCAgentSessionView({
     pendingRenameSessionsConfirm,
     respondToRenameSessionsConfirm,
     pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation,
     respondToGhostGrantConfirm,
     lastExpandedPlanViewerState,
     updatePlanContent,
@@ -1602,7 +1606,10 @@ export function CCAgentSessionView({
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type !== 'command') return false;
       if (!sessionId || !ownsHardwareTaskActions) return false;
-      if (action.commandId === 'approval.approve') {
+      if (
+        action.commandId === 'approval.approve' ||
+        action.commandId === 'composer.submit'
+      ) {
         if (pendingPermission) {
           respondToPermission({ behavior: 'allow' });
           return true;
@@ -1613,7 +1620,10 @@ export function CCAgentSessionView({
         }
         return false;
       }
-      if (action.commandId === 'approval.decline') {
+      if (
+        action.commandId === 'approval.decline' ||
+        action.commandId === 'navigateBack'
+      ) {
         if (pendingPermission) {
           respondToPermission({
             behavior: 'deny',
@@ -1626,6 +1636,7 @@ export function CCAgentSessionView({
           cancelPlanReview(pendingPlanReview.requestId);
           return true;
         }
+        return false;
       }
       if (action.commandId === 'forkTask') {
         if (!canNavigateSession) return false;
@@ -2683,7 +2694,7 @@ export function CCAgentSessionView({
           await sessionService.update(sessionId, { extraDirs: next });
         } catch (err) {
           log.warn('extraDirs DB update failed', err);
-          toast.error('附加目录保存失败');
+          toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
           return;
         }
       }
@@ -2695,7 +2706,7 @@ export function CCAgentSessionView({
       }
       await refreshServerSession();
     },
-    [sessionId, refreshServerSession],
+    [sessionId, refreshServerSession, t],
   );
 
   // /issue 命令的 composer 附件不随命令 payload 走 main IPC 往返 —— AttachedFile 是
@@ -4013,7 +4024,8 @@ export function CCAgentSessionView({
       pendingPluginSetup ||
       pendingIssueConfirm ||
       pendingRenameSessionsConfirm ||
-      pendingGhostGrantConfirm,
+      pendingGhostGrantConfirm ||
+      pendingRemoteDesktopConfirmation,
     );
   useEffect(() => {
     if (shareSelectionActive && shareSelectionBlocked) shareSelectionStore.exit();
@@ -4052,6 +4064,7 @@ export function CCAgentSessionView({
       bottomPadding={overlayHeight}
       composerStackTopOffset={composerStackTopOffset}
       contentWidth={messageWidth}
+      getContentWidth={getMessageWidth}
       focusMessageClientId={focusedMessageTarget?.clientId ?? null}
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
       forkOrigin={forkOrigin}
@@ -4371,7 +4384,8 @@ export function CCAgentSessionView({
                       pendingPluginSetup ||
                       pendingIssueConfirm ||
                       pendingRenameSessionsConfirm ||
-                      pendingGhostGrantConfirm
+                      pendingGhostGrantConfirm ||
+                      pendingRemoteDesktopConfirmation
                     )
                   }
                   className="mb-0"
@@ -4560,7 +4574,8 @@ export function CCAgentSessionView({
                     pendingPluginSetup ||
                     pendingIssueConfirm ||
                     pendingRenameSessionsConfirm ||
-                    pendingGhostGrantConfirm
+                    pendingGhostGrantConfirm ||
+                    pendingRemoteDesktopConfirmation
                   )
                 }
                 placeholder={
@@ -4627,13 +4642,17 @@ export function CCAgentSessionView({
                     pending={pendingGhostGrantConfirm}
                     onRespond={respondToGhostGrantConfirm}
                   />
+                ) : pendingRemoteDesktopConfirmation ? (
+                  <RemoteDesktopConfirmationNotice
+                    key={pendingRemoteDesktopConfirmation.requestId}
+                  />
                 ) : null}
               </InteractionPromptHost>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               <GoalIndicator sessionId={sessionId} />
-              {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
-                 全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
-                 Takeover ? : ChatInput) 的语义一致。
+              {/* 互斥:控制端能终结的 pending interaction 会接管 composer；
+                 Desktop-only 只读确认只能提示等待，必须保留 ChatInput，避免控制端
+                 既处理不了确认又无法继续发送或排队消息。
                  优先级 (高 → 低):
                    1. attached (远程接管中)  → TakeoverMask  (90px)
                    2. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
@@ -4659,8 +4678,8 @@ export function CCAgentSessionView({
               ) : shareSelectionActive && sessionId ? (
                 <ShareSelectionBar
                   sessionId={sessionId}
-                  contentWidth={messageWidth}
                   barWidth={inputWidth}
+                  getContentWidth={getMessageWidth}
                 />
               ) : (
                 <ChatInput
@@ -5058,15 +5077,6 @@ function HandoffSourcePill({
 
 const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
-const CONTROLLED_BANNER_WIDTH_RATIO = 0.5;
-
-function getControlledBannerMaxWidth(inputWidth?: number): number {
-  if (inputWidth == null) return CONTROLLED_BANNER_MAX_WIDTH;
-  return Math.max(
-    0,
-    Math.min((inputWidth - 16) * CONTROLLED_BANNER_WIDTH_RATIO, CONTROLLED_BANNER_MAX_WIDTH),
-  );
-}
 
 function RunningStatusBar({
   status,
@@ -5094,7 +5104,7 @@ function RunningStatusBar({
   generationReliable?: boolean;
   startedAt: number | null;
   visible: boolean;
-  inputWidth?: number;
+  inputWidth?: CSSProperties['width'];
   /**
    * 当前是否处于 side-task (mivo MJ 按钮等不走 LLM 的后台任务) 运行态。
    * true 时隐藏右侧的 elapsed · rate 行 —— mivo 不消耗 token, 显示上一轮
@@ -5244,9 +5254,7 @@ function RunningStatusBar({
     tokens: formatRunningTokenCount(animatedTokens),
   });
   const rateText =
-    usageMeta.kind === 'rate'
-      ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate })
-      : null;
+    usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个

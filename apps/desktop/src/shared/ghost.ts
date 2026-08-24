@@ -775,15 +775,17 @@ export interface GhostSecretOauthDecl {
    * 可选:loopback 回调固定端口(1024–65535)。Atlassian 这类服务商要求回调
    * URI 与应用注册值精确匹配(含端口),声明后主机授权引擎钉死
    * `http://127.0.0.1:<port>/callback`(端口被占用时结构化报错引导重试);
-   * 缺省 = 随机端口(Google 等允许任意 loopback 端口的服务商)。
+   * 声明 tokenBroker 时必填；其它 OAuth 缺省 = 随机端口(Google 等允许任意
+   * loopback 端口的服务商)。
    */
   redirectPort?: number;
   /**
    * 可选:XDT server token broker 的 provider slug(2026-07-14,xd-atlassian
    * 意识化前置)。声明后 code 换 token 与 refresh 不直连 tokenUrl,改经主机
    * 调 XDT server 的授权 broker(带登录 JWT;client secret 在服务端,不随包
-   * 分发)。与 clientSecret 互斥。**仅第一方官方前缀意识可用**——校验层保持
-   * 纯函数不感知装入语境,门控在运行时装入闸与连接闸(cindy-brain)。
+   * 分发)。必须同时声明 redirectPort，并与 clientSecret 互斥。静态官方前缀照旧
+   * 放行；其余资格由装入来源与当前组织事实共同判定。校验层保持纯函数不感知
+   * 装入语境，门控在装入闸与连接闸。
    */
   tokenBroker?: string;
   /**
@@ -1615,12 +1617,12 @@ export function isValidGhostId(id: unknown): id is string {
 }
 
 /**
- * 官方意识 id 前缀(docs/dev-rules/plugin-security-and-authoring.md):`cindy-` 保留给随包预装的
- * 第一方意识。用户装入通道(拖入/选文件/forge 转交)对该前缀**在 packaged
- * 版本上拒装**——否则卸载内置意识后,同 id 的第三方包可抢注官方身份,连带
+ * 官方意识历史 id 前缀常量:`cindy-`。完整保留集合与用户装入通道判定以
+ * `GHOST_OFFICIAL_ID_PREFIXES` 为准；官方市场可安装命中保留前缀的插件，
+ * 用户装入通道(拖入/选文件/forge 转交/自定义市场)则在 packaged 版本上拒装
+ * (dev 默认豁免,可用开发开关复现)。否则同 id 的第三方包可抢注官方身份,连带
  * 蹭走凭证别名(providerSecrets 的 GHOST_SECRET_STORAGE_ALIASES 按 id 生效,
- * 抢注者能拿到用户历史填过的机器级 key)。dev 构建豁免:官方意识的开发迭代
- * 本来就靠打包重装。
+ * 抢注者能拿到用户历史填过的机器级 key)。
  */
 export const GHOST_OFFICIAL_ID_PREFIX = 'cindy-';
 
@@ -1636,9 +1638,33 @@ export const GHOST_OFFICIAL_ID_PREFIXES: readonly string[] = [
   'xd-',
 ];
 
-/** id 是否属于官方保留命名空间。 */
+/** id 是否属于官方保留命名空间。静态命名空间与不可逆恢复能力继续用这个。 */
 export function isOfficialGhostId(id: string): boolean {
   return GHOST_OFFICIAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+/**
+ * 用户装入通道（拖入 / 选文件 / forge 转交 / 自定义市场）是否拒装该 id。
+ * 当前与 `isOfficialGhostId` 等价；本批不放宽组织前缀。
+ */
+export function isUserInstallReservedGhostId(id: string): boolean {
+  return isOfficialGhostId(id);
+}
+
+/**
+ * 该 id 是否命中 `oauth.tokenBroker` 的静态官方前缀资格。
+ * 非官方资格由运行时 first-party 判据增量放行，不改这张静态表。
+ */
+export function isBrokerEligibleGhostId(id: string): boolean {
+  return isOfficialGhostId(id);
+}
+
+/**
+ * 该 id 能否拿宿主原语：OAuth 端口回收、身份头像代下载。
+ * 仅认静态官方前缀；本轮不随 Broker 资格放宽。
+ */
+export function isFirstPartyHostPrivilegeGhostId(id: string): boolean {
+  return isOfficialGhostId(id);
 }
 
 /**
@@ -2489,7 +2515,7 @@ export function ghostLocalePathFor(
 ): string | null {
   if (!manifest.locales) return null;
   const manifestLocale = (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
-    ? (locale as GhostLocale)
+    ? locale as GhostLocale
     : null;
   return (
     (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null
@@ -2499,7 +2525,7 @@ export function ghostLocalePathFor(
 /** 插件 app-context 只暴露协议旧四语；宿主新增语言固定回退英文以兼容存量插件。 */
 export function ghostAppContextLocale(locale: string | undefined | null): GhostLocale {
   return (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
-    ? locale as GhostLocale
+    ? (locale as GhostLocale)
     : 'en';
 }
 

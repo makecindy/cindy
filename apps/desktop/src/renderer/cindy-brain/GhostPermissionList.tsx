@@ -83,7 +83,13 @@ function itemIcon(item: GhostPermissionItem): LucideIcon {
   return KIND_ICON[item.kind];
 }
 
-function PermRow({ item, badge }: { item: GhostPermissionItem; badge?: 'added' | 'removed' | 'updated' }) {
+function PermRow({
+  item,
+  badge,
+}: {
+  item: GhostPermissionItem;
+  badge?: 'added' | 'removed' | 'updated';
+}) {
   const { t } = useTranslation();
   const Icon = itemIcon(item);
   // 主机固定说明(detailKey)与作者自由文本(detail)可以并存(oauth 凭证:
@@ -289,6 +295,87 @@ export function GhostOauthClientChangedAlert({ className }: { className?: string
   );
 }
 
+/**
+ * Agent 发起装入时展示的来源信息(2026-08)。
+ *
+ * 目的:让用户在"刚让 Agent 干了一堆事、没有'我没让它装插件'清晰记忆"的状态下,
+ * 仍能一眼判断"这次不是我点的"。因此第一句直接点破发起者,再给出任务标题与源码
+ * 相对路径这两个**主机可核实**的事实作为判断依据(不是"可能有风险"的空话)。
+ *
+ * 用 warning 族语义 token(非 destructive 红):平常的手动安装框保持中性、不显示
+ * 本横幅,危险的那次才多出这一块——对比度本身就是信号,不靠"更醒目的红"训练
+ * 用户无脑点(那正是 https 证书警告的失败模式)。
+ *
+ * 高危档才追加 hazard 点破行;中危档只展示来源事实。是否 firstInstall / 展示哪些
+ * hazard 由调用方(installFlow)按风险分档决定,本组件只如实渲染。
+ */
+export interface GhostAgentOriginInfo {
+  sessionTitle?: string;
+  sourceRelPath?: string;
+  /** 该 id 此前从未安装过(仅新装分支为 true;更新分支恒 false)。 */
+  firstInstall: boolean;
+  /** 高危点破(仅高危档传入 true;中危/低危全 false → 不出 callout)。 */
+  hazards: { skill: boolean; node: boolean; credential: boolean };
+  /** 凭证外发对象域名(credential 点破用;credential 为 true 时非空)。 */
+  credentialHosts: string[];
+}
+
+export function GhostAgentOriginBanner({ info }: { info: GhostAgentOriginInfo }) {
+  const { t } = useTranslation();
+  const title = info.sessionTitle?.trim();
+  const path = info.sourceRelPath?.trim();
+  const contextKey =
+    title && path ? 'context' : title ? 'contextNoPath' : path ? 'contextNoTitle' : 'contextBare';
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded-xl bg-[var(--warning-bg-soft)] px-3 py-2.5"
+    >
+      <ShieldAlert
+        size={16}
+        className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+        aria-hidden="true"
+      />
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="text-13 font-medium leading-[1.5] text-[var(--confirm-desc)]">
+          {t('settings.ghosts.installConfirm.agentBanner.title')}
+        </p>
+        <p className="break-words text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {t(`settings.ghosts.installConfirm.agentBanner.${contextKey}`, {
+            title: title ?? '',
+            path: path ?? '',
+          })}
+        </p>
+        <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {t('settings.ghosts.installConfirm.agentBanner.advice')}
+        </p>
+        {info.firstInstall && (
+          <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+            {t('settings.ghosts.installConfirm.agentBanner.firstInstall')}
+          </p>
+        )}
+        {info.hazards.skill && (
+          <p className="text-12 font-medium leading-[1.5] text-[var(--warning-fg)]">
+            {t('settings.ghosts.installConfirm.agentBanner.hazardSkill')}
+          </p>
+        )}
+        {info.hazards.node && (
+          <p className="text-12 font-medium leading-[1.5] text-[var(--warning-fg)]">
+            {t('settings.ghosts.installConfirm.agentBanner.hazardNode')}
+          </p>
+        )}
+        {info.hazards.credential && (
+          <p className="break-words text-12 font-medium leading-[1.5] text-[var(--warning-fg)]">
+            {t('settings.ghosts.installConfirm.agentBanner.hazardCredential', {
+              hosts: info.credentialHosts.join('、'),
+            })}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function GhostManualSummary({ count }: { count: number }) {
   const { t } = useTranslation();
   if (count <= 0) return null;
@@ -316,6 +403,8 @@ export function GhostInstallReview({
   items,
   manualCount = 0,
   extra,
+  agentOrigin,
+  enableNotice,
 }: {
   description?: string;
   meta: string;
@@ -324,6 +413,13 @@ export function GhostInstallReview({
   manualCount?: number;
   /** 追加内容(如 library 槽的存储位置行),渲染在权限清单下方。 */
   extra?: ReactNode;
+  /** Agent 发起装入时的来源信息;手动入口不传 → 不展示来源横幅。 */
+  agentOrigin?: GhostAgentOriginInfo;
+  /**
+   * 启用结果说明(重新确认权限路径用):替代已删除的"立即开启"勾选框,如实
+   * 陈述确认后是保持沉睡还是保持启用,不再让用户在没有判断依据的勾选框上选。
+   */
+  enableNotice?: string;
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -333,6 +429,11 @@ export function GhostInstallReview({
 
   return (
     <div>
+      {agentOrigin && (
+        <div className="mb-3">
+          <GhostAgentOriginBanner info={agentOrigin} />
+        </div>
+      )}
       {description && (
         <div>
           <p
@@ -368,6 +469,9 @@ export function GhostInstallReview({
         <GhostPermissionList items={items} />
       </div>
       {extra ? <div className="mt-3">{extra}</div> : null}
+      {enableNotice && (
+        <p className="mt-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">{enableNotice}</p>
+      )}
     </div>
   );
 }
@@ -455,23 +559,27 @@ export function GhostUpdateReview({
   trust,
   diff,
   manualCount = 0,
+  agentOrigin,
 }: {
   trust?: GhostTrustInfo;
   diff: GhostPermissionDiff;
   manualCount?: number;
+  /** Agent 发起的更新时的来源信息;手动更新不传 → 不展示来源横幅。 */
+  agentOrigin?: GhostAgentOriginInfo;
 }) {
   return (
     <div>
+      {agentOrigin && (
+        <div className="mb-3">
+          <GhostAgentOriginBanner info={agentOrigin} />
+        </div>
+      )}
       {trust && <GhostTrustSummary trust={trust} />}
       {diff.builtinOauthClientChanged ? (
         <GhostOauthClientChangedAlert className={trust ? 'mt-3' : undefined} />
       ) : null}
       <GhostManualSummary count={manualCount} />
-      <div
-        className={cn(
-          (trust || diff.builtinOauthClientChanged || manualCount > 0) && 'mt-3',
-        )}
-      >
+      <div className={cn((trust || diff.builtinOauthClientChanged || manualCount > 0) && 'mt-3')}>
         <GhostPermissionDiffView diff={diff} />
       </div>
     </div>

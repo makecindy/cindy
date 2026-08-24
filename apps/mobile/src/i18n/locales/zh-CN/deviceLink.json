@@ -26,5 +26,42 @@
   "versionMismatchTitle": "版本不匹配",
   "versionMismatchHint": "当前 App 版本与服务端协议不一致，请升级到最新版本。",
   "unstableTitle": "连接反复断开",
-  "unstableHint": "本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。"
+  "unstableHint": "本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。",
+  "relay": {
+    "label": {
+      "online": "Relay 已连接",
+      "connecting": "正在连接 Relay",
+      "stopped": "Relay 未连接"
+    },
+    "hint": {
+      "online": "可以同步远程任务。",
+      "lastSynced": "上次同步 {{time}}",
+      "connecting": "网络恢复后会自动重新订阅远程任务。",
+      "stopped": "回到前台或重新登录后会恢复连接。"
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} 无法使用：电脑端还没有配置可用的 API Key。请在电脑端 {{appName}} 的“设置 → 模型供应商”完成配置后再试。",
+    "noOauth": "{{agent}} 无法使用：电脑端尚未完成账号授权。请在电脑端 {{appName}} 的“设置 → 模型供应商”重新连接账号后再试。",
+    "noCredentials": "{{agent}} 无法使用：电脑端尚未登录。请在电脑端 {{appName}} 的“设置 → 模型供应商”完成登录后再试。",
+    "noEncryption": "{{agent}} 无法使用：电脑端系统安全存储不可用，读取不到已保存的密钥。请检查系统钥匙串（macOS）或系统账户加密（Windows），然后重启电脑端 {{appName}}。",
+    "proxyNotReady": "{{agent}} 暂时无法使用：电脑端组件尚未就绪。请稍候重试；若持续出现，请重启电脑端 {{appName}}。",
+    "default": "{{agent}} 无法使用：电脑端登录凭证不可用。请在电脑端 {{appName}} 的“设置 → 模型供应商”重新登录后再试。（{{reason}}）"
+  },
+  "remoteError": {
+    "remoteDisabled": "被控电脑已关闭允许远程控制。",
+    "channelNotAllowed": "当前电脑端版本不支持这个远程能力。",
+    "accessRevoked": "这台电脑已撤销手机访问权限。",
+    "deviceUnresponsive": "电脑端未响应，正在自动重试，请稍后再试。",
+    "versionMismatch": "与服务端协议版本不一致，请升级 App 后重试。",
+    "payloadTooLarge": "这次传输的内容过大，请拆分后重试。",
+    "mediaFetchFailed": "获取电脑端文件失败，可以稍后重试。",
+    "voiceTranscribeFailed": "语音转写失败，可以重试或改用键盘输入。",
+    "linkNotOpen": "与被控电脑的控制链路已断开，正在重新建立。",
+    "accountChanged": "Codex 账号或工作区已变化，请刷新配额后重新确认。",
+    "offerExpired": "Codex 重置凭证已失效，请刷新配额后重新确认。",
+    "preconditionFailed": "操作条件已变化，请刷新后重新确认。",
+    "transient": "网络或被控端暂时不可用，可以稍后重新同步。",
+    "callFailed": "远程调用失败，可以稍后重试。（{{error}}）"
+  }
 }

@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   relocate: vi.fn(async (): Promise<{ persistedSdkSessionId: string | null }> => ({
     persistedSdkSessionId: null,
   })),
+  closeSession: vi.fn(async (_sessionId: string) => undefined),
   tapWindowBroadcast: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
   stopAndRemovePiSubagentRuns: vi.fn(async (_root: string) => true),
@@ -39,6 +40,10 @@ const h = vi.hoisted(() => ({
     isSessionAlive: (id: string) => boolean;
     closeSession: (id: string) => Promise<void>;
   } | null => null),
+  closeIdleSessionForMove: vi.fn(async (_sessionId: string) => true),
+  withRehydrateCloseSuppressed: vi.fn(
+    async (_sessionId: string, task: () => Promise<void>) => task(),
+  ),
   setPinnedSectionCardMode: vi.fn(),
   upsertRecentWorkdir: vi.fn(async () => undefined),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
@@ -100,6 +105,7 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
 // the whole Host.
 vi.mock('../../../maker-host/index.js', () => ({
   getMakerIfReady: h.getMakerIfReady,
+  withRehydrateCloseSuppressed: h.withRehydrateCloseSuppressed,
 }));
 // delete 路径的 removeHookAttachmentDir 会真删 turn change-set;归档路径动态
 // import cindy-brain(重副作用模块)。两者都 mock 掉,本文件只断言广播行为。
@@ -207,6 +213,7 @@ async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise
 beforeEach(() => {
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
+  h.closeSession.mockClear();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.handlers.clear();
   h.stopAndRemovePiSubagentRuns.mockClear();
@@ -216,11 +223,18 @@ beforeEach(() => {
   h.clearPiSubagentDeletedTombstone.mockClear();
   h.clearPiSubagentDeletedTombstone.mockImplementation(async () => undefined);
   h.getMakerIfReady.mockReset();
-  h.getMakerIfReady.mockReturnValue(null);
+  h.closeIdleSessionForMove.mockReset();
+  h.closeIdleSessionForMove.mockImplementation(async (sessionId) => {
+    await h.withRehydrateCloseSuppressed(sessionId, () => h.closeSession(sessionId));
+    return true;
+  });
+  h.withRehydrateCloseSuppressed.mockClear();
+  h.withRehydrateCloseSuppressed.mockImplementation(async (_sessionId, task) => task());
+  h.getMakerIfReady.mockReturnValue({ isSessionAlive: () => false, closeSession: h.closeSession });
   h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
-  registerSessionIpc();
+  registerSessionIpc(undefined, { closeIdleSessionForMove: h.closeIdleSessionForMove });
 });
 
 afterEach(async () => {
@@ -684,11 +698,44 @@ describe('local-db:sessions:update handler wiring', () => {
   it('does nothing for codex sessions', async () => {
     await invokeUpdate('codex-local', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
+    expect(h.closeSession).toHaveBeenCalledWith('codex-local');
+  });
+
+  it('closes a local Pi runtime before moving its working directory', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET agent_kind = ? WHERE id = ?').run('pi', 'codex-local');
+
+    await invokeUpdate('codex-local', { workingDir: '/new/dir' });
+
+    expect(h.closeSession).toHaveBeenCalledWith('codex-local');
+    expect(h.withRehydrateCloseSuppressed).toHaveBeenCalledWith(
+      'codex-local',
+      expect.any(Function),
+    );
+  });
+
+  it('rejects moving a local Pi/Codex session whose turn became active', async () => {
+    h.closeIdleSessionForMove.mockResolvedValueOnce(false);
+
+    await expect(
+      invokeUpdate('codex-local', { workingDir: '/new/dir' }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+    ).toEqual({ working_dir: '/old/dir' });
+    expect(h.closeSession).not.toHaveBeenCalled();
+  });
+
+  it('does not reacquire the route lock for a combined workingDir and status patch', async () => {
+    await invokeUpdate('codex-local', { workingDir: '/new/dir', status: 'active' });
+
+    expect(h.routeLock).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing for remote sessions', async () => {
     await invokeUpdate('cc-remote', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
+    expect(h.closeSession).not.toHaveBeenCalled();
   });
 });
 

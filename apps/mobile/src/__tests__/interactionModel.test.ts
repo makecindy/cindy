@@ -242,14 +242,16 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).not.toContain('optionCheckboxMark');
   });
 
-  it('keeps issue confirmation unsupported in the mobile adapter and panel', () => {
+  it('keeps every Host-owned confirmation read-only in the mobile adapter and panel', () => {
     const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
 
     expect('buildIssueConfirmReviewPresentation' in mobileInteractionModel).toBe(false);
     expect('buildIssueConfirmDecision' in mobileInteractionModel).toBe(false);
     expect('normalizeIssueConfirm' in mobileInteractionModel).toBe(false);
-    expect(interactionPanelSource).toContain("if (kind === 'issue_confirm')");
-    expect(interactionPanelSource).toContain("t('interaction.panel.issueConfirmUnsupported')");
+    expect(interactionPanelSource).toContain(
+      "kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'",
+    );
+    expect(interactionPanelSource).toContain("t('interaction.panel.desktopConfirmUnsupported')");
     expect(interactionPanelSource).not.toContain('buildIssueConfirmReviewPresentation');
   });
 

@@ -99,6 +99,7 @@ describe('/plan composer command', () => {
     expect(planModeComposerDraftText(true, editorText, storedText)).toBe(editorText);
     expect(planModeComposerDraftText(false, null, storedText)).toBe(storedText);
     expect(planModeComposerDraftText(true, null, storedText)).toBeNull();
+    expect(planModeComposerDraftText(true, editorText, storedText, true)).toBeNull();
   });
 
   it('does not persist the consumed /plan command as draft text', () => {

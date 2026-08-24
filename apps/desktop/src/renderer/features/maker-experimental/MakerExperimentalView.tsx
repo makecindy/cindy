@@ -188,11 +188,7 @@ export function MakerExperimentalView(): ReactElement {
               color: '#d4d4d4',
               border: '1px solid #333',
               borderRadius: 4,
-              cursor: m.session
-                ? window.electronAPI.platform === 'win32'
-                  ? 'var(--cursor-not-allowed, not-allowed)'
-                  : 'not-allowed'
-                : 'pointer',
+              cursor: m.session ? 'default' : 'pointer',
               opacity: m.session ? 0.5 : 1,
             }}
           >

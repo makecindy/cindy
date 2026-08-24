@@ -756,7 +756,7 @@ describe('sendToSession ordering', () => {
   it('marks worker idle and clears auto-bridge state before aborting worker sessions', () => {
     const serviceIdleBlock = extractBetween(
       orcaTeamServiceSource,
-      "async function idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' }): Promise<OrcaOkResult> {",
+      'async function idleWorker(',
       'async function archiveWorker',
     );
     const serviceDepsBlock = extractBetween(

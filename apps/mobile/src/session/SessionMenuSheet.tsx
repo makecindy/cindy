@@ -41,6 +41,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
@@ -166,7 +167,7 @@ export function SessionMenuSheet({
 }: SessionMenuSheetProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
@@ -426,8 +427,8 @@ export function SessionMenuSheet({
     onSetExtraDirs(removeSessionExtraDir(session.extraDirs, path));
   }, [onSetExtraDirs, session.extraDirs]);
 
-  const spend = summarizeSessionSpend(session);
-  const usage = summarizeContextUsage(contextUsage);
+  const spend = summarizeSessionSpend(session, mobilePresentationLocalizer);
+  const usage = summarizeContextUsage(contextUsage, mobilePresentationLocalizer);
   // 账号限额行:窗口构成完全跟随被控端上游接口返回(不假设 5h/周),解析不出内容 → null 不渲染。
   // 陈旧判定依赖当前时间: 重开面板要重算, 面板长开跨过失效时刻也要重算
   // (与 desktop 的定时重选同口径; review 反馈)。
@@ -461,12 +462,12 @@ export function SessionMenuSheet({
       modelId: session.model,
       nowMs: now,
     });
-    return summarizeAccountRateLimits(scoped, now);
+    return summarizeAccountRateLimits(scoped, now, mobilePresentationLocalizer);
     // visible / quotaStaleTick 进依赖: 重开与到点失效都要按当前时间重选。
-  }, [accountUsage, quotaBucketTables, session.model, visible, quotaStaleTick]);
+  }, [accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick]);
   const resetSummary = useMemo(
-    () => summarizeCodexRateLimitReset(codexRateLimits, Date.now()),
-    [codexRateLimits],
+    () => summarizeCodexRateLimitReset(codexRateLimits, Date.now(), mobilePresentationLocalizer),
+    [codexRateLimits, i18nInstance.language],
   );
   const workspace = buildSessionInfoWorkspace(session);
   const showExtraDirs = sessionInfoShowsExtraDirs(session);

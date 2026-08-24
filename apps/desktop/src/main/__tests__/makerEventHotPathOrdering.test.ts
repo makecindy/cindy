@@ -61,6 +61,32 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
+  it('rejects a fenced leftover terminal before register-side turn effects', () => {
+    expect(source).toContain('delete rendererEvent.sessionTurnGeneration');
+    expect(source).toContain('delete rendererEvent.sessionInstanceId');
+    const wireSessionSource = extractWireSessionSource();
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'ghostSessionTap.handleEvent(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'consumeClaudeOpusPlanMismatch(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'finalizeTurnChangeSet(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'shouldMarkTurnStatusIdleAfterBroadcast = true',
+    );
+  });
+
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
     const wireSessionSource = extractWireSessionSource();
 
@@ -147,7 +173,7 @@ describe('maker:event hot path ordering', () => {
     const observerHelperStart = source.indexOf('function notifyGoalIdleAfterTurnSettled(');
     const observerHelperEnd = source.indexOf('\n}\n', observerHelperStart) + 2;
     const observerHelperSource = source.slice(observerHelperStart, observerHelperEnd);
-    const reconcileStart = source.indexOf('const reconcileSessionTurnIdle =');
+    const reconcileStart = source.indexOf('const sealLostTerminalPersistState =');
     const reconcileEnd = source.indexOf('\n\n  const readDirectAbortTurnId =', reconcileStart);
     const reconcileSource = source.slice(reconcileStart, reconcileEnd);
     const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
@@ -170,20 +196,27 @@ describe('maker:event hot path ordering', () => {
 
     expect(reconcileStart).toBeGreaterThanOrEqual(0);
     expect(reconcileEnd).toBeGreaterThan(reconcileStart);
-    expectOrder(
-      reconcileSource,
+    const liveIdleStart = reconcileSource.indexOf(
       'sessionTurnActivityTracker.setSessionInTurn(sessionId, false);',
-      'notifyGoalIdleAfterTurnSettled(sessionId);',
     );
+    expect(liveIdleStart).toBeGreaterThanOrEqual(0);
+    expect(
+      reconcileSource.indexOf('notifyGoalIdleAfterTurnSettled(sessionId);', liveIdleStart),
+    ).toBeGreaterThan(liveIdleStart);
     expectOrder(
       reconcileSource,
-      'markTurnEndedAfterPersistDrain(sessionId);',
-      'clearCodexPlanRowsForSession(sessionId);',
+      'flushAssistantBlock(sessionId, null);',
+      'consumeLastAssistantPersistId(sessionId);',
     );
     expectOrder(
       reconcileSource,
       'clearCodexPlanRowsForSession(sessionId);',
       'resetTurnPersistState(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'sealLostTerminalPersistState(sessionId);',
+      'sessionTurnActivityTracker.deleteSession(sessionId);',
     );
 
     // ABORT_SESSION reconciles from finally, so vendor abort rejection still reaches the
@@ -202,7 +235,12 @@ describe('maker:event hot path ordering', () => {
       "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
     );
     expect(coordinatorSource).toContain('isLiveTurnRunning: (sessionId) =>');
-    expect(coordinatorSource).toContain('if (!sess) return undefined;');
+    expect(coordinatorSource).toContain('isLiveSessionPresent: (sessionId) =>');
+    expect(source).toContain('lookupStableSessionForTurnBoundary');
+    expect(source).toContain("status: 'unavailable'");
+    expect(coordinatorSource).toContain("if (lookup.status === 'unavailable') return undefined;");
+    expect(coordinatorSource).toContain("if (lookup.status === 'missing') return false;");
+    expect(coordinatorSource).toContain("return lookup.status === 'found';");
   });
 
   it('does not latch product-turn bookkeeping on background status events', () => {
@@ -695,18 +733,25 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {
-    const stableLookupStart = source.indexOf('const getStableSessionForTurnBoundary =');
-    const stableLookupEnd = source.indexOf('\n  const reconcileSessionTurnIdle =', stableLookupStart);
+    const stableLookupStart = source.indexOf('const lookupStableSessionForTurnBoundary =');
+    const stableLookupEnd = source.indexOf('\n  const getStableSessionForTurnBoundary =', stableLookupStart);
     const stableLookupSource = source.slice(stableLookupStart, stableLookupEnd);
-    const reconcileStart = stableLookupEnd;
+    const reconcileStart = source.indexOf('const sealLostTerminalPersistState =');
     const reconcileEnd = source.indexOf('\n\n  const inputCoordinator:', reconcileStart);
     const reconcileSource = source.slice(reconcileStart, reconcileEnd);
 
     expect(stableLookupStart).toBeGreaterThanOrEqual(0);
     expect(stableLookupEnd).toBeGreaterThan(stableLookupStart);
     expect(stableLookupSource).toContain('wiredSessionsById.get(sessionId)?.session');
-    expectOrder(stableLookupSource, 'if (wired) return wired;', 'return maker.getSession(sessionId) ?? null;');
-    expect(stableLookupSource).toContain('return null;');
+    expectOrder(
+      stableLookupSource,
+      'if (wired) return { status: \'found\', session: wired };',
+      'return sess ? { status: \'found\', session: sess } : { status: \'missing\' };',
+    );
+    expect(stableLookupSource).toContain("return { status: 'unavailable' };");
+    expect(source).toContain(
+      "return lookup.status === 'found' ? lookup.session : null;",
+    );
 
     expect(reconcileStart).toBeGreaterThanOrEqual(0);
     expect(reconcileEnd).toBeGreaterThan(reconcileStart);
@@ -716,8 +761,8 @@ describe('maker:event hot path ordering', () => {
     expectOrder(reconcileSource, 'flushAssistantBlock(sessionId, null);', 'consumeLastAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastAssistantPersistId(sessionId);', 'consumeLastTopLevelAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastTopLevelAssistantPersistId(sessionId);', 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)');
-    expectOrder(reconcileSource, 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)', 'markTurnEndedAfterPersistDrain(sessionId);');
-    expectOrder(reconcileSource, 'markTurnEndedAfterPersistDrain(sessionId);', 'resetTurnPersistState(sessionId);');
+    expectOrder(reconcileSource, 'sealLostTerminalPersistState(sessionId);', 'sessionTurnActivityTracker.deleteSession(sessionId);');
+    expectOrder(reconcileSource, 'clearCodexPlanRowsForSession(sessionId);', 'resetTurnPersistState(sessionId);');
   });
 
   it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
@@ -854,20 +899,27 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('? getReferenceModelPricing()');
     expect(codexDoneSource).toContain('? await getGatewayModelPricingForModel()');
     expect(codexDoneSource).toContain('price ?? undefined');
-    expect(codexDoneSource).toContain(
-      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+    expect(codexDoneSource).toMatch(
+      /u\.segments !== undefined && codexSegmentsReliable\s*\? codexUsageSegments\s*:\s*\[\]/,
     );
+    expect(codexDoneSource).toContain(
+      "if (money && (isSubscriptionValue || price?.source === 'gateway'))",
+    );
+    expect(codexDoneSource).toContain(
+      "const isActualApiCost = !isSubscriptionValue && price?.source === 'gateway';",
+    );
+    expect(codexDoneSource).toContain('if (isActualApiCost)');
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
+      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
     );
     expect(codexDoneSource).toMatch(
       /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
     );
     const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(money);');
     const modelCostRecordIndex = codexDoneSource.indexOf(
-      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+      "if (money && (isSubscriptionValue || price?.source === 'gateway'))",
     );
     const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
@@ -887,7 +939,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).not.toContain('isEstimate: true');
   });
 
-  it('claude-code 费用走 HYBRID 定价 (gateway 重算 + total_cost_usd 窄兜底) after EVENT broadcast', () => {
+  it('claude-code 费用按完整请求段定价，累计 cost 首帧只建基线', () => {
     const wireSessionSource = extractWireSessionSource();
     const claudeDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'claude-code'");
     const codexDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'codex'");
@@ -906,15 +958,17 @@ describe('maker:event hot path ordering', () => {
     );
     expect(claudeDoneSource).toContain('providerId: sessionProviderForBilling');
     expect(claudeDoneSource).toContain('billingRoute,');
+    expect(claudeDoneSource).toContain(
+      'const claudeUsageSegments = normalizeTurnUsageSegments(doneData?.usageSegments);',
+    );
     expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
     expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
-    expect(claudeDoneSource).toContain(
-      "money: m.money?.kind === 'actual-cost' ? m.money : null,",
-    );
+    expect(claudeDoneSource).toContain('subscriptionEstimate ?? unpricedSubscriptionValueMarker()');
+    expect(claudeDoneSource).toContain('money: modelRowMoney,');
     // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
     // 仪表盘按订阅估算价折算; 其余轮仍写归一化裸 id。
     expect(claudeDoneSource).toMatch(
-      /model:\s*isClaudeSubscriptionValueRow\s*\?\s*claudeSubscriptionUsageModelKey\(m\.model\)\s*:\s*m\.model,/,
+      /model:\s*isClaudeSubscriptionValueRow \|\| isBridgeSubscriptionRow\s*\?\s*claudeSubscriptionUsageModelKey\(m\.model\)\s*:\s*m\.model,/,
     );
     expect(claudeDoneSource).toContain(
       "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",
@@ -922,8 +976,9 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain(
       "m.source === 'subscription' && isSubscriptionDirectRoute(m.model)",
     );
+    expect(claudeDoneSource).toContain('const subscriptionTurnEstimates: RegionalMoney[] = [];');
     expect(claudeDoneSource).toMatch(
-      /estimateClaudeSubscriptionTurnValue\(\s*perModel,\s*currentLedgerCurrency\(\),\s*pricing,\s*\)/,
+      /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*currentLedgerCurrency\(\),\s*m\.segments,\s*\)/,
     );
     // 订阅判定对齐 proxy 路由: 显式选 Anthropic, 或默认路由优先按 observed route, 未观察再回落无网关 key 启发式
     expect(claudeDoneSource).toContain("sessionProviderForBilling === 'anthropic'");
@@ -941,8 +996,17 @@ describe('maker:event hot path ordering', () => {
     );
     // 保留 #216 的 tooltip token/cache 明细。
     expect(claudeDoneSource).toContain('buildClaudeTurnUsageDetails(');
-    // 窄兜底: modelUsage 缺失时仍用 total_cost_usd delta 记总额, 别漏整轮 (review #4)。
-    expect(claudeDoneSource).toContain('const rawDelta = Math.max(0, cumulative - prevReportedCost);');
+    // 窄兜底: total_cost_usd 是进程累计；首次只建基线，且累计 usage 不得冒充本轮 token。
+    expect(claudeDoneSource).toMatch(
+      /const rawDelta\s*=\s*prevReportedCost === undefined\s*\? 0\s*:\s*Math\.max\(0, cumulative - prevReportedCost\);/,
+    );
+    const claudeCostFallback = claudeDoneSource.slice(
+      claudeDoneSource.indexOf("} else if (typeof cumulative === 'number' && cumulative >= 0)"),
+    );
+    expect(claudeCostFallback).toMatch(
+      /buildClaudeTurnUsageDetails\(\s*undefined,\s*undefined,\s*resolvedModel,/,
+    );
+    expect(claudeCostFallback).toContain("if (route !== 'provider-api')");
   });
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {
@@ -950,11 +1014,27 @@ describe('maker:event hot path ordering', () => {
     const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'pi'");
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
-    expect(piDoneSource).toContain('const pricing = isCustomProviderRoute');
-    expect(piDoneSource).toContain('? getReferenceModelPricing()');
-    expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', pricingModel, pricing)");
-    expect(piDoneSource).not.toMatch(/getModelPriceQuote\(\s*null\s*,\s*effectiveProvider/);
-    expect(piDoneSource).toContain('if (!isSubscriptionValue)');
+    expect(piDoneSource).toContain(
+      '(turnPiFastModeBySession.get(session.id) ?? getSessionFastMode(session.id))',
+    );
+    expect(piDoneSource).toContain('turnPiFastModeBySession.delete(session.id);');
+    expect(piDoneSource).toContain(
+      "segment.priceVariant ?? (segment.id?.startsWith('pi:') ? piPriceVariant : 'standard'),",
+    );
+    expect(piDoneSource).toMatch(/const pricing\s*=\s*billingRoute === 'xd-gateway'/);
+    expect(piDoneSource).toContain(': getReferenceModelPricing();');
+    expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', model, pricing)");
+    expect(piDoneSource).toContain(
+      'const pricingSegments = piSegmentsReliable ? group.segments : [];',
+    );
+    expect(piDoneSource).toContain('money = resolveTurnCost({');
+    expect(piDoneSource).toContain('segments: pricingSegments,');
+    expect(piDoneSource).toContain(
+      "billingRoute === 'provider-api' ? undefined : group.sdkCostUsd",
+    );
+    expect(piDoneSource).toContain('money ?? unpricedSubscriptionValueMarker()');
+    expect(piDoneSource).toContain('money: modelRowMoney,');
+    expect(piDoneSource).toContain('if (actualMoney)');
     expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
   });
 

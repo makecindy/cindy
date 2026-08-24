@@ -84,6 +84,13 @@ const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissi
 const isAppearanceUtilityView =
   isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
+document.documentElement.dataset.windowBackdropMaterial =
+  window.electronAPI.windowBackdropMaterial ?? 'none';
+const disposeWindowBackdropMaterialChanged =
+  window.electronAPI.onWindowBackdropMaterialChanged?.((material) => {
+    document.documentElement.dataset.windowBackdropMaterial = material;
+  }) ?? (() => {});
+import.meta.hot?.dispose(disposeWindowBackdropMaterialChanged);
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
 }
@@ -150,7 +157,7 @@ void (async () => {
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <ComputerPermissionBackdrop />
       </ThemeProvider>,
     );
@@ -162,7 +169,7 @@ void (async () => {
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ComputerPermissionGuideWindow />
         </LocaleProvider>
@@ -174,7 +181,7 @@ void (async () => {
   if (isVoiceInputDictionaryToast) {
     const { VoiceInputDictionaryToast } = await import('./voice-input/VoiceInputDictionaryToast');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <VoiceInputDictionaryToast />
         </LocaleProvider>
@@ -186,7 +193,7 @@ void (async () => {
   if (isVoiceInputOverlay) {
     const { VoiceInputOverlay } = await import('./voice-input/VoiceInputOverlay');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ConfirmDialogProvider>
             <VoiceInputOverlay />

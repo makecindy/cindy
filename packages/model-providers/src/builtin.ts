@@ -161,6 +161,7 @@ const OPENAI_PROVIDER: Provider = {
     codex: {
       upstream: 'https://chatgpt.com/backend-api/codex',
       authStrategy: 'oauth-passthrough',
+      supportsResponsesCustomTools: true,
     },
     'claude-code': {
       upstream: 'https://chatgpt.com/backend-api/codex',
@@ -220,6 +221,7 @@ const XD_PROVIDER: Provider = {
     codex: {
       upstream: 'https://xd-gateway.invalid/v1',
       authStrategy: 'gateway-key',
+      supportsResponsesCustomTools: false,
     },
     // pi 直连网关 anthropic-messages 面(与 claude-code 同可达面);upstream 同为占位。
     pi: {

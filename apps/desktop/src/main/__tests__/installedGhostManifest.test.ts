@@ -24,6 +24,32 @@ function manifest(id = 'legacy-plugin'): Record<string, unknown> {
   };
 }
 
+function legacyBrokerManifest(): Record<string, unknown> {
+  return {
+    ...manifest('legacy-broker'),
+    slots: ['network'],
+    tools: undefined,
+    settingsHtml: 'settings.html',
+    network: {
+      hosts: ['accounts.example.com'],
+      secrets: [
+        {
+          key: 'account',
+          label: 'Account',
+          source: 'oauth',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+          oauth: {
+            authorizeUrl: 'https://accounts.example.com/authorize',
+            tokenUrl: 'https://accounts.example.com/token',
+            clientId: 'builtin-client-id',
+            tokenBroker: 'jira',
+          },
+        },
+      ],
+    },
+  };
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -63,6 +89,17 @@ describe('installed ghost manifest compatibility', () => {
     });
 
     expect(parsed.ok).toBe(false);
+  });
+
+  it('keeps an installed legacy broker manifest readable when redirectPort was never declared', () => {
+    const parsed = parseInstalledGhostManifest(legacyBrokerManifest());
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.manifest.network?.secrets?.[0]?.oauth).toMatchObject({
+      tokenBroker: 'jira',
+    });
+    expect(parsed.manifest.network?.secrets?.[0]?.oauth?.redirectPort).toBeUndefined();
   });
 
   it('reads an installed ghost.json through the bounded compatibility path', () => {

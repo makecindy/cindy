@@ -271,6 +271,22 @@ describe('sessionList', () => {
     expect(buildRemoteSessionCardPreview(base, { running: false })).toBe('旧的消息摘要');
   });
 
+  it('localizes generated preview states without treating message text as a state marker', () => {
+    const message = toRemoteSessionListItem(
+      session('s1', { title: 'Run tests' }),
+      new Date('2026-01-01T00:10:00.000Z').getTime(),
+      undefined,
+      0,
+      '运行中',
+    );
+    const localizer = {
+      translate: (key: string, fallback: string) => key.endsWith('.running') ? 'Running' : fallback,
+    };
+
+    expect(buildRemoteSessionCardPreview(message, { localizer })).toBe('运行中');
+    expect(buildRemoteSessionCardPreview(message, { localizer, running: true })).toBe('Running');
+  });
+
   it('prefers human awaiting copy over stale tool status when interaction is pending', () => {
     const base = toRemoteSessionListItem(
       session('s1', { title: 'Ask something' }),

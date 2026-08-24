@@ -361,12 +361,10 @@ describe('统一面板 · 会话内形态', () => {
   });
 
   /**
-   * Chris 2026-08-19 裁决:同引擎视图只显示**生效引擎 = 当前引擎**的行。
-   * xd 的 GPT-5.5 候选里有 cc,但 gpt 家族主场在 codex(§2.1:主场在别处的行不跟随
-   * pinnedEngine)—— 它在 cc 会话的「仅 Claude」视图里此前会以 **Codex 形态**出现,点下去
-   * 还触发跨引擎切换确认,与该视图「选什么都无损」的承诺冲突。裁决是不显示,不是转换。
+   * Chris 2026-08-23:同引擎视图列出所有候选含当前引擎的模型,并钉在轨上点选。
+   * xd 的 GPT-5.5 主场在 codex,仍出现在兼容段(Opus 之后);在 Claude 轨里点它走无损直切。
    */
-  it('同引擎视图不显示「候选含当前引擎、但落点在别家」的行', () => {
+  it('同引擎视图把兼容行排在优先行后面,点下去留在当前轨', async () => {
     renderPanel({
       sessionEngineFilter: {
         currentAgent: 'claude-code' as const,
@@ -378,12 +376,81 @@ describe('统一面板 · 会话内形态', () => {
     });
     const list = screen.getByRole('listbox');
     expect(within(list).getByText('Opus 5')).toBeTruthy();
-    expect(within(list).queryByText('GPT-5.5')).toBeNull();
-    // 切到「全部」仍然找得到它(跨引擎是显式入口,不是把行藏死)。
-    act(() => {
-      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    expect(within(list).getByText('GPT-5.5')).toBeTruthy();
+    const ids = within(list)
+      .getAllByRole('option')
+      .map((row) => row.textContent);
+    expect(ids.findIndex((text) => text?.includes('Opus 5'))).toBeLessThan(
+      ids.findIndex((text) => text?.includes('GPT-5.5')),
+    );
+    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
+    expect(triple?.getAttribute('title')).toContain('Claude');
+    const sizer = document.querySelector('[data-width-sizer]');
+    const sizerGpt = Array.from(sizer?.querySelectorAll('[data-unified-anchor]') ?? []).find(
+      (node) => node.textContent?.includes('GPT-5.5'),
+    );
+    expect(sizerGpt?.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain(
+      'Codex',
+    );
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
     });
-    expect(within(screen.getByRole('listbox')).getByText('GPT-5.5')).toBeTruthy();
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'medium');
+  });
+
+  it('同引擎轨未选中兼容行:浮层显式换引擎后 override 不被钉轨盖掉,再点行走跨引擎确认', async () => {
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+    });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('codex');
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
+    expect(triple?.getAttribute('title')).toContain('Codex');
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'xd',
+        modelId: 'gpt-5.5',
+        targetAgent: 'codex',
+      }),
+    );
+  });
+
+  it('同引擎轨选中行:全局 override 指向别的引擎时仍显示并点选 live 引擎', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'codex');
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
+    expect(triple?.getAttribute('title')).toContain('Claude');
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    // 选中行再点是同引擎重选,绝不能被 leftover override 误判成跨引擎。
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
   });
 
   /**

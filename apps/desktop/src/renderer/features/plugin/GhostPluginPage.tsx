@@ -106,6 +106,7 @@ import {
   sortInstalledForDisplay,
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
+import { MyPublishesSection } from './MyPublishesSection';
 import { ignoredRoundStorageKey, isBatchFinished, updateRoundKey } from './lib/updateAllModel';
 import {
   approveUpdateExpansion,
@@ -168,6 +169,94 @@ const RECOMMENDED_FILTERS: readonly PluginPresentationFilter[] = [
 const MAX_VISIBLE_INSTALLED_PLUGINS = 8;
 /** 折叠入口只预览前三个隐藏插件，避免头像堆叠反过来抢占操作文案。 */
 const MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS = 3;
+
+/**
+ * 本期隐藏「我的发布」二级 tab，避免与「已安装」争抢顶层布局。
+ * 重新开放前必须先定首个 tab 的标签；当前「概览」仅为已被用户否掉的占位词，并非定案。
+ */
+export const SHOW_MY_PUBLISHES_SECTION = false;
+
+/**
+ * Product gate for the whole secondary tab experience. The overview stays mounted while tabs
+ * switch, and a disabled gate returns it without an extra wrapper or hidden publishing effects.
+ */
+export function MyPublishesSectionVisibilityGate({
+  visible,
+  overviewLabel,
+  publishesLabel,
+  tabsAriaLabel,
+  publishes,
+  children,
+}: {
+  visible: boolean;
+  overviewLabel: string;
+  publishesLabel: string;
+  tabsAriaLabel: string;
+  publishes: ReactNode;
+  children: ReactNode;
+}) {
+  const [activeTab, setActiveTab] = useState<'overview' | 'publishes'>('overview');
+  const id = useId();
+  const overviewTabId = `${id}-overview-tab`;
+  const overviewPanelId = `${id}-overview-panel`;
+  const publishesTabId = `${id}-publishes-tab`;
+  const publishesPanelId = `${id}-publishes-panel`;
+
+  if (!visible) return <>{children}</>;
+
+  return (
+    <>
+      <div
+        role="tablist"
+        aria-label={tabsAriaLabel}
+        className="mt-5 flex items-end gap-6 border-b border-[var(--border-default)]"
+      >
+        {([
+          ['overview', overviewLabel, overviewTabId, overviewPanelId],
+          ['publishes', publishesLabel, publishesTabId, publishesPanelId],
+        ] as const).map(([tab, label, tabId, panelId]) => {
+          const active = activeTab === tab;
+          return (
+            <button
+              key={tab}
+              id={tabId}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-controls={panelId}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                '-mb-px select-none border-b-2 px-0.5 pb-2.5 pt-1 text-13 font-medium transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                active
+                  ? 'border-[var(--text-primary)] text-[var(--text-primary)]'
+                  : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      <div
+        id={overviewPanelId}
+        role="tabpanel"
+        aria-labelledby={overviewTabId}
+        hidden={activeTab !== 'overview'}
+      >
+        {children}
+      </div>
+      <div
+        id={publishesPanelId}
+        role="tabpanel"
+        aria-labelledby={publishesTabId}
+        hidden={activeTab !== 'publishes'}
+      >
+        {publishes}
+      </div>
+    </>
+  );
+}
 
 /** Keeps the installed-section disclosure rule deterministic and directly testable. */
 function visibleInstalledPluginItems<T>(items: readonly T[]): T[] {
@@ -326,7 +415,7 @@ export function GhostPluginPage({
   const marketLocale = resolveSystemLocale(i18n.resolvedLanguage ?? i18n.language);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { confirm, confirmWithCheckbox } = useConfirmDialog();
+  const { confirm } = useConfirmDialog();
   const { user, mode, dataOwnerId } = useAuth();
   const showEnterprise = user?.membershipKind === 'org';
   const ghosts = useInstalledGhosts();
@@ -948,8 +1037,8 @@ export function GhostPluginPage({
       await handleMarketUpdate(selectedDetail.id);
       return;
     }
-    await pickAndUpdateGhost(selectedDetail.id, { t, confirm, confirmWithCheckbox });
-  }, [confirm, confirmWithCheckbox, handleMarketUpdate, selectedDetail, selectedMarketUpdate, t]);
+    await pickAndUpdateGhost(selectedDetail.id, { t, confirm });
+  }, [confirm, handleMarketUpdate, selectedDetail, selectedMarketUpdate, t]);
 
   /**
    * 缺少批准状态时的恢复入口。市场自有的包重走市场安装确认(重新下载 + 逐项
@@ -966,15 +1055,15 @@ export function GhostPluginPage({
       }
       // 本地包路线:从已装目录读全量权限清单确认后开 receipt,不用用户翻出原始
       // .cindy 文件;目录读不出时该流程内部自动回退到"重新选包"。
-      await reapproveInstalledGhost(ghostId, { t, confirm, confirmWithCheckbox });
+      await reapproveInstalledGhost(ghostId, { t, confirm });
     },
-    [confirm, confirmWithCheckbox, ghosts, handleMarketUpdate, marketByGhostId, t],
+    [confirm, ghosts, handleMarketUpdate, marketByGhostId, t],
   );
 
   const handleUpdateFromFile = useCallback(async () => {
     if (!selectedDetail) return;
-    await pickAndUpdateGhost(selectedDetail.id, { t, confirm, confirmWithCheckbox });
-  }, [confirm, confirmWithCheckbox, selectedDetail, t]);
+    await pickAndUpdateGhost(selectedDetail.id, { t, confirm });
+  }, [confirm, selectedDetail, t]);
 
   // 控制器在挂载期借用本页的市场刷新;卸载后批次继续跑,重新进页全量刷新。
   useEffect(
@@ -997,20 +1086,35 @@ export function GhostPluginPage({
     setUpdateDialogOpen(true);
   }, [updatableInstalledItems]);
 
+  const handlePublish = useCallback(async () => {
+    const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
+    if (!picked || 'canceled' in picked) return;
+    try {
+      await window.electronAPI.pluginPublisher.start(picked.filePath);
+    } catch (error) {
+      const decoded = extractIpcError(error);
+      toast.error(
+        decoded?.code === 'PERMISSION_DENIED'
+          ? t('settings.ghosts.publish.disabled')
+          : t('settings.ghosts.publish.startFailed'),
+      );
+    }
+  }, [t]);
+
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
     if (!picked || 'canceled' in picked) return;
+    // 设置页选文件是用户亲手操作 → 手动来源(不传 origin),不加横幅、不加重。
     await confirmAndInstallGhost(picked.filePath, {
       t,
       confirm,
-      confirmWithCheckbox,
-      // 已在插件页:tab 型插件勾选「立即开启并打开面板」后原地开面板。
+      // 已在插件页:tab 型插件装入即生效后原地开面板。
       openPluginPanel: (ghostId) => {
         setSelectedId(null);
         setOpenPanelId(ghostId);
       },
     });
-  }, [confirm, confirmWithCheckbox, t]);
+  }, [confirm, t]);
 
   const handleRetryLegacyRecovery = useCallback(async () => {
     legacyRecoveryStatusRequestRef.current += 1;
@@ -1512,6 +1616,18 @@ export function GhostPluginPage({
               </div>
             </header>
 
+            <MyPublishesSectionVisibilityGate
+              visible={SHOW_MY_PUBLISHES_SECTION && showEnterprise}
+              overviewLabel={t('settings.ghosts.page.overviewTab')}
+              publishesLabel={t('settings.ghosts.publish.section')}
+              tabsAriaLabel={t('settings.ghosts.page.secondaryTabsAria')}
+              publishes={
+                <MyPublishesSection
+                  enabled={showEnterprise}
+                  onPublish={() => void handlePublish()}
+                />
+              }
+            >
             {scopeDir ? (
               <div className="mt-5 flex items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3">
                 <div className="flex min-w-0 items-center gap-2.5">
@@ -1802,6 +1918,7 @@ export function GhostPluginPage({
                 )}
               </section>
             ) : null}
+            </MyPublishesSectionVisibilityGate>
           </PluginManagementPage>
         </main>
         {panelAside}

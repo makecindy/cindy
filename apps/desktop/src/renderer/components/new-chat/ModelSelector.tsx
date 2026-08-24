@@ -66,6 +66,7 @@ import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
+import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
   evictDeviceProviders,
   prefetchDeviceProviders,
@@ -172,14 +173,6 @@ export interface ModelMemoryAccessors {
   /** 同 `clearEffort`,针对 Fast(缺省即关,所以删除与写 false 显示等价,但不钉住默认)。 */
   clearFast?: (agent: AgentKind, providerId: string, modelId: string) => void;
 }
-
-// 供应商完整展示名:三个内置 id 复用设置页 i18n 标题(settings.providers.<id>.title),
-// 自定义供应商回退目录里的 provider.name。用于模型信息面板的来源说明。
-const PROVIDER_TITLE_KEY: Record<string, string> = {
-  anthropic: 'settings.providers.anthropic.title',
-  openai: 'settings.providers.openai.title',
-  xd: 'settings.providers.xd.title',
-};
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
@@ -318,8 +311,7 @@ function ModelOptionsFloatingPanel({
 }
 
 function providerDisplayName(p: ProviderView, t: (key: string) => string): string {
-  const key = PROVIDER_TITLE_KEY[p.id];
-  return key ? t(key) : p.name;
+  return sharedProviderDisplayName(p, t);
 }
 
 // 来源供应商 → 单色官方 mark(fill=currentColor)。trigger 默认右间距 + trigger 文字色;

@@ -1713,6 +1713,53 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('显式 close 后词典只读快照 push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const sentOpen = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: sentOpen.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'remote-stream',
+      },
+    });
+    await open;
+    h.client.closeLink('dev-b', 'user');
+
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'LINK_NOT_OPEN' }),
+    );
+    const sentBefore = h.current().sent.length;
+    expect(() => h.client.sendPush(
+      'dev-b',
+      'device-link:voice:dictionary:snapshot',
+      { ok: true, entries: [] },
+    )).not.toThrow();
+    const sent = h.current().sent.at(-1)!;
+    expect(h.current().sent.length).toBeGreaterThan(sentBefore);
+    expect(sent).toMatchObject({
+      kind: 'push',
+      dst: 'dev-b',
+      payload: { channel: 'device-link:voice:dictionary:snapshot' },
+    });
+    expect(parseTransportPayload(sent.payload)).toBeNull();
+    h.client.stop();
+  });
+
   it('显式 close 后只放行已接收的 legacy listing invoke-result 回程', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
@@ -3280,6 +3327,278 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('非 pong 的有效入站流量也能阻止心跳误判共享连接', async () => {
+    // 这条验证的是 heartbeat tick 与入站活动的逻辑顺序，不是宿主定时器精度。
+    // Windows 高负载 runner 会把 4ms/8ms 真实 timer 一起推迟，再先执行较早注册的
+    // heartbeat，制造测试自身的假空闲窗口；用 fake timers 固定每个周期的先后关系。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      // 模拟 relay 仍在持续推送 presence，但 pong 偶发丢失；有效业务帧证明
+      // 共享 socket 仍有入站流量，不应因单独的 pong 计数拆掉所有 peer。
+      const activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'dev-b', online: true, deviceName: 'Test' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      expect(ws.terminated).toBe(false);
+      expect(h.client.getStatus()).toBe('online');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('多 peer 心跳:一个 peer 静默时健康 peer 的 link 与在途请求零感知', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 8,
+        pongMissLimit: 1,
+        requestTimeoutMs: 200,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    let healthyPending: Promise<unknown> | null = null;
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      const silentLink = establishInboundReliableLink(
+        h,
+        'heartbeat-silent-stream',
+        1,
+        'peer-silent',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await silentLink;
+      const healthyLink = establishInboundReliableLink(
+        h,
+        'heartbeat-healthy-stream',
+        1,
+        'peer-healthy',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await healthyLink;
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+      // peer-silent 此后不再发送任何帧；peer-healthy 上保留一个真实在途请求。
+      healthyPending = h.client.invoke('peer-healthy', {
+        channel: 'local-db:sessions:list',
+        args: [10],
+      }, 200);
+      const healthyInvoke = ws.sent
+        .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
+        .at(-1)!;
+      const socketsBefore = h.sockets.length;
+
+      // relay 仍持续报告健康 peer 的有效入站活动，但 pong 丢失。heartbeat 必须按
+      // 共享 socket 的真实活性判断，不能因另一 peer 静默拆掉所有 link。
+      activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'peer-healthy', online: true, deviceName: 'Healthy' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      activity = null;
+
+      expect(ws.terminated).toBe(false);
+      expect(h.sockets).toHaveLength(socketsBefore);
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'invoke-result',
+        id: healthyInvoke.id,
+        src: 'peer-healthy',
+        payload: { ok: true, result: ['healthy-ok'] },
+      });
+      await expect(healthyPending).resolves.toMatchObject({
+        ok: true,
+        result: ['healthy-ok'],
+      });
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      await healthyPending?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it('可解析但协议无效的入站帧不会刷新 heartbeat 活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const invalidFrames = [
+      { v: PROTOCOL_VERSION + 1, kind: 'pong' },
+      { v: PROTOCOL_VERSION, kind: 'future-kind' },
+      {
+        v: PROTOCOL_VERSION,
+        kind: 'presence-changed',
+        payload: { online: true },
+      },
+    ] as unknown as Envelope[];
+    let index = 0;
+    const activity = setInterval(() => {
+      ws.push(invalidFrames[index % invalidFrames.length]);
+      index += 1;
+    }, 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('畸形 invoke 继续分发但不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    h.client.onFrame((env) => frames.push(env));
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const malformed = {
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-heartbeat-invoke',
+      src: 'dev-b',
+      payload: { args: [] },
+    } as unknown as Envelope;
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('缺少 src 或 id 的 legacy invoke 不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'invoke',
+        payload: { channel: 'maker:valid-looking', args: [] },
+      } as unknown as Envelope;
+      const activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('可靠 invoke 分片在重组前也算入站活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 50, pongMissLimit: 2 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-fragment-stream');
+
+    const frames = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'fragmented-heartbeat-invoke',
+      src: 'dev-b',
+      dst: 'dev-self',
+      payload: { channel: 'maker:large', args: ['x'.repeat(150_000)] },
+    }, 'heartbeat-fragment-stream', 1);
+    expect(frames.length).toBeGreaterThan(1);
+
+    const activity = setInterval(() => {
+      for (const frame of frames) h.current().push(frame);
+    }, 10);
+    await tick(180);
+    clearInterval(activity);
+
+    expect(h.current().terminated).toBe(false);
+    expect(h.client.getStatus()).toBe('online');
+    h.client.stop();
+  });
+
+  it('缺少 src 或 id 的可靠 invoke 不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-missing-id-stream');
+    const ws = h.current();
+
+    const malformed = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      payload: { channel: 'maker:valid-looking', args: [] },
+    }, 'heartbeat-missing-id-stream', 1)[0]!;
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('heartbeat idle 使用单调时钟，不受系统时间回拨影响', async () => {
+    const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+    let monotonicMs = 100;
+    const monotonic = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => monotonicMs);
+    const wallClock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await tick();
+      const ws = h.current();
+      ws.ack();
+      wallClock.mockReturnValue(-1_000_000);
+
+      for (let i = 0; i < 40 && !ws.terminated; i++) {
+        monotonicMs += 10;
+        await tick(10);
+      }
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      wallClock.mockRestore();
+      monotonic.mockRestore();
+    }
+  });
+
   it('getToken 返回 null:不建连,按退避重试', async () => {
     const h = makeHarness({ token: null });
     h.client.start();
@@ -3321,6 +3640,64 @@ describe('DeviceLinkClient', () => {
     h.current().push({ v: PROTOCOL_VERSION, kind: 'link-close', src: 'dev-a', payload: { reason: 'user' } });
     expect(frames.map((f) => f.kind)).toEqual(['invoke', 'push', 'link-close']);
     h.client.stop();
+  });
+
+  it('畸形 invoke 仍交给业务层生成结构化拒绝', async () => {
+    const h = makeHarness();
+    const frames: Envelope[] = [];
+    h.client.onFrame((e) => frames.push(e));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      src: 'dev-a',
+      payload: { channel: 'maker:send' },
+    });
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      payload: { channel: 'maker:send' },
+    });
+    h.client.stop();
+  });
+
+  it('畸形 link-close 仍交给业务层收口但不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.onFrame((env) => frames.push(env));
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        src: 'dev-a',
+        payload: {},
+      } as unknown as Envelope;
+      activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      if (activity) clearInterval(activity);
+      activity = null;
+
+      expect(frames.length).toBeGreaterThan(0);
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      vi.useRealTimers();
+    }
   });
 
   it('epoch 守卫:过期 socket 的迟到 close/message 回调被忽略,不触发额外重连', async () => {

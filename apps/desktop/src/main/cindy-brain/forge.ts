@@ -6,8 +6,9 @@
  *   喂给 agent——替代"人读的作者文档",同事对 AI 说"帮我做个 XX 意识"即可;
  * - packGhostDir:源码目录 → 校验(与装入同一套 validateGhostManifest)→
  *   打包 .cindy 到源码目录自身(id-version.cindy,同名覆盖;shouldSkip 跳过
- *   *.cindy 防套娃)。装入确认弹窗由调用方(mcp-integrations 接线)经双击
- *   转交通道触发,本文件不碰 UI。
+ *   *.cindy 防套娃),并同时返回内存里的 `buf`。作者副本给人拿走;安装链路
+ *   必须用 `buf` 直写 Host staging,不能从源码目录回读。装入确认弹窗由
+ *   调用方(mcp-integrations 接线)经双击转交通道触发,本文件不碰 UI。
  *
  * 安全边界:agent 能写意识源码(它本来就有文件工具),但打包必须过校验、
  * 装入必须过用户确认框(默认沉睡)——与手动拖 .cindy 完全同一条门。
@@ -19,6 +20,12 @@ import os from 'node:os';
 import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
+
+import {
+  PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES,
+  PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES,
+  PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES,
+} from '@cindy/plugin-protocol';
 
 import {
   GHOST_ICON_MAX_BYTES,
@@ -47,6 +54,7 @@ import {
   unixRegularFilePermissionsForArchive,
 } from './ghostZipPermissions.js';
 import { isPathInsideDir } from './dirDeposit.js';
+import { brokerRedirectPortDeclarationIssue } from './ghostBrokerRedirectPort.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
 /**
@@ -116,13 +124,36 @@ async function pathHasLinkSegment(inputPath: string): Promise<boolean> {
   return false;
 }
 
-/** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
+/**
+ * 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。
+ *
+ * node 档三个上限**直接引用协议常量**,不再手抄数字:同一份 `.cindy` 之后会被
+ * plugin-server 的成员发布链路按这三个值权威校验(`docs/plugin-server.md`
+ * 「企业成员上传」),打包侧放行、发布侧拒收是最难排查的一类不一致。basic 档
+ * 是 Forge 自己的产品判断(小包更快更稳),与发布上限无关,保持本地常量。
+ *
+ * ZIP 条目口径:协议与服务端数的是**所有 ZIP entry**,Forge 数的是**文件**。
+ * 两者相等的前提是包里不含自动补出的目录 entry —— 见下面 `createFolders: false`。
+ */
 const MAX_BASIC_FILES = 256;
-const MAX_NODE_FILES = 2_048;
+const MAX_NODE_FILES = PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES;
 const MAX_BASIC_TOTAL_BYTES = 32 * 1024 * 1024;
-const MAX_NODE_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_NODE_TOTAL_BYTES = PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES;
 const MAX_BASIC_CINDY_BYTES = 8 * 1024 * 1024;
-const MAX_NODE_CINDY_BYTES = 128 * 1024 * 1024;
+const MAX_NODE_CINDY_BYTES = PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES;
+
+/**
+ * JSZip 默认 `createFolders: true`,会为 `a/b/c.txt` 自动补出 `a/` 与 `a/b/`
+ * 两个目录 entry。Forge 只数文件,plugin-server 数所有 entry,于是「2 个文件」
+ * 在服务端是「4 个 entry」——带目录层级的包逼近上限时会被发布侧拒掉,而打包侧
+ * 看不出任何问题。
+ *
+ * 关掉它让两侧口径按构造相等,而不是让 Forge 去模仿 JSZip 的补目录算法。
+ * 装入侧不依赖目录 entry:`GhostManager` 解包时对 `entry.dir` 一律 `mkdir` 后
+ * `continue`,而写文件那条分支本来就会 `mkdir(path.dirname(dest))`,目录照样建得出来。
+ * 空目录两种设置下都不进包(Forge 只收集普通文件),所以也不存在丢空目录的问题。
+ */
+const ZIP_FILE_OPTIONS = { createFolders: false } as const;
 const FORGE_AI_ICON_PATH = 'assets/icon.png';
 
 /** 打包时跳过的目录/文件(源码目录里的开发残留,不属于意识本体)。 */
@@ -134,7 +165,7 @@ function shouldSkip(name: string): boolean {
 }
 
 export type ForgePackResult =
-  | { ok: true; cindyPath: string; manifest: GhostManifest }
+  | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer }
   | {
       ok: false;
       errorCode:
@@ -595,6 +626,10 @@ export async function scaffoldGhostDir(
   if (!validation.ok) {
     return { ok: false, errorCode: 'INVALID_INPUT', message: `插件信息不合格:${validation.reason}` };
   }
+  const brokerPortIssue = brokerRedirectPortDeclarationIssue(validation.manifest);
+  if (brokerPortIssue) {
+    return { ok: false, errorCode: 'INVALID_INPUT', message: `插件信息不合格:${brokerPortIssue}` };
+  }
 
   try {
     await fs.promises.lstat(targetDir);
@@ -771,6 +806,10 @@ async function buildGhostPackage(
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
       return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${v.reason}` };
+    }
+    const brokerPortIssue = brokerRedirectPortDeclarationIssue(v.manifest);
+    if (brokerPortIssue) {
+      return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${brokerPortIssue}` };
     }
     if (manifestBytes.byteLength > GHOST_INSTALL_MANIFEST_MAX_BYTES) {
       return {
@@ -1179,7 +1218,7 @@ async function buildGhostPackage(
           message: `总体积超上限(${maxTotalBytes} 字节)`,
         };
       }
-      zip.file(f.rel, content, { unixPermissions });
+      zip.file(f.rel, content, { ...ZIP_FILE_OPTIONS, unixPermissions });
     }
     if (iconPng !== undefined && !iconSourceEntry) {
       packedBytes += iconPng.byteLength;
@@ -1190,7 +1229,10 @@ async function buildGhostPackage(
           message: `总体积超上限(${maxTotalBytes} 字节)`,
         };
       }
-      zip.file(FORGE_AI_ICON_PATH, iconPng, { unixPermissions: ARCHIVE_REGULAR_0644 });
+      zip.file(FORGE_AI_ICON_PATH, iconPng, {
+        ...ZIP_FILE_OPTIONS,
+        unixPermissions: ARCHIVE_REGULAR_0644,
+      });
     }
     const buf = await zip.generateAsync({
       type: 'nodebuffer',
@@ -1288,7 +1330,9 @@ export async function packGhostDir(
       message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  return { ok: true, cindyPath, manifest: built.manifest };
+  // 作者目录里的副本只给人手动拿走。安装链路必须用内存里的 `buf` 直写
+  // staging，绝不能从 cindyPath 回读——agent 能在确认前替换那份文件。
+  return { ok: true, cindyPath, manifest: built.manifest, buf: built.buf };
 }
 
 /**
@@ -1342,7 +1386,7 @@ export async function packGhostDirToFile(
       message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  return { ok: true, cindyPath: destPath, manifest: built.manifest };
+  return { ok: true, cindyPath: destPath, manifest: built.manifest, buf: built.buf };
 }
 
 /**
@@ -1355,7 +1399,7 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
 写一个意识。**流程:先取手册目录 → 按 §0 用提问卡片和用户对齐设计 → 按需用 section
 读透相关章(动手前至少读完 §2 卡槽总览、"沙箱红线"与"打包与测试"三章) → 在工作目录写源码文件 →
-ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
+ghost_forge_pack 打包 → 用户在弹窗上确认装入；需要发布时改用 publish intent 取得一次性票据。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
 骨架上修改。可选模板:\`plain\`(普通沙箱工具)、\`agent-action\`(卡片点击后让 Agent
@@ -1710,8 +1754,8 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "pkce": true,                                 // 可选:PKCE(S256)开关,缺省 true
       "extraAuthorizeParams": { "access_type": "offline", "prompt": "consent" },  // 可选 ≤8 条:服务商特有授权参数(协议保留参数禁写)
       "identity": { "url": "https://api.example.com/userinfo", "labelPath": "email", "displayTemplate": "{team} · {user}", "avatarPath": "data.avatar_thumb" },  // 可选:授权后拉一次身份端点给账号打标签(设置页"已连接为 xxx";url 域名须命中 hosts)。labelPath 应指向**唯一且稳定**字段(如邮箱 / user_id)——它是重复授权时的同身份合并判定键,选 name 这类可重名可改名字段会误合并。displayTemplate 可选:人类可读展示名模板,\`{点分路径}\` 占位符从同一份身份响应取值(至少一个占位符,≤200 字符),任一占位符取不到值整体降级为空、回落显示 labelPath 的值——labelPath 的稳定字段不可读(如 Slack 的 user_id)时声明它,设置页与账号工具展示的就是渲染后的名字(邮箱这类本身可读的服务商不需要)。avatarPath 可选:头像 URL 在身份响应里的点分路径(如飞书的 "data.avatar_thumb")——主机取 https 地址后**不带凭证**下载小图(仅 png/jpeg/webp/gif、≤256KB)转 data URL 存库,\`/oauth\` 回查里以 account.avatarDataUrl 给你的 settingsHtml 展示(<img> 直接用)。**下载仅对第一方官方意识生效**(头像地址不受 hosts 白名单约束,第三方声明合法但恒降级 null)——所以页面必须能没头像也好看(如回落姓名首字圆片)
-      "redirectPort": 53682,                        // 可选:loopback 回调固定端口(1024–65535)。服务商要求回调 URI 与注册值精确匹配(如 Atlassian)时声明,回调恒为 http://127.0.0.1:<端口>/callback;缺省 = 随机端口(Google 等允许任意 loopback 端口的服务商不用声明)
-      "tokenBroker": "jira",                        // 可选:仅第一方官方意识可用(第三方声明拒装)。声明后 code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
+      "redirectPort": 53682,                        // 可选:loopback 回调固定端口(1024–65535);声明 tokenBroker 时必填。服务商要求回调 URI 与注册值精确匹配(如 Atlassian)时声明,回调恒为 http://127.0.0.1:<端口>/callback;非 broker 模式缺省 = 随机端口(Google 等允许任意 loopback 端口的服务商不用声明)
+      "tokenBroker": "jira",                        // 可选:三路资格:静态官方前缀照旧放行;当前组织的服务端 organization market 包已安装、source 为 market、organizationId 与当前组织一致、id 命中本组织已登记前缀且 release sha256 与批准 receipt 的 packageSha256 相等;或当前组织身份下经 ghost forge 装入(receipt.installOrigin 为 agent-forge)且 id 命中本组织已登记前缀。后两条新增基座不接受手动装入、个人身份或别的组织前缀,且只给 Broker 与 oidc-token,不给宿主原语。声明时必须同时声明 redirectPort;code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
       "brokerBounce": { "path": "/example/bounce", "callbackPath": "/example/callback" }  // 可选:双地址弹跳回调(服务商后台只收 https redirect、不收 http loopback 时用)。必须与 tokenBroker、redirectPort 同时声明;报给服务商的 redirect_uri = broker 服务基地址 + path(主机运行时拼,清单不落域名),浏览器授权后由弹跳路由 302 回 http://127.0.0.1:<redirectPort><callbackPath>
     }
   }],
@@ -2820,14 +2864,20 @@ PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能�
 \`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
 **Cindy 企业身份断言(source:"oidc-token",可选)**:适用于接入 Cindy Connection
-Auth 的企业服务。主机只在当前登录账号属于组织 Membership、且该插件拥有当前组织的
-Plugin Market organization 安装记录、安装 manifest digest 未被篡改并声明了目标服务域名时,
-按需向 auth-server 换取短时 Connection JWT;audience 与组织身份由主机推导,插件清单和
-运行时代码都不能选择、读取或保存 audience/token。该凭证必须固定声明
+Auth 的企业服务。主机只在当前登录账号属于组织 Membership,并且满足下面两条基座
+之一时,按需向 auth-server 换取短时 Connection JWT:
+1. 当前组织的 Plugin Market organization 安装记录(source 必须是服务端 \`market\`),
+   安装 manifest digest 未被篡改,并声明了目标服务域名;或
+2. **组织身份 + 本组织已登记前缀 + 插件 id 命中 \`<前缀>-\` + 经 ghost forge 装入
+   (receipt 为 agent-forge) + 批准记录中保有有效的 packageSha256 来源指纹**。
+audience 与组织身份由主机推导,插件清单和运行时代码都不能选择、读取或保存
+audience/token；audience 固定为 \`\${orgSlug}:\${ghostId}\`,总长不得超过 64 字符。
+这两条组织基座都不适用于个人身份或手动装入；其中 forge 基座还要求命中当前组织
+前缀。它们只给 Broker 与 oidc-token,不给宿主原语。该凭证必须固定声明
 \`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,
 且 \`hosts\` 必须是非空的显式子集,只允许把断言发给列出的企业服务域名。
 \`oidc-token\` 的 \`inject.hosts\` 只接受精确域名,不允许 \`*.example.com\` 通配；Host
-会从通过 digest 校验的市场 manifest 读取这些声明,目标请求必须精确命中声明域名才会签发并注入。
+会从已批准的安装事实读取这些声明,目标请求必须精确命中声明域名才会签发并注入。
 它没有用户输入、\`url\`、\`exchange\` 或 \`oauth\` 详单,也不要放进 \`setup.requires\`;没有企业
 身份时 cindy.fetch 会 fail-closed 并返回结构化错误。企业服务应使用 Connection JWT
 中的 \`sub\`、\`email\` 或 \`identities\` 等声明自行选择业务身份,不要要求 Cindy 客户端先把
@@ -2903,15 +2953,21 @@ identity.displayTemplate 时,\`/oauth\` 回查与连接结果里 account.label �
   (含端口,如 Atlassian)时声明,主机回调恒为 \`http://127.0.0.1:<端口>/callback\`;
   端口被占用时连接返回 LISTEN_FAILED(detail 带人话提示,settingsHtml 原样展示
   即可;第一方官方内置意识会先自动结束占用进程并重试,第三方意识不享受此回收
-  ——请选一个不易撞车的端口)。Google 这类允许任意 loopback 端口的服务商不用
-  声明。
-- \`tokenBroker\`:**仅第一方官方意识可用**(第三方声明直接拒装)——code/refresh
-  交换改经 Cindy 服务端 broker 完成,client secret 由服务端持有、不随包分发,
-  且要求用户已登录 Cindy。声明它时与 clientSecret 互斥;PKCE 缺省开(verifier
+  ——请选一个不易撞车的端口)。声明 \`tokenBroker\` 时必须提供；非 broker 模式下，
+  Google 这类允许任意 loopback 端口的服务商不用声明。
+- \`tokenBroker\`:资格有三路:①静态官方前缀命中,照旧放行；②当前组织的服务端
+  organization market 包已安装、source 为 \`market\`、organizationId 与当前组织一致,
+  id 命中本组织已登记前缀,且 release sha256 与批准 receipt 的 packageSha256 相等；
+  ③当前组织身份下经 ghost forge 装入(receipt 的
+  installOrigin 为 \`agent-forge\`),且 id 命中本组织已登记前缀。第 2、3 条新增基座
+  不接受手动装入、个人身份或别的组织前缀,且只给 Broker 与 oidc-token,不给宿主原语。
+  code/refresh 交换改经 Cindy 服务端 broker 完成,client secret 由服务端持有、不随包
+  分发,且要求用户已登录 Cindy。声明它时必须同时声明 redirectPort,并与 clientSecret
+  互斥;PKCE 缺省开(verifier
   经 broker exchange 透传服务端),不吃 PKCE 的服务商显式 \`"pkce": false\`;
   设置页的 \`/oauth/<key>/client\` 自填通道返回 405(settingsHtml 不要再画
   client 输入区)。
-- \`brokerBounce\`:双地址弹跳回调(随 tokenBroker,同样仅第一方)。部分
+- \`brokerBounce\`:双地址弹跳回调(随 tokenBroker,资格与 tokenBroker 相同)。部分
   服务商后台只收 https redirect、不收 http loopback——声明后报给服务商的
   redirect_uri 是「broker 服务的 https 弹跳路由」(主机用 broker 基地址 + \`path\`
   运行时拼出),浏览器授权后弹跳路由 302 回本机
@@ -4169,6 +4225,14 @@ const opened = await cindy.iosSimulator.request({
    (记得 bump ghost.json 的 version);
 5. 验证:让用户 \`$<command> <内容>\` 试一单,看聊天图卡/面板是否符合预期。
 
+企业组织成员需要发布时，调用 \`ghost_forge_pack({ dir: '<绝对路径>', intent: 'publish' })\`。
+该意图不会弹装入确认，也不会返回可供自行拼接的 Host 路径；它只返回绑定本次包 id 与
+完整字节的一次性 \`publishToken\`。随后把该票据传给
+\`ghost_forge_publish({ token: '<publishToken>' })\`，工具会立即返回 \`transferId\`，发布在
+后台继续；用 \`ghost_forge_publish_status\` 查询传输与审核状态。发布确认屏仍由用户明确
+确认。成员发布仅企业组织成员可用，个人账号不可用；票据过期、换账号或重复使用后须重新
+以 publish intent 打包，不能改传文件路径绕过。
+
 ## 8. 发布签名与审核
 
 \`ghost_forge_pack\` 默认只负责本地制作和试装，生成的是**未签名包**。未签名不等于
@@ -4239,9 +4303,9 @@ const opened = await cindy.iosSimulator.request({
 - oauth 声明格式错(source:"oauth" 缺 oauth 详单或反之、与 exchange 同时声明(互斥)、
   authorizeUrl/tokenUrl 非 https 或域名不在 hosts 白名单、scopes 条目含空白/重复、
   extraAuthorizeParams 覆写保留参数(client_id/redirect_uri/state/code_challenge 等)、
-  redirectPort 不是 1024–65535 整数、tokenBroker 与 clientSecret 同时声明、
+  redirectPort 不是 1024–65535 整数、tokenBroker 没同时声明 redirectPort 或与 clientSecret 同时声明、
   clientIdAlternatives 没与 clientId + tokenBroker 成套或包含重复/非法 ID、
-  非官方前缀 id 声明了 tokenBroker(仅第一方可用)、brokerBounce 没和 tokenBroker +
+  当前安装来源或组织身份无权使用 tokenBroker、brokerBounce 没和 tokenBroker +
   redirectPort 成套声明或路径不是 / 开头的站内绝对路径)
 - connections 声明格式错(超 2 条、key 撞 secrets 的 key 或声明内重复、label 缺失/超 64 字、
   inject 缺失/format 没有 {value}/header 用了协议关键头、**声明了 inject.hosts**(连接

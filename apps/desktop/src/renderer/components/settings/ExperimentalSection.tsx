@@ -32,7 +32,7 @@ export function ExperimentalSection() {
 
       <div className="flex flex-col gap-3">
         <LspBetaCell />
-        <BetaChannelCell />
+        {window.electronAPI?.platform !== 'linux' ? <BetaChannelCell /> : null}
         {EXPERIMENTAL_FEATURES.map((feature) => (
           <ExperimentalFeatureRow key={feature.key} feature={feature} />
         ))}

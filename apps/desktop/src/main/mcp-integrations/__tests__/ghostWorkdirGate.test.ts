@@ -30,7 +30,34 @@ const logWarnMock = vi.fn();
 const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
 const { packGhostDirMock } = vi.hoisted(() => ({ packGhostDirMock: vi.fn() }));
+const { handleIncomingCindyFileMock, completeForgePackStagingMock } = vi.hoisted(() => ({
+  handleIncomingCindyFileMock: vi.fn(async () => undefined),
+  completeForgePackStagingMock: vi.fn(() => ({
+    ticket: 'publish-token-1',
+    installPath: '/host/staging/demo.cindy',
+    agentCindyPath: 'demo-1.0.0.cindy',
+    packageSha256: 'a'.repeat(64),
+  })),
+}));
+const {
+  publishTicketConsumeMock,
+  releaseForgePackStagingMock,
+  startPluginPublishMock,
+  currentPublisherIdentityMock,
+} = vi.hoisted(() => ({
+  publishTicketConsumeMock: vi.fn(),
+  releaseForgePackStagingMock: vi.fn(),
+  startPluginPublishMock: vi.fn(() => ({ transferId: 'transfer-1', uploadId: null })),
+  currentPublisherIdentityMock: vi.fn<
+    () => { membershipId: string; orgSlug: string; orgName: string } | null
+  >(() => ({
+    membershipId: 'member-1',
+    orgSlug: 'acme',
+    orgName: 'Acme',
+  })),
+}));
 const releaseMutationMock = vi.fn();
+const appSessionBoundaryPendingMock = vi.fn(() => false);
 const captureMutationOwnerMock = vi.fn(() => ({
   mode: 'local' as const,
   dataOwnerId: 'test',
@@ -80,6 +107,8 @@ const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
+  getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'member-1', generation: 7 }),
+  isAppSessionBoundaryPending: appSessionBoundaryPendingMock,
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => {
   const createMakerLogger = () => ({
@@ -175,9 +204,26 @@ vi.mock('../../cindy-brain/forge.js', () => ({
   packGhostDir: packGhostDirMock,
   scaffoldGhostDir: vi.fn(),
 }));
-vi.mock('../../cindy-brain/openFileInstall.js', () => ({ handleIncomingCindyFile: vi.fn() }));
+vi.mock('../../cindy-brain/forgePackStaging.js', () => ({
+  completeForgePackStaging: completeForgePackStagingMock,
+  getForgePackStagingController: () => ({
+    consume: publishTicketConsumeMock,
+    releaseStaging: releaseForgePackStagingMock,
+  }),
+  invalidateForgePackTicket: vi.fn(),
+  releaseForgePackStaging: releaseForgePackStagingMock,
+}));
+vi.mock('../../cindy-brain/openFileInstall.js', () => ({
+  handleIncomingCindyFile: handleIncomingCindyFileMock,
+}));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionFsSnapshot: sessionSnapshotMock,
+  getSessionTitle: vi.fn(async () => 'Test session'),
+}));
+vi.mock('../../plugin-publisher/host.js', () => ({
+  currentPublisherIdentity: currentPublisherIdentityMock,
+  getPluginPublisherOrchestrator: vi.fn(),
+  startPluginPublish: startPluginPublishMock,
 }));
 vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: () => 'image/png' }));
 vi.mock('../../cindy-media/ledger.js', () => ({
@@ -364,6 +410,22 @@ beforeEach(() => {
     errorCode: 'MANIFEST_INVALID',
     message: 'stop after gate assertion',
   });
+  handleIncomingCindyFileMock.mockClear();
+  completeForgePackStagingMock.mockClear();
+  publishTicketConsumeMock.mockReset();
+  publishTicketConsumeMock.mockReturnValue({
+    owner: { mode: 'cloud', dataOwnerId: 'member-1', generation: 7 },
+    operationKind: 'install',
+    stagingPath: '/host/staging/demo.cindy',
+    packageSha256: 'a'.repeat(64),
+    manifestId: 'demo',
+    packExpiresAt: Date.now() + 600_000,
+  });
+  releaseForgePackStagingMock.mockClear();
+  startPluginPublishMock.mockClear();
+  currentPublisherIdentityMock.mockClear();
+  appSessionBoundaryPendingMock.mockReset();
+  appSessionBoundaryPendingMock.mockReturnValue(false);
   clearAllPrefs();
 });
 
@@ -383,6 +445,130 @@ describe('Forge session workdir gate', () => {
       sessionWorkdir: WORKDIR,
       forbiddenRootDirs: [],
     });
+  });
+
+  it('keeps default intent on the install-confirm path without exposing a publish token', async () => {
+    packGhostDirMock.mockResolvedValueOnce({
+      ok: true,
+      buf: Buffer.from('packed'),
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    });
+    const result = await makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
+    expect(result).toMatchObject({ ok: true, cindyPath: 'demo-1.0.0.cindy' });
+    if (!result.ok) throw new Error('default install pack unexpectedly failed');
+    expect(result).not.toHaveProperty('publishToken');
+    expect(result.note).toContain("若接下来要发布到组织市场,请用 intent='publish' 重新打包");
+    expect(handleIncomingCindyFileMock).toHaveBeenCalledWith(
+      '/host/staging/demo.cindy',
+      'ghost-forge',
+      expect.objectContaining({ kind: 'agent-forge' }),
+    );
+  });
+
+  it('does not suggest organization publishing to a personal account after default install pack', async () => {
+    currentPublisherIdentityMock.mockReturnValueOnce(null);
+    packGhostDirMock.mockResolvedValueOnce({
+      ok: true,
+      buf: Buffer.from('packed'),
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    });
+
+    const result = await makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
+
+    // Excludes showing an unusable publish next step to personal accounts.
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('personal install pack unexpectedly failed');
+    expect(result.note).not.toContain("intent='publish'");
+    // Excludes changing the default intent while adding the conditional note.
+    expect(result).not.toHaveProperty('publishToken');
+    expect(handleIncomingCindyFileMock).toHaveBeenCalledWith(
+      '/host/staging/demo.cindy',
+      'ghost-forge',
+      expect.objectContaining({ kind: 'agent-forge' }),
+    );
+  });
+
+  it('returns the one-shot token for publish intent without opening install confirmation', async () => {
+    packGhostDirMock.mockResolvedValueOnce({
+      ok: true,
+      buf: Buffer.from('packed'),
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    });
+    const result = await makeDeps().forgePack({
+      dir: path.join(WORKDIR, 'plugin-src'),
+      intent: 'publish',
+    });
+    expect(result).toMatchObject({ ok: true, publishToken: 'publish-token-1' });
+    expect(handleIncomingCindyFileMock).not.toHaveBeenCalled();
+  });
+
+  it('consumes the publish token and binds publisher input to ticket id, SHA and cleanup', async () => {
+    const result = await makeDeps().forgePublish({ token: 'publish-token-1' });
+    expect(result).toMatchObject({ ok: true, transferId: 'transfer-1', uploadId: null });
+    expect(publishTicketConsumeMock).toHaveBeenCalledWith('publish-token-1');
+    expect(startPluginPublishMock).toHaveBeenCalledWith(
+      '/host/staging/demo.cindy',
+      null,
+      expect.objectContaining({
+        manifestId: 'demo',
+        packageSha256: 'a'.repeat(64),
+        onTerminal: expect.any(Function),
+      }),
+    );
+    const binding = (
+      startPluginPublishMock.mock.calls as unknown as Array<[
+        string,
+        null,
+        { onTerminal: () => void },
+      ]>
+    )[0]?.[2];
+    binding?.onTerminal();
+    expect(releaseForgePackStagingMock).toHaveBeenCalledWith('/host/staging/demo.cindy');
+  });
+
+  it('explains that an invalid publish token must come from a publish-intent pack', async () => {
+    publishTicketConsumeMock.mockReturnValueOnce(undefined);
+
+    const result = await makeDeps().forgePublish({ token: 'invalid-token' });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PUBLISH_TOKEN_INVALID' });
+    if (result.ok) throw new Error('invalid publish token unexpectedly succeeded');
+    expect(result.message).toContain(
+      "只能由 ghost_forge_pack(intent='publish') 签发",
+    );
+  });
+
+  it('keeps owner-mismatch and boundary-pending guidance distinct from invalid-token repacking', async () => {
+    publishTicketConsumeMock.mockReturnValueOnce({
+      owner: { mode: 'cloud', dataOwnerId: 'member-1', generation: 8 },
+      operationKind: 'install',
+      stagingPath: '/host/staging/demo.cindy',
+      packageSha256: 'a'.repeat(64),
+      manifestId: 'demo',
+      packExpiresAt: Date.now() + 600_000,
+    });
+    const ownerMismatch = await makeDeps().forgePublish({ token: 'other-owner' });
+    if (ownerMismatch.ok) throw new Error('owner-mismatch token unexpectedly succeeded');
+    expect(ownerMismatch).toEqual({
+      ok: false,
+      errorCode: 'PUBLISH_TOKEN_OWNER_MISMATCH',
+      message: '发布票据无效、已过期或已被使用，请重新打包',
+    });
+
+    appSessionBoundaryPendingMock.mockReturnValueOnce(true);
+    const boundaryPending = await makeDeps().forgePublish({ token: 'boundary' });
+    if (boundaryPending.ok) throw new Error('boundary-pending token unexpectedly succeeded');
+    expect(boundaryPending).toEqual({
+      ok: false,
+      errorCode: 'SESSION_BOUNDARY_PENDING',
+      message: '账号切换中，请稍后重试',
+    });
+    // Excludes collapsing account-boundary failures into the invalid-ticket fix.
+    expect(ownerMismatch.message).not.toContain("intent='publish'");
+    expect(boundaryPending.message).not.toContain("intent='publish'");
   });
 
   it('rejects remote workdirs before touching local Forge fs', async () => {

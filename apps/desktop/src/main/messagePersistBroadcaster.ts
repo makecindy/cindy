@@ -1498,6 +1498,19 @@ export function onInteractionMessage(
  *
  * 仅 ask_user_question / plan_review 落库(permission 无 chat 消息,persistId 为空时直接跳过)。
  */
+const finalizedInteractionPersistIdsBySession = new Map<string, Set<string>>();
+
+function claimInteractionPersistId(sessionId: string, persistId: string): boolean {
+  let claimed = finalizedInteractionPersistIdsBySession.get(sessionId);
+  if (!claimed) {
+    claimed = new Set<string>();
+    finalizedInteractionPersistIdsBySession.set(sessionId, claimed);
+  }
+  if (claimed.has(persistId)) return false;
+  claimed.add(persistId);
+  return true;
+}
+
 export function onInteractionResolved(
   sessionId: string,
   persistId: string | undefined,
@@ -1508,14 +1521,16 @@ export function onInteractionResolved(
   if (!persistId) return;
   const requestId = typeof request.requestId === 'string' ? request.requestId : '';
   if (!requestId) return;
+  if (!claimInteractionPersistId(sessionId, persistId)) return;
 
   if (kind === 'ask_user_question') {
     const answers = (decision.answers as Record<string, string> | undefined) ?? {};
+    const cancelled = decision.dismissed === true;
     enqueueWrite(`ask_user_resolved:${sessionId}:${persistId}`, () =>
       updateDbMessageContent(sessionId, persistId, {
         requestId,
         questions: request.questions ?? [],
-        status: 'answered',
+        status: cancelled ? 'cancelled' : 'answered',
         answers,
       }),
     );
@@ -1946,6 +1961,7 @@ export function clearSessionPersistState(sessionId: string): void {
   lastAssistantPersistIdBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);
+  finalizedInteractionPersistIdsBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
   _turnAttemptTokenBySession.delete(sessionId);

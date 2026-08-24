@@ -540,4 +540,126 @@ describe('plugin delivery contract', () => {
       }),
     ).toThrow(PluginProtocolError);
   });
+
+  it('normalizes missing or null currentOrganization to null', () => {
+    const missing = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+    });
+    expect(missing.currentOrganization).toBeNull();
+    const explicitNull = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+      currentOrganization: null,
+    });
+    expect(explicitNull.currentOrganization).toBeNull();
+  });
+
+  it('parses a registered organization plugin prefix without adding a hyphen', () => {
+    const response = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+      currentOrganization: { organizationId: 'org-1', pluginPrefix: 'acme' },
+    });
+    expect(response.currentOrganization).toEqual({
+      organizationId: 'org-1',
+      pluginPrefix: 'acme',
+    });
+  });
+
+  it('keeps pluginPrefix null when the organization has not registered a prefix', () => {
+    const response = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+      currentOrganization: { organizationId: 'org-1', pluginPrefix: null },
+    });
+    expect(response.currentOrganization).toEqual({
+      organizationId: 'org-1',
+      pluginPrefix: null,
+    });
+  });
+
+  it('enforces the server organizationId length limit of 128 characters', () => {
+    const organizationId128 = 'a'.repeat(128);
+    const accepted = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+      currentOrganization: { organizationId: organizationId128, pluginPrefix: null },
+    });
+    expect(accepted.currentOrganization).toEqual({
+      organizationId: organizationId128,
+      pluginPrefix: null,
+    });
+
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'a'.repeat(129), pluginPrefix: null },
+      }),
+    ).toThrow(PluginProtocolError);
+  });
+
+  it('rejects currentOrganization when the pluginPrefix key is missing', () => {
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1' },
+      }),
+    ).toThrow(PluginProtocolError);
+  });
+
+  it('rejects pluginPrefix values outside the server pattern', () => {
+    const withPrefix = (pluginPrefix: unknown) => () =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1', pluginPrefix },
+      });
+    expect(withPrefix('a')).toThrow(PluginProtocolError);
+    expect(withPrefix('ab')()).toMatchObject({
+      currentOrganization: { organizationId: 'org-1', pluginPrefix: 'ab' },
+    });
+    expect(withPrefix('a'.repeat(16))()).toMatchObject({
+      currentOrganization: { pluginPrefix: 'a'.repeat(16) },
+    });
+    expect(withPrefix('a'.repeat(17))).toThrow(PluginProtocolError);
+    expect(withPrefix('acme-')).toThrow(PluginProtocolError);
+    expect(withPrefix('Acme')).toThrow(PluginProtocolError);
+  });
+
+  it('does not parse currentOrganization on Plugin details', () => {
+    const response = parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        id: pluginId,
+        ghostId: validManifest.id,
+        name: validManifest.name,
+        description: null,
+        author: null,
+        scope: 'public',
+        organizationId: null,
+        defaultInstall: true,
+        currentRelease: {
+          id: 'release-1',
+          version: validManifest.version,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 1024,
+          publishedAt: '2026-07-19T00:00:00.000Z',
+          manifest: validManifest,
+        },
+      },
+      currentOrganization: { organizationId: 'org-1', pluginPrefix: 'acme' },
+    });
+    expect(response).not.toHaveProperty('currentOrganization');
+  });
 });

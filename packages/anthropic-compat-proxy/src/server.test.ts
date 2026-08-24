@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { EventEmitter } from 'node:events';
+import { Transform } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -29,7 +30,7 @@ import {
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
-import type { ProxyHandle } from './types.js';
+import type { ProxyHandle, RequestTransform } from './types.js';
 
 const TEST_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const TEST_PI_BINARY = path.join(
@@ -140,6 +141,140 @@ describe('anthropic-compat-proxy loopback port guard', () => {
 
     const result = await post(proxy.url, { model: 'test-model' });
     expect(result).toEqual({ status: 200, text: JSON.stringify({ ok: true }) });
+  });
+
+  it('pipes successful response bodies through a request-scoped transform', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      const payload = '{"source":"upstream"}';
+      res.writeHead(200, {
+        'content-type': 'application/json', 'content-length': String(payload.length),
+      }).end(payload);
+    });
+    upstreamClose = upstream.close;
+    let requestBody = '';
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [(body) => ({ ...(body as object), routed: true })],
+      transformResponse: (ctx) => {
+        requestBody = ctx.requestBody.toString('utf8');
+        return new Transform({
+          transform(chunk, _encoding, callback) {
+            callback(null, String(chunk).replace('upstream', 'adapted-provider'));
+          },
+        });
+      },
+    });
+
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: '{"model":"test-model"}',
+    });
+    expect(await response.json()).toEqual({ source: 'adapted-provider' });
+    expect(response.headers.get('content-length')).toBeNull();
+    expect(JSON.parse(requestBody)).toEqual({ model: 'test-model', routed: true });
+  });
+
+  it('settles request-scoped transform state after a non-2xx response', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'provider_unavailable' } }));
+    });
+    upstreamClose = upstream.close;
+    const onRequestSettled = vi.fn();
+    const requestTransform: RequestTransform = (body) => body;
+    requestTransform.onRequestSettled = onRequestSettled;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [requestTransform],
+    });
+
+    const response = await post(proxy.url, { model: 'test-model' });
+
+    expect(response.status).toBe(503);
+    expect(onRequestSettled).toHaveBeenCalledOnce();
+    expect(onRequestSettled).toHaveBeenCalledWith(1);
+  });
+
+  it('settles request-scoped transform state when the client closes during an async transform', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    upstreamClose = upstream.close;
+    let resolveTransform!: () => void;
+    let markTransformStarted!: () => void;
+    const transformStarted = new Promise<void>((resolve) => {
+      markTransformStarted = resolve;
+    });
+    const transformReleased = new Promise<void>((resolve) => {
+      resolveTransform = resolve;
+    });
+    const onRequestSettled = vi.fn();
+    const requestTransform: RequestTransform = async (body) => {
+      markTransformStarted();
+      await transformReleased;
+      return body;
+    };
+    requestTransform.onRequestSettled = onRequestSettled;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [requestTransform],
+    });
+
+    const controller = new AbortController();
+    const response = fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"model":"test-model"}',
+      signal: controller.signal,
+    }).catch(() => null);
+    await transformStarted;
+    controller.abort();
+    await response;
+    expect(onRequestSettled).not.toHaveBeenCalled();
+
+    resolveTransform();
+    await vi.waitFor(() => expect(onRequestSettled).toHaveBeenCalledOnce());
+    expect(onRequestSettled).toHaveBeenCalledWith(1);
+  });
+
+  it('fails the client when a response transform rejects during async flush', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"ok":true}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      transformResponse: () => new Transform({
+        transform(chunk, _encoding, callback) {
+          callback(null, chunk);
+        },
+        flush(callback) {
+          setImmediate(() => callback(new Error('response transform flush failed')));
+        },
+      }),
+    });
+
+    const controller = new AbortController();
+    const resultPromise = fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"model":"test-model"}',
+      signal: controller.signal,
+    }).then(async (response) => {
+      await response.text();
+      return 'resolved' as const;
+    }).catch(() => 'rejected' as const);
+    const result = await Promise.race([
+      resultPromise,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000)),
+    ]);
+    controller.abort();
+
+    expect(result).toBe('rejected');
   });
 
   it('jumps out of a Windows excluded-port range after EACCES and cleans listeners', async () => {
@@ -1456,6 +1591,29 @@ describe('anthropic-compat-proxy mixed sync+async transform chain', () => {
     expect(custom.bodies).toHaveLength(1);
     // 抛错的 async transform 被跳过，后续 sync transform 照常执行。
     expect(JSON.parse(custom.bodies[0]).survived).toBe(true);
+  });
+
+  it('rejects locally when a fail-closed request transform throws', async () => {
+    const custom = await startFakeUpstream((_i, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+    const rejectingTransform: RequestTransform = () => {
+      throw new Error('request cannot be adapted safely');
+    };
+    rejectingTransform.errorMode = 'reject-request';
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [rejectingTransform],
+    });
+
+    const response = await post(proxy.url, { model: 'original', input: [] });
+
+    expect(response.status).toBe(502);
+    expect(JSON.parse(response.text)).toMatchObject({ error: { type: 'proxy_error' } });
+    expect(custom.bodies).toHaveLength(0);
   });
 });
 

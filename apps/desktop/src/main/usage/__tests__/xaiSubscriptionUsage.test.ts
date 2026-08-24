@@ -104,13 +104,17 @@ describe('fetchXaiSubscriptionUsageSnapshot', () => {
     })).resolves.toBeNull();
   });
 
-  it('does not replace cache when billing 200 only has a reset time', async () => {
+  it('treats a still-open weekly window without percent as 0% used after reset', async () => {
     const fetchFn = vi.fn(async (url: string) => {
       if (url.includes('/settings')) {
         return jsonResponse(200, { subscription_tier_display: 'SuperGrok Heavy' });
       }
       if (url.includes('format=credits')) {
-        return jsonResponse(200, { config: { currentPeriod: { end: 1_800_000_000 } } });
+        return jsonResponse(200, {
+          config: {
+            currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', end: 1_800_000_000 },
+          },
+        });
       }
       if (url.includes('/user?') || url.includes('/userinfo')) return jsonResponse(200, {});
       return jsonResponse(404, {});
@@ -118,6 +122,70 @@ describe('fetchXaiSubscriptionUsageSnapshot', () => {
     await expect(fetchXaiSubscriptionUsageSnapshot({
       accessToken: 'tok',
       fetchFn: fetchFn as unknown as typeof fetch,
+      now: 1_700_000_000_000,
+    })).resolves.toMatchObject({
+      planLabel: 'SuperGrok Heavy',
+      creditUsagePercent: 0,
+      resetsAt: 1_800_000_000,
+    });
+  });
+
+  it('does not replace cache when weekly percent is present but unparseable', async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes('/settings')) {
+        return jsonResponse(200, { subscription_tier_display: 'SuperGrok Heavy' });
+      }
+      if (url.includes('format=credits')) {
+        return jsonResponse(200, {
+          config: {
+            currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', end: 1_800_000_000 },
+            creditUsagePercent: 'nope',
+          },
+        });
+      }
+      if (url.includes('/user?') || url.includes('/userinfo')) return jsonResponse(200, {});
+      return jsonResponse(404, {});
+    });
+    await expect(fetchXaiSubscriptionUsageSnapshot({
+      accessToken: 'tok',
+      fetchFn: fetchFn as unknown as typeof fetch,
+      now: 1_700_000_000_000,
+    })).resolves.toBeNull();
+  });
+
+  it('does not replace cache when only a future billingPeriodEnd is present', async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes('/settings')) {
+        return jsonResponse(200, { subscription_tier_display: 'SuperGrok Heavy' });
+      }
+      if (url.includes('format=credits')) {
+        return jsonResponse(200, { config: { billingPeriodEnd: 1_800_000_000 } });
+      }
+      if (url.includes('/user?') || url.includes('/userinfo')) return jsonResponse(200, {});
+      return jsonResponse(404, {});
+    });
+    await expect(fetchXaiSubscriptionUsageSnapshot({
+      accessToken: 'tok',
+      fetchFn: fetchFn as unknown as typeof fetch,
+      now: 1_700_000_000_000,
+    })).resolves.toBeNull();
+  });
+
+  it('does not replace cache when the reset time is already in the past and percent is missing', async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes('/settings')) {
+        return jsonResponse(200, { subscription_tier_display: 'SuperGrok Heavy' });
+      }
+      if (url.includes('format=credits')) {
+        return jsonResponse(200, { config: { currentPeriod: { end: 1_600_000_000 } } });
+      }
+      if (url.includes('/user?') || url.includes('/userinfo')) return jsonResponse(200, {});
+      return jsonResponse(404, {});
+    });
+    await expect(fetchXaiSubscriptionUsageSnapshot({
+      accessToken: 'tok',
+      fetchFn: fetchFn as unknown as typeof fetch,
+      now: 1_700_000_000_000,
     })).resolves.toBeNull();
   });
 

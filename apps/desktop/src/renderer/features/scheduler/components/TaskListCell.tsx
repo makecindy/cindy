@@ -155,8 +155,8 @@ export function TaskListCell({
   //     · 没跑过 → "Next in Y"  · 没下一次 → "Last X ago"
   // 用 lastFiredAt（上一次开始时间）而不是 lastFinishedAt：用户更关心"任务上次什么时候被触发"，
   // 而不是"上次跑完是什么时候"。长跑任务在 running 中也能立刻看到 "Last HH:mm"。
-  const lastText = formatLastRun(s.lastFiredAt);
-  const nextText = s.status === 'active' ? formatNextRun(s.nextFireAt) : null;
+  const lastText = formatLastRun(s.lastFiredAt, Date.now(), t);
+  const nextText = s.status === 'active' ? formatNextRun(s.nextFireAt, Date.now(), t) : null;
   let subtitle: string | null;
   if (queuedForSession) {
     // 排在目标会话队列里等派发 —— 比"没抢到执行槽"更靠前判定:这一轮已经触发过了，

@@ -15,6 +15,12 @@ export function ghostInstallErrorKey(code: string | undefined): string {
       return 'settings.ghosts.errors.commandConflict';
     case 'GHOST_ID_RESERVED':
       return 'settings.ghosts.errors.idReserved';
+    case 'GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED':
+      return 'settings.ghosts.errors.brokerManualInstallNotAuthorized';
+    case 'GHOST_BROKER_NOT_AUTHORIZED':
+      return 'settings.ghosts.errors.brokerNotAuthorized';
+    case 'GHOST_BROKER_REDIRECT_PORT_REQUIRED':
+      return 'settings.ghosts.errors.brokerRedirectPortRequired';
     case 'NOT_FOUND':
       return 'settings.ghosts.errors.sourceMissing';
     // 批准状态相关的前置条件失败在这条链路上只有一种下一步动作:重新确认权限。
