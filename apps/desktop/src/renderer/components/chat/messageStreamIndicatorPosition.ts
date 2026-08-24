@@ -5,6 +5,7 @@ const COMPOSER_GAP_PX = 6;
 
 const COMPOSER_STACK_SELECTOR = '[data-chat-composer-stack]';
 const COMPOSER_CENTER_GROUP_SELECTOR = '[data-composer-center-group]';
+const PLAN_FLYOUT_SELECTOR = '[data-plan-flyout-positioner="composer"]';
 
 export function resolveMessageStreamIndicatorBottomOffset({
   bottomPadding,
@@ -39,20 +40,27 @@ export function measureMessageStreamIndicatorClearanceOffset(
     const centerGroupRect = centerGroup.getBoundingClientRect();
     if (centerGroupRect.height > 0) clearanceTop = Math.min(clearanceTop, centerGroupRect.top);
   }
+  const planFlyout = overlayEl.querySelector<HTMLElement>(PLAN_FLYOUT_SELECTOR);
+  if (planFlyout) {
+    const planFlyoutRect = planFlyout.getBoundingClientRect();
+    if (planFlyoutRect.height > 0) clearanceTop = Math.min(clearanceTop, planFlyoutRect.top);
+  }
 
   return overlayEl.getBoundingClientRect().bottom - clearanceTop;
 }
 
 /**
  * The center group can gain or lose a plan while the outer overlay keeps the
- * same height (the running-status row already owns that grid row). Observe the
- * inner geometry as well so the clearance is refreshed in that case.
+ * same height (the running-status row already owns that grid row). The plan
+ * flyout is absolutely positioned, so observe it directly after it mounts.
  */
 export function getMessageStreamIndicatorResizeTargets(overlayEl: HTMLElement): HTMLElement[] {
   const targets = [overlayEl];
   const composerStack = overlayEl.querySelector<HTMLElement>(COMPOSER_STACK_SELECTOR);
   const centerGroup = overlayEl.querySelector<HTMLElement>(COMPOSER_CENTER_GROUP_SELECTOR);
+  const planFlyout = overlayEl.querySelector<HTMLElement>(PLAN_FLYOUT_SELECTOR);
   if (composerStack) targets.push(composerStack);
   if (centerGroup) targets.push(centerGroup);
+  if (planFlyout) targets.push(planFlyout);
   return targets;
 }

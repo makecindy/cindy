@@ -1314,12 +1314,31 @@ export function CCAgentSessionView({
       setOverlayHeight(overlayEl.offsetHeight);
       setBottomCenterClearanceOffset(measureMessageStreamIndicatorClearanceOffset(overlayEl));
     };
-    // Seed with the current height so the first paint after remount uses the
-    // real value (not the stale state from the previous mount).
-    measureOverlay();
     const ro = new ResizeObserver(measureOverlay);
-    for (const target of getMessageStreamIndicatorResizeTargets(overlayEl)) ro.observe(target);
-    return () => ro.disconnect();
+    let observedTargets = new Set<HTMLElement>();
+    const syncResizeTargetsAndMeasure = () => {
+      const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
+      for (const target of observedTargets) {
+        if (!nextTargets.has(target)) ro.unobserve(target);
+      }
+      for (const target of nextTargets) {
+        if (!observedTargets.has(target)) ro.observe(target);
+      }
+      observedTargets = nextTargets;
+      measureOverlay();
+    };
+
+    // Seed with the current geometry so the first paint after remount does not
+    // reuse stale state. The plan flyout is absolutely positioned and mounts
+    // only on hover/click, so its insertion does not resize the center group;
+    // resync observed targets whenever that subtree changes.
+    syncResizeTargetsAndMeasure();
+    const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);
+    mutationObserver.observe(overlayEl, { childList: true, subtree: true });
+    return () => {
+      mutationObserver.disconnect();
+      ro.disconnect();
+    };
   }, [overlayEl]);
 
   // F-FP-5: 点击 workingDir → 在系统文件管理器里直接打开目录(复用 shell:open-path IPC)。
