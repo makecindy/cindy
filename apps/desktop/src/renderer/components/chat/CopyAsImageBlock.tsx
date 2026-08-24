@@ -4,8 +4,8 @@
  * 与 CodeBlockPre / MarkdownMermaidBlock 同一套 hover 工具栏配方(右上角
  * `h-7 w-7` 图标按钮、group-hover 显隐、Check 1.5s 反馈)。内容经
  * `domToPngBlob`(html-to-image foreignObject 序列化)光栅化:
- *   - 外层 `group relative` 承载完整高度的 sticky 工具栏,内层内容用负上边距回叠;
- *     工具栏挂在 overflow 容器内会被裁剪并随横向滚动漂移;
+ *   - 外层 `group relative` 承载完整高度的 sticky 工具栏,内容包装层用负上边距回叠;
+ *     导出目标本身不带布局偏移,工具栏也不会因挂在 overflow 容器内被裁剪或随横向滚动漂移;
  *   - 光栅化目标是内层内容节点,`scrollWidth` 取完整内容宽,宽表格不被可视
  *     口截断;
  *   - 标注入口仅在聊天会话上下文出现(useCopyAsImage.canAnnotate)。
@@ -89,8 +89,10 @@ export function CopyAsImageBlock({
 
   return (
     <div className={cn('group relative flex flex-col', className)}>
-      <div ref={contentRef} className={cn('-mt-9', contentClassName)}>
-        {children}
+      <div className="-mt-9">
+        <div ref={contentRef} className={contentClassName}>
+          {children}
+        </div>
       </div>
       <div
         className={cn(

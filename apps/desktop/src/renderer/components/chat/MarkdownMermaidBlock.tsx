@@ -204,59 +204,61 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
 
   return (
     <div ref={blockRef} className="group relative my-3 flex flex-col">
-      {showSourceView ? (
-        <pre
-          className={cn(
-            '-mt-9 overflow-x-auto rounded-[12px]',
-            'border border-[var(--msg-code-block-border)]',
-            'bg-[var(--msg-code-block-bg)]',
-            'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-            'select-text',
-          )}
-        >
-          <code className="language-mermaid">{raw}</code>
-        </pre>
-      ) : svg != null ? (
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => setLightboxOpen(true)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              setLightboxOpen(true);
-            }
-          }}
-          aria-label={t('chat.mermaid.clickToZoom')}
-          title={t('chat.mermaid.clickToZoom')}
-          className={cn(
-            '-mt-9 overflow-x-auto rounded-[12px]',
-            'border border-[var(--msg-code-block-border)]',
-            'bg-[var(--msg-code-block-bg)]',
-            'p-4 flex justify-center cursor-zoom-in',
-            // With mermaid's useMaxWidth disabled, SVG carries its intrinsic
-            // width/height. Cap both axes so an oversized diagram shrinks to
-            // fit (preserving aspect ratio via the SVG's viewBox) without
-            // dominating the viewport — fine detail lives in the lightbox.
-            '[&>svg]:!max-w-full [&>svg]:!max-h-[60vh] [&>svg]:!h-auto [&>svg]:!w-auto',
-          )}
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-      ) : (
-        // Initial load (mermaid chunk in flight) — show a quiet placeholder
-        // matching the code-block frame so layout doesn't jump.
-        <pre
-          className={cn(
-            '-mt-9 overflow-x-auto rounded-[12px]',
-            'border border-[var(--msg-code-block-border)]',
-            'bg-[var(--msg-code-block-bg)]',
-            'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-            'select-text opacity-60',
-          )}
-        >
-          <code className="language-mermaid">{raw}</code>
-        </pre>
-      )}
+      <div className="-mt-9">
+        {showSourceView ? (
+          <pre
+            className={cn(
+              'overflow-x-auto rounded-[12px]',
+              'border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)]',
+              'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
+              'select-text',
+            )}
+          >
+            <code className="language-mermaid">{raw}</code>
+          </pre>
+        ) : svg != null ? (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setLightboxOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setLightboxOpen(true);
+              }
+            }}
+            aria-label={t('chat.mermaid.clickToZoom')}
+            title={t('chat.mermaid.clickToZoom')}
+            className={cn(
+              'overflow-x-auto rounded-[12px]',
+              'border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)]',
+              'p-4 flex justify-center cursor-zoom-in',
+              // With mermaid's useMaxWidth disabled, SVG carries its intrinsic
+              // width/height. Cap both axes so an oversized diagram shrinks to
+              // fit (preserving aspect ratio via the SVG's viewBox) without
+              // dominating the viewport — fine detail lives in the lightbox.
+              '[&>svg]:!max-w-full [&>svg]:!max-h-[60vh] [&>svg]:!h-auto [&>svg]:!w-auto',
+            )}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        ) : (
+          // Initial load (mermaid chunk in flight) — show a quiet placeholder
+          // matching the code-block frame so layout doesn't jump.
+          <pre
+            className={cn(
+              'overflow-x-auto rounded-[12px]',
+              'border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)]',
+              'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
+              'select-text opacity-60',
+            )}
+          >
+            <code className="language-mermaid">{raw}</code>
+          </pre>
+        )}
+      </div>
 
       {error != null && svg == null ? (
         <div

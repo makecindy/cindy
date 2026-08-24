@@ -436,9 +436,9 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
  * CodeBlockPre — fenced code block with a hover-revealed copy button that
  * sticks to the visible top-right corner while the message scrolls. The
  * button reads `innerText` from the live <pre>, so it always copies the latest
- * text even mid-stream. The content's negative top margin overlaps the full
- * height sticky row, keeping the button inside the block's bottom edge without
- * adding layout space. Group-hover keeps it out of the way until needed.
+ * text even mid-stream. The content wrapper's negative top margin overlaps the
+ * full height sticky row, keeping the button inside the block's bottom edge
+ * without adding layout space. Group-hover keeps it out of the way until needed.
  */
 function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
   const { t } = useTranslation();
@@ -492,21 +492,23 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         </button>
       </div>
-      <pre
-        ref={preRef}
-        className={cn(
-          '-mt-9 rounded-[12px]',
-          'border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)]',
-          'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-          'select-text',
-          // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
-          'whitespace-pre-wrap break-all',
-        )}
-        {...props}
-      >
-        {children}
-      </pre>
+      <div className="-mt-9">
+        <pre
+          ref={preRef}
+          className={cn(
+            'rounded-[12px]',
+            'border border-[var(--msg-code-block-border)]',
+            'bg-[var(--msg-code-block-bg)]',
+            'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
+            'select-text',
+            // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
+            'whitespace-pre-wrap break-all',
+          )}
+          {...props}
+        >
+          {children}
+        </pre>
+      </div>
     </div>
   );
 }

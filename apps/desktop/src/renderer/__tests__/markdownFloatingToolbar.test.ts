@@ -38,12 +38,16 @@ describe('Markdown block floating toolbars', () => {
     expect(source.indexOf('pointer-events-none sticky top-0')).toBeLessThan(
       source.indexOf('ref={preRef}'),
     );
+    expect(source).toContain('<div className="-mt-9">');
+    expect(source).not.toContain("'-mt-9 rounded-[12px]'");
   });
 
   it('keeps the copy-as-image toolbar outside its horizontal overflow node', () => {
     const source = sources.copyableBlock;
     expect(source).toContain("cn('group relative flex flex-col', className)");
-    expect(source).toContain("cn('-mt-9', contentClassName)");
+    expect(source).toContain('<div className="-mt-9">');
+    expect(source).toContain('ref={contentRef} className={contentClassName}');
+    expect(source).not.toContain("cn('-mt-9', contentClassName)");
     expect(source).toContain('pointer-events-none order-first sticky top-0');
   });
 
@@ -51,6 +55,6 @@ describe('Markdown block floating toolbars', () => {
     const source = sources.mermaid;
     expect(source).toContain('group relative my-3 flex flex-col');
     expect(source).toContain('pointer-events-none order-first sticky top-0');
-    expect(source.match(/'-mt-9 overflow-x-auto rounded-\[12px\]'/g)).toHaveLength(3);
+    expect(source.match(/<div className="-mt-9">/g)).toHaveLength(1);
   });
 });
