@@ -863,7 +863,10 @@ import {
   isLocalSessionBusy,
 } from '../maker-host/codex-credential-switch.js';
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
-import { applyRuntimeSelectionAxesWithRecovery } from './runtimeSelectionAxes.js';
+import {
+  applyRuntimeSelectionAxesWithRecovery,
+  commitRuntimeAxisAfterPersistence,
+} from './runtimeSelectionAxes.js';
 import {
   acceptSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
@@ -873,6 +876,7 @@ import {
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordRecoveredSessionRuntimeMutation,
+  recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes,
@@ -14729,6 +14733,54 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setSessionEffort(sessionId, previousRuntime.effort);
         setSessionFastMode(sessionId, previousRuntime.fastMode);
       };
+      const reconcileRetainedLiveProfile = async (
+        effort: SessionRuntimeProfile['effort'],
+        fastMode: boolean,
+      ): Promise<void> => {
+        const retainedSession = maker.getSession(sessionId);
+        if (!retainedSession || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+          return;
+        }
+        const retainedProfile: SessionRuntimeProfile = {
+          agentKind: retainedSession.agentKind,
+          model: retainedSession.model,
+          providerId:
+            effectiveProviderId === undefined
+              ? (previousRuntime.providerId ?? null)
+              : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+          effort,
+          fastMode,
+        };
+        if (effectiveProviderId !== undefined) {
+          setSessionProvider(sessionId, retainedProfile.providerId);
+        }
+        setSessionEffort(sessionId, retainedProfile.effort);
+        setSessionFastMode(sessionId, retainedProfile.fastMode);
+        pendingCredentialSwitchHolder?.clear(sessionId);
+        if (internalOptions.source === 'user') {
+          recordRecoveredSessionRuntimeMutation(sessionId, retainedProfile);
+        } else {
+          acceptSessionRuntimeMutation({
+            sessionId,
+            source: internalOptions.source,
+            previousProfile: internalOptions.previousProfile,
+            profile: retainedProfile,
+            deferred: false,
+          });
+        }
+        agentSwitchPending.clear(sessionId);
+        broadcastSessionPatched(sessionId, {
+          agentSwitchIntent: null,
+          agentSwitchIntentCanceled: true,
+        });
+        wakeSessionInputAfterCredentialSwitch(sessionId);
+        await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+          log.debug('recovered runtime projection broadcast failed', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      };
       try {
         const result = await applyRuntimeSetModelChange({
           maker,
@@ -14792,6 +14844,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               restoreControlStores,
               terminateSession: () =>
                 withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId)),
+              recoverLiveProfileAfterTerminationFailure: () =>
+                reconcileRetainedLiveProfile(
+                  previousRuntime.effort ?? null,
+                  previousRuntime.fastMode,
+                ),
             });
           } else {
             commitControlStores();
@@ -14846,43 +14903,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               wakeSessionInputAfterCredentialSwitch(sessionId);
             }
             if (recoveryError) {
-              const retainedSession = maker.getSession(sessionId);
-              if (
-                retainedSession &&
-                sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)
-              ) {
-                const retainedProfile: SessionRuntimeProfile = {
-                  agentKind: retainedSession.agentKind,
-                  model: retainedSession.model,
-                  providerId:
-                    effectiveProviderId === undefined
-                      ? (previousRuntime.providerId ?? null)
-                      : (normalizeSessionProviderId(effectiveProviderId) ?? null),
-                  effort: atomicSelection
-                    ? atomicSelection.effort
-                    : (previousRuntime.effort ?? null),
-                  fastMode: atomicSelection?.fastMode ?? previousRuntime.fastMode,
-                };
-                if (effectiveProviderId !== undefined) {
-                  setSessionProvider(sessionId, retainedProfile.providerId);
-                }
-                setSessionEffort(sessionId, retainedProfile.effort);
-                setSessionFastMode(sessionId, retainedProfile.fastMode);
-                pendingCredentialSwitchHolder?.clear(sessionId);
-                recordRecoveredSessionRuntimeMutation(sessionId, retainedProfile);
-                agentSwitchPending.clear(sessionId);
-                broadcastSessionPatched(sessionId, {
-                  agentSwitchIntent: null,
-                  agentSwitchIntentCanceled: true,
-                });
-                wakeSessionInputAfterCredentialSwitch(sessionId);
-                await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
-                  log.debug('recovered runtime projection broadcast failed', {
-                    sessionId,
-                    error: error instanceof Error ? error.message : String(error),
-                  });
-                });
-              }
+              await reconcileRetainedLiveProfile(
+                atomicSelection ? atomicSelection.effort : (previousRuntime.effort ?? null),
+                atomicSelection?.fastMode ?? previousRuntime.fastMode,
+              );
               throw new AggregateError(
                 [persistenceError, recoveryError],
                 'runtime selection persistence and session recovery both failed',
@@ -15030,6 +15054,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel);
 
+  const recoverRemoteRuntimeAxisPersistence = async (
+    sessionId: string,
+    previousProfile: SessionRuntimeProfile,
+    patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,
+  ): Promise<void> => {
+    try {
+      await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+    } catch (recoveryError) {
+      const retainedSession = maker.getSession(sessionId);
+      if (retainedSession) {
+        const retainedProfile: SessionRuntimeProfile = {
+          ...previousProfile,
+          agentKind: retainedSession.agentKind,
+          model: retainedSession.model,
+          ...patch,
+        };
+        if (patch.effort !== undefined) {
+          setSessionEffort(sessionId, patch.effort);
+        }
+        if (patch.fastMode !== undefined) {
+          setSessionFastMode(sessionId, patch.fastMode);
+        }
+        recordRecoveredSessionRuntimeAxisMutation(sessionId, retainedProfile);
+        await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+          log.debug('recovered runtime axis projection broadcast failed', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      throw recoveryError;
+    }
+  };
+
   ipcMain.handle(MAKER_INVOKE.SET_EFFORT, async (event, sessionId: unknown, effort: unknown) => {
     // 轮 24-I3 HIGH:会话变更型 IPC 统一 sender 校验(对齐 SET_PERMISSION_MODE)——
     // 任意 WebView/受污染页面不得修改活会话偏好。device-link 远程控制端已授权。
@@ -15039,13 +15097,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof effort !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
     }
+    const remoteInvoke = isDeviceLinkInvoke();
+    const remoteResponse = remoteInvoke ? {} : undefined;
+    const persistEffort = async () => {
+      if (!remoteResponse) return;
+      await persistSessionFields(sessionId, { effort });
+      markRemoteSettingPersistedInsideHandler(remoteResponse);
+    };
     const applyEffort = async () => {
       const [runtimeStatus] = await getDbClient()
         .drizzle.select({ status: sessions.status })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      if (!runtimeStatus) return;
+      if (!runtimeStatus) {
+        if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
+        return remoteResponse;
+      }
       if (runtimeStatus.status !== 'active') {
         throwIpcError(
           'PRECONDITION_FAILED',
@@ -15062,9 +15130,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       const sess = maker.getSession(sessionId);
       if (!sess) {
-        commitEffort();
+        await commitRuntimeAxisAfterPersistence({ persist: persistEffort, commit: commitEffort });
         log.debug('set-effort: session not found, no-op', { sessionId });
-        return;
+        return remoteResponse;
       }
       // 有 pending 凭证切换 = 本会话的 model/effort 变更已整体延迟到 turn 结束重建:
       // 跳过对仍在跑的旧 turn 的 runtime 推送(与 renderer 本地分支的 deferred 守卫同因,
@@ -15072,11 +15140,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 持久化不受影响:本地由 renderer sessionService.update 落盘,远程由 device-link
       // dispatch 的 persistRemoteSetting 按请求值落被控端 DB,重建时生效。
       if (pendingCredentialSwitchHolder?.has(sessionId)) {
-        commitEffort();
+        await commitRuntimeAxisAfterPersistence({ persist: persistEffort, commit: commitEffort });
         log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
-        return;
+        return remoteResponse;
       }
       try {
+        const previousProfile = remoteInvoke
+          ? (await readSessionRuntimeProfiles(sessionId))?.effective
+          : undefined;
         const result = await applyRuntimeEffortWithRecovery({
           applyRuntime: () =>
             sess.setEffort(
@@ -15089,7 +15160,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             sessionId,
           });
         }
-        commitEffort();
+        await commitRuntimeAxisAfterPersistence({
+          persist: persistEffort,
+          commit: commitEffort,
+          ...(remoteInvoke && result === 'applied' && previousProfile
+            ? {
+                recoverAfterPersistenceFailure: () =>
+                  recoverRemoteRuntimeAxisPersistence(sessionId, previousProfile, {
+                    effort: effort as SessionRuntimeProfile['effort'],
+                  }),
+              }
+            : {}),
+        });
+        return remoteResponse;
       } catch (error) {
         log.warn('set-effort runtime update failed', {
           sessionId,
@@ -15415,13 +15498,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof sessionId !== 'string' || typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
+      const remoteInvoke = isDeviceLinkInvoke();
+      const remoteResponse = remoteInvoke ? {} : undefined;
+      const persistFastMode = async () => {
+        if (!remoteResponse) return;
+        await persistSessionFields(sessionId, { fastMode: enabled });
+        markRemoteSettingPersistedInsideHandler(remoteResponse);
+      };
       const applyFastMode = async () => {
         const [runtimeStatus] = await getDbClient()
           .drizzle.select({ status: sessions.status })
           .from(sessions)
           .where(eq(sessions.id, sessionId))
           .limit(1);
-        if (!runtimeStatus) return;
+        if (!runtimeStatus) {
+          if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
+          return remoteResponse;
+        }
         if (runtimeStatus.status !== 'active') {
           throwIpcError(
             'PRECONDITION_FAILED',
@@ -15436,34 +15529,61 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
         const sess = maker.getSession(sessionId);
         if (!sess) {
-          commitFastMode();
+          await commitRuntimeAxisAfterPersistence({
+            persist: persistFastMode,
+            commit: commitFastMode,
+          });
           log.debug('set-fast-mode: session not found, no-op', { sessionId });
-          return;
+          return remoteResponse;
         }
         if (sess.agentKind === 'pi') {
           // Pi 的 ChatGPT 请求不从 pi 请求体携带 Fast，而是由上面的 session store
           // 在 compat-proxy 决策点闭包进 responses bridge prefs。到这里已经即时生效，
           // 无需向 pi RPC 再发一份不存在的 set_fast_mode 控制命令。
-          commitFastMode();
+          await commitRuntimeAxisAfterPersistence({
+            persist: persistFastMode,
+            commit: commitFastMode,
+          });
           log.debug('set-fast-mode: pi responses bridge state updated', { sessionId, enabled });
-          return;
+          return remoteResponse;
         }
         if (sess.agentKind !== 'codex') {
-          commitFastMode();
+          await commitRuntimeAxisAfterPersistence({
+            persist: persistFastMode,
+            commit: commitFastMode,
+          });
           log.debug('set-fast-mode: agent does not implement fast mode, no-op', {
             sessionId,
             agentKind: sess.agentKind,
           });
-          return;
+          return remoteResponse;
         }
         // 同 set-effort:pending 凭证切换期间不触碰仍在跑的旧 turn,持久化走各自 DB 路径。
         if (pendingCredentialSwitchHolder?.has(sessionId)) {
-          commitFastMode();
+          await commitRuntimeAxisAfterPersistence({
+            persist: persistFastMode,
+            commit: commitFastMode,
+          });
           log.debug('set-fast-mode: skipped live push (pending credential switch)', { sessionId });
-          return;
+          return remoteResponse;
         }
+        const previousProfile = remoteInvoke
+          ? (await readSessionRuntimeProfiles(sessionId))?.effective
+          : undefined;
         await sess.setFastMode(enabled);
-        commitFastMode();
+        await commitRuntimeAxisAfterPersistence({
+          persist: persistFastMode,
+          commit: commitFastMode,
+          ...(remoteInvoke && previousProfile
+            ? {
+                recoverAfterPersistenceFailure: () =>
+                  recoverRemoteRuntimeAxisPersistence(sessionId, previousProfile, {
+                    fastMode: enabled,
+                  }),
+              }
+            : {}),
+        });
+        return remoteResponse;
       };
       return withSendToSessionLock(sessionId, async () => {
         await assertReviewSettingsUnlocked(sessionId);

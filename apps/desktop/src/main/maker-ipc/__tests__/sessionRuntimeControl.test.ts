@@ -10,6 +10,7 @@ import {
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordRecoveredSessionRuntimeMutation,
+  recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes,
@@ -170,6 +171,27 @@ describe('session runtime control state', () => {
       visitedRoutes: [],
     });
     expect(sessionRuntimeGenerationMatches(sessionId, observedGeneration)).toBe(false);
+  });
+
+  it('records an unavoidable live axis while preserving a deferred route', () => {
+    const sessionId = 'runtime-axis-recovery';
+    const pending = { ...current, model: 'gpt-next', providerId: 'xd' };
+    const pendingGeneration = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: pending,
+      deferred: true,
+    });
+    const live = { ...current, effort: 'high' as const };
+
+    const generation = recordRecoveredSessionRuntimeAxisMutation(sessionId, live);
+
+    expect(generation).toBe(pendingGeneration + 1);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      effectiveOverride: live,
+      pending: { generation, source: 'agent', profile: pending },
+    });
   });
 
   it('clears one terminal session without disturbing another runtime override', () => {

@@ -13,6 +13,39 @@ export interface ApplyRuntimeSelectionAxesWithRecoveryInput {
   commitControlStores: () => void;
   restoreControlStores: () => void;
   terminateSession: () => Promise<void>;
+  recoverLiveProfileAfterTerminationFailure?: () => void | Promise<void>;
+}
+
+export interface CommitRuntimeAxisAfterPersistenceInput {
+  persist: () => Promise<void>;
+  commit: () => void;
+  recoverAfterPersistenceFailure?: () => Promise<void>;
+}
+
+/**
+ * A Device Link axis change is not accepted until the controlled Desktop has
+ * persisted its baseline. If persistence rejects after the live RPC succeeded,
+ * retire or reconcile that Session before reporting the failed invoke.
+ */
+export async function commitRuntimeAxisAfterPersistence(
+  input: CommitRuntimeAxisAfterPersistenceInput,
+): Promise<void> {
+  try {
+    await input.persist();
+  } catch (persistenceError) {
+    if (input.recoverAfterPersistenceFailure) {
+      try {
+        await input.recoverAfterPersistenceFailure();
+      } catch (recoveryError) {
+        throw new AggregateError(
+          [persistenceError, recoveryError],
+          'runtime axis persistence and session recovery both failed',
+        );
+      }
+    }
+    throw persistenceError;
+  }
+  input.commit();
 }
 
 /**
@@ -35,6 +68,7 @@ export async function applyRuntimeSelectionAxesWithRecovery(
       await input.terminateSession();
     } catch (terminationError) {
       input.restoreControlStores();
+      await input.recoverLiveProfileAfterTerminationFailure?.();
       throw terminationError;
     }
     input.commitControlStores();

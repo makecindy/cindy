@@ -112,6 +112,24 @@ export function recordRecoveredSessionRuntimeMutation(
   return state.generation;
 }
 
+/**
+ * A user axis RPC reached the live Session but its baseline persistence and
+ * compensating close both failed. Keep the observed live profile explicit while
+ * preserving any earlier accepted deferred route.
+ */
+export function recordRecoveredSessionRuntimeAxisMutation(
+  sessionId: string,
+  profile: SessionRuntimeProfile,
+): number {
+  const state = stateFor(sessionId);
+  state.generation += 1;
+  state.effectiveOverride = profile;
+  if (state.pending) {
+    state.pending = { ...state.pending, generation: state.generation };
+  }
+  return state.generation;
+}
+
 export function recordUserSessionRuntimeAxisMutation(
   sessionId: string,
   patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,

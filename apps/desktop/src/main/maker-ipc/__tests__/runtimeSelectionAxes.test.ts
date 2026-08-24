@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { applyRuntimeSelectionAxesWithRecovery } from '../runtimeSelectionAxes.js';
+import {
+  applyRuntimeSelectionAxesWithRecovery,
+  commitRuntimeAxisAfterPersistence,
+} from '../runtimeSelectionAxes.js';
 
 describe('applyRuntimeSelectionAxesWithRecovery', () => {
   it('commits the control stores only after every live axis succeeds', async () => {
@@ -62,6 +65,7 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     const terminationError = new Error('close rejected');
     const commitControlStores = vi.fn();
     const restoreControlStores = vi.fn();
+    const recoverLiveProfileAfterTerminationFailure = vi.fn();
 
     await expect(
       applyRuntimeSelectionAxesWithRecovery({
@@ -74,6 +78,7 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
         fastMode: false,
         commitControlStores,
         restoreControlStores,
+        recoverLiveProfileAfterTerminationFailure,
         terminateSession: vi.fn(async () => {
           throw terminationError;
         }),
@@ -81,7 +86,37 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     ).rejects.toBe(terminationError);
 
     expect(restoreControlStores).toHaveBeenCalledOnce();
+    expect(recoverLiveProfileAfterTerminationFailure).toHaveBeenCalledOnce();
     expect(commitControlStores).not.toHaveBeenCalled();
+  });
+
+  it('commits an axis only after persistence succeeds', async () => {
+    const order: string[] = [];
+    await commitRuntimeAxisAfterPersistence({
+      persist: async () => {
+        order.push('persist');
+      },
+      commit: () => order.push('commit'),
+    });
+    expect(order).toEqual(['persist', 'commit']);
+  });
+
+  it('recovers the live axis without committing when persistence fails', async () => {
+    const persistenceError = new Error('sqlite rejected');
+    const order: string[] = [];
+    await expect(
+      commitRuntimeAxisAfterPersistence({
+        persist: async () => {
+          order.push('persist');
+          throw persistenceError;
+        },
+        commit: () => order.push('commit'),
+        recoverAfterPersistenceFailure: async () => {
+          order.push('recover');
+        },
+      }),
+    ).rejects.toBe(persistenceError);
+    expect(order).toEqual(['persist', 'recover']);
   });
 
   it('restores the old stores and retires a partially-mutated session on axis failure', async () => {

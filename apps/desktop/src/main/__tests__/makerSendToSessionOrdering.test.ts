@@ -515,10 +515,8 @@ describe('sendToSession ordering', () => {
       'setSessionFastMode(sessionId, selectionToCommit.fastMode);',
       'await persistSessionFields(sessionId, patch);',
     );
-    expectOrder(
-      setModelBlock,
-      'await persistSessionFields(sessionId, patch);',
-      'agentSwitchPending.clear(sessionId);',
+    expect(setModelBlock.lastIndexOf('agentSwitchPending.clear(sessionId);')).toBeGreaterThan(
+      setModelBlock.indexOf('await persistSessionFields(sessionId, patch);'),
     );
     expectOrder(
       setModelBlock,

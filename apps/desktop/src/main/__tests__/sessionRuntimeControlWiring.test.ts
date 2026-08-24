@@ -98,12 +98,21 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
 
-    expect(effort.lastIndexOf('commitEffort();')).toBeGreaterThan(
+    expect(effort.lastIndexOf('commit: commitEffort')).toBeGreaterThan(
       effort.indexOf('await applyRuntimeEffortWithRecovery({'),
     );
-    expect(fast.lastIndexOf('commitFastMode();')).toBeGreaterThan(
+    expect(fast.lastIndexOf('commit: commitFastMode')).toBeGreaterThan(
       fast.indexOf('await sess.setFastMode(enabled);'),
     );
+    for (const [body, persist, commit] of [
+      [effort, 'persist: persistEffort', 'commit: commitEffort'],
+      [fast, 'persist: persistFastMode', 'commit: commitFastMode'],
+    ] as const) {
+      expect(body).toContain('commitRuntimeAxisAfterPersistence({');
+      expect(body.indexOf(persist)).toBeLessThan(body.indexOf(commit));
+      expect(body).toContain('markRemoteSettingPersistedInsideHandler(remoteResponse);');
+      expect(body).toContain('recoverRemoteRuntimeAxisPersistence(sessionId');
+    }
   });
 
   it('rejects terminal tasks inside the shared route lock before runtime mutations', () => {
@@ -131,8 +140,8 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
     for (const [body, commit] of [
-      [effort, 'commitEffort();'],
-      [fast, 'commitFastMode();'],
+      [effort, 'commit: commitEffort'],
+      [fast, 'commit: commitFastMode'],
     ] as const) {
       const terminalGuard = body.indexOf("runtimeStatus.status !== 'active'");
       expect(terminalGuard).toBeGreaterThan(-1);
