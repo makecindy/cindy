@@ -95,6 +95,7 @@ import {
   runSessionPendingInteractionsSnapshotSingleFlight,
   runSessionProjectionSnapshotSingleFlight,
 } from '@/device-link/sessionSnapshotSingleFlight';
+import { createTransientTopicSubscriptionCoordinator } from '@/device-link/transientTopicSubscription';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -1590,6 +1591,20 @@ export default function SessionScreen() {
   const [readAckSyncedKey, setReadAckSyncedKey] = useState<string | null>(null);
   const readAckEpochRef = useRef(connectionEpoch);
   readAckEpochRef.current = connectionEpoch;
+  // 后台订阅重试不能越过任务/设备/连接代切换，也不能在页面卸载后把已清理的 owner
+  // 重新登记回来。render 阶段先发布最新 identity；旧 effect 的 cleanup 只清自己。
+  const sessionSubscriptionIdentity = JSON.stringify([deviceId, sessionId, connectionEpoch]);
+  const sessionSubscriptionIdentityRef = useRef<string | null>(sessionSubscriptionIdentity);
+  sessionSubscriptionIdentityRef.current = sessionSubscriptionIdentity;
+  useEffect(() => () => {
+    if (sessionSubscriptionIdentityRef.current === sessionSubscriptionIdentity) {
+      sessionSubscriptionIdentityRef.current = null;
+    }
+  }, [sessionSubscriptionIdentity]);
+  const sessionsSubscriptionCoordinatorRef = useRef<ReturnType<
+    typeof createTransientTopicSubscriptionCoordinator
+  > | null>(null);
+  sessionsSubscriptionCoordinatorRef.current ??= createTransientTopicSubscriptionCoordinator();
   // 门槛代号:每次「作废门槛」(原地切 session / liveAttention 上升沿)都递增。
   // sync 尾部只有代号与自己启动时一致才允许落 key——否则 A→B→A 场景下,visit-1
   // 的在途旧 load 会在重置之后用**相同的** `${sessionId}:${connectionEpoch}` 把门槛
@@ -3643,6 +3658,15 @@ export default function SessionScreen() {
     // 旧连接代的 in-flight load 若在尾部读 ref 的最新值,会把旧窗口数据标成新代已同步,
     // 抢在排队的 resync 之前放行回执。开始时捕获则旧 load 落的是旧代 key,门槛不放行。
     const readAckEpochAtStart = readAckEpochRef.current;
+    const subscriptionIdentityAtStart = JSON.stringify([
+      deviceId,
+      sessionId,
+      readAckEpochAtStart,
+    ]);
+    const subscriptionRetryIsStale = () => (
+      syncRun.isStale()
+      || sessionSubscriptionIdentityRef.current !== subscriptionIdentityAtStart
+    );
     // 门槛代号同理在开始时捕获:切会话 / attention 上升沿会递增代号,启动更早的
     // in-flight load 在尾部发现代号已变,放弃落 key(它的数据不含触发点之后的内容)。
     const readAckGateGenAtStart = readAckGateGenRef.current;
@@ -3656,8 +3680,17 @@ export default function SessionScreen() {
       && storedSessionAtStart !== null;
     const prepareLinkAndSubscription = async () => {
       await withTransientRemoteRetry(() => openLink(deviceId));
-      // subscribe 只负责之后的实时推送,不该挡数据读;失败不影响 open,重连 rehydration 会补订阅。
-      void subscribe(`session:${sessionId}`, deviceId, ['sessions']).catch(() => undefined);
+      if (subscriptionRetryIsStale()) return;
+      // sessions topic 只负责之后的实时推送,不挡快照读。自己在后台
+      // 处理瞬时 route / ACK 失败;重试前重开 peer link,不再等未来 rehydrate 碰运气。
+      void sessionsSubscriptionCoordinatorRef.current?.start({
+        identity: subscriptionIdentityAtStart,
+        isStale: subscriptionRetryIsStale,
+        reopenLink: async () => {
+          await openLink(deviceId);
+        },
+        subscribe: () => subscribe(`session:${sessionId}`, deviceId, ['sessions']),
+      });
     };
     const retryRead = <T,>(read: () => Promise<T>): Promise<T> => {
       let attempt = 0;
