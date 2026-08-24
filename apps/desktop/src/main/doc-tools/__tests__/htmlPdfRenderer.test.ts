@@ -27,9 +27,11 @@ interface FakeWindowOptions {
 class FakeSession extends EventEmitter {
   permissionRequestHandler: ((...args: any[]) => void) | undefined;
   permissionCheckHandler: ((...args: any[]) => boolean) | undefined;
-  beforeRequestHandler: ((details: { url: string }, callback: (response: { cancel: boolean }) => void) => void) | undefined;
+  beforeRequestHandler:
+    | ((details: { url: string; resourceType?: string }, callback: (response: { cancel: boolean }) => void) => void)
+    | undefined;
   webRequest = {
-    onBeforeRequest: vi.fn((handler: (details: { url: string }, callback: (response: { cancel: boolean }) => void) => void) => {
+    onBeforeRequest: vi.fn((handler: (details: { url: string; resourceType?: string }, callback: (response: { cancel: boolean }) => void) => void) => {
       this.beforeRequestHandler = handler;
     }),
   };
@@ -238,6 +240,21 @@ describe('渲染窗的安全配置', () => {
     expect(await decide('https://example.com/font.woff2')).toBe(false);
     expect(await decide('http://127.0.0.1:8080/secret')).toBe(false);
     expect(await decide('file:///etc/passwd')).toBe(false);
+  });
+
+  it('只放行已准备好的主文档入口,不放行其它 file 子资源', async () => {
+    await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>x</p>' });
+    const win = FakeBrowserWindow.instances[0]!;
+    const handler = win.webContents.session.beforeRequestHandler!;
+    const entry = pathToFileURL(win.loadedFile!).href;
+    const mainFrame = await new Promise<{ cancel: boolean }>((resolve) =>
+      handler({ url: entry, resourceType: 'mainFrame' }, resolve),
+    );
+    const subresource = await new Promise<{ cancel: boolean }>((resolve) =>
+      handler({ url: entry, resourceType: 'image' }, resolve),
+    );
+    expect(mainFrame.cancel).toBe(false);
+    expect(subresource.cancel).toBe(true);
   });
 
   it('弹窗与 Renderer 发起的导航一律 deny', async () => {

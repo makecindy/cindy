@@ -183,6 +183,8 @@ function createRenderWindow(partition: string): BrowserWindow {
 async function isAllowedResourceUrl(
   requestUrl: string,
   _allowedFileRoots: readonly AllowedFileRoot[],
+  entryUrl: string,
+  resourceType?: string,
 ): Promise<boolean> {
   let parsed: URL;
   try {
@@ -193,6 +195,10 @@ async function isAllowedResourceUrl(
   if (parsed.protocol === 'data:' || parsed.protocol === 'blob:' || parsed.protocol === 'about:') {
     return true;
   }
+  // loadFile() itself is a trusted top-level entry prepared by this renderer.
+  // Only that exact main-frame URL is exempted; page-initiated file: subresources
+  // remain blocked and cannot reopen a path after the security check.
+  if (resourceType === 'mainFrame' && requestUrl === entryUrl) return true;
   // Never let Chromium reopen a user-controlled file path after this check.
   // The allowlisted roots remain part of PreparedSource for compatibility and
   // diagnostics, but file:// resources must be converted to data: before render.
@@ -200,13 +206,17 @@ async function isAllowedResourceUrl(
   return false;
 }
 
-function lockRequests(win: BrowserWindow, allowedFileRoots: readonly AllowedFileRoot[]): void {
+function lockRequests(
+  win: BrowserWindow,
+  allowedFileRoots: readonly AllowedFileRoot[],
+  entryUrl: string,
+): void {
   const session = win.webContents.session;
   session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.setPermissionCheckHandler(() => false);
   session.on('will-download', (event) => event.preventDefault());
   session.webRequest.onBeforeRequest((details, callback) => {
-    void isAllowedResourceUrl(details.url, allowedFileRoots)
+    void isAllowedResourceUrl(details.url, allowedFileRoots, entryUrl, details.resourceType)
       .then((allowed) => callback({ cancel: !allowed }))
       .catch(() => callback({ cancel: true }));
   });
@@ -274,7 +284,7 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
     win = createRenderWindow(`temp:cindy-docs-${randomUUID()}`);
     const target = win;
     lockNavigation(target);
-    lockRequests(target, source.allowedFileRoots);
+    lockRequests(target, source.allowedFileRoots, pathToFileURL(source.fileUrlPath).href);
 
     const work = (async (): Promise<RenderAttemptResult> => {
       // 加载失败与 Renderer 崩溃都要把这次渲染判死,否则 printToPDF 会在一个空白
