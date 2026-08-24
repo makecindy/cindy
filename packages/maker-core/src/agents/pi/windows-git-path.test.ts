@@ -268,6 +268,51 @@ describe('Windows Git/PATH helpers', () => {
     expect(result).toBe(`C:\\Windows;${localCmd}`);
   });
 
+  it('reserves bounded probe capacity for registry fallbacks after PATH roots are capped', () => {
+    const staleRoots = Array.from({ length: 8 }, (_, index) => `C:\\StaleGit${index + 1}`);
+    const staleGitExecutables = staleRoots.map((root) => `${root}\\cmd\\git.exe`);
+    const registryRoot = 'D:\\Program Files\\Git';
+    const registryCmd = `${registryRoot}\\cmd`;
+    const registryGit = `${registryCmd}\\git.exe`;
+    const phases: string[][][] = [];
+    const warnings: Array<{ message: string; context: Record<string, unknown> | undefined }> = [];
+
+    const result = resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: 'C:\\Windows',
+      probes: {
+        readRegistryInstallPaths: () => [registryRoot],
+        findGitExecutablesOnPath: () => staleGitExecutables,
+        probePathKinds: (candidates) => probePartitionedWindowsPathKinds(
+          candidates,
+          new Set(),
+          (batches) => {
+            phases.push(batches.map((batch) => [...batch]));
+            const admitted = batches.slice(0, 8).flat();
+            if (!admitted.includes(registryGit)) return new Map();
+            return new Map([
+              [registryCmd, 'directory'],
+              [registryGit, 'file'],
+            ]);
+          },
+        ),
+      },
+      logger: {
+        warn: (message, context) => warnings.push({ message, context }),
+      },
+    });
+
+    expect(phases).toHaveLength(1);
+    expect(phases[0].slice(0, 8).some((batch) => batch.includes(registryGit))).toBe(true);
+    expect(phases[0][8]).toEqual([staleGitExecutables[7]]);
+    expect(warnings).toEqual([{
+      message: 'windows git path PATH install-root candidates truncated',
+      context: { limit: 7, omitted: 1 },
+    }]);
+    expect(JSON.stringify(warnings)).not.toContain(staleRoots[7]);
+    expect(result).toBe(`C:\\Windows;${registryCmd}`);
+  });
+
   it('finds git.exe in Unicode PATH segments without searching the current directory', () => {
     const gitPath = 'C:\\Users\\测试用户\\Git\\cmd\\git.exe';
     const isFile = (candidate: string) => candidate === gitPath;

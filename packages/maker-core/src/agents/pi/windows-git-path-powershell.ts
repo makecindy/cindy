@@ -100,6 +100,14 @@ function windowsPathKindProbeLines(outputLine: string): string[] {
   ];
 }
 
+export function maxWindowsPathKindProbeBatchCount(timeoutMs: number): number {
+  const budgetMs = Math.max(timeoutMs - 250, 1);
+  const availableOperationBudgetMs = Math.max(budgetMs - 250, 1);
+  const operationTimeoutMs = Math.min(availableOperationBudgetMs, 1_250);
+  const maxOperationWaves = Math.max(Math.floor(availableOperationBudgetMs / operationTimeoutMs), 1);
+  return 4 * maxOperationWaves;
+}
+
 export function buildWindowsPathKindProbeScript(
   candidateCount: number,
   timeoutMs: number,
@@ -123,8 +131,7 @@ export function buildWindowsPathKindProbeScript(
   const maxConcurrency = Math.min(operationCount, 4);
   const availableOperationBudgetMs = Math.max(budgetMs - 250, 1);
   const operationTimeoutMs = Math.min(availableOperationBudgetMs, 1_250);
-  const maxOperationWaves = Math.max(Math.floor(availableOperationBudgetMs / operationTimeoutMs), 1);
-  const maxOperationCount = Math.min(operationCount, maxConcurrency * maxOperationWaves);
+  const maxOperationCount = Math.min(operationCount, maxWindowsPathKindProbeBatchCount(timeoutMs));
   const encodedProbeCommand = Buffer.from([
     '$paths = @(([string]$env:CINDY_WINDOWS_GIT_PATH_CANDIDATES | ConvertFrom-Json))',
     'foreach ($pathValue in $paths) {',

@@ -5,6 +5,7 @@ import {
   buildWindowsNetworkDriveProbeScript,
   buildWindowsPathKindProbeScript,
   buildWindowsRegistryProbeScript,
+  maxWindowsPathKindProbeBatchCount,
   terminateWindowsPowerShellDescendants,
   type WindowsGitPathLogger,
   warnWindowsGitPathProbeDiagnostics,
@@ -507,17 +508,39 @@ export function resolveWindowsGitPath({
   };
   const original = existingPath ?? '';
   const segments = original.split(';').filter((segment) => segment.trim() !== '');
-  const registryRoots = probes.readRegistryInstallPaths();
+  const registryRoots = uniqueWindowsPaths(probes.readRegistryInstallPaths());
   const gitExecutableCandidates = probes.findGitExecutablesOnPath(existingPath);
-  const inferredRoots = gitExecutableCandidates.flatMap((gitPath) => gitInstallRootFromPath(gitPath) ?? []);
+  const allInferredRoots = uniqueWindowsPaths(
+    gitExecutableCandidates.flatMap((gitPath) => gitInstallRootFromPath(gitPath) ?? []),
+  );
+  const inferredRootLimit = Math.max(
+    maxWindowsPathKindProbeBatchCount(WINDOWS_PATH_PROBE_TIMEOUT_MS) - registryRoots.length,
+    0,
+  );
+  const inferredRoots = allInferredRoots.slice(0, inferredRootLimit);
+  if (allInferredRoots.length > inferredRoots.length) {
+    logger?.warn('windows git path PATH install-root candidates truncated', {
+      limit: inferredRootLimit,
+      omitted: allInferredRoots.length - inferredRoots.length,
+    });
+  }
   const potentialRoots = uniqueWindowsPaths([...inferredRoots, ...registryRoots]);
+  const potentialRootKeys = new Set(potentialRoots.map(normalizedWindowsPath));
+  const prioritizedGitExecutableCandidates = gitExecutableCandidates.filter((gitPath) => {
+    const installRoot = gitInstallRootFromPath(gitPath);
+    return installRoot !== undefined && potentialRootKeys.has(normalizedWindowsPath(installRoot));
+  });
+  const deferredGitExecutableCandidates = gitExecutableCandidates.filter(
+    (gitPath) => !prioritizedGitExecutableCandidates.includes(gitPath),
+  );
   const injectedFileProbes = overrides?.isDirectory !== undefined || overrides?.isFile !== undefined;
   const fileProbes: WindowsGitFileProbes = injectedFileProbes
     ? { isDirectory: probes.isDirectory, isFile: probes.isFile }
     : fileProbesFromPathKinds(probes.probePathKinds([
-      ...gitExecutableCandidates,
+      ...prioritizedGitExecutableCandidates,
       ...potentialRoots.flatMap(installRootProbeCandidates),
       ...msysRootProbeCandidates(segments, potentialRoots),
+      ...deferredGitExecutableCandidates,
     ]));
   const rootCandidates = uniqueWindowsPaths([
     ...gitExecutableCandidates
