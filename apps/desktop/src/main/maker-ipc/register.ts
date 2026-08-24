@@ -12008,21 +12008,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!item.agentSkillInvocation) return true;
     if (item.createOpts.agentKind !== 'pi') return false;
     const session = maker.getSession(sessionId);
-    const manifest = session?.getRuntimeCapabilities();
-    if (!session || !manifest) return false;
+    if (!session) return false;
     const currentSkills = await maker.listAgentSkills('pi', {
       sessionId,
       workingDir: item.createOpts.workingDir,
       forceReload: true,
     });
+    if (maker.getSession(sessionId) !== session) return false;
+    const manifest = session.getRuntimeCapabilities();
+    if (!manifest) return false;
     if (piSkillScanErrorsBlockInvocation(
       currentSkills.errors,
       item.agentSkillInvocation.sourcePath,
     )) return false;
-    if (
-      maker.getSession(sessionId) !== session
-      || session.getRuntimeCapabilities() !== manifest
-    ) return false;
     const invocationIsCurrent = await isCurrentPiSkillInvocation(
       item,
       manifest,

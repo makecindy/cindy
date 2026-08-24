@@ -1162,6 +1162,11 @@ export class Session {
     return this.handle.onRuntimeCapabilitiesChange?.(listener) ?? (() => undefined);
   }
 
+  /** Re-capture a transiently unknown Pi catalog without refreshing stable runtime facts. */
+  async refreshRuntimeCapabilitiesIfRetryableUnknown(): Promise<void> {
+    await this.handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+  }
+
   async getContextUsage(): Promise<ContextUsageData> {
     this.ensureActive();
     if (!this.handle.getContextUsage) {

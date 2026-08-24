@@ -22,6 +22,7 @@ import {
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
 import type { AgentKind, PermissionMode } from './types/common.js';
 import type { AgentEvent } from './types/events.js';
+import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import {
   fingerprintPiProjectSkillEntrypoint,
   PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS,
@@ -1312,6 +1313,74 @@ describe('Maker session capabilities', () => {
 });
 
 describe('Maker Pi runtime skill status', () => {
+  it('uses forceReload to retry a live matching session runtime catalog', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-runtime-retry-')));
+    try {
+      const otherRoot = path.join(root, 'other');
+      mkdirSync(otherRoot);
+      let runtimeManifest: PiRuntimeCapabilityManifest = {
+        sessionId: 'runtime-retry',
+        capturedAt: '2026-08-24T00:00:00.000Z',
+        generation: 1,
+        status: 'unknown',
+        source: 'pi:get_commands',
+        commands: [],
+        error: {
+          stage: 'ready',
+          code: 'timeout',
+          message: 'Pi runtime command discovery timed out',
+        },
+      };
+      const retry = vi.fn(async () => {
+        runtimeManifest = {
+          sessionId: 'runtime-retry',
+          capturedAt: '2026-08-24T00:00:01.000Z',
+          generation: 2,
+          status: 'loaded',
+          source: 'pi:get_commands',
+          commands: [],
+        };
+      });
+      const agent = createAgent(async () => {
+        const handle = createHandle({ id: 'pi-runtime-retry', agentKind: 'pi' });
+        handle.getRuntimeCapabilities = () => runtimeManifest;
+        handle.refreshRuntimeCapabilitiesIfRetryableUnknown = retry;
+        return handle;
+      }, 'pi');
+      agent.listAgentSkills = vi.fn(async () => ({ skills: [] }));
+      const maker = new Maker({
+        agents: { pi: agent },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      await maker.createSession({
+        id: 'runtime-retry',
+        agentKind: 'pi',
+        workingDir: root,
+        model: 'm',
+      });
+
+      await maker.listAgentSkills('pi', { workingDir: root, sessionId: 'runtime-retry' });
+      expect(retry).not.toHaveBeenCalled();
+
+      await maker.listAgentSkills('pi', {
+        workingDir: otherRoot,
+        sessionId: 'runtime-retry',
+        forceReload: true,
+      });
+      expect(retry).not.toHaveBeenCalled();
+
+      await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'runtime-retry',
+        forceReload: true,
+      });
+      expect(retry).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('maps a user Skill directory to its frontmatter runtime command by frozen source', async () => {
     const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-user-skill-')));
     const sourcePath = path.join(root, 'pi-home', 'skills', 'directory-name');

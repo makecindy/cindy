@@ -1638,6 +1638,8 @@ export interface AgentSessionHandle {
   onRuntimeCapabilitiesChange?(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
   ): () => void;
+  /** Retry only a transiently unknown Pi runtime catalog; deterministic failures stay terminal. */
+  refreshRuntimeCapabilitiesIfRetryableUnknown?(): Promise<void>;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
   /**

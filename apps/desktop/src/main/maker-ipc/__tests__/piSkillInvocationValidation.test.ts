@@ -772,6 +772,8 @@ describe('Pi Skill invocation validation', () => {
     const start = registerSource.indexOf('const validateQueuedAgentSkillInvocation = async (');
     const end = registerSource.indexOf('\n  const inputCoordinator:', start);
     const validation = registerSource.slice(start, end);
+    const reload = validation.indexOf("maker.listAgentSkills('pi', {");
+    const manifestCapture = validation.indexOf('const manifest = session.getRuntimeCapabilities();');
     const proof = validation.indexOf('const invocationIsCurrent = await isCurrentPiSkillInvocation(');
     const scopedErrorCheck = validation.indexOf('piSkillScanErrorsBlockInvocation(');
     const sessionRecheck = validation.indexOf('maker.getSession(sessionId) === session', proof);
@@ -784,6 +786,8 @@ describe('Pi Skill invocation validation', () => {
     expect(end).toBeGreaterThan(start);
     expect(scopedErrorCheck).toBeGreaterThanOrEqual(0);
     expect(validation).not.toContain('if (currentSkills.errors?.length) return false;');
+    expect(reload).toBeGreaterThanOrEqual(0);
+    expect(manifestCapture).toBeGreaterThan(reload);
     expect(proof).toBeGreaterThanOrEqual(0);
     expect(sessionRecheck).toBeGreaterThan(proof);
     expect(manifestRecheck).toBeGreaterThan(proof);

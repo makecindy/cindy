@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +8,7 @@ const captured = vi.hoisted(() => ({
   instances: [] as Array<{
     sessionId: string;
     sdkSessionId: string;
+    configHome: string;
     args: string[];
     requests: Array<Record<string, unknown>>;
     closed: boolean;
@@ -14,6 +16,8 @@ const captured = vi.hoisted(() => ({
   }>,
   catalogs: {} as Record<string, unknown>,
   runtimeFailures: new Set<string>(),
+  runtimeUnsupported: new Set<string>(),
+  runtimeTimeoutsRemaining: new Map<string, number>(),
   runtimeDeferred: false,
   runtimeRelease: undefined as (() => void) | undefined,
   rewindStateFailure: false,
@@ -29,6 +33,7 @@ vi.mock('../transport.js', () => ({
     const state = {
       sessionId: opts.env.CINDY_PI_SESSION_ID ?? '',
       sdkSessionId: `/mock/${opts.env.CINDY_PI_SESSION_ID || 'fork'}.jsonl`,
+      configHome: opts.env.PI_CODING_AGENT_DIR ?? '',
       args: [...opts.args],
       requests: [] as Array<Record<string, unknown>>,
       closed: false,
@@ -70,11 +75,19 @@ vi.mock('../rpc-client.js', () => ({
         return { success: true, data: { sessionFile: this.state.sdkSessionId, model: { contextWindow: 200_000 } } };
       }
       if (command.type === 'get_commands') {
+        if (captured.runtimeDeferred) {
+          await new Promise<void>((resolve) => { captured.runtimeRelease = resolve; });
+        }
+        const timeoutsRemaining = captured.runtimeTimeoutsRemaining.get(this.state.sessionId) ?? 0;
+        if (timeoutsRemaining > 0) {
+          captured.runtimeTimeoutsRemaining.set(this.state.sessionId, timeoutsRemaining - 1);
+          throw new Error('pi rpc timeout after 5000ms: get_commands');
+        }
         if (captured.runtimeFailures.has(this.state.sessionId)) {
           return { type: 'response', command: 'get_commands', success: false, error: 'provider=/secret/path rejected' };
         }
-        if (captured.runtimeDeferred) {
-          await new Promise<void>((resolve) => { captured.runtimeRelease = resolve; });
+        if (captured.runtimeUnsupported.has(this.state.sessionId)) {
+          return { type: 'response', command: 'get_commands', success: false, error: 'unknown command: get_commands' };
         }
         const data = captured.catalogs[this.state.sessionId] ?? { commands: [] };
         return { type: 'response', command: 'get_commands', success: true, data };
@@ -114,6 +127,8 @@ describe('Pi runtime capability lifecycle', () => {
     captured.instances = [];
     captured.catalogs = {};
     captured.runtimeFailures = new Set();
+    captured.runtimeUnsupported = new Set();
+    captured.runtimeTimeoutsRemaining = new Map();
     captured.runtimeDeferred = false;
     captured.runtimeRelease = undefined;
     captured.rewindStateFailure = false;
@@ -183,6 +198,140 @@ describe('Pi runtime capability lifecycle', () => {
       });
     });
     await expect(handle.send({ type: 'user', content: 'hello' })).resolves.toBeUndefined();
+    await handle.close();
+  });
+
+  it('recaptures a transiently unknown catalog once for concurrent force-reload retries', async () => {
+    captured.runtimeTimeoutsRemaining.set('s1', 1);
+    captured.catalogs.s1 = catalog('skill:recovered');
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    const instance = captured.instances[0]!;
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+        status: 'unknown',
+        commands: [],
+        error: { code: 'timeout' },
+      });
+    });
+
+    captured.runtimeDeferred = true;
+    const first = handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+    const second = handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+    await vi.waitFor(() => {
+      expect(instance.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+    });
+    captured.runtimeDeferred = false;
+    captured.runtimeRelease?.();
+    await Promise.all([first, second]);
+
+    expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+      generation: 2,
+      status: 'loaded',
+      commands: [{ name: 'skill:recovered' }],
+    });
+    expect(instance.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+    await handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+    expect(instance.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+    await handle.close();
+  });
+
+  it('keeps a repeated runtime capability timeout fail closed', async () => {
+    captured.runtimeTimeoutsRemaining.set('s1', 2);
+    captured.catalogs.s1 = catalog('skill:must-stay-blocked');
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    const instance = captured.instances[0]!;
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'unknown', generation: 1 });
+    });
+
+    captured.runtimeDeferred = true;
+    const first = handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+    await vi.waitFor(() => {
+      expect(instance.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+    });
+    const second = handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+    captured.runtimeDeferred = false;
+    captured.runtimeRelease?.();
+    await Promise.all([first, second]);
+
+    expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+      status: 'unknown',
+      generation: 2,
+      commands: [],
+      error: { code: 'timeout' },
+    });
+    expect(instance.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+    await handle.close();
+  });
+
+  it('recaptures user Skill provenance after a transient filesystem failure', async () => {
+    captured.runtimeDeferred = true;
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    const instance = captured.instances[0]!;
+    const skillDir = path.join(instance.configHome, 'skills', 'recovered');
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(skillFile, '---\nname: recovered\n---\n# Recovered\n');
+    captured.catalogs.s1 = {
+      commands: [{
+        name: 'skill:recovered',
+        source: 'skill',
+        sourceInfo: {
+          source: 'auto',
+          scope: 'user',
+          baseDir: instance.configHome,
+          path: skillFile,
+        },
+      }],
+    };
+    const realOpendir = fsPromises.opendir.bind(fsPromises);
+    const canonicalConfigHome = await fsPromises.realpath(instance.configHome);
+    let failProvenanceScan = true;
+    const opendir = vi.spyOn(fsPromises, 'opendir').mockImplementation(async (candidate, options) => {
+      if (failProvenanceScan && String(candidate) === path.join(canonicalConfigHome, 'skills')) {
+        throw Object.assign(new Error('injected provenance I/O failure'), { code: 'EIO' });
+      }
+      return realOpendir(candidate, options);
+    });
+    try {
+      captured.runtimeDeferred = false;
+      captured.runtimeRelease?.();
+      await vi.waitFor(() => {
+        expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+          status: 'unknown',
+          commands: [],
+          error: { code: 'timeout' },
+        });
+      });
+
+      failProvenanceScan = false;
+      await handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+        generation: 2,
+        status: 'loaded',
+        commands: [{ name: 'skill:recovered' }],
+      });
+    } finally {
+      opendir.mockRestore();
+      await handle.close();
+    }
+  });
+
+  it('does not retry a deterministic unsupported runtime catalog', async () => {
+    captured.runtimeUnsupported.add('s1');
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    const instance = captured.instances[0]!;
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+        status: 'unknown',
+        error: { code: 'unsupported' },
+      });
+    });
+
+    await handle.refreshRuntimeCapabilitiesIfRetryableUnknown?.();
+
+    expect(instance.requests.filter((request) => request.type === 'get_commands')).toHaveLength(1);
     await handle.close();
   });
 

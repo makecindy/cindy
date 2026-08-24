@@ -1462,6 +1462,9 @@ export class Maker {
         await canonicalPiRuntimePath(opts.workingDir, deadlineAtMs)
         !== await canonicalPiRuntimePath(session.workDir, deadlineAtMs)
       ) return result;
+      if (opts.forceReload) {
+        await session.refreshRuntimeCapabilitiesIfRetryableUnknown();
+      }
       return await mergePiRuntimeSkillStatuses(
         result,
         session.getRuntimeCapabilities(),
