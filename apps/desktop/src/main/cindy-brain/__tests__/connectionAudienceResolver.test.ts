@@ -6,6 +6,7 @@ import {
 } from '../../plugin-market/ledger.js';
 import {
   isConnectionSecretReady,
+  isReservedConnectionPluginSlug,
   loadConnectionAudienceResolver,
 } from '../connectionAudienceResolver.js';
 
@@ -68,10 +69,32 @@ function resolverOptions(
 }
 
 describe('installed Plugin Connection audience resolver', () => {
+  it('names cindy-publisher and xd-publisher as reserved connection slugs', () => {
+    expect(isReservedConnectionPluginSlug('cindy-publisher')).toBe(true);
+    expect(isReservedConnectionPluginSlug('xd-publisher')).toBe(true);
+    expect(isReservedConnectionPluginSlug('cindy-art')).toBe(false);
+  });
+
   it('derives audience and hosts from the installed manifest and current organization', () => {
     const resolver = loadConnectionAudienceResolver({
       ...resolverOptions(),
     });
+    expect(resolver.resolve('plugin-a', identity)).toEqual({
+      membershipId: 'membership-1',
+      audience: 'org-example:plugin-a',
+      pluginSlug: 'plugin-a',
+      allowedHosts: ['service-a.x.test'],
+    });
+  });
+
+  it('keeps legacy organization-market OIDC independent from receipt package SHA', () => {
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(),
+      readApprovedPackageSha256: () => null,
+    });
+
+    // This is the intentional compatibility boundary: Broker now requires the
+    // package hash, but the existing market OIDC path remains manifest-bound.
     expect(resolver.resolve('plugin-a', identity)).toEqual({
       membershipId: 'membership-1',
       audience: 'org-example:plugin-a',
@@ -114,6 +137,21 @@ describe('installed Plugin Connection audience resolver', () => {
     expect(resolver.resolve('plugin-a', identity)).toBeNull();
   });
 
+  it('rejects reserved publisher identity slugs even with a matching market install', () => {
+    for (const ghostId of ['cindy-publisher', 'xd-publisher'] as const) {
+      const reservedManifest = { ...manifest, id: ghostId };
+      const reservedInstallation = {
+        ...marketInstallation,
+        ghostId,
+        manifestDigest: ghostManifestDigest(reservedManifest),
+      };
+      const resolver = loadConnectionAudienceResolver(
+        resolverOptions(reservedManifest, reservedInstallation),
+      );
+      expect(resolver.resolve(ghostId, identity)).toBeNull();
+    }
+  });
+
   it('requires an organization identity and an installed oidc-token declaration', () => {
     const resolver = loadConnectionAudienceResolver({
       ...resolverOptions(),
@@ -132,6 +170,59 @@ describe('installed Plugin Connection audience resolver', () => {
         ...resolverOptions({ ...manifest, network: { hosts: ['service-a.x.test'] } }),
       }).resolve('plugin-a', identity),
     ).toBeNull();
+  });
+
+  it('resolves a forge-installed org-prefix plugin before consulting the market ledger', () => {
+    const forgeManifest: GhostManifest = { ...manifest, id: 'acme-tool' };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(forgeManifest, null),
+      readInstallOrigin: () => 'agent-forge',
+      readApprovedPackageSha256: () => 'a'.repeat(64),
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+    });
+    expect(resolver.resolve('acme-tool', identity)).toEqual({
+      membershipId: 'membership-1',
+      audience: 'org-example:acme-tool',
+      pluginSlug: 'acme-tool',
+      allowedHosts: ['service-a.x.test'],
+    });
+  });
+
+  it('does not give forge OIDC to a personal identity or a missing orgSlug', () => {
+    const forgeManifest: GhostManifest = { ...manifest, id: 'acme-tool' };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(forgeManifest, null),
+      readInstallOrigin: () => 'agent-forge',
+      readApprovedPackageSha256: () => 'a'.repeat(64),
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+    });
+    expect(
+      resolver.resolve('acme-tool', {
+        membershipId: 'membership-1',
+        membershipKind: 'personal',
+        orgId: null,
+        orgSlug: null,
+      }),
+    ).toBeNull();
+    expect(
+      resolver.resolve('acme-tool', {
+        membershipId: 'membership-1',
+        membershipKind: 'org',
+        orgId: 'org-id-1',
+        orgSlug: null,
+      }),
+    ).toBeNull();
+  });
+
+  it('does not give forge OIDC to a manual install of the same org-prefix id', () => {
+    const forgeManifest: GhostManifest = { ...manifest, id: 'acme-tool' };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(forgeManifest, null),
+      readInstallOrigin: () => 'manual',
+      readApprovedPackageSha256: () => 'a'.repeat(64),
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+    });
+    expect(resolver.resolve('acme-tool', identity)).toBeNull();
   });
 
   it('requires the managed secret target to match a declared exact host', () => {

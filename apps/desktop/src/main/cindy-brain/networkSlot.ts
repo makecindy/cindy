@@ -148,7 +148,13 @@ export interface NetworkSlotDeps {
       | { ok: true; accessToken: string; accountId: string }
       | {
           ok: false;
-          error: 'NO_CLIENT_CONFIG' | 'NO_ACCOUNT' | 'AUTH_EXPIRED' | 'REFRESH_FAILED' | 'NETWORK';
+          error:
+            | 'NO_CLIENT_CONFIG'
+            | 'NO_ACCOUNT'
+            | 'AUTH_EXPIRED'
+            | 'REFRESH_FAILED'
+            | 'NETWORK'
+            | 'BROKER_FORBIDDEN';
           detail?: string;
         }
     >;
@@ -1642,6 +1648,8 @@ export class GhostNetworkSlot {
             return { error: `凭证「${secret.label}」尚未连接账号(或指定的账号不存在)——请到主界面侧边栏「插件」的本插件详情页点「连接账号」完成授权` };
           case 'AUTH_EXPIRED':
             return { error: `凭证「${secret.label}」的账号授权已失效——请到主界面侧边栏「插件」的本插件详情页重新连接该账号` };
+          case 'BROKER_FORBIDDEN':
+            return { error: `凭证「${secret.label}」当前身份无权使用授权 broker` };
           case 'NETWORK':
             return { error: `凭证「${secret.label}」刷新令牌时网络失败,请稍后重试` };
           default:

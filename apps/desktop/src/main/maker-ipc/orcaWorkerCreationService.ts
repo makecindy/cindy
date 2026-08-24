@@ -42,7 +42,10 @@ export interface OrcaWorkerListSnapshot {
   status: OrcaWorkerStatus;
 }
 
-/** New Maker 面板传来的按 agent 默认值缓存；undefined/null 都表示继续 fallback。 */
+/**
+ * New Maker 面板传来的按 agent 默认值缓存；undefined/null 都表示继续 fallback，
+ * providerId 的空串或纯空白也按未选择处理。
+ */
 export interface OrcaWorkerDefaultsSnapshot {
   model?: string | null;
   effort?: string | null;
@@ -182,8 +185,8 @@ export interface OrcaWorkerCreateParams {
   /**
    * 显式选定的模型来源(标准模型选择面板的 per-worker 选择)。string = 显式来源,
    * 走下方精确 preflight 校验「已连接且提供该模型」,不满足即失败,不静默换路由;
-   * undefined / null = 未显式选择,沿用 defaults 缓存 / Lead 继承 / spawn-aware
-   * 默认路由的既有解析(含 requiresExplicitRoute 唯一来源救援与 stale 回落)。
+   * undefined / null = 未显式选择,沿用兼容的 Lead / defaults 来源,否则解析并保存
+   * 当前默认来源。Lead 已绑定但当前断连的来源会在创建前失败,不静默改走其它凭证。
    */
   providerId?: string | null;
   initialTask?: string;
@@ -687,6 +690,10 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // pi-manager 预上传, orca_worker_bridge 工具面经 SSH remote-forward 隧道注入。
     // 与 CC/Codex remote worker 同构;此闸会让 remote pi lead 完全无法使用 pi worker。
     const defaults = deps.getWorkerDefaults(params.agent);
+    const workerDefaultProviderId =
+      typeof defaults.providerId === 'string' && defaults.providerId.trim()
+        ? defaults.providerId.trim()
+        : null;
     const inheritedModelComesFromDefaults =
       params.model === undefined
       && defaults.model !== undefined
@@ -696,23 +703,73 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       lead,
       defaults,
     });
-    const inheritedProviderId = explicitSourceId
-      ?? (inheritedModelComesFromDefaults
-        ? (defaults.providerId ?? null)
-        : (params.agent === lead.agentKind ? lead.providerId : null));
-    const cachedProviderMayFallback =
+    const leadProviderId =
+      params.agent === lead.agentKind && typeof lead.providerId === 'string' && lead.providerId.trim()
+        ? lead.providerId.trim()
+        : null;
+    const leadProviderSnapshot = leadProviderId === null
+      ? undefined
+      : agentProviders.find((provider) => provider.id === leadProviderId);
+    const leadRouteModelResolution = explicitSourceId === null && leadProviderSnapshot
+      ? resolveWorkerModelId({
+          agent: params.agent,
+          model: selectedModel,
+          providerId: leadProviderId,
+          availableModels,
+          providers: agentProviders,
+        })
+      : null;
+    const routableLeadModelResolution =
+      leadRouteModelResolution?.ok === true
+      && leadProviderSnapshot?.models.includes(leadRouteModelResolution.model)
+        ? leadRouteModelResolution
+        : null;
+    const explicitModelKeepsLeadRoute =
+      params.model !== undefined
+      && explicitModelResolution?.ok === true
+      && (
+        selectedModel === lead.model
+        || explicitModelResolution.model === lead.model
+        || leadProviderSnapshot?.models.includes(explicitModelResolution.model) === true
+      );
+    const compatibleLeadModelResolution =
+      routableLeadModelResolution !== null
+      && (params.model === undefined || explicitModelKeepsLeadRoute)
+        ? routableLeadModelResolution
+        : null;
+    const compatibleLeadProviderId = compatibleLeadModelResolution === null
+      ? null
+      : leadProviderId;
+    const inheritedLeadProviderUnusable =
       explicitSourceId === null
-      && inheritedModelComesFromDefaults
-      && defaults.providerId !== undefined
-      && defaults.providerId !== null;
-    const modelResolution = explicitModelResolution ?? resolveWorkerModelId({
-      agent: params.agent,
-      model: selectedModel,
-      providerId: inheritedProviderId,
-      allowProviderFallback: cachedProviderMayFallback,
-      availableModels,
-      providers: agentProviders,
-    });
+      && leadProviderId !== null
+      && selectedModel === lead.model
+      && routableLeadModelResolution === null;
+    const inheritedProviderComesFromDefaults =
+      explicitSourceId === null
+      && compatibleLeadModelResolution === null
+      && !inheritedLeadProviderUnusable
+      && inheritedModelComesFromDefaults;
+    const inheritedProviderId = explicitSourceId
+      ?? compatibleLeadProviderId
+      ?? (inheritedLeadProviderUnusable
+        ? leadProviderId
+        : inheritedProviderComesFromDefaults
+          ? workerDefaultProviderId
+          : null);
+    const cachedProviderMayFallback =
+      inheritedProviderComesFromDefaults
+      && workerDefaultProviderId !== null;
+    const modelResolution = compatibleLeadModelResolution
+      ?? explicitModelResolution
+      ?? resolveWorkerModelId({
+        agent: params.agent,
+        model: selectedModel,
+        providerId: inheritedProviderId,
+        allowProviderFallback: cachedProviderMayFallback,
+        availableModels,
+        providers: agentProviders,
+      });
     if (!modelResolution.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: modelResolution.message };
     }
@@ -727,55 +784,39 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
     }
-    const explicitModelDefaultProviderId = params.model !== undefined
-      ? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolvedConfig.model)
-      : null;
-    const explicitModelProviders = params.model !== undefined
-      ? agentProviders.filter((provider) => provider.models.includes(resolvedConfig.model))
-      : [];
+    const defaultProviderId = providerRouting.resolveDefaultProviderIdForModel(
+      params.agent,
+      resolvedConfig.model,
+    );
     const cachedProviderRouteIsStale = params.model === undefined
-      && inheritedModelComesFromDefaults
-      && defaults.providerId !== undefined
-      && defaults.providerId !== null
+      && inheritedProviderComesFromDefaults
+      && workerDefaultProviderId !== null
       && !agentProviders.some(
-        (provider) => provider.id === defaults.providerId && provider.models.includes(resolvedConfig.model),
+        (provider) =>
+          provider.id === workerDefaultProviderId
+          && provider.models.includes(resolvedConfig.model),
       );
-    const modelOnlyDefaultNeedsRouteResolution = params.model === undefined
-      && inheritedModelComesFromDefaults
-      && (defaults.providerId === undefined || defaults.providerId === null);
-    const inheritedDefaultNeedsRouteResolution =
-      cachedProviderRouteIsStale || modelOnlyDefaultNeedsRouteResolution;
-    const inheritedDefaultProviderId = inheritedDefaultNeedsRouteResolution
-      ? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolvedConfig.model)
-      : null;
-    const inheritedDefaultProvider = inheritedDefaultProviderId === null
+    const inheritedProviderSnapshot = inheritedProviderId === null
       ? undefined
-      : agentProviders.find((provider) => provider.id === inheritedDefaultProviderId);
+      : agentProviders.find((provider) => provider.id === inheritedProviderId);
+    const inheritedProvider = inheritedProviderSnapshot?.models.includes(resolvedConfig.model)
+      ? inheritedProviderSnapshot
+      : undefined;
     const resolved = {
       ...resolvedConfig,
-      // 仅显式指定 model 不等于显式选择来源：多来源模型仍保留 spawn-aware 默认路由。
-      // 但若当前只有一个可用来源,必须把该来源固化到 session。否则 preflight 虽会按
-      // 这个唯一来源校验通过,实际 spawn 却收到 providerId=null 并回落到 agent 原生认证
-      // 链路,形成「校验走 A、执行走 B」的分裂状态(如 XD 独有 DeepSeek 模型误走
-      // Codex ChatGPT OAuth)。来源取运行时 provider registry,不按模型名写死 provider id。
-      providerId: explicitSourceId !== null
-        ? explicitSourceId
-        : params.model !== undefined
-          && explicitModelProviders.length === 1
-          ? explicitModelProviders[0]!.id
-          : params.model !== undefined
-            ? null
-            : inheritedDefaultNeedsRouteResolution
-              ? (inheritedDefaultProvider?.requiresExplicitRoute ? inheritedDefaultProvider.id : null)
-              : resolvedConfig.providerId,
+      // Worker session 必须保存实际生效的来源身份，凭证层才能把官方订阅解析为
+      // oauth-bearer。显式来源优先；否则先保留仍提供目标模型的 Lead 来源，再看 defaults；
+      // Lead 已绑定但当前断连时保留其意图交给下方 preflight 明确拒绝，不能静默改走
+      // Cindy AI；仅 defaults 失效或来源不提供目标模型时回落当前默认来源。
+      providerId: explicitSourceId
+        ?? inheritedProvider?.id
+        ?? (inheritedLeadProviderUnusable ? leadProviderId : defaultProviderId),
     };
     // Fast 与 effort 都按**实际路由来源**自己的模型条目判定(显式来源、defaults 缓存
     // 来源、spawn 默认来源统一)—— getAvailableModels 是跨来源拍平清单(首来源 wins,
     // 且不含连接态),同 id 模型的 supportsFastMode / efforts 在不同来源可分叉:首来源
     // 的元数据会误杀或误放行真实路由来源的能力(codex review 三轮)。
-    const routeProviderId = explicitSourceId
-      ?? resolved.providerId
-      ?? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolved.model);
+    const routeProviderId = resolved.providerId ?? defaultProviderId;
     const routeProvider = routeProviderId === null
       ? undefined
       : agentProviders.find((provider) => provider.id === routeProviderId);
@@ -813,11 +854,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     } else if (resolvedConfig.pendingEffortError) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.pendingEffortError };
     }
-    const budgetRouteProviderId = explicitSourceId !== null
-      ? explicitSourceId
-      : params.model !== undefined
-        ? explicitModelDefaultProviderId
-        : (inheritedDefaultNeedsRouteResolution ? inheritedDefaultProviderId : resolved.providerId);
+    const budgetRouteProviderId = resolved.providerId;
 
     // codex/ 预算模型依赖 Cindy AI API key；XD/default 路由即使因 provider 缺失，
     // 也要先返回这条可操作的凭证错误，避免被下方通用的精确路由失败遮蔽。
@@ -849,12 +886,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
             'subscription-direct models require the local proxy path — pick an SSH-compatible model',
         };
       }
-      // 默认路由 (resolved.providerId=null) 同样要闸 — 且必须按
-      // routeProviderId/routeProvider (上方 583 行) 判定:它已经
-      // 「显式来源 → resolved → resolveDefaultProviderIdForModel」解析出
-      // 实际落点;budgetRouteProviderId 在 worker 未显式传 model 时仍为
-      // null, 只查它会让默认路由的 chat-bridged 漏过 (codex-connector
-      // R24 P2)。
+      // 未显式来源的 Worker 也必须按最终持久化的实际 routeProvider 判定；否则
+      // 默认来源上的 chat-bridged provider 会漏过远端兼容闸。
       if (routeProvider?.chatBridgedCodex === true) {
         return {
           ok: false,
@@ -868,7 +901,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
     if (
       params.model !== undefined
-      && explicitModelDefaultProviderId === null
+      && defaultProviderId === null
       && explicitSourceId === null
     ) {
       return {
@@ -883,7 +916,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       };
     }
 
-    if (cachedProviderRouteIsStale && inheritedDefaultProviderId === null) {
+    if (cachedProviderRouteIsStale && defaultProviderId === null) {
       return {
         ok: false,
         errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',

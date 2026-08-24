@@ -104,6 +104,7 @@ import {
 import type { PluginInstallReceiptOutbox } from '../installReceiptOutbox';
 import { PluginMarketService } from '../service';
 import type { PluginMarketApi } from '../api';
+import { createOrganizationPrefixStore } from '../organizationPrefixStore';
 
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
@@ -187,6 +188,31 @@ function setupSecretManifest(id = 'cindy-test', version = '1.0.0') {
   };
 }
 
+function brokerManifestWithoutPort(id = 'cindy-test', version = '1.0.0') {
+  return {
+    ...manifest(id, version),
+    slots: ['network'],
+    settingsHtml: 'settings.html',
+    network: {
+      hosts: ['accounts.example.com'],
+      secrets: [
+        {
+          key: 'account',
+          label: 'Account',
+          source: 'oauth',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+          oauth: {
+            authorizeUrl: 'https://accounts.example.com/authorize',
+            tokenUrl: 'https://accounts.example.com/token',
+            clientId: 'builtin-client-id',
+            tokenBroker: 'jira',
+          },
+        },
+      ],
+    },
+  };
+}
+
 function normalizedManifest(raw: unknown): GhostManifest {
   const validated = validateGhostManifest(raw);
   if (!validated.ok) throw new Error(validated.reason);
@@ -231,6 +257,7 @@ function detail(
 function reviewedInstallOptions(item: VisiblePluginSummary, allowSourceReplacement = false) {
   return {
     expectedReleaseId: item.currentRelease.id,
+    expectedManifest: manifest(item.ghostId, item.currentRelease.version),
     allowSourceReplacement,
   };
 }
@@ -252,7 +279,13 @@ function harness(items: VisiblePluginSummary[], removals: PluginRemovalNotice[] 
   roots.push(root);
   const ledger = new PluginMarketLedger(path.join(root, 'ledger.json'));
   const api = {
-    listAll: vi.fn(async () => ({ plugins: items, removals })),
+    listAll: vi.fn(
+      async (): Promise<Awaited<ReturnType<PluginMarketApi['listAll']>>> => ({
+        plugins: items,
+        removals,
+        currentOrganization: null,
+      }),
+    ),
     detail: vi.fn(async (pluginId: string): Promise<VisiblePluginDetail> => {
       const item = items.find((candidate) => candidate.id === pluginId);
       if (!item) throw new Error('not found');
@@ -364,6 +397,57 @@ describe('PluginMarketService migration and defaultInstall', () => {
       unavailableReason: null,
     });
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('remembers the listed organization prefix after a successful snapshot', async () => {
+    const item = summary();
+    const h = harness([item]);
+    const prefixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-org-prefix-service-'));
+    roots.push(prefixRoot);
+    const { ownerScopedUserDataPath } = await import('../../appSessionState.js');
+    vi.mocked(ownerScopedUserDataPath).mockImplementation((...parts: string[]) =>
+      path.join(prefixRoot, ...parts),
+    );
+    h.api.listAll.mockResolvedValue({
+      plugins: [item],
+      removals: [],
+      currentOrganization: { organizationId: 'org-acme', pluginPrefix: 'acme' },
+    });
+
+    await h.service.snapshot();
+
+    const store = createOrganizationPrefixStore(
+      path.join(prefixRoot, 'plugin-market', 'organization.v1.json'),
+    );
+    expect(store.lookup('org-acme')).toEqual({ kind: 'known', pluginPrefix: 'acme' });
+  });
+
+  it('still returns the market snapshot when the organization prefix cache write fails', async () => {
+    const item = summary();
+    const h = harness([item]);
+    h.api.listAll.mockResolvedValue({
+      plugins: [item],
+      removals: [],
+      currentOrganization: { organizationId: 'org-acme', pluginPrefix: 'acme' },
+    });
+    const realRenameSync = fs.renameSync;
+    const renameSync = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(to).endsWith(path.join('plugin-market', 'organization.v1.json'))) {
+        throw Object.assign(new Error('simulated cache rename failure'), { code: 'EPERM' });
+      }
+      return realRenameSync(from, to);
+    });
+
+    try {
+      // Excludes allowing a reconstructable cache write failure to reject the whole catalog.
+      await expect(h.service.snapshot()).resolves.toMatchObject({
+        items: [{ pluginId: item.id }],
+        unavailableReason: null,
+      });
+      expect(renameSync).toHaveBeenCalled();
+    } finally {
+      renameSync.mockRestore();
+    }
   });
 
   it('passes the optional release icon metadata to renderer-safe market items', async () => {
@@ -1078,6 +1162,31 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('keeps a no-port broker release visible in detail but rejects market installation before download', async () => {
+    const item = summary();
+    const brokerManifest = brokerManifestWithoutPort();
+    const normalizedBrokerManifest = normalizedManifest(brokerManifest);
+    const h = harness([item]);
+    h.api.detail.mockResolvedValue({
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: brokerManifest },
+    } as VisiblePluginDetail);
+
+    // 详情必须继续可读；把准入检查错放到共用 validator 或 detail 会先在这里报错。
+    await expect(h.service.detail(item.id)).resolves.toMatchObject({
+      manifest: { network: { secrets: [{ oauth: { tokenBroker: 'jira' } }] } },
+    });
+
+    await expect(
+      h.service.install(item.id, {
+        expectedReleaseId: item.currentRelease.id,
+        expectedManifest: normalizedBrokerManifest,
+      }),
+    ).rejects.toThrow('[GHOST_BROKER_REDIRECT_PORT_REQUIRED]');
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   // 2026-07-26 定案:市场首装一律装完即开,手动安装与 defaultInstall 归一,
   // 不再向装入入口透传 initiallyEnabled(启用语义收敛在市场装入入口本身)。
   it('manual market install goes through the auto-enable install entry', async () => {
@@ -1091,16 +1200,87 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     const { ghost } = await h.service.install(item.id, reviewedInstallOptions(item));
 
-    expect(runtime.install).toHaveBeenCalledWith(expect.stringMatching(/\.cindy$/), {
-      ghostId: 'cindy-test',
-      version: '1.0.0',
-      permissionPolicy: { mode: 'manual', sourceType: 'server' },
-    });
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({
+        ghostId: 'cindy-test',
+        version: '1.0.0',
+        permissionPolicy: { mode: 'manual', sourceType: 'server' },
+        reviewedManifest: expect.objectContaining({ id: 'cindy-test' }),
+      }),
+    );
     // 安装入口用目录 summary 做 detail 身份绑定(防止把 A 的确认导向 B 的内容),
     // 因此手动安装也会先取一次目录,但不做任何 listAll 之外的多余请求。
     expect(h.api.listAll).toHaveBeenCalledTimes(1);
     // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
     expect(ghost?.enabled).toBe(true);
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('pendingMarketRecord');
+  });
+
+  it('passes a Host-built pendingMarketRecord only for organization server-market packages', async () => {
+    const orgItem = summary({
+      ghostId: 'acme-tool',
+      scope: 'organization',
+      organizationId: 'org-1',
+      source: 'local-market',
+      installed: false,
+    } as Partial<VisiblePluginSummary> & { source: string; installed: boolean });
+    runtime.install.mockResolvedValue({
+      manifest: manifest('acme-tool'),
+      dir: '/userData/cindy-brain/acme-tool',
+      enabled: true,
+    });
+    const orgHarness = harness([orgItem]);
+    await orgHarness.service.install(orgItem.id, {
+      ...reviewedInstallOptions(orgItem),
+      expectedManifest: manifest('acme-tool'),
+    });
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({
+        pendingMarketRecord: {
+          scope: 'organization',
+          organizationId: 'org-1',
+          source: 'market',
+          installed: true,
+          sha256: orgItem.currentRelease.sha256,
+        },
+      }),
+    );
+    const pending = runtime.install.mock.calls[0]?.[1]?.pendingMarketRecord as {
+      source: string;
+      installed: boolean;
+      sha256: string;
+    };
+    expect(pending.source).toBe('market');
+    expect(pending.installed).toBe(true);
+    // The pending ticket carries only the server Release hash. The approved
+    // side is Host-bound later to inspect(package bytes), so the service cannot
+    // mint a self-reported match.
+    expect(pending.sha256).toBe(orgItem.currentRelease.sha256);
+    expect(pending).not.toHaveProperty('approvedPackageSha256');
+
+    runtime.install.mockReset();
+    const publicItem = summary({ scope: 'public', organizationId: null });
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    const publicHarness = harness([publicItem]);
+    await publicHarness.service.install(publicItem.id, reviewedInstallOptions(publicItem));
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('pendingMarketRecord');
+
+    runtime.install.mockReset();
+    const personalItem = summary({ scope: 'personal', organizationId: null });
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    const personalHarness = harness([personalItem]);
+    await personalHarness.service.install(personalItem.id, reviewedInstallOptions(personalItem));
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('pendingMarketRecord');
   });
 
   it('manual market install accepts the normalized setup manifest returned by detail', async () => {
@@ -1176,11 +1356,14 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     const ordinaryHarness = harness([ordinary]);
     await ordinaryHarness.service.install(ordinary.id, reviewedInstallOptions(ordinary));
-    expect(runtime.install.mock.calls[0]?.[1]).toEqual({
-      ghostId: 'cindy-test',
-      version: '1.0.0',
-      permissionPolicy: { mode: 'manual', sourceType: 'server' },
-    });
+    expect(runtime.install.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        ghostId: 'cindy-test',
+        version: '1.0.0',
+        permissionPolicy: { mode: 'manual', sourceType: 'server' },
+        reviewedManifest: expect.objectContaining({ id: 'cindy-test' }),
+      }),
+    );
   });
 
   it('旧 source:market + manifestDigest 安装会回填 cindy-github 官方 trust', async () => {
@@ -1435,6 +1618,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       permissionPolicy: { mode: 'manual', sourceType: 'server' },
+      reviewedManifest: expect.objectContaining({ id: item.ghostId }),
     });
     expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('permissionBaselineManifest');
   });
@@ -2287,6 +2471,41 @@ describe('PluginMarketService migration and defaultInstall', () => {
       'update-available',
       'update-available',
     ]);
+  });
+
+  it('rejects a no-port broker auto-upgrade without disturbing the installed legacy version', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: {
+        ...item.currentRelease,
+        manifest: brokerManifestWithoutPort(item.ghostId, '2.0.0'),
+      },
+    } as VisiblePluginDetail);
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]?.installState).toBe('update-available');
+    expect(runtime.ghosts[0]?.manifest.version).toBe('1.0.0');
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 
   it('aggregates upgrade notices and filters directional controls from a single name', async () => {

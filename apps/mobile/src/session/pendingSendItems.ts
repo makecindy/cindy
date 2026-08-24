@@ -73,6 +73,31 @@ export interface MobilePendingSendItem {
   hint: string | null;
 }
 
+export interface MobileMessageListExtraData {
+  pendingSendSelectedClientId: string | null;
+  shareSelectionActive: boolean;
+}
+
+/**
+ * LegendList 的行外刷新信号。待发送气泡的展开态不改变 data，必须把选中项放进
+ * extraData，才能让已复用的可见行重新计算操作区。
+ */
+export function buildMobileMessageListExtraData(
+  pendingSendSelectedClientId: string | null,
+  shareSelectionActive: boolean,
+): MobileMessageListExtraData {
+  return { pendingSendSelectedClientId, shareSelectionActive };
+}
+
+/** 待发送气泡是否处于展开态；生产渲染与状态转换测试共用同一判据。 */
+export function isPendingSendItemSelected(
+  item: Pick<MobilePendingSendItem, 'actions' | 'clientId' | 'phase'>,
+  selectedClientId: string | null,
+): boolean {
+  const interactive = item.actions !== null || item.phase === 'failed';
+  return interactive && selectedClientId === item.clientId;
+}
+
 export function pendingSendItemKey(clientId: string): string {
   return `message-${clientId}`;
 }
@@ -222,7 +247,8 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   input.queue.forEach((item, index) => {
     const phase: MobilePendingSendPhase = input.editingClientId === item.clientId
       ? 'editing'
-      : input.steeringClientIds.has(item.clientId) || input.sendingClientIds.has(item.clientId)
+      : input.steeringClientIds.has(item.clientId)
+        || input.sendingClientIds.has(item.clientId)
         ? 'sending'
         : 'queued';
     pushQueued(item, phase, index + 1);

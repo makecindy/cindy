@@ -66,14 +66,11 @@ describe('mobile session composer desktop-first surface', () => {
     const inlineButtonStart = source.indexOf('composerInlineToolButton: {');
     const inlineButtonEnd = source.indexOf('composerToolButtonActive:', inlineButtonStart);
     const inlineButtonStyle = source.slice(inlineButtonStart, inlineButtonEnd);
-    const floatingButtonStart = sharedSource.indexOf('voiceButtonAnchor: {', sharedStyleStart);
-    const floatingButtonEnd = sharedSource.indexOf('voiceButtonAnchorWithTrailing:', floatingButtonStart);
-    const floatingButtonStyle = sharedSource.slice(floatingButtonStart, floatingButtonEnd);
     const sendButtonStart = source.indexOf('sendButton: {');
     const sendButtonEnd = source.indexOf('sendButtonInactive:', sendButtonStart);
     const sendButtonStyle = source.slice(sendButtonStart, sendButtonEnd);
     const inputStart = sharedSource.indexOf('input: {', sharedStyleStart);
-    const inputEnd = sharedSource.indexOf('voiceButtonAnchor:', inputStart);
+    const inputEnd = sharedSource.indexOf('resizeGrabberTouch:', inputStart);
     const inputStyle = sharedSource.slice(inputStart, inputEnd);
     const composerStyleStart = source.indexOf('composer: {');
     const composerStyleEnd = source.indexOf('composerScroll:', composerStyleStart);
@@ -137,9 +134,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
     expect(source).toContain('|| permissionSheetOpen');
-    // 2026-07-29 用户裁决(对齐 Codex):权限入口是 composer 左侧图标钮 + 独立浮窗
-    // (MobilePermissionPickerList 由本 screen 直挂 SheetSurface),模型药丸右对齐;
+    // 2026-07-29 用户裁决:权限入口是 composer 左侧图标钮 + 独立浮窗
+    // (MobilePermissionPickerList 由本 screen 直挂 SheetSurface);
     // 浮窗打开时仍属于 composer 激活态,不能因输入框失焦把底排收起。
+    // 2026-08:模型药丸改到左侧组(权限/计划右侧),避免发送/停止出现时横向跳动。
     // ModelPickerSheet 的 header 权限入口隐藏(hidePermissionTrigger),不再双入口。
     expect(source).not.toContain('testID="session.composerPermissionButton"');
     expect(source).toContain('testID="session.permissionIndicator"');
@@ -173,7 +171,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain("'session.screen.modelBusyRetrying'");
     expect(source).toContain("'session.screen.rateLimitRetrying'");
     expect(source).toContain('{reconnectAttempt.attempt}/{reconnectAttempt.maxAttempts}');
-    expect(source).toContain('ArrowDown');
     expect(source).toContain('useSessionRunStatus');
     expect(source).toContain('remoteSessionRunStatus.tokenUsage');
     expect(source).toContain('remoteSessionRunStatus.startedAt ?? composerActivityStartedAt');
@@ -181,9 +178,21 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}');
     expect(source).toContain('startedAt={composerActivityStartedAtMs}');
     expect(source).toContain('tokenUsage={composerActivityTokenUsage}');
-    expect(source).toContain('{!sideTaskRunning ? (');
+    expect(source).toContain('outputTokens={remoteSessionRunStatus.outputTokens}');
+    expect(source).toContain('generationDurationMs={remoteSessionRunStatus.generationDurationMs}');
+    expect(source).toContain('ArrowDown');
+    expect(source).toContain('{!sideTaskRunning && showUsageMeta ? (');
+    expect(source).toContain('generationActive={remoteSessionRunStatus.generationActive}');
+    expect(source).toContain('const showUsageMeta = Boolean(rateText) || tokenUsage > 0;');
+    expect(source).toContain("t('session.screen.tokenCount'");
+    expect(source).toContain("t('session.screen.tokenCountFull'");
+    expect(source).toContain("t('session.screen.tokenRate'");
+    expect(source).toContain('accessibilityLabel={rateText}');
+    expect(source).toContain('accessibilityLabel={tokenA11yText}');
+    expect(source).not.toContain('accessibilityLabel={tokenUsage > 0 ? tokenA11yText : undefined}');
     expect(source).toContain('function formatComposerActivityElapsed');
-    expect(source).toContain('function formatComposerActivityTokens');
+    expect(source).toContain('function formatComposerActivityTokenCount');
+    expect(source).toContain('function formatComposerActivityRateValue');
     expect(source).toContain('composerActivityPrimary');
     expect(source).toContain('composerActivityMeta');
     expect(source).toContain('composerActivityMetaText');
@@ -240,8 +249,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inputStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
     expect(inputStyle).toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
     expect(inputStyle).toContain("textAlignVertical: 'top'");
-    expect(floatingButtonStyle).toContain("top: '50%'");
-    expect(floatingButtonStyle).toContain('translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
+    expect(sharedSource).toContain('cardLayout,');
+    expect(sharedSource).toContain('floating: voicePlacement.floating,');
+    expect(sharedSource).not.toContain('styles.voiceButtonAnchor');
+    expect(sharedSource).not.toContain('voiceButtonAnchorCard');
     // Composer input is a single stable, always-multiline, always-inline instance (no compact↔expanded
     // swap that remounts the native input) so the first tap reliably opens the keyboard — guards the
     // "two taps to focus" regression. Compact rest look kept via minHeight (no fixed height that clips).
@@ -473,9 +485,23 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).not.toContain('floatingVoiceButtonStyle=');
     expect(composerInputSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
-    expect(sharedSource).toContain('styles.voiceButtonAnchor,');
-    expect(sharedSource).toContain('voicePlacement.floating && styles.voiceButtonAnchorWithTrailing,');
-    expect(sharedSource).toContain('cardLayout && styles.voiceButtonAnchorCard,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
+    expect(sharedSource).toContain('floating: voicePlacement.floating,');
+    expect(sharedSource).toContain('pointerEvents="box-none"\n          style={[\n            styles.voiceButtonTouchTarget,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
+    expect(sharedSource).toContain('{floatingVoiceButton?.(floatingVoiceButtonStyle)}');
+    const voiceButtonHitAreaStyleStart = sharedSource.indexOf('voiceButtonTouchTarget: {');
+    const voiceButtonHitAreaStyleEnd = sharedSource.indexOf('\n  },', voiceButtonHitAreaStyleStart);
+    const voiceButtonHitAreaStyle = sharedSource.slice(voiceButtonHitAreaStyleStart, voiceButtonHitAreaStyleEnd);
+    expect(voiceButtonHitAreaStyleStart).toBeGreaterThan(-1);
+    expect(voiceButtonHitAreaStyle).toContain('minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(voiceButtonHitAreaStyle).not.toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(sharedSource).toContain('export function ComposerToolbarLeftGroup');
+    expect(sharedSource).toContain('toolbarLeftGroup: {');
+    expect(sharedSource).toContain('justifyContent: \'flex-start\'');
+    expect(sharedSource).not.toContain('cardLayout && styles.voiceButtonAnchorCard,');
+    expect(sharedSource).not.toContain("top: '50%'");
+    expect(sharedSource).not.toContain("top: 'auto'");
     // 录音中语音按钮以「红色停止方块」可见,禁止任何 opacity:0 隐藏样式回归
     // (旧 gestureAnchor 设计曾把听写中的按钮隐藏,会让停止录音无可见控件)。
     expect(source).not.toContain('composerInlineToolButtonGestureAnchor');
@@ -483,14 +509,23 @@ describe('mobile session composer desktop-first surface', () => {
     // 若回归三档,录音期间首段转写落地会让语音按钮整格横跳,原位正好变成停止任务。
     expect(source).not.toContain('composerFloatingVoiceButtonWithInlineStop');
     expect(source).not.toContain('composerFloatingVoiceButtonStyle');
-    // 槽位顺序不变量(对齐桌面 2026-07-25 定案):停止任务 → 语音占位 → 发送槽。
+    // 槽位顺序不变量:左侧组包住 [+][权限][计划][模型],再接 spacer;
+    // 右段 停止任务 → 语音占位 → 发送槽。药丸必须在 LeftGroup 内,不能只靠 JSX 顺序。
     const toolbarStart = source.indexOf('const renderComposerToolbar = () => (');
     const toolbarEnd = source.indexOf('const renderComposerInputOverlay', toolbarStart);
     const toolbarSource = source.slice(toolbarStart, toolbarEnd);
+    const toolbarLeftGroupStart = toolbarSource.indexOf('<ComposerToolbarLeftGroup testID="session.composerToolbarLeft">');
+    const toolbarLeftGroupEnd = toolbarSource.indexOf('</ComposerToolbarLeftGroup>');
+    const toolbarModelIndex = toolbarSource.indexOf('testID="session.composerModelButton"');
+    const toolbarSpacerIndex = toolbarSource.indexOf('<ComposerToolbarSpacer />');
     const toolbarInlineStopIndex = toolbarSource.indexOf('{renderComposerInlineStop()}');
     const toolbarVoiceSlotIndex = toolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
     const toolbarSendSlotIndex = toolbarSource.indexOf('{renderComposerSendSlot()}');
-    expect(toolbarInlineStopIndex).toBeGreaterThan(-1);
+    expect(toolbarLeftGroupStart).toBeGreaterThan(-1);
+    expect(toolbarModelIndex).toBeGreaterThan(toolbarLeftGroupStart);
+    expect(toolbarLeftGroupEnd).toBeGreaterThan(toolbarModelIndex);
+    expect(toolbarSpacerIndex).toBeGreaterThan(toolbarLeftGroupEnd);
+    expect(toolbarInlineStopIndex).toBeGreaterThan(toolbarSpacerIndex);
     expect(toolbarVoiceSlotIndex).toBeGreaterThan(toolbarInlineStopIndex);
     expect(toolbarSendSlotIndex).toBeGreaterThan(toolbarVoiceSlotIndex);
     const trailingFragmentStart = source.indexOf('const renderComposerTrailingActions = () => (');
@@ -512,12 +547,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inlineButtonStyle).not.toContain('width: 36');
     expect(inlineButtonStyle).not.toContain('height: 42');
     expect(inlineButtonStyle).not.toContain('width: 42');
-    expect(floatingButtonStyle).toContain("position: 'absolute'");
-    expect(floatingButtonStyle).toContain('right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT');
-    expect(floatingButtonStyle).toContain("top: '50%'");
-    expect(floatingButtonStyle).toContain('translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2');
-    expect(floatingButtonStyle).toContain('zIndex: 2');
-    expect(sharedSource).toContain('right: spacing.md + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP');
+    expect(sharedSource).toContain("from '@/session/composerVoiceButtonAnchor'");
+    expect(sharedSource).toContain('MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM');
     expect(sendButtonStyle).toContain('height: 34');
     expect(sendButtonStyle).toContain('width: 34');
     expect(sendButtonStyle).not.toContain('height: 36');
@@ -692,6 +723,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('voiceDuration');
     expect(source).not.toContain('recordingDuration');
     expect(source).not.toContain('formatVoiceDuration');
-    expect(source).not.toContain('durationMs');
+    expect(source).not.toContain('voiceDurationMs');
+    expect(source).not.toMatch(/(?:const|let)\s+durationMs\b/);
   });
 });

@@ -60,10 +60,17 @@ export interface GhostInstallReceipt {
   enabled: boolean;
   trust: GhostTrustInfo;
   /**
-   * 批准时点的来源指纹，仅供审计与人工比对：市场/本地包是 `.cindy` 文件哈希，
-   * 随包种子是内容目录哈希。**运行时不校验它**，不要据此认为安装内容持续完整。
+   * 批准时点的来源指纹：市场/本地包是 `.cindy` 文件哈希，随包种子是内容目录哈希。
+   * 组织市场 Broker 资格会把它与 ledger 的 Release sha256 比对；除此以外运行时不会
+   * 重算可变安装目录的整包字节，所以不要据此认为安装内容持续完整。
    */
   packageSha256?: string;
+  /**
+   * 本次装入/更新操作的来源。可选；缺失按 `manual` 读。
+   * 不要改成必填、不要升 schemaVersion、不要批量重写旧 receipt。
+   * 未知值只在授权判断时降级为 manual，不写回磁盘。
+   */
+  installOrigin?: string;
   /**
    * 按 skill item 目录钉住的批准字节指纹(`item.dir` → sha256)。声明了 skill 槽
    * 时逐项必填，没声明时是空对象。
@@ -1020,7 +1027,11 @@ export function createGhostInstallReceipt(input: {
   packageSha256?: string;
   revision?: string;
   iconDataUrl?: string;
+  installOrigin?: string;
 }): GhostInstallReceipt {
+  if (input.installOrigin !== undefined && !isPersistableInstallOrigin(input.installOrigin)) {
+    throw new Error('receipt installOrigin 不合法');
+  }
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
     id: input.manifest.id,
@@ -1032,7 +1043,26 @@ export function createGhostInstallReceipt(input: {
     skillContentSha256: input.skillContentSha256,
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
+    ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
   };
+}
+
+const MAX_INSTALL_ORIGIN_CHARS = 64;
+const INSTALL_ORIGIN_PATTERN = /^[a-z0-9-]+$/;
+
+function isPersistableInstallOrigin(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= MAX_INSTALL_ORIGIN_CHARS &&
+    INSTALL_ORIGIN_PATTERN.test(value)
+  );
+}
+
+/** Authorization-time view: missing or unknown → manual. Never write this back. */
+export function effectiveInstallOrigin(
+  receipt: Pick<GhostInstallReceipt, 'installOrigin'>,
+): 'manual' | 'agent-forge' {
+  return receipt.installOrigin === 'agent-forge' ? 'agent-forge' : 'manual';
 }
 
 /**
@@ -1164,6 +1194,16 @@ function validateReceipt(
     if (!validated.ok) return { ok: false, reason: `receipt locale 不合法:${localePath}` };
     localeResources[localePath] = validated.resource;
   }
+  let installOrigin: string | undefined;
+  if (value.installOrigin !== undefined) {
+    if (typeof value.installOrigin !== 'string') {
+      return { ok: false, reason: 'receipt installOrigin 不合法' };
+    }
+    if (!isPersistableInstallOrigin(value.installOrigin)) {
+      return { ok: false, reason: 'receipt installOrigin 不合法' };
+    }
+    installOrigin = value.installOrigin;
+  }
   return {
     ok: true,
     receipt: {
@@ -1177,6 +1217,7 @@ function validateReceipt(
       skillContentSha256,
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
+      ...(installOrigin !== undefined ? { installOrigin } : {}),
     },
   };
 }

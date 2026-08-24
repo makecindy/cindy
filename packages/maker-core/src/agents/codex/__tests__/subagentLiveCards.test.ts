@@ -287,15 +287,166 @@ describe('createSubagentLiveCardTracker', () => {
     ).toBe(300);
   });
 
-  it('uses Cindy configured model only until the child thread reports its actual model', () => {
+  it('uses an unlocked Cindy fallback only until the child thread reports its model', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
-    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({
+    // Fresh spawn 的初始模型由 translator 合并进原有启动帧，tracker 不重复发帧。
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'turn/started', {})).toMatchObject({
       taskId: 'card-1',
       model: 'gpt-5.6-terra',
     });
 
     expect(tracker.noteDescendantThread('t-child', 'root-thread', 'codex/gpt-5.5')).toMatchObject({
       model: 'codex/gpt-5.5',
+    });
+  });
+
+  it('keeps a proxy-locked model when Codex reports its inherited parent model', () => {
+    const tracker = createSubagentLiveCardTracker({
+      now: () => 0,
+      subagentModelFallback: 'z-ai/glm-5.2',
+      lockSubagentModel: true,
+    });
+    expect(tracker.noteSpawnItem(
+      v1SpawnItem('card-locked', ['t-child']),
+      'deepseek/deepseek-v4-pro',
+    )).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'turn/started', {})).toMatchObject({
+      taskId: 'card-locked',
+      model: 'z-ai/glm-5.2',
+    });
+
+    // thread/started.model is the pre-proxy Codex creation model. The proxy
+    // has already made GLM the actual outbound model, so this is not authority
+    // to replace the locked identity.
+    expect(
+      tracker.noteDescendantThread(
+        't-child',
+        'root-thread',
+        'deepseek/deepseek-v4-pro',
+      ),
+    ).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'turn/completed', {
+      turn: { id: 'turn-child', status: 'completed' },
+    })).toMatchObject({
+      taskId: 'card-locked',
+      model: 'z-ai/glm-5.2',
+      status: 'completed',
+    });
+  });
+
+  it('freezes the parent model for a spawn without a configured or explicit child model', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    expect(tracker.noteSpawnItem(
+      v2SpawnItem('card-1', 't-child'),
+      'provider-a/model-parent',
+    )).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'turn/started', {})).toMatchObject({
+      taskId: 'card-1',
+      model: 'provider-a/model-parent',
+    });
+
+    // 同一 spawn 的 completed phase 晚到时，即使父线程已切模，也不能改写已冻结值。
+    expect(
+      tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'), 'provider-b/model-next'),
+    ).toMatchObject({ model: 'provider-a/model-parent' });
+    // 新 spawn 才继承新模型。
+    expect(tracker.noteSpawnItem(
+      v2SpawnItem('card-2', 't-child-2'),
+      'provider-b/model-next',
+    )).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child-2', 'turn/started', {})).toMatchObject({
+      model: 'provider-b/model-next',
+    });
+  });
+
+  it('keeps explicit and configured child defaults ahead of parent inheritance', () => {
+    const configured = createSubagentLiveCardTracker({
+      now: () => 0,
+      subagentModelFallback: 'provider-config/model-child',
+    });
+    expect(configured.noteSpawnItem(
+      v2SpawnItem('card-config', 't-config'),
+      'provider-parent/model-root',
+    )).toBeNull();
+    expect(configured.handleDescendantNotification('t-config', 'turn/started', {})).toMatchObject({
+      model: 'provider-config/model-child',
+    });
+    expect(configured.noteSpawnItem(
+      v2SpawnItem('card-explicit', 't-explicit', undefined, 'provider-explicit/model-child'),
+      'provider-parent/model-root',
+    )).toBeNull();
+    expect(configured.handleDescendantNotification('t-explicit', 'turn/started', {})).toMatchObject({
+      model: 'provider-explicit/model-child',
+    });
+  });
+
+  it('inherits a nested spawn from its direct parent and lets runtime observation override it', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent'), 'provider-a/model-root');
+    expect(
+      tracker.noteDescendantThread('t-grandchild', 't-parent', undefined, false, true),
+    ).toMatchObject({ model: 'provider-a/model-root' });
+
+    expect(
+      tracker.noteDescendantThread('t-grandchild', 't-parent', 'provider-b/model-actual'),
+    ).toMatchObject({ model: null });
+    expect(
+      tracker.noteDescendantThread('t-parent', 'root-thread', 'provider-b/model-actual'),
+    ).toMatchObject({ model: 'provider-b/model-actual' });
+  });
+
+  it('does not let a late nested spawn fallback replace an observed runtime model', () => {
+    const tracker = createSubagentLiveCardTracker({
+      now: () => 0,
+      subagentModelFallback: 'provider-config/model-child',
+    });
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent'));
+    tracker.noteDescendantThread('t-parent', 'root-thread', 'provider-runtime/model-actual');
+    tracker.noteDescendantThread('t-grandchild', 't-parent', 'provider-runtime/model-actual');
+
+    // The nested spawn item can arrive after thread/started. Its configured
+    // fallback is lower-confidence than the already observed runtime model.
+    expect(
+      tracker.noteDescendantThread('t-grandchild', 't-parent', undefined, false, true),
+    ).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-grandchild', 'turn/started', {
+        turn: { id: 'grandchild-turn' },
+      }),
+    ).toMatchObject({ model: 'provider-runtime/model-actual' });
+  });
+
+  it('preserves a buffered runtime model when lower-priority nested spawn metadata arrives later', () => {
+    const tracker = createSubagentLiveCardTracker({
+      now: () => 0,
+      subagentModelFallback: 'provider-config/model-child',
+    });
+    tracker.noteDescendantThread('t-grandchild', 't-parent', 'provider-runtime/model-actual');
+    tracker.noteDescendantThread('t-grandchild', 't-parent', undefined, false, true);
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent'));
+
+    expect(
+      tracker.handleDescendantNotification('t-grandchild', 'turn/started', {
+        turn: { id: 'grandchild-turn' },
+      }),
+    ).toMatchObject({ model: null });
+    expect(
+      tracker.noteDescendantThread('t-parent', 'root-thread', 'provider-runtime/model-actual'),
+    ).toMatchObject({ model: 'provider-runtime/model-actual' });
+  });
+
+  it('preserves nested inheritance when lineage arrives before the parent spawn item', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    expect(
+      tracker.noteDescendantThread('t-grandchild', 't-parent', undefined, false, true),
+    ).toBeNull();
+    expect(tracker.noteSpawnItem(
+      v2SpawnItem('card-parent', 't-parent'),
+      'provider-a/model-root',
+    )).toBeNull();
+    expect(tracker.handleDescendantNotification('t-grandchild', 'turn/started', {})).toMatchObject({
+      model: 'provider-a/model-root',
     });
   });
 
@@ -326,7 +477,8 @@ describe('createSubagentLiveCardTracker', () => {
     // 多 receiver 卡:只有部分线程报了模型时,不许把局部观测投影成全卡事实;
     // 也不回退到配置兜底(已有相反观测,兜底反而更可能是错的)(codex review)。
     const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
-    expect(tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']))).toMatchObject({
+    expect(tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']))).toBeNull();
+    expect(tracker.handleDescendantNotification('t-a', 'turn/started', {})).toMatchObject({
       model: 'gpt-5.6-terra',
     });
 
@@ -343,10 +495,12 @@ describe('createSubagentLiveCardTracker', () => {
   it('hides the aggregate model badge when receiver threads report different models', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
     tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']));
-    tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5');
+    expect(tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5')).toMatchObject({
+      model: null,
+    });
     const conflicting = tracker.noteDescendantThread('t-b', 'root-1', 'gpt-5.6-terra');
-    expect(conflicting).not.toBeNull();
-    expect(conflicting?.model).toBeNull();
+    // t-b 的实际值与其已冻结默认值相同，聚合结论仍是冲突，无需重复发帧。
+    expect(conflicting).toBeNull();
   });
 
   it('clears an observed model when a quiet descendant joins the card', () => {
@@ -532,6 +686,94 @@ describe('createSubagentLiveCardTracker', () => {
     tracker.handleDescendantNotification('t-a', 'turn/completed', { turn: { status: 'failed' } });
     tracker.handleDescendantNotification('t-b', 'turn/completed', { turn: { status: 'completed' } });
     expect(tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']))?.status).toBe('failed');
+  });
+
+  it('re-asserts running for a fresh completed-only spawn whose agents are still active', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    const completedOnly = {
+      ...v1SpawnItem('card-v1', ['t-a']),
+      status: 'completed',
+      agentsStates: { 't-a': { status: 'running' } },
+    };
+
+    expect(tracker.noteSpawnItem(completedOnly, undefined, 'completed')).toMatchObject({
+      taskId: 'card-v1',
+      status: 'running',
+    });
+  });
+
+  it('persists the real terminal state for a fresh completed-only spawn (shutdown closure)', () => {
+    // P1-4：completed-only spawn（app-server 省略 started）此前线程恒为 running，
+    // drainRunningForShutdown 会把已完成的子代理持久化成 stopped。终态必须从
+    // agentsStates 同步进 tracker，且登记帧要把真实终态发出去。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    const completedOnly = {
+      ...v1SpawnItem('card-v1', ['t-a']),
+      status: 'completed',
+      agentsStates: { 't-a': { status: 'completed' } },
+    };
+
+    expect(tracker.noteSpawnItem(completedOnly, undefined, 'completed')).toMatchObject({
+      taskId: 'card-v1',
+      status: 'completed',
+    });
+    // shutdown 闭环：已完成/已失败的卡不再产生 stopped 帧。
+    expect(tracker.drainRunningForShutdown()).toHaveLength(0);
+
+    const failedOnly = {
+      ...v1SpawnItem('card-v2', ['t-b']),
+      status: 'completed',
+      agentsStates: { 't-b': { status: 'failed' } },
+    };
+    expect(tracker.noteSpawnItem(failedOnly, undefined, 'completed')).toMatchObject({
+      taskId: 'card-v2',
+      status: 'failed',
+    });
+    expect(tracker.drainRunningForShutdown()).toHaveLength(0);
+
+    // `done` 是 Codex agentsStates 的实际产出拼写（translator.test.ts 夹具同款），
+    // 漏识别会把已完成的子代理在 shutdown 时持久化成 stopped（review P1）。
+    const doneOnly = {
+      ...v1SpawnItem('card-v3', ['t-c']),
+      status: 'completed',
+      agentsStates: { 't-c': { status: 'done' } },
+    };
+    expect(tracker.noteSpawnItem(doneOnly, undefined, 'completed')).toMatchObject({
+      taskId: 'card-v3',
+      status: 'completed',
+    });
+    expect(tracker.drainRunningForShutdown()).toHaveLength(0);
+  });
+
+  it('persists agentsStates terminal status after an earlier started phase', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a']), undefined, 'started');
+
+    const completed = {
+      ...v1SpawnItem('card-v1', ['t-a']),
+      status: 'completed',
+      agentsStates: { 't-a': { status: 'done' } },
+    };
+    expect(tracker.noteSpawnItem(completed, undefined, 'completed')).toMatchObject({
+      taskId: 'card-v1',
+      status: 'completed',
+    });
+    expect(tracker.drainRunningForShutdown()).toHaveLength(0);
+  });
+
+  it('does not guess an unknown terminal label for a completed-only spawn', () => {
+    // 认不出的 agentsStates 标签保持 running（不猜）；shutdown 仍按 stopped 收口。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    const completedOnly = {
+      ...v1SpawnItem('card-v1', ['t-a']),
+      status: 'completed',
+      agentsStates: { 't-a': { status: 'frobnicated' } },
+    };
+
+    expect(tracker.noteSpawnItem(completedOnly, undefined, 'completed')).toBeNull();
+    expect(tracker.drainRunningForShutdown()).toMatchObject([
+      expect.objectContaining({ taskId: 'card-v1', status: 'stopped' }),
+    ]);
   });
 
   it('never overwrites a failed spawn terminal state with a running aggregate', () => {

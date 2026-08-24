@@ -891,6 +891,7 @@ const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
 const MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
+const MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0';
 
 function swiftTargetTriple(cpuArch: 'arm64' | 'x86_64', deploymentTarget: string): string {
   return `${cpuArch}-apple-${deploymentTarget}`;
@@ -994,6 +995,26 @@ function buildSwiftHelperForForgeArch(
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const src = path.join(__dirname, 'native', 'xbox-gamepad', 'macos-xbox-gamepad-helper.swift');
+  const destDir = path.join(__dirname, 'resources', 'tools', 'xbox-gamepad');
+  const dest = path.join(destDir, 'cindy-macos-xbox-gamepad-helper');
+  if (!fs.existsSync(src)) {
+    throw new Error(`[forge] Xbox gamepad helper source missing at ${src}`);
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET,
+    ['-framework', 'GameController', '-framework', 'IOKit'],
+    'Xbox gamepad helper',
+  );
+  fs.chmodSync(dest, 0o755);
 }
 
 function buildMacVoiceInputTextInsertionHelper(platform: ForgePlatform, arch: ForgeArch): void {
@@ -1463,6 +1484,7 @@ const config: ForgeConfig = {
       buildWindowsVoiceInputFunctionKeyListener(targetPlatform);
       buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
+      buildMacXboxGamepadHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
@@ -1501,6 +1523,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/cindy-brain/libraryDbWorker.ts',
+          config: 'vite.library-db-worker.config.ts',
+          // 插件 Library SQLite 隔离在 per-plugin worker：恶意慢查询只饿死
+          // 自己的线程，宿主可 terminate（WAL 保证不损坏库）。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/im/wechat/silkWorker.ts',
           config: 'vite.silk-worker.config.ts',
           // SILK/WASM 解码隔离在线程中，避免阻塞 Electron main。
@@ -1510,6 +1539,13 @@ const config: ForgeConfig = {
           entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
           config: 'vite.contacts-sync-codec-worker.config.ts',
           // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/process-monitor/windowsProcessScanWorker.ts',
+          config: 'vite.process-scan-worker.config.ts',
+          // Windows PowerShell 的进程管道偶发 ENOTCONN；一次性 worker 隔离后
+          // 只降级资源用量快照，不能再变成 Electron main 的 uncaughtException。
           target: 'preload',
         },
         {
@@ -1531,6 +1567,13 @@ const config: ForgeConfig = {
           config: 'vite.watcher-host.config.ts',
           // 同 dbWorker:借 preload target 出 CJS 单文件；运行时是 Electron
           // utilityProcess（@parcel/watcher 的 native 崩溃隔离，见 watcher-host/）。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/worklouder-codex/workLouderCodexHostProcess.ts',
+          config: 'vite.preload.config.ts',
+          // 私有 Work Louder SDK + node-hid 只在独立 utilityProcess 内加载；
+          // SDK 缺失或原生崩溃都不能影响 Electron main。
           target: 'preload',
         },
         {

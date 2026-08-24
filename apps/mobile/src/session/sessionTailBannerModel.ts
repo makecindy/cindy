@@ -26,7 +26,7 @@ import {
   messageContentToPreview,
   sortMessagesByCreatedAt,
 } from '@cindy/maker-shared/message-normalize';
-import { describeAgentAuthError } from '@cindy/maker-shared/device-link-contract';
+import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 

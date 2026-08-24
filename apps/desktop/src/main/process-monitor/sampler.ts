@@ -56,6 +56,8 @@ export interface ProcessMonitorSamplerDeps {
   log: SamplerLogger;
   /** OS 扫描的最小间隔;快 tick 之间复用缓存。 */
   osScanIntervalMs?: number;
+  /** Windows 首帧先返回 Chromium 指标，OS 扫描在后台刷新后由下一 tick 合并。 */
+  deferOsScan?: boolean;
   /** 注入时钟(测试用;生产缺省 Date.now)。 */
   now?: () => number;
 }
@@ -240,7 +242,9 @@ export function createProcessMonitorSampler(
 
   return {
     async sample(): Promise<ProcessMonitorSample> {
-      await refreshSnapshotIfStale();
+      const refresh = refreshSnapshotIfStale();
+      if (deps.deferOsScan) void refresh;
+      else await refresh;
       const atMs = now();
       const agentEntries = collectAgentEntries();
       const agentPids = new Set<number>();

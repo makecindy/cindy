@@ -15,6 +15,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1297,11 +1299,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           model: 'byom-model', // 属于原生 provider,不是网关模型
         });
         // models.json 里有独立的 localbyom provider 块,baseUrl 直连原生端点。
-        // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根;
-        // 本 test 只起一个会话,run-tmp 下恰有一个子目录。
-        const { readFileSync, readdirSync } = await import('node:fs');
+        // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根。
+        // 整组测试共享 agentHome，前序用例可能留下已清空的 run-tmp 子目录；只认仍持有
+        // models.json 的活动会话目录，并要求当前恰好一个，避免目录枚举顺序造成误判。
         const runTmp = path.join(agentHome, 'run-tmp');
-        const configHome = path.join(runTmp, readdirSync(runTmp)[0]);
+        const activeConfigHomes = readdirSync(runTmp, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => path.join(runTmp, entry.name))
+          .filter((candidate) => existsSync(path.join(candidate, 'models.json')));
+        expect(activeConfigHomes).toHaveLength(1);
+        const configHome = activeConfigHomes[0];
+        if (!configHome) throw new Error('active Pi config home missing');
         const config = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8')) as {
           providers: Record<string, { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> }>;
         };
@@ -1916,10 +1924,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
               'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
-              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH',
-              'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
+              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH CINDY_PI_BASH_PACKAGE_HOME',
+              'CINDY_PI_PERMISSION_FILE PI_PACKAGE_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
-              'done; printf "PI_ENV_CLEAN\\n"',
+              'done; printf "PI_BASH_HOME:%s\\nPI_ENV_CLEAN\\n" "$PI_CODING_AGENT_DIR"',
             ].join(' '),
           }),
           anthropicStreamBody('env isolation finished'),
@@ -1939,6 +1947,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           ?.flatMap((message) => message.content ?? [])
           .find((block) => block.type === 'tool_result')?.content ?? '';
         expect(toolResult).toContain('PI_ENV_CLEAN');
+        expect(toolResult).toMatch(/PI_BASH_HOME:.*[/\\]bash-package-home/);
         expect(toolResult).not.toContain('PI_ENV_LEAK:');
         expect(toolResult).not.toContain('test-key-123');
         expect(toolResult).not.toContain('remote-mcp-secret-canary');
@@ -1974,6 +1983,45 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(followUp.some((b) => b.includes('User denied this tool call via Cindy.'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'auto mode: an automatic review block is not reported as a user rejection',
+    { timeout: 60_000 },
+    async () => {
+      const tempRoot = mkdtempSync(path.join(tmpdir(), 'pi-auto-review-denial-copy-'));
+      const workingDir = path.join(tempRoot, 'workspace');
+      mkdirSync(workingDir);
+      const marker = path.join(tempRoot, 'must-not-exist.txt');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('write', { path: marker, content: 'must not land' }),
+          anthropicStreamBody('automatic denial observed'),
+        );
+        const deps = buildDeps();
+        deps.reviewAutoPermissionAction = async () => ({ verdict: 'block' });
+        const reqBefore = seenRequests.length;
+        const { resolverTools } = await runPermissionTurn({
+          sessionId: 'pi-auto-review-source-copy',
+          workingDir,
+          permissionMode: 'auto',
+          resolverBehavior: 'deny',
+          deps,
+        });
+
+        expect(resolverTools).toEqual([]);
+        expect(existsSync(marker)).toBe(false);
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('Cindy Auto-review denied this tool call.')))
+          .toBe(true);
+        expect(followUp.some((body) => body.includes('User denied this tool call via Cindy.')))
+          .toBe(false);
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
         scriptedResponses.length = 0;
       }
     },
@@ -2721,8 +2769,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           await handle?.close();
         }
 
-        // 派子代理本身要过审批门(它不是只读内置工具)—— 这是有意的安全属性。
-        expect(resolverTools).toContain('subagent');
+        // Ask 档仍逐次由用户确认 spawn；Auto 档另有回归证明 spawn 本身静默放行。
+        expect(resolverTools).toEqual(['subagent']);
 
         // 卡片走的是与 Claude / Codex 同一条 agent_task_update 通道。
         const cardUpdates = events
@@ -2742,6 +2790,49 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(seenRequests.some((r) => r.body.includes('auth starts at src/auth/index.ts:42'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'auto mode: Subagent spawn is silent while a dangerous child tool call is still denied',
+    { timeout: 120_000 },
+    async () => {
+      const tempRoot = mkdtempSync(path.join(tmpdir(), 'pi-subagent-auto-approval-'));
+      const workingDir = path.join(tempRoot, 'workspace');
+      mkdirSync(workingDir);
+      const marker = path.join(tempRoot, 'must-not-exist.txt');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('subagent', {
+            agent: 'worker',
+            task: 'try the requested shell command',
+          }),
+          // Spawn itself is safe, but the worker's concrete side effect must return to the
+          // parent approval surface. The resolver denies this command below.
+          anthropicToolUseBody('write', { path: marker, content: 'must not land' }),
+          anthropicStreamBody('the requested command was denied'),
+          anthropicStreamBody('parent turn finished'),
+        );
+
+        const deps = buildDeps();
+        deps.reviewAutoPermissionAction = async () => ({ verdict: 'block' });
+        const { resolverTools } = await runPermissionTurn({
+          sessionId: 'pi-subagent-auto-child-deny',
+          workingDir,
+          permissionMode: 'auto',
+          resolverBehavior: 'deny',
+          deps,
+        });
+
+        // Auto-review blocks the concrete child side effect silently. The child receives
+        // the source-aware reason through the durable mailbox (covered by the protocol tests).
+        expect(resolverTools).toEqual([]);
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
         scriptedResponses.length = 0;
       }
     },

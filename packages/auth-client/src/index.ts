@@ -1,6 +1,14 @@
 export { AuthApiError, CindyAuthClient } from "./client.js";
 export { discoverSsoOrgRealm } from "./orgRealmDiscovery.js";
 export {
+  MAX_SSO_ORG_HISTORY_ENTRIES,
+  MAX_SSO_ORG_IDENTIFIER_LENGTH,
+  parseSsoOrgHistory,
+  rememberSsoOrgIdentifier,
+  serializeSsoOrgHistory,
+  SSO_ORG_HISTORY_VERSION,
+} from "./ssoOrgHistory.js";
+export {
   accountDeletionReceiptRecordSchema,
   authSessionRecordSchema,
   parseAccountDeletionReceiptRecord,
@@ -29,6 +37,10 @@ export {
   accountDeletionStatusSchema,
   accountMembershipSchema,
   authRegionSchema,
+  CAPTCHA_CHALLENGE_PAGE_PATH,
+  captchaConfigSchema,
+  captchaRequiredActionForVerificationKind,
+  captchaRequiredActionSchema,
   desktopAuthorizationPollSchema,
   loginMethodSchema,
   loginOutcomeSchema,
@@ -52,6 +64,8 @@ export type {
   AuthClientType,
   AuthFlowAction,
   AuthFlowState,
+  CaptchaConfig,
+  CaptchaRequiredAction,
   AuthMe,
   AuthMembership,
   AuthRegion,

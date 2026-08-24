@@ -11,8 +11,10 @@
 // 8083、app 还连 8081,反而制造"看着像新版、其实是旧 bundle"的坑(正是本工具要消灭的)。
 //   - 8081 空闲 → 起在 8081。
 //   - 8081 已被**本 worktree** 占 → 说明 Metro 已在跑,直接 Fast Refresh 即可,不重开。
-//   - 8081 被**别的 worktree** 占 → 默认明确报错;传 `--takeover` 时仅在确认占用者是 Metro、
-//     且能读取它的 worktree 时为本次用户授权的切换停止它,然后重新启动当前版本。
+//   - 8081 被**别的 worktree** 占 → 默认明确报错;传 `--takeover` 时仅在确认占用者是
+//     Cindy Metro(cwd 以 /apps/mobile 结尾 + 注入了源码指纹)后停止它。不要求对方
+//     磁盘上的 git 指纹仍与启动时一致;对方目录已删则视为孤儿 Metro,同样可接管。
+//     未知进程 / 非 Metro 即使带 `--takeover` 也 fail closed。
 //     确实要换端口请 `--port <p>` 显式指定(你需自行把模拟器里的 app 指过去,如 dev menu)。
 //
 // 用法(仓库根):
@@ -22,6 +24,7 @@
 //   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
 
 import { execFileSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
@@ -34,6 +37,7 @@ import {
   classifySimMetroListener,
   extractSimMetroPortArgs,
   extractSimTakeoverArgs,
+  resolveSimMetroHandoff,
 } from './lib/sim-whoami.mjs';
 import {
   ensureMobileLocalRegionConfig,
@@ -94,39 +98,23 @@ if (portArgs.port === DEFAULT_PORT) {
       source: runningSource,
       targetWorktree: worktreeRoot,
     });
-    let listenerSourceIdentity = null;
-    if (listener.confirmed) {
-      try {
-        listenerSourceIdentity = gitSourceIdentity(listener.worktree);
-      } catch {
-        listenerSourceIdentity = null;
-      }
+    const listenerWorktreeExists = Boolean(listener.worktree && existsSync(listener.worktree));
+    const decision = resolveSimMetroHandoff({
+      port: DEFAULT_PORT,
+      cwd,
+      takeover,
+      envChanged,
+      currentSource: sourceIdentity,
+      runningSource,
+      listener,
+      listenerWorktreeExists,
+    });
+    if (decision.action === 'reuse') {
+      for (const line of decision.lines) console.log(line);
+      process.exit(0);
     }
-    const listenerConfirmed = listener.confirmed && listenerSourceIdentity === runningSource;
-    const canTakeOverListener = listener.isTarget ? listener.confirmed : listenerConfirmed;
-
-    if (listenerConfirmed && listener.isTarget) {
-      // 是本 worktree 的 Metro —— 但还要确认它注入了**当前分支**的 git env,否则 build label branch
-      // 会是旧值/unknown(如手动 `expo start` 起的、或起好后切过分支),"已在跑"就成了假证据。
-      if (runningSource === sourceIdentity) {
-        if (envChanged && !takeover) {
-          console.error('✗ 已补/改 apps/mobile/.env,但 8081 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。');
-          console.error('  需要刷新 env 时传 `--takeover` 重起,新 env 才会生效。');
-          process.exit(1);
-        }
-        if (!envChanged) {
-          console.log(`✓ Metro 已在 ${DEFAULT_PORT} 运行(本 worktree,源码指纹 ${sourceIdentity})。改 JS 直接 Fast Refresh,无需重开。`);
-          process.exit(0);
-        }
-      } else if (!takeover) {
-        console.error(`✗ ${DEFAULT_PORT} 上是本 worktree 的 Metro,但源码指纹已过期(运行中=${runningSource || '(无)'} ≠ 当前=${sourceIdentity})。`);
-        console.error('  这通常表示 Metro 启动后又 amend/rebase/reset/改过文件。需要接管时传 `--takeover` 重起。');
-        process.exit(1);
-      }
-    } else if (!(takeover && canTakeOverListener)) {
-      console.error(`✗ 端口 ${DEFAULT_PORT} 被其他进程占用:${cwd || '(未知进程)'}`);
-      console.error(`  本 app 无 expo-dev-client、只会连默认 ${DEFAULT_PORT};默认不会自动接管。`);
-      console.error('  只有确认它是本 Cindy worktree 的 Metro 后，传 `--takeover` 才能安全切换。');
+    if (decision.action === 'refuse') {
+      for (const line of decision.lines) console.error(line);
       process.exit(1);
     }
 
@@ -139,7 +127,9 @@ if (portArgs.port === DEFAULT_PORT) {
       console.error(`✗ 无法在限定时间内停止旧 Metro(pid=${pid}),拒绝继续。`);
       process.exit(1);
     }
-    if (listener.isTarget) {
+    if (decision.code === 'occupied-orphan') {
+      console.log(`✓ 已停止已删除 worktree 的孤儿 Metro(pid=${pid}, cwd=${cwd})。`);
+    } else if (listener.isTarget) {
       console.log(`✓ 已重启当前 worktree 的 Metro(pid=${pid}, cwd=${cwd})。`);
     } else {
       console.log(`✓ 已接管其他 Cindy worktree 的 Metro(pid=${pid}, cwd=${cwd})。`);

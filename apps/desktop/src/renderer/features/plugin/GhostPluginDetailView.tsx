@@ -27,6 +27,7 @@ import {
   GraduationCap,
   KeyRound,
   LayoutTemplate,
+  Library,
   MapPin,
   Megaphone,
   MessageCircleQuestion,
@@ -45,6 +46,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
+import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostErrandPrefs } from '@/cindy-brain/GhostErrandPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -58,6 +60,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,
@@ -114,6 +117,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   notify: Megaphone,
   confirm: MessageCircleQuestion,
   fs: FilePen,
+  library: Library,
   'session-context': MapPin,
   pick: FolderOpen,
   preview: AppWindow,
@@ -289,6 +293,12 @@ export function GhostPluginDetailView({
                   type="button"
                   onClick={onUpdate}
                   disabled={updateBusy}
+                  aria-label={
+                    updateVersion === detail.version
+                      ? t('settings.ghosts.market.update')
+                      : t('settings.ghosts.market.updateTo', { version: updateVersion })
+                  }
+                  aria-busy={updateBusy || undefined}
                   className={cn(
                     'inline-flex h-10 items-center justify-center gap-1.5 rounded-full px-5 text-13 font-medium',
                     'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -297,10 +307,16 @@ export function GhostPluginDetailView({
                     'disabled:cursor-wait disabled:opacity-60 disabled:active:scale-100',
                   )}
                 >
-                  <ArrowUp size={14} aria-hidden="true" />
-                  {updateVersion === detail.version
-                    ? t('settings.ghosts.market.update')
-                    : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                  {updateBusy ? (
+                    <Spinner size={14} />
+                  ) : (
+                    <>
+                      <ArrowUp size={14} aria-hidden="true" />
+                      {updateVersion === detail.version
+                        ? t('settings.ghosts.market.update')
+                        : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                    </>
+                  )}
                 </button>
               ) : null}
               {primaryAction !== 'manage' ? (
@@ -520,6 +536,8 @@ export function GhostPluginDetailView({
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
+
+        <GhostLibrarySection ghostId={detail.id} slots={ghost?.manifest.slots ?? []} />
 
         <DetailsSection detail={detail} panelStatus={panelStatus} />
       </article>

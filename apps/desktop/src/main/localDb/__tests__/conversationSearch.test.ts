@@ -29,4 +29,20 @@ describe('conversationSearch source invariants', () => {
   it('keeps the raw stored title in the session summary', () => {
     expect(conversationSearchSource).toContain('title: row.title,');
   });
+
+  it('applies grouping-normalized workingDirs so remote project search is not window-bound', () => {
+    expect(conversationSearchSource).toContain('applyWorkingDirFilter');
+    expect(conversationSearchSource).toContain('normalizeWorkingDirForGrouping');
+  });
+
+  it('excludes Orca workers from searchable sessions', () => {
+    expect(conversationSearchSource).toContain("ne(sessions.orcaRole, 'worker')");
+  });
+
+  it('scopes content retrieval to searchable session ids including global search', () => {
+    expect(conversationSearchSource).toContain('sessionIds: allowedSessionIds');
+    expect(conversationSearchSource).not.toContain(
+      'filters.sessionIds !== null || filters.workingDirs !== null',
+    );
+  });
 });

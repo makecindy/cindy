@@ -19,6 +19,9 @@ import { contextBridge, ipcRenderer } from 'electron';
  *   …req}) 的语法糖,零新通道零新权限(白名单/凭证注入全在主机侧守门)。
  * - fs(req):fs 槽代写文件的便捷口——send({type:'fs-request', …req}) 的
  *   语法糖,同样零新通道零新权限(三档守门全在主机侧 fsSlot)。
+ * - library(req):library 槽持久作品库的便捷口——send({type:'library-request',
+ *   …req}) 的语法糖;资格审/binding 根解析/owner scope 复核/SQL 语句门全在
+ *   主机侧 librarySlot,失败回结构化 errorCode(永不 reject)。
  * - agent.errand(req) / agent.queryErrand(req):派活取件便捷口——
  *   send({type:'agent-errand-request', kind:'run'/'query', …req}) 的语法糖;
  * - agent.run(req):Agent 新回合的便捷口——send({type:'agent-request',
@@ -57,6 +60,8 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fetch-request' }),
   fs: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fs-request' }),
+  library: (req: Record<string, unknown>): Promise<unknown> =>
+    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'library-request' }),
   agent: {
     run: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-request' }),

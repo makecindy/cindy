@@ -56,6 +56,22 @@ beforeEach(() => {
 });
 
 describe('createStdioTransport process observer', () => {
+  it('starts the app-server without a visible Windows console', () => {
+    mocks.spawn.mockReturnValue(makeChild());
+
+    createStdioTransport({ binaryPath: '/codex', cwd: '/workspace' });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      '/codex',
+      ['app-server'],
+      expect.objectContaining({
+        cwd: '/workspace',
+        shell: false,
+        windowsHide: true,
+      }),
+    );
+  });
+
   it('spawn 时登记一次，主动 close 时只清理一次', async () => {
     const child = makeChild();
     mocks.spawn.mockReturnValue(child);

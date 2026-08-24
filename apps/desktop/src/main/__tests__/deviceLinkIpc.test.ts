@@ -35,7 +35,9 @@ vi.mock('./index', () => ({
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),
   broadcast: vi.fn(),
+  applyControllerPresenceListSnapshot: vi.fn(),
   captureControllerDisplayNameRequestEpoch: () => 0,
+  captureControllerPresenceRequestEpoch: () => 0,
   readControllerDisplayNameFreshnessSince: () => ({
     changedAfterRequest: false,
     authoritativeName: null,
@@ -51,7 +53,9 @@ vi.mock('../device-link/index', () => ({
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),
   broadcast: vi.fn(),
+  applyControllerPresenceListSnapshot: vi.fn(),
   captureControllerDisplayNameRequestEpoch: () => 0,
+  captureControllerPresenceRequestEpoch: () => 0,
   readControllerDisplayNameFreshnessSince: () => ({
     changedAfterRequest: false,
     authoritativeName: null,
@@ -145,8 +149,10 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     rememberLastKnownDeviceName: vi.fn(async () => false),
     forgetLastKnownDeviceName: vi.fn(async () => false),
     applyControllerDisplayNameListSnapshot: vi.fn(),
+    applyControllerPresenceListSnapshot: vi.fn(),
     beginControllerDisplayNameDirectoryRefresh: vi.fn(() => 1),
     captureControllerDisplayNameRequestEpoch: vi.fn(() => 0),
+    captureControllerPresenceRequestEpoch: vi.fn(() => 0),
     isLatestControllerDisplayNameDirectoryRefresh: vi.fn(() => true),
     waitForNewerControllerDisplayNameDirectoryRefresh: vi.fn(async () => {}),
     readControllerDisplayNameFreshnessSince: vi.fn(() => ({
@@ -302,6 +308,7 @@ describe('device-link IPC handlers', () => {
     'listDevices:被后台目录淘汰的旧响应(%s)等待后返回当前权威名(%s)',
     async (name, authoritativeName, expectedName) => {
       const applyControllerDisplayNameListSnapshot = vi.fn();
+      const applyControllerPresenceListSnapshot = vi.fn();
       const rememberLastKnownDeviceName = vi.fn(async () => true);
       const forgetLastKnownDeviceName = vi.fn(async () => true);
       const waitForNewerControllerDisplayNameDirectoryRefresh = vi.fn(async () => {});
@@ -323,6 +330,7 @@ describe('device-link IPC handlers', () => {
           ],
         }),
         applyControllerDisplayNameListSnapshot,
+        applyControllerPresenceListSnapshot,
         rememberLastKnownDeviceName,
         forgetLastKnownDeviceName,
         beginControllerDisplayNameDirectoryRefresh: vi.fn(() => 1),
@@ -340,6 +348,7 @@ describe('device-link IPC handlers', () => {
 
       expect(waitForNewerControllerDisplayNameDirectoryRefresh).toHaveBeenCalledWith(1);
       expect(applyControllerDisplayNameListSnapshot).not.toHaveBeenCalled();
+      expect(applyControllerPresenceListSnapshot).not.toHaveBeenCalled();
       expect(rememberLastKnownDeviceName).not.toHaveBeenCalled();
       expect(forgetLastKnownDeviceName).not.toHaveBeenCalled();
     },
@@ -356,11 +365,13 @@ describe('device-link IPC handlers', () => {
       const rememberLastKnownDeviceName = vi.fn(async () => true);
       const forgetLastKnownDeviceName = vi.fn(async () => true);
       const applyControllerDisplayNameListSnapshot = vi.fn();
+      const applyControllerPresenceListSnapshot = vi.fn();
       const deps = makeDeps({
         apiFetch,
         rememberLastKnownDeviceName,
         forgetLastKnownDeviceName,
         applyControllerDisplayNameListSnapshot,
+        applyControllerPresenceListSnapshot,
       });
       const device = (name: string) => ({
         deviceId: 'dev-1',
@@ -392,6 +403,11 @@ describe('device-link IPC handlers', () => {
       expect(applyControllerDisplayNameListSnapshot).toHaveBeenCalledTimes(1);
       expect(applyControllerDisplayNameListSnapshot).toHaveBeenCalledWith(
         [expect.objectContaining({ deviceId: 'dev-1', name: '新数据库名' })],
+        0,
+      );
+      expect(applyControllerPresenceListSnapshot).toHaveBeenCalledTimes(1);
+      expect(applyControllerPresenceListSnapshot).toHaveBeenCalledWith(
+        [expect.objectContaining({ deviceId: 'dev-1', online: true, platform: 'darwin' })],
         0,
       );
     },

@@ -544,8 +544,8 @@ export interface GhostSecretOauthDecl {
    * 可选:服务端 token broker 的 provider slug(2026-07-14 增补)。
    * 声明后 code 换 token 与 refresh 不直连 tokenUrl,改经主机
    * 调服务端的授权 broker(带登录 JWT;client secret 在服务端,不随包
-   * 分发)。与 clientSecret 互斥。**仅第一方官方前缀意识可用**——校验层保持
-   * 纯函数不感知装入语境,门控在运行时装入闸与连接闸(cindy-brain)。
+   * 分发)。与 clientSecret 互斥。静态官方前缀照旧放行；其余资格由装入来源与
+   * 当前组织事实共同判定。校验层保持纯函数不感知装入语境，门控在装入闸与连接闸。
    */
   tokenBroker?: string;
   /**

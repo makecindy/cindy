@@ -10,6 +10,7 @@
 export type SettingsTab =
   | 'general'
   | 'billing'
+  | 'usage'
   | 'personalization'
   | 'providers'
   | 'api-keys'
@@ -22,16 +23,20 @@ export type SettingsTab =
   | 'tina'
   | 'ghosts'
   | 'builtin-tools'
+  | 'pi-extensions'
   | 'computer-use'
   | 'im-bot'
   | 'help'
   | 'about';
 
-export const TAB_IDS: ReadonlyArray<SettingsTab> = [
+export const TAB_IDS = [
   'general',
   'personalization',
   'providers',
   'billing',
+  // 「用量历史」紧随计费:两者都回答"我用了多少",但分工明确 —— billing 管账单与账户
+  // 信息,usage 只统计本机 Cindy 内产生的 token 消耗(#2785 维护者裁决)。
+  'usage',
   // 「工具密钥」(api-keys)已于 2026-07-13 下架:面板里最后一把 mivo key 随
   // XD Mivo 意识化改由意识设置页收单(官方别名映射同一存储键)。id 仍留在
   // SettingsTab 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件分区。
@@ -50,11 +55,14 @@ export const TAB_IDS: ReadonlyArray<SettingsTab> = [
   'computer-use',
   'help',
   'about',
-];
+] as const satisfies ReadonlyArray<SettingsTab>;
+
+export type VisibleSettingsTab = (typeof TAB_IDS)[number];
 
 export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   general: 'settings.tabs.general',
   billing: 'settings.tabs.billing',
+  usage: 'settings.tabs.usage',
   personalization: 'settings.tabs.personalization',
   'api-keys': 'settings.tabs.apiKeys',
   'voice-input': 'settings.tabs.voiceInput',
@@ -67,16 +75,16 @@ export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   tina: 'settings.tabs.tina',
   ghosts: 'settings.tabs.ghosts',
   'builtin-tools': 'settings.tabs.builtinTools',
+  'pi-extensions': 'settings.tabs.piExtensions',
   'computer-use': 'settings.tabs.computerUse',
   'im-bot': 'settings.tabs.imBot',
   help: 'settings.tabs.help',
   about: 'settings.tabs.about',
 };
 
-// 只校验当前「可见/可路由」的 tab(即 TAB_IDS 里的项)。注意 `tina` 仍保留在
-// SettingsTab 类型与 TAB_LABEL_KEY 中(供 SettingsView 的 `?tab=tina` → `im-bot`
-// legacy 重定向复用),但已从 TAB_IDS 移除,因此 isSettingsTab('tina') 返回 false
-// 是有意为之——tina 不再是独立可停靠的 tab,重定向在调用本守卫之前就已处理。
+// 只校验当前「可见/可路由」的 tab(即 TAB_IDS 里的项)。注意 `tina` 与
+// `pi-extensions` 仍保留在 SettingsTab 类型与 TAB_LABEL_KEY 中,分别供旧深链
+// 重定向和通用页内嵌管理面板复用；二者都不是独立可停靠的一级 tab。
 export function isSettingsTab(value: string | null): value is SettingsTab {
   return value !== null && (TAB_IDS as ReadonlyArray<string>).includes(value);
 }

@@ -105,7 +105,9 @@ describe('scrollWindowModel', () => {
     // 「加载更早」,也决定能不能信任早于本页的缓存段。
     expect(source).toContain('const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);');
     expect(source).toContain('setHasOlderMessages(moreBeyondWindow);');
-    expect(source).toContain('setLatestMessageWindow(sessionId, historyPage, { moreBeyondWindow })');
+    expect(source).toMatch(
+      /setLatestMessageWindow\(sessionId, historyPage, \{\s*authority: messageAuthority,\s*moreBeyondWindow,\s*\}\)/,
+    );
   });
 });
 

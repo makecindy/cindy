@@ -161,6 +161,7 @@ export class GhostCardActionDispatcher {
         await this.deps.wake(ghost);
         if (!ownerUsable()) return rejectStaleOwner(ghostId);
       }
+      // 卡片路径只发这一张一次性票；不另记面板手势，避免一次点击两份凭据。
       const userActionToken = this.deps.issueUserActionToken?.(ghostId, sessionId) ?? null;
       if (!ownerUsable()) return rejectStaleOwner(ghostId);
       this.deps.sendToGhost(ghostId, {

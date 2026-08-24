@@ -2,6 +2,7 @@ import {
   parseChatQuoteSegments,
   stripChatQuoteMarkerLines,
 } from '@cindy/maker-shared/chat-quotes';
+import { slashCommandDisplayLabel } from '@cindy/maker-shared/composer-palette';
 import {
   type ConversationShareAttachment,
   type ConversationShareBodyPart,
@@ -130,7 +131,7 @@ function projectBodyParts(
       if (token.display) parts.push({ kind: 'pasted', label: token.display });
       continue;
     }
-    if (token.text) parts.push({ kind: 'slash', label: token.text });
+    if (token.text) parts.push({ kind: 'slash', label: slashCommandDisplayLabel(token.text) });
   }
   return parts;
 }

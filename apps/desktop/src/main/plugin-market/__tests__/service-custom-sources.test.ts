@@ -1130,6 +1130,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     });
     expect(result.ghost?.manifest.id).toBe('alpha');
     expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('pendingMarketRecord');
     // 打包产物是临时文件，装完即删
     expect(runtime.install.mock.calls[0]?.[0]).toMatch(/cindy-custom-market-alpha-.*\.cindy$/);
     expect(fs.existsSync(runtime.install.mock.calls[0]?.[0] as string)).toBe(false);

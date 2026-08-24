@@ -29,6 +29,7 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   },
 }));
@@ -97,6 +98,7 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
     errorCode: null,
     loginState: state,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
     ...extra,
   };
@@ -257,13 +259,15 @@ describe('verification-code', () => {
 
   it('重发成功重置 / 失败保持(dispatch 返回值驱动 arm)', async () => {
     vi.useFakeTimers();
-    const dispatch = vi.fn(async () => true);
-    mount(await verificationState(), { dispatch });
+    // request-code 走 dispatchWithResult(captcha 兜底需要读失败码),arm 由其
+    // success 驱动
+    const dispatchWithResult = vi.fn(async () => ({ success: true, code: null as string | null }));
+    mount(await verificationState(), { dispatchWithResult });
     // 初始无倒计时(直接注入态未经历 request-code) → 链接可点
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));
     });
-    expect(dispatch).toHaveBeenCalledWith(
+    expect(dispatchWithResult).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'request-code', kind: 'email' }),
     );
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
@@ -271,7 +275,7 @@ describe('verification-code', () => {
     );
     // 走到 0 → 再点一次但失败:不 arm,链接保持
     act(() => vi.advanceTimersByTime(42_000));
-    dispatch.mockResolvedValueOnce(false);
+    dispatchWithResult.mockResolvedValueOnce({ success: false, code: 'RATE_LIMITED' });
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));
     });

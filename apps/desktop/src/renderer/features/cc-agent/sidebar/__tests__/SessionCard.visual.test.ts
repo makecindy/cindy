@@ -65,6 +65,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children: ReactNode }) => children,
   Tooltip: {
     Provider: ({ children }: { children: ReactNode }) => children,
     Root: ({ children }: { children: ReactNode }) => children,
@@ -94,6 +95,10 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
     mocks.worktreeSessionIds.has(sessionId)
       ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT')
       : null,
+}));
+
+vi.mock('@/contexts/WorktreeContext', () => ({
+  useWorktreeForSession: () => null,
 }));
 
 vi.mock('@/state/agentIslandActivity', () => ({
@@ -421,9 +426,7 @@ describe('SessionCard visual cases', () => {
 
   it('uses the unified Timer for automation cases without a bound schedule', () => {
     renderCase('automation-timer');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBe(
-      '由自动化创建',
-    );
+    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBeNull();
     expect(
       screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer'),
     ).not.toBeNull();

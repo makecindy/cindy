@@ -22,7 +22,7 @@ function read(relPath: string): string {
 }
 
 const sessionScreen = read('app/sessions/[sessionId].tsx');
-const homeScreen = read('app/devices/index.tsx');
+const sessionListActions = read('src/session/useSessionListActions.ts');
 const automationsScreen = read('app/automations/[deviceId].tsx');
 const menuSheet = read('src/session/SessionMenuSheet.tsx');
 
@@ -34,7 +34,7 @@ describe('mobile 会话标题投影出口', () => {
   });
 
   it('首页删除确认里的标题过投影', () => {
-    expect(homeScreen).toContain(
+    expect(sessionListActions).toContain(
       "projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim()",
     );
   });
@@ -46,7 +46,7 @@ describe('mobile 会话标题投影出口', () => {
   });
 
   it('两个重命名入口都用投影值预填', () => {
-    expect(homeScreen).toContain(
+    expect(sessionListActions).toContain(
       "setRenameSessionDraft(projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')))",
     );
     expect(menuSheet).toContain(
@@ -58,7 +58,7 @@ describe('mobile 会话标题投影出口', () => {
 
   it('两个重命名入口的「没改就不落库」判据都覆盖投影值', () => {
     // 只比原始标题 → 兜底文案被写进 DB,哨兵被毁。
-    expect(homeScreen).toContain(
+    expect(sessionListActions).toContain(
       "if (title === projectDraftSessionTitle(target.title, t('session.menu.unnamedTitle'))) return;",
     );
     expect(menuSheet).toContain('if (!next || next === session.title || next === renamePrefill) {');

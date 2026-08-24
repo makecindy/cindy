@@ -504,7 +504,7 @@ async function finishLinux({ artifactDir, baseName, arch }) {
   // 包一致:归集时写死 amd64 会让 arm64 产物顶着 amd64 的名字发出去。
   const installerPath = path.join(artifactDir, `${baseName}-${debianArch(arch)}.deb`);
   fs.copyFileSync(debPath, installerPath);
-  // Linux 首发无热更链路(见 ci/lib.mjs createLinuxFirstReleaseManifest),只出安装包。
+  // Linux 没有 hotfix zip；应用内更新下载这份 installer .deb，再用 pkexec 覆盖安装。
   return { files: [fileEntry('installer', installerPath)], signing: { mode: 'none' } };
 }
 

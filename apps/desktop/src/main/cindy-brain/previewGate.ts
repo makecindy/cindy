@@ -44,7 +44,7 @@ const PREVIEW_MEDIA_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS]);
  * - 'allow'    自己协议同 id 下的普通页面,放行(现状行为);
  * - 'preview'  预览链接,拦下导航并走预览闸;
  * - 'external' https 外部地址,拦下导航并走外链闸(GhostExternalLinkGate:
- *              只有身份卡声明过的控制台地址才转系统浏览器打开,其余丢弃);
+ *              身份卡声明地址/基座授信主机直开,其它合法地址二次确认);
  * - 'block'    其它一切(非 https 外部地址 / 别的意识 / 畸形 URL),拦下丢弃。
  */
 export type GhostPanelNavigation = 'allow' | 'preview' | 'external' | 'block';
@@ -210,35 +210,64 @@ export const GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS = 1000;
 export interface GhostExternalLinkGateDeps {
   /**
    * 该意识身份卡里声明过的全部外链地址(network.secrets[].url 等,装包时
-   * 已校验仅 https)。查不到意识(已卸下/沉睡)返回空数组。
+   * 已校验仅 https)。有效但无声明返回空数组；查不到或已停用返回 null，
+   * 让旧 guest 在授权生命周期结束后 fail closed。
    */
-  declaredExternalUrls(ghostId: string): readonly string[];
+  declaredExternalUrls(ghostId: string): readonly string[] | null;
   /** 时钟注入(限速用;缺省 Date.now)。 */
   now?(): number;
 }
 
 export type GhostExternalLinkOutcome =
-  | { ok: true; url: string }
-  | { ok: false; reason: 'not-declared' | 'not-focused' | 'rate-limited' };
+  | { action: 'direct-open'; url: string }
+  | { action: 'confirm'; url: string }
+  | {
+      action: 'reject';
+      reason:
+        | 'bad-url'
+        | 'not-focused'
+        | 'rate-limited'
+        | 'confirmation-pending'
+        | 'ghost-unavailable';
+    };
 
 /**
- * 外链闸(设置区/面板里的「前往控制台」链接):意识 webview 导航到 https
- * 地址时,主机拦下导航并在这里过闸——**逐字命中身份卡声明过的地址**
- * (network.secrets[].url,装包校验仅 https)才转系统浏览器打开。安全模型
- * 与预览闸同一纪律(廉价检查挡在贵检查前面):
- * - 焦点闸:webview 必须正持有焦点(用户真点了链接)才放行,后台脚本
- *   location.href 刷不起浏览器;
+ * 首版基座固定授信主机。根域与子域必须按 DNS label 边界匹配，不能用裸
+ * `endsWith('xd.com')`，否则 evilxd.com 会被误放行。workers.xd.team 只认
+ * 精确主机，不自动把其子域纳入信任。
+ */
+function isTrustedGhostExternalHostname(hostname: string): boolean {
+  if (hostname === 'workers.xd.team') return true;
+  return (
+    hostname === 'xd.com' ||
+    hostname.endsWith('.xd.com') ||
+    hostname === 'xd.cn' ||
+    hostname.endsWith('.xd.cn')
+  );
+}
+
+/**
+ * 外链闸(设置区/面板里的「前往控制台」链接):意识 webview 导航时,主机
+ * 拦下导航并在这里过闸。只接受无内嵌凭证的绝对 HTTPS 地址；逐字命中
+ * 身份卡既有声明或命中固定授信主机的直接转系统浏览器，其余合法地址交
+ * 宿主弹二次确认。安全模型与预览闸同一纪律(廉价检查挡在贵检查前面):
+ * - 焦点闸:webview 必须正持有焦点才放行,未聚焦页面不能触发。焦点只
+ *   是 activation 前置条件,不是“真实点击”证明；will-navigate 本身无法
+ *   区分普通 `<a>` 与聚焦页面里的脚本导航；
  * - 限速:**按尝试记账**(不只按成功),同一意识两次尝试至少间隔 1s——
  *   声明比对要经 GhostManager 实扫磁盘上的身份卡(目录即注册表,无缓存),
  *   限速必须罩住它,持焦点的恶意页用导航垃圾也刷不动主进程 IO;
  *   连续 spam 会不断顺延窗口(闸整体关死),对真实点击无感;
- * - 白名单是声明式的(身份卡装包时定死),沙箱页给的字符串没有机会变成
- *   任意跳转(防钓鱼是结构性的);
+ * - 现有声明地址维持逐字比对兼容语义；授信主机只按 URL 解析器规范化的
+ *   hostname + DNS label 边界判断；确认分支只回规范化后的不可变 URL;
+ * - 同一意识最多一个确认在途，宿主无论打开、取消或异常都须 release;
  * - 失败静默(调用方只记 debug 日志),不给沙箱可探测的差异面。
  */
 export class GhostExternalLinkGate {
   /** 意识 id → 上次尝试时刻(限速账本,按尝试记账;体量 = 已装意识数,无需清理)。 */
   private lastAttemptAt = new Map<string, number>();
+  /** 正在等待宿主原生确认框的意识；确认结束时由调用方释放。 */
+  private confirmationPending = new Set<string>();
 
   constructor(private readonly deps: GhostExternalLinkGateDeps) {}
 
@@ -248,18 +277,49 @@ export class GhostExternalLinkGate {
     /** webview 当前是否持有焦点(guestContents.isFocused)。 */
     isPanelFocused: () => boolean;
   }): GhostExternalLinkOutcome {
-    if (!params.isPanelFocused()) return { ok: false, reason: 'not-focused' };
+    if (!params.isPanelFocused()) return { action: 'reject', reason: 'not-focused' };
     const now = this.deps.now?.() ?? Date.now();
     const last = this.lastAttemptAt.get(params.ghostId);
     this.lastAttemptAt.set(params.ghostId, now);
     if (last !== undefined && now - last < GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS) {
-      return { ok: false, reason: 'rate-limited' };
+      return { action: 'reject', reason: 'rate-limited' };
     }
-    // 逐字比对(不做归一化):href 必须与身份卡声明完全一致,规则简单可预期。
-    if (!this.deps.declaredExternalUrls(params.ghostId).includes(params.url)) {
-      return { ok: false, reason: 'not-declared' };
+    if (this.confirmationPending.has(params.ghostId)) {
+      return { action: 'reject', reason: 'confirmation-pending' };
     }
-    return { ok: true, url: params.url };
+    let parsed: URL;
+    try {
+      parsed = new URL(params.url);
+    } catch {
+      return { action: 'reject', reason: 'bad-url' };
+    }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+      return { action: 'reject', reason: 'bad-url' };
+    }
+    const declaredExternalUrls = this.deps.declaredExternalUrls(params.ghostId);
+    if (declaredExternalUrls === null) {
+      return { action: 'reject', reason: 'ghost-unavailable' };
+    }
+    // 既有声明继续逐字比对，避免改变存量插件已经依赖的直开语义。
+    if (declaredExternalUrls.includes(params.url)) {
+      return { action: 'direct-open', url: params.url };
+    }
+    const normalizedUrl = parsed.href;
+    if (isTrustedGhostExternalHostname(parsed.hostname)) {
+      return { action: 'direct-open', url: normalizedUrl };
+    }
+    this.confirmationPending.add(params.ghostId);
+    return { action: 'confirm', url: normalizedUrl };
+  }
+
+  /** 宿主确认框结束后的 finally 钩；重复释放无副作用。 */
+  releaseConfirmation(ghostId: string): void {
+    this.confirmationPending.delete(ghostId);
+  }
+
+  /** 原生确认返回后复核授权生命周期，防止弹窗期间停用或卸载后仍打开。 */
+  isGhostAvailable(ghostId: string): boolean {
+    return this.deps.declaredExternalUrls(ghostId) !== null;
   }
 }
 

@@ -174,9 +174,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       "labelKey: 'ccAgent.sidebar.viewStyleListWide', Icon: LayoutList",
     );
 
-    // 任务信息四项各配数据类型图标;时间用 Clock 而非 Timer(后者是自动任务专用字形)。
+    // 任务信息各项各配数据类型图标;时间用 Clock 而非 Timer(后者是自动任务专用字形)。
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest");
+    expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.tokens', Icon: Coins");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.cost', Icon: Wallet");
     expect(filterSource).not.toMatch(/taskInfo\.time', Icon: Timer/);
@@ -244,10 +245,11 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
   });
 
-  it('关项目分组时 hook 把 manual 回落到 recency', () => {
+  it('项目顺序与任务排序拆开,关分组不再改写 sortBy', () => {
     const hookSource = read('features', 'cc-agent', 'hooks', 'useSidebarFilter.ts');
-    expect(hookSource).toContain('nextSortByAfterGroupByChange');
-    expect(hookSource).toContain('const nextSort = nextSortByAfterGroupByChange(next, current)');
+    expect(hookSource).not.toContain('nextSortByAfterGroupByChange');
+    expect(hookSource).toContain('setProjectOrder');
+    expect(hookSource).toContain('migrateLegacyManualSort');
   });
 
   it('列表行也接收来源标签(平铺时项目会话不再丢项目名)', () => {
@@ -290,9 +292,11 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).not.toMatch(
       /onSelect=\{\(\) => setMainViewMode\(option\.value\)\}\s*\n\s*keepOpen/,
     );
-    expect(filterSource).toContain("checked={groupDevice && sortBy !== 'manual'}");
-    expect(filterSource).toContain("disabled={sortBy === 'manual'}");
-    expect(filterSource).toContain("t('ccAgent.sidebar.filterGroupByDeviceManualTip')");
+    expect(filterSource).not.toMatch(
+      /onSelect=\{\(\) => setProjectOrder\(option\.value\)\}\s*\n\s*keepOpen/,
+    );
+    expect(filterSource).toContain('checked={groupDevice}');
+    expect(filterSource).not.toContain("disabled={sortBy === 'manual'}");
   });
 
   // 2026-08-13 用户裁决:「优先级」光看标签猜不出排序依据,需要 hover 说明。
@@ -350,6 +354,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(infoMetaSource).toContain("if (field === 'pr' && hasPrRef)");
     expect(infoMetaSource).toContain("pieces.push({ key: 'pr', text: '' })");
     expect(infoMetaSource).toContain("piece.key === 'pr' ?");
+    expect(infoMetaSource).toContain("if (field === 'worktree' && hasWorktree)");
+    expect(infoMetaSource).toContain("piece.key === 'worktree' ?");
     // 菜单摘要的图标串同样按勾选顺序(遍历 taskInfoFields,不是遍历选项表)。
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
     expect(filterSource).toContain('{taskInfoFields.map((field) => {');
@@ -660,5 +666,23 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       'max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-y-auto',
     );
     expect(filterSource).toContain('collisionPadding={8}');
+  });
+
+  it('项目顺序菜单勾选跟 resolveDisplayedProjectOrder,不回退查看端偏好', () => {
+    const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
+    expect(filterSource).toContain('resolveDisplayedProjectOrder(');
+    expect(filterSource).toContain('scopedProjectOrder: FilterProjectOrder = resolveDisplayedProjectOrder(');
+    expect(filterSource).not.toContain('hostCustom ? \'custom\' : projectOrder');
+  });
+
+  it('远程 GET 用 fetch fence,本机播种只在成功后按 owner 锁定', () => {
+    const hookSource = read('features', 'cc-agent', 'hooks', 'useRemoteHostProjectOrders.ts');
+    expect(hookSource).toContain('createProjectOrderFetchFence');
+    expect(hookSource).toContain('shouldApplyFetch');
+    expect(hookSource).toContain('shouldSeedLocalHostProjectOrder');
+    expect(hookSource).toContain('seededLocalHostOwners.add');
+    expect(hookSource).not.toContain('localHostSeedStarted = true');
+    expect(hookSource).toContain('void load(1)');
+    expect(hookSource).toContain('attempt < 3 && entries.some(([, result]) => result.kind === \'transient\')');
   });
 });

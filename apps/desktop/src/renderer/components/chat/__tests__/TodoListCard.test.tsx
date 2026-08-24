@@ -3,12 +3,12 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { TodoListCard } from '../TodoListCard';
+import { InlinePlanCard, TodoListCard } from '../TodoListCard';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, values: { current: number; total: number }) =>
-      `Step ${values.current} / ${values.total}`,
+    t: (key: string, values?: { current: number; total: number }) =>
+      key === 'chat.planPill.dismiss' ? 'Close Plan' : `Step ${values?.current} / ${values?.total}`,
   }),
 }));
 
@@ -154,6 +154,27 @@ describe('TodoListCard flyout interaction', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('offers an accessible close action with a keyboard-visible shared tooltip', async () => {
+    const onDismiss = vi.fn();
+    render(<TodoListCard todos={TODOS} animated={false} onDismiss={onDismiss} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(trigger);
+    const closeButton = screen.getByRole('button', { name: 'Close Plan' });
+
+    expect(closeButton.classList.contains('hover:bg-[var(--model-item-hover)]')).toBe(true);
+    expect(closeButton.classList.contains('hover:bg-[var(--surface-hover)]')).toBe(false);
+    expect(closeButton.classList.contains('focus-visible:outline-none')).toBe(true);
+    expect(closeButton.getAttribute('title')).toBeNull();
+
+    fireEvent.focus(closeButton);
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Close Plan');
+
+    fireEvent.click(closeButton);
+
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
   it('keeps centering and entrance animation transforms on separate elements', () => {
     render(<TodoListCard todos={TODOS} animated={false} />);
 
@@ -206,5 +227,42 @@ describe('TodoListCard flyout interaction', () => {
 
     expect(document.getElementById(flyoutId)).toBe(positioner);
     expect(animatedContent.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('InlinePlanCard', () => {
+  it('shows the shared focus ring when the collapse control is keyboard-focused', () => {
+    render(<InlinePlanCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button');
+    expect(trigger.classList.contains('focus-visible:outline-none')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-2')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-[var(--focus-ring)]')).toBe(true);
+  });
+
+  it('starts expanded and can collapse back to a compact summary', () => {
+    const { container } = render(<InlinePlanCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('[data-inline-plan-step-active="true"]')).not.toBeNull();
+
+    fireEvent.click(trigger);
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[data-inline-plan-step-active="true"]')).toBeNull();
+  });
+
+  it('breathes the active inline step only while the session is running', () => {
+    const view = render(<InlinePlanCard todos={TODOS} animated />);
+    const active = view.container.querySelector('[data-inline-plan-step-active="true"]');
+
+    expect(active?.getAttribute('data-inline-plan-step-breathing')).toBe('true');
+    expect(active?.classList.contains('session-status-breathing')).toBe(true);
+
+    view.rerender(<InlinePlanCard todos={TODOS} animated={false} />);
+    const idle = view.container.querySelector('[data-inline-plan-step-active="true"]');
+    expect(idle?.getAttribute('data-inline-plan-step-breathing')).toBe('false');
+    expect(idle?.classList.contains('session-status-breathing')).toBe(false);
   });
 });

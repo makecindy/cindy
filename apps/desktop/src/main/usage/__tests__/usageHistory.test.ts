@@ -74,16 +74,17 @@ vi.mock('../referenceModelPricing', () => ({
           outputPerMtok: 10,
         }
       : undefined,
-  getSubscriptionDirectValuePrice: (model: string) =>
-    model === 'xai/grok-4.3'
+  getSubscriptionDirectValuePrice: (model: string, agent?: string) =>
+    model === 'xai/grok-4.3' || (model === 'grok-4.6' && agent === 'pi')
       ? {
           providerId: 'xai',
           modelId: model,
           currency: 'USD',
           source: 'subscription-reference',
           approximate: true,
-          inputPerMtok: 3,
-          outputPerMtok: 15,
+          inputPerMtok: model === 'grok-4.6' ? 2 : 3,
+          outputPerMtok: model === 'grok-4.6' ? 6 : 15,
+          cacheReadPerMtok: model === 'grok-4.6' ? 0.5 : undefined,
         }
       : undefined,
 }));
@@ -109,6 +110,7 @@ import {
   computeAnomaly,
   computeStreaks,
   emptyUsageHistoryPayload,
+  getSubscriptionValuePriceFor,
   piSubscriptionUsageModelKey,
   prevDayKey,
   readUsageHistory,
@@ -297,6 +299,26 @@ describe('billing model keys', () => {
   });
 });
 
+describe('getSubscriptionValuePriceFor', () => {
+  it('routes Pi exclusive Grok ids through the subscription-direct quote', () => {
+    expect(getSubscriptionValuePriceFor('pi', 'grok-4.6', null)).toMatchObject({
+      providerId: 'xai',
+      modelId: 'grok-4.6',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+    });
+  });
+
+  it('routes Claude bridge subscription ids through their direct quote', () => {
+    expect(getSubscriptionValuePriceFor('claude-code', 'xai/grok-4.3', null)).toMatchObject({
+      providerId: 'xai',
+      modelId: 'xai/grok-4.3',
+      source: 'subscription-reference',
+    });
+  });
+});
+
 describe('readUsageHistoryWith', () => {
   it('aggregates actual money and subscription value without double counting', async () => {
     const estimateAmount = regionalUsdAmount(2);
@@ -396,6 +418,93 @@ describe('readUsageHistoryWith', () => {
     ]);
     expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(regionalUsdAmount(5));
     expect(result.totals.last30DaysEstimatedValue.amount).toBeCloseTo(regionalUsdAmount(5));
+  });
+
+  it('uses the request-priced subscription value stored at write time', async () => {
+    const stored: RegionalMoney = {
+      amount: regionalUsdAmount(1.25),
+      currency: DEFAULT_USAGE_CURRENCY,
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value', 'reference-price'],
+    };
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async () => [
+          modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), stored, {
+            inputTokens: 1_000_000,
+          }),
+        ],
+        getReferenceModelPricing: () => ({
+          openai: {
+            // A later catalog price would produce 9. The frozen request-level
+            // estimate must win instead of repricing the day aggregate.
+            'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 9, 20),
+          },
+        }),
+      }),
+    );
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(stored.amount);
+    expect(result.modelDaily[0].subscriptionEstimateMoney.amount).toBeCloseTo(stored.amount);
+  });
+
+  it('does not reprice an explicitly unpriceable future subscription row', async () => {
+    const unavailable: RegionalMoney = {
+      amount: 0,
+      currency: DEFAULT_USAGE_CURRENCY,
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value', 'reference-price'],
+    };
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async () => [
+          modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), unavailable, {
+            inputTokens: 1_000_000,
+          }),
+        ],
+        getReferenceModelPricing: () => ({
+          openai: { 'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 9, 20) },
+        }),
+        isModelPricingRefreshInFlight: () => true,
+      }),
+    );
+    expect(result.estimatesPending).toBe(false);
+    expect(result.models[0].estimatedMoney).toBeNull();
+    expect(result.modelDaily[0].subscriptionEstimateMoney.amount).toBe(0);
+  });
+
+  it('does not reprice a value estimate after projecting it into another ledger currency', async () => {
+    const historicalCurrency = DEFAULT_USAGE_CURRENCY === 'CNY' ? 'USD' : 'CNY';
+    const stored: RegionalMoney = {
+      amount: 4,
+      currency: historicalCurrency,
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value', 'reference-price'],
+    };
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async () => [
+          modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), stored, {
+            inputTokens: 1_000_000,
+          }),
+        ],
+        getReferenceModelPricing: () => ({
+          openai: { 'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 99, 199) },
+        }),
+      }),
+    );
+
+    expect(result.estimatesPending).toBe(false);
+    expect(result.models[0].estimatedMoney).toBeNull();
+    expect(result.modelDaily[0]).toMatchObject({
+      subscriptionEstimateMoney: {
+        amount: 0,
+        currency: DEFAULT_USAGE_CURRENCY,
+        kind: 'value-estimate',
+      },
+    });
   });
 
   it('keeps active-ledger subscription estimates when history uses another currency', async () => {
@@ -542,7 +651,7 @@ describe('readUsageHistoryWith', () => {
     expect(result.models[0].estimatedMoney?.amount).toBe(expected);
   });
 
-  it('keeps Pi cache usage as a distinct subscription row', async () => {
+  it('keeps Pi cache usage token-only when the quote omits a cache-read price', async () => {
     const result = await readUsageHistoryWith(makeDeps({
       getModelUsageSince: async () => [
         modelRow(
@@ -561,8 +670,31 @@ describe('readUsageHistoryWith', () => {
       inputTokens: 100_000,
       cacheReadTokens: 900_000,
     });
-    expect(result.models[0].estimatedMoney?.amount).toBeGreaterThan(0);
+    expect(result.models[0].estimatedMoney).toBeNull();
     expect(result.totals.todayTokens).toBe(1_002_000);
+  });
+
+  it('estimates Pi SuperGrok subscription value for exclusive grok ids', async () => {
+    const result = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [
+        modelRow(
+          TODAY,
+          'pi',
+          piSubscriptionUsageModelKey('grok-4.6'),
+          actual(0),
+          { inputTokens: 179_300, outputTokens: 9_300, cacheReadTokens: 1_600_000 },
+        ),
+      ],
+    }));
+
+    expect(result.models[0]).toMatchObject({
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      inputTokens: 179_300,
+      cacheReadTokens: 1_600_000,
+    });
+    // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $1.2144
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(1.2144, 6);
   });
 
   it('marks estimates pending only when a subscription price is missing during refresh', async () => {
