@@ -995,6 +995,36 @@ describe('render_pdf', () => {
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
   });
 
+  it('快照未加引号的本地资源属性', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(path.join(workdir, 'style.css'), 'body { color: red; }', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'unquoted.html'),
+      '<html><head><link rel=stylesheet href=./style.css></head><body><img src=./chart.png poster=./chart.png data=./chart.png srcset=./chart.png><source srcset=./chart.png></body></html>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'unquoted.html',
+      outPath: 'unquoted.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('data:image/png;base64,');
+    expect(rendered).toContain('data:text/css;base64,');
+    expect(rendered).not.toContain('./chart.png');
+    expect(rendered).not.toContain('./style.css');
+  });
+
   it('限制重复本地资源展开后的 HTML 快照大小', async () => {
     const renderHtmlToPdf = vi.fn(async () => ({
       buffer: pdfBytes,

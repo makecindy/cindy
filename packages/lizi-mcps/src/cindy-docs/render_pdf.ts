@@ -201,6 +201,44 @@ function splitSrcset(value: string): string[] {
   return candidates.map((candidate) => candidate.trim()).filter(Boolean);
 }
 
+/**
+ * Read the small subset of HTML attributes whose values may point at local
+ * task resources.  HTML permits these values to be either quoted or
+ * unquoted; keeping one parser for both forms prevents the resource policy
+ * from silently dropping valid markup such as `<img src=./chart.png>`.
+ */
+const HTML_ATTRIBUTE_PATTERN =
+  /(\s+)([A-Za-z_:][\w:.-]*)(\s*=\s*)(?:(['"])([\s\S]*?)\4|([^\s"'=<>\x60]+))/gi;
+
+function readHtmlAttribute(tag: string, attributeName: string): string | undefined {
+  const wanted = attributeName.toLowerCase();
+  for (const match of tag.matchAll(HTML_ATTRIBUTE_PATTERN)) {
+    if (match[2]!.toLowerCase() !== wanted) continue;
+    return match[4] ? match[5] : match[6];
+  }
+  return undefined;
+}
+
+async function rewriteHtmlAttributes(
+  tag: string,
+  attributeNames: readonly string[],
+  replacer: (value: string, attributeName: string) => Promise<string>,
+): Promise<string> {
+  const wanted = new Set(attributeNames.map((name) => name.toLowerCase()));
+  return replaceAsync(
+    tag,
+    HTML_ATTRIBUTE_PATTERN,
+    async (match, leading, attributeName, equals, quote, quoted, bare) => {
+      const normalizedName = attributeName.toLowerCase();
+      if (!wanted.has(normalizedName)) return match;
+      const value = quote ? quoted : bare;
+      const rewritten = await replacer(value, normalizedName);
+      if (rewritten === value) return match;
+      return `${leading}${attributeName}${equals}${quote ? `${quote}${rewritten}${quote}` : rewritten}`;
+    },
+  );
+}
+
 async function inlineSrcset(
   value: string,
   baseDir: string,
@@ -280,33 +318,27 @@ async function inlineLocalResources(root: string, baseDir: string, html: string)
     cssStack: new Set(),
   };
   let rewritten = await replaceAsync(html, /<link\b[^>]*>/gi, async (tag) => {
-    const hrefMatch = tag.match(/(\s+href\s*=\s*)(["'])([^"']+)\2/i);
-    if (!hrefMatch) return tag;
-    const rel = tag.match(/\srel\s*=\s*(["'])([^"']+)\1/i)?.[2] ?? '';
-    if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(hrefMatch[3]!)) return tag;
-    const snapshot = await snapshotLocalResource(context, baseDir, hrefMatch[3]!);
-    if (!snapshot) return tag;
-    return tag.replace(hrefMatch[0]!, `${hrefMatch[1]}${hrefMatch[2]}${snapshot}${hrefMatch[2]}`);
+    const href = readHtmlAttribute(tag, 'href');
+    if (!href) return tag;
+    const rel = readHtmlAttribute(tag, 'rel') ?? '';
+    if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(href)) return tag;
+    return rewriteHtmlAttributes(tag, ['href'], async (reference) => {
+      return (await snapshotLocalResource(context, baseDir, reference)) ?? reference;
+    });
   });
   rewritten = await replaceAsync(
     rewritten,
     /<(?:img|source|audio|video|track|object|input|image)\b[^>]*>/gi,
     async (tag) => {
-      const withSources = await replaceAsync(
+      const withSources = await rewriteHtmlAttributes(
         tag,
-        /(\s+(?:src|poster|data)\s*=\s*)(["'])([^"']*)\2/gi,
-        async (match, prefix, quote, reference) => {
-          const snapshot = await snapshotLocalResource(context, baseDir, reference);
-          return snapshot ? `${prefix}${quote}${snapshot}${quote}` : match;
-        },
+        ['src', 'poster', 'data'],
+        async (reference) => (await snapshotLocalResource(context, baseDir, reference)) ?? reference,
       );
-      return replaceAsync(
+      return rewriteHtmlAttributes(
         withSources,
-        /(\s+srcset\s*=\s*)(["'])([^"']*)\2/gi,
-        async (match, prefix, quote, value) => {
-          const rewrittenSrcset = await inlineSrcset(value, baseDir, context);
-          return `${prefix}${quote}${rewrittenSrcset}${quote}`;
-        },
+        ['srcset'],
+        async (value) => inlineSrcset(value, baseDir, context),
       );
     },
   );
@@ -320,10 +352,12 @@ async function inlineLocalResources(root: string, baseDir: string, html: string)
   );
   return replaceAsync(
     rewritten,
-    /(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi,
-    async (match, prefix, quote, css) => {
+    HTML_ATTRIBUTE_PATTERN,
+    async (match, leading, attributeName, equals, quote, quoted, bare) => {
+      if (attributeName.toLowerCase() !== 'style') return match;
+      const css = quote ? quoted : bare;
       const rewrittenCss = await inlineCssUrls(css, baseDir, context);
-      return `${prefix}${quote}${rewrittenCss}${quote}`;
+      return `${leading}${attributeName}${equals}${quote ? `${quote}${rewrittenCss}${quote}` : rewrittenCss}`;
     },
   );
 }
