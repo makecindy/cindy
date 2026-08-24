@@ -4897,12 +4897,10 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     ));
     // 第一包确认被丢弃后，host 收到首个重试便会恢复发送；但在其首个可靠业务帧
     // 回到 controller、取消确认计时器之前，下一次 20ms 重试可能已经进入 relay。
-    // 业务帧的累计 ACK 在确认等待期间也会携带当前 linkRequestId，因此统计中最多
-    // 会比 transportMaxRetryAttempts 多一帧(本测试只产生一个业务帧)。Windows runner
-    // 更容易命中这个合法竞态，因此这里只约束协议不变量：至少有一次确认送达，
-    // 不超过确认重试上限加该业务 ACK，且不跨 request 代际。
+    // Windows runner 更容易命中这个合法竞态，因此这里只约束协议不变量：至少
+    // 有一次确认送达，且不会超过首包丢失后的剩余重试预算，也不跨 request 代际。
     expect(confirmationAcks.length).toBeGreaterThanOrEqual(1);
-    expect(confirmationAcks.length).toBeLessThanOrEqual(4);
+    expect(confirmationAcks.length).toBeLessThanOrEqual(3);
     expect(confirmationAcks.every((env) => (
       parseTransportAck(env)?.linkRequestId === linkRequestId
     ))).toBe(true);
