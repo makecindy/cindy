@@ -44,13 +44,25 @@ describe('Windows Git PATH PowerShell probes', () => {
   });
 
   it('locks the bounded concurrent runspace coordinator for multiple candidates', () => {
-    const script = buildWindowsPathKindProbeScript(2, 3_000);
+    const script = buildWindowsPathKindProbeScript(8, 3_000);
 
     expect(script).toContain('$paths = @($json | ConvertFrom-Json)');
+    expect(script).toContain('$clock = [Diagnostics.Stopwatch]::StartNew()');
+    expect(script).toContain('$maxConcurrency = 4');
+    expect(script).toContain('[RunspaceFactory]::CreateRunspacePool(1, $maxConcurrency)');
+    expect(script).toContain('$operations.Count -lt $maxConcurrency');
+    expect(script).toContain('$nextPathIndex -lt $paths.Count -or $operations.Count -gt 0');
+    expect(script).toContain('$shell.RunspacePool = $runspacePool');
     expect(script).toContain('$async = $shell.BeginInvoke()');
     expect(script).toContain('$operation.Shell.EndInvoke($operation.Async)');
     expect(script).toContain('$budgetMs = 2750');
+    expect(script).toContain('if ($nextPathIndex -lt $paths.Count -or $operations.Count -gt 0) {');
     expect(script).toContain('WriteLine("__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__`tpath-runspace")');
+    expect(script).not.toContain('foreach ($candidate in $paths)');
+    expect(script.indexOf('$clock = [Diagnostics.Stopwatch]::StartNew()'))
+      .toBeLessThan(script.indexOf('$async = $shell.BeginInvoke()'));
+    expect(script.indexOf('$completed = @($operations | Where-Object { $_.Async.IsCompleted })'))
+      .toBeLessThan(script.indexOf('foreach ($operation in $completed)'));
     expect(script).not.toContain('catch {}');
   });
 
