@@ -4,14 +4,14 @@
  *
  * 拓扑(全本地,无网络):
  *   真 pi 二进制  ──RPC──▶ PiAgent
- *        │ HTTP(streamable MCP, SDK) ──▶ 假 MCP server(注册一个 cindy_echo 工具)
+ *        │ HTTP(streamable MCP, SDK) ──▶ 假 MCP server(覆盖多 server、多参数形状与同名工具)
  *        │ HTTP(anthropic SSE)       ──▶ 假网关(脚本化三轮:先发现、再经稳定网关调用，
  *        │                                拿到真实 tool_result 后再出最终 text)
  *   PiAgent.interactionResolver ◀── extension_ui_request(权限询问)
  *
  * 断言:
  *   1. 模型启动面只有两个稳定网关 schema，不再含每个 mcp__<server>__<tool>
- *   2. list_tools → call_tool 真正打到假 MCP server，全部能力仍可达
+ *   2. list_tools → call_tool 真正打到假 MCP server，多工具连续调用仍全部可达
  *   3. ask 档下 Host 仍看到真实 MCP identity；allow/deny 与错误修正链保持成立
  *
  * pi 二进制缺失时 skip。
@@ -136,8 +136,57 @@ function countToolResults(requestBody: string): number {
   return (requestBody.match(/"type":"tool_result"/g) ?? []).length;
 }
 
+function latestToolResultContent(request: Record<string, unknown>): string {
+  const messages = request.messages as Array<{
+    content?: Array<{ type?: string; content?: string }>;
+  }> | undefined;
+  for (const message of [...(messages ?? [])].reverse()) {
+    const result = [...(message.content ?? [])].reverse().find((item) => item.type === 'tool_result');
+    if (result?.content !== undefined) return result.content;
+  }
+  throw new Error('model request did not contain a tool_result');
+}
+
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('multi command MCP workflow')) {
+    const turns: Array<{ name: string; input: Record<string, unknown> }> = [
+      { name: 'cindy_mcp_list_tools', input: {} },
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'status' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy_workspace', tool: 'status', args: {} } },
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'sum' } },
+      {
+        name: 'cindy_mcp_call_tool',
+        input: { server: 'cindy_workspace', tool: 'sum', args: { values: [3, 5, 8] } },
+      },
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'configure' } },
+      {
+        name: 'cindy_mcp_call_tool',
+        input: {
+          server: 'cindy_workspace',
+          tool: 'configure',
+          args: { options: { retries: 2, flags: ['safe', 'fast'] } },
+        },
+      },
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'lookup' } },
+      {
+        name: 'cindy_mcp_call_tool',
+        input: { server: 'cindy_workspace', tool: 'lookup', args: { query: 'release-notes' } },
+      },
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_contacts', tool: 'lookup' } },
+      {
+        name: 'cindy_mcp_call_tool',
+        input: { server: 'cindy_contacts', tool: 'lookup', args: { query: 'Ada' } },
+      },
+    ];
+    const next = turns[toolResultCount];
+    return next
+      ? anthropicToolTurn(toolResultCount + 1, next.name, next.input)
+      : anthropicTextTurn(
+          turns.length + 1,
+          'workflow complete: READY, SUM[16], CONFIGURED[2:safe,fast], WORKSPACE[release-notes], CONTACT[Ada]',
+        );
+  }
   if (requestBody.includes('unknown gateway tool')) {
     return toolResultCount === 0
       ? anthropicToolTurn(1, 'cindy_mcp_call_tool', {
@@ -214,6 +263,11 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const REMOTE_ERROR_CANARY = 'remote-error-body-secret-canary';
   let agentHome = '';
   const echoCalls: Array<{ text: unknown }> = [];
+  const statusCalls: Array<Record<string, never>> = [];
+  const sumCalls: Array<{ values: number[] }> = [];
+  const configureCalls: Array<{ options: { retries: number; flags: string[] } }> = [];
+  const workspaceLookupCalls: Array<{ query: string }> = [];
+  const contactsLookupCalls: Array<{ query: string }> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
   const seenMcpUrls: string[] = [];
@@ -239,7 +293,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     const gAddr = gateway.address();
     if (typeof gAddr === 'object' && gAddr) gatewayUrl = `http://127.0.0.1:${gAddr.port}`;
 
-    // 假 MCP server(streamable-HTTP + bearer + 单工具 echo),与 codexHttpBridge 同构。
+    // 假 MCP server(streamable-HTTP + bearer + 多路工具),与 codexHttpBridge 同构。
     mcpHttp = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       seenMcpUrls.push(req.url ?? '');
       const auth = req.headers.authorization ?? '';
@@ -412,15 +466,71 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         res.writeHead(401).end('unauthorized');
         return;
       }
-      const server = new McpServer({ name: 'cindy_echo', version: '1.0.0' });
-      server.registerTool(
-        'echo',
-        { description: 'Echo text back in uppercase', inputSchema: { text: z.string() } },
-        async ({ text }) => {
-          echoCalls.push({ text });
-          return { content: [{ type: 'text', text: `ECHO[${text}]` }] };
-        },
-      );
+      const isWorkspace = req.url?.includes('/workspace') ?? false;
+      const isContacts = req.url?.includes('/contacts') ?? false;
+      const server = new McpServer({
+        name: isWorkspace ? 'cindy_workspace' : isContacts ? 'cindy_contacts' : 'cindy_echo',
+        version: '1.0.0',
+      });
+      if (isWorkspace) {
+        server.registerTool(
+          'status',
+          { description: 'Read the workspace status', inputSchema: {} },
+          async (args) => {
+            statusCalls.push(args);
+            return { content: [{ type: 'text', text: 'READY' }] };
+          },
+        );
+        server.registerTool(
+          'sum',
+          { description: 'Sum a list of numbers', inputSchema: { values: z.array(z.number()) } },
+          async ({ values }) => {
+            sumCalls.push({ values });
+            return { content: [{ type: 'text', text: `SUM[${values.reduce((total, value) => total + value, 0)}]` }] };
+          },
+        );
+        server.registerTool(
+          'configure',
+          {
+            description: 'Apply nested workspace options',
+            inputSchema: {
+              options: z.object({ retries: z.number().int(), flags: z.array(z.string()) }),
+            },
+          },
+          async ({ options }) => {
+            configureCalls.push({ options });
+            return {
+              content: [{ type: 'text', text: `CONFIGURED[${options.retries}:${options.flags.join(',')}]` }],
+            };
+          },
+        );
+        server.registerTool(
+          'lookup',
+          { description: 'Look up a workspace resource', inputSchema: { query: z.string() } },
+          async ({ query }) => {
+            workspaceLookupCalls.push({ query });
+            return { content: [{ type: 'text', text: `WORKSPACE[${query}]` }] };
+          },
+        );
+      } else if (isContacts) {
+        server.registerTool(
+          'lookup',
+          { description: 'Look up a contact', inputSchema: { query: z.string() } },
+          async ({ query }) => {
+            contactsLookupCalls.push({ query });
+            return { content: [{ type: 'text', text: `CONTACT[${query}]` }] };
+          },
+        );
+      } else {
+        server.registerTool(
+          'echo',
+          { description: 'Echo text back in uppercase', inputSchema: { text: z.string() } },
+          async ({ text }) => {
+            echoCalls.push({ text });
+            return { content: [{ type: 'text', text: `ECHO[${text}]` }] };
+          },
+        );
+      }
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on('close', () => { void transport.close(); void server.close(); });
       await server.connect(transport);
@@ -439,7 +549,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   });
 
   function buildDeps(
-    bridgeMode: 'local' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+    bridgeMode: 'local' | 'local-multi' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -584,6 +694,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: `Bearer ${REMOTE_BEARER}` },
           };
         }
+        if (bridgeMode === 'local-multi') {
+          const sessionQuery = ctx?.sessionId
+            ? `?session=${encodeURIComponent(ctx.sessionId)}`
+            : '';
+          return {
+            mcpBridge: {
+              token: MCP_TOKEN,
+              servers: [
+                { name: 'cindy_workspace', url: `${mcpUrl}/workspace${sessionQuery}` },
+                { name: 'cindy_contacts', url: `${mcpUrl}/contacts${sessionQuery}` },
+              ],
+            },
+          };
+        }
         return {
           mcpBridge: {
             token: MCP_TOKEN,
@@ -604,7 +728,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   async function runOneTurn(
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
-    bridgeMode: 'local' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+    bridgeMode: 'local' | 'local-multi' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
   ): Promise<{
     events: AgentEvent[];
@@ -703,6 +827,120 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .map((d) => d.text)
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it(
+    'executes five real tools across two MCP servers in one Pi workflow without mixing same-name tools',
+    { timeout: 90_000 },
+    async () => {
+      statusCalls.length = 0;
+      sumCalls.length = 0;
+      configureCalls.length = 0;
+      workspaceLookupCalls.length = 0;
+      contactsLookupCalls.length = 0;
+      seenMcpUrls.length = 0;
+      const permissionRequests: Array<{ toolName: string; input: unknown }> = [];
+
+      const { events, requestBodies, requests } = await runOneTurn(
+        'ask',
+        async (req) => {
+          expect(req.kind).toBe('permission');
+          if (req.kind === 'permission') {
+            permissionRequests.push({ toolName: req.toolName, input: req.input });
+          }
+          return { kind: 'permission', behavior: 'allow' };
+        },
+        'local-multi',
+        'run the multi command MCP workflow',
+      );
+
+      expect(statusCalls).toEqual([{}]);
+      expect(sumCalls).toEqual([{ values: [3, 5, 8] }]);
+      expect(configureCalls).toEqual([{ options: { retries: 2, flags: ['safe', 'fast'] } }]);
+      expect(workspaceLookupCalls).toEqual([{ query: 'release-notes' }]);
+      expect(contactsLookupCalls).toEqual([{ query: 'Ada' }]);
+      expect(permissionRequests).toEqual([
+        { toolName: 'mcp__cindy_workspace__status', input: {} },
+        { toolName: 'mcp__cindy_workspace__sum', input: { values: [3, 5, 8] } },
+        {
+          toolName: 'mcp__cindy_workspace__configure',
+          input: { options: { retries: 2, flags: ['safe', 'fast'] } },
+        },
+        { toolName: 'mcp__cindy_workspace__lookup', input: { query: 'release-notes' } },
+        { toolName: 'mcp__cindy_contacts__lookup', input: { query: 'Ada' } },
+      ]);
+
+      const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
+        ?.map((tool) => tool.name) ?? [];
+      expect(startupToolNames.filter((name) => name?.startsWith('cindy_mcp_'))).toEqual([
+        'cindy_mcp_list_tools',
+        'cindy_mcp_call_tool',
+      ]);
+      expect(startupToolNames.some((name) => name?.startsWith('mcp__'))).toBe(false);
+
+      const discoveryResult = latestToolResultContent(requests[1] ?? {});
+      expect(discoveryResult).toContain('cindy_workspace');
+      expect(discoveryResult).toContain('cindy_contacts');
+      expect(discoveryResult).not.toContain('inputSchema');
+      const inspectedResults = [2, 4, 6, 8, 10].map((index) =>
+        JSON.parse(latestToolResultContent(requests[index] ?? {})) as {
+          tools?: Array<{ server?: string; name?: string; description?: string; inputSchema?: unknown }>;
+        }
+      );
+      expect(inspectedResults.map((result) => result.tools?.[0])).toMatchObject([
+        { server: 'cindy_workspace', name: 'status', inputSchema: { type: 'object', properties: {} } },
+        {
+          server: 'cindy_workspace',
+          name: 'sum',
+          inputSchema: {
+            type: 'object',
+            properties: { values: { type: 'array', items: { type: 'number' } } },
+            required: ['values'],
+          },
+        },
+        {
+          server: 'cindy_workspace',
+          name: 'configure',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              options: {
+                type: 'object',
+                properties: {
+                  retries: { type: 'integer' },
+                  flags: { type: 'array', items: { type: 'string' } },
+                },
+                required: ['retries', 'flags'],
+              },
+            },
+            required: ['options'],
+          },
+        },
+        { server: 'cindy_workspace', name: 'lookup', description: 'Look up a workspace resource' },
+        { server: 'cindy_contacts', name: 'lookup', description: 'Look up a contact' },
+      ]);
+      const finalRequestBody = requestBodies.at(-1) ?? '';
+      for (const result of [
+        'READY',
+        'SUM[16]',
+        'CONFIGURED[2:safe,fast]',
+        'WORKSPACE[release-notes]',
+        'CONTACT[Ada]',
+      ]) {
+        expect(finalRequestBody).toContain(result);
+      }
+      expect(seenMcpUrls.some((url) => url.includes('/workspace?session=mcp-itest-ask'))).toBe(true);
+      expect(seenMcpUrls.some((url) => url.includes('/contacts?session=mcp-itest-ask'))).toBe(true);
+
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('workflow complete');
+      expect(finalText).toContain('CONTACT[Ada]');
     },
   );
 
