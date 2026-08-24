@@ -105,7 +105,8 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect((source.match(
       /publishPresenceAvailabilityMutation\(deviceId, \(availabilityByDevice\) =>/g,
     ) ?? [])).toHaveLength(5);
-    expect(source).toContain('setConnectionEpoch((n) => n + 1);');
+    expect(source).toContain('connectionEpochRef.current = ++nextDeviceLinkConnectionEpoch;');
+    expect(source).toContain('setConnectionEpoch(connectionEpochRef.current);');
     expect(source).toContain('setPresenceVersion((n) => n + 1);\n      const presence = updatePresenceAvailability(');
   });
 

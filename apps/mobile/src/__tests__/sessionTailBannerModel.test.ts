@@ -37,6 +37,7 @@ function baseInput(patch: Partial<ResolveSessionTailBannerInput> = {}): ResolveS
     projection: { error: null, credentialSwitchWait: null },
     isSessionStreaming: false,
     continuationInFlight: false,
+    sessionMetadataSyncedForConnection: true,
     interruptAcked: false,
     hiddenErrorClientIds: new Set(),
     ...patch,
@@ -58,6 +59,14 @@ describe('resolveSessionTailBanner — error-tail', () => {
       continueKind: 'error',
       retryable: true,
     });
+  });
+
+  it('keeps a persisted error tail visible before current-connection metadata sync', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', { message: 'boom' })],
+      sessionMetadataSyncedForConnection: false,
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', clientId: 'e1' });
   });
 
   it('maps legacy app-exit marker rows to the continue-task semantics', () => {
@@ -163,6 +172,13 @@ describe('resolveSessionTailBanner — error-tail', () => {
 });
 
 describe('resolveSessionTailBanner — interrupted(session 双时间戳)', () => {
+  it('stays quiet until metadata is synced for the current connection', () => {
+    expect(resolveSessionTailBanner(baseInput({
+      session: { activeTurnStartedAt: 2000, lastTurnEndedAt: 1000, clearedAt: null },
+      sessionMetadataSyncedForConnection: false,
+    }))).toBeNull();
+  });
+
   it('fires when the active turn started after it last ended and nothing acked it', () => {
     const state = resolveSessionTailBanner(baseInput({
       session: { activeTurnStartedAt: 2000, lastTurnEndedAt: 1000, clearedAt: null },

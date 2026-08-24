@@ -2846,7 +2846,11 @@ export class DeviceLinkClient {
     try {
       this.sendEnvelope(makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId));
     } catch (err) {
-      this.log.debug('reliable transport ACK send failed', err);
+      this.log.debug(
+        `reliable transport ACK send failed dst=${dst.slice(0, 8)}`
+        + ` stream=${streamId.slice(0, 8)} ack=${ackSeq} conn=${this.connEpoch}`,
+        err,
+      );
     }
   }
 
@@ -3394,7 +3398,8 @@ export class DeviceLinkClient {
       return;
     }
     this.log.warn(
-      `reliable transport ACK timeout for ${dst.slice(0, 8)} seq=${seq}; resetting peer link (relay connection kept alive)`,
+      `reliable transport ACK timeout; resetting peer link (relay connection kept alive)`
+      + ` ${this.describeReliableTimeout(dst, seq, peer)}`,
     );
     this.markPeerLinkDown(peer);
     if (peer.retryTimer) {
@@ -3488,14 +3493,46 @@ export class DeviceLinkClient {
 
   private forceReconnectForReliableTimeout(dst: string, seq: number): void {
     if (this.stopped || this.status !== 'online') return;
+    const peer = this.peerTransport.get(dst);
     this.log.warn(
-      `reliable transport ACK timeout for ${dst.slice(0, 8)} seq=${seq}; forcing reconnect`,
+      `reliable transport ACK timeout; forcing reconnect`
+      + ` ${this.describeReliableTimeout(dst, seq, peer)}`,
     );
     const ws = this.ws;
     this.ws = null;
     this.connEpoch++;
     closeOrTerminate(ws);
     this.handleDisconnect(1006, 'reliable transport retry exhausted');
+  }
+
+  /**
+   * Final timeout evidence only: no payload or full device identifiers. This
+   * separates "ACK never advanced" from an ACK send exception and records the
+   * exact peer/link phase without adding a warning on every 2s retry tick.
+   */
+  private describeReliableTimeout(
+    dst: string,
+    seq: number,
+    peer: PeerTransportState | undefined,
+  ): string {
+    if (!peer) {
+      return `dst=${dst.slice(0, 8)} seq=${seq} peer=missing conn=${this.connEpoch}`;
+    }
+    const pending = peer.pending.get(seq)
+      ?? (peer.pending.values().next().value as PendingReliableMessage | undefined);
+    const ageMs = pending
+      ? Math.max(0, Math.round(this.monotonicNow() - pending.enqueuedAt))
+      : -1;
+    return `dst=${dst.slice(0, 8)} seq=${seq}`
+      + ` kind=${pending?.envelope.kind ?? 'missing'}`
+      + ` attempts=${pending?.attempts ?? -1} sent=${pending?.sent ?? false} ageMs=${ageMs}`
+      + ` pending=${peer.pending.size}/${peer.pendingBytes}`
+      + ` ack=${peer.highestAckSeq} next=${peer.nextSeq}`
+      + ` send=${peer.sendPhase} receive=${peer.receiveReady}`
+      + ` stream=${peer.streamId.slice(0, 8)}`
+      + ` remoteStream=${peer.remoteStreamId?.slice(0, 8) ?? 'none'}`
+      + ` recovery=${peer.recoveryNeedsAck}/${peer.recoveryFramesSent}`
+      + ` conn=${this.connEpoch}`;
   }
 
   private abandonReliablePending(dst: string, message: string): void {
