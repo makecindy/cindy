@@ -1,6 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
+import {
+  buildWindowsNetworkDriveProbeScript,
+  buildWindowsPathKindProbeScript,
+  buildWindowsRegistryProbeScript,
+  type WindowsGitPathLogger,
+  warnWindowsGitPathProbeDiagnostics,
+  warnWindowsGitPathProbeFailure,
+} from './windows-git-path-powershell.js';
+
 export type WindowsPathKind = 'file' | 'directory';
 
 /**
@@ -25,6 +34,7 @@ export interface ResolveWindowsGitPathOptions {
   platform?: NodeJS.Platform;
   existingPath: string | undefined;
   probes?: Partial<WindowsGitPathProbes>;
+  logger?: WindowsGitPathLogger;
 }
 
 export const WINDOWS_GIT_REGISTRY_KEYS = [
@@ -73,24 +83,11 @@ function windowsRegistryProviderPath(key: typeof WINDOWS_GIT_REGISTRY_KEYS[numbe
   return `Registry::HKEY_LOCAL_MACHINE\\${key.slice('HKLM\\'.length)}`;
 }
 
-function defaultReadRegistryInstallPaths(): readonly string[] {
+function defaultReadRegistryInstallPaths(logger?: WindowsGitPathLogger): readonly string[] {
   if (process.platform !== 'win32') return [];
   const powershell = windowsPowerShellPath();
   if (!powershell) return [];
-  const registryPaths = WINDOWS_GIT_REGISTRY_KEYS
-    .map((key) => `'${windowsRegistryProviderPath(key)}'`)
-    .join(', ');
-  const script = [
-    `$keys = @(${registryPaths})`,
-    'foreach ($key in $keys) {',
-    '  try {',
-    "    $value = Get-ItemPropertyValue -LiteralPath $key -Name 'InstallPath' -ErrorAction Stop",
-    '    if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {',
-    '      [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$value))',
-    '    }',
-    '  } catch {}',
-    '}',
-  ].join('\n');
+  const script = buildWindowsRegistryProbeScript(WINDOWS_GIT_REGISTRY_KEYS.map(windowsRegistryProviderPath));
   try {
     const output = execFileSync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
@@ -98,9 +95,10 @@ function defaultReadRegistryInstallPaths(): readonly string[] {
       timeout: 3_000,
       windowsHide: true,
     });
+    warnWindowsGitPathProbeDiagnostics(logger, 'registry', output);
     return decodeWindowsRegistryBase64Lines(output);
-  } catch {
-    // Registry access is best-effort. PATH resolution must remain fail-open.
+  } catch (error) {
+    warnWindowsGitPathProbeFailure(logger, 'registry', error);
     return [];
   }
 }
@@ -165,14 +163,8 @@ export function partitionWindowsProbeCandidates(
   return { local, network };
 }
 
-function defaultNetworkDriveLetters(powershell: string): ReadonlySet<string> {
-  const script = [
-    'try {',
-    '  [System.IO.DriveInfo]::GetDrives() |',
-    '    Where-Object { $_.DriveType -eq [System.IO.DriveType]::Network } |',
-    '    ForEach-Object { [Console]::Out.WriteLine($_.Name.Substring(0, 1)) }',
-    '} catch {}',
-  ].join('\n');
+function defaultNetworkDriveLetters(powershell: string, logger?: WindowsGitPathLogger): ReadonlySet<string> {
+  const script = buildWindowsNetworkDriveProbeScript();
   try {
     const output = execFileSync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
@@ -180,11 +172,12 @@ function defaultNetworkDriveLetters(powershell: string): ReadonlySet<string> {
       timeout: WINDOWS_PATH_PROBE_TIMEOUT_MS,
       windowsHide: true,
     });
+    warnWindowsGitPathProbeDiagnostics(logger, 'network-drives', output);
     return new Set(output.split(/\r?\n/)
       .map((line) => line.trim().toUpperCase())
       .filter((line) => /^[A-Z]$/.test(line)));
-  } catch {
-    // A failed classification probe must not prevent local-path discovery.
+  } catch (error) {
+    warnWindowsGitPathProbeFailure(logger, 'network-drives', error);
     return new Set();
   }
 }
@@ -210,63 +203,12 @@ export function probePartitionedWindowsPathKinds(
 function defaultProbeWindowsPathKindBatches(
   powershell: string,
   batches: readonly (readonly string[])[],
+  logger?: WindowsGitPathLogger,
 ): ReadonlyMap<string, WindowsPathKind> {
   const nonEmptyBatches = batches.filter((batch) => batch.length > 0);
   if (nonEmptyBatches.length === 0) return new Map();
-  const inputPrelude = [
-    '$stdin = [Console]::OpenStandardInput()',
-    '$memory = New-Object System.IO.MemoryStream',
-    '$stdin.CopyTo($memory)',
-    '$json = [Text.Encoding]::UTF8.GetString($memory.ToArray())',
-  ];
-  const probeLines = (outputLine: string): string[] => [
-    'try {',
-    '  $item = Get-Item -LiteralPath $candidate -Force -ErrorAction Stop',
-    "  $kind = if ($item.PSIsContainer) { 'D' } else { 'F' }",
-    '  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($candidate))',
-    outputLine,
-    '} catch {}',
-  ];
   const candidates = nonEmptyBatches.flat();
-  const script = candidates.length === 1 ? [
-    ...inputPrelude,
-    '$candidate = [string]($json | ConvertFrom-Json)',
-    ...probeLines('  [Console]::Out.WriteLine($kind + "`t" + $encoded)'),
-  ].join('\n') : [
-    ...inputPrelude,
-    '$paths = @($json | ConvertFrom-Json)',
-    "$probeScript = @'",
-    'param([string]$candidate)',
-    ...probeLines('  $kind + "`t" + $encoded'),
-    "'@",
-    '$operations = New-Object System.Collections.ArrayList',
-    'foreach ($candidate in $paths) {',
-    '  $shell = [PowerShell]::Create()',
-    '  [void]$shell.AddScript($probeScript)',
-    '  [void]$shell.AddArgument([string]$candidate)',
-    '  $async = $shell.BeginInvoke()',
-    '  [void]$operations.Add([PSCustomObject]@{ Shell = $shell; Async = $async })',
-    '}',
-    '$clock = [Diagnostics.Stopwatch]::StartNew()',
-    `$budgetMs = ${WINDOWS_PATH_PROBE_TIMEOUT_MS - 250}`,
-    'while ($operations.Count -gt 0 -and $clock.ElapsedMilliseconds -lt $budgetMs) {',
-    '  $completed = @($operations | Where-Object { $_.Async.IsCompleted })',
-    '  if ($completed.Count -eq 0) {',
-    '    Start-Sleep -Milliseconds 10',
-    '    continue',
-    '  }',
-    '  foreach ($operation in $completed) {',
-    '    try {',
-    '      foreach ($line in $operation.Shell.EndInvoke($operation.Async)) {',
-    '        [Console]::Out.WriteLine([string]$line)',
-    '      }',
-    '    } catch {} finally {',
-    '      $operation.Shell.Dispose()',
-    '      [void]$operations.Remove($operation)',
-    '    }',
-    '  }',
-    '}',
-  ].join('\n');
+  const script = buildWindowsPathKindProbeScript(candidates.length, WINDOWS_PATH_PROBE_TIMEOUT_MS);
   const input = candidates.length === 1 ? candidates[0] : candidates;
   try {
     const output = execFileSync(
@@ -280,10 +222,10 @@ function defaultProbeWindowsPathKindBatches(
         windowsHide: true,
       },
     );
+    warnWindowsGitPathProbeDiagnostics(logger, 'path-kinds', output);
     return decodeWindowsPathKindLines(output);
   } catch (error) {
-    // The shared hard timeout stops any blocked runspaces. Keep records from
-    // other candidates that completed before the coordinator was terminated.
+    warnWindowsGitPathProbeFailure(logger, 'path-kinds', error);
     return decodeWindowsPathKindsFromProbeError(error);
   }
 }
@@ -294,7 +236,10 @@ function defaultProbeWindowsPathKindBatches(
  * local Git discovery, and can delay its own best-effort batch only up to the
  * configured timeout.
  */
-function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMap<string, WindowsPathKind> {
+function defaultProbeWindowsPathKinds(
+  candidates: readonly string[],
+  logger?: WindowsGitPathLogger,
+): ReadonlyMap<string, WindowsPathKind> {
   if (process.platform !== 'win32') return new Map();
   const powershell = windowsPowerShellPath();
   if (!powershell) return new Map();
@@ -302,8 +247,8 @@ function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMa
   if (absoluteCandidates.length === 0) return new Map();
   return probePartitionedWindowsPathKinds(
     absoluteCandidates,
-    defaultNetworkDriveLetters(powershell),
-    (batches) => defaultProbeWindowsPathKindBatches(powershell, batches),
+    defaultNetworkDriveLetters(powershell, logger),
+    (batches) => defaultProbeWindowsPathKindBatches(powershell, batches, logger),
   );
 }
 
@@ -343,16 +288,6 @@ function defaultFindGitExecutablesOnPath(pathValue: string | undefined): readonl
   if (process.platform !== 'win32') return [];
   return windowsExecutableCandidatesOnPath(pathValue, WINDOWS_GIT_EXECUTABLE);
 }
-
-const defaultProbes: WindowsGitPathProbes = {
-  readRegistryInstallPaths: defaultReadRegistryInstallPaths,
-  findGitExecutablesOnPath: defaultFindGitExecutablesOnPath,
-  probePathKinds: defaultProbeWindowsPathKinds,
-  // The production resolver replaces these placeholders with one batched
-  // snapshot. They remain injectable for cross-platform pure-function tests.
-  isDirectory: () => false,
-  isFile: () => false,
-};
 
 function normalizedWindowsPath(value: string): string {
   const trimmed = value.trim().replace(/^"|"$/g, '');
@@ -481,9 +416,23 @@ export function translateMsysPathSegment(segment: string, installRoots: readonly
   return undefined;
 }
 
-export function resolveWindowsGitPath({ platform = process.platform, existingPath, probes: overrides }: ResolveWindowsGitPathOptions): string {
+export function resolveWindowsGitPath({
+  platform = process.platform,
+  existingPath,
+  probes: overrides,
+  logger,
+}: ResolveWindowsGitPathOptions): string {
   if (platform !== 'win32') return existingPath ?? '';
-  const probes: WindowsGitPathProbes = { ...defaultProbes, ...overrides };
+  const probes: WindowsGitPathProbes = {
+    readRegistryInstallPaths: () => defaultReadRegistryInstallPaths(logger),
+    findGitExecutablesOnPath: defaultFindGitExecutablesOnPath,
+    probePathKinds: (candidates) => defaultProbeWindowsPathKinds(candidates, logger),
+    // The production resolver replaces these placeholders with one batched
+    // snapshot. They remain injectable for cross-platform pure-function tests.
+    isDirectory: () => false,
+    isFile: () => false,
+    ...overrides,
+  };
   const original = existingPath ?? '';
   const segments = original.split(';').filter((segment) => segment.trim() !== '');
   const registryRoots = probes.readRegistryInstallPaths();
