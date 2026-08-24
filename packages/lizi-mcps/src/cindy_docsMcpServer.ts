@@ -182,14 +182,21 @@ export function createCindyDocsMcpServer(
   const server = new McpServer({ name: 'cindy_docs', version: '1.0.0' });
   const registry = new DocsToolRegistry();
 
-  registerMakeDocxTool(registry, sessionCtx);
-  registerMakePptxTool(registry, sessionCtx);
-  registerMakeXlsxTool(registry, sessionCtx);
+  if (deps.writeDocsOutput) {
+    registerMakeDocxTool(registry, sessionCtx, deps.writeDocsOutput);
+    registerMakePptxTool(registry, sessionCtx, deps.writeDocsOutput);
+    registerMakeXlsxTool(registry, sessionCtx, deps.writeDocsOutput);
+  }
   registerReadSheetTool(registry, sessionCtx);
-  // render_pdf / inspect_pdf 只在 host 提供了对应回调时注册 —— 没有这些能力的宿主
-  // 里让模型看不到它们,好过看见了调用再拿到一个「不可用」。
-  if (deps.renderHtmlToPdf) {
-    registerRenderPdfTool(registry, sessionCtx, deps.renderHtmlToPdf);
+  // 生成工具、render_pdf / inspect_pdf 只在 host 提供对应边界回调时注册 ——
+  // 没有能力的宿主里让模型看不到它们,好过看见了调用再拿到一个「不可用」。
+  if (deps.renderHtmlToPdf && deps.writeDocsOutput) {
+    registerRenderPdfTool(
+      registry,
+      sessionCtx,
+      deps.renderHtmlToPdf,
+      deps.writeDocsOutput,
+    );
   }
   if (deps.inspectPdf) {
     registerInspectPdfTool(registry, sessionCtx, deps.inspectPdf);

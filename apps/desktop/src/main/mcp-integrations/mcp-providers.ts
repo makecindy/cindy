@@ -18,6 +18,7 @@ import {
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
+import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
 import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
@@ -304,11 +305,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       isUserEnabled: () => readLspModeSettings().enabled,
     },
     // cindy_docs(文档工坊): docx / pptx / xlsx / csv 全在 @cindy/mcps 内用纯 JS 库实现,
-    // 这里只补上包里做不到的两件事 —— 都需要 electron:
+    // 这里只补上包里做不到的三件事 —— 都需要 electron:
+    //   writeDocsOutput: 最终落盘靠 cwd 绑定的单次 utility process;
     //   renderHtmlToPdf: HTML → PDF 靠 Chromium printToPDF(隐藏窗即用即毁);
     //   inspectPdf:     回读 PDF 结构靠一次性 utility process 里的 pdfjs。
     docs: {
       logger: createLogger('mcp/cindy_docs'),
+      writeDocsOutput,
       renderHtmlToPdf,
       inspectPdf,
     },

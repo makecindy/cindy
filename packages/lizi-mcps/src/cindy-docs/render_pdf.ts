@@ -9,6 +9,8 @@
  * 再运行期报不可用」——模型看不到的工具不会被误选。
  */
 
+import path from 'node:path';
+
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
@@ -20,13 +22,11 @@ import {
   prepareOutputPath,
   readInputFileWithinLimit,
   resolveSessionRoot,
-  writeOutputFile,
 } from './_paths.js';
 import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import {
   applyReportTemplate,
   extractHtmlTitle,
-  htmlHasRelativeResources,
 } from './pdfTemplate.js';
 import {
   DEFAULT_DOCS_THEME,
@@ -37,6 +37,7 @@ import type {
   DocsMcpSessionCtx,
   DocsPdfPageSize,
   RenderHtmlToPdfFn,
+  WriteDocsOutputFn,
 } from './types.js';
 
 /** 与设计一致的渲染硬超时。加载卡死的页面不能拖着任务不放。 */
@@ -99,6 +100,7 @@ export function registerRenderPdfTool(
   registry: DocsToolRegistry,
   sessionCtx: DocsMcpSessionCtx,
   renderHtmlToPdf: RenderHtmlToPdfFn,
+  writeDocsOutput: WriteDocsOutputFn,
 ): void {
   registry.register({
     name: 'render_pdf',
@@ -230,9 +232,13 @@ export function registerRenderPdfTool(
               };
 
         const { buffer, fontsReady } = await renderHtmlToPdf({
-          // 套了模板就必须走内联 html:不能改用户的源文件,相对路径也会因此失效。
+          // 套模板后走内联 html，host 会注入原文件目录的受限 base URL，既不改
+          // 用户源文件，也能继续加载同目录相对资源。
           ...(wrapped.applied || !sourcePath
-            ? { html: wrapped.html }
+            ? {
+                html: wrapped.html,
+                ...(sourcePath ? { htmlBaseDir: path.dirname(sourcePath) } : {}),
+              }
             : { htmlPath: sourcePath }),
           pageSize,
           landscape,
@@ -249,15 +255,10 @@ export function registerRenderPdfTool(
             {},
           );
         }
-        await writeOutputFile(root, abs, buffer, overwrite);
+        await writeDocsOutput({ root, path: abs, data: buffer, overwrite });
 
-        const described = await describeOutput(root, abs);
+        const described = describeOutput(root, abs, buffer.byteLength);
         const warnings: string[] = [];
-        if (wrapped.applied && htmlHasRelativeResources(sourceHtml)) {
-          warnings.push(
-            '已套用内置报告模板。原文含相对路径资源,套模板后按内联 HTML 渲染,这些相对路径可能失效;请改成绝对/内联资源,或先自己写 <style> 再用 htmlPath。',
-          );
-        }
         if (described.bytes < SUSPICIOUS_PDF_BYTES) {
           warnings.push(
             'PDF 字节数异常小,很可能渲染成了白页。用 inspect_pdf 回读确认,必要时检查 HTML 与外部资源后重做,不要直接交付。',

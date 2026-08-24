@@ -22,7 +22,6 @@ import {
   prepareOutputPath,
   readInputFileWithinLimit,
   resolveSessionRoot,
-  writeOutputFile,
 } from './_paths.js';
 import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import {
@@ -35,7 +34,7 @@ import {
   type PptxLayoutName,
 } from './pptxMasters.js';
 import { DOCS_THEMES, resolveDocsTheme, type DocsThemeName } from './themes.js';
-import type { DocsMcpSessionCtx } from './types.js';
+import type { DocsMcpSessionCtx, WriteDocsOutputFn } from './types.js';
 
 /** 主题色板对外可见,让测试断言真实取值而不是硬编码色号(实现漂移能被测出来)。 */
 export const PPTX_THEMES = DOCS_THEMES;
@@ -290,6 +289,7 @@ const SlideSchema = z
 export function registerMakePptxTool(
   registry: DocsToolRegistry,
   sessionCtx: DocsMcpSessionCtx,
+  writeDocsOutput: WriteDocsOutputFn,
 ): void {
   registry.register({
     name: 'make_pptx',
@@ -667,9 +667,9 @@ export function registerMakePptxTool(
         const buffer = (await pptx.write({
           outputType: 'nodebuffer',
         })) as Buffer;
-        await writeOutputFile(root, abs, buffer, overwrite);
+        await writeDocsOutput({ root, path: abs, data: buffer, overwrite });
         return okPayload({
-          ...(await describeOutput(root, abs)),
+          ...describeOutput(root, abs, buffer.byteLength),
           format: 'pptx',
           theme,
           footer,

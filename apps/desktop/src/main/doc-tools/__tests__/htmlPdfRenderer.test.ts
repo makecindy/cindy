@@ -14,6 +14,7 @@ import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,7 +24,7 @@ interface FakeWindowOptions {
   [k: string]: unknown;
 }
 
-class FakeSession {
+class FakeSession extends EventEmitter {
   permissionRequestHandler: ((...args: any[]) => void) | undefined;
   permissionCheckHandler: ((...args: any[]) => boolean) | undefined;
   beforeRequestHandler: ((details: { url: string }, callback: (response: { cancel: boolean }) => void) => void) | undefined;
@@ -32,6 +33,10 @@ class FakeSession {
       this.beforeRequestHandler = handler;
     }),
   };
+
+  constructor() {
+    super();
+  }
 
   setPermissionRequestHandler(handler: (...args: any[]) => void): void {
     this.permissionRequestHandler = handler;
@@ -172,7 +177,28 @@ describe('渲染窗的安全配置', () => {
     win.webContents.session.permissionRequestHandler!({}, 'geolocation', permissionCallback);
     expect(permissionCallback).toHaveBeenCalledWith(false);
     expect(win.webContents.session.permissionCheckHandler!()).toBe(false);
+    const downloadEvent = { preventDefault: vi.fn() };
+    win.webContents.session.emit('will-download', downloadEvent, {});
+    expect(downloadEvent.preventDefault).toHaveBeenCalledTimes(1);
     expect(win.shown).toBe(false);
+  });
+
+  it('资源根目录在校验后被替换时 fail closed', async () => {
+    const sourceDir = path.join(tempRoot, 'source');
+    const movedSourceDir = path.join(tempRoot, 'source-original');
+    const outsideDir = path.join(tempRoot, 'outside');
+    await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
+    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: path.join(sourceDir, 'src.html') });
+    await fs.rename(sourceDir, movedSourceDir);
+    await fs.symlink(outsideDir, sourceDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const outsideAsset = path.join(sourceDir, 'secret.png');
+    await fs.writeFile(path.join(outsideDir, 'secret.png'), 'secret');
+
+    const handler = FakeBrowserWindow.instances[0]!.webContents.session.beforeRequestHandler!;
+    const response = await new Promise<{ cancel: boolean }>((resolve) =>
+      handler({ url: pathToFileURL(outsideAsset).href }, resolve),
+    );
+    expect(response.cancel).toBe(true);
   });
 
   it('请求级 URL 策略只放行本地同目录资源与内联 URL,阻断网络和越界 file URL', async () => {
@@ -221,6 +247,33 @@ describe('渲染主流程', () => {
 
     const tempFile = FakeBrowserWindow.instances[0]!.loadedFile!;
     await expect(fs.stat(path.dirname(tempFile))).rejects.toThrow();
+  });
+
+  it('套模板后的内联 HTML 保留原文件目录作为相对资源基准', async () => {
+    const sourceDir = path.join(tempRoot, 'report');
+    await fs.mkdir(sourceDir);
+    const asset = path.join(sourceDir, 'chart.png');
+    await fs.writeFile(asset, 'image');
+    let loadedContent = '';
+    FakeBrowserWindow.loadBehavior = async (_win, file) => {
+      loadedContent = await fs.readFile(file, 'utf-8');
+    };
+
+    await renderHtmlToPdf({
+      ...BASE_INPUT,
+      html: '<html><head></head><body><img src="./chart.png"></body></html>',
+      htmlBaseDir: sourceDir,
+    });
+    const realSourceDir = await fs.realpath(sourceDir);
+    expect(loadedContent).toContain(
+      `<base href="${pathToFileURL(`${realSourceDir}${path.sep}`).href}" />`,
+    );
+
+    const handler = FakeBrowserWindow.instances[0]!.webContents.session.beforeRequestHandler!;
+    const response = await new Promise<{ cancel: boolean }>((resolve) =>
+      handler({ url: pathToFileURL(asset).href }, resolve),
+    );
+    expect(response.cancel).toBe(false);
   });
 
   it('htmlPath 直接加载,不产生临时文件', async () => {

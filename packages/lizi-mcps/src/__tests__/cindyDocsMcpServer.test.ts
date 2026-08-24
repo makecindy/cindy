@@ -34,9 +34,7 @@ import {
 } from '../cindy-docs/make_pptx.js';
 import {
   DocsPathError,
-  prepareOutputPath,
   readInputFileWithinLimit,
-  writeOutputFile,
 } from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
 import type {
@@ -45,6 +43,7 @@ import type {
   DocsPdfInspection,
   DocsPdfPageInspection,
   DocsPdfRenderInput,
+  WriteDocsOutputFn,
 } from '../cindy-docs/types.js';
 
 let workdir: string;
@@ -73,12 +72,23 @@ function sessionCtx(overrides: Partial<DocsMcpSessionCtx> = {}): DocsMcpSessionC
 }
 
 async function connect(deps: DocsMcpDeps = {}, ctx = sessionCtx()) {
-  const server = createCindyDocsMcpServer(deps, ctx);
+  const server = createCindyDocsMcpServer({ writeDocsOutput: testWriter, ...deps }, ctx);
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'docs-test-client', version: '0.0.0' });
   await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
   return client;
 }
+
+const testWriter: WriteDocsOutputFn = async ({ path: outputPath, data, overwrite }) => {
+  try {
+    await fs.writeFile(outputPath, data, { flag: overwrite ? 'w' : 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new DocsPathError('FILE_EXISTS', `目标文件已存在: ${outputPath}`, 'overwrite');
+    }
+    throw error;
+  }
+};
 
 function payload(result: unknown): Record<string, unknown> {
   const content = (result as { content: Array<{ text: string }> }).content;
@@ -698,34 +708,6 @@ describe('路径边界与覆盖语义', () => {
     expect(await unzip(forced.path as string, 'word/document.xml')).toContain('第二版');
   });
 
-  it('并发写同一路径时默认模式由最终 wx 落盘闸门保证只成功一次', async () => {
-    const target = path.join(workdir, 'race.bin');
-    const results = await Promise.allSettled([
-      writeOutputFile(workdir, target, Buffer.from('one'), false),
-      writeOutputFile(workdir, target, Buffer.from('two'), false),
-    ]);
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    const rejected = results.find((result) => result.status === 'rejected');
-    expect(rejected?.status === 'rejected' && rejected.reason?.code).toBe('FILE_EXISTS');
-    expect(['one', 'two']).toContain(await fs.readFile(target, 'utf8'));
-  });
-
-  it('最终写入前重新检查父目录 symlink，阻止 prepare 后的目录替换越界', async () => {
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));
-    created.push(outside);
-    const safeDir = path.join(workdir, 'safe');
-    const movedDir = path.join(workdir, 'safe-original');
-    const target = await prepareOutputPath(workdir, 'safe/report.bin', false);
-
-    await fs.rename(safeDir, movedDir);
-    await fs.symlink(outside, safeDir, 'dir');
-
-    await expect(
-      writeOutputFile(workdir, target, Buffer.from('blocked'), false),
-    ).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
-    await expect(fs.stat(path.join(outside, 'report.bin'))).rejects.toThrow();
-  });
-
   it('输入读取只接受与边界校验相同的已打开文件身份', async () => {
     const inside = path.join(workdir, 'inside.txt');
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));
@@ -744,42 +726,6 @@ describe('路径边界与覆盖语义', () => {
         (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
       ),
     ).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
-  });
-
-  it('覆盖 rename 遇到 Windows EEXIST/EPERM 时保留旧文件直到新文件提交', async () => {
-    const target = path.join(workdir, 'replace.bin');
-    await fs.writeFile(target, 'old');
-    const rename = vi.spyOn(fs, 'rename');
-    rename.mockRejectedValueOnce(Object.assign(new Error('Windows replace denied'), {
-      code: 'EPERM',
-    }));
-
-    await writeOutputFile(workdir, target, Buffer.from('new'), true);
-
-    expect(await fs.readFile(target, 'utf8')).toBe('new');
-    expect((await fs.readdir(workdir)).some((name) => name.includes('.cindy-docs-backup-'))).toBe(
-      false,
-    );
-  });
-
-  it('Windows 覆盖降级提交失败时恢复原文件', async () => {
-    const target = path.join(workdir, 'replace-rollback.bin');
-    await fs.writeFile(target, 'old');
-    const originalRename = fs.rename.bind(fs);
-    const rename = vi.spyOn(fs, 'rename');
-    rename
-      .mockRejectedValueOnce(Object.assign(new Error('replace denied'), { code: 'EEXIST' }))
-      .mockImplementationOnce(originalRename)
-      .mockRejectedValueOnce(Object.assign(new Error('commit failed'), { code: 'EACCES' }));
-
-    await expect(
-      writeOutputFile(workdir, target, Buffer.from('new'), true),
-    ).rejects.toMatchObject({ code: 'EACCES' });
-
-    expect(await fs.readFile(target, 'utf8')).toBe('old');
-    expect((await fs.readdir(workdir)).some((name) => name.includes('.cindy-docs-backup-'))).toBe(
-      false,
-    );
   });
 
   it('无 workingDir 时 fail closed', async () => {

@@ -5,10 +5,10 @@
  *  - docx / pptxgenjs / exceljs / marked 都是纯 JS,没有原生绑定、不碰 Electron,
  *    与本包已有的 sharp / googleapis / ssh 客户端同级,直接在 @cindy/mcps 内实现,
  *    不需要绕一层 host 注入。
- *  - **唯一必须 host 注入的是 HTML → PDF 渲染**:它靠 Chromium `printToPDF`,
- *    只有 Electron 主进程能提供。本包铁律是不 import electron(否则 package 无法
- *    在非 Electron 宿主复用,也会污染依赖方向),所以渲染函数由 desktop main 在
- *    mcp-providers.ts 闭包注入。
+ *  - host 注入两类 Electron 边界能力:HTML → PDF 靠 Chromium `printToPDF`；
+ *    最终落盘靠绑定到已验证目录身份的一次性 utility process。本包铁律是不
+ *    import electron(否则 package 无法在非 Electron 宿主复用,也会污染依赖方向),
+ *    所以这两个函数都由 desktop main 在 mcp-providers.ts 闭包注入。
  */
 
 import type { LiziMcpLogger, LiziMcpSessionContext } from '../types.js';
@@ -34,6 +34,12 @@ export interface DocsPdfMargins {
 export interface DocsPdfRenderInput {
   htmlPath?: string;
   html?: string;
+  /**
+   * Base directory for relative file resources when htmlPath content was
+   * wrapped in memory. The host injects a file:// base URL and allows only
+   * this directory plus its own temporary source directory.
+   */
+  htmlBaseDir?: string;
   pageSize: DocsPdfPageSize;
   landscape: boolean;
   printBackground: boolean;
@@ -64,6 +70,17 @@ export interface DocsPdfRenderOutput {
  * apps/desktop/src/main/doc-tools/htmlPdfRenderer.ts。
  */
 export type RenderHtmlToPdfFn = (input: DocsPdfRenderInput) => Promise<DocsPdfRenderOutput>;
+
+/**
+ * Host-owned output commit. Desktop binds the final file operation to a
+ * previously verified parent-directory identity in a one-shot utility process.
+ */
+export type WriteDocsOutputFn = (input: {
+  root: string;
+  path: string;
+  data: Uint8Array;
+  overwrite: boolean;
+}) => Promise<void>;
 
 /** 单页结构快照。宽高单位是 PDF point(1/72 英寸)。 */
 export interface DocsPdfPageInspection {
@@ -102,11 +119,13 @@ export type InspectPdfFn = (input: {
 /**
  * cindy_docs MCP server 工厂参数。
  *
- * renderHtmlToPdf / inspectPdf 缺省 = host 没接该能力(如纯 Node 宿主复用本包)→
+ * writeDocsOutput / renderHtmlToPdf / inspectPdf 缺省 = host 没接对应能力→
  * 对应工具不注册,与 memory 的 session_search / contacts 的系统通讯录同模式:
  * 能力不具备就不注册该顶层工具,而不是注册了再运行期报错。
  */
 export interface DocsMcpDeps {
+  /** Required for authoring tools; hosts must provide an identity-bound writer. */
+  writeDocsOutput?: WriteDocsOutputFn;
   renderHtmlToPdf?: RenderHtmlToPdfFn;
   inspectPdf?: InspectPdfFn;
   logger?: LiziMcpLogger;

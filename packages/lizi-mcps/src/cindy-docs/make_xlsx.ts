@@ -15,7 +15,6 @@ import {
   DocsPathError,
   prepareOutputPath,
   resolveSessionRoot,
-  writeOutputFile,
 } from './_paths.js';
 import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import {
@@ -25,7 +24,7 @@ import {
   type DocsTheme,
   type DocsThemeName,
 } from './themes.js';
-import type { DocsMcpSessionCtx } from './types.js';
+import type { DocsMcpSessionCtx, WriteDocsOutputFn } from './types.js';
 
 /** 列宽估算上下限:太窄看不全,太宽一屏放不下几列。 */
 const MIN_COL_WIDTH = 8;
@@ -264,6 +263,7 @@ function displayWidth(text: string): number {
 export function registerMakeXlsxTool(
   registry: DocsToolRegistry,
   sessionCtx: DocsMcpSessionCtx,
+  writeDocsOutput: WriteDocsOutputFn,
 ): void {
   registry.register({
     name: 'make_xlsx',
@@ -427,14 +427,14 @@ export function registerMakeXlsxTool(
         }
 
         const arrayBuffer = await workbook.xlsx.writeBuffer();
-        await writeOutputFile(
+        await writeDocsOutput({
           root,
-          abs,
-          Buffer.from(arrayBuffer as ArrayBuffer),
+          path: abs,
+          data: Buffer.from(arrayBuffer as ArrayBuffer),
           overwrite,
-        );
+        });
         return okPayload({
-          ...(await describeOutput(root, abs)),
+          ...describeOutput(root, abs, arrayBuffer.byteLength),
           format: 'xlsx',
           theme,
           zebra,

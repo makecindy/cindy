@@ -12,6 +12,12 @@ const toolFile: GeneratedFileRef = {
   source: 'tool',
 };
 const commandFile: GeneratedFileRef = { ...toolFile, source: 'command' };
+const confirmedDocumentFile: GeneratedFileRef = {
+  ...toolFile,
+  name: 'report.docx',
+  artifact: { format: 'docx' },
+  artifactConfirmed: true,
+};
 
 describe('isLocalGeneratedFileInTurn', () => {
   it('accepts a tool-created file whose birthtime falls in the turn', () => {
@@ -29,6 +35,28 @@ describe('isLocalGeneratedFileInTurn', () => {
     expect(
       isLocalGeneratedFileInTurn(
         toolFile,
+        { kind: 'file', birthtimeMs: START - 60_000, mtimeMs: START + 5_000 },
+        START,
+        END,
+      ),
+    ).toBe(false);
+  });
+
+  it('accepts a successfully overwritten document by its current mtime', () => {
+    expect(
+      isLocalGeneratedFileInTurn(
+        confirmedDocumentFile,
+        { kind: 'file', birthtimeMs: START - 60_000, mtimeMs: START + 5_000 },
+        START,
+        END,
+      ),
+    ).toBe(true);
+  });
+
+  it('does not grant the mtime path to unconfirmed replay metadata', () => {
+    expect(
+      isLocalGeneratedFileInTurn(
+        { ...confirmedDocumentFile, artifactConfirmed: undefined },
         { kind: 'file', birthtimeMs: START - 60_000, mtimeMs: START + 5_000 },
         START,
         END,

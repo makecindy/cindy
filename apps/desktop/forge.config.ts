@@ -1563,6 +1563,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/doc-tools/docsOutputWriterUtilityProcess.ts',
+          config: 'vite.preload.config.ts',
+          // 最终文档落盘绑定到已验证父目录的 cwd capability，避免 main 侧
+          // realpath 与 write/rename 之间被 symlink 替换。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/watcher-host/watcherHostProcess.ts',
           config: 'vite.watcher-host.config.ts',
           // 同 dbWorker:借 preload target 出 CJS 单文件；运行时是 Electron

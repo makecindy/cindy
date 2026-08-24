@@ -14,11 +14,10 @@ import {
   DocsPathError,
   prepareOutputPath,
   resolveSessionRoot,
-  writeOutputFile,
 } from './_paths.js';
 import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import { markdownToDocxBuffer } from './markdownToDocx.js';
-import type { DocsMcpSessionCtx } from './types.js';
+import type { DocsMcpSessionCtx, WriteDocsOutputFn } from './types.js';
 
 const DESCRIPTION = [
   '把 Markdown 正文生成为真正的 Word 文档(.docx)。',
@@ -43,6 +42,7 @@ const DESCRIPTION = [
 export function registerMakeDocxTool(
   registry: DocsToolRegistry,
   sessionCtx: DocsMcpSessionCtx,
+  writeDocsOutput: WriteDocsOutputFn,
 ): void {
   registry.register({
     name: 'make_docx',
@@ -104,9 +104,9 @@ export function registerMakeDocxTool(
           ...(trimmedTitle.length > 0 ? { title: trimmedTitle } : {}),
           ...(subtitle ? { subtitle } : {}),
         });
-        await writeOutputFile(root, abs, buffer, overwrite);
+        await writeDocsOutput({ root, path: abs, data: buffer, overwrite });
         return okPayload({
-          ...(await describeOutput(root, abs)),
+          ...describeOutput(root, abs, buffer.byteLength),
           format: 'docx',
           theme,
           cover: useCover,

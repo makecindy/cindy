@@ -40,12 +40,16 @@ describe('createLiziMcpProviders — cindy_docs', () => {
   });
 
   it('provider 没有自带 isEnabled 门控(启停由 host 的 plugin registry 包一层)', () => {
-    const provider = createLiziMcpProviders({ docs: {} }).find((p) => p.name === 'cindy_docs')!;
+    const provider = createLiziMcpProviders({
+      docs: { writeDocsOutput: async () => undefined },
+    }).find((p) => p.name === 'cindy_docs')!;
     expect(provider.isEnabled).toBeUndefined();
   });
 
   it('toClaudeSdkConfig 产出可实例化的 sdk server,并绑定会话 ctx', async () => {
-    const provider = createLiziMcpProviders({ docs: {} }).find((p) => p.name === 'cindy_docs')!;
+    const provider = createLiziMcpProviders({
+      docs: { writeDocsOutput: async () => undefined },
+    }).find((p) => p.name === 'cindy_docs')!;
     const config = provider.toClaudeSdkConfig(ctx) as {
       type: string;
       name: string;
@@ -120,6 +124,7 @@ describe('createLiziMcpProviders — cindy_docs', () => {
     expect(await gatedToolNames({})).toEqual([]);
     expect(
       await gatedToolNames({
+        writeDocsOutput: async () => undefined,
         renderHtmlToPdf: async () => ({ buffer: Buffer.alloc(0), fontsReady: true }),
       }),
     ).toEqual(['render_pdf']);

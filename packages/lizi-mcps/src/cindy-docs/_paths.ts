@@ -11,7 +11,6 @@
  * 模型重跑一次就静默盖掉是不可接受的。覆盖必须由模型显式 overwrite:true 表态。
  */
 
-import { randomUUID } from 'node:crypto';
 import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 
@@ -123,112 +122,6 @@ export function assertOutputExtension(outPath: string, expectedExtension: string
     `输出文件必须使用 ${expected} 扩展名，当前是 "${actual || '(无扩展名)'}"`,
     `请把 outPath 改成以 ${expected} 结尾的文件名。`,
   );
-}
-
-/**
- * 在最终落盘处再次执行防覆盖判定，避免 prepareOutputPath 的 stat/write 竞态：
- * - 默认模式用 wx，目标在两次调用之间出现时也只会失败，不会截断它；
- * - 覆盖模式先写同目录临时文件，再用 rename 原子替换；Windows 不支持直接
- *   覆盖的文件系统走「旧文件备份 → 新文件提交 → 失败恢复」降级。
- */
-async function revalidateOutputBoundary(root: string, abs: string): Promise<void> {
-  try {
-    await resolvePathInsideRoot(root, abs);
-  } catch (err) {
-    toPathError(err, abs);
-  }
-}
-
-async function replaceOutputFile(
-  root: string,
-  stagingPath: string,
-  abs: string,
-): Promise<void> {
-  await revalidateOutputBoundary(root, abs);
-  try {
-    await fs.rename(stagingPath, abs);
-    return;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== 'EEXIST' && code !== 'EPERM') throw err;
-  }
-
-  // Windows 的 exFAT / 共享盘可能不支持 rename 覆盖已存在目标。先把旧文件
-  // 搬到同目录唯一备份，再提交新文件；提交失败就恢复旧文件，绝不先 unlink。
-  const backupPath = path.join(
-    path.dirname(abs),
-    `.cindy-docs-backup-${randomUUID()}-${path.basename(abs)}`,
-  );
-  let movedExisting = false;
-  try {
-    try {
-      await fs.rename(abs, backupPath);
-      movedExisting = true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
-    }
-
-    await revalidateOutputBoundary(root, abs);
-    await fs.rename(stagingPath, abs);
-    if (movedExisting) {
-      // 新文件已经提交，备份清理失败不能把一次成功覆盖误报为失败；残留的唯一
-      // 隐藏备份仍比删除用户旧文件安全，并可由用户手工恢复。
-      movedExisting = false;
-      await fs.rm(backupPath, { force: true }).catch(() => undefined);
-    }
-  } catch (err) {
-    if (movedExisting) {
-      try {
-        await revalidateOutputBoundary(root, abs);
-        await fs.rename(backupPath, abs);
-        movedExisting = false;
-      } catch (restoreError) {
-        throw new AggregateError(
-          [err, restoreError],
-          `替换目标失败，旧文件保留在可恢复备份: ${backupPath}`,
-        );
-      }
-    }
-    throw err;
-  }
-}
-
-export async function writeOutputFile(
-  root: string,
-  abs: string,
-  data: Uint8Array | string,
-  overwrite: boolean,
-): Promise<void> {
-  // prepareOutputPath 与真正落盘之间可能隔着一次耗时的文档构建。最终写入前
-  // 必须重新解析 symlink 边界，防止父目录在这段时间被替换到工作目录外。
-  await revalidateOutputBoundary(root, abs);
-  if (!overwrite) {
-    try {
-      await fs.writeFile(abs, data, { flag: 'wx' });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
-        throw new DocsPathError(
-          'FILE_EXISTS',
-          `目标文件已存在: ${abs}`,
-          '同名文件已存在。确认要覆盖就再调一次并传 overwrite: true,否则换一个文件名(建议加日期或版本后缀)。',
-        );
-      }
-      throw err;
-    }
-    return;
-  }
-
-  const dir = path.dirname(abs);
-  const stagingDir = await fs.mkdtemp(path.join(dir, '.cindy-docs-staging-'));
-  const stagingPath = path.join(stagingDir, path.basename(abs));
-  try {
-    await fs.writeFile(stagingPath, data, { flag: 'wx' });
-    await replaceOutputFile(root, stagingPath, abs);
-  } finally {
-    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {
-      /* 临时 staging 清理尽力而为 */
-    });
-  }
 }
 
 /** 校验一个读取路径:边界钳制 + 必须是普通文件。 */
@@ -368,15 +261,15 @@ export async function readInputFileWithinLimit(
 }
 
 /** 落盘后统一的成功信息:相对路径更适合读给用户听,绝对路径供后续工具串联。 */
-export async function describeOutput(
+export function describeOutput(
   root: string,
   abs: string,
-): Promise<{ path: string; relativePath: string; bytes: number }> {
-  const st = await fs.stat(abs);
+  bytes: number,
+): { path: string; relativePath: string; bytes: number } {
   const rel = path.relative(path.resolve(root), abs);
   return {
     path: abs,
     relativePath: rel.length > 0 ? rel : path.basename(abs),
-    bytes: st.size,
+    bytes,
   };
 }

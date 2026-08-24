@@ -299,10 +299,10 @@ interface GeneratedFileStat {
 }
 
 /**
- * 本地文件是否有足够证据归属于该 turn。tool 来源必须有真实创建时间:
- * Write 也可能覆盖既有文件,仅凭成功/mtime 不能把它当成“新建”;birthtime
- * 不可用时宁可不出。command 来源为兼容不提供 birthtime 的 Linux FS,维持
- * mtime 回退,但仍受完整 turn 时间窗约束。
+ * 本地文件是否有足够证据归属于该 turn。普通文件工具必须有真实创建时间；
+ * 只有文档工具的结构化 ok:true 结果能证明 overwrite 是本轮成功交付，此时
+ * 改用 mtime。command 来源为兼容不提供 birthtime 的 Linux FS,维持 mtime
+ * 回退,但仍受完整 turn 时间窗约束。
  */
 export function isLocalGeneratedFileInTurn(
   file: GeneratedFileRef,
@@ -313,9 +313,14 @@ export function isLocalGeneratedFileInTurn(
   if (stat.kind !== 'file' || turnStartMs === null) return false;
   const birthtimeMs =
     typeof stat.birthtimeMs === 'number' && stat.birthtimeMs > 0 ? stat.birthtimeMs : null;
-  const ts = file.source === 'tool' ? birthtimeMs : (birthtimeMs ?? stat.mtimeMs);
-  // tool 来源的 birthtime 是同机 FS 事实,不放宽下界:放 2 分钟 slack 会把本轮
-  // 覆盖的旧文件误当新建。command 来源保留消息落库/执行时序抖动余量。
+  const confirmedArtifactOverwrite = file.artifactConfirmed === true;
+  const ts = confirmedArtifactOverwrite
+    ? stat.mtimeMs
+    : file.source === 'tool'
+      ? birthtimeMs
+      : (birthtimeMs ?? stat.mtimeMs);
+  // tool 来源的 birthtime 或显式成功交付的 mtime 都是同机 FS 事实，不放宽
+  // 下界；command 来源保留消息落库/执行时序抖动余量。
   const lowerBound = file.source === 'tool' ? turnStartMs : turnStartMs - TURN_START_SLACK_MS;
   return typeof ts === 'number' && ts >= lowerBound && (turnEndMs === null || ts < turnEndMs);
 }

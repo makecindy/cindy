@@ -37,7 +37,7 @@ import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { BrowserWindow, app } from 'electron';
 
@@ -84,19 +84,60 @@ function tempRoot(): string {
 interface PreparedSource {
   fileUrlPath: string;
   /** 允许 file:// 子资源读取的目录,防止 HTML 借 file URL 读取任意本地文件。 */
-  allowedFileRoot: string;
+  allowedFileRoots: AllowedFileRoot[];
   /** 需要清理的临时目录(仅内联 HTML 走这条路)。 */
   cleanupDir?: string;
 }
 
+interface AllowedFileRoot {
+  path: string;
+  realPath: string;
+  dev: bigint;
+  ino: bigint;
+}
+
+async function snapshotAllowedFileRoot(root: string): Promise<AllowedFileRoot> {
+  const realPath = await fs.realpath(root);
+  const stat = await fs.lstat(realPath, { bigint: true });
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`HTML resource root is not a directory: ${root}`);
+  }
+  return { path: realPath, realPath, dev: stat.dev, ino: stat.ino };
+}
+
 async function prepareSource(input: DocsPdfRenderInput): Promise<PreparedSource> {
   if (input.htmlPath) {
-    return { fileUrlPath: input.htmlPath, allowedFileRoot: path.dirname(input.htmlPath) };
+    return {
+      fileUrlPath: input.htmlPath,
+      allowedFileRoots: [await snapshotAllowedFileRoot(path.dirname(input.htmlPath))],
+    };
   }
+  const baseRootIdentity = input.htmlBaseDir
+    ? await snapshotAllowedFileRoot(input.htmlBaseDir)
+    : undefined;
   const dir = await fs.mkdtemp(path.join(tempRoot(), 'cindy-docs-html-'));
   const file = path.join(dir, 'source.html');
-  await fs.writeFile(file, input.html ?? '', 'utf-8');
-  return { fileUrlPath: file, allowedFileRoot: dir, cleanupDir: dir };
+  const tempRootIdentity = await snapshotAllowedFileRoot(dir);
+  const html = baseRootIdentity
+    ? injectBaseHref(input.html ?? '', baseRootIdentity.realPath)
+    : (input.html ?? '');
+  await fs.writeFile(file, html, 'utf-8');
+  return {
+    fileUrlPath: file,
+    allowedFileRoots: baseRootIdentity
+      ? [tempRootIdentity, baseRootIdentity]
+      : [tempRootIdentity],
+    cleanupDir: dir,
+  };
+}
+
+function injectBaseHref(html: string, baseDir: string): string {
+  const href = pathToFileURL(`${path.resolve(baseDir)}${path.sep}`).href;
+  const base = `<base href="${href}" />`;
+  if (/<head(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<head(\s[^>]*)?>/i, (head) => `${head}\n${base}`);
+  }
+  return `<head>${base}</head>\n${html}`;
 }
 
 function createRenderWindow(partition: string): BrowserWindow {
@@ -136,12 +177,23 @@ function isPathInside(parent: string, child: string): boolean {
   return rel.length === 0 || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function isSamePath(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
+}
+
 /**
  * PDF 排版窗只允许读取当前 HTML 目录里的本地资源、data/blob URL 与 about:blank。
  * 外部网络请求一律取消:即便不读取响应,图片/字体/iframe 也能借用户网络身份探测
  * localhost/内网或触发第三方跟踪副作用。需要远程资源时由模型先转成 data URI。
  */
-async function isAllowedResourceUrl(requestUrl: string, allowedFileRoot: string): Promise<boolean> {
+async function isAllowedResourceUrl(
+  requestUrl: string,
+  allowedFileRoots: readonly AllowedFileRoot[],
+): Promise<boolean> {
   let parsed: URL;
   try {
     parsed = new URL(requestUrl);
@@ -154,22 +206,39 @@ async function isAllowedResourceUrl(requestUrl: string, allowedFileRoot: string)
   if (parsed.protocol !== 'file:') return false;
   try {
     const filePath = fileURLToPath(parsed);
-    const [rootReal, fileReal] = await Promise.all([
-      fs.realpath(allowedFileRoot),
-      fs.realpath(filePath),
-    ]);
-    return isPathInside(rootReal, fileReal);
+    const fileReal = await fs.realpath(filePath);
+    for (const allowedFileRoot of allowedFileRoots) {
+      try {
+        const rebound = await fs.realpath(allowedFileRoot.path);
+        const stat = await fs.lstat(rebound, { bigint: true });
+        if (
+          isSamePath(rebound, allowedFileRoot.realPath) &&
+          stat.isDirectory() &&
+          !stat.isSymbolicLink() &&
+          stat.dev === allowedFileRoot.dev &&
+          stat.ino === allowedFileRoot.ino &&
+          isPathInside(allowedFileRoot.realPath, fileReal)
+        ) {
+          return true;
+        }
+      } catch {
+        // A temporary source root may already be gone while another allowed
+        // base directory is still valid; evaluate roots independently.
+      }
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
-function lockRequests(win: BrowserWindow, allowedFileRoot: string): void {
+function lockRequests(win: BrowserWindow, allowedFileRoots: readonly AllowedFileRoot[]): void {
   const session = win.webContents.session;
   session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.setPermissionCheckHandler(() => false);
+  session.on('will-download', (event) => event.preventDefault());
   session.webRequest.onBeforeRequest((details, callback) => {
-    void isAllowedResourceUrl(details.url, allowedFileRoot)
+    void isAllowedResourceUrl(details.url, allowedFileRoots)
       .then((allowed) => callback({ cancel: !allowed }))
       .catch(() => callback({ cancel: true }));
   });
@@ -237,7 +306,7 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
     win = createRenderWindow(`temp:cindy-docs-${randomUUID()}`);
     const target = win;
     lockNavigation(target);
-    lockRequests(target, source.allowedFileRoot);
+    lockRequests(target, source.allowedFileRoots);
 
     const work = (async (): Promise<RenderAttemptResult> => {
       // 加载失败与 Renderer 崩溃都要把这次渲染判死,否则 printToPDF 会在一个空白

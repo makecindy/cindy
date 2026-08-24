@@ -25,7 +25,12 @@ import {
 import { layoutSlots, SLIDE_H, SLIDE_W } from '../cindy-docs/pptxMasters.js';
 import { applyReportTemplate, htmlLooksUnstyled } from '../cindy-docs/pdfTemplate.js';
 import { DOCS_THEMES, formatDocsDate, themeToArgb } from '../cindy-docs/themes.js';
-import type { DocsMcpDeps, DocsMcpSessionCtx, DocsPdfRenderInput } from '../cindy-docs/types.js';
+import type {
+  DocsMcpDeps,
+  DocsMcpSessionCtx,
+  DocsPdfRenderInput,
+  WriteDocsOutputFn,
+} from '../cindy-docs/types.js';
 
 let workdir: string;
 const created: string[] = [];
@@ -52,12 +57,16 @@ function sessionCtx(overrides: Partial<DocsMcpSessionCtx> = {}): DocsMcpSessionC
 }
 
 async function connect(deps: DocsMcpDeps = {}, ctx = sessionCtx()) {
-  const server = createCindyDocsMcpServer(deps, ctx);
+  const server = createCindyDocsMcpServer({ writeDocsOutput: testWriter, ...deps }, ctx);
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'docs-defaults-client', version: '0.0.0' });
   await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
   return client;
 }
+
+const testWriter: WriteDocsOutputFn = async ({ path: outputPath, data, overwrite }) => {
+  await fs.writeFile(outputPath, data, { flag: overwrite ? 'w' : 'wx' });
+};
 
 function payload(result: unknown): Record<string, unknown> {
   const content = (result as { content: Array<{ text: string }> }).content;
@@ -463,6 +472,22 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(styled.templateApplied).toBe(false);
     expect(seen[1]!.html).toBe('<style>h1{color:red}</style><h1>已有样式</h1>');
     expect(seen[1]!.margins).toEqual({ top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 });
+
+    const sourceDir = path.join(workdir, 'report-assets');
+    await fs.mkdir(sourceDir);
+    await fs.writeFile(
+      path.join(sourceDir, 'report.html'),
+      '<h1>相对资源</h1><img src="./chart.png">',
+      'utf8',
+    );
+    const relative = await callTool(client, 'render_pdf', {
+      htmlPath: 'report-assets/report.html',
+      outPath: 'relative.pdf',
+    });
+    expect(relative.ok).toBe(true);
+    expect(seen[2]!.html).toContain('./chart.png');
+    expect(seen[2]!.htmlBaseDir).toBe(sourceDir);
+    expect(relative.warning).toBeUndefined();
   });
 
   it('template:none 跳过套模板;用户显式 margins 优先生效', async () => {

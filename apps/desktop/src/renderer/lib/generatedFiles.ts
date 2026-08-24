@@ -36,6 +36,8 @@ export interface GeneratedFileRef {
   source: 'tool' | 'command';
   /** 文档工具返回的轻量交付信息；普通源码文件没有此字段。 */
   artifact?: DocumentArtifactMetadata;
+  /** true 仅表示同一 tool_use 有结构化 ok:true 结果，可用本轮 mtime 证明成功覆盖。 */
+  artifactConfirmed?: boolean;
 }
 
 export type DocumentArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
@@ -737,10 +739,11 @@ export function collectGeneratedFiles(
     for (const rawPath of createdPathsFromToolUse(toolName, msg.toolInput)) {
       addPath(rawPath, 'tool');
     }
+    const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
     const artifact = extractDocumentArtifactMetadata(
       toolName,
       msg.toolInput,
-      msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined,
+      resultContent,
     );
     if (artifact) {
       const outputPath =
@@ -751,8 +754,19 @@ export function collectGeneratedFiles(
         const abs = canonicalizeWindowsShape(resolveToolFilePath(outputPath, workingDir));
         const key = dedupeKeyForPath(abs);
         const existing = byKey.get(key);
-        if (existing) existing.artifact = artifact;
-        else byKey.set(key, { path: abs, name: basename(abs), source: 'tool', artifact });
+        const artifactConfirmed = parseToolResult(resultContent)?.ok === true;
+        if (existing) {
+          existing.artifact = artifact;
+          if (artifactConfirmed) existing.artifactConfirmed = true;
+        } else {
+          byKey.set(key, {
+            path: abs,
+            name: basename(abs),
+            source: 'tool',
+            artifact,
+            ...(artifactConfirmed ? { artifactConfirmed: true } : {}),
+          });
+        }
       }
     }
     const descriptor = describeToolUse(toolName, msg.toolInput);

@@ -44,6 +44,7 @@ describe('collectGeneratedFiles', () => {
       WORKDIR,
     );
     expect(files).toHaveLength(1);
+    expect(files[0].artifactConfirmed).toBe(true);
     expect(files[0].artifact).toEqual({
       format: 'pptx',
       title: '产品路线图',

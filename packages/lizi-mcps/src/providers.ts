@@ -93,8 +93,8 @@ export interface CreateLiziMcpProvidersOptions {
   /**
    * cindy_docs(文档工坊): PDF / Word / Excel / PPT 的格式转换原语。
    * 与 xdtHelper 同款 —— 无外部账号依赖,host 仍需显式传(即使 {})才启用。
-   * renderHtmlToPdf 缺省时 render_pdf 工具不注册(本包不 import electron,
-   * Chromium printToPDF 只能由 desktop main 闭包注入)。
+   * writeDocsOutput 缺省时生成工具不注册；renderHtmlToPdf 缺省时 render_pdf
+   * 不注册(本包不 import electron,这些边界能力由 desktop main 闭包注入)。
    * 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
    */
   docs?: DocsMcpDeps;
