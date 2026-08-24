@@ -171,6 +171,20 @@ const VISIBLE_PAINT_OPS: readonly number[] = [
   ...IMAGE_OPS,
 ].filter((op): op is number => typeof op === 'number');
 
+export function pageVisibilityUnverified(
+  textChars: number,
+  drawOps: number | null,
+  imageOps: number | null,
+): boolean {
+  return (
+    drawOps === null ||
+    imageOps === null ||
+    textChars > 0 ||
+    drawOps > 0 ||
+    imageOps > 0
+  );
+}
+
 /**
  * 读 PDF 的结构快照:页数、每页尺寸/旋转、文本量与开头片段、绘图与图像算子数,
  * 并据此判定结构上空白页。这里不做位图渲染,因此有绘制算子的页面会标记
@@ -182,7 +196,8 @@ const VISIBLE_PAINT_OPS: readonly number[] = [
  * 仅能证明存在结构内容,不能证明最终像素肉眼可见。
  *
  * 算子表单独 try/catch:损坏页或超预算时降级成 null 而不是让整次检查失败 ——
- * 半份结构信息也比"检查工具自己挂了"有用。null 时 blank 恒为 false,不猜。
+ * 半份结构信息也比"检查工具自己挂了"有用。null 时 blank 恒为 false,并标记
+ * visibilityUnverified,不把未完成的结构检查当成通过。
  */
 export async function inspectPdfPages(
   data: Uint8Array,
@@ -260,8 +275,7 @@ export async function inspectPdfPages(
         drawOps,
         imageOps,
         blank: text.length === 0 && drawOps === 0 && imageOps === 0,
-        visibilityUnverified:
-          text.length > 0 || (drawOps !== null && drawOps > 0) || (imageOps !== null && imageOps > 0),
+        visibilityUnverified: pageVisibilityUnverified(text.length, drawOps, imageOps),
       });
     }
     return { numPages, pagesInspected: pages.length, pages };

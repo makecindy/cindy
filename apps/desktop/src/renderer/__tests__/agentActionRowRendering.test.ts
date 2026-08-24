@@ -78,6 +78,20 @@ describe('document tool result presentation', () => {
     ).toBe('目标文件已存在，请换一个文件名。');
   });
 
+  it('shows a human hint for read-only document tool failures too', () => {
+    const error = JSON.stringify({
+      ok: false,
+      errorCode: 'FILE_TOO_LARGE',
+      data: { hint: '文件超过检查上限，请先压缩或拆分。' },
+    });
+    expect(humanizeDocumentToolResult('mcp__cindy_docs__read_sheet', error)).toBe(
+      '文件超过检查上限，请先压缩或拆分。',
+    );
+    expect(humanizeDocumentToolResult('mcp:cindy_docs:inspect_pdf', error)).toBe(
+      '文件超过检查上限，请先压缩或拆分。',
+    );
+  });
+
   it('does not rewrite non-document tool results', () => {
     expect(humanizeDocumentToolResult('Bash', '{"ok":false}')).toBeNull();
   });

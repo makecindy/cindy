@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { inspectPdfPages } from '../reviewPdfUtilityProcess.js';
+import { inspectPdfPages, pageVisibilityUnverified } from '../reviewPdfUtilityProcess.js';
 
 /**
  * 生成一份合法的最小 PDF。
@@ -108,6 +108,11 @@ describe('inspectPdfPages', () => {
     const pdf = buildPdf([{ raw: 'q 1 0 0 1 0 0 cm Q' }]);
     const result = await inspectPdfPages(pdf, [], 10, 100);
     expect(result.pages[0]).toMatchObject({ textChars: 0, drawOps: 0, imageOps: 0, blank: true });
+  });
+
+  it('算子表解析失败时把空文本页标记为未验证', () => {
+    expect(pageVisibilityUnverified(0, null, null)).toBe(true);
+    expect(pageVisibilityUnverified(0, 0, 0)).toBe(false);
   });
 
   it('maxPages 卡住检查页数,不会把整份文档读完', async () => {

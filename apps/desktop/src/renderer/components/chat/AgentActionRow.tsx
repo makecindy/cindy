@@ -456,7 +456,9 @@ export function extractToolResultImageUrls(toolResult: string): string[] {
 export function humanizeDocumentToolResult(toolName: string, toolResult: string): string | null {
   const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
   const documentTool = normalized.split(':').at(-1) ?? normalized;
-  if (!/^(make_docx|make_pptx|make_xlsx|render_pdf)$/.test(documentTool)) return null;
+  if (!/^(make_docx|make_pptx|make_xlsx|render_pdf|read_sheet|inspect_pdf)$/.test(documentTool)) {
+    return null;
+  }
   try {
     const parsed = JSON.parse(toolResult) as {
       ok?: unknown;

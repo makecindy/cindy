@@ -1252,6 +1252,26 @@ describe('inspect_pdf', () => {
     expect(result.blankPages).toEqual([]);
   });
 
+  it('算子表未能解析时 verdict 不得误报 ok', async () => {
+    const client = await withPdf({
+      numPages: 1,
+      pagesInspected: 1,
+      pages: [
+        page({
+          textChars: 0,
+          drawOps: null,
+          imageOps: null,
+          blank: false,
+          visibilityUnverified: true,
+        }),
+      ],
+    });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.verdict).toBe('warning');
+    expect(result.warning).toContain('未做位图级可见性确认');
+    expect(result.verdict).not.toBe('ok');
+  });
+
   it('横向与非标准纸张都翻译成人能对照的说法', async () => {
     const client = await withPdf({
       numPages: 2,
