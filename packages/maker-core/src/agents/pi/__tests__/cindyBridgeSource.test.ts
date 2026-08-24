@@ -960,6 +960,16 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('${');
   });
 
+  it('preserves the permission denial source across the private Pi UI envelope', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    expect(source).toContain('await ctx.ui.input(');
+    expect(source).toContain("const PERMISSION_USER_DENY = 'user-deny'");
+    expect(source).toContain("const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny'");
+    expect(source).toContain('User denied this tool call via Cindy.');
+    expect(source).toContain('Cindy Auto-review denied this tool call.');
+    expect(source).toContain('Cindy could not approve this tool call.');
+  });
+
   it('normalizes bash timeout at the execute boundary without a host-side timer', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     expect(source).toContain(

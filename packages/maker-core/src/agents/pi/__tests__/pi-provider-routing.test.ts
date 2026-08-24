@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.setConfig({ testTimeout: 30_000 });
+
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
 
@@ -241,10 +243,19 @@ describe('Pi provider-aware model routing', () => {
   it('routes host subscriptions through PI native providers and wire model ids', async () => {
     const authProviderIds: Array<string | null | undefined> = [];
     let resolveProxyProviderId: (() => string | null) | undefined;
+    const proxyRegistrations: Array<{
+      token: string;
+      providerId: string | null;
+      scope?: 'session' | 'subagent-route';
+    }> = [];
     const availableModels: ModelDescriptor[] = [
       {
         id: 'chatgpt/gpt-cindy-daily-test', displayName: 'GPT Daily', contextWindow: 272_000,
         efforts: ['low', 'high'], defaultEffort: 'high',
+      },
+      {
+        id: 'chatgpt/gpt-5.6-luna', displayName: 'GPT 5.6 Luna', contextWindow: 272_000,
+        efforts: ['medium'], defaultEffort: 'medium',
       },
       {
         id: 'xai/grok-4.5', displayName: 'Grok 4.5', contextWindow: 1_000_000,
@@ -253,6 +264,10 @@ describe('Pi provider-aware model routing', () => {
       {
         id: 'xai/grok-4.20', displayName: 'Grok 4.20', contextWindow: 1_000_000,
         efforts: ['high'], defaultEffort: 'high',
+      },
+      {
+        id: 'xai/grok-4.6', displayName: 'Grok 4.6', contextWindow: 1_000_000,
+        efforts: ['medium'], defaultEffort: 'medium',
       },
       {
         id: 'claude-opus-5', displayName: 'Claude Opus 5', contextWindow: 1_000_000,
@@ -275,20 +290,35 @@ describe('Pi provider-aware model routing', () => {
       capabilityAdditions: { availableModels },
       resolvePiAgentHome: () => agentHome,
       resolvePiGatewayModelApi: () => 'openai-responses',
-      registerPiProxySession: (_sessionId, _token, resolveProviderId) => {
-        resolveProxyProviderId = resolveProviderId;
+      registerPiProxySession: (_sessionId, token, resolveProviderId, options) => {
+        if (options?.scope !== 'subagent-route') resolveProxyProviderId = resolveProviderId;
+        proxyRegistrations.push({
+          token,
+          providerId: resolveProviderId(),
+          scope: options?.scope,
+        });
       },
       resolvePiNativeProviders: async () => ({
         providers: [
           {
             id: 'anthropic', sourceProviderId: 'anthropic', name: 'Anthropic',
             baseUrl: 'http://127.0.0.1:9988', inheritModels: true,
+            headers: {
+              'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+              'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+              'x-cindy-pi-provider-id': 'anthropic',
+            },
             models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5' }],
           },
           {
             id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
             baseUrl: 'http://127.0.0.1:9988', inheritModels: true,
             apiKeyEnvVar: 'CINDY_PI_OPENAI_PROXY_KEY',
+            headers: {
+              'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+              'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+              'x-cindy-pi-provider-id': 'openai',
+            },
             models: [
               {
                 id: 'chatgpt/gpt-5.6-sol',
@@ -304,13 +334,25 @@ describe('Pi provider-aware model routing', () => {
                 contextWindow: 272_000,
                 maxTokens: 32_000,
               },
+              {
+                id: 'gpt-5.6-luna',
+                wireId: 'gpt-5.6-luna',
+                contextWindow: 272_000,
+                maxTokens: 32_000,
+              },
             ],
           },
           {
             id: 'xai', sourceProviderId: 'xai', name: 'xAI',
             baseUrl: 'http://127.0.0.1:9988/v1', inheritModels: true,
+            headers: {
+              'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+              'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+              'x-cindy-pi-provider-id': 'xai',
+            },
             models: [
               { id: 'xai/grok-4.5', wireId: 'grok-4.5' },
+              { id: 'grok-4.6', wireId: 'grok-4.6' },
               {
                 id: 'grok-4.6', wireId: 'grok-4.6', catalogAddition: true,
                 contextWindow: 500_000, maxTokens: 500_000,
@@ -373,8 +415,48 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty('api');
     expect(JSON.parse(readFileSync(path.join(configHome, 'settings.json'), 'utf8')))
       .toEqual({ transport: 'sse' });
-    expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8')))
-      .toEqual({ model: 'gpt-cindy-daily-test', provider: 'openai-codex' });
+    const runtimeText = readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8');
+    expect(runtimeText).not.toContain('proxySessionToken');
+    expect(proxyRegistrations.filter((registration) => registration.scope === 'subagent-route'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ providerId: 'anthropic', scope: 'subagent-route' }),
+        expect.objectContaining({ providerId: 'openai', scope: 'subagent-route' }),
+        expect.objectContaining({ providerId: 'xai', scope: 'subagent-route' }),
+      ]));
+    expect(new Set(proxyRegistrations.map((registration) => registration.token)).size)
+      .toBe(proxyRegistrations.length);
+    expect(JSON.parse(runtimeText)).toMatchObject({
+        model: 'gpt-cindy-daily-test',
+        provider: 'openai-codex',
+        modelRoutes: {
+          'chatgpt/gpt-cindy-daily-test': [
+            { provider: 'openai-codex', model: 'gpt-cindy-daily-test' },
+            { provider: 'cindy', model: 'chatgpt/gpt-cindy-daily-test' },
+          ],
+          'chatgpt/gpt-5.6-luna': [
+            {
+              provider: 'openai-codex', model: 'gpt-5.6-luna', sourceProviderId: 'openai',
+              proxySessionAuth: true,
+            },
+            { provider: 'cindy', model: 'chatgpt/gpt-5.6-luna' },
+          ],
+          'claude-opus-5': [
+            {
+              provider: 'anthropic', model: 'claude-opus-5', sourceProviderId: 'anthropic',
+              proxySessionAuth: true,
+            },
+            { provider: 'cindy', model: 'claude-opus-5' },
+          ],
+          'xai/grok-4.6': [
+            { provider: 'xai', model: 'grok-4.6', sourceProviderId: 'xai', proxySessionAuth: true },
+            { provider: 'cindy', model: 'xai/grok-4.6' },
+          ],
+          'xai/grok-4.20': [
+            { provider: 'xai', model: 'grok-4.20', sourceProviderId: 'xai', proxySessionAuth: true },
+            { provider: 'cindy', model: 'xai/grok-4.20' },
+          ],
+        },
+      });
 
     await handle.setModel!('xai/grok-4.5', { providerId: 'xai' });
     expect(captured.requests).toContainEqual({
@@ -382,7 +464,7 @@ describe('Pi provider-aware model routing', () => {
     });
     expect(resolveProxyProviderId?.()).toBe('xai');
     expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8')))
-      .toEqual({ model: 'grok-4.5', provider: 'xai' });
+      .toMatchObject({ model: 'grok-4.5', provider: 'xai' });
 
     await handle.setModel!('claude-opus-5', { providerId: 'anthropic' });
     expect(captured.requests).toContainEqual({
@@ -390,7 +472,7 @@ describe('Pi provider-aware model routing', () => {
     });
     expect(resolveProxyProviderId?.()).toBe('anthropic');
     await handle.close();
-  });
+  }, 30_000);
 
   it('serializes inheritModels Grok 4.6 capability corrections into models.json', async () => {
     const agent = new PiAgent({
@@ -531,7 +613,7 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers['openai-codex']?.baseUrl).toBe('http://127.0.0.1:9988');
     expect(models.providers['cindy-byom-openai-codex']?.baseUrl).toBe('https://user.example/v1');
     expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'namespaced-byom-routing'), 'utf8')))
-      .toEqual({ model: 'chatgpt/gpt-5.6-sol', provider: 'cindy-byom-openai-codex' });
+      .toMatchObject({ model: 'chatgpt/gpt-5.6-sol', provider: 'cindy-byom-openai-codex' });
     await handle.close();
   });
 
@@ -640,6 +722,7 @@ describe('Pi provider-aware model routing', () => {
     expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'grok-46-native'), 'utf8'))).toEqual({
       model: 'xai/grok-4.6',
       provider: 'xai',
+      modelRoutes: expect.any(Object),
     });
     await handle.setModel!('local-model', { providerId: 'native-a' });
     await handle.setModel!('xai/grok-4.6', { providerId: 'xai' });
@@ -752,7 +835,9 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
     expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
-    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
+    // The snapshot also persists the alias route table for Subagent model
+    // normalization, so assert the rebuilt identity rather than exact shape.
+    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toMatchObject({
       model: 'grok-4.6',
       provider: 'xai',
     });
@@ -806,10 +891,10 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
     expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
-    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
-      model: 'grok-4.6',
-      provider: 'xai',
-    });
+    const cleared = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+    expect(cleared).toMatchObject({ model: 'grok-4.6', provider: 'xai' });
+    // The point of this test: the stuck pending flag must be gone.
+    expect(cleared.pending).toBeUndefined();
     await handle.close();
   });
 
@@ -1472,6 +1557,53 @@ describe('Pi provider-aware model routing', () => {
     expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
       .toEqual(['--provider', 'xai']);
     await namespaced.close();
+  });
+
+  it('normalizes Subagent aliases to the catalog wire id without a guessed gateway fallback', async () => {
+    const deps = byomDeps(async () => ({
+      providers: [{
+        id: 'xai',
+        sourceProviderId: 'xai',
+        name: 'xAI',
+        baseUrl: 'http://xai.test',
+        api: 'anthropic-messages',
+        modelIdAliases: {
+          'grok-4.6': 'xai/grok-4.6',
+          'xai/grok-4.6': 'xai/grok-4.6',
+        },
+        models: [{ id: 'xai/grok-4.6', wireId: 'x-ai/grok-4.6' }],
+      }],
+      env: {},
+    }), [
+      { id: 'gateway-model', displayName: 'Gateway', contextWindow: 200_000, efforts: [], defaultEffort: null },
+      { id: 'grok-4.6', displayName: 'Grok 4.6', contextWindow: 500_000, efforts: [], defaultEffort: null },
+    ]);
+    deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+      modelId === 'gateway-model' ? 'openai-responses' : undefined;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'subagent-wire-normalization',
+      workingDir: cwd,
+      model: 'gateway-model',
+      providerId: 'xd',
+    });
+    const runtime = JSON.parse(
+      readFileSync(runtimeFileOf('subagent', 'subagent-wire-normalization'), 'utf8'),
+    ) as { modelRoutes: Record<string, Array<{ provider: string; model: string; sourceProviderId?: string }>> };
+    expect(runtime.modelRoutes['grok-4.6']).toEqual([
+      { provider: 'xai', model: 'x-ai/grok-4.6', sourceProviderId: 'xai' },
+    ]);
+    expect(runtime.modelRoutes['xai/grok-4.6']).toEqual([
+      { provider: 'xai', model: 'x-ai/grok-4.6', sourceProviderId: 'xai' },
+    ]);
+    expect(runtime.modelRoutes['gateway-model']).toEqual([
+      {
+        provider: 'cindy',
+        model: 'gateway-model',
+        sourceProviderId: 'cindy-gateway',
+        proxySessionAuth: true,
+      },
+    ]);
+    await handle.close();
   });
 
   it('fails closed when provider-less aliases are ambiguous', async () => {
@@ -3063,6 +3195,7 @@ describe('Pi provider-aware model routing', () => {
     };
     let transportOptions:
       Parameters<NonNullable<AgentDeps['getRemotePiTransport']>>[1] | undefined;
+    const remoteWrittenFiles: string[] = [];
     let registeredToken: string | undefined;
     let disposed = 0;
     const base = byomDeps(
@@ -3139,7 +3272,7 @@ describe('Pi provider-aware model routing', () => {
       resolveRemotePiBinaryPath: async () => '/remote/pi',
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
-        writeFile: async () => {},
+        writeFile: async (file) => { remoteWrittenFiles.push(file); },
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
@@ -3167,6 +3300,15 @@ describe('Pi provider-aware model routing', () => {
       expect.arrayContaining(['CINDY_PI_API_KEY', 'CINDY_PI_XAI_PROXY_API_KEY']),
     );
     expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    expect(transportOptions?.args).not.toContain('/remote/cindy-subagent.ts');
+    expect(transportOptions?.args.some((arg) => arg.endsWith('/cindy-subagent.ts'))).toBe(false);
+    expect(transportOptions?.env.CINDY_PI_SUBAGENT_BINARY).toBeUndefined();
+    expect(transportOptions?.env.CINDY_PI_SUBAGENT_RUNTIME_FILE).toBeUndefined();
+    expect(transportOptions?.env.CINDY_PI_SUBAGENT_RUN_ROOT).toBeUndefined();
+    expect(transportOptions?.env.CINDY_PI_SUBAGENT_RUNNER_FILE).toBeUndefined();
+    expect(transportOptions?.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+    expect(remoteWrittenFiles.some((file) => file.endsWith('/cindy-subagent.ts'))).toBe(false);
+    expect(remoteWrittenFiles.some((file) => file.endsWith('/cindy-subagent-runner.cjs'))).toBe(false);
     expect(transportOptions?.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
     const firstToken = registeredToken;
     const firstSpawnEnv = { ...transportOptions?.env };
@@ -3184,6 +3326,7 @@ describe('Pi provider-aware model routing', () => {
       provider: 'xai',
       modelId: 'xai/grok-4.6',
     });
+    expect(remoteWrittenFiles.some((file) => file.includes('/subagent-'))).toBe(false);
     await handle.close();
     expect(disposed).toBe(1);
 

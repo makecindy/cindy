@@ -99,6 +99,8 @@ export const MAKER_INVOKE = {
    * → UNSUPPORTED_CAPABILITY。
    */
   STOP_AGENT_TASK: 'maker:agent-task:stop',
+  /** Send a message to one active Cindy-owned PI Subagent run. */
+  CONTROL_PI_SUBAGENT: 'maker:pi-subagent:control',
   /**
    * 列出会话当前仍在运行的后台任务({taskId, taskType?, toolUseId?, title?})。只读;
    * renderer 挂载或 reloadMessages 清空 taskUpdates 后,用它补回「订阅前已启动」的

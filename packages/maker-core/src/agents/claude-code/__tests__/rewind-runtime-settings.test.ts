@@ -204,6 +204,7 @@ async function startRewindableSession(
     autoCompactThresholdPct?: number;
     idleTimeoutMs?: number;
     remoteHostId?: string;
+    model?: string;
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -215,8 +216,12 @@ async function startRewindableSession(
 
   const firstQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(firstQuery);
+  const remoteStartParams: Array<Record<string, unknown>> = [];
   const remoteCcQueryFactory = options.remoteHostId
-    ? (async () => firstQuery as never)
+    ? (async (opts: { startParams: Record<string, unknown> }) => {
+        remoteStartParams.push(opts.startParams);
+        return firstQuery as never;
+      })
     : undefined;
   const infoCalls: string[] = [];
 
@@ -235,13 +240,13 @@ async function startRewindableSession(
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
-    model: 'claude-opus-4-6',
+    model: options.model ?? 'claude-opus-4-6',
     workingDir,
     permissionMode: 'acceptEdits',
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery, infoCalls };
+  return { agent, handle, firstQuery, infoCalls, remoteStartParams };
 }
 
 afterEach(async () => {
@@ -685,11 +690,10 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
-  it('skips idle auto-compact on local sessions when host will rebuild context', async () => {
-    const shouldHandoff = vi.fn(() => true);
+  it('injects host auto-compact at 75% even when the model-switch handoff callback would fire', async () => {
     const { handle, firstQuery, infoCalls } = await startRewindableSession({
       autoCompactThresholdPct: 50,
-      shouldHandoffAfterContextAssessment: shouldHandoff,
+      shouldHandoffAfterContextAssessment: () => true,
     });
     void (async () => {
       try {
@@ -714,7 +718,72 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
     await handle.setModel?.('claude-sonnet-5');
     expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
-    expect(shouldHandoff).toHaveBeenCalled();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+      'auto-compact triggered',
+    ]);
+
+    await handle.close();
+  });
+
+  it('injects host auto-compact at the 0.1.57 Grok occupancy that is below a full window', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+    expect(handle.getUsageSnapshot().contextTokens).toBe(437_712);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('does not inject host auto-compact when occupancy is already full', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
     expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
 
     await handle.close();
@@ -752,6 +821,277 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
       'auto-compact triggered',
     ]);
+
+    await handle.close();
+  });
+
+  it('still injects host auto-compact on a full remote session because rollover is local-only', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+      remoteHostId: 'remote-1',
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('latches rollover when idle host auto-compact returns an empty summary', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: summarization produced empty response',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.getUsageSnapshot().needsRollover).toBe(true);
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    firstQuery.stream.emit({
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { input_tokens: 438_000, output_tokens: 0 } },
+    });
+    await Promise.resolve();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.close();
+  });
+
+  it('retries idle host auto-compact after a transient compact failure', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: 401 unauthorized',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  async function waitForIdleHostAutoCompact(
+    handle: Awaited<ReturnType<typeof startRewindableSession>>['handle'],
+    firstQuery: ReturnType<typeof createFakeQuery>,
+    infoCalls: string[],
+  ): Promise<void> {
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+  }
+
+  it('does not re-inject idle host auto-compact after abort until the next user turn', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.abort();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('does not re-inject idle host auto-compact after the upstream idle watchdog', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+      idleTimeoutMs: 20,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+    await vi.waitFor(() => {
+      expect(firstQuery.interrupt).toHaveBeenCalled();
+    });
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('clears idle host auto-compact fired after requestGracefulStop', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.requestGracefulStop?.();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
 
     await handle.close();
   });

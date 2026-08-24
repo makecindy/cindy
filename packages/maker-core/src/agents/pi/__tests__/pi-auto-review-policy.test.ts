@@ -146,4 +146,12 @@ describe('classifyPiToolForAutoReview', () => {
     expect(verdict('mcp__cindy_orca__start_team', { anything: 1 })).toBe('prompt');
     expect(verdict('some_future_tool', {})).toBe('prompt');
   });
+
+  it('auto-approves first-party durable Subagent spawn without opening unknown tools', () => {
+    expect(verdict('subagent', {
+      agent: 'worker',
+      task: 'implement the fix',
+    })).toBe('auto-approve');
+    expect(verdict('some_future_tool', {})).toBe('prompt');
+  });
 });

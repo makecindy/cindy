@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { LucideProps } from 'lucide-react';
 import {
   Boxes,
+  ChartColumn,
   CircleDollarSign,
   CircleHelp,
   FileUp,
@@ -59,6 +60,7 @@ type SettingsNavIcon = ComponentType<LucideProps>;
 const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   general: Settings2,
   billing: CircleDollarSign,
+  usage: ChartColumn,
   personalization: Sparkles,
   providers: Boxes,
   'voice-input': Mic,

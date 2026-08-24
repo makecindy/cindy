@@ -88,6 +88,7 @@ export type {
   ResponseObserver,
   ResponseObserverCtx,
   ResponseObserverSink,
+  ResponseTransform,
   RequestTransform,
   RequestTransformCtx,
   RoutingDecision,

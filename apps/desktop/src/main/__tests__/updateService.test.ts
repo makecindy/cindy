@@ -260,7 +260,9 @@ async function runStartupUpdate(
   readAutoUpdateSettings.mockReturnValue({
     autoRelaunchOnIdle: options.enabled ?? true,
   });
-  fetchManifest.mockResolvedValue(updateManifest());
+  fetchManifest.mockResolvedValue(
+    options.platform === 'linux' ? linuxInstallerManifest() : updateManifest(),
+  );
   download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
     fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
     fs.writeFileSync(targetPath, 'update');
@@ -279,8 +281,41 @@ async function runStartupUpdate(
   }
 }
 
-describe('checkForUpdate Linux first-release guard', () => {
-  it('returns manual_download on Linux without fetching or downloading, even with a hotfix manifest override', async () => {
+function linuxInstallerManifest(version = '0.0.65') {
+  return {
+    app: {
+      version,
+      installer: {
+        file: `app/linux-x64/cindy-${version}-amd64.deb`,
+        sha256: 'abc',
+        size: 123,
+      },
+    },
+  };
+}
+
+describe('checkForUpdate Linux installer flow', () => {
+  it('downloads the Linux installer .deb instead of a hotfix zip', async () => {
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const { checkForUpdate, getUpdateStatus } = await freshUpdateService('linux');
+
+    const result = await checkForUpdate(linuxInstallerManifest('9.9.9'));
+
+    expect(result).toBe('ready');
+    expect(getUpdateStatus()).toBe('ready');
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(download.mock.calls[0]?.[0]).toMatchObject({
+      url: expect.stringContaining('cindy-9.9.9-amd64.deb'),
+      sha256: 'abc',
+    });
+  });
+
+  it('ignores a Linux hotfix zip and stays idle without an installer', async () => {
     const { checkForUpdate, getUpdateStatus } = await freshUpdateService('linux');
 
     const result = await checkForUpdate({
@@ -292,29 +327,27 @@ describe('checkForUpdate Linux first-release guard', () => {
           size: 123,
         },
       },
-      claudeCode: {
-        version: '1.0.0',
-        file: 'claude-code/1.0.0/linux-x64/claude.gz',
-        sha256: 'def',
-        size: 456,
-      },
     });
 
-    expect(result).toBe('manual_download');
+    expect(result).toBe('idle');
     expect(getUpdateStatus()).toBe('idle');
-    expect(fetchManifest).not.toHaveBeenCalled();
     expect(download).not.toHaveBeenCalled();
   });
 
-  it('keeps returning manual_download on repeated Linux checks while remaining idle', async () => {
-    const { checkForUpdate, getUpdateStatus } = await freshUpdateService('linux');
+  it('does not auto-apply a staged Linux .deb at startup', async () => {
+    await expect(runStartupUpdate({ platform: 'linux' })).resolves.toMatchObject({
+      hasUpdate: true,
+      action: 'none',
+      version: '0.0.65',
+    });
+  });
 
-    expect(await checkForUpdate()).toBe('manual_download');
-    expect(await checkForUpdate()).toBe('manual_download');
+  it('refuses the xd org beta default on Linux without writing to disk', async () => {
+    tryEnableUncustomizedBetaAtomic.mockReset();
+    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux');
 
-    expect(getUpdateStatus()).toBe('idle');
-    expect(fetchManifest).not.toHaveBeenCalled();
-    expect(download).not.toHaveBeenCalled();
+    await expect(enableUncustomizedBetaChannel()).resolves.toBe(false);
+    expect(tryEnableUncustomizedBetaAtomic).not.toHaveBeenCalled();
   });
 });
 

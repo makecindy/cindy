@@ -432,11 +432,16 @@ export const subagentRuns = sqliteTable(
     title: text('title'),
     description: text('description'),
     summary: text('summary'),
+    /** Complete bounded terminal return; kept separate from the short summary. */
+    returnedResult: text('returned_result'),
+    returnedResultEmpty: integer('returned_result_empty'),
+    returnedResultTruncated: integer('returned_result_truncated'),
     model: text('model'),
     reasoningEffort: text('reasoning_effort'),
     totalTokens: integer('total_tokens'),
     toolUses: integer('tool_uses'),
     durationMs: integer('duration_ms'),
+    costUsd: real('cost_usd'),
     /** JSON SubagentCapabilities; optional fields are fail-closed by readers. */
     capabilities: text('capabilities').notNull().default('{}'),
     /** JSON SubagentActivityEntry[]; writer enforces count/text bounds. */
@@ -539,6 +544,7 @@ export const sessionPrRefs = sqliteTable(
  *   - schema_version                       (string，"0" / "1" / ...)
  *   - codex_history_has_product_prompt_initialized_v1 ('done')
  *   - codex_history_cindy_memory_prompt_reset_v2 ('done')
+ *   - codex_history_product_prompt_revision (current explicit revision)
  *
  * 历史 keys（只读遗留，不再写入）：cloud_migration_*——chat-data 云端迁移已随
  * 主 server 退役（2026-07），存量库里可能残留这组键，无消费方。

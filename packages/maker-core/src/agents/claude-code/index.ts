@@ -96,7 +96,7 @@ import {
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
-import { AutoCompactController } from '../shared/auto-compact-controller.js';
+import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palette-scanner.js';
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
@@ -1266,13 +1266,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'claude-code',
             getThresholdPct: getAutoCompactThresholdPct,
-            // 远端没有 overflow rollover;关掉 /compact 会让会话只能硬超限。
-            ...(opts.remoteHostId
-              ? {}
-              : {
-                  shouldHandoffAfterContextAssessment:
-                    this.deps.runtimeConfig.shouldHandoffAfterContextAssessment,
-                }),
+            compactWhenFull: Boolean(opts.remoteHostId),
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。
@@ -2351,13 +2345,18 @@ export class ClaudeCodeAgent extends BaseAgent {
       generation: 0,
       interruptGeneration: 0,
       lastAssistantMsgHadSubstance: true,
+      nextRequestPriceVariant: 'standard',
     };
     const runtimeState: RuntimeState = newRuntimeState();
-    const beginNewTurn = (): void => {
+    const beginNewTurn = (priceVariant: 'standard' | 'priority' = mutableFastMode ? 'priority' : 'standard'): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
       resetClaudeGenerationTiming(runtimeState.generation);
+      runtimeState.activeUsageSegmentByParent.clear();
+      runtimeState.activeUsagePriceVariantByParent.clear();
+      runtimeState.pendingUsagePriceVariantByParent.clear();
+      turnState.nextRequestPriceVariant = priceVariant;
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
@@ -2411,6 +2410,9 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 的边界事件正常放行、清 turnInFlight。计数 = "已注入但 SDK 还没跑完的桥接 turn 数"。
      */
     let queuedBridgeTurns = 0;
+    // 用户 turn 结束后由 completeTranslatedTurnEnd / setModel 注入的静默 /compact。
+    // 不能复用 queuedBridgeTurns：那会 suppress 终态、并把 isTurnRunning 卡在 true。
+    let hostAutoCompactInFlight = false;
     type ActiveBridgeKind = 'rewind' | 'cancellation';
     let activeBridgeKind: ActiveBridgeKind | null = null;
     // Bridge /compact 由 rewind 或 cancellation rebuild 尾部注入。若用户 Stop 打在该 bridge turn
@@ -2422,6 +2424,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const bridgeStateActive = (): boolean =>
       queuedBridgeTurns > 0 || activeBridgeKind !== null || activeBridgeRewindResumeAt !== undefined;
     let q: Query;
+    // Query-scoped lifecycle fact: modelUsage is cumulative within the SDK
+    // process. A query created without a resume id starts that counter at zero;
+    // resumed queries may include prior transcript usage and must establish a
+    // baseline unless request segments prove the delta independently.
+    const modelUsageStartsAtZeroQueries = new WeakSet<Query>();
     function restoreBridgeAutoCompactSnapshot(reason: string): void {
       const snapshot = bridgeCompactUsageSnapshot;
       bridgeCompactUsageSnapshot = null;
@@ -2590,6 +2597,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
         source: 'claude-code',
       });
+      cancelIdleHostAutoCompact('host_auto_compact_idle_timeout');
       // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
       // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
       turnInFlight = false;
@@ -2618,8 +2626,10 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 检查是否需要 auto-compact, 需要时把 /compact push 到 inputQueue。返回是否实际 push。
      * 调用方在 rebuild 尾部的 "compact→user 桥接场景" 中据此把 queuedBridgeTurns++,
      * 让后续中间 turn 边界事件被 suppress、turnInFlight 跨排队 turn 保持。
+     * origin=idle 是用户 turn 结束后的静默压缩，失败要 latch/cancel；origin=bridge 由
+     * queuedBridgeTurns 分支处理，不要再标 hostAutoCompactInFlight。
      */
-    function triggerAutoCompactIfNeeded(): boolean {
+    function triggerAutoCompactIfNeeded(origin: 'idle' | 'bridge' = 'idle'): boolean {
       if (closed || turnInFlight) return false;
       if (!autoCompactController?.shouldCompactNow()) return false;
       const snapshot = autoCompactController.getLatestSnapshot();
@@ -2631,15 +2641,32 @@ export class ClaudeCodeAgent extends BaseAgent {
         contextWindow: snapshot?.contextWindow,
         sdkSessionId,
       });
-      beginNewTurn();
+      beginNewTurn(mutableFastMode ? 'priority' : 'standard');
       resetToolLoopGuards();
       turnInFlight = true;
+      if (origin === 'idle') hostAutoCompactInFlight = true;
       inputQueue.push({
         type: 'user',
         message: { role: 'user', content: '/compact' },
         parent_tool_use_id: null,
       });
       armUpstreamResponseIdle();
+      return true;
+    }
+
+    function noteHostAutoCompactTerminalFailure(message: string): void {
+      if (!hostAutoCompactInFlight) return;
+      if (!opts.remoteHostId && isDeterministicHostCompactFailure(message)) {
+        autoCompactController?.markNeedsRollover('host_auto_compact_failed');
+      } else {
+        autoCompactController?.onCompactCanceled('host_auto_compact_failed');
+      }
+    }
+
+    function cancelIdleHostAutoCompact(reason: string): boolean {
+      if (!hostAutoCompactInFlight) return false;
+      autoCompactController?.onCompactCanceled(reason);
+      // 只清 fired。hostAutoCompactInFlight 留给 onTurnEnd，避免取消收尾立刻再注入。
       return true;
     }
 
@@ -2652,11 +2679,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       const snapshot = autoCompactController?.getLatestSnapshot();
       const threshold = autoCompactController?.getCurrentThresholdPct();
       return snapshot !== null && snapshot !== undefined &&
-        threshold !== undefined && snapshot.ratio >= threshold / 100;
+        threshold !== undefined &&
+        snapshot.ratio >= threshold / 100 &&
+        snapshot.ratio < 1 &&
+        autoCompactController?.needsRollover() !== true;
     }
 
     function queueAutoCompactBridge(kind: ActiveBridgeKind, resumeAt?: string): boolean {
-      const queued = triggerAutoCompactIfNeeded();
+      const queued = triggerAutoCompactIfNeeded('bridge');
       if (!queued) return false;
       bridgeCompactUsageSnapshot = autoCompactController?.getLatestSnapshot() ?? null;
       activeBridgeKind = kind;
@@ -2721,6 +2751,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // resume 优先用当前的 sdkSessionId (rewind 重启时它指向上一轮 SDK 给的 id);
       // 缺省回到 startSession 入参的 resumeSessionId (新会话首次起 query 时用)。
       let resumeSdkSid = sdkSessionId ?? configuredResumeSessionId;
+      let modelUsageCumulativeStartsAtZero = !resumeSdkSid;
 
       // ── 远端 cc 分支 (Phase 4.3) ──
       // session 标了 remoteHostId 且 host 注入了 remoteCcQueryFactory → 走远端
@@ -3233,6 +3264,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         })().catch(() => undefined);
 
         if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
+        if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(remoteQuery);
         return remoteQuery;
       }
 
@@ -3298,6 +3330,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               resumeRecoveryAttempted = false;
               freshSessionValidationPending = true;
               resumeSdkSid = undefined;
+              modelUsageCumulativeStartsAtZero = true;
             } else {
               log.warn('resume transcript not found in any project dir (CLI resume may fail)', {
                 resumeSdkSid,
@@ -3434,6 +3467,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       });
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
+      if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
       return query;
     };
 
@@ -3482,6 +3516,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let bridgeSuppressedDoneData: Record<string, unknown> | undefined;
     function clearBridgeState(): void {
       queuedBridgeTurns = 0;
+      hostAutoCompactInFlight = false;
       activeBridgeKind = null;
       activeBridgeRewindResumeAt = undefined;
       bridgeCompactUsageSnapshot = null;
@@ -4187,9 +4222,30 @@ export class ClaudeCodeAgent extends BaseAgent {
               queuedBridgeTurns,
             });
             restoreBridgeAutoCompactSnapshot('bridge_compact_failed');
-            autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            const compactError =
+              typeof (e.data as { message?: unknown }).message === 'string'
+                ? (e.data as { message: string }).message
+                : '';
+            if (!opts.remoteHostId && isDeterministicHostCompactFailure(compactError)) {
+              autoCompactController?.markNeedsRollover('bridge_compact_failed');
+            } else {
+              autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            }
             return true;
           }
+        }
+        if (hostAutoCompactInFlight && e.type === 'error' && isTerminalAgentErrorEvent(e)) {
+          const compactError =
+            typeof (e.data as { message?: unknown }).message === 'string'
+              ? (e.data as { message: string }).message
+              : '';
+          log.warn('host auto-compact turn failed', {
+            reason: (e.data as { reason?: unknown } | null | undefined)?.reason,
+            message: compactError,
+          });
+          noteHostAutoCompactTerminalFailure(
+            compactError || 'Error during compaction: unknown host auto-compact failure',
+          );
         }
         if (e.type === 'status') {
           const data = e.data as { isRunning?: unknown } | null | undefined;
@@ -4275,6 +4331,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const getClaudeSubagentTaskUsage = this.deps.getClaudeSubagentTaskUsage;
     function completeTranslatedTurnEnd(): void {
       pendingToolIds.clear();
+      const endingHostAutoCompact = hostAutoCompactInFlight;
+      hostAutoCompactInFlight = false;
       if (queuedBridgeTurns > 0) {
         queuedBridgeTurns -= 1;
         log.debug('onTurnEnd: consumed one bridge turn, keeping turnInFlight + plan state', {
@@ -4299,7 +4357,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       turnInFlight = false;
       clearUpstreamResponseIdle();
-      triggerAutoCompactIfNeeded();
+      // 本轮已经是静默 /compact。瞬时失败由 onCompactCanceled 打开重试，等下一轮用户
+      // turn 结束再压；这里立刻再注入会把 401/过载打成紧循环。
+      if (!endingHostAutoCompact) triggerAutoCompactIfNeeded();
     }
     function startForwardLoop(currentQ: Query): void {
       // q 换代: 上一代 q 的 pending interrupted result 不可能从新 q drain 出来,
@@ -4456,7 +4516,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 rawType,
                 sdkSessionId,
               });
-              beginNewTurn();
+              beginNewTurn(mutableFastMode ? 'priority' : 'standard');
               resetToolLoopGuards();
               turnInFlight = true;
             }
@@ -4471,10 +4531,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               turn: turnState,
               log,
               getModel: () => mutableModel,
+              getProviderId: () => mutableProviderId,
               getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
+              getFastMode: () => mutableFastMode,
               getSdkSessionId: () => sdkSessionId,
+              modelUsageCumulativeStartsAtZero: () =>
+                modelUsageStartsAtZeroQueries.has(currentQ),
               getLogTitle: () => lastSendTitle,
               tracker: usageTracker,
               onSessionId: (sid) => {
@@ -4573,6 +4637,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                       autoCompactController?.onUsageUpdate(used, window);
                     },
                     onCompactBoundary: () => {
+                      hostAutoCompactInFlight = false;
                       memoryFlushController?.onCompactBoundary();
                       autoCompactController?.onCompactBoundary();
                     },
@@ -4877,7 +4942,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // turnInFlight,否则 isTurnRunning() 会在没有 turn 运行时误报为忙。无 replay 的
       // 全新 query + startForwardLoop 等价于 startSession 首次起 q 的空闲态。
       if (replayInput) {
-        beginNewTurn();
+        beginNewTurn(runtimeSnapshot.fastMode ? 'priority' : 'standard');
         resetToolLoopGuards();
         turnInFlight = true;
       }
@@ -5414,7 +5479,7 @@ export class ClaudeCodeAgent extends BaseAgent {
 
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
-        beginNewTurn();
+        beginNewTurn(mutableFastMode ? 'priority' : 'standard');
         resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
@@ -5598,6 +5663,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const generation = turnState.generation;
         turnState.interruptRequested = true;
         turnState.interruptGeneration = generation;
+        cancelIdleHostAutoCompact('host_auto_compact_graceful_stop');
         dismissAllPending('graceful_stop', 'deny');
         // A parent result can leave the foreground idle while wake tasks still
         // own an awaiting continuation. Interrupting that idle Query alone does
@@ -5704,6 +5770,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 前台仍在跑或 provider continuation 正在 awaiting 时都要锁定本代 Stop。
         // 后者的 turnInFlight 已经是 false，但 interrupt ACK 前的迟到 result 同样
         // 不得重新铸造 continuation claim。
+        cancelIdleHostAutoCompact('host_auto_compact_aborted');
         const awaitingContinuationAtUserStop = activeContinuationClaim();
         if (turnInFlight || awaitingContinuationAtUserStop?.state === 'awaiting') {
           turnState.interruptRequested = true;
@@ -6006,7 +6073,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 走 tracker —— translator 在 message_delta 时 ingest, result 时 endTurn 锁定;
         // 这里读到的就是最新值 (mid-turn 反映累加, turn end 后 reset 前是 turn aggregate,
         // 下一 turn beginTurn 后 reset 为 0)。
-        return usageTracker.snapshot();
+        return {
+          ...usageTracker.snapshot(),
+          ...(autoCompactController?.needsRollover() ? { needsRollover: true } : {}),
+        };
       },
 
       async getContextUsage() {

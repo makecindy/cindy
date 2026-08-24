@@ -148,6 +148,8 @@ export async function resetUpdateChannelSettings(): Promise<UpdateChannelSetting
 
 /** manifestService 消费的单一读取入口:返回是否启用 beta(设备级)。 */
 export function isBetaChannelEnabled(): boolean {
+  // Linux 没有 beta 清单 / 热更 zip；隐藏开关后仍读落盘值会把客户端钉在不可达渠道。
+  if (process.platform === 'linux') return false;
   return readUpdateChannelSettings().enableBeta;
 }
 

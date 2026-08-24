@@ -4391,10 +4391,10 @@ export default function NewRemoteSessionScreen() {
       });
     } catch (err) {
       if (!isCurrentOwner()) return;
-      // agent 未鉴权(电脑端没配 key / 没登录)是新会话失败的高频原因,
-      // 换成带引导的中文提示;其它错误维持原文。
+      // agent 未鉴权(电脑端没配 key / 没登录)是新任务失败的高频原因。
+      // state 保留结构化原文，渲染时再按当前语言生成引导，避免切换语言后缓存旧文案。
       const raw = formatRemoteError(err);
-      setError(describeAgentAuthError(raw) ?? raw);
+      setError(raw);
     } finally {
       releasePrecreatedRegistration?.();
       if (!handedOff) {
@@ -5613,7 +5613,9 @@ export default function NewRemoteSessionScreen() {
               </View>
             ) : null}
 
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            {error ? (
+              <Text style={styles.errorText}>{describeAgentAuthError(error) ?? error}</Text>
+            ) : null}
             {/* 发送前鉴权提示:选中 agent 在被控端无已连接供应商时提前告知;
                 error 已展示(含被门禁拦截的同款文案)时不重复出现。 */}
             {!error && agentAuthVerdict === 'unauthenticated' ? (

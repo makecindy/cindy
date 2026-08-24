@@ -22,7 +22,7 @@ export type HomeRow =
       key: string;
       kind: 'session';
       item: RemoteSessionListItem;
-      source: 'chat' | 'pinned' | 'project';
+      source: 'chat' | 'pinned' | 'project' | 'search';
       /** 仅平铺(未按项目分组)的顶层会话行:项目名或「对话」。 */
       sourceLabel?: string;
     };

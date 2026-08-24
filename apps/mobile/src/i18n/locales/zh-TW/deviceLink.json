@@ -26,5 +26,38 @@
   "versionMismatchTitle": "版本不匹配",
   "versionMismatchHint": "當前 App 版本與服務端協議不一致，請升級到最新版本。",
   "unstableTitle": "連線反覆斷開",
-  "unstableHint": "本機連線反覆斷開又重連，遠端操作可能一直超時。請檢查網路；若持續如此，重啟 App 後重試。"
+  "unstableHint": "本機連線反覆斷開又重連，遠端操作可能一直超時。請檢查網路；若持續如此，重啟 App 後重試。",
+  "relay": {
+    "label": { "online": "Relay 已連線", "connecting": "正在連線 Relay", "stopped": "Relay 未連線" },
+    "hint": {
+      "online": "可以同步遠端任務。",
+      "lastSynced": "上次同步 {{time}}",
+      "connecting": "網路恢復後會自動重新訂閱遠端任務。",
+      "stopped": "回到前景或重新登入後會恢復連線。"
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} 無法使用：電腦端還沒有設定可用的 API Key。請在電腦端 {{appName}} 的「設定 → 模型供應商」完成設定後再試。",
+    "noOauth": "{{agent}} 無法使用：電腦端尚未完成帳號授權。請在電腦端 {{appName}} 的「設定 → 模型供應商」重新連線帳號後再試。",
+    "noCredentials": "{{agent}} 無法使用：電腦端尚未登入。請在電腦端 {{appName}} 的「設定 → 模型供應商」完成登入後再試。",
+    "noEncryption": "{{agent}} 無法使用：電腦端系統安全儲存空間不可用，讀不到已儲存的金鑰。請檢查系統鑰匙圈（macOS）或系統帳號加密（Windows），然後重新啟動電腦端 {{appName}}。",
+    "proxyNotReady": "{{agent}} 暫時無法使用：電腦端元件尚未就緒。請稍候重試；若持續出現，請重新啟動電腦端 {{appName}}。",
+    "default": "{{agent}} 無法使用：電腦端登入憑證不可用。請在電腦端 {{appName}} 的「設定 → 模型供應商」重新登入後再試。（{{reason}}）"
+  },
+  "remoteError": {
+    "remoteDisabled": "受控電腦已關閉允許遠端控制。",
+    "channelNotAllowed": "目前電腦端版本不支援這個遠端能力。",
+    "accessRevoked": "這臺電腦已撤銷手機存取權限。",
+    "deviceUnresponsive": "電腦端未回應，正在自動重試，請稍後再試。",
+    "versionMismatch": "與服務端協定版本不一致，請升級 App 後重試。",
+    "payloadTooLarge": "這次傳輸的內容過大，請拆分後重試。",
+    "mediaFetchFailed": "取得電腦端檔案失敗，可以稍後重試。",
+    "voiceTranscribeFailed": "語音轉寫失敗，可以重試或改用鍵盤輸入。",
+    "linkNotOpen": "與受控電腦的控制連線已中斷，正在重新建立。",
+    "accountChanged": "Codex 帳號或工作區已變更，請重新整理配額後再次確認。",
+    "offerExpired": "Codex 重設憑證已失效，請重新整理配額後再次確認。",
+    "preconditionFailed": "操作條件已變更，請重新整理後再次確認。",
+    "transient": "網路或受控端暫時不可用，可以稍後重新同步。",
+    "callFailed": "遠端呼叫失敗，可以稍後重試。（{{error}}）"
+  }
 }

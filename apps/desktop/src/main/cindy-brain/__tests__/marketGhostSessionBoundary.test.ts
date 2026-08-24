@@ -189,6 +189,10 @@ describe('market Ghost session boundary', () => {
     // stopAndWait (rollback if provenance check fails).
     expect(restoreIndex).toBeGreaterThan(waitIndex);
     expect(body).toContain('finally {\n      releaseMutation();');
+    const leaseReleaseIndex = body.indexOf('finally {\n      releaseMutation();');
+    const stagingReleaseIndex = body.indexOf('releaseForgePackStaging(');
+    expect(leaseReleaseIndex).toBeGreaterThan(-1);
+    expect(stagingReleaseIndex).toBeGreaterThan(leaseReleaseIndex);
     expect(body).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
     expect(body).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });

@@ -312,7 +312,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
           <button
             type="button"
             onClick={handleTogglePlay}
-            aria-label={playing ? 'Pause' : 'Play'}
+            aria-label={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}
             className={cn(
               'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
               'bg-[var(--msg-tool-card-text)] text-[var(--msg-tool-card-bg)]',

@@ -170,9 +170,9 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // 为什么必须全桶、不能只刷当前桶(codex review):归档时 patchLocal 会 drop
       // 目标桶(archived,本地没有这条的完整 row)并立刻重拉,而那次重拉发生在
       // setStatus 写库**之前**,拿回来的是「还没归档」的快照。本机
-      // local-db:sessions:update 又只在 title / settings / project 变化时才广播
-      // sessions:patched(status 不在其中),archived 桶再没有别的修正机会 —— 用户
-      // 切到「已归档」筛选会看不到刚归档的这条,直到某次无关刷新。
+      // local-db:sessions:update 对 status 变化也会广播 sessions:patched(#3175,
+      // 副窗与控制端靠它收敛),但广播只修单个字段、不触发各桶重拉 ——
+      // 已归档桶仍需要这里的 emitRefresh 才能看到刚归档的这条,直到某次无关刷新。
       // 与 unarchiveSession 末尾的 emitRefresh 同口径。
       emitRefresh();
       // 远程会话从侧边栏消失由被控端 sessions:patched{status} 回流(applyPatch 移出分片)驱动,

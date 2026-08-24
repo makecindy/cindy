@@ -164,6 +164,12 @@ export interface RoutingDescriptor {
    * Codex 的 openai-chat / anthropic-messages 会分别进入对应的本地 Responses bridge。
    */
   wireProtocol?: ProviderWireProtocol;
+  /**
+   * 此 Codex Responses 上游是否原生接受 `type: "custom"` 工具。
+   * `false` 时 Desktop 可把选定的 custom tool 对称转换为普通 function tool；
+   * 未声明表示没有足够能力信息，调用方不得按模型名猜测。
+   */
+  supportsResponsesCustomTools?: boolean;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /**

@@ -16,7 +16,10 @@ vi.mock('@/features/right-sidebar/plugins/resource-usage/ResourceUsageBody', () 
 }));
 
 vi.mock('@/components/title-bar/WindowControls', () => ({
-  WindowControls: () => <button data-testid="window-controls" />,
+  // #3183: 暴露 onClose 触发,验证标题栏 X 走资源窗口专用关闭通道
+  WindowControls: ({ onClose }: { onClose?: () => void }) => (
+    <button data-testid="window-controls" onClick={onClose} />
+  ),
 }));
 
 vi.mock('@/hooks/useTheme', () => ({ ThemeProvider: ({ children }: React.PropsWithChildren) => children }));
@@ -44,6 +47,7 @@ afterEach(() => {
 describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
   const rendererReady = vi.fn(() => Promise.resolve());
   const presentationReady = vi.fn(() => Promise.resolve());
+  const resourceClose = vi.fn(() => Promise.resolve());
   let samplingListener: ((active: boolean) => void) | null = null;
   let localeListener: ((locale: 'zh-CN' | 'en') => void) | null = null;
 
@@ -54,12 +58,13 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     setLocale.mockClear();
     rendererReady.mockClear();
     presentationReady.mockClear();
+    resourceClose.mockClear();
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
         platform: 'win32',
         resourceUsageWindow: {
-          close: vi.fn(() => Promise.resolve()),
+          close: resourceClose,
           rendererReady,
           presentationReady,
           onSamplingActiveChanged: (cb: (active: boolean) => void) => {
@@ -132,6 +137,18 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     });
 
     expect(presentationReady).toHaveBeenCalledOnce();
+  });
+
+  it('closes the resource window via the dedicated close channel when the title-bar X is clicked (#3183)', () => {
+    render(<ResourceUsageWindowRoot />);
+
+    act(() => {
+      screen.getByTestId('window-controls').click();
+    });
+
+    // 必须走 resourceUsageWindow.close(controller 隐藏窗口 + 焦点回归主窗口),
+    // 而不是通用 windowClose,否则用户点 X 后看起来"回不去"。
+    expect(resourceClose).toHaveBeenCalledOnce();
   });
 
   it('retries a transient presentation-ready IPC failure', async () => {
