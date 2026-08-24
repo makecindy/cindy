@@ -869,6 +869,7 @@ import {
   clearSessionRuntimeControlState,
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
+  mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
@@ -11033,13 +11034,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${targetSessionId} not found`,
         };
       }
-      const next: SessionRuntimeProfile = {
-        ...profiles.effective,
-        ...(patch.model !== undefined ? { model: patch.model } : {}),
-        ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
-        ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
-        ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
-      };
+      const mergeBase = profiles.control.pending?.profile ?? profiles.effective;
+      const next = mergeSessionRuntimeProfilePatch(mergeBase, patch);
       let response: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
       try {
         response = await applySessionRuntimeSelection(

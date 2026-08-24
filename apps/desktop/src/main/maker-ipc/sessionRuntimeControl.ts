@@ -29,6 +29,23 @@ export interface SessionRuntimeControlSnapshot {
   visitedRoutes: string[];
 }
 
+export type SessionRuntimeProfilePatch = Partial<
+  Pick<SessionRuntimeProfile, 'model' | 'providerId' | 'effort' | 'fastMode'>
+>;
+
+export function mergeSessionRuntimeProfilePatch(
+  base: SessionRuntimeProfile,
+  patch: SessionRuntimeProfilePatch,
+): SessionRuntimeProfile {
+  return {
+    ...base,
+    ...(patch.model !== undefined ? { model: patch.model } : {}),
+    ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+    ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+    ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
+  };
+}
+
 interface SessionRuntimeControlState {
   generation: number;
   effectiveOverride: SessionRuntimeProfile | null;

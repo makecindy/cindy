@@ -7,6 +7,7 @@ import {
   clearAllSessionRuntimeControlStates,
   clearSessionRuntimeControlState,
   getSessionRuntimeControlSnapshot,
+  mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
@@ -184,6 +185,35 @@ describe('session runtime control state', () => {
       generation,
       source: 'agent',
       profile: { ...current, effort: null },
+    });
+  });
+
+  it('composes a later partial patch on the already accepted pending profile', () => {
+    const sessionId = 'runtime-compose-pending';
+    const pending = { ...current, model: 'gpt-next', providerId: 'xd', fastMode: false };
+    const firstGeneration = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: pending,
+      deferred: true,
+    });
+    const firstSnapshot = getSessionRuntimeControlSnapshot(sessionId);
+    expect(firstSnapshot.pending?.generation).toBe(firstGeneration);
+
+    const composed = mergeSessionRuntimeProfilePatch(firstSnapshot.pending!.profile, {
+      fastMode: true,
+    });
+    const secondGeneration = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: composed,
+      deferred: true,
+    });
+    expect(secondGeneration).toBe(firstGeneration + 1);
+    expect(settlePendingSessionRuntimeMutation(sessionId, secondGeneration)).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId).effectiveOverride).toEqual({
+      ...pending,
+      fastMode: true,
     });
   });
 });

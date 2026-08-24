@@ -124,4 +124,11 @@ describe('session runtime control wiring', () => {
       'maybeApplySessionRuntimeFallback(sessionId, decision.episodeAttempt)',
     );
   });
+
+  it('composes later partial runtime changes on the accepted pending profile', () => {
+    expect(registerSource).toContain(
+      'const mergeBase = profiles.control.pending?.profile ?? profiles.effective;',
+    );
+    expect(registerSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
+  });
 });
