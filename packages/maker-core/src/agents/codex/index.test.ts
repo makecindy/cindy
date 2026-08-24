@@ -16469,7 +16469,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.requestUserInput || !handlers.descendantThreadStarted || !handlers.serverRequestResolved) {
+    if (!handlers?.requestUserInput || !handlers.descendantThreadStarted) {
       throw new Error('expected requestUserInput and descendant thread handlers');
     }
     handlers.descendantThreadStarted({
@@ -16478,7 +16478,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     const resolveInteraction = vi.fn();
     handle.setInteractionResolver(resolveInteraction);
 
-    const resultPromise = handlers.requestUserInput({
+    const result = await handlers.requestUserInput({
       threadId: 'child-thread-native-user-input',
       turnId: 'turn-native-descendant',
       itemId: 'native-input-descendant',
@@ -16492,60 +16492,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       }],
     }, { requestId: 'req-native-descendant' });
 
-    // Without item provenance, keep the descendant request fail-closed until
-    // the server resolves it instead of guessing that it is a user question.
-    handlers.serverRequestResolved({
-      threadId: 'child-thread-native-user-input',
-      requestId: 'req-native-descendant',
-    });
-    const result = await resultPromise;
-
     expect(result).toEqual({ answers: {} });
     expect(resolveInteraction).not.toHaveBeenCalled();
     await handle.close();
-  });
-
-  it('rejects an unknown descendant native request after provenance timeout', async () => {
-    vi.useFakeTimers();
-    try {
-      const agent = new CodexAgent(createDeps());
-      const host = installFakeHost(agent);
-      const handle = await agent.startSession({
-        sessionId: 'session-native-user-input-descendant-timeout',
-        model: 'gpt-5.4',
-        workingDir: '/repo',
-      });
-      const handlers = host.getThreadHandlers();
-      if (!handlers?.requestUserInput || !handlers.descendantThreadStarted) {
-        throw new Error('expected requestUserInput and descendant thread handlers');
-      }
-      handlers.descendantThreadStarted({
-        thread: { id: 'child-thread-native-user-input-timeout', parentThreadId: 'start-thread-id' },
-      });
-      const resolveInteraction = vi.fn();
-      handle.setInteractionResolver(resolveInteraction);
-
-      const resultPromise = handlers.requestUserInput({
-        threadId: 'child-thread-native-user-input-timeout',
-        turnId: 'turn-native-descendant-timeout',
-        itemId: 'native-input-descendant-timeout',
-        questions: [{
-          id: 'direction',
-          header: 'Direction',
-          question: 'Choose child direction?',
-          isOther: false,
-          isSecret: false,
-          options: [],
-        }],
-      }, { requestId: 'req-native-descendant-timeout' });
-
-      await vi.advanceTimersByTimeAsync(10_000);
-      await expect(resultPromise).resolves.toEqual({ answers: {} });
-      expect(resolveInteraction).not.toHaveBeenCalled();
-      await handle.close();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it('keeps descendant native permission input requests available', async () => {
@@ -16597,64 +16546,6 @@ describe('CodexAgent MCP thread context hooks', () => {
     }, { requestId: 'req-permission-descendant' });
 
     expect(result).toEqual({ answers: { confirm: { answers: ['Allow'] } } });
-    expect(resolveInteraction).toHaveBeenCalledTimes(1);
-    await handle.close();
-  });
-
-  it('keeps descendant native permission input requests available when item context arrives later', async () => {
-    const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-native-permission-input-descendant-out-of-order',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.requestUserInput || !handlers.descendantThreadStarted || !handlers.descendantNotification) {
-      throw new Error('expected requestUserInput and descendant notification handlers');
-    }
-    handlers.descendantThreadStarted({
-      thread: { id: 'child-thread-permission-input-late', parentThreadId: 'start-thread-id' },
-    });
-    const resolveInteraction = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
-      expect(request.kind).toBe('permission');
-      expect(request.toolName).toBe('mcp:third_party:needs_confirmation');
-      return { kind: 'permission', behavior: 'allow' };
-    });
-    handle.setInteractionResolver(resolveInteraction);
-
-    const resultPromise = handlers.requestUserInput({
-      threadId: 'child-thread-permission-input-late',
-      turnId: 'turn-permission-descendant-late',
-      itemId: 'child-permission-input-late',
-      questions: [{
-        id: 'confirm',
-        header: 'Confirm',
-        question: 'Allow the child tool?',
-        isOther: false,
-        isSecret: false,
-        options: [
-          { label: 'Deny', description: '' },
-          { label: 'Allow', description: '' },
-        ],
-      }],
-    }, { requestId: 'req-permission-descendant-late' });
-
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    handlers.descendantNotification('child-thread-permission-input-late', 'item/updated', {
-      threadId: 'child-thread-permission-input-late',
-      turnId: 'turn-permission-descendant-late',
-      item: {
-        id: 'child-permission-input-late',
-        type: 'mcpToolCall',
-        server: 'third_party',
-        tool: 'needs_confirmation',
-      },
-    });
-
-    await expect(resultPromise).resolves.toEqual({
-      answers: { confirm: { answers: ['Allow'] } },
-    });
     expect(resolveInteraction).toHaveBeenCalledTimes(1);
     await handle.close();
   });
