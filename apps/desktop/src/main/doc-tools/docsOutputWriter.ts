@@ -87,21 +87,17 @@ function throwResultError(
 
 export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
   const parentDir = path.dirname(input.path);
-  const [realRoot, realParent] = await Promise.all([
-    fs.realpath(input.root),
-    fs.realpath(parentDir),
-  ]);
-  if (!isInside(realRoot, realParent)) {
+  const realRoot = await fs.realpath(input.root);
+  const lexicalParent = path.resolve(parentDir);
+  const parentRelativePath = path.relative(realRoot, lexicalParent);
+  if (parentRelativePath.startsWith('..') || path.isAbsolute(parentRelativePath)) {
     throw new DocsPathError(
       'PATH_NOT_ALLOWED',
-      `输出目录不在任务工作目录内: ${realParent}`,
+      `输出目录不在任务工作目录内: ${lexicalParent}`,
       '请改用任务工作目录内的输出路径。',
     );
   }
-  const [rootStat, parentStat] = await Promise.all([
-    fs.lstat(realRoot, { bigint: true }),
-    fs.lstat(realParent, { bigint: true }),
-  ]);
+  const rootStat = await fs.lstat(realRoot, { bigint: true });
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     throw new DocsPathError(
       'PATH_NOT_ALLOWED',
@@ -109,20 +105,28 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
       '请改用任务工作目录内的输出路径。',
     );
   }
-  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
-    throw new DocsPathError(
-      'PATH_NOT_ALLOWED',
-      `输出目录不是可用的真实目录: ${realParent}`,
-      '请改用任务工作目录内的普通目录。',
-    );
-  }
-  const parentRelativePath = path.relative(realRoot, realParent);
-  if (parentRelativePath.startsWith('..') || path.isAbsolute(parentRelativePath)) {
-    throw new DocsPathError(
-      'PATH_NOT_ALLOWED',
-      `输出目录不在任务工作目录内: ${realParent}`,
-      '请改用任务工作目录内的输出路径。',
-    );
+  let expectedParent: DocsOutputWriteRequest['expectedParent'] = null;
+  try {
+    const realParent = await fs.realpath(parentDir);
+    if (!isInside(realRoot, realParent)) {
+      throw new DocsPathError(
+        'PATH_NOT_ALLOWED',
+        `输出目录不在任务工作目录内: ${realParent}`,
+        '请改用任务工作目录内的输出路径。',
+      );
+    }
+    const parentStat = await fs.lstat(realParent, { bigint: true });
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+      throw new DocsPathError(
+        'PATH_NOT_ALLOWED',
+        `输出目录不是可用的真实目录: ${realParent}`,
+        '请改用任务工作目录内的普通目录。',
+      );
+    }
+    expectedParent = { realPath: realParent, dev: parentStat.dev, ino: parentStat.ino };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    // Missing parents are created by the root-anchored utility process.
   }
 
   const request: DocsOutputWriteRequest = {
@@ -131,11 +135,7 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
       dev: rootStat.dev,
       ino: rootStat.ino,
     },
-    expectedParent: {
-      realPath: realParent,
-      dev: parentStat.dev,
-      ino: parentStat.ino,
-    },
+    expectedParent,
     parentRelativePath,
     targetName: path.basename(input.path),
     data: new Uint8Array(input.data),

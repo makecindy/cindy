@@ -32,6 +32,8 @@ export interface ReviewPdfPageInspection {
   imageOps: number | null;
   /** 无文本且无任何绘图/图像算子。算子读不出来时恒为 false(不猜)。 */
   blank: boolean;
+  /** true = 结构算子存在,但未做位图级可见性确认(白色/透明内容仍可能肉眼不可见)。 */
+  visibilityUnverified: boolean;
 }
 
 export interface ReviewPdfInspectProcessResult {

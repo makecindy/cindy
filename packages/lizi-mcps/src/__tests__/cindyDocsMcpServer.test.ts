@@ -81,6 +81,7 @@ async function connect(deps: DocsMcpDeps = {}, ctx = sessionCtx()) {
 
 const testWriter: WriteDocsOutputFn = async ({ path: outputPath, data, overwrite }) => {
   try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, data, { flag: overwrite ? 'w' : 'wx' });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
@@ -625,6 +626,36 @@ describe('read_sheet', () => {
     expect(tail.truncated).toBe(false);
   });
 
+  it('宽表按列窗口读取,不会物化 XFD 右侧的大量空格', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Wide');
+    sheet.getCell('XFD1').value = 'tail-column';
+    await fs.writeFile(
+      path.join(workdir, 'wide.xlsx'),
+      Buffer.from((await workbook.xlsx.writeBuffer()) as ArrayBuffer),
+    );
+    const client = await connect();
+    const first = await callTool(client, 'read_sheet', {
+      path: 'wide.xlsx',
+      maxRows: 1,
+      maxColumns: 8,
+    });
+    expect(first.totalColumns).toBe(16384);
+    expect(first.returnedRows).toBe(1);
+    expect((first.rows as unknown[][])[0]).toHaveLength(8);
+    expect(first.nextStartColumn).toBe(9);
+
+    const tail = await callTool(client, 'read_sheet', {
+      path: 'wide.xlsx',
+      maxRows: 1,
+      startColumn: 16384,
+      maxColumns: 1,
+    });
+    expect(tail.rows).toEqual([['tail-column']]);
+    expect(tail.truncated).toBe(false);
+    expect(tail.nextStartColumn).toBeUndefined();
+  });
+
   it('xlsx 输入先过文件大小与 ZIP 解压比上限,不把异常压缩包交给 ExcelJS', async () => {
     const client = await connect();
     await fs.writeFile(path.join(workdir, 'huge.xlsx'), Buffer.alloc(32 * 1024 * 1024 + 1, 0));
@@ -916,6 +947,7 @@ describe('inspect_pdf', () => {
     drawOps: 42,
     imageOps: 1,
     blank: false,
+    visibilityUnverified: false,
     ...over,
   });
 

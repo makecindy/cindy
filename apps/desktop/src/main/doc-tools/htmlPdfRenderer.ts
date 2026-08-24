@@ -37,7 +37,7 @@ import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
 import { BrowserWindow, app } from 'electron';
 
@@ -83,7 +83,7 @@ function tempRoot(): string {
 
 interface PreparedSource {
   fileUrlPath: string;
-  /** 允许 file:// 子资源读取的目录,防止 HTML 借 file URL 读取任意本地文件。 */
+  /** 原始资源基准目录,保留用于诊断;file:// 子资源本身始终 fail closed。 */
   allowedFileRoots: AllowedFileRoot[];
   /** 需要清理的临时目录(仅内联 HTML 走这条路)。 */
   cleanupDir?: string;
@@ -175,48 +175,14 @@ function createRenderWindow(partition: string): BrowserWindow {
   });
 }
 
-function isPathInside(parent: string, child: string): boolean {
-  const rel = path.relative(path.resolve(parent), path.resolve(child));
-  return rel.length === 0 || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
-function isSamePath(left: string, right: string): boolean {
-  const normalize = (value: string): string => {
-    const resolved = path.resolve(value);
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  return normalize(left) === normalize(right);
-}
-
 /**
- * Chromium 会在请求获准后重新按 file:// 路径打开资源,所以不能把「此刻
- * realpath 在根目录内」当成足够的授权:请求之间若把某一级目录或文件换成
- * symlink,Chromium 仍会跟随新目标。对不可信 HTML 的本地资源直接拒绝任何
- * symlink 路径,让这条竞态 fail closed;普通文件仍按根目录身份逐请求复核。
- */
-async function hasSymlinkComponent(filePath: string, rootPath: string): Promise<boolean> {
-  const relative = path.relative(path.resolve(rootPath), path.resolve(filePath));
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return true;
-  let current = path.resolve(rootPath);
-  for (const segment of relative ? relative.split(path.sep) : []) {
-    current = path.join(current, segment);
-    try {
-      if ((await fs.lstat(current)).isSymbolicLink()) return true;
-    } catch {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * PDF 排版窗只允许读取当前 HTML 目录里的本地资源、data/blob URL 与 about:blank。
+ * PDF 排版窗只允许读取 data/blob URL 与 about:blank;本地 file:// 子资源也拒绝。
  * 外部网络请求一律取消:即便不读取响应,图片/字体/iframe 也能借用户网络身份探测
  * localhost/内网或触发第三方跟踪副作用。需要远程资源时由模型先转成 data URI。
  */
 async function isAllowedResourceUrl(
   requestUrl: string,
-  allowedFileRoots: readonly AllowedFileRoot[],
+  _allowedFileRoots: readonly AllowedFileRoot[],
 ): Promise<boolean> {
   let parsed: URL;
   try {
@@ -227,34 +193,11 @@ async function isAllowedResourceUrl(
   if (parsed.protocol === 'data:' || parsed.protocol === 'blob:' || parsed.protocol === 'about:') {
     return true;
   }
-  if (parsed.protocol !== 'file:') return false;
-  try {
-    const filePath = fileURLToPath(parsed);
-    const fileReal = await fs.realpath(filePath);
-    for (const allowedFileRoot of allowedFileRoots) {
-      try {
-        if (await hasSymlinkComponent(filePath, allowedFileRoot.path)) continue;
-        const rebound = await fs.realpath(allowedFileRoot.path);
-        const stat = await fs.lstat(rebound, { bigint: true });
-        if (
-          isSamePath(rebound, allowedFileRoot.realPath) &&
-          stat.isDirectory() &&
-          !stat.isSymbolicLink() &&
-          stat.dev === allowedFileRoot.dev &&
-          stat.ino === allowedFileRoot.ino &&
-          isPathInside(allowedFileRoot.realPath, fileReal)
-        ) {
-          return true;
-        }
-      } catch {
-        // A temporary source root may already be gone while another allowed
-        // base directory is still valid; evaluate roots independently.
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  // Never let Chromium reopen a user-controlled file path after this check.
+  // The allowlisted roots remain part of PreparedSource for compatibility and
+  // diagnostics, but file:// resources must be converted to data: before render.
+  if (parsed.protocol === 'file:') return false;
+  return false;
 }
 
 function lockRequests(win: BrowserWindow, allowedFileRoots: readonly AllowedFileRoot[]): void {

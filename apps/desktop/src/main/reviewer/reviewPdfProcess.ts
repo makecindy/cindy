@@ -217,6 +217,7 @@ function isReviewPdfPageInspection(value: unknown, maxPages: number): boolean {
     nullableCount(page.drawOps) &&
     nullableCount(page.imageOps) &&
     typeof page.blank === 'boolean' &&
+    typeof page.visibilityUnverified === 'boolean' &&
     maxPages > 0
   );
 }

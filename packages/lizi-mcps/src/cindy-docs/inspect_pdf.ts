@@ -68,7 +68,8 @@ const DESCRIPTION = [
   '页面尺寸(会翻译成 A4 / Letter 这类名字)与旋转角。文档级还给总页数与空白页清单。',
   '',
   '【怎么判读】',
-  '- blankPages 非空 → 那几页是白的,大概率 CSS 把内容藏了或外部资源没加载上,重做;',
+  '- blankPages 非空 → 那几页是结构上确定为空的,大概率 CSS 把内容藏了或外部资源没加载上,重做;',
+  '- visibilityUnverified=true → 只确认到结构算子,没有做位图级可见性验证;白色/透明内容仍需人工打开确认,不要把 verdict 当作视觉验收;',
   '- numPages 远超预期 → 分页样式没生效(检查 page-break / break-inside);',
   '- paper 不是你要的尺寸 → render_pdf 的 pageSize 传错了;',
   '- textPreview 和你写的内容对不上 → 装错了内容或页序错乱。',
@@ -159,6 +160,9 @@ export function registerInspectPdfTool(
         }
         const blankPages = decorated.filter((p) => p.blank).map((p) => p.page);
         const allInspectedBlank = decorated.length > 0 && blankPages.length === decorated.length;
+        const visibilityUnverifiedPages = decorated
+          .filter((p) => p.visibilityUnverified)
+          .map((p) => p.page);
 
         return okPayload({
           path: abs,
@@ -167,6 +171,7 @@ export function registerInspectPdfTool(
           pagesInspected: inspection.pagesInspected,
           pages: decorated,
           blankPages,
+          visibilityUnverifiedPages,
           ...(allInspectedBlank
             ? {
                 verdict: 'blank',
@@ -178,7 +183,13 @@ export function registerInspectPdfTool(
                   verdict: 'partial-blank',
                   warning: `第 ${blankPages.join('、')} 页是空白的。通常是分页把内容挤走了(检查 page-break / break-inside),修好后重新生成。`,
                 }
-              : { verdict: 'ok' }),
+              : visibilityUnverifiedPages.length > 0
+                ? {
+                    verdict: 'warning',
+                    warning:
+                      `第 ${visibilityUnverifiedPages.join('、')} 页含结构内容,但本工具未做位图级可见性确认。请打开 PDF 目检后再交付,尤其留意白色/透明文字与背景。`,
+                  }
+                : { verdict: 'ok' }),
         });
       } catch (err) {
         if (err instanceof DocsPathError) {

@@ -94,6 +94,8 @@ export interface DocsPdfPageInspection {
   drawOps: number | null;
   imageOps: number | null;
   blank: boolean;
+  /** 结构存在但未做位图级可见性验证。 */
+  visibilityUnverified: boolean;
 }
 
 export interface DocsPdfInspection {

@@ -28,6 +28,8 @@ import type { DocsMcpSessionCtx } from './types.js';
 
 const DEFAULT_MAX_ROWS = 200;
 const HARD_MAX_ROWS = 5000;
+const DEFAULT_MAX_COLUMNS = 64;
+const HARD_MAX_COLUMNS = 256;
 /** 文本表格的读入上限(字节)。超过就拒读,避免把几百 MB 日志当 csv 塞进内存。 */
 const MAX_TEXT_BYTES = 32 * 1024 * 1024;
 /** xlsx 在 ExcelJS 中会展开 ZIP,压缩包与展开后都设硬上限。 */
@@ -44,6 +46,7 @@ const DESCRIPTION = [
   '',
   '【参数】sheet 只对 xlsx 有效,可传工作表名或 1 起的序号;不传取第一张。',
   'startRow 是 1 起的起始行,默认 1;maxRows 默认 200,最大 5000。',
+  `startColumn 是 1 起的起始列,默认 1;maxColumns 默认 ${DEFAULT_MAX_COLUMNS},最大 ${HARD_MAX_COLUMNS}。`,
   '返回里 truncated=true 表示后面还有更多行,nextStartRow 可直接用于下一次读取;',
   'totalRows 是实际总行数 —— 别把截断当成「表就这么大」。',
   '',
@@ -60,6 +63,9 @@ type SheetCell = string | number | boolean | null;
 interface SheetRead {
   rows: SheetCell[][];
   totalRows: number;
+  totalColumns: number;
+  startColumn: number;
+  endColumn: number;
   sheetName?: string;
   sheetNames?: string[];
 }
@@ -134,7 +140,16 @@ function normalizeCell(value) {
   // 边界校验的字节，不能再按路径重开一个可能已被替换的文件。
   await workbook.xlsx.load(Buffer.from(workerData.archive));
   const sheetNames = workbook.worksheets.map((ws) => ws.name);
-  if (sheetNames.length === 0) return parentPort.postMessage({ rows: [], totalRows: 0, sheetNames });
+  if (sheetNames.length === 0) {
+    return parentPort.postMessage({
+      rows: [],
+      totalRows: 0,
+      totalColumns: 0,
+      startColumn: workerData.startColumn,
+      endColumn: workerData.startColumn - 1,
+      sheetNames,
+    });
+  }
   let worksheet = workbook.worksheets[0];
   if (typeof workerData.sheetSelector === 'number') worksheet = workbook.worksheets[workerData.sheetSelector - 1];
   else if (typeof workerData.sheetSelector === 'string' && workerData.sheetSelector.length > 0) {
@@ -147,17 +162,27 @@ function normalizeCell(value) {
     throw error;
   }
   const totalRows = Math.max(worksheet.rowCount || 0, worksheet.actualRowCount || 0);
-  const columnCount = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
+  const totalColumns = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
   const rows = [];
   const firstRow = workerData.startRow;
   const lastRow = Math.min(totalRows, firstRow + workerData.maxRows - 1);
+  const firstColumn = workerData.startColumn;
+  const lastColumn = Math.min(totalColumns, firstColumn + workerData.maxColumns - 1);
   for (let r = firstRow; r <= lastRow; r += 1) {
     const row = worksheet.getRow(r);
     const cells = [];
-    for (let c = 1; c <= columnCount; c += 1) cells.push(normalizeCell(row.getCell(c).value));
+    for (let c = firstColumn; c <= lastColumn; c += 1) cells.push(normalizeCell(row.getCell(c).value));
     rows.push(cells);
   }
-  parentPort.postMessage({ rows, totalRows, sheetName: worksheet.name, sheetNames });
+  parentPort.postMessage({
+    rows,
+    totalRows,
+    totalColumns,
+    startColumn: firstColumn,
+    endColumn: Math.max(firstColumn - 1, lastColumn),
+    sheetName: worksheet.name,
+    sheetNames,
+  });
 })().catch((error) => parentPort.postMessage({ error: {
   code: error.code,
   message: String(error.message || error),
@@ -170,6 +195,8 @@ function readXlsxInWorker(
   sheetSelector: string | number | undefined,
   startRow: number,
   maxRows: number,
+  startColumn: number,
+  maxColumns: number,
 ): Promise<SheetRead> {
   return new Promise((resolve, reject) => {
     // readInputFileWithinLimit 使用独占 ArrayBuffer；转移所有权可避免在主进程
@@ -187,6 +214,8 @@ function readXlsxInWorker(
         sheetSelector,
         startRow,
         maxRows,
+        startColumn,
+        maxColumns,
         exceljsPath: createRequire(import.meta.url).resolve('exceljs'),
       },
       transferList: [archiveBuffer],
@@ -236,10 +265,12 @@ async function readXlsx(
   sheetSelector: string | number | undefined,
   startRow: number,
   maxRows: number,
+  startColumn: number,
+  maxColumns: number,
 ): Promise<SheetRead> {
   const archive = await readInputFileWithinLimit(root, absPath, MAX_XLSX_BYTES, xlsxTooLarge);
   await assertSafeXlsxArchive(archive);
-  return readXlsxInWorker(archive, sheetSelector, startRow, maxRows);
+  return readXlsxInWorker(archive, sheetSelector, startRow, maxRows, startColumn, maxColumns);
 }
 
 async function readTextTable(
@@ -248,6 +279,8 @@ async function readTextTable(
   ext: string,
   startRow: number,
   maxRows: number,
+  startColumn: number,
+  maxColumns: number,
 ): Promise<SheetRead> {
   const text = (
     await readInputFileWithinLimit(
@@ -262,11 +295,20 @@ async function readTextTable(
         ),
     )
   ).toString('utf8');
-  return parseDelimitedWindow(text, {
+  const parsed = parseDelimitedWindow(text, {
     delimiter: delimiterForExtension(ext),
     startRow,
     maxRows,
   });
+  const totalColumns = parsed.rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const endColumn = Math.min(totalColumns, startColumn + maxColumns - 1);
+  return {
+    rows: parsed.rows.map((row) => row.slice(startColumn - 1, endColumn)),
+    totalRows: parsed.totalRows,
+    totalColumns,
+    startColumn,
+    endColumn: Math.max(startColumn - 1, endColumn),
+  };
 }
 
 export function registerReadSheetTool(
@@ -300,8 +342,22 @@ export function registerReadSheetTool(
         .max(HARD_MAX_ROWS)
         .default(DEFAULT_MAX_ROWS)
         .describe(`最多返回多少行,默认 ${DEFAULT_MAX_ROWS},上限 ${HARD_MAX_ROWS}。`),
+      startColumn: z
+        .number()
+        .int()
+        .min(1)
+        .max(Number.MAX_SAFE_INTEGER - HARD_MAX_COLUMNS)
+        .default(1)
+        .describe('从第几列开始返回,1 起。默认 1;配合 nextStartColumn 分批读取宽表。'),
+      maxColumns: z
+        .number()
+        .int()
+        .min(1)
+        .max(HARD_MAX_COLUMNS)
+        .default(DEFAULT_MAX_COLUMNS)
+        .describe(`最多返回多少列,默认 ${DEFAULT_MAX_COLUMNS},上限 ${HARD_MAX_COLUMNS}。`),
     },
-    handler: async ({ path: inputPath, sheet, startRow, maxRows }) => {
+    handler: async ({ path: inputPath, sheet, startRow, maxRows, startColumn, maxColumns }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareInputPath(root, inputPath);
@@ -309,9 +365,9 @@ export function registerReadSheetTool(
 
         let result: SheetRead;
         if (ext === '.xlsx' || ext === '.xlsm') {
-          result = await readXlsx(root, abs, sheet, startRow, maxRows);
+          result = await readXlsx(root, abs, sheet, startRow, maxRows, startColumn, maxColumns);
         } else if (ext === '.csv' || ext === '.tsv' || ext === '.tab' || ext === '.txt') {
-          result = await readTextTable(root, abs, ext, startRow, maxRows);
+          result = await readTextTable(root, abs, ext, startRow, maxRows, startColumn, maxColumns);
         } else if (ext === '.xls') {
           return errorPayload(
             'UNSUPPORTED_FORMAT',
@@ -338,11 +394,20 @@ export function registerReadSheetTool(
           endRow,
           returnedRows: result.rows.length,
           totalRows: result.totalRows,
+          startColumn: result.startColumn,
+          endColumn: result.endColumn,
+          totalColumns: result.totalColumns,
           truncated,
           ...(truncated
             ? {
                 nextStartRow: endRow + 1,
                 truncationNote: `返回了第 ${startRow}–${endRow} 行,总共 ${result.totalRows} 行。需要更多请用 startRow=${endRow + 1} 继续读取(单次上限 ${HARD_MAX_ROWS}),不要把这一页当作全表。`,
+              }
+            : {}),
+          ...(result.endColumn < result.totalColumns
+            ? {
+                nextStartColumn: result.endColumn + 1,
+                columnTruncationNote: `返回了第 ${result.startColumn}–${result.endColumn} 列,总共 ${result.totalColumns} 列。需要更多请用 startColumn=${result.endColumn + 1} 继续读取(单次上限 ${HARD_MAX_COLUMNS})。`,
               }
             : {}),
         });

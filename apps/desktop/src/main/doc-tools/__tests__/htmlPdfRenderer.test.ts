@@ -223,7 +223,7 @@ describe('渲染窗的安全配置', () => {
     expect(response.cancel).toBe(true);
   });
 
-  it('请求级 URL 策略只放行本地同目录资源与内联 URL,阻断网络和越界 file URL', async () => {
+  it('请求级 URL 策略只放行内联 URL,阻断本地 file URL 与网络', async () => {
     const localAsset = path.join(tempRoot, 'asset.txt');
     await fs.writeFile(localAsset, 'asset', 'utf8');
     await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: path.join(tempRoot, 'src.html') }).catch(() => undefined);
@@ -233,7 +233,7 @@ describe('渲染窗的安全配置', () => {
       const response = await new Promise<{ cancel: boolean }>((resolve) => handler({ url }, resolve));
       return !response.cancel;
     };
-    expect(await decide(`file://${localAsset}`)).toBe(true);
+    expect(await decide(`file://${localAsset}`)).toBe(false);
     expect(await decide('data:text/plain,ok')).toBe(true);
     expect(await decide('https://example.com/font.woff2')).toBe(false);
     expect(await decide('http://127.0.0.1:8080/secret')).toBe(false);
@@ -295,7 +295,7 @@ describe('渲染主流程', () => {
     const response = await new Promise<{ cancel: boolean }>((resolve) =>
       handler({ url: pathToFileURL(asset).href }, resolve),
     );
-    expect(response.cancel).toBe(false);
+    expect(response.cancel).toBe(true);
   });
 
   it('htmlPath 直接加载,不产生临时文件', async () => {

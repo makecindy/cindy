@@ -50,6 +50,19 @@ async function request(
   };
 }
 
+async function missingParentRequest(targetName: string, data: string): Promise<DocsOutputWriteRequest> {
+  const rootStat = await fs.promises.lstat(root, { bigint: true });
+  const rootRealPath = await fs.promises.realpath(root);
+  return {
+    expectedRoot: { realPath: rootRealPath, dev: rootStat.dev, ino: rootStat.ino },
+    expectedParent: null,
+    parentRelativePath: 'nested/reports',
+    targetName,
+    data: Buffer.from(data),
+    overwrite: false,
+  };
+}
+
 describe('docs output cwd-bound writer', () => {
   it('creates exclusively and never truncates an existing file by default', async () => {
     const first = await request('report.bin', 'one', false);
@@ -58,6 +71,11 @@ describe('docs output cwd-bound writer', () => {
       runDocsOutputWrite(await request('report.bin', 'two', false), root),
     ).rejects.toMatchObject({ code: 'FILE_EXISTS' });
     expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('one');
+  });
+
+  it('creates missing parents inside the anchored session root', async () => {
+    await runDocsOutputWrite(await missingParentRequest('report.bin', 'nested'), root);
+    expect(await fs.promises.readFile(path.join(root, 'nested/reports/report.bin'), 'utf8')).toBe('nested');
   });
 
   it('atomically replaces an existing regular file', async () => {

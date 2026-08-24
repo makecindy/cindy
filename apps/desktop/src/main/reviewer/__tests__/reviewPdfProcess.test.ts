@@ -92,6 +92,7 @@ describe('isolated PDF structure inspection', () => {
                 drawOps: 0,
                 imageOps: 0,
                 blank: true,
+                visibilityUnverified: false,
               },
             ],
           },

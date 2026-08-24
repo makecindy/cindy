@@ -77,7 +77,7 @@ function toPathError(err: unknown, inputPath: string): never {
 }
 
 /**
- * 校验并准备一个输出路径:边界钳制 → 覆盖判定 → 建目录。
+ * 校验并准备一个输出路径:边界钳制 → 覆盖判定。
  * 返回可直接写入的绝对路径。
  */
 export async function prepareOutputPath(
@@ -106,9 +106,6 @@ export async function prepareOutputPath(
     );
   }
 
-  // 输出目录不存在时自动建(工具约定输出进 documents/ 这类子目录,不该让模型
-  // 先手工 mkdir 一次)。recursive 对已存在目录是 no-op。
-  await fs.mkdir(path.dirname(abs), { recursive: true });
   return abs;
 }
 

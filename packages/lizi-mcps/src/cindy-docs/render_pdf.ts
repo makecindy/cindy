@@ -65,7 +65,7 @@ const DESCRIPTION = [
   '【输入】htmlPath(工作目录内的 .html 文件)与 html(内联源码)二选一,必须给且只给一个。',
   'HTML 源码上限 16 MB;文件路径与内联源码使用同一上限。',
   '为防止不可信 HTML 借用户网络身份探测内网或触发跟踪,渲染窗会阻断外部网络请求。',
-  '图片/字体请内联成 data URI;相对路径资源只有在用 htmlPath 时才解析得到。',
+  '图片/字体/样式请内联成 data URI;为避免不可信 HTML 的本地资源竞态,file:// 子资源一律阻断。',
   '',
   '【模板】template 默认 auto:没有 <style> / 外链 CSS 的裸 HTML 会自动套内置报告模板',
   '(系统字体、标题层级、表格斑马纹、打印页边距)。已经自己写了样式的原样透传。',
@@ -115,7 +115,7 @@ export function registerRenderPdfTool(
         .string()
         .optional()
         .describe(
-          '内联 HTML 源码。与 htmlPath 二选一。相对路径的本地资源不会被解析。',
+          '内联 HTML 源码。与 htmlPath 二选一。图片/字体请使用 data URI,file:// 子资源不会被解析。',
         ),
       outPath: z
         .string()

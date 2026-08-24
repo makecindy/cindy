@@ -47,9 +47,10 @@ async function verifyParent(request: DocsOutputWriteRequest, workingDir: string)
     if (
       !stat.isDirectory() ||
       stat.isSymbolicLink() ||
-      stat.dev !== request.expectedParent.dev ||
-      stat.ino !== request.expectedParent.ino ||
-      !samePath(realParent, request.expectedParent.realPath) ||
+      (request.expectedParent !== null &&
+        (stat.dev !== request.expectedParent.dev ||
+          stat.ino !== request.expectedParent.ino ||
+          !samePath(realParent, request.expectedParent.realPath))) ||
       relative !== request.parentRelativePath ||
       relative.startsWith('..') ||
       path.isAbsolute(relative)
@@ -63,6 +64,42 @@ async function verifyParent(request: DocsOutputWriteRequest, workingDir: string)
     if (error instanceof OutputWriteError) throw error;
     throw new OutputWriteError('PATH_NOT_ALLOWED', '任务工作目录或输出目录在最终落盘前不可用');
   }
+}
+
+/**
+ * Create an output parent one path component at a time while the utility
+ * process is anchored at the session root.  The main process deliberately
+ * never calls recursive mkdir on a user-controlled path: all directory
+ * creation and identity checks happen in this root-bound process.
+ */
+async function ensureParent(request: DocsOutputWriteRequest, workingDir: string): Promise<void> {
+  const relative = request.parentRelativePath;
+  if (relative === '' || relative === '.') {
+    await verifyParent(request, workingDir);
+    return;
+  }
+  const segments = relative.split(/[\\/]+/).filter(Boolean);
+  if (segments.some((segment) => segment === '.' || segment === '..' || segment.includes('\0'))) {
+    throw new OutputWriteError('PATH_NOT_ALLOWED', '输出目录相对路径不合法');
+  }
+  let current = request.expectedRoot.realPath;
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    try {
+      const stat = await fs.promises.lstat(current, { bigint: true });
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new OutputWriteError('PATH_NOT_ALLOWED', '输出目录包含符号链接或非目录成员');
+      }
+    } catch (error) {
+      if (!hasCode(error, 'ENOENT')) throw error;
+      await fs.promises.mkdir(current);
+      const created = await fs.promises.lstat(current, { bigint: true });
+      if (!created.isDirectory() || created.isSymbolicLink()) {
+        throw new OutputWriteError('PATH_NOT_ALLOWED', '输出目录创建后不是普通目录');
+      }
+    }
+  }
+  await verifyParent(request, workingDir);
 }
 
 async function writeExclusive(target: string, data: Uint8Array): Promise<void> {
@@ -154,7 +191,6 @@ export async function runDocsOutputWrite(
 ): Promise<void> {
   if (
     !request ||
-    !request.expectedParent ||
     typeof request.targetName !== 'string' ||
     request.targetName !== path.basename(request.targetName) ||
     request.targetName === '.' ||
@@ -170,7 +206,7 @@ export async function runDocsOutputWrite(
   // every operation, so a moved parent cannot keep an outside inode alive.
   const anchoredRootDir = rootDir ?? '.';
   const anchoredWorkingDir = path.join(anchoredRootDir, request.parentRelativePath);
-  await verifyParent(request, anchoredWorkingDir);
+  await ensureParent(request, anchoredWorkingDir);
   const outputPath = (name: string): string => path.join(anchoredWorkingDir, name);
   const target = outputPath(request.targetName);
 

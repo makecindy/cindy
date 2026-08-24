@@ -321,6 +321,7 @@ export function registerMakeXlsxTool(
 
         // Excel 的工作表名比较大小写不敏感,但展示名仍保留用户原始大小写。
         const usedNames = new Set<string>();
+        const writtenSheets: Array<{ name: string; rows: number }> = [];
         for (const sheet of sheets) {
           // Excel 的非法工作表字符会让文件直接打不开,静默换成下划线比报错更有用。
           let name = sheet.name.replace(/[:\\/?*[\]]/g, '_').slice(0, 31);
@@ -335,6 +336,7 @@ export function registerMakeXlsxTool(
           usedNames.add(unique.toLowerCase());
 
           const ws = workbook.addWorksheet(unique);
+          writtenSheets.push({ name: unique, rows: sheet.rows.length });
           const columnCount = Math.max(
             sheet.header?.length ?? 0,
             ...sheet.rows.map((row) => row.length),
@@ -439,7 +441,7 @@ export function registerMakeXlsxTool(
           format: 'xlsx',
           theme,
           zebra,
-          sheets: sheets.map((s) => ({ name: s.name, rows: s.rows.length })),
+          sheets: writtenSheets,
           artifact: artifactMetadata({
             format: 'xlsx',
             ...(sheets[0]?.name ? { title: sheets[0].name } : {}),

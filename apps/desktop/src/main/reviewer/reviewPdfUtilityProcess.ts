@@ -173,11 +173,13 @@ const VISIBLE_PAINT_OPS: readonly number[] = [
 
 /**
  * 读 PDF 的结构快照:页数、每页尺寸/旋转、文本量与开头片段、绘图与图像算子数,
- * 并据此判定空白页。
+ * 并据此判定结构上空白页。这里不做位图渲染,因此有绘制算子的页面会标记
+ * visibilityUnverified,不能冒充视觉验收通过。
  *
  * 这是 cindy_docs 产出自检的数据来源 —— 生成 PDF 最常见也最难自查的翻车是
  * 「文件生成了、打开是白的」,它在字节数上完全正常。这里给的是确定性证据:
- * 某页 textChars=0 且 drawOps=0 且 imageOps=0,那它就是白的。
+ * 某页 textChars=0 且 drawOps=0 且 imageOps=0,那它在结构上就是白的；反之
+ * 仅能证明存在结构内容,不能证明最终像素肉眼可见。
  *
  * 算子表单独 try/catch:损坏页或超预算时降级成 null 而不是让整次检查失败 ——
  * 半份结构信息也比"检查工具自己挂了"有用。null 时 blank 恒为 false,不猜。
@@ -258,6 +260,8 @@ export async function inspectPdfPages(
         drawOps,
         imageOps,
         blank: text.length === 0 && drawOps === 0 && imageOps === 0,
+        visibilityUnverified:
+          text.length > 0 || (drawOps !== null && drawOps > 0) || (imageOps !== null && imageOps > 0),
       });
     }
     return { numPages, pagesInspected: pages.length, pages };

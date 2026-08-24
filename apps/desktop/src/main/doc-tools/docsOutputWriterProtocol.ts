@@ -12,7 +12,8 @@ export interface DocsOutputRootIdentity {
 
 export interface DocsOutputWriteRequest {
   expectedRoot: DocsOutputRootIdentity;
-  expectedParent: DocsOutputParentIdentity;
+  /** Existing parent identity, or null when the utility must create it safely. */
+  expectedParent: DocsOutputParentIdentity | null;
   parentRelativePath: string;
   targetName: string;
   data: Uint8Array;
