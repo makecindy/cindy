@@ -165,11 +165,14 @@ export function registerInspectPdfTool(
           .map((p) => p.page);
         const partial = inspection.pagesInspected < inspection.numPages;
         const inspectedPageNumbers = new Set(decorated.map((page) => page.page));
-        const nextPages = partial
-          ? Array.from({ length: inspection.numPages }, (_, index) => index + 1)
-              .filter((page) => !inspectedPageNumbers.has(page))
-              .slice(0, maxPages)
-          : [];
+        const nextPages: number[] = [];
+        if (partial) {
+          // numPages is untrusted PDF metadata. Never allocate an array sized by
+          // that declaration; generate only the bounded next page batch.
+          for (let page = 1; page <= inspection.numPages && nextPages.length < maxPages; page += 1) {
+            if (!inspectedPageNumbers.has(page)) nextPages.push(page);
+          }
+        }
         const coverageWarning = partial
           ? `本次只检查了 ${inspection.pagesInspected}/${inspection.numPages} 页，未覆盖页码 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}] 继续检查。`
           : undefined;

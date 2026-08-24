@@ -1073,6 +1073,30 @@ describe('render_pdf', () => {
     expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toContain('./missing.png');
   });
 
+  it('只在真实 HTML 开始标签内重写 style 属性', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(
+      path.join(workdir, 'style-safe.html'),
+      `<script>const sample = ' style="background:url(./missing.png)"';</script><p>ok</p>`,
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'style-safe.html',
+      outPath: 'style-safe.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('<p>ok</p>');
+    expect(rendered).toContain('./missing.png');
+  });
+
   it('按 HTML base href 解析相对资源而不是固定使用 HTML 同目录', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.mkdir(path.join(workdir, 'assets'));

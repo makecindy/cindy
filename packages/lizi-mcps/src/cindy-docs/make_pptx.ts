@@ -63,6 +63,8 @@ export const PPTX_SUPPORTED_IMAGE_EXT: ReadonlySet<string> = new Set([
  */
 export const PPTX_MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 export const PPTX_MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024;
+/** Keep decode work bounded before handing bytes to pptxgenjs. */
+export const PPTX_MAX_IMAGE_PIXELS = 12_000_000;
 
 export function isSupportedPptxImage(filePath: string): boolean {
   return PPTX_SUPPORTED_IMAGE_EXT.has(path.extname(filePath).toLowerCase());
@@ -233,19 +235,17 @@ export function detectPptxImageMime(bytes: Buffer): PptxImageMime | null {
   return null;
 }
 
-/** Decode the payload before handing it to pptxgenjs; signatures alone accept corrupt PNGs. */
+/** Decode the payload before handing it to pptxgenjs; signatures alone accept corrupt PNGs.
+ * The encoded output is intentionally discarded: returning a raw RGBA buffer here would
+ * let a compressed image expand to hundreds of MB in the Electron main process.
+ */
 export async function validateDecodablePptxImage(bytes: Buffer): Promise<boolean> {
   try {
-    const decoded = await sharp(bytes, { limitInputPixels: 50_000_000 })
+    const decoded = await sharp(bytes, { limitInputPixels: PPTX_MAX_IMAGE_PIXELS })
       .ensureAlpha()
-      .raw()
+      .png()
       .toBuffer({ resolveWithObject: true });
-    return (
-      decoded.info.width > 0 &&
-      decoded.info.height > 0 &&
-      decoded.info.channels === 4 &&
-      decoded.data.byteLength === decoded.info.width * decoded.info.height * 4
-    );
+    return decoded.info.width > 0 && decoded.info.height > 0 && decoded.data.byteLength > 0;
   } catch {
     return false;
   }

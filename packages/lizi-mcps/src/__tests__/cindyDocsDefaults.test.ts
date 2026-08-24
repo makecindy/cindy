@@ -464,6 +464,7 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(extractHtmlTitle('<title> </title><h1>\n</h1>')).toBeUndefined();
     expect(extractHtmlTitle('<title>季度回顾</title>')).toBe('季度回顾');
     expect(extractHtmlTitle('<h1>季度回顾</h1>')).toBe('季度回顾');
+    expect(extractHtmlTitle('<title>R&amp;D &#x62a5;&#x544a;</title>')).toBe('R&D 报告');
   });
 
   it('htmlLooksUnstyled 只在没有 stylesheet 时为真', () => {

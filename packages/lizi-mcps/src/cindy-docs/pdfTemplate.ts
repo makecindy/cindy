@@ -30,11 +30,38 @@ function stripTags(raw: string): string {
   return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function decodeHtmlEntities(raw: string): string {
+  const named: Record<string, string> = {
+    amp: '&',
+    apos: "'",
+    gt: '>',
+    lt: '<',
+    nbsp: '\u00a0',
+    quot: '"',
+  };
+  return raw.replace(/&(#(?:x[\da-f]+|\d+)|[a-z][\da-z]+);/gi, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const hex = entity[1]?.toLowerCase() === 'x';
+      const value = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(value) && value >= 0 && value <= 0x10ffff
+        ? String.fromCodePoint(value)
+        : match;
+    }
+    return named[entity.toLowerCase()] ?? match;
+  });
+}
+
 export function extractHtmlTitle(html: string): string | undefined {
   const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (title?.[1] && stripTags(title[1]).length > 0) return stripTags(title[1]);
+  if (title?.[1]) {
+    const value = decodeHtmlEntities(stripTags(title[1]));
+    if (value.length > 0) return value;
+  }
   const heading = html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
-  if (heading?.[1] && stripTags(heading[1]).length > 0) return stripTags(heading[1]);
+  if (heading?.[1]) {
+    const value = decodeHtmlEntities(stripTags(heading[1]));
+    if (value.length > 0) return value;
+  }
   return undefined;
 }
 

@@ -9,6 +9,7 @@
  * 再运行期报不可用」——模型看不到的工具不会被误选。
  */
 
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -165,6 +166,12 @@ async function replaceHtmlTagsAsync(
   replacer: (tag: string) => Promise<string>,
 ): Promise<string> {
   const parts: string[] = [];
+  let outputBytes = 0;
+  const pushPart = (part: string): void => {
+    outputBytes += Buffer.byteLength(part, 'utf8');
+    assertSnapshotHtmlSize(outputBytes);
+    parts.push(part);
+  };
   let cursor = 0;
   let index = 0;
   while (index < input.length) {
@@ -192,13 +199,13 @@ async function replaceHtmlTagsAsync(
     if (end >= input.length) break;
     const tag = input.slice(start, end + 1);
     if (predicate(tag)) {
-      parts.push(input.slice(cursor, start));
-      parts.push(await replacer(tag));
+      pushPart(input.slice(cursor, start));
+      pushPart(await replacer(tag));
       cursor = end + 1;
     }
     index = end + 1;
   }
-  parts.push(input.slice(cursor));
+  pushPart(input.slice(cursor));
   return parts.join('');
 }
 
@@ -492,15 +499,14 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
       return `${opening}${await inlineCssUrls(imported, baseUrl, context)}${closing}`;
     },
   );
-  return replaceAsync(
+  return replaceHtmlTagsAsync(
     rewritten,
-    HTML_ATTRIBUTE_PATTERN,
-    async (match, leading, attributeName, equals, quote, quoted, bare) => {
-      if (attributeName.toLowerCase() !== 'style') return match;
-      const css = quote ? quoted : bare;
-      const rewrittenCss = await inlineCssUrls(css, baseUrl, context);
-      return `${leading}${attributeName}${equals}${quote ? `${quote}${rewrittenCss}${quote}` : rewrittenCss}`;
-    },
+    (tag) => tag[1] !== '/' && /\bstyle\s*=/i.test(tag),
+    (tag) =>
+      rewriteHtmlAttributes(tag, ['style'], async (css) => {
+        const rewrittenCss = await inlineCssUrls(css, baseUrl, context);
+        return rewrittenCss;
+      }),
   );
 }
 
@@ -611,6 +617,29 @@ export function registerRenderPdfTool(
         assertOutputExtension(outPath, '.pdf');
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
+        // Capture the source's canonical relative location before reading. Keep the
+        // lexical root prefix (macOS commonly exposes /var as /private/var through
+        // realpath) so later resource boundary checks use the same root spelling.
+        // The bounded reader below verifies the source identity and root again; using
+        // this stable relative location prevents a parent-path rebind from changing
+        // the resource base between the HTML snapshot and inlining.
+        const sourceSnapshotPath = sourcePath
+          ? await (async () => {
+              const [realRoot, realSource] = await Promise.all([
+                fs.realpath(root),
+                fs.realpath(sourcePath),
+              ]);
+              const relative = path.relative(realRoot, realSource);
+              if (relative.startsWith('..') || path.isAbsolute(relative)) {
+                throw new DocsPathError(
+                  'PATH_NOT_ALLOWED',
+                  `输入文件不在任务工作目录内: ${sourcePath}`,
+                  '请把 HTML 文件放在当前任务工作目录内后重试。',
+                );
+              }
+              return path.join(root, relative);
+            })()
+          : undefined;
         const sourceBytes = sourcePath
           ? await readInputFileWithinLimit(
               root,
@@ -636,7 +665,7 @@ export function registerRenderPdfTool(
           }
         }
         const snapshotHtml = sourcePath
-          ? await inlineLocalResources(root, sourcePath, sourceHtml)
+          ? await inlineLocalResources(root, sourceSnapshotPath ?? sourcePath, sourceHtml)
           : sourceHtml;
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
         const wrapped = applyReportTemplate(snapshotHtml, palette, template);
