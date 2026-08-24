@@ -1,9 +1,9 @@
 /**
  * rehypeStreamWordFade.test.ts
  * ---------------------------------------------------------------------------
- * 流式分段淡入插件的行为测试:切词、零 stagger、稳定 key(不重播)、结构
- * 变化下的 key 稳定性、render candidate 提交、inline-code 原子淡入、
- * pre/KaTeX 跳过,以及 CSS 侧动画本体的静态回归。
+ * 流式逐词淡入插件的行为测试:切词、稳定 key 与 delay 分配(不重播)、结构
+ * 变化下的 key 稳定性(序号漂移回归)、settled 落袋、背压压缩、code/KaTeX
+ * 跳过,以及 CSS 侧动画本体的静态回归。
  */
 
 import { readFileSync } from 'node:fs';
@@ -13,8 +13,6 @@ import type { Element, Root, Text } from 'hast';
 
 import {
   _resetWordFadeStateCacheForTests,
-  commitWordFadeCandidate,
-  createWordFadeCandidate,
   createWordFadeState,
   getOrCreateWordFadeState,
   markSettledFromAnimationEnd,
@@ -32,11 +30,7 @@ function textNode(value: string): Text {
   return { type: 'text', value };
 }
 
-function el(
-  tagName: string,
-  children: Element['children'],
-  properties: Element['properties'] = {},
-): Element {
+function el(tagName: string, children: Element['children'], properties: Element['properties'] = {}): Element {
   return { type: 'element', tagName, properties, children };
 }
 
@@ -51,26 +45,18 @@ function run(tree: Root, state: WordFadeState, nowMs = 0): Root {
   return tree;
 }
 
-function nodeText(node: Root | Element): string {
-  let out = '';
-  for (const child of node.children) {
-    if (child.type === 'text') out += child.value;
-    else if (child.type === 'element') out += nodeText(child);
-  }
-  return out;
-}
-
-/** 收集树里所有 stream-word span 的 (text, delay, key)。inline code 取整体文本。 */
+/** 收集树里所有 stream-word span 的 (text, delay, key)。 */
 function collectWords(node: Root | Element): { text: string; delay: number; key: string }[] {
   const out: { text: string; delay: number; key: string }[] = [];
   for (const child of node.children) {
     if (child.type !== 'element') continue;
     const cls = child.properties?.className;
     if (Array.isArray(cls) && cls.includes('stream-word')) {
+      const t = child.children[0];
       const style = String(child.properties?.style ?? '');
       const m = /--wf-delay:(-?\d+)ms/.exec(style);
       out.push({
-        text: nodeText(child),
+        text: t?.type === 'text' ? t.value : '',
         delay: m ? Number(m[1]) : NaN,
         key: String(child.properties?.dataWfKey ?? ''),
       });
@@ -124,13 +110,13 @@ describe('rehypeStreamWordFade', () => {
     expect(getOrCreateWordFadeState(cacheKey)).not.toBe(active);
   });
 
-  it('普通聊天零 stagger:同 tick 新词全部从 0ms 开始淡入', () => {
+  it('文本节点被切成带 --wf-delay 的 stream-word span,首词 0ms 起、24ms/词递进', () => {
     const state = createWordFadeState();
     const tree = root(el('p', [textNode('one two three')]));
     run(tree, state);
     const words = collectWords(tree);
     expect(words.map((w) => w.text)).toEqual(['one ', 'two ', 'three']);
-    expect(words.map((w) => w.delay)).toEqual([0, 0, 0]);
+    expect(words.map((w) => w.delay)).toEqual([0, 24, 48]);
   });
 
   it('同一 state 重跑(流式 re-parse)已见词拿回同一 key,发剩余(负)delay 续播', () => {
@@ -139,7 +125,7 @@ describe('rehypeStreamWordFade', () => {
     run(tree1, state);
     const keys1 = collectWords(tree1).map((w) => w.key);
 
-    // 下一个 tick(100ms 后):全文重建 + 新词到达。
+    // 下一个 tick(100ms 后):全文重建 + 新词到达,队列尾(48ms)已落到过去。
     const tree2 = root(el('p', [textNode('one two three four')]));
     run(tree2, state, 100);
     const words = collectWords(tree2);
@@ -148,29 +134,32 @@ describe('rehypeStreamWordFade', () => {
     expect(words[0].key).toBe(keys1[0]);
     expect(words[1].key).toBe(keys1[1]);
     expect(words[0].delay).toBe(-100);
-    expect(words[1].delay).toBe(-100);
-    // 所有新词都从本 tick 的 0 起播，不互相排队。
+    expect(words[1].delay).toBe(-76);
+    // 新词从本 tick 的 0 起接着排。
     expect(words[2].delay).toBe(0);
-    expect(words[3].delay).toBe(0);
+    expect(words[3].delay).toBe(24);
   });
 
-  it('跨 tick 没有历史积压:后到的新词仍立即开始', () => {
+  it('timeline 跨 tick 连续:队列尾在未来时后到的词接着排,不插队', () => {
     const state = createWordFadeState();
+    // tick 1(t=0):4 词排到 96ms(尾部)。
     run(root(el('p', [textNode('a b c d')])), state);
+    // tick 2(t=50):队列尾 96ms 还在未来,新词从 96-50=46ms 接着排。
     const tree2 = root(el('p', [textNode('a b c d e f')]));
     run(tree2, state, 50);
     const words = collectWords(tree2);
-    expect(words.slice(0, 4).map((word) => word.delay)).toEqual([-50, -50, -50, -50]);
-    expect(words.slice(4).map((word) => word.delay)).toEqual([0, 0]);
+    expect(words[4].delay).toBe(46);
+    expect(words[5].delay).toBe(70);
   });
 
-  it('卡顿后突发的大段文字也整批立即开始，不产生新的可见积压', () => {
+  it('卡顿后突发:队列已排空则第一词立即开始,整段连贯波浪推进', () => {
     const state = createWordFadeState();
     run(root(el('p', [textNode('a b')])), state);
+    // 卡顿 5 秒后一大坨到达:尾部(48ms)远落在过去,从 0 重新起排。
     const tree2 = root(el('p', [textNode('a b x y z')]));
     run(tree2, state, 5000);
     const words = collectWords(tree2);
-    expect(words.slice(2).map((w) => w.delay)).toEqual([0, 0, 0]);
+    expect(words.slice(2).map((w) => w.delay)).toEqual([0, 24, 48]);
   });
 
   it('chunk 边界半个词长成整词:前缀延续复用同一 key', () => {
@@ -224,91 +213,75 @@ describe('rehypeStreamWordFade', () => {
     expect(words2[0].key).toBe(keys1[0]);
   });
 
-  it('超大 tick 也不把尾部排到未来', () => {
+  it('自适应背压:预算富余时步长恒为 24ms 上限(慢速输出与 Codex 观感一致)', () => {
     const state = createWordFadeState();
+    // 10 词:320/10=32ms ≥ 24ms 上限,不压缩,全程 24ms 步进。
+    const many = Array.from({ length: 10 }, (_, i) => `w${i}`).join(' ');
+    const tree = root(el('p', [textNode(many)]));
+    run(tree, state);
+    const delays = collectWords(tree).map((w) => w.delay);
+    expect(delays[0]).toBe(0);
+    expect(delays[1]).toBe(24);
+    expect(delays[9]).toBe(216);
+  });
+
+  it('自适应背压:大 tick 步长按预算压缩,超前量封顶 MAX_LEAD_MS(与模型吐词速率无关)', () => {
+    const state = createWordFadeState();
+    // 500 词一次性到达(超快模型):步长压到 320/500=0.64ms,总积压 ≤320ms。
     const many = Array.from({ length: 500 }, (_, i) => `w${i}`).join(' ');
     const tree = root(el('p', [textNode(many)]));
     run(tree, state);
     const delays = collectWords(tree).map((w) => w.delay);
-    expect(delays).toHaveLength(500);
-    expect(new Set(delays)).toEqual(new Set([0]));
+    expect(Math.max(...delays)).toBeLessThanOrEqual(320);
+    // 仍保持递增波浪(不是整块同帧蹦出)。
+    expect(delays[499]).toBeGreaterThan(delays[250]);
+    // 下一 tick(t=320,积压已消化)新词从 0 接着排,不被历史积压顶到未来。
+    const tree2 = root(el('p', [textNode(`${many} fresh`)]));
+    run(tree2, state, 320);
+    const words2 = collectWords(tree2);
+    expect(words2[500].text).toBe('fresh');
+    expect(words2[500].delay).toBeLessThanOrEqual(24);
+    // 慢速恢复后(下一 tick 词少)步长回到 24ms:fresh2 在 fresh 之后 24ms。
+    const tree3 = root(el('p', [textNode(`${many} fresh fresh2`)]));
+    run(tree3, state, 320);
+    const words3 = collectWords(tree3);
+    expect(words3[501].delay - words3[500].delay).toBe(24);
   });
 
-  it('被放弃的 render candidate 不污染 committed key 状态', () => {
-    const committed = createWordFadeState();
-    const abandoned = createWordFadeCandidate(committed);
-    run(root(el('p', [textNode('abandoned render')])), abandoned, 10);
-
-    expect(committed.nextId).toBe(0);
-    expect(committed.previous).toEqual([]);
-    expect(committed.startAtByKey.size).toBe(0);
-
-    const mounted = createWordFadeCandidate(committed);
-    const tree = root(el('p', [textNode('mounted render')]));
-    run(tree, mounted, 20);
-    expect(collectWords(tree)[0].key).toBe('wf-0');
-  });
-
-  it('layout commit 发布 candidate，并保留提交间隙到达的 settled 事件', () => {
-    const committed = createWordFadeState();
-    const candidate = createWordFadeCandidate(committed);
-    const tree = root(el('p', [textNode('one two')]));
-    run(tree, candidate, 0);
-    const keys = collectWords(tree).map((word) => word.key);
-
-    committed.settled.add('older-frame');
-    commitWordFadeCandidate(committed, candidate);
-
-    expect(committed.previous.map((segment) => segment.key)).toEqual(keys);
-    expect(committed.startAtByKey.size).toBe(2);
-    expect(committed.settled.has('older-frame')).toBe(true);
-  });
-
-  it('截图回归:前文与后到 inline code 同时开始淡入，code 不再抢先显示', () => {
+  it('持续快速到达:每 tick 预算重算,积压始终收敛不发散', () => {
     const state = createWordFadeState();
-    const code = el('code', [textNode('meta.Disabled')]);
+    // 模拟 300 tok/s:每 100ms 到达 30 词,连续 10 tick。
+    let text = '';
+    for (let tick = 0; tick < 10; tick++) {
+      text += (text ? ' ' : '') + Array.from({ length: 30 }, (_, i) => `t${tick}w${i}`).join(' ');
+      const tree = root(el('p', [textNode(text)]));
+      run(tree, state, tick * 100);
+      const nowMs = tick * 100;
+      // 不变量:排程尾部超前 now 永远不超过 MAX_LEAD_MS + 一个步长。
+      expect(state.nextStartAtMs - nowMs).toBeLessThanOrEqual(320 + 24);
+      // 感知不变量:本 tick 到达的词,可见时刻落后到达 < 0.5s(预算+动画)。
+      const delays = collectWords(tree).map((w) => w.delay);
+      expect(Math.max(...delays)).toBeLessThanOrEqual(320);
+    }
+  });
+
+  it('code / pre 子树跳过(路径 chip 与代码块保持整体形态)', () => {
+    const state = createWordFadeState();
+    const code = el('code', [textNode('src/foo bar.ts')]);
     const pre = el('pre', [el('code', [textNode('const a = 1')])]);
-    const paragraph = el('p', [textNode('看 line 241 上下文和 line 145 '), code]);
-    const tree = root(paragraph, pre);
+    const tree = root(el('p', [code]), pre);
     run(tree, state);
-    const segments = collectWords(tree);
-    const codeSegment = paragraph.children.at(-1) as Element;
-
-    expect(segments.at(-1)?.text).toBe('meta.Disabled');
-    expect(segments.every((segment) => segment.delay === 0)).toBe(true);
-    expect(codeSegment.tagName).toBe('span');
-    expect(codeSegment.properties?.className).toContain('stream-word');
-    expect(codeSegment.children).toEqual([code]);
-    // fenced code block 仍保持整体，不进入流式淡入。
-    expect((pre.children[0] as Element).tagName).toBe('code');
-    expect((pre.children[0] as Element).properties?.className).toBeUndefined();
+    expect(collectWords(tree)).toEqual([]);
+    expect((code.children[0] as Text).value).toBe('src/foo bar.ts');
   });
 
-  it('inline code 作为带类型的原子段复用稳定 key，不与同文本正文串 key', () => {
-    const state = createWordFadeState();
-    const tree1 = root(el('p', [textNode('same '), el('code', [textNode('same')])]));
-    run(tree1, state, 0);
-    const first = collectWords(tree1);
-
-    const tree2 = root(
-      el('p', [textNode('same '), el('code', [textNode('same')]), textNode(' tail')]),
-    );
-    run(tree2, state, 100);
-    const second = collectWords(tree2);
-
-    expect(first[0].key).not.toBe(first[1].key);
-    expect(second[0].key).toBe(first[0].key);
-    expect(second[1].key).toBe(first[1].key);
-    expect(second[1].delay).toBe(-100);
-  });
-
-  it('表格格内文字照常分段淡入,结构(table/tr/td)不打任何动画标', () => {
+  it('表格格内文字照常逐词淡入,结构(table/tr/td)不打任何动画标', () => {
     const state = createWordFadeState();
     const td = el('td', [textNode('早晚 跑步 最佳')]);
     const tr = el('tr', [td]);
     const tree = root(el('table', [el('tbody', [tr])]));
     run(tree, state);
-    // Codex 模型:结构即时出现,文字与正文共用同一淡入时机。
+    // Codex 模型:结构即时出现,文字与正文共用同一条 timeline 逐词浮现。
     expect(collectWords(tree).map((w) => w.text)).toEqual(['早晚 ', '跑步 ', '最佳']);
     expect(tr.properties?.dataStreamBlock).toBeUndefined();
     expect(tr.properties?.dataStreamMarker).toBeUndefined();
@@ -323,11 +296,11 @@ describe('rehypeStreamWordFade', () => {
     run(tree, state);
     const words = collectWords(tree);
     expect(words.map((w) => w.text)).toEqual(['alpha ', 'beta', 'quoted']);
-    // 圆点与 li 内第一个段共 key 共 delay(同帧出现,不额外占段位)。
+    // 圆点与 li 内第一个词共 key 共 delay(同帧出现,不占队列位)。
     expect(li.properties?.dataStreamMarker).toBe(true);
     expect(li.properties?.dataWfKey).toBe(words[0].key);
     expect(String(li.properties?.style)).toContain(`--wf-delay:${words[0].delay}ms`);
-    // 块结构不淡入；动效对象只有文本词、inline-code 原子和圆点。
+    // 结构元素不淡入(Codex 模型:只有词和圆点两类动效对象)。
     expect(hr.properties?.dataStreamMarker).toBeUndefined();
     expect(quote.properties?.dataStreamMarker).toBeUndefined();
     // 打标不覆盖已有属性。
@@ -337,13 +310,15 @@ describe('rehypeStreamWordFade', () => {
     expect(li2.properties?.dataStreamMarker).toBe(true);
   });
 
-  it('空 li 立即淡入，文字到达后切到首段 key 不重播', () => {
+  it('空 li(结构刚长出、文字未到)借队列尾 delay,文字到达后切到词 key 不重播', () => {
     const state = createWordFadeState();
+    // tick 1:前文 3 个词把队列推到 72ms,空 li 同时出现。
     const li = el('li', []);
     run(root(el('p', [textNode('one two three')]), el('ul', [li])), state, 0);
     expect(li.properties?.dataStreamMarker).toBe(true);
     expect(li.properties?.dataWfKey).toBeUndefined();
-    expect(String(li.properties?.style)).toContain('--wf-delay:0ms');
+    // 借队列尾部当前值(3 词 × 24ms),且不推进队列。
+    expect(String(li.properties?.style)).toContain('--wf-delay:72ms');
     // tick 2:文字到达,圆点挂到第一个词的 key/delay 上。
     const li2 = el('li', [textNode('four')]);
     run(root(el('p', [textNode('one two three')]), el('ul', [li2])), state, 0);
@@ -410,10 +385,11 @@ describe('rehypeStreamWordFade', () => {
     expect(words2.map((w) => w.text)).toEqual(['two ', 'three ', 'four']);
     const p = tree2.children[0] as Element;
     expect(p.children[0]).toEqual(textNode('one '));
-    // 活动词仍保住原 key,负 delay 继续提供 remount 免疫；新词立即开始。
+    // 活动词仍保住原 key,负 delay 继续提供 remount 免疫。
+    // 在播词续播,新词接排。
     expect(words2[0].key).toBe(words1[1].key);
     expect(words2[1].key).toBe(words1[2].key);
-    expect(words2[1].delay).toBe(-500);
+    expect(words2[1].delay).toBe(-452);
   });
 
   it('长 settled 前缀只保留一个原生文本节点', () => {
@@ -486,8 +462,6 @@ describe('globals.css 的 stream-word 动画本体', () => {
     expect(css).not.toContain('data-stream-block');
     // 与 .stream-word 同在 reduced-motion 的 animation:none 关停清单里
     // (文件里有多个 reduce 块,按同规则相邻断言而不是抓第一个块)。
-    expect(css).toMatch(
-      /\.stream-word,\s*\[data-stream-marker\]::marker,[\s\S]{0,300}?animation: none !important/,
-    );
+    expect(css).toMatch(/\.stream-word,\s*\[data-stream-marker\]::marker,[\s\S]{0,300}?animation: none !important/);
   });
 });

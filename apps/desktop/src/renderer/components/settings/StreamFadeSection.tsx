@@ -1,8 +1,8 @@
 /**
  * StreamFadeSection — Settings → 个性化 下的「流式动效」开关。
  *
- * 控制流式输出时正文的淡入浮现动效(词段 / inline code 原子 + 列表圆点同帧
- * 浮现,见 rehypeStreamWordFade):开(默认)= 新内容淡入;关 = 文字直接显示。
+ * 控制流式输出时正文的淡入浮现动效(逐词淡入 + 列表圆点同帧浮现,见
+ * rehypeStreamWordFade):开(默认)= 新内容淡入;关 = 文字直接显示。
  * 系统 reduced-motion 开启时动效无条件关闭,本开关不覆盖该行为。
  *
  * 存储走 useStreamFadePreference(localStorage 只存 override,切回默认即
