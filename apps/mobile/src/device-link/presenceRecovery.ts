@@ -1,4 +1,5 @@
 import type { InvokeResultPayload, PresenceSnapshot } from '@cindy/device-link';
+export { isPresenceEligibleForRemoteRequest } from '@cindy/maker-shared/device-responsiveness';
 
 type PresenceAvailabilitySnapshot = Pick<PresenceSnapshot, 'deviceId' | 'online' | 'remoteControlEnabled'>;
 
@@ -291,15 +292,6 @@ export function reconcileAvailabilityAfterInboundFrame(
     cleared = true;
   }
   return cleared;
-}
-
-export function isPresenceEligibleForRemoteRequest(
-  availabilityByDevice: ReadonlyMap<string, boolean>,
-  deviceId: string,
-): boolean {
-  // 首次尚未收到 presence 时保留既有乐观尝试;只有 relay 已明确声明 unavailable
-  // 才拦住 rehydrate / half-open probe,避免对离线设备立即重放请求风暴。
-  return availabilityByDevice.get(deviceId) !== false;
 }
 
 export function resetPresenceAvailabilityForConnection(

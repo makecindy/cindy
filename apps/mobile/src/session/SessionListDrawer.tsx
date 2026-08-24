@@ -39,6 +39,17 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
+import { HomeSearchBar } from '@/session/HomeSearchBar';
+import {
+  conversationSearchOriginsFromDeviceModels,
+  listConversationSearchProjects,
+  shouldReplaceListWithSearchResults,
+  type ConversationSearchDeviceModel,
+  type ConversationSearchDeviceOrigin,
+} from '@/session/conversationSearch';
+import { useConversationSearch } from '@/session/useConversationSearch';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { buildHomeSections, type HomeRow, type HomeSection } from '@/session/homeSections';
@@ -242,6 +253,54 @@ export function SessionListDrawer({
   // 早退,不为收起的抽屉付这份成本。
   const storeVersion = useRemoteSessionStoreVersion();
   const messageVersion = useRemoteMessageVersion();
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const searchOrigins = useMemo(() => {
+    const models = remoteSessionStore.getConversationSearchDeviceModels() as ConversationSearchDeviceModel[];
+    if (models.length > 0) {
+      return conversationSearchOriginsFromDeviceModels(models, {
+        unresponsiveDeviceIds: unresponsiveDevices,
+      });
+    }
+    const identities = remoteSessionStore.getDeviceIdentity();
+    if (identities.length > 0) {
+      return identities.map((device) => ({
+        deviceId: device.deviceId,
+        deviceName: device.name,
+        reachable: false,
+      }));
+    }
+    const byId = new Map<string, ConversationSearchDeviceOrigin>();
+    for (const session of sessions) {
+      const id = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
+      if (!id || byId.has(id)) continue;
+      byId.set(id, {
+        deviceId: id,
+        deviceName: session.deviceLinkDeviceName ?? id,
+        reachable: false,
+      });
+    }
+    return [...byId.values()];
+  }, [sessions, storeVersion, unresponsiveDevices]);
+  const searchProjects = useMemo(
+    () => listConversationSearchProjects(excludeOrcaWorkerSessions(sessions)),
+    [sessions],
+  );
+  const indexedSearch = useConversationSearch({
+    enabled: mounted,
+    origins: searchOrigins,
+    projects: searchProjects,
+  });
+  const searchQuery = indexedSearch.query;
+  const [searchFilterOpen, setSearchFilterOpen] = useState(false);
+  const searchFilterA11y = t('devices.list.search.filterAria', {
+    agent: t(`devices.list.search.filter.agent.${indexedSearch.agentFilter}`),
+    lastActivity: t(`devices.list.search.filter.lastActivity.${indexedSearch.lastActivityFilter}`),
+    projects: indexedSearch.projectSelection === 'all'
+      ? t('devices.list.search.filter.allProjects')
+      : t('devices.list.search.filter.selectedProjects', { count: indexedSearch.projectSelection.length }),
+    sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
+    status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
+  });
   const sections = useMemo<HomeSection[]>(() => {
     if (!mounted) return [];
     void storeVersion;
@@ -266,6 +325,7 @@ export function SessionListDrawer({
       if (liveActivity) liveActivityEntries.push([session.id, liveActivity]);
     }
     const home = buildMobileHomePresentation({
+      searchQuery,
       // 权威设备身份必须随会话一起进 presentation:canonicalizeSessionDevice 会按传入
       // devices 重算并覆盖 canonicalDeviceId,空列表会把 store 已认领好的规范 id 打回
       // 弱推断(re-link 后点行路由到旧物理设备)。store 身份变化会触发 sessions 重算,
@@ -285,8 +345,20 @@ export function SessionListDrawer({
       // 已解析的 i18n 文案传给共享层(共享层不出中文串;en/ja/ko 不再回退「未命名任务」)。
       unnamedLabel: t('session.menu.unnamedTitle'),
     });
+    if (shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) {
+      return [{
+        data: indexedSearch.results.map((item) => ({
+          item,
+          key: `search:${(item.session as { deviceLinkDeviceId?: string | null }).deviceLinkDeviceId ?? 'local'}:${item.session.id}`,
+          kind: 'session' as const,
+          source: 'search' as const,
+        })),
+        key: 'search',
+        title: null,
+      }];
+    }
     return buildHomeSections(home, false, false);
-  }, [messageVersion, mounted, sessions, storeVersion, t]);
+  }, [indexedSearch.results, indexedSearch.status, messageVersion, mounted, searchQuery, sessions, storeVersion, t]);
   const hasRows = useMemo(
     () => sections.some((section) => section.data.length > 0),
     [sections],
@@ -359,6 +431,22 @@ export function SessionListDrawer({
               />
             </Pressable>
           </View>
+          <View style={styles.drawerSearchRow}>
+            <HomeSearchBar
+              autoFocus={false}
+              filterA11y={searchFilterA11y}
+              filterActive={indexedSearch.activeFilterCount > 0}
+              onChangeQuery={indexedSearch.setQuery}
+              onOpenFilter={() => setSearchFilterOpen(true)}
+              padded={false}
+              query={searchQuery}
+              testIDs={{
+                filter: 'sessionDrawer.searchFilterButton',
+                input: 'sessionDrawer.searchInput',
+                row: 'sessionDrawer.searchRow',
+              }}
+            />
+          </View>
           {hasRows ? (
             <SectionList
               contentContainerStyle={styles.listContent}
@@ -399,6 +487,25 @@ export function SessionListDrawer({
           </View>
         </Animated.View>
       </GestureDetector>
+      <ConversationSearchFilterSheet
+        activeCount={indexedSearch.activeFilterCount}
+        agentKind={indexedSearch.agentFilter}
+        lastActivity={indexedSearch.lastActivityFilter}
+        lockedProjects={false}
+        onAgentKindChange={indexedSearch.setAgentFilter}
+        onClose={() => setSearchFilterOpen(false)}
+        onLastActivityChange={indexedSearch.setLastActivityFilter}
+        onProjectsChange={indexedSearch.setProjectSelection}
+        onReset={indexedSearch.resetFilters}
+        onSortChange={indexedSearch.setSortBy}
+        onStatusChange={indexedSearch.setStatusFilter}
+        projectSelection={indexedSearch.projectSelection}
+        projects={searchProjects}
+        sortBy={indexedSearch.sortBy}
+        status={indexedSearch.statusFilter}
+        topOffset={insets.top + spacing.sm}
+        visible={searchFilterOpen}
+      />
     </View>
   );
 }
@@ -559,6 +666,23 @@ const makeStyles = (colors: ThemeColors) =>
       justifyContent: 'space-between',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
+    },
+    drawerSearchRow: {
+      alignItems: 'center',
+      borderBottomColor: colors.border,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row',
+      gap: spacing.sm,
+      minHeight: 44,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.xs,
+    },
+    drawerSearchInput: {
+      color: colors.textPrimary,
+      flex: 1,
+      fontSize: typeScale.body,
+      minWidth: 0,
+      paddingVertical: spacing.xs,
     },
     panelTitle: {
       color: colors.textPrimary,

@@ -83,6 +83,7 @@ import {
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
   onInteractionMessage,
+  onInteractionResolved,
   onThinkingEvent,
   flushAssistantBlock,
   flushOrphanToolResults,
@@ -2202,6 +2203,40 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
   });
 
+  it('missing-session lost-terminal seal does not concatenate the next turn onto leftover stream text', async () => {
+    const deadId = onAssistantTextEvent(
+      SESSION,
+      { text: 'dead-turn-fragment', isFinal: false },
+      null,
+    );
+    expect(deadId).toEqual(expect.any(String));
+
+    // Same persist boundary as reconcileSessionTurnIdle's missing lookup.
+    flushAssistantBlock(SESSION, null);
+    consumeLastAssistantPersistId(SESSION);
+    consumeLastTopLevelAssistantPersistId(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const nextId = onAssistantTextEvent(
+      SESSION,
+      { text: 'next-turn-only', isFinal: false },
+      null,
+    );
+    expect(nextId).not.toBe(deadId);
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter((c) => (c[1] as { role?: string }).role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+    expect(assistantCreates[0]?.[1]).toEqual(
+      expect.objectContaining({ clientId: deadId, content: 'dead-turn-fragment' }),
+    );
+    expect(assistantCreates[1]?.[1]).toEqual(
+      expect.objectContaining({ clientId: nextId, content: 'next-turn-only' }),
+    );
+  });
+
   it('clearSessionPersistState 清理追踪(session 关闭防泄漏)', () => {
     onAssistantTextEvent(SESSION, { text: 'gone', isFinal: true }, null);
     clearSessionPersistState(SESSION);
@@ -2682,5 +2717,39 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
     flushOrphanToolResults(SESSION, null);
     await flushWrites();
     expect(createMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('ask_user persist first-write-wins', () => {
+  it('ignores a later cancelled write after the winner already answered', async () => {
+    const persistId = onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'ask-winner',
+      questions: [{ question: 'Pick one' }],
+    });
+    onInteractionResolved(
+      SESSION,
+      persistId,
+      'ask_user_question',
+      { requestId: 'ask-winner', questions: [{ question: 'Pick one' }] },
+      { answers: { 'Pick one': 'Keep going' } },
+    );
+    onInteractionResolved(
+      SESSION,
+      persistId,
+      'ask_user_question',
+      { requestId: 'ask-winner', questions: [{ question: 'Pick one' }] },
+      { answers: {}, dismissed: true },
+    );
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledTimes(1);
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        status: 'answered',
+        answers: { 'Pick one': 'Keep going' },
+      }),
+    );
   });
 });

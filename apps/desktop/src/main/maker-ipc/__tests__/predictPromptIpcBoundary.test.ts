@@ -10,11 +10,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
-  predict: vi.fn(async (_params: unknown) => '下一步做什么'),
+  predict: vi.fn(async (params: unknown): Promise<string | null> => {
+    void params;
+    return '下一步做什么';
+  }),
   drainPersistQueue: vi.fn<() => Promise<void>>(async () => undefined),
   /** 模拟 DB 读出的最近 user/assistant 素材(来源:latestMessageText.regenerateTitleMaterial)。 */
   regenerateMaterial: vi.fn(
-    async (_sessionId: string, _limit: number, _latestTurnIsInFlight?: boolean | (() => boolean)) => {
+    async (
+      _sessionId: string,
+      _limit: number,
+      _latestTurnIsInFlight?: boolean | (() => boolean),
+    ) => {
       void _sessionId;
       void _limit;
       void _latestTurnIsInFlight;
@@ -28,9 +35,37 @@ const h = vi.hoisted(() => ({
     },
   ),
   /** 模拟 DB 返回的 session row */
-  sessionRow: { remoteHostId: null, agentKind: null, updatedAt: 1 } as { remoteHostId: string | null; source?: string | null; agentKind: string | null; workingDir?: string | null; status?: string | null; updatedAt?: number } | undefined,
+  sessionRow: {
+    remoteHostId: null,
+    agentKind: null,
+    updatedAt: 1,
+    activeTurnStartedAt: 1,
+    lastTurnEndedAt: 2,
+  } as
+    | {
+        remoteHostId: string | null;
+        source?: string | null;
+        agentKind: string | null;
+        workingDir?: string | null;
+        status?: string | null;
+        updatedAt?: number;
+        activeTurnStartedAt?: number | null;
+        lastTurnEndedAt?: number | null;
+      }
+    | undefined,
   /** 模拟 DB 第二次读取(排空落盘队列之后)返回的 session row;用于「drain 期间被删除」竞态测试。 */
-  sessionRowAfterDrain: undefined as { remoteHostId: string | null; source?: string | null; agentKind: string | null; workingDir?: string | null; status?: string | null; updatedAt?: number } | undefined,
+  sessionRowAfterDrain: undefined as
+    | {
+        remoteHostId: string | null;
+        source?: string | null;
+        agentKind: string | null;
+        workingDir?: string | null;
+        status?: string | null;
+        updatedAt?: number;
+        activeTurnStartedAt?: number | null;
+        lastTurnEndedAt?: number | null;
+      }
+    | undefined,
   /** DB 读取次数计数(区分 drain 前后的两次读取)。 */
   dbReads: 0,
 }));
@@ -51,8 +86,19 @@ vi.mock('electron', () => ({
     getPath: () => '/tmp/xdt-maker-vitest-electron',
     isReady: () => true,
     whenReady: async () => undefined,
-    commandLine: { appendSwitch: () => undefined, appendArgument: () => undefined, hasSwitch: () => false, getSwitchValue: () => '' },
-    dock: { setBadge: () => undefined, bounce: () => 0, cancelBounce: () => undefined, hide: () => undefined, show: async () => undefined },
+    commandLine: {
+      appendSwitch: () => undefined,
+      appendArgument: () => undefined,
+      hasSwitch: () => false,
+      getSwitchValue: () => '',
+    },
+    dock: {
+      setBadge: () => undefined,
+      bounce: () => 0,
+      cancelBounce: () => undefined,
+      hide: () => undefined,
+      show: async () => undefined,
+    },
     getName: () => 'XDMaker Test',
     getVersion: () => '0.0.0-test',
     setName: () => undefined,
@@ -110,17 +156,40 @@ vi.mock('electron', () => ({
   nativeTheme: { shouldUseDarkColors: false, themeSource: 'system' },
   powerMonitor: { getSystemIdleTime: () => 0, getSystemIdleState: () => 'active' },
   screen: {
-    getPrimaryDisplay: () => ({ id: 1, bounds: { x: 0, y: 0, width: 1024, height: 768 }, workArea: { x: 0, y: 0, width: 1024, height: 768 }, scaleFactor: 1 }),
+    getPrimaryDisplay: () => ({
+      id: 1,
+      bounds: { x: 0, y: 0, width: 1024, height: 768 },
+      workArea: { x: 0, y: 0, width: 1024, height: 768 },
+      scaleFactor: 1,
+    }),
     getAllDisplays: () => [],
-    getDisplayNearestPoint: () => ({ id: 1, bounds: { x: 0, y: 0, width: 1024, height: 768 }, workArea: { x: 0, y: 0, width: 1024, height: 768 }, scaleFactor: 1 }),
-    getDisplayMatching: () => ({ id: 1, bounds: { x: 0, y: 0, width: 1024, height: 768 }, workArea: { x: 0, y: 0, width: 1024, height: 768 }, scaleFactor: 1 }),
+    getDisplayNearestPoint: () => ({
+      id: 1,
+      bounds: { x: 0, y: 0, width: 1024, height: 768 },
+      workArea: { x: 0, y: 0, width: 1024, height: 768 },
+      scaleFactor: 1,
+    }),
+    getDisplayMatching: () => ({
+      id: 1,
+      bounds: { x: 0, y: 0, width: 1024, height: 768 },
+      workArea: { x: 0, y: 0, width: 1024, height: 768 },
+      scaleFactor: 1,
+    }),
     getCursorScreenPoint: () => ({ x: 0, y: 0 }),
   },
   BrowserWindow: class {
-    static getAllWindows() { return []; }
-    static getFocusedWindow() { return null; }
-    static fromWebContents() { return null; }
-    static fromId() { return null; }
+    static getAllWindows() {
+      return [];
+    }
+    static getFocusedWindow() {
+      return null;
+    }
+    static fromWebContents() {
+      return null;
+    }
+    static fromId() {
+      return null;
+    }
   },
   session: {
     defaultSession: { protocol: { registerSchemesAsPrivileged: () => undefined } },
@@ -137,9 +206,20 @@ vi.mock('electron', () => ({
     getUserDefault: () => undefined,
     setUserDefault: () => undefined,
   },
-  globalShortcut: { register: () => true, registerAll: () => undefined, isRegistered: () => false, unregister: () => undefined, unregisterAll: () => undefined },
+  globalShortcut: {
+    register: () => true,
+    registerAll: () => undefined,
+    isRegistered: () => false,
+    unregister: () => undefined,
+    unregisterAll: () => undefined,
+  },
   webContents: { fromId: () => null, fromFrame: () => null, getAllWebContents: () => [] },
-  crashReporter: { start: () => undefined, addExtraParameter: () => undefined, removeExtraParameter: () => undefined, getParameters: () => ({}) },
+  crashReporter: {
+    start: () => undefined,
+    addExtraParameter: () => undefined,
+    removeExtraParameter: () => undefined,
+    getParameters: () => ({}),
+  },
   nativeImage: {
     createEmpty: () => nativeImageEmpty(),
     createFromPath: () => nativeImageEmpty(),
@@ -158,7 +238,9 @@ vi.mock('electron', () => ({
     getApplicationMenu: () => null,
   },
   Notification: class {
-    static isSupported() { return true; }
+    static isSupported() {
+      return true;
+    }
     show() {}
     close() {}
   },
@@ -177,7 +259,9 @@ vi.mock('../../localDb/client/current.js', () => ({
               h.dbReads >= 2 && h.sessionRowAfterDrain !== undefined
                 ? h.sessionRowAfterDrain
                 : h.sessionRow;
-            return Promise.resolve([row].filter(Boolean));
+            return Promise.resolve(
+              row ? [{ activeTurnStartedAt: 1, lastTurnEndedAt: 2, ...row }] : [],
+            );
           },
         }),
       }),
@@ -202,7 +286,12 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
   },
 }));
 
-import { registerMakerTitleIpc } from '../title.js';
+import { _resetPromptPredictionCacheForTests, registerMakerTitleIpc } from '../title.js';
+import {
+  clearPromptPredictionSessionStopped,
+  notePromptPredictionSessionStopped,
+  resetPromptPredictionStopLedgerForTests,
+} from '../promptPredictionStopLedger.js';
 
 const EVENT = {} as Electron.IpcMainInvokeEvent;
 
@@ -212,19 +301,28 @@ function invokePredict(request: unknown): Promise<unknown> {
   return Promise.resolve(handler(EVENT, request));
 }
 
-/** 合法的 predict-prompt payload: sessionId + agentKind + turnGen(素材由 main 从 DB 读取)。 */
+/** 合法 payload：完成 revision 由 renderer live ledger 提供，素材由 main 从 DB 读取。 */
 const VALID_REQUEST = {
   sessionId: 'session-1',
   agentKind: 'claude-code',
   turnGen: 0,
+  completionRevision: 2,
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.handlers.clear();
   h.trusted = true;
-  h.sessionRow = { remoteHostId: null, agentKind: 'cc', updatedAt: 1 };
+  h.sessionRow = {
+    remoteHostId: null,
+    agentKind: 'cc',
+    updatedAt: 1,
+    activeTurnStartedAt: 1,
+    lastTurnEndedAt: 2,
+  };
   h.sessionRowAfterDrain = undefined;
+  _resetPromptPredictionCacheForTests();
+  resetPromptPredictionStopLedgerForTests();
   h.dbReads = 0;
   h.predict.mockResolvedValue('下一步做什么');
   registerMakerTitleIpc();
@@ -262,6 +360,10 @@ describe('maker:predict-prompt — payload 运行期校验', () => {
     ['turnGen 非数字', { sessionId: 's1', agentKind: 'claude-code', turnGen: 'abc' }],
     ['turnGen 负数', { sessionId: 's1', agentKind: 'claude-code', turnGen: -1 }],
     ['turnGen NaN', { sessionId: 's1', agentKind: 'claude-code', turnGen: NaN }],
+    ['缺 completionRevision', { sessionId: 's1', agentKind: 'claude-code', turnGen: 0 }],
+    ['completionRevision 非数字', { ...VALID_REQUEST, completionRevision: 'abc' }],
+    ['completionRevision 非整数', { ...VALID_REQUEST, completionRevision: 1.5 }],
+    ['completionRevision 非正数', { ...VALID_REQUEST, completionRevision: 0 }],
   ])('%s → INVALID_PARAMS 且不调用付费模型', async (_label, payload) => {
     await expect(invokePredict(payload)).rejects.toThrow(/INVALID_PARAMS/);
     expect(h.predict).not.toHaveBeenCalled();
@@ -270,9 +372,8 @@ describe('maker:predict-prompt — payload 运行期校验', () => {
   it('素材从 DB 读取,不采用 renderer 上报的 messages / workingDir', async () => {
     h.sessionRow = { remoteHostId: null, agentKind: 'pi', workingDir: '/db/workdir', updatedAt: 1 };
     await invokePredict({
-      sessionId: 'session-1',
+      ...VALID_REQUEST,
       agentKind: 'pi',
-      turnGen: 0,
       // 受信 renderer 或 stale UI 可能上报其它会话转写 / 伪造 workdir,应被忽略
       messages: [{ role: 'user', content: '外部注入的伪造内容' }],
       workingDir: '/spoofed/path',
@@ -308,6 +409,43 @@ describe('maker:predict-prompt — DB 防御纵深(远程会话拒绝)', () => {
     expect(h.predict).not.toHaveBeenCalled();
   });
 
+  it('completionRevision 与 DB lastTurnEndedAt 不一致时不调用付费模型', async () => {
+    h.sessionRow = {
+      remoteHostId: null,
+      agentKind: 'cc',
+      updatedAt: 1,
+      activeTurnStartedAt: 1,
+      lastTurnEndedAt: 3,
+    };
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+  });
+
+  it('完成后同毫秒开始新 turn 时也不返回旧轮推荐', async () => {
+    h.sessionRow = {
+      remoteHostId: null,
+      agentKind: 'cc',
+      updatedAt: 2,
+      activeTurnStartedAt: 2,
+      lastTurnEndedAt: 2,
+    };
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+  });
+
+  it('Main 记录显式 Stop 后所有窗口与 Device Link 请求都跳过预测，下一 turn 可清除', async () => {
+    notePromptPredictionSessionStopped('session-1');
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+
+    clearPromptPredictionSessionStopped('session-1');
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
   it('本地 session(remoteHostId=null, agentKind 匹配)正常执行预测', async () => {
     h.sessionRow = { remoteHostId: null, agentKind: 'cc', updatedAt: 1 };
 
@@ -334,7 +472,12 @@ describe('maker:predict-prompt — DB 防御纵深(远程会话拒绝)', () => {
     // 第一次读取(drain 前)返回合法本地 session;排空落盘队列后第二次读取返回已删除状态,
     // 覆盖 TOCTOU 竞态:drain 前的 status 检查过期后,必须在素材物化/调用 provider 前重新校验。
     h.sessionRow = { remoteHostId: null, agentKind: 'cc', updatedAt: 1 };
-    h.sessionRowAfterDrain = { remoteHostId: null, agentKind: 'cc', status: 'deleted', updatedAt: 1 };
+    h.sessionRowAfterDrain = {
+      remoteHostId: null,
+      agentKind: 'cc',
+      status: 'deleted',
+      updatedAt: 1,
+    };
 
     await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
     expect(h.predict).not.toHaveBeenCalled();
@@ -353,63 +496,115 @@ describe('maker:predict-prompt — DB 防御纵深(远程会话拒绝)', () => {
   });
 });
 
-describe('maker:predict-prompt — 多窗口去重', () => {
-  it('同一 session 同一 updatedAt 并发调用时第二个请求直接返回 null,避免重复付费', async () => {
-    // 让第一次预测暂挂,模拟并发
+describe('maker:predict-prompt — 多窗口同轮幂等', () => {
+  it('同一 session 同一 completion revision 并发时共享 Promise 和结果', async () => {
     let resolveFirst!: (value: string) => void;
     h.predict.mockImplementationOnce(
-      () => new Promise<string>((resolve) => { resolveFirst = resolve; }),
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
     );
 
-    // 发起两个并发调用(同一 turnGen)
     const first = invokePredict(VALID_REQUEST);
-    // 等第一个进入 handler 并标记 _predictingPromptSessions
     await vi.waitFor(() => expect(h.predict).toHaveBeenCalledTimes(1));
+    const second = invokePredict({ ...VALID_REQUEST, turnGen: 9 });
 
-    const second = invokePredict(VALID_REQUEST);
-    await expect(second).resolves.toEqual({ prompt: null });
-
-    // 第一个完成
     resolveFirst('预测结果');
     await expect(first).resolves.toEqual({ prompt: '预测结果' });
+    await expect(second).resolves.toEqual({ prompt: '预测结果' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
   });
 
-  it('同一 session 新 updatedAt 的请求替换旧请求（旧轮结果终将被 renderer turnGen 校验丢弃）', async () => {
+  it('同一 completion revision 结算后即使 updatedAt 因非轮次字段变化也复用结果', async () => {
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    h.sessionRow = {
+      remoteHostId: null,
+      agentKind: 'cc',
+      updatedAt: 9,
+      activeTurnStartedAt: 1,
+      lastTurnEndedAt: 2,
+    };
+    await expect(invokePredict({ ...VALID_REQUEST, turnGen: 3 })).resolves.toEqual({
+      prompt: '下一步做什么',
+    });
+
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
+  it('同一 completion revision 改过 workingDir 后不复用旧目录上下文', async () => {
+    h.sessionRow = {
+      remoteHostId: null,
+      agentKind: 'cc',
+      workingDir: '/project-a',
+      updatedAt: 1,
+      activeTurnStartedAt: 1,
+      lastTurnEndedAt: 2,
+    };
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+
+    h.sessionRow = {
+      ...h.sessionRow,
+      workingDir: '/project-b',
+      updatedAt: 2,
+    };
+    await expect(invokePredict({ ...VALID_REQUEST, turnGen: 3 })).resolves.toEqual({
+      prompt: null,
+    });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
+  it('新 completion revision 即使 updatedAt 相同也允许新预测，旧结果不覆盖新缓存', async () => {
     let resolveFirst!: (value: string) => void;
     h.predict.mockImplementationOnce(
-      () => new Promise<string>((resolve) => { resolveFirst = resolve; }),
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
     );
 
-    // 发起 updatedAt=1 的预测并暂挂
     const first = invokePredict(VALID_REQUEST);
     await vi.waitFor(() => expect(h.predict).toHaveBeenCalledTimes(1));
 
-    // 同一 session 发起 updatedAt=2 的新预测（模拟新轮次更新了 session.updatedAt），
-    // 应替换旧条目并允许通过。旧请求结果终将被 renderer 端 turnGen 校验丢弃，不再阻塞新轮。
-    h.sessionRow = { remoteHostId: null, agentKind: 'cc', updatedAt: 2 };
+    h.sessionRow = {
+      remoteHostId: null,
+      agentKind: 'cc',
+      updatedAt: 1,
+      activeTurnStartedAt: 2,
+      lastTurnEndedAt: 3,
+    };
     let resolveSecond!: (value: string) => void;
     h.predict.mockImplementationOnce(
-      () => new Promise<string>((resolve) => { resolveSecond = resolve; }),
+      () =>
+        new Promise<string>((resolve) => {
+          resolveSecond = resolve;
+        }),
     );
     const second = invokePredict({
       ...VALID_REQUEST,
       turnGen: 1,
+      completionRevision: 3,
     });
     await vi.waitFor(() => expect(h.predict).toHaveBeenCalledTimes(2));
 
-    // 旧预测完成，去重条目已被新请求替换
     resolveFirst('旧轮预测');
     await expect(first).resolves.toEqual({ prompt: '旧轮预测' });
-
-    // 新预测完成
     resolveSecond('新轮预测');
     await expect(second).resolves.toEqual({ prompt: '新轮预测' });
+
+    await expect(
+      invokePredict({ ...VALID_REQUEST, turnGen: 2, completionRevision: 3 }),
+    ).resolves.toEqual({ prompt: '新轮预测' });
+    expect(h.predict).toHaveBeenCalledTimes(2);
   });
 
   it('不同 session 可以并发预测', async () => {
     let resolveFirst!: (value: string) => void;
     h.predict.mockImplementationOnce(
-      () => new Promise<string>((resolve) => { resolveFirst = resolve; }),
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
     );
 
     const first = invokePredict(VALID_REQUEST);
@@ -425,32 +620,14 @@ describe('maker:predict-prompt — 多窗口去重', () => {
     await expect(first).resolves.toEqual({ prompt: '预测结果A' });
   });
 
-  it('同一 session 不同 updatedAt 的请求也允许通过（renderer 端 turnGen 校验兜底）', async () => {
-    let resolveFirst!: (value: string) => void;
-    h.predict.mockImplementationOnce(
-      () => new Promise<string>((resolve) => { resolveFirst = resolve; }),
-    );
+  it('同一 completion revision 的 null 结果也缓存，避免反复付费重试', async () => {
+    h.predict.mockResolvedValueOnce(null);
 
-    // 窗口 A 发起 updatedAt=1 的预测并暂挂
-    const first = invokePredict({ ...VALID_REQUEST, turnGen: 5 });
-    await vi.waitFor(() => expect(h.predict).toHaveBeenCalledTimes(1));
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    await expect(invokePredict({ ...VALID_REQUEST, turnGen: 8 })).resolves.toEqual({
+      prompt: null,
+    });
 
-    // 窗口 B 发起 updatedAt=2 的预测（新轮次，updatedAt 已更新）。
-    // 不同 updatedAt 允许通过，入口不比对大小；renderer 端 turnGen 校验兜底。
-    h.sessionRow = { remoteHostId: null, agentKind: 'cc', updatedAt: 2 };
-    let resolveSecond!: (value: string) => void;
-    h.predict.mockImplementationOnce(
-      () => new Promise<string>((resolve) => { resolveSecond = resolve; }),
-    );
-    const second = invokePredict({ ...VALID_REQUEST, turnGen: 3 });
-    await vi.waitFor(() => expect(h.predict).toHaveBeenCalledTimes(2));
-
-    // 窗口 A 的预测完成
-    resolveFirst('预测结果A');
-    await expect(first).resolves.toEqual({ prompt: '预测结果A' });
-
-    // 窗口 B 的预测完成
-    resolveSecond('预测结果B');
-    await expect(second).resolves.toEqual({ prompt: '预测结果B' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
   });
 });

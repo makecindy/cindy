@@ -151,6 +151,26 @@ test("desktop restart recognizes dev processes from sibling repository worktrees
 	}, worktrees, 999), false);
 });
 
+test("desktop restart preserves durable PI Subagent runners", () => {
+	const checkoutRoot = path.resolve("/repo/cindy-feature");
+	const electron = path.join(checkoutRoot, "node_modules/electron/dist/Electron");
+	const runner = path.resolve(
+		"/user-data/owners/owner/runtime/pi-subagent-runs/session/run/runner.cjs",
+	);
+	const config = path.resolve(
+		"/user-data/owners/owner/runtime/pi-subagent-runs/session/run/config.json",
+	);
+
+	assert.equal(isRepositoryDesktopDevProcess({
+		pid: 44,
+		command: `${electron} ${runner} ${config}`,
+	}, [checkoutRoot], 999), false);
+	assert.equal(isRepositoryDesktopDevProcess({
+		pid: 45,
+		command: `${electron} .`,
+	}, [checkoutRoot], 999), true);
+});
+
 test("restart kill scope only targets the checkout that runs the script", () => {
 	const ownRoot = path.resolve("/repo/cindy-feature");
 	const otherRoot = path.resolve("/repo/cindy-pi-sandbox");

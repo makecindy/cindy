@@ -22,6 +22,7 @@ const loginHook = vi.hoisted(() => ({
     dispatch: vi.fn(async () => true),
     dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
+    enterLocalMode: vi.fn(async (): Promise<void> => undefined),
   },
 }));
 
@@ -61,21 +62,8 @@ async function identifierState(scenario: string): Promise<AuthFlowState> {
   return reduceAuthFlow(null, { type: 'providers-loaded', providers });
 }
 
-function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
-  loginHook.value = {
-    isLoading: false,
-    errorCode: null,
-    loginState: state,
-    dispatch: vi.fn(async () => true),
-    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
-    clearError: vi.fn(),
-    ...extra,
-  };
-  return render(<LoginPage />);
-}
-
 const openExternal = vi.fn(async () => ({ success: true }));
-const authEnterLocal = vi.fn(async () => ({ mode: 'local' }));
+const enterLocalMode = vi.fn(async (): Promise<void> => undefined);
 // 协议门放行时会把「已同意」落到 main(TapDB 采集的前置条件,见
 // main/analytics-settings-store.ts)。它是 fire-and-forget,不参与登录派发时序。
 const acceptPrivacyConsent = vi.fn(async () => ({
@@ -84,13 +72,27 @@ const acceptPrivacyConsent = vi.fn(async () => ({
   allowed: true,
 }));
 
+function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
+  loginHook.value = {
+    isLoading: false,
+    errorCode: null,
+    loginState: state,
+    dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
+    clearError: vi.fn(),
+    enterLocalMode,
+    ...extra,
+  };
+  return render(<LoginPage />);
+}
+
 beforeEach(() => {
   openExternal.mockClear();
-  authEnterLocal.mockClear();
+  enterLocalMode.mockClear();
   acceptPrivacyConsent.mockClear();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin', openExternal, authEnterLocal, acceptPrivacyConsent },
+    value: { platform: 'darwin', openExternal, acceptPrivacyConsent },
   });
 });
 
@@ -243,18 +245,18 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
 
   // 2026-07-29 拍板(推翻同年 07-27「跳过登录免协议门」):不登录账号也是在用 Cindy
   // 客户端,跳过登录与个人账号登录同口径先过协议门。旧游客圆钮入口已删除。
-  it('「跳过登录」未勾选 → 弹窗且不进本地模式;同意 → 续接 authEnterLocal', async () => {
+  it('「跳过登录」未勾选 → 弹窗且不进本地模式;同意 → 续接 enterLocalMode', async () => {
     mount(await identifierState('providers:cn-social'));
     expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-skip-entry'));
     });
     expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
-    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(enterLocalMode).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-consent-agree'));
     });
-    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(enterLocalMode).toHaveBeenCalledTimes(1);
   });
 
   it('「跳过登录」不同意 → 停在登录页,不进本地模式', async () => {
@@ -264,7 +266,7 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     });
     fireEvent.click(screen.getByTestId('login-consent-disagree'));
     expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
-    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(enterLocalMode).not.toHaveBeenCalled();
     expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
   });
 
@@ -275,19 +277,19 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
       fireEvent.click(screen.getByTestId('login-skip-entry'));
     });
     expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
-    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(enterLocalMode).toHaveBeenCalledTimes(1);
     expect(acceptPrivacyConsent).toHaveBeenCalled();
   });
 
-  /* 顺序回归(codex 审查 P1,#907):同意记录必须落在 auth:enter-local **之后**。
+  /* 顺序回归(codex 审查 P1,#907):同意记录必须落在 enterLocalMode **之后**。
      acceptPrivacyConsent 的 handler 会同步广播 allowed,而 allowed 的算式是
      isAnalyticsAllowed() && !isLocalMode() —— 提前落同意时 isLocalMode() 还是
      false,广播 allowed:true 会让 tapdbClient 当场 initSdk() 并发出 device_login,
      与「未登录态不上报」直接冲突。两个入口、勾选与弹窗两条路径都要锁。 */
   const expectConsentPersistedAfterEnterLocal = () => {
-    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(enterLocalMode).toHaveBeenCalledTimes(1);
     expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
-    expect(authEnterLocal.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(enterLocalMode.mock.invocationCallOrder[0]).toBeLessThan(
       acceptPrivacyConsent.mock.invocationCallOrder[0],
     );
   };
@@ -312,24 +314,24 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     expectConsentPersistedAfterEnterLocal();
   });
 
-  /* 并发窗口回归(codex 审查 P1 第二条,#907):auth:enter-local 的 handler 要 await
+  /* 并发窗口回归(codex 审查 P1 第二条,#907):enterLocalMode 最终仍要 await
      waitForSessionInvalidation() + teardownAuthAccountBoundary(),这段窗口里 isLoading
      仍是 false、弹窗已关、consentAccepted 已为 true,于是邮箱 / 社交等入口仍可点。
      它们走 deferConsentPersist=false 分支,会在 main 还没转成 local 时立刻 persist,
      把 allowed:true 广播给 TapDB —— 必须一个都不放过。 */
   it('会话切换窗口内点社交圆钮 → 不派发、不落同意;切换完成后只落 skip 自己那一次', async () => {
     let releaseEnterLocal: () => void = () => undefined;
-    authEnterLocal.mockImplementationOnce(
+    enterLocalMode.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          releaseEnterLocal = () => resolve({ mode: 'local' });
+        new Promise<void>((resolve) => {
+          releaseEnterLocal = () => resolve();
         }),
     );
     mount(await identifierState('providers:cn-social'));
     fireEvent.click(screen.getByTestId('login-consent-radio'));
     // 不 await:enter-local 故意悬挂在窗口里
     fireEvent.click(screen.getByTestId('login-skip-entry'));
-    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(enterLocalMode).toHaveBeenCalledTimes(1);
     expect(acceptPrivacyConsent).not.toHaveBeenCalled();
 
     // 窗口内点其它过门入口:一律作废
@@ -345,7 +347,7 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     });
     // 只有 skip 自己那一次同意记录,且它落在 enter-local 之后
     expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
-    expect(authEnterLocal.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(enterLocalMode.mock.invocationCallOrder[0]).toBeLessThan(
       acceptPrivacyConsent.mock.invocationCallOrder[0],
     );
   });
@@ -360,7 +362,7 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     });
     // 账号登录链路登录后 isLocalMode() 为 false、allowed 本就该为真,顺序无需延后
     expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
-    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(enterLocalMode).not.toHaveBeenCalled();
   });
 
   /* error 步 footer 的逃生入口(login-local-mode)与面板内入口共用 openLocalMode,
@@ -378,14 +380,14 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
       fireEvent.click(screen.getByTestId('login-local-mode'));
     });
     expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
-    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(enterLocalMode).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-consent-agree'));
     });
-    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(enterLocalMode).toHaveBeenCalledTimes(1);
     expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
     // 顺序同面板内入口:先切会话再落同意(见下方顺序回归组的注释)
-    expect(authEnterLocal.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(enterLocalMode.mock.invocationCallOrder[0]).toBeLessThan(
       acceptPrivacyConsent.mock.invocationCallOrder[0],
     );
   });
@@ -397,7 +399,7 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     });
     fireEvent.click(screen.getByTestId('login-consent-disagree'));
     expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
-    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(enterLocalMode).not.toHaveBeenCalled();
     // 逃生入口本身必须还在(不同意不等于把这条唯一出路关掉)
     expect(screen.getByTestId('login-local-mode')).toBeTruthy();
   });

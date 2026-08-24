@@ -4,6 +4,8 @@
  * sessionTaskSummary.ts;这里锁住档位选择 / sanitize 截断 / 定时识别 / 素材判定 /
  * 内容抽取这些后续最容易被改坏、而 typecheck·db-validate 覆盖不到的判定。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   STALE_DEMOTE_MS,
@@ -22,6 +24,7 @@ import {
   shouldGeneratePinnedCardSummary,
   shouldVoidSummaryAfterGenerationAttempt,
   nonCardTurnDisplayPatch,
+  sessionListPreviewPatch,
   shouldForceGenerateOnClear,
   shouldScheduleForceGenerateAfterInFlight,
 } from '../sessionTaskSummary.logic';
@@ -225,6 +228,77 @@ describe('nonCardTurnDisplayPatch', () => {
       summary: null,
       preview: null,
     });
+  });
+});
+
+describe('sessionListPreviewPatch', () => {
+  it('只补最近消息,不动摘要', () => {
+    expect(sessionListPreviewPatch('那就对上了')).toEqual({ preview: '那就对上了' });
+    expect(sessionListPreviewPatch(null)).toEqual({ preview: null });
+  });
+});
+
+describe('turn-done list preview refresh', () => {
+  it('回合结束后先刷新列表预览,再按需生成置顶摘要', () => {
+    const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'register.ts'), 'utf8');
+    const summarySource = readFileSync(resolve(__dirname, '..', 'sessionTaskSummary.ts'), 'utf8');
+    expect(registerSource).toContain('await refreshSessionListPreview(session.id);');
+    expect(registerSource).toContain('await maybeGenerateSessionTaskSummary(session.id, { force: true });');
+    expect(registerSource.indexOf('await refreshSessionListPreview(session.id);')).toBeLessThan(
+      registerSource.indexOf('await maybeGenerateSessionTaskSummary(session.id, { force: true });'),
+    );
+    expect(summarySource).toContain('export async function refreshSessionListPreview');
+    expect(summarySource).toContain('const ownerScope = captureOwnerScope();');
+    expect(summarySource).toContain('if (!isOwnerScopeCurrent(ownerScope)) return;');
+    expect(summarySource).toContain(
+      'broadcastSessionListPreview(sessionId, preview, ownerScope);',
+    );
+    expect(summarySource).toContain(
+      "import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';",
+    );
+  });
+
+  it('助手正文被改写后也刷新列表预览', () => {
+    const messagesSource = readFileSync(
+      resolve(__dirname, '..', 'localDb', 'ipc', 'messages.ts'),
+      'utf8',
+    );
+    const latestSource = readFileSync(
+      resolve(__dirname, '..', 'localDb', 'latestMessageText.ts'),
+      'utf8',
+    );
+    const updateStart = messagesSource.indexOf('export async function updateMessageContent');
+    const updateEnd = messagesSource.indexOf('function clampLimit', updateStart);
+    const updateBlock = messagesSource.slice(updateStart, updateEnd);
+    expect(updateBlock).toContain('const ownerScope = captureOwnerBroadcastScope();');
+    expect(updateBlock.indexOf('const ownerScope = captureOwnerBroadcastScope();')).toBeLessThan(
+      updateBlock.indexOf('.update(messages)'),
+    );
+    expect(updateBlock).toContain(
+      'await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);',
+    );
+    const broadcastStart = messagesSource.indexOf(
+      'async function maybeBroadcastSessionListPreview',
+    );
+    const broadcastEnd = messagesSource.indexOf('function isAutoResumeUserRow', broadcastStart);
+    const broadcastBlock = messagesSource.slice(broadcastStart, broadcastEnd);
+    expect(broadcastBlock).toContain('latest = await latestVisiblePreviewRow(sessionId);');
+    expect(broadcastBlock).toContain('if (latest?.clientId !== row.clientId) return;');
+    expect(broadcastBlock).toContain(
+      'preview: extractMessagePreview(row.content, row.role)',
+    );
+    expect(broadcastBlock).not.toContain('if (!preview) return;');
+    expect(latestSource).toContain('export async function latestVisiblePreviewRow');
+    expect(latestSource).toContain(
+      'or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt))',
+    );
+    expect(latestSource).toContain('const joinedMessageRowid = sql<number>`"messages"."rowid"`;');
+    expect(latestSource).toContain(
+      '.orderBy(desc(messages.createdAt), desc(joinedMessageRowid))',
+    );
+    expect(latestSource).toContain(
+      "CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1",
+    );
   });
 });
 

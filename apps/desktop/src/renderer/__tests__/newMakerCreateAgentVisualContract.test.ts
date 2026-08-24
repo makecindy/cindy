@@ -80,7 +80,8 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     // 内容列宽度从死锁 800px 改为跟随 useProportionalWidth 的 inputWidth(与进行中
     // 对话页同源,封顶 914+20=934px):大屏留出左右呼吸空间、发送后同一 ChatInput 无宽度跳变。
     expect(source).toContain('relative flex w-full flex-col items-start');
-    expect(source).toContain('style={{ maxWidth: inputWidth || 800 }}');
+    expect(source).toContain('style={{ maxWidth: inputWidth }}');
+    expect(source).toContain('responsiveBreakpoints: DRAFT_INPUT_WIDTH_BREAKPOINTS');
     expect(source).not.toContain('max-w-[800px]');
     expect(source).toContain('absolute right-0 top-[22px]');
     // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
@@ -134,7 +135,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'rememberedEffortByModel={isDeviceLinkDraft ? undefined : draft.effortByModel}',
       'onRememberedEffortChange={',
       'isDeviceLinkDraft ? undefined : handleRememberedEffortChange',
-      'placeholder="Hi Cindy!"',
+      "placeholder={t('newChat.chatInput.createAgentPlaceholder')}",
       // 统一模型选择器(M5):新会话的选中直通 + 收藏锚点选中态。撤掉 AgentSelect 后,
       // 「换引擎」这件事只剩这一条路径 —— 掉了它草稿就再也换不了引擎。
       'onUnifiedDraftSelect={handleUnifiedDraftSelect}',

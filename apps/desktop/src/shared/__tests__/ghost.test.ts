@@ -26,6 +26,9 @@ import {
   isGhostCallToolName,
   isValidGhostId,
   isOfficialGhostId,
+  isUserInstallReservedGhostId,
+  isBrokerEligibleGhostId,
+  isFirstPartyHostPrivilegeGhostId,
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
   parseGhostPartition,
@@ -2655,14 +2658,41 @@ describe('ghost · launch 启动模式(2026-07-12)', () => {
   });
 });
 
-describe('ghost · 官方保留 id 前缀(cindy-)', () => {
-  it('isOfficialGhostId:cindy- 前缀命中,其它不命中', () => {
+describe('ghost · 官方保留 id 前缀', () => {
+  it('isOfficialGhostId:三类完整前缀命中,近似形态不命中', () => {
     expect(isOfficialGhostId('cindy-web-search')).toBe(true);
     expect(isOfficialGhostId('cindy-art')).toBe(true);
+    expect(isOfficialGhostId('filo-google')).toBe(true);
+    expect(isOfficialGhostId('xd-mivo')).toBe(true);
     // 前缀必须完整命中:cindyart 无连字符、my-cindy- 前缀不在最左都不算官方。
     expect(isOfficialGhostId('cindyart')).toBe(false);
     expect(isOfficialGhostId('my-cindy-tool')).toBe(false);
     expect(isOfficialGhostId('web-search')).toBe(false);
+  });
+
+  it('四个官方 id 谓词对本阶段同一组输入返回完全相同的结果', () => {
+    const cases: ReadonlyArray<readonly [id: string, expected: boolean]> = [
+      ['cindy-art', true],
+      ['filo-google', true],
+      ['xd-mivo', true],
+      ['acme-feishu', false],
+      ['my-plugin', false],
+      ['cindyart', false],
+      ['my-cindy-tool', false],
+      ['', false],
+    ];
+    const predicates = [
+      isOfficialGhostId,
+      isUserInstallReservedGhostId,
+      isBrokerEligibleGhostId,
+      isFirstPartyHostPrivilegeGhostId,
+    ];
+    // 期望值写死,避免用任一被测谓词或同一前缀表反推 expected 后让错误实现自证正确。
+    for (const [id, expected] of cases) {
+      for (const predicate of predicates) {
+        expect(predicate(id), `${predicate.name}(${JSON.stringify(id)})`).toBe(expected);
+      }
+    }
   });
 });
 

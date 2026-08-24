@@ -12,13 +12,13 @@ const modelSelectorSource = read('ModelSelector.tsx');
 const permissionSelectorSource = read('PermissionSelector.tsx');
 
 describe('composer narrow toolbar contract', () => {
-  it('uses measured card width for both default-session and create-agent composers', () => {
+  it('uses discrete card-width modes for both default-session and create-agent composers', () => {
+    expect(chatInputSource).toContain("useState<ToolbarWidthMode>('unmeasured')");
+    expect(chatInputSource).toContain('currentMode === nextMode ? currentMode : nextMode');
     expect(chatInputSource).toContain(
-      'const useNarrowToolbar = narrowToolbar || (toolbarWidth != null && toolbarWidth < 600);',
+      'const useNarrowToolbar = narrowToolbar || autoNarrowToolbar;',
     );
-    expect(chatInputSource).not.toContain(
-      'isCreateAgentVariant &&\n    (narrowToolbar || (toolbarWidth != null && toolbarWidth < 600))',
-    );
+    expect(chatInputSource).not.toContain('setToolbarWidth(el.clientWidth)');
     expect(chatInputSource).toContain('compactToolbar={useNarrowToolbar}');
     expect(chatInputSource).toContain('ultraCompactToolbar={useUltraCompactToolbar}');
     expect(chatInputSource).toContain('iconOnly={useUltraCompactToolbar}');

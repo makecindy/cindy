@@ -7,6 +7,136 @@
     "deleting": "Deleting",
     "create": "New"
   },
+  "presentation": {
+    "deviceList": {
+      "headerAvailable": "{{count}} controllable computers",
+      "headerUnavailable": "{{count}} computers currently unavailable",
+      "waitingForDesktop": "Waiting for a computer to come online",
+      "filterAvailable": "Controllable devices",
+      "filterEmpty": "No controllable devices",
+      "filterMeta": "{{available}} available",
+      "filterMetaWithUnavailable": "{{available}} available · {{unavailable}} need attention",
+      "showUnavailableReason": "Expand a device to see why it is unavailable",
+      "emptyCopy": "Sign in to the same account on your computer, then enable “Allow same-account devices to control this computer” under Remote Control in Settings.",
+      "emptyTitle": "No computers to show yet",
+      "hideUnavailableA11y": "Hide unavailable computers",
+      "showUnavailableA11y": "Show unavailable computers",
+      "availableOnly": "Available only",
+      "unavailableCount": "Unavailable {{count}}",
+      "status": {
+        "ready": "Controllable",
+        "busy": "Running",
+        "offline": "Offline",
+        "remoteDisabled": "Remote control off",
+        "accessRevoked": "Access revoked",
+        "self": "This device"
+      },
+      "detail": {
+        "accessRevoked": "Restore this phone’s access on the computer",
+        "remoteDisabled": "Enable remote control in the computer’s settings",
+        "self": "Current phone",
+        "busy": "The computer is working on a task",
+        "ready": "Remote control is allowed"
+      },
+      "lastSeen": {
+        "never": "Never online",
+        "unknown": "Last online time unknown",
+        "justNow": "Online just now",
+        "minutesAgo": "Online {{count}} minutes ago",
+        "hoursAgo": "Online {{count}} hours ago",
+        "daysAgo": "Online {{count}} days ago",
+        "onDate": "Last online {{date}}"
+      }
+    },
+    "sessionList": {
+      "section": { "pinned": "Pinned", "dialogue": "Chat" },
+      "filterWithCount": "{{label}} {{count}}",
+      "controlsSummary": "{{filter}} · Grouped by {{group}}",
+      "automation": "Automation",
+      "sessionCount": "{{count}} sessions",
+      "messageCount": "{{count}} messages",
+      "status": { "archived": "Archived", "deleted": "Deleted" },
+      "preview": {
+        "permission": "Waiting for permission",
+        "planReview": "Waiting for plan review",
+        "answer": "Waiting for your answer",
+        "attention": "Waiting for you",
+        "automationRunning": "Automation running",
+        "running": "Running"
+      },
+      "context": {
+        "matchingTasks": "{{count}} matching sessions",
+        "tasks": "{{count}} sessions",
+        "noMatchingTasks": "No matching sessions",
+        "noResults": "No results for this filter",
+        "rows": " · {{count}} rows",
+        "detail": "{{result}}{{rows}} · {{filter}} · Grouped by {{group}}",
+        "searchResults": "Search Results",
+        "title": {
+          "active": "Active Sessions",
+          "waiting": "Pending Sessions",
+          "automation": "Automation Sessions",
+          "archived": "Archived Sessions",
+          "all": "All Sessions"
+        },
+        "hint": {
+          "search": "Search includes titles, project paths, models, automation names, and message previews.",
+          "active": "Open a session to continue controlling it, or touch and hold to select multiple sessions.",
+          "waiting": "Permissions, plan reviews, and questions that need confirmation on your phone appear here.",
+          "automation": "Automation sessions are grouped by task; expand a group to open an individual run.",
+          "archived": "Touch and hold an archived session to restore or delete it in bulk.",
+          "all": "Active, archived, and automation sessions are shown together for quick lookup."
+        }
+      },
+      "empty": {
+        "search": { "title": "No matching sessions", "copy": "Try another title, project path, model, or message keyword." },
+        "waiting": { "title": "No pending requests", "copy": "Permission prompts, plan reviews, and questions will appear here." },
+        "automation": { "title": "No automation sessions", "copy": "Sessions created by automations will be grouped here after a run." },
+        "archived": { "title": "No archived sessions", "copy": "Touch and hold a session to archive or delete it in bulk." },
+        "active": { "title": "No active sessions on this computer", "copy": "Create or continue a session on your computer and it will appear here." }
+      },
+      "time": {
+        "unknown": "Recent activity time unknown",
+        "justNow": "Just now",
+        "minutesAgo": "{{count}} minutes ago",
+        "hoursAgo": "{{count}} hours ago",
+        "daysAgo": "{{count}} days ago",
+        "minutes": "{{count}} min",
+        "hours": "{{count}} hr",
+        "days": "{{count}} d",
+        "weeks": "{{count}} wk",
+        "months": "{{count}} mo",
+        "years": "{{count}} yr"
+      }
+    },
+    "home": {
+      "allDevices": "All",
+      "allComputers": "All computers",
+      "waitingCount": "{{count}} pending",
+      "synced": "Synced",
+      "unknownComputer": "Unknown computer",
+      "uncategorizedProject": "Uncategorized project",
+      "empty": {
+        "search": { "title": "No matches", "copy": "Try another project name, session title, computer name, or message keyword." },
+        "waiting": { "title": "No pending requests", "copy": "Permission prompts, plan reviews, and questions will appear here." },
+        "automation": { "title": "No automation sessions", "copy": "Sessions created by automations will be grouped here by project." },
+        "archived": { "title": "No archived sessions", "copy": "Switch to All or Active to keep browsing your current projects and sessions." },
+        "noSession": { "title": "No sessions yet", "copy": "Create or continue a session on your computer and its project will appear here." }
+      },
+      "noDevice": {
+        "accessRevoked": { "title": "Access revoked", "copy": "{{names}} revoked this phone’s remote access. Retry access, or allow it again on the computer to reconnect automatically." },
+        "remoteDisabled": { "title": "Allow remote control on your computer", "copy": "{{names}} is online. One step remains: enable phone control on the computer." },
+        "offline": { "title": "Open Cindy on your computer", "copy": "Your connected computers are offline. Open Cindy and stay signed in; your phone will reconnect automatically." },
+        "firstRun": { "title": "Connect Cindy on your computer", "copy": "Cindy currently runs on your computer. The mobile app uses remote access so you can work with the Agents on that computer." }
+      }
+    },
+    "bulk": {
+      "action": { "archive": "Archive", "delete": "Delete", "pin": "Pin", "restore": "Restore", "unpin": "Unpin" },
+      "title": "{{action}} {{count}} sessions",
+      "description": "Apply {{action}} to the {{count}} selected sessions.",
+      "descriptionWithSkipped": "Apply {{action}} to {{count}} selected sessions; {{skippedCount}} inapplicable sessions will be skipped."
+    }
+  },
   "list": {
     "thisComputer": "This device",
     "allConversations": "All Sessions",
@@ -34,6 +164,7 @@
       "openMenu": "Open menu",
       "closeMenu": "Close menu",
       "openDisplaySettings": "Open display settings",
+      "openSearch": "Search",
       "openSettings": "Open settings",
       "syncing": "Syncing",
       "sync": "Sync again",
@@ -63,6 +194,7 @@
       "statusArchived": "Archived",
       "statusAll": "All",
       "dialogueFolder": "Chat",
+      "search": "Search",
       "settings": "Settings",
       "remoteSettings": "Remote connection settings",
       "displaySettings": "Display settings",
@@ -73,6 +205,45 @@
       "projectOrderManual": "Manual",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
       "statusHeading": "Status"
+    },
+    "search": {
+      "placeholder": "Search titles or content…",
+      "filterA11y": "Search filters",
+      "filterAria": "Search filters and sort (Sort: {{sort}}, Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
+      "filter": {
+        "label": "Search criteria",
+        "reset": "Reset",
+        "sortHeading": "Sort by",
+        "statusHeading": "Status",
+        "projectsHeading": "Projects",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "Last activity",
+        "allProjects": "All projects",
+        "selectedProjects": "{{count}} selected",
+        "sort": {
+          "relevance": "Relevance",
+          "activityDesc": "Recently active",
+          "activityAsc": "Oldest active"
+        },
+        "status": {
+          "active": "Active",
+          "archived": "Archived",
+          "all": "All"
+        },
+        "agent": {
+          "all": "All",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1d",
+          "3d": "3d",
+          "7d": "7d",
+          "30d": "30d",
+          "all": "All"
+        }
+      }
     },
     "renameDevice": {
       "title": "Rename Device",
@@ -129,7 +300,7 @@
       "openA11y": "Search remote sessions",
       "closeA11y": "Close remote session search",
       "label": "Search",
-      "placeholder": "Search titles, projects, models, messages",
+      "placeholder": "Search titles or content…",
       "clearA11y": "Clear search",
       "closeInputA11y": "Close search",
       "clear": "Clear",
@@ -203,6 +374,12 @@
     "viewAllRuns": "View all {{count}} runs"
   },
   "automations": {
+    "heading": {
+      "delete": "Delete Automation",
+      "pause": "Pause Automation",
+      "deleteRun": "Delete Run"
+    },
+    "runNow": "Run now",
     "error": {
       "projectMissingConfig": "This project automation is missing projectConfigId. Delete it on the desktop.",
       "deletePartial": "Automation deleted, but {{count}} generated sessions couldn't be updated. Check them on the desktop."
@@ -224,7 +401,7 @@
     "createAutomation": "New Automation",
     "recentRuns": "Recent Runs",
     "runs": {
-      "emptyCopy": "After you tap Run now, new runs show up here.",
+      "emptyCopy": "After you tap {{runNow}}, new runs show up here.",
       "emptyTitle": "No runs yet"
     },
     "form": {
@@ -318,7 +495,51 @@
       "loading": "Loading",
       "refresh": "Refresh",
       "cardA11y": "Automation template {{name}}",
-      "manualConfig": "Manual config"
+      "manualConfig": "Manual config",
+      "builtin": {
+        "nightly-test-heal": {
+          "name": "Nightly test self-healing",
+          "description": "Run tests every night and attempt minimal fixes for failures in an isolated worktree",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR gatekeeper",
+          "description": "Pre-review new changes on open PRs each weekday and report risks by severity",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "domain-radar": {
+          "name": "Domain radar",
+          "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
+          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "Topic to follow",
+              "placeholder": "e.g. AI agents, EV market, frontend frameworks"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "Competitor watch",
+          "description": "Weekly roundup of competitors' product and market moves, with impact analysis",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "Competitors",
+              "placeholder": "e.g. Notion, Linear, Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "Weekly report drafter",
+          "description": "Compile this week's work from documents in the working directory into a report draft",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "Knowledge base freshness check",
+          "description": "Monthly health check of working-directory docs for outdated or conflicting content",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
+      }
     },
     "scheduleRowA11y": "Automation task {{title}}",
     "detail": {
@@ -345,6 +566,90 @@
       "marking": "Marking",
       "markRead": "Read",
       "deleteA11y": "Delete run record"
+    },
+    "presentation": {
+      "validation": {
+        "templateParameter": "Enter the template parameter: {{label}}",
+        "name": "Enter a task name",
+        "prompt": "Enter a task prompt",
+        "timezone": "Enter a time zone",
+        "boundSession": "Choose a task to bind",
+        "cron": "Enter a cron expression",
+        "workingDir": "Enter a project directory",
+        "effort": "Reasoning effort must be one of: {{values}}",
+        "intervalPositiveInteger": "The interval in minutes must be a positive integer",
+        "intervalUnsupported": "Minute intervals support 1–59 minutes, or whole-hour intervals from 1–23 hours"
+      },
+      "schedule": {
+        "paused": "Paused",
+        "manual": "Manual trigger",
+        "once": "One-time task",
+        "waitingFirstRun": "Waiting for the first run",
+        "every": "Every {{duration}}",
+        "recurring": "Recurring task",
+        "dialogueWorkspace": "Chat workspace",
+        "noDirectory": "No directory set",
+        "lastRun": "Last run {{relative}}",
+        "imminent": "Running soon",
+        "nextRun": "In {{duration}}",
+        "status": {
+          "active": "Running",
+          "paused": "Paused",
+          "expired": "Completed"
+        },
+        "session": {
+          "persistent": "Persistent task",
+          "bound": "Bound task",
+          "fresh": "New task",
+          "persistentWithId": "Persistent task {{id}}",
+          "persistentDetail": "Reuse the same task after the first trigger",
+          "boundWithId": "Bound to {{id}}"
+        }
+      },
+      "run": {
+        "session": "Task {{id}}",
+        "delete": "Delete",
+        "markRead": "Read",
+        "canRestart": "Can run again",
+        "noSession": "No task created",
+        "open": "Open",
+        "restart": "Re-run",
+        "durationUnknown": "Duration unknown",
+        "runningFor": "Running for {{duration}}",
+        "duration": "Duration {{duration}}",
+        "unknownTime": "Unknown time",
+        "status": {
+          "running": "Running",
+          "success": "Succeeded",
+          "failed": "Failed",
+          "aborted": "Aborted",
+          "interrupted": "Interrupted",
+          "skipped": "Skipped"
+        }
+      },
+      "pause": {
+        "title": "Pause {{name}}",
+        "detail": "This automation currently has {{count}} runs in progress. Pausing stops future triggers immediately and stops these active runs.",
+        "preview": "Runs in progress: {{count}}"
+      },
+      "delete": {
+        "noSessions": "No tasks generated by this automation were found",
+        "sessions": "Found {{count}} tasks generated by this automation",
+        "withInflight": "{{sessions}}, with {{count}} runs still in progress"
+      },
+      "duration": {
+        "seconds": "{{count}} sec",
+        "minutesSeconds": "{{minutes}} min {{seconds}} sec",
+        "minutes": "{{count}} min",
+        "hours": "{{count}} hr",
+        "days": "{{count}} days"
+      },
+      "relative": {
+        "justNow": "just now",
+        "minutesAgo": "{{count}} min ago",
+        "hoursAgo": "{{count}} hr ago",
+        "daysAgo": "{{count}} days ago"
+      }
     }
   }
 }

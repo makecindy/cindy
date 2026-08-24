@@ -1,6 +1,14 @@
 export { AuthApiError, CindyAuthClient } from "./client.js";
 export { discoverSsoOrgRealm } from "./orgRealmDiscovery.js";
 export {
+  MAX_SSO_ORG_HISTORY_ENTRIES,
+  MAX_SSO_ORG_IDENTIFIER_LENGTH,
+  parseSsoOrgHistory,
+  rememberSsoOrgIdentifier,
+  serializeSsoOrgHistory,
+  SSO_ORG_HISTORY_VERSION,
+} from "./ssoOrgHistory.js";
+export {
   accountDeletionReceiptRecordSchema,
   authSessionRecordSchema,
   parseAccountDeletionReceiptRecord,

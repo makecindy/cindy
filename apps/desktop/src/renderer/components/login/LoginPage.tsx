@@ -6,6 +6,7 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -49,8 +50,10 @@ import {
   LoginSkipEntry,
   LoginSocialButton,
   LoginSocialRow,
+  LoginSsoOrgHistoryList,
   LoginTextLink,
   LoginTitleBlock,
+  ssoOrgHistoryOptionId,
 } from './LoginControls';
 import { useResendCountdown } from './useResendCountdown';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -67,6 +70,7 @@ import {
 } from './loginDesignTokens';
 import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
+import { getSsoOrgHistory } from '@/state/ssoOrgHistory';
 
 /**
  * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
@@ -119,6 +123,7 @@ export function LoginPage() {
     dispatch,
     dispatchWithResult,
     clearError,
+    enterLocalMode,
   } = useLogin();
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
@@ -154,17 +159,19 @@ export function LoginPage() {
    * 在会话切过去之后落,不能由 requireConsent 提前落(竞态原因见那里的注释)。
    */
   const openLocalMode = async () => {
-    if (isLoading || localModePendingRef.current || !window.electronAPI?.authEnterLocal) return;
+    if (isLoading || localModePendingRef.current || !enterLocalMode) return;
     markLocalModeTransition(true);
     try {
-      await window.electronAPI.authEnterLocal();
+      // 必须走 AuthContext.enterLocalMode():它调同一条 IPC,并用返回值立刻改
+      // mode / canEnterApp。登录页自己调 authEnterLocal 只改主进程会话,界面
+      // 仍当自己没进来;广播一旦没赶上,再点一次也不会重播,登录页就钉死。
+      // GuestRoute 看到 mode === 'local' 后自己切走,不要在这里改 hash——
+      // canEnterApp 还是 false 时冲进受保护路由会被踢回 /login。
+      await enterLocalMode();
       // 顺序是硬要求:先 enter-local(main 侧 isLocalMode() 转真)再落同意,这样
       // acceptPrivacyConsent 广播出来的 allowed 恒为 false,TapDB 不会被拉起来发
       // device_login。反过来会开出一个真实的上报窗口(codex 审查 P1,#907)。
       persistPrivacyConsent();
-      // The auth state event normally redirects through GuestRoute. Keep the
-      // transition deterministic when the IPC response wins that race.
-      window.location.hash = '#/';
     } catch (error) {
       // 两个调用点都是 requireConsent(() => void openLocalMode()):抛出去没人接,
       // 会变成 unhandled rejection。IPC 失败(main 未就绪/通道异常)时停在登录页
@@ -339,7 +346,10 @@ export function LoginPage() {
   // (规则 9:能代码化的格式校验不甩给 server 往返);与 server errorCode 互斥展示
   // (本地错误优先),输入变更即清除。null = 无本地格式错误。
   const [identifierFormatError, setIdentifierFormatError] = useState<VerificationKind | null>(null);
-  const [ssoOrg, setSsoOrg] = useState('');
+  const [ssoOrgHistory, setSsoOrgHistory] = useState(() => getSsoOrgHistory());
+  const [ssoOrg, setSsoOrg] = useState(() => ssoOrgHistory[0] ?? '');
+  const [ssoOrgHistoryOpen, setSsoOrgHistoryOpen] = useState(false);
+  const [ssoOrgHistoryActiveIndex, setSsoOrgHistoryActiveIndex] = useState(-1);
   const [verificationCode, setVerificationCode] = useState('');
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
@@ -599,9 +609,51 @@ export function LoginPage() {
     if (localModePendingRef.current) return;
     const value = ssoOrg.trim();
     if (!value) return;
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
     // 组织区域先静默发现；仅当结果与安装包区域不一致时，main 状态机进入
     // realm-confirmation，由下方弹窗在继续 SSO 前向用户确认。
-    void dispatch({ type: 'discover-sso-org', org: value });
+    void dispatch({ type: 'discover-sso-org', org: value }).finally(() => {
+      setSsoOrgHistory(getSsoOrgHistory());
+    });
+  };
+
+  const openSsoOrgHistory = () => {
+    if (ssoOrgHistory.length <= 1) return;
+    setSsoOrgHistoryOpen(true);
+    setSsoOrgHistoryActiveIndex(-1);
+  };
+
+  const selectSsoOrgHistory = (entry: string) => {
+    setSsoOrg(entry);
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
+    clearError();
+  };
+
+  const handleSsoOrgHistoryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (ssoOrgHistory.length <= 1) return;
+    if (event.key === 'Escape') {
+      setSsoOrgHistoryOpen(false);
+      setSsoOrgHistoryActiveIndex(-1);
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setSsoOrgHistoryOpen(true);
+      setSsoOrgHistoryActiveIndex((current) => {
+        if (event.key === 'ArrowDown') {
+          return current < ssoOrgHistory.length - 1 ? current + 1 : 0;
+        }
+        return current > 0 ? current - 1 : ssoOrgHistory.length - 1;
+      });
+      return;
+    }
+    if (event.key === 'Enter' && ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0) {
+      event.preventDefault();
+      const selected = ssoOrgHistory[ssoOrgHistoryActiveIndex];
+      if (selected) selectSsoOrgHistory(selected);
+    }
   };
 
   /* ── identifier 主视图(680×620 组:面板 680×500 + 第三方圆钮行) ── */
@@ -712,6 +764,11 @@ export function LoginPage() {
               // 期间要自己挡:那道 guard 在 requireConsent 里,这条路径绕过了它。
               if (isLoading || localModePendingRef.current) return;
               clearError();
+              const nextHistory = getSsoOrgHistory();
+              setSsoOrgHistory(nextHistory);
+              if (!ssoOrg.trim()) setSsoOrg(nextHistory[0] ?? '');
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
               setSsoOrgMode(true);
             }}
           >
@@ -733,54 +790,86 @@ export function LoginPage() {
 
   /* ── 企业 SSO 入口子视图(sso-org empty/filled;面板 680×500,无跳过入口) ── */
   const renderSsoOrg = () => (
-    <LoginPanel testId="login-panel-sso-org">
-      <form onSubmit={submitSsoOrg} noValidate>
-        <LoginBackButton
-          disabled={isLoading}
-          label={t('login.back')}
-          onClick={() => {
-            clearError();
-            setSsoOrgMode(false);
-          }}
-        />
-        <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
-        <LoginInput
-          autoFocus
-          disabled={isLoading}
-          maxLength={253}
-          autoComplete="off"
+    <>
+      <LoginPanel testId="login-panel-sso-org">
+        <form onSubmit={submitSsoOrg} noValidate>
+          <LoginBackButton
+            disabled={isLoading}
+            label={t('login.back')}
+            onClick={() => {
+              clearError();
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+              setSsoOrgMode(false);
+            }}
+          />
+          <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
+          <LoginInput
+            autoFocus={ssoOrgHistory.length <= 1}
+            disabled={isLoading}
+            maxLength={253}
+            autoComplete="off"
+            value={ssoOrg}
+            onChange={(value) => {
+              setSsoOrg(value);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onFocus={openSsoOrgHistory}
+            onClick={openSsoOrgHistory}
+            onBlur={() => {
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onKeyDown={handleSsoOrgHistoryKeyDown}
+            role="combobox"
+            ariaControls="login-sso-org-history-list"
+            ariaExpanded={ssoOrgHistoryOpen}
+            ariaActiveDescendant={
+              ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0
+                ? ssoOrgHistoryOptionId(ssoOrgHistoryActiveIndex)
+                : undefined
+            }
+            placeholder={t('login.ssoOrgPlaceholder')}
+            error={!!errorCode}
+            testId="login-sso-org-input"
+          />
+          {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
+          <span
+            className="absolute line-clamp-2 text-center"
+            style={{
+              left: SSO_ORG_HINT.x,
+              top: SSO_ORG_HINT.y,
+              width: SSO_ORG_HINT.width,
+              height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
+              lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
+              fontSize: SSO_ORG_HINT.fontSize,
+              color: LOGIN_COLORS.secondaryText,
+            }}
+          >
+            {t('login.ssoOrgHint')}
+          </span>
+          <LoginPrimaryButton
+            type="submit"
+            disabled={!ssoOrg.trim()}
+            loading={isLoading}
+            testId="login-sso-org-continue"
+          >
+            {isLoading ? t('login.working') : t('login.continue')}
+          </LoginPrimaryButton>
+          {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
+        </form>
+      </LoginPanel>
+      {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 && (
+        <LoginSsoOrgHistoryList
+          entries={ssoOrgHistory}
           value={ssoOrg}
-          onChange={setSsoOrg}
-          placeholder={t('login.ssoOrgPlaceholder')}
-          error={!!errorCode}
-          testId="login-sso-org-input"
+          activeIndex={ssoOrgHistoryActiveIndex}
+          onActiveIndexChange={setSsoOrgHistoryActiveIndex}
+          onSelect={selectSsoOrgHistory}
+          listId="login-sso-org-history-list"
         />
-        {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
-        <span
-          className="absolute line-clamp-2 text-center"
-          style={{
-            left: SSO_ORG_HINT.x,
-            top: SSO_ORG_HINT.y,
-            width: SSO_ORG_HINT.width,
-            height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
-            lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
-            fontSize: SSO_ORG_HINT.fontSize,
-            color: LOGIN_COLORS.secondaryText,
-          }}
-        >
-          {t('login.ssoOrgHint')}
-        </span>
-        <LoginPrimaryButton
-          type="submit"
-          disabled={!ssoOrg.trim()}
-          loading={isLoading}
-          testId="login-sso-org-continue"
-        >
-          {isLoading ? t('login.working') : t('login.continue')}
-        </LoginPrimaryButton>
-        {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
-      </form>
-    </LoginPanel>
+      )}
+    </>
   );
 
   /* ── method-choice(含 sso-org-list 来源变体) ── */

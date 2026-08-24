@@ -44,7 +44,8 @@
 - `.cindy` 是以 `ghost.json` 为身份卡的插件包，现行唯一形态为 `kind: 'chip'`。
 - 代码目录与运行时使用 `cindy-brain` / `Ghost` 命名，**不得重新引入已退役的 cartridge
   声明型兼容层**。
-- `cindy-` id 前缀保留给随包官方插件，第三方插件不得占用。
+- `cindy-` / `filo-` / `xd-` 是官方保留 id 前缀，第三方插件不得占用；前缀正本见
+  `apps/desktop/src/shared/ghost.ts` 的 `GHOST_OFFICIAL_ID_PREFIXES`。
 
 ## 2. 运行时沙箱与进程隔离
 
@@ -91,7 +92,8 @@
     确认时看到的 token 回传，Main 重新读状态比对，不一致就拒（`state-changed`）。
     token 是前置条件不是凭证——真值一律由 Main 现读。
   - receipt 保证的是**授权事实**，**不是安装内容此后一直没被改过**：逻辑页代码仍从可变
-    安装目录加载，`packageSha256` 只是批准时点的来源指纹、运行时不校验（见第 7 节）。
+    安装目录加载。`packageSha256` 是批准时点的来源指纹；组织市场 Broker 会把它与 ledger
+    的 Release sha256 比对，但运行时不会重算可变安装目录的整包字节（见第 7 节）。
 - **Forge 的源码区与 Host 受管根互斥。** `ghost_forge_scaffold` / `ghost_forge_pack` 的目标
   必须是当前会话工作目录里的独立作者目录；命中安装根或批准状态根一律拒
   （pack 返回 `SOURCE_IS_INSTALLED_PLUGIN`）。判定按 realpath 比对受管根，同时挡住大小写
@@ -343,8 +345,9 @@
   授权的那一组，此后任何 manifest/权限变化照旧走完整确认)、**只写状态根不动安装目录**
   (三份旧文件原样保留，回滚到旧客户端时仍按安装目录判定，符合第 5 节兜底第 4 条)。核心
   授权事实读不出(manifest 不合法、技能目录含链接、声明的 locale 装入后损坏)才对该插件
-  fail closed、走恢复 UI；trust 镜像缺失降级为 `unverified`、`packageSha256` audit-only
-  故省略。改动装入／迁移链路时保持这些不变量，尤其不得把迁移改成"每次缺 receipt 就补"
+  fail closed、走恢复 UI；trust 镜像缺失降级为 `unverified`；旧目录无法反推出原始 `.cindy`
+  整包的 `packageSha256`，故省略（组织市场 Broker 因此 fail closed，既有市场 OIDC 不变）。
+  改动装入／迁移链路时保持这些不变量，尤其不得把迁移改成"每次缺 receipt 就补"
   (那就是把授权事实重新交给可变安装目录，等于回到 #636)。迁移之后批准再丢失的恢复
   路径：市场包走市场重装确认；本地包走「从已装目录重新确认」（`ghosts:reapprove-inspect`
   → 确认卡全量权限清单 → `ghosts:reapprove-installed`，清单字节以 manifestSha256 绑定

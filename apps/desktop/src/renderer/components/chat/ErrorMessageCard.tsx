@@ -20,6 +20,7 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { isCindyGatewayProxyTokenInvalidError } from '@cindy/maker-shared/error-redaction';
 import {
   isStreamInterruptedErrorMessage,
   unwrapProviderErrorDisplay,
@@ -27,19 +28,37 @@ import {
 import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
 
-export function ErrorMessageCard({ message, reason }: { message: string; reason?: string }) {
+export function ErrorMessageCard({
+  message,
+  reason,
+  providerId,
+}: {
+  message: string;
+  reason?: string;
+  providerId?: string;
+}) {
   const { t } = useTranslation();
   const [showRaw, setShowRaw] = useState(false);
   const decoded = decodeRemoteErrorMessage(message);
   const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
+  const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
+    reason,
+    message: decoded,
+    providerId: providerId ?? null,
+  });
   const unwrapped = unwrapProviderErrorDisplay(decoded);
   const text = isStreamInterrupted
     ? t('chat.errorBanner.streamInterruptedNoRetry')
-    : i18nKey
-      ? t(i18nKey)
-      : unwrapped;
-  const showRawToggle = isStreamInterrupted || (!i18nKey && unwrapped !== decoded);
+    : isGatewayProxyTokenInvalid
+      ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
+      : i18nKey
+        ? t(i18nKey)
+        : unwrapped;
+  const showRawToggle =
+    isStreamInterrupted ||
+    isGatewayProxyTokenInvalid ||
+    (!i18nKey && unwrapped !== decoded);
 
   useEffect(() => {
     setShowRaw(false);

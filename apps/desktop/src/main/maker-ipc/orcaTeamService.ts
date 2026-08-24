@@ -321,6 +321,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   const workerTransitionTails = new Map<string, Promise<void>>();
   /** Active dispatch count stays positive from pre-resume reservation through host dispatch settlement. */
   const activeWorkerDispatches = new Map<string, number>();
+  /**
+   * (#3153) done 确认被「同 turn 仍在收尾」拒绝(active turn / send in progress)时登记,
+   * 在该 turn 的 terminal 边界重试一次。fire-once:重试前即消费,不因重试失败重登记——
+   * 下一次 done 广播仍会走 renderer 的可见性 ack 路径。done 的产品语义是
+   * 「保持到用户看到为止」,所以只在 renderer 已尝试过确认时补收口,不做无条件自动 ack。
+   */
+  const deferredDoneAcknowledgements = new Set<string>();
 
   async function withWorkerTransition<T>(workerId: string, operation: () => Promise<T>): Promise<T> {
     const previous = workerTransitionTails.get(workerId) ?? Promise.resolve();
@@ -723,7 +730,16 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     };
   }
 
-  async function idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' }): Promise<OrcaOkResult> {
+  async function idleWorker(
+    params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' },
+    /**
+     * (#3153) 内部参数,不走 IPC 边界:terminal 边界的补收口重试必须带
+     * deferredRetry=true——重试再被 active-turn / send 锁守卫拒绝时**不得重新登记**,
+     * 否则 fire-once 契约被打破,且该 terminal 边界之后未必还有下一个 terminal
+     * 事件来消费,worker 会带着悬置登记卡回 done(正是本机制要修的状态)。
+     */
+    opts?: { deferredRetry?: boolean },
+  ): Promise<OrcaOkResult> {
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
 
@@ -742,6 +758,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         return { ok: false, errorCode: 'ALREADY_IDLE', message: `worker ${params.workerId} is already idle` };
       }
       if (params.expectedStatus && deps.getLiveSession(worker.sessionId)?.isTurnRunning()) {
+        // 回报 settle 先落库、worker 自己的 turn 还在收尾:登记后由 terminal 边界重试(#3153)。
+        // terminal 重试自身被拒时不登记(见 idleWorker 的 opts 注释)。
+        if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+          deferredDoneAcknowledgements.add(worker.id);
+        }
         return {
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
@@ -749,6 +770,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
       if (params.expectedStatus && deps.hasSendToSessionLock(worker.sessionId)) {
+        if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+          deferredDoneAcknowledgements.add(worker.id);
+        }
         return {
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
@@ -802,6 +826,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       if (!params.expectedStatus) {
         await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');
       }
+      deferredDoneAcknowledgements.delete(worker.id);
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       return { ok: true, workerId: worker.id };
     };
@@ -829,6 +854,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
+    deferredDoneAcknowledgements.delete(worker.id);
     await deps.cancelWorkerSessionOperations(worker.sessionId);
     await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
     await deps.archiveWorkerSession(worker.sessionId);
@@ -1016,12 +1042,22 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
 
-      const workers = await deps.listWorkersByLead(link.leadSessionId);
-      const worker = workers.find((item) => item.id === link.workerId);
-      if (!worker || worker.status === 'running') return;
+      // 新 turn 开始意味着旧 done 状态已被取代,悬置的补确认不再有意义(#3153)。
+      // 作废必须放在 transition 临界区内、running 提交之后:ack 的登记同样发生在
+      // 临界区内,若在临界区外提前 delete,旧 done 的 ack 可以插队在 delete 之后、
+      // running 提交之前重新登记(active-turn 守卫只看 live session,不看持久化
+      // status 是否已推进),脏 entry 会存活到新 turn 的 terminal 边界被消费,
+      // 绕过「done 保持到用户看到为止」的可见性语义直接 idle。
+      await withWorkerTransition(link.workerId, async () => {
+        const workers = await deps.listWorkersByLead(link.leadSessionId);
+        const worker = workers.find((item) => item.id === link.workerId);
+        if (!worker || worker.status === 'running') return;
 
-      await deps.updateWorkerStatus(link.workerId, 'running');
-      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+        await deps.updateWorkerStatus(link.workerId, 'running');
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      });
+      // running 提交后旧 entry 已不可能被重新登记,此时清理才是可靠的。
+      deferredDoneAcknowledgements.delete(link.workerId);
     },
     async handleWorkerTerminalTurn(params) {
       const link = await deps.getWorkerLinkBySessionId(params.sessionId);
@@ -1030,6 +1066,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const workers = await deps.listWorkersByLead(link.leadSessionId);
       const worker = workers.find((item) => item.id === link.workerId);
       if (!worker) {
+        deferredDoneAcknowledgements.delete(link.workerId);
         clearRuntimeState(params.sessionId);
         return;
       }
@@ -1044,7 +1081,32 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           });
           return;
         }
+        // (#3153) done 的回报 settle 会先于本 turn 终止落库,renderer「看到 done
+        // 即 ack」在 active-turn 守卫处被拒后没有重试闭环,worker 会永久停在 done
+        // (runtime/attention 悬置)。这里在该 turn 的 terminal 边界补一次收口;
+        // 没登记过被拒确认的 done 保持原样(维持「done 保持到用户看到为止」语义)。
+        const retryAcknowledgeDone =
+          worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
         clearRuntimeState(params.sessionId);
+        if (!retryAcknowledgeDone) return;
+        const acknowledged = await idleWorker(
+          {
+            callerLeadSessionId: link.leadSessionId,
+            workerId: link.workerId,
+            expectedStatus: 'done',
+          },
+          // 补收口重试被拒时不得重新登记,保证 fire-once(见 idleWorker 的 opts 注释)。
+          { deferredRetry: true },
+        );
+        if (!acknowledged.ok) {
+          deps.log.info('orca deferred done acknowledgement skipped', {
+            workerId: link.workerId,
+            leadSessionId: link.leadSessionId,
+            sessionId: params.sessionId,
+            errorCode: acknowledged.errorCode,
+            message: acknowledged.message,
+          });
+        }
         return;
       }
 

@@ -34,6 +34,8 @@ import {
   LegacyGhostRecoveryNotice,
   marketUpdateAllowsPermissionExpansion,
   MarketPluginCard,
+  MyPublishesSectionVisibilityGate,
+  SHOW_MY_PUBLISHES_SECTION,
   shouldOpenInstalledDetailAfterMarketSuccess,
 } from '../GhostPluginPage';
 import {
@@ -51,6 +53,106 @@ const {
   MAX_VISIBLE_INSTALLED_PLUGINS,
   visibleInstalledPluginItems,
 } = __installedPluginLayoutForTests;
+
+describe('MyPublishesSectionVisibilityGate', () => {
+  const labels = {
+    overviewLabel: 'Overview',
+    publishesLabel: 'My publishes',
+    tabsAriaLabel: 'Plugin page sections',
+  };
+
+  it('shows both secondary tabs and switches their selected panel when enabled', () => {
+    render(
+      <MyPublishesSectionVisibilityGate
+        visible
+        {...labels}
+        publishes={<div data-testid="publishes-content" />}
+      >
+        <div data-testid="overview-content" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    const overviewTab = screen.getByRole('tab', { name: 'Overview' });
+    const publishesTab = screen.getByRole('tab', { name: 'My publishes' });
+    const overviewPanel = document.getElementById(overviewTab.getAttribute('aria-controls') ?? '');
+    const publishesPanel = document.getElementById(
+      publishesTab.getAttribute('aria-controls') ?? '',
+    );
+
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(overviewTab.getAttribute('aria-selected')).toBe('true');
+    expect(publishesTab.getAttribute('aria-selected')).toBe('false');
+    expect(overviewPanel?.hidden).toBe(false);
+    expect(publishesPanel?.hidden).toBe(true);
+
+    fireEvent.click(publishesTab);
+
+    // This excludes a decorative tab row that never switches the visible content.
+    expect(overviewTab.getAttribute('aria-selected')).toBe('false');
+    expect(publishesTab.getAttribute('aria-selected')).toBe('true');
+    expect(overviewPanel?.hidden).toBe(true);
+    expect(publishesPanel?.hidden).toBe(false);
+  });
+
+  it('removes the whole secondary tab row and publishing effects when disabled', () => {
+    const publishesRender = vi.fn();
+    function PublishesProbe() {
+      publishesRender();
+      return <div data-testid="publishes-content-disabled" />;
+    }
+
+    const { container } = render(
+      <MyPublishesSectionVisibilityGate
+        visible={SHOW_MY_PUBLISHES_SECTION}
+        {...labels}
+        publishes={<PublishesProbe />}
+      >
+        <section className="mt-6" data-testid="installed-content-disabled" />
+        <section className="mt-10" data-testid="recommended-content-disabled" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    // This excludes hiding only the publishing panel while leaving a one-tab row or wrapper noise.
+    expect(SHOW_MY_PUBLISHES_SECTION).toBe(false);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    const installed = screen.getByTestId('installed-content-disabled');
+    const recommended = screen.getByTestId('recommended-content-disabled');
+    expect(Array.from(container.children)).toEqual([installed, recommended]);
+    expect(installed.className).toBe('mt-6');
+    expect(recommended.className).toBe('mt-10');
+    expect(publishesRender).not.toHaveBeenCalled();
+  });
+
+  it('keeps overview content mounted and in place while viewing publishes', () => {
+    render(
+      <MyPublishesSectionVisibilityGate
+        visible
+        {...labels}
+        publishes={<div data-testid="publishes-content-persistent" />}
+      >
+        <div data-testid="overview-content-persistent" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    const overviewNode = screen.getByTestId('overview-content-persistent');
+    const publishesNode = screen.getByTestId('publishes-content-persistent');
+    const overviewPanel = overviewNode.parentElement;
+    const publishesPanel = publishesNode.parentElement;
+
+    expect(overviewPanel?.nextElementSibling).toBe(publishesPanel);
+    fireEvent.click(screen.getByRole('tab', { name: 'My publishes' }));
+
+    // The same DOM node and panel order exclude conditional unmounting or reordering the catalog.
+    expect(screen.getByTestId('overview-content-persistent')).toBe(overviewNode);
+    expect(overviewPanel?.nextElementSibling).toBe(publishesPanel);
+    expect(overviewPanel?.hidden).toBe(true);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(screen.getByTestId('overview-content-persistent')).toBe(overviewNode);
+    expect(overviewPanel?.hidden).toBe(false);
+  });
+});
 
 describe('diffMarketUpdatePermissionItems', () => {
   it.each(['legacy-unapproved', 'invalid'] as const)(

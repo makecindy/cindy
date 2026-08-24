@@ -11,10 +11,6 @@ import {
   readAgentInputReferences,
 } from '@cindy/maker-shared/agent-input-projection';
 
-import {
-  assessModelSwitchContext,
-  shouldHandoffAfterContextAssessment,
-} from '../../shared/modelSwitchAssessment';
 import { buildHandoffText, extractPlainText, type HandoffSourceMessage } from './agentHandoff.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
@@ -105,18 +101,15 @@ export function lookupVerifiedContextWindow(
   return null;
 }
 
+/** 同模型发送前只认满窗。切小窗口的 danger 仍走 assessModelSwitchContext，不走这里。 */
 export function shouldRebuildForContextPressure(
   tokens: number,
   window: number,
-  autoCompactThresholdPct?: number,
+  _autoCompactThresholdPct?: number,
 ): boolean {
-  return shouldHandoffAfterContextAssessment(
-    assessModelSwitchContext({
-      contextTokens: tokens,
-      targetContextWindow: window,
-      autoCompactThresholdPct,
-    }),
-  );
+  if (!Number.isFinite(tokens) || tokens <= 0) return false;
+  if (!Number.isFinite(window) || window <= 0) return false;
+  return tokens >= window;
 }
 
 function isSyntheticUser(message: OverflowSourceMessage): boolean {
@@ -309,7 +302,7 @@ export interface ContextOverflowRolloverDeps {
   ): Promise<{ reason?: string; sourceUserClientId?: string | null } | null>;
   getLiveSession(sessionId: string): {
     isTurnRunning(): boolean;
-    getUsageSnapshot?(): { contextTokens: number; contextWindow: number };
+    getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
   } | null | undefined;
   closeSession(sessionId: string): Promise<void>;
   drainPersistQueue(): Promise<void>;
@@ -461,12 +454,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionRow.agentKind,
     );
     const window = effectiveContextWindow(sessionRow.model, reportedWindow, verified);
-    const pressure = shouldRebuildForContextPressure(
-      tokens,
-      window,
-      deps.getAutoCompactThresholdPct?.(),
-    );
-    if (!lastError && !pressure) return false;
+    const pressure = shouldRebuildForContextPressure(tokens, window);
+    const compactFailed = liveUsage?.needsRollover === true;
+    if (!lastError && !pressure && !compactFailed) return false;
     let lastUser: OverflowSourceMessage | undefined;
     let lastUserIndex = -1;
     for (let i = source.length - 1; i >= 0; i -= 1) {

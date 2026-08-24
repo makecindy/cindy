@@ -117,6 +117,8 @@ const MODEL = 'gpt-5';
 const EFFORT = 'medium';
 const PERMISSION_MODE = 'default';
 const WORKING_DIR = 'C:\\workspace';
+const LITELLM_INVALID_PROXY_TOKEN =
+  'Invalid proxy server token passed; Unable to find token in cache or `LiteLLM_VerificationTokenTable`';
 
 function serverMessage(
   patch: Omit<Message, 'toolUseId' | 'agentMeta'> &
@@ -201,6 +203,50 @@ function projection(
   };
 }
 
+function activeTurnRecoveryItem(
+  text = 'hello gateway',
+  clientId = 'user-client',
+  providerId: string | null | undefined = 'xd',
+): AgentInputQueuedMessage {
+  return {
+    clientId,
+    text,
+    persistedContent: text,
+    model: MODEL,
+    effort: EFFORT,
+    permissionMode: PERMISSION_MODE,
+    workingDir: WORKING_DIR,
+    chatMessage: {
+      clientId,
+      role: 'user',
+      content: text,
+      createdAt: '2026-01-01T00:00:01.000Z',
+    },
+    createOpts: {
+      agentKind: 'claude-code',
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      ...(providerId !== undefined ? { providerId } : {}),
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    },
+  };
+}
+
+function emitGatewayProxyTokenFailure(
+  data: Record<string, unknown>,
+  source: 'claude-code' | 'codex' = 'claude-code',
+): void {
+  onEvent?.({
+    sessionId: SESSION_ID,
+    event: { type: 'error', source, data },
+  });
+  onEvent?.({
+    sessionId: SESSION_ID,
+    event: { type: 'done', source, data: { is_error: true } },
+  });
+}
+
 function installElectronBridge(): void {
   onEvent = undefined;
   onStatusChanged = undefined;
@@ -266,6 +312,12 @@ function installElectronBridge(): void {
         size: 1,
       })),
       safeStorageRead: vi.fn(async () => 'local-key'),
+      modelAccess: {
+        retry: vi.fn(async () => ({ state: 'ok', source: 'server', endpoint: 'https://gw.test' })),
+        rotate: vi.fn(),
+        getStatus: vi.fn(),
+        onStatusChange: vi.fn(),
+      },
       localDb: {
         messages: {
           onCreated: (cb: (data: unknown) => void) => {
@@ -2187,6 +2239,301 @@ describe('makerChatStore text delta batching', () => {
       },
     });
 
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
+      'Authorization: [REDACTED] (HTTP 401)',
+    );
+  });
+
+  it('re-fetches Cindy credentials and resends on LiteLLM invalid proxy token', async () => {
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'claude-code',
+      remoteHostId: null,
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    emitDbMessageCreated({
+      id: 'user-row',
+      clientId: 'user-client',
+      role: 'user',
+      content: 'hello gateway',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(window.electronAPI.modelAccess.rotate).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.closeSession).toHaveBeenCalledWith(SESSION_ID, {
+      preserveWorkspace: true,
+    });
+    expect(input.retryLastError).toHaveBeenCalledOnce();
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+  });
+
+  it('does not retry the same gateway failure root after the failed turn done tail', async () => {
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+
+    const retriedItem = activeTurnRecoveryItem('hello gateway', 'retry-client');
+    retriedItem.supersedesUserClientId = 'user-client';
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: retriedItem },
+        errorRetryText: 'retry:retry-client',
+      }),
+    );
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(input.retryLastError).toHaveBeenCalledOnce();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('persists the deferred error when Cindy credential re-fetch fails', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+    });
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('does not treat a custom LiteLLM provider token error as Cindy credentials', async () => {
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: {
+          kind: 'active-turn',
+          item: activeTurnRecoveryItem('hello custom gateway', 'custom-client', 'custom-litellm'),
+        },
+        errorRetryText: 'retry:custom-client',
+      }),
+    );
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: LITELLM_INVALID_PROXY_TOKEN },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('does not guess Cindy credentials when queued createOpts omitted providerId', async () => {
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'claude-code',
+      remoteHostId: null,
+      providerId: 'custom-litellm',
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    const omittedProviderItem = activeTurnRecoveryItem('hello omitted provider', 'omit-client');
+    delete omittedProviderItem.createOpts.providerId;
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: {
+          kind: 'active-turn',
+          item: omittedProviderItem,
+        },
+        errorRetryText: 'retry:omit-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('waits for the failed turn done before refreshing Cindy credentials', async () => {
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'codex',
+        data: {
+          isTerminal: true,
+          reason: 'gateway-proxy-token-invalid',
+          message: LITELLM_INVALID_PROXY_TOKEN,
+        },
+      },
+    });
+    await flushPromises();
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'done', source: 'codex', data: { is_error: true } },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(input.retryLastError).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed instead of guessing a retry target when active-turn recovery is missing', async () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: {
+          isTerminal: true,
+          reason: 'gateway-proxy-token-invalid',
+          message: LITELLM_INVALID_PROXY_TOKEN,
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.objectContaining({ reason: 'gateway-proxy-token-invalid' }),
+      null,
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('does not refresh local credentials for a device-link forwarded gateway error', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'maker:input:projection',
+      payload: projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    });
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'maker:event',
+      payload: {
+        sessionId: SESSION_ID,
+        event: {
+          type: 'error',
+          source: 'claude-code',
+          data: {
+            isTerminal: true,
+            reason: 'gateway-proxy-token-invalid',
+            message: LITELLM_INVALID_PROXY_TOKEN,
+          },
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+  });
+
+  it('does not re-fetch credentials for a generic 401', async () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, errorStatus: 401, message: 'Authorization: [REDACTED]' },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(window.electronAPI.modelAccess.rotate).not.toHaveBeenCalled();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
       'Authorization: [REDACTED] (HTTP 401)',
     );

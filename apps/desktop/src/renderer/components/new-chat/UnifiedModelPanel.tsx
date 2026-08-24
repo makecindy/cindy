@@ -33,6 +33,7 @@ import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
 import {
+  agentKindOfEngine,
   anchorKey,
   engineOfAgentKind,
   entryMatchesModelId,
@@ -158,11 +159,12 @@ export interface UnifiedModelPanelProps {
   configurationEnabled?: boolean;
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
-   *   - rail 顶部多一格「同引擎」(图标 = 当前引擎),**默认选中**;该视图只列
-   *     引擎匹配的收藏 + 当前引擎能跑的模型(无损直切);
-   *   - 该视图里的行**默认落在当前引擎**上(pinnedEngine),用户显式 override 仍优先;
+   *   - rail 顶部多一格「同引擎」(图标 = 当前引擎),**默认选中**;该视图列
+   *     引擎匹配的收藏 + 所有候选含当前引擎的模型(默认/选过的在前,仅兼容的在后);
+   *   - 该视图里的模型行**显示和点选都钉在当前轨引擎**上(π 轨里点就是 Pi);
+   *     排序仍按「默认/选过的在前」,不把主场改写成当前引擎。
    *   - 显式切到「全部 / 供应商」视图时,列表顶部出现一行克制的有损警示;
-   *   - 选中一行时若它的生效引擎 ≠ 当前引擎,走 `onCrossEngineSelect`(调用方执行
+   *   - 「全部」里选中一行若生效引擎 ≠ 当前引擎,走 `onCrossEngineSelect`(调用方执行
    *     performAgentSwitch 那条既有事务链路),而不是普通的 onSelect。
    *
    * `onCrossEngineSelect` 与 `currentAgent` 刻意做成**同一个对象里的必填字段**:会话内
@@ -439,7 +441,13 @@ export function UnifiedModelPanel({
   // 判据)在下方 effectiveEngineOf 里有一份**同构副本**(供 sections 过滤,避免把深度 / Fast
   // 的依赖打进列表重建)——改这里的引擎合成必须同步改那边。
   const configOf = useCallback(
-    (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedRowConfig => {
+    (
+      entry: UnifiedModelEntry,
+      favorite?: ModelFavoriteItem,
+      // 定宽 sizer 量的是「全部」视图,必须按那条轨解析,不能继承当前 effectiveRail
+      // (否则兼容行被钉成 π 后量到更窄的三元组,切「全部」再弹宽)。
+      railForConfig: UnifiedRailFilter = effectiveRail,
+    ): UnifiedRowConfig => {
       // 收藏条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
       if (favorite) {
         return resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable });
@@ -463,13 +471,27 @@ export function UnifiedModelPanel({
         memoryFast: (agent) =>
           modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
         agentFastModeCapable,
-        // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上(无损
-        // 直切);主场在别处的行保持主场显示。用户显式 override 仍然优先(见
-        // resolveUnifiedRowConfig 的 pinnedEngine 注释)。
+        // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上。
+        // 同引擎轨再加一道:没写过引擎 override 的**未选中**行钉在轨上显示/点选。
+        // 选中行必须先钉 live 引擎(草稿/另一会话留下的全局 override 不能改写正在跑的那一行)。
+        // 未选中行的浮层显式换引擎:override 赢,否则胶囊弹回、点行仍走轨引擎。
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
-        ...(isSelectedModelRow && liveEngineAgent
-          ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
-          : {}),
+        ...(() => {
+          if (isSelectedModelRow && liveEngineAgent) {
+            return { forceEngine: engineOfAgentKind(liveEngineAgent) };
+          }
+          const override = getModelEngineOverride(entry.providerId, entry.modelId);
+          const overrideUsable =
+            override !== undefined && entry.candidates.includes(agentKindOfEngine(override));
+          if (
+            railForConfig.kind === 'engine' &&
+            entry.candidates.includes(railForConfig.agent) &&
+            !overrideUsable
+          ) {
+            return { forceEngine: engineOfAgentKind(railForConfig.agent) };
+          }
+          return {};
+        })(),
       });
       // **选中行读 live 值**,不读全局记忆:已建会话的深度 / Fast 由 DB / runtime 权威,
       // 其它对话改同一个模型的全局预设不该改写正在跑的这一条(与旧版 rowEffortOf /
@@ -495,6 +517,7 @@ export function UnifiedModelPanel({
     [
       activeFavoriteUid,
       agentFastModeCapable,
+      effectiveRail,
       enginePrefsVersion,
       fastMode,
       isLiveRow,
@@ -509,8 +532,8 @@ export function UnifiedModelPanel({
   );
 
   /**
-   * 同引擎视图的第二道判据(Chris 2026-08-19 裁决,详见 buildUnifiedListSections 里的
-   * `visible` 注释):行的**生效引擎**必须就是当前会话引擎,否则不显示。
+   * 同引擎视图的生效引擎解析器:给列表做排序优先级(默认/选过的本引擎在前),
+   * 并过滤收藏区。详见 buildUnifiedListSections。
    *
    * 这是 `configOf` 的**引擎那一半的同构副本**(2026-08-19 预审 P2-4):不能直接用
    * configOf —— 它的依赖里有 fastMode / selectedEffort / memoryVersion / agentFastModeCapable,
@@ -521,9 +544,8 @@ export function UnifiedModelPanel({
    * Fast 记忆完全无关 —— 所以这里不传 memoryEffort / memoryFast / agentFastModeCapable,
    * 依赖只收引擎真正相关的几项。
    *
-   * ★ 与 configOf 的 engineOverride / pinnedEngine / forceEngine 三路合成**必须逐字同构**
-   * (含 isSelectedModelRow 的判据),改一处必须改另一处 —— 漂了就会「过滤掉了却还画着」
-   * 或反过来。正在跑的那一行因 forceEngine = 当前引擎必然通过过滤,不会被自己滤没。
+   * 与 configOf 的 override / pinned / 选中行 forceEngine **同构**,但同引擎轨上故意分叉:
+   * configOf 把显示/点选钉在轨引擎,这里不钉 —— 否则排序键全变成当前轨,优先/兼容段塌掉。
    */
   const effectiveEngineOf = useCallback(
     (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedEngine => {
@@ -1134,9 +1156,9 @@ export function UnifiedModelPanel({
           </>
         )}
         {/* 跨引擎视图的有损警示(规格 §1.6)—— 一行、可截断、不抢占列表高度。
-            只在会话内**离开**同引擎视图时出现:同引擎视图里选什么都是无损的,那里摆警示
-            等于每次打开都在喊狼来了。badge 样式没有同引擎视图(恒为「全部」),常驻
-            警示同样是喊狼来了 —— 有损与否由选中时的跨引擎确认事务把关,这里不摆。 */}
+            只在会话内**离开**同引擎视图时出现:同引擎轨的优先行是无损的,兼容行点下去
+            走确认事务,轨顶不常驻警示(避免每次打开喊狼)。badge 样式没有同引擎视图
+            (恒为「全部」),常驻警示同样是喊狼 —— 有损由选中时的确认事务把关。 */}
         {pickerLayout !== 'badge' && sessionEngineFilter && effectiveRail.kind !== 'engine' && (
           <div
             role="note"
@@ -1284,7 +1306,7 @@ export function UnifiedModelPanel({
                 <span className="truncate">{sectionLabel(section)}</span>
               </div>
               {section.rows.map((row) => {
-                const config = configOf(row.entry, row.favorite);
+                const config = configOf(row.entry, row.favorite, RAIL_ALL);
                 const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
                 return (
                   <UnifiedModelRow

@@ -96,17 +96,18 @@ export interface AgentRuntimeConfig {
    *
    * - undefined: host 不接管自动压缩 (保持 agent 默认行为)
    * - 50-95: 每个 turn 结束时, maker-core 基于最新 usage 快照判断。
-   *   Claude Code 静默注入 `/compact`；Pi 调已有 compact RPC。
-   *   Pi 原生 `window - reserveTokens` 仍作顶满抢救。
+   *   同模型占用达到该比例且尚未满窗时, Claude Code 静默注入 `/compact`；Pi 调 compact RPC。
+   *   占用 ≥ 100%，或 host/bridge 自动 compact 确定性失败后,下次 send 换干净原生窗口。
+   *   切到更小窗口模型的 danger 预检仍用同一百分比,与同模型 compact 解耦。
+   *   Pi 原生 `window - reserveTokens` 仍作顶满抢救。本地 Pi 继续关掉引擎自己的自动压缩。
    *
    * Host 可以用 getter 注入, agent 会在每次判断时读取最新值。
    */
   autoCompactThresholdPct?: number;
 
   /**
-   * Host-owned context switch assessment. When true, skip host auto-compact
-   * because the host will rebuild the native session before the next send.
-   * Do not install this on sessions the host cannot rebuild (remoteHostId).
+   * Host-owned context switch assessment for **changing to a smaller model window**.
+   * Same-model host compact no longer consults this callback.
    */
   shouldHandoffAfterContextAssessment?: (
     contextTokens: number,

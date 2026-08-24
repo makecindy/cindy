@@ -4,19 +4,16 @@
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
-import {
-  gatewayLedgerCurrency,
-  getModelPriceQuote,
-} from '../../shared/modelPriceQuote.js';
+import { gatewayLedgerCurrency, getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import {
   addRegionalMoney,
   toLedgerCurrency,
-  usdMoney,
   usdToLedgerCurrency,
   type ModelPriceQuote,
   type ModelPricingCatalog,
   type MoneyCurrency,
   type MoneyEstimateReason,
+  type PriceVariant,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { buildTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -29,6 +26,68 @@ export interface TurnTokenDeltas {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreateTokens: number;
+}
+
+export interface TurnUsageSegment extends TurnTokenDeltas {
+  id?: string;
+  model?: string;
+  priceVariant?: PriceVariant;
+  costUsd?: number;
+  complete?: boolean;
+}
+
+function finiteNonNegative(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
+  if (!Array.isArray(value)) return [];
+  const segments: TurnUsageSegment[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const raw = item as Record<string, unknown>;
+    const segment: TurnUsageSegment = {
+      inputTokens: finiteNonNegative(raw.inputTokens),
+      outputTokens: finiteNonNegative(raw.outputTokens),
+      cacheReadTokens: finiteNonNegative(raw.cacheReadTokens),
+      cacheCreateTokens: finiteNonNegative(raw.cacheCreateTokens),
+    };
+    const costUsd = finiteNonNegative(raw.costUsd);
+    if (
+      segment.inputTokens === 0 &&
+      segment.outputTokens === 0 &&
+      segment.cacheReadTokens === 0 &&
+      segment.cacheCreateTokens === 0 &&
+      costUsd === 0
+    )
+      continue;
+    if (typeof raw.id === 'string' && raw.id) segment.id = raw.id;
+    if (typeof raw.model === 'string' && raw.model.trim()) segment.model = raw.model.trim();
+    if (
+      raw.priceVariant === 'standard' ||
+      raw.priceVariant === 'priority' ||
+      raw.priceVariant === 'fast' ||
+      raw.priceVariant === 'batch'
+    ) {
+      segment.priceVariant = raw.priceVariant;
+    }
+    if (costUsd > 0) segment.costUsd = costUsd;
+    if (raw.complete === true || raw.complete === false) segment.complete = raw.complete;
+    segments.push(segment);
+  }
+  return segments;
+}
+
+export function sumTurnUsageSegments(segments: readonly TurnUsageSegment[]): TurnTokenDeltas {
+  return segments.reduce(
+    (sum, segment) => ({
+      inputTokens: sum.inputTokens + segment.inputTokens,
+      outputTokens: sum.outputTokens + segment.outputTokens,
+      cacheReadTokens: sum.cacheReadTokens + segment.cacheReadTokens,
+      cacheCreateTokens: sum.cacheCreateTokens + segment.cacheCreateTokens,
+    }),
+    { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+  );
 }
 
 export type BillingRoute = 'xd-gateway' | 'provider-api' | 'subscription' | 'unknown';
@@ -79,22 +138,23 @@ export function isAnthropicModel(normalizedModel: string): boolean {
   );
 }
 
-/**
- * token × quote → quote 币种金额。cache 价缺失时按输入价计，和详情文案一致。
- */
+/** token × quote → quote 币种金额。缺少实际使用桶的价格时拒绝猜价。 */
 export function computeGatewayTurnCost(
   tokens: TurnTokenDeltas,
   price: ModelPriceQuote | undefined,
+  variant: PriceVariant = 'standard',
 ): number | null {
   if (!price) return null;
-  const totalInputTokens =
-    tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreateTokens;
-  const band = price.inputTokenPriceBands
+  if (variant === 'batch') return null;
+  const priority = variant === 'priority' || variant === 'fast';
+  const tariff = priority ? price.priority : price;
+  if (!tariff) return null;
+  const totalInputTokens = tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreateTokens;
+  const band = tariff.inputTokenPriceBands
     ?.filter(
       (candidate) =>
         totalInputTokens >= candidate.minInputTokens &&
-        (candidate.maxInputTokens === undefined ||
-          totalInputTokens < candidate.maxInputTokens),
+        (candidate.maxInputTokens === undefined || totalInputTokens < candidate.maxInputTokens),
     )
     .sort((a, b) => b.minInputTokens - a.minInputTokens)[0];
   // Provider reference bands describe the complete set of ranges for which the
@@ -102,22 +162,50 @@ export function computeGatewayTurnCost(
   // would silently extend a bounded quote (for example <200k) to the model's
   // whole context window. Gateway bands remain overlays because its legacy
   // threshold fields intentionally omit the baseline range.
-  if (price.inputTokenPriceBands?.length && !band && price.source !== 'gateway') {
+  if (tariff.inputTokenPriceBands?.length && !band && price.source !== 'gateway') {
     return null;
   }
-  const inputPrice = band?.inputPerMtok ?? price.inputPerMtok;
-  const outputPrice = band?.outputPerMtok ?? price.outputPerMtok;
-  const cacheReadPrice =
-    band?.cacheReadPerMtok ?? price.cacheReadPerMtok ?? inputPrice;
+  const inputPrice = band?.inputPerMtok ?? tariff.inputPerMtok;
+  const outputPrice = band?.outputPerMtok ?? tariff.outputPerMtok;
+  const cacheReadPrice = band?.cacheReadPerMtok ?? tariff.cacheReadPerMtok;
+  // Gateway currently publishes no dedicated Priority cache-write field. Its
+  // contract keeps cache creation on the standard tariff while Fast changes
+  // input/output/cache-read prices. Do not turn every cached Claude Fast
+  // request into an unpriceable turn merely because that redundant field is
+  // absent from the Priority overlay.
   const cacheCreatePrice =
-    band?.cacheCreatePerMtok ?? price.cacheCreatePerMtok ?? inputPrice;
+    band?.cacheCreatePerMtok ??
+    tariff.cacheCreatePerMtok ??
+    (priority ? price.cacheCreatePerMtok : undefined);
+  if (
+    (tokens.inputTokens > 0 && inputPrice === undefined) ||
+    (tokens.outputTokens > 0 && outputPrice === undefined) ||
+    (tokens.cacheReadTokens > 0 && cacheReadPrice === undefined) ||
+    (tokens.cacheCreateTokens > 0 && cacheCreatePrice === undefined)
+  ) {
+    return null;
+  }
   return (
-    (tokens.inputTokens * inputPrice +
-      tokens.outputTokens * outputPrice +
-      tokens.cacheReadTokens * cacheReadPrice +
-      tokens.cacheCreateTokens * cacheCreatePrice) /
+    (tokens.inputTokens * (inputPrice ?? 0) +
+      tokens.outputTokens * (outputPrice ?? 0) +
+      tokens.cacheReadTokens * (cacheReadPrice ?? 0) +
+      tokens.cacheCreateTokens * (cacheCreatePrice ?? 0)) /
     1_000_000
   );
+}
+
+export function computeGatewaySegmentedTurnCost(
+  segments: readonly TurnUsageSegment[],
+  price: ModelPriceQuote | undefined,
+): number | null {
+  if (!price || segments.length === 0) return null;
+  let total = 0;
+  for (const segment of segments) {
+    const amount = computeGatewayTurnCost(segment, price, segment.priceVariant ?? 'standard');
+    if (amount == null) return null;
+    total += amount;
+  }
+  return total;
 }
 
 /**
@@ -129,9 +217,13 @@ export function computePriceQuoteTurnMoney(
   tokens: TurnTokenDeltas,
   price: ModelPriceQuote | undefined,
   ledgerCurrency: MoneyCurrency,
+  segments?: readonly TurnUsageSegment[],
 ): RegionalMoney | null {
   if (!price) return null;
-  const standardAmount = computeGatewayTurnCost(tokens, price);
+  const standardAmount =
+    segments !== undefined
+      ? computeGatewaySegmentedTurnCost(segments, price)
+      : computeGatewayTurnCost(tokens, price);
   if (standardAmount == null) return null;
   const discount =
     price.source === 'gateway' &&
@@ -184,8 +276,9 @@ export function resolveTurnCost(args: {
   sdkCostDelta?: number;
   pricing: ModelPricingCatalog | null | undefined;
   context: TurnPricingContext;
+  segments?: readonly TurnUsageSegment[];
 }): TurnCostResolution {
-  const { rawModel, tokens, sdkCostDelta, pricing, context } = args;
+  const { rawModel, tokens, sdkCostDelta, pricing, context, segments } = args;
   const model = normalizeModelIdForPricing(rawModel);
 
   // An explicit provider API route is authoritative. User-defined providers may legitimately
@@ -211,21 +304,11 @@ export function resolveTurnCost(args: {
     // 窗口，不代表这一轮真的超过阈值）。
     const quote = getModelPriceQuote(pricing, 'xd', model);
     if (!quote) {
-      // 该模型没有报价(上游未登记,或目录还没同步下来)。SDK 的 costDelta 是 USD,
-      // 只有账本币种同为 USD 时才能直接兜底记账 —— 这样以 USD 结算的账号不会漏记。
-      //
-      // 币种不同(CNY 账本)仍然不兜底:SDK 值既不是该账号的报价口径、也不含 costDiscount,
-      // 折算进去只会误记,宁可这一轮不记。
-      const fallbackUsd = Math.max(0, sdkCostDelta ?? 0);
-      return {
-        model,
-        money: ledgerCurrency === 'USD' && fallbackUsd > 0 ? usdMoney(fallbackUsd) : null,
-        source: 'sdk-fallback',
-      };
+      return { model, money: null, source: 'sdk-fallback' };
     }
     return {
       model,
-      money: computePriceQuoteTurnMoney(tokens, quote, ledgerCurrency),
+      money: computePriceQuoteTurnMoney(tokens, quote, ledgerCurrency, segments),
       source: 'gateway',
     };
   }
@@ -245,29 +328,31 @@ export function resolveTurnCost(args: {
   // 分桶重算并保留 value-estimate 标记；只有 cost 增量或目录价格不覆盖本轮时仍退回
   // SDK，避免把有费用但无 token 明细的轮次误算成 $0。
   if (context.providerId === 'deepseek' && providerQuote && hasTokenDeltas) {
-    const referenceMoney = computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency);
+    const referenceMoney = computePriceQuoteTurnMoney(
+      tokens,
+      providerQuote,
+      ledgerCurrency,
+      segments,
+    );
     if (referenceMoney) {
-      return {
-        model,
-        money: referenceMoney,
-        source: 'reference',
-      };
+      return { model, money: referenceMoney, source: 'reference' };
+    }
+    if (segments !== undefined) {
+      return { model, money: null, source: 'reference' };
     }
   }
 
   // 其它第三方供应商 / 未知路由:SDK 值是 USD 口径,投影到账本币种而不是构建区域,
   // 否则 USD 结算账号上这些花费会变成 CNY 并被账本守卫丢弃。
   const sdkAmount = Math.max(0, sdkCostDelta ?? 0);
-  if (sdkAmount > 0) {
-    return {
-      model,
-      money: usdToLedgerCurrency(sdkAmount, ledgerCurrency),
-      source: context.billingRoute === 'provider-api' ? 'sdk' : 'sdk-fallback',
-    };
+  if (context.billingRoute === 'provider-api' && sdkAmount > 0) {
+    return { model, money: usdToLedgerCurrency(sdkAmount, ledgerCurrency), source: 'sdk' };
   }
   return {
     model,
-    money: providerQuote ? computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency) : null,
+    money: providerQuote
+      ? computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency, segments)
+      : null,
     source: context.billingRoute === 'provider-api' ? 'reference' : 'sdk-fallback',
   };
 }
@@ -277,6 +362,7 @@ export interface ResolvedModelCost {
   money: RegionalMoney | null;
   source: TurnCostSource;
   deltas: TurnTokenDeltas;
+  segments?: TurnUsageSegment[];
 }
 
 export interface ClaudeTurnCostResolution {
@@ -291,11 +377,105 @@ export function resolveClaudeTurnCostSinks(
   modelDeltas: ModelUsageDeltaEntry[],
   pricing: ModelPricingCatalog | null | undefined,
   context: TurnPricingContext,
+  usageSegments?: readonly TurnUsageSegment[],
+  usageSegmentsComplete = false,
 ): ClaudeTurnCostResolution {
+  type DeltaWithSegments = ModelUsageDeltaEntry & { segments?: TurnUsageSegment[] };
+  const effectiveDeltas: DeltaWithSegments[] =
+    usageSegments === undefined
+      ? modelDeltas
+      : (() => {
+          const observedByModel = new Map<
+            string,
+            { all: TurnUsageSegment[]; priceable: TurnUsageSegment[] }
+          >();
+          for (const segment of usageSegments) {
+            const model = normalizeModelIdForPricing(segment.model);
+            const group = observedByModel.get(model) ?? { all: [], priceable: [] };
+            const copy = { ...segment };
+            group.all.push(copy);
+            if (usageSegmentsComplete || segment.complete === true) {
+              group.priceable.push(copy);
+            }
+            observedByModel.set(model, group);
+          }
+          const cumulativeByModel = new Map(
+            modelDeltas.map((delta) => [normalizeModelIdForPricing(delta.model), delta]),
+          );
+          const models = new Set([...observedByModel.keys(), ...cumulativeByModel.keys()]);
+          const values: DeltaWithSegments[] = [];
+          for (const model of models) {
+            const observed = observedByModel.get(model);
+            const cumulative = cumulativeByModel.get(model);
+            const observedTotals = sumTurnUsageSegments(observed?.all ?? []);
+            const priceableSegments = observed?.priceable ?? [];
+            const priceableTotals = sumTurnUsageSegments(priceableSegments);
+            const target: TurnTokenDeltas = {
+              inputTokens: Math.max(observedTotals.inputTokens, cumulative?.inputTokensDelta ?? 0),
+              outputTokens: Math.max(
+                observedTotals.outputTokens,
+                cumulative?.outputTokensDelta ?? 0,
+              ),
+              cacheReadTokens: Math.max(
+                observedTotals.cacheReadTokens,
+                cumulative?.cacheReadTokensDelta ?? 0,
+              ),
+              cacheCreateTokens: Math.max(
+                observedTotals.cacheCreateTokens,
+                cumulative?.cacheCreateTokensDelta ?? 0,
+              ),
+            };
+            let remainingCost = cumulative?.costUsdDelta ?? 0;
+            if (priceableSegments.length > 0) {
+              values.push({
+                model,
+                costUsdDelta: remainingCost,
+                inputTokensDelta: priceableTotals.inputTokens,
+                outputTokensDelta: priceableTotals.outputTokens,
+                cacheReadTokensDelta: priceableTotals.cacheReadTokens,
+                cacheCreateTokensDelta: priceableTotals.cacheCreateTokens,
+                segments: priceableSegments,
+              });
+              // Provider-reported cost is already represented once. The
+              // unpriceable residual below carries token facts only.
+              remainingCost = 0;
+            }
+            const residual = {
+              inputTokensDelta: Math.max(0, target.inputTokens - priceableTotals.inputTokens),
+              outputTokensDelta: Math.max(0, target.outputTokens - priceableTotals.outputTokens),
+              cacheReadTokensDelta: Math.max(
+                0,
+                target.cacheReadTokens - priceableTotals.cacheReadTokens,
+              ),
+              cacheCreateTokensDelta: Math.max(
+                0,
+                target.cacheCreateTokens - priceableTotals.cacheCreateTokens,
+              ),
+            };
+            if (
+              remainingCost > 0 ||
+              residual.inputTokensDelta > 0 ||
+              residual.outputTokensDelta > 0 ||
+              residual.cacheReadTokensDelta > 0 ||
+              residual.cacheCreateTokensDelta > 0
+            ) {
+              values.push({
+                model,
+                costUsdDelta: remainingCost,
+                ...residual,
+                // Never collapse an unmatched aggregate or unfinished request
+                // into one synthetic provider call. Only explicitly completed
+                // request segments above are eligible for token pricing.
+                segments: [],
+              });
+            }
+          }
+          return values;
+        })();
   const perModel: ResolvedModelCost[] = [];
   const actualMoney: RegionalMoney[] = [];
   const estimatedMoney: RegionalMoney[] = [];
-  for (const delta of modelDeltas) {
+  for (const delta of effectiveDeltas) {
     const tokens: TurnTokenDeltas = {
       inputTokens: delta.inputTokensDelta,
       outputTokens: delta.outputTokensDelta,
@@ -308,12 +488,14 @@ export function resolveClaudeTurnCostSinks(
       sdkCostDelta: delta.costUsdDelta,
       pricing,
       context,
+      segments: delta.segments,
     });
     perModel.push({
       model: resolved.model,
       money: resolved.money,
       source: resolved.source,
       deltas: tokens,
+      ...(delta.segments ? { segments: delta.segments } : {}),
     });
     if (resolved.money && resolved.money.amount > 0) {
       (resolved.money.kind === 'actual-cost' ? actualMoney : estimatedMoney).push(resolved.money);
@@ -321,8 +503,7 @@ export function resolveClaudeTurnCostSinks(
   }
   return {
     turnMoney: actualMoney.length > 0 ? addRegionalMoney(actualMoney) : null,
-    estimatedTurnMoney:
-      estimatedMoney.length > 0 ? addRegionalMoney(estimatedMoney) : null,
+    estimatedTurnMoney: estimatedMoney.length > 0 ? addRegionalMoney(estimatedMoney) : null,
     perModel,
   };
 }

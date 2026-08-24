@@ -94,3 +94,20 @@ describe('tryEnableUncustomizedBetaAtomic', () => {
     });
   });
 });
+
+describe('Linux beta channel gate', () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+  });
+
+  it('keeps Linux on the release channel even when disk says beta is on', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    const store = await loadStore();
+    await store.writeEnableBeta(true);
+
+    expect(store.readUpdateChannelSettings().enableBeta).toBe(true);
+    expect(store.isBetaChannelEnabled()).toBe(false);
+  });
+});

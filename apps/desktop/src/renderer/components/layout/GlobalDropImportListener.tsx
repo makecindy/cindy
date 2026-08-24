@@ -61,7 +61,7 @@ export function GlobalDropImportListener({
   const interceptRef = useRef(false);
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { confirm, confirmWithCheckbox } = useConfirmDialog();
+  const { confirm } = useConfirmDialog();
   // 装入 tab 型插件勾选「立即开启并打开面板」的兑现:面板收束后页签面板
   // 只住在插件页,从任意视图导航过去并经 ?panel= 深链打开。
   const openPluginPanel = useCallback(
@@ -69,25 +69,26 @@ export function GlobalDropImportListener({
     [navigate],
   );
 
-  // 双击 .cindy 的转交消费:挂载时取一次(冷启动双击,main 已缓存)+ 订阅
-  // 信号(已运行时双击)。取到路径即走与按钮/拖入完全相同的确认装入编排。
+  // 双击 .cindy / forge 转交的消费:挂载时取一次(冷启动双击 / 关窗期间转交的,
+  // main 已缓存)+ 订阅通知(已运行时双击 / forge 转交)。取到路径即走与按钮/拖入
+  // 完全相同的确认装入编排。
+  //
+  // 来源与路径**一起从 takePendingInstall 取**,不从通知 payload 拿:通知是易失的
+  // (没有窗口时直接丢),而 forge 转交在 macOS 关窗后仍可能发生,来源丢了就会把
+  // Agent 发起的装入显示成手动 —— 恰好是最危险的方向。理由全文见 main 侧
+  // openFileInstall.ts 的头注释。
   useEffect(() => {
     const consumePending = async () => {
-      const { filePath } = await window.electronAPI.ghosts.takePendingInstall();
+      const { filePath, origin } = await window.electronAPI.ghosts.takePendingInstall();
       if (filePath) {
-        await confirmAndInstallGhost(filePath, {
-          t,
-          confirm,
-          confirmWithCheckbox,
-          openPluginPanel,
-        });
+        await confirmAndInstallGhost(filePath, { t, confirm, openPluginPanel }, origin);
       }
     };
     void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     return window.electronAPI.ghosts.onInstallRequested(() => {
       void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     });
-  }, [confirm, confirmWithCheckbox, openPluginPanel, t]);
+  }, [confirm, openPluginPanel, t]);
 
   useEffect(() => {
     // 悬停识别:单文件且 MIME 命中才给遮罩。
@@ -147,12 +148,8 @@ export function GlobalDropImportListener({
       markGlobalDropIntercepted(e);
       if (kind === 'cindy') {
         // 验明正身 → 确认弹窗 → 装入的编排在 installFlow(与设置页装入按钮同契约)。
-        void confirmAndInstallGhost(path, {
-          t,
-          confirm,
-          confirmWithCheckbox,
-          openPluginPanel,
-        });
+        // 拖入是用户亲手操作 → 手动来源(不传 origin),不加横幅、不加重。
+        void confirmAndInstallGhost(path, { t, confirm, openPluginPanel });
         return;
       }
       void window.electronAPI.localDb.sessionShare
@@ -210,7 +207,7 @@ export function GlobalDropImportListener({
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [confirm, confirmWithCheckbox, navigate, onOpenShareImport, openPluginPanel, t]);
+  }, [confirm, navigate, onOpenShareImport, openPluginPanel, t]);
 
   return (
     <>

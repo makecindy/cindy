@@ -8,6 +8,10 @@ import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@c
 import { useAuth } from '@/auth/AuthContext';
 import { LoginCaptchaWebView } from '@/auth/LoginCaptchaWebView';
 import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
+import {
+  getSsoOrgHistorySnapshot,
+  hydrateSsoOrgHistory,
+} from '@/auth/ssoOrgHistory';
 import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import {
   CN_PHONE_PREFIX,
@@ -44,6 +48,7 @@ import {
   LOGIN_GROUP,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
+  LOGIN_SSO_ORG_HISTORY,
   LOGIN_SSO_ORG_HINT_TOP,
   LOGIN_SUBTITLE,
   LOGIN_TITLE,
@@ -69,6 +74,7 @@ import {
   LoginSocialButton,
   LoginSocialGlyph,
   LoginSocialRow,
+  LoginSsoOrgHistoryList,
   LoginTextLinkSlot,
   LoginTitleBlock,
   AppleLogoGlyph,
@@ -131,6 +137,12 @@ export default function LoginScreen() {
   // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态)
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
+  const [ssoOrgHistory, setSsoOrgHistory] = useState(() =>
+    getSsoOrgHistorySnapshot(),
+  );
+  const [ssoOrgHistoryOpen, setSsoOrgHistoryOpen] = useState(false);
+  const ssoOrgEditedRef = useRef(false);
+  const ssoOrgHistoryBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const realmConfirmation =
     auth.loginState?.step === 'realm-confirmation'
       ? auth.loginState
@@ -224,6 +236,31 @@ export default function LoginScreen() {
   const styles = useThemedStyles(makeStyles);
   const configIssues = getMobileConfigIssues();
   const disabled = auth.isBusy || !auth.initialized || configIssues.length > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    void hydrateSsoOrgHistory().then((entries) => {
+      if (!cancelled) setSsoOrgHistory(entries);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ssoOrgMode || ssoOrgEditedRef.current || ssoOrgHistory.length === 0)
+      return;
+    setSsoOrg((current) => current || ssoOrgHistory[0] || '');
+  }, [ssoOrgHistory, ssoOrgMode]);
+
+  useEffect(
+    () => () => {
+      if (ssoOrgHistoryBlurTimerRef.current) {
+        clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (
@@ -336,6 +373,7 @@ export default function LoginScreen() {
       ? ssoOrgMode
         ? () => {
             auth.clearAuthError();
+            setSsoOrgHistoryOpen(false);
             setSsoOrgMode(false);
           }
         : null
@@ -385,50 +423,98 @@ export default function LoginScreen() {
       const submitSsoOrg = () => {
         const value = ssoOrg.trim();
         if (!value) return;
+        setSsoOrgHistoryOpen(false);
         // 先静默发现组织区域；只有跨出安装包区域时 AuthContext 才进入
         // realm-confirmation，并由页面底部弹窗在继续 SSO 前确认。
-        void auth.dispatchLoginAction({
-          type: 'discover-sso-org',
-          org: value,
-        });
+        void auth
+          .dispatchLoginAction({
+            type: 'discover-sso-org',
+            org: value,
+          })
+          .finally(() => {
+            setSsoOrgHistory(getSsoOrgHistorySnapshot());
+          });
+      };
+      const openSsoOrgHistory = () => {
+        if (ssoOrgHistoryBlurTimerRef.current) {
+          clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+          ssoOrgHistoryBlurTimerRef.current = null;
+        }
+        if (ssoOrgHistory.length > 1) setSsoOrgHistoryOpen(true);
+      };
+      const closeSsoOrgHistorySoon = () => {
+        if (ssoOrgHistoryBlurTimerRef.current) {
+          clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+        }
+        ssoOrgHistoryBlurTimerRef.current = setTimeout(() => {
+          ssoOrgHistoryBlurTimerRef.current = null;
+          setSsoOrgHistoryOpen(false);
+        }, 120);
+      };
+      const selectSsoOrgHistory = (entry: string) => {
+        if (ssoOrgHistoryBlurTimerRef.current) {
+          clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+          ssoOrgHistoryBlurTimerRef.current = null;
+        }
+        ssoOrgEditedRef.current = true;
+        setSsoOrg(entry);
+        setSsoOrgHistoryOpen(false);
+        auth.clearAuthError();
+        Keyboard.dismiss();
       };
       return (
-        <LoginPanel testID="login.panel.ssoOrg">
-          {backNode}
-          <LoginTitleBlock
-            title={loginText('ssoOrgTitle')}
-            subtitle={loginText('ssoOrgSubtitle')}
-          />
-          <LoginSkinInput
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect={false}
-            editable={!disabled}
-            error={!!error}
-            maxLength={253}
-            onChangeText={setSsoOrg}
-            onSubmitEditing={submitSsoOrg}
-            placeholder={loginText('ssoOrgPlaceholder')}
-            returnKeyType="go"
-            testID="login.ssoOrgInput"
-            value={ssoOrg}
-          />
-          <LoginTextLinkSlot
-            align="top"
-            tone="secondary"
-            top={LOGIN_SSO_ORG_HINT_TOP}
-          >
-            {loginText('ssoOrgHint')}
-          </LoginTextLinkSlot>
-          <LoginPrimaryButton
-            busy={auth.isBusy}
-            disabled={disabled || !ssoOrg.trim()}
-            label={loginText('continue')}
-            onPress={submitSsoOrg}
-            testID="login.ssoOrgContinueButton"
-          />
-          {errorNode}
-        </LoginPanel>
+        <>
+          <LoginPanel testID="login.panel.ssoOrg">
+            {backNode}
+            <LoginTitleBlock
+              title={loginText('ssoOrgTitle')}
+              subtitle={loginText('ssoOrgSubtitle')}
+            />
+            <LoginSkinInput
+              autoCapitalize="none"
+              autoComplete="off"
+              autoCorrect={false}
+              accessibilityRole="combobox"
+              accessibilityState={{ expanded: ssoOrgHistoryOpen }}
+              editable={!disabled}
+              error={!!error}
+              maxLength={253}
+              onBlur={closeSsoOrgHistorySoon}
+              onChangeText={(value) => {
+                ssoOrgEditedRef.current = true;
+                setSsoOrg(value);
+              }}
+              onFocus={openSsoOrgHistory}
+              onSubmitEditing={submitSsoOrg}
+              placeholder={loginText('ssoOrgPlaceholder')}
+              returnKeyType="go"
+              testID="login.ssoOrgInput"
+              value={ssoOrg}
+            />
+            <LoginTextLinkSlot
+              align="top"
+              tone="secondary"
+              top={LOGIN_SSO_ORG_HINT_TOP}
+            >
+              {loginText('ssoOrgHint')}
+            </LoginTextLinkSlot>
+            <LoginPrimaryButton
+              busy={auth.isBusy}
+              disabled={disabled || !ssoOrg.trim()}
+              label={loginText('continue')}
+              onPress={submitSsoOrg}
+              testID="login.ssoOrgContinueButton"
+            />
+            {errorNode}
+          </LoginPanel>
+          {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 ? (
+            <LoginSsoOrgHistoryList
+              entries={ssoOrgHistory}
+              onSelect={selectSsoOrgHistory}
+              value={ssoOrg}
+            />
+          ) : null}
+        </>
       );
     }
     const submit = () => {
@@ -607,6 +693,12 @@ export default function LoginScreen() {
               // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
               if (disabled) return;
               auth.clearAuthError();
+              const history = getSsoOrgHistorySnapshot();
+              setSsoOrgHistory(history);
+              if (!ssoOrgEditedRef.current && !ssoOrg.trim()) {
+                setSsoOrg(history[0] ?? '');
+              }
+              setSsoOrgHistoryOpen(false);
               setSsoOrgMode(true);
             }}
             testID="login.ssoEntryButton"
@@ -1134,6 +1226,14 @@ export default function LoginScreen() {
       stage.viewportHeight > prev ? stage.viewportHeight : prev,
     );
   }, [stage.viewportHeight]);
+  const ssoOrgHistoryBottom =
+    ssoOrgMode && ssoOrgHistoryOpen && ssoOrgHistory.length > 1
+      ? LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight
+      : LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height;
+  const controlsUnionBottom = Math.max(
+    LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height,
+    ssoOrgHistoryBottom,
+  );
   const shiftResult = useMemo(() => {
     if (groupBaseline == null) {
       return { shift: 0, mode: 'hidden' as const };
@@ -1142,18 +1242,15 @@ export default function LoginScreen() {
       platform: Platform.OS === 'android' ? 'android' : 'ios',
       visible: keyboard.visible,
       keyboard: keyboard.rect,
-      // 停靠贴附锚 = 面板底(Step 5b.1:panelBottom + 10 - keyboardTop)
+      // 候选层已收在面板内，停靠锚始终保持面板底；不同屏幕尺寸只通过
+      // groupScale 与基线测量适配，避免展开列表时整组额外跳动。
       panelBottomY: groupBaseline.y + loginSizes.panelHeight * groupScale,
-      // 悬浮相交判定锚 = 当前输入框 ∪ 主按钮(U-8b;输入框顶到主按钮底)
+      // 悬浮相交判定锚仍覆盖输入框、主按钮与展开后的候选层并集。
       controlsUnion: {
         x: groupBaseline.x + LOGIN_CONTROL.x * groupScale,
         y: groupBaseline.y + LOGIN_CONTROL.inputY * groupScale,
         width: LOGIN_CONTROL.width * groupScale,
-        height:
-          (LOGIN_CONTROL.buttonY +
-            LOGIN_CONTROL.height -
-            LOGIN_CONTROL.inputY) *
-          groupScale,
+        height: (controlsUnionBottom - LOGIN_CONTROL.inputY) * groupScale,
       },
       viewportWidth: stage.viewportWidth,
       viewportHeight: stage.viewportHeight,
@@ -1165,6 +1262,8 @@ export default function LoginScreen() {
     groupBaseline,
     keyboard,
     groupScale,
+    ssoOrgHistoryBottom,
+    controlsUnionBottom,
     stage.viewportWidth,
     stage.viewportHeight,
     insets.top,

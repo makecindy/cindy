@@ -51,13 +51,8 @@ describe('controlled banner placement', () => {
 
   it('keeps only the collapsed breathing light anchored before token metadata', () => {
     expect(sessionViewSource).toContain('const CONTROLLED_BANNER_MAX_WIDTH = 420;');
-    expect(sessionViewSource).toContain('const CONTROLLED_BANNER_WIDTH_RATIO = 0.5;');
     expect(sessionViewSource).toContain(
-      'function getControlledBannerMaxWidth(inputWidth?: number): number',
-    );
-    expect(sessionViewSource).toContain('(inputWidth - 16) * CONTROLLED_BANNER_WIDTH_RATIO');
-    expect(sessionViewSource).toContain(
-      'const controlledBannerMaxWidth = getControlledBannerMaxWidth(inputWidth);',
+      'const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;',
     );
     expect(sessionViewSource).toContain('if (isHidden && !rightLeadingSlot) return null;');
     expect(controlledBannerSource).toContain("placement?: 'floating' | 'inline' | 'composer';");
@@ -120,7 +115,7 @@ describe('controlled banner placement', () => {
   });
 
   it('caps the right-aligned composer chip without changing the input width', () => {
-    expect(controlledBannerSource).toContain('maxWidth?: number;');
+    expect(controlledBannerSource).toContain("maxWidth?: CSSProperties['maxWidth'];");
     expect(controlledBannerSource).toContain('style={maxWidth == null ? undefined : { maxWidth }}');
     expect(sessionViewSource).toContain('maxWidth={controlledBannerMaxWidth}');
   });

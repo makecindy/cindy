@@ -120,23 +120,18 @@ export const DL_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionar
 /**
  * 手机端拉取被控桌面的语音词典快照(只读)。
  *
- * 桌面之间的词典靠 push 帧对等同步,但手机在后台不维持 WebSocket、收不到 push,
- * 所以改为需要时主动拉一份。返回的是**只读投影**:词条文本 + 频次 + 别名,外加一个
+ * 桌面之间的词典靠 push 帧对等同步,手机不参与 CRDT 合并而只接收桌面主动推送的
+ * 只读投影;本 channel 保留作为旧版兼容和丢 push 时的主动刷新兜底。返回的是**只读投影**:
+ * 词条文本 + 频次 + 别名,外加一个
  * 版本向量(`stateVector`)供手机判断多台电脑的快照谁包含谁。化身、墓碑、抑制项、
  * 时钟都不外泄 —— 手机不参与合并,不持有可写状态,避免移动端词典分叉。
  *
  * 符合准入判据:不依赖 event.sender、无本机 UI 副作用、词典真相在被控端。
  *
- * ## 已知限制:与电脑之间的同步不一致
- *
- * invoke 属于 relay 的 CONTROL_KINDS,转发前会校验目标的 remoteControlEnabled;
- * 而电脑之间的词典同步走 push,不受该开关限制。结果是同一个功能有两套前提:用户
- * 开了「词典同步」后电脑之间就通了,手机却还要额外打开「允许同账号设备控制本机」
- * ——那个开关的语义是「允许别人操作我」,和「读一份词典」并不对应,用户撞上时基本
- * 猜不到该去开什么。
- *
- * 后续可改为推送:桌面在 presence 看到手机上线时主动 push 只读投影,零配置且与
- * 电脑之间同一条通道;本 channel 保留作为手机主动刷新的兜底。
+ * invoke 仍属于 relay 的 CONTROL_KINDS,转发前会校验目标的 remoteControlEnabled;
+ * 因此新版本优先使用独立的只读 push 快照通道,即使桌面关闭「允许被控」也能查看词典。
+ * 本 channel 保留用于旧版桌面兼容和 push 丢失后的主动刷新,不能把 REMOTE_DISABLED
+ * 当成“真的没有词条”。
  */
 export const DL_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
 
@@ -387,6 +382,13 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  // Durable PI Subagent truth and process handles live on the data-owning device.
+  // Reads and exact controls must execute there; the controller must never fall
+  // back to its own pi-agent-home for a remote task.
+  'local-db:subagent-runs:list',
+  'local-db:subagent-runs:detail',
+  'local-db:subagent-runs:transcript',
+  'maker:pi-subagent:control',
   // —— Goal(目标模式;goal 状态机在被控端 GoalController 执行才有意义)——
   'maker:goal:set',
   'maker:goal:clear',

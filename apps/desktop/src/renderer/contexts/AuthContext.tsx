@@ -43,6 +43,7 @@ import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
+import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
@@ -347,6 +348,12 @@ export function AuthProvider({
         setLoginState({ step: 'browser-redirect', label: action.label });
       }
       const result = await authServiceRef.current!.dispatchLoginAction(action);
+      // Org discovery can auto-start a sole SSO browser flow below. Persist at
+      // the successful discovery boundary so a later browser cancel/timeout
+      // does not erase a valid organization from local history.
+      if (action.type === 'discover-sso-org' && result.success) {
+        rememberSsoOrgIdentifier(action.org);
+      }
       // 没有真正选择时不停留 method-choice：唯一 SSO 改派 start-browser
       //（确认窗立刻消失、露出等待态）；唯一邮箱验证码直接发码进输码页。
       if (result.success && result.state.step === 'method-choice') {
@@ -391,46 +398,17 @@ export function AuthProvider({
   }, [runDataOwnerBoundary]);
 
   const enterLocalMode = useCallback(async () => {
+    // 本地模式也是一次 dataOwnerId 切换。必须走 applyIncomingState,不能自己拼半套
+    // setter:漏接草稿 / prompt / 模型可见性 / 记忆分区会让跳过登录进主界面后仍读写
+    // signed-out 槽(2026-08-21 #3201 Codex P1)。
     const state = await runDataOwnerBoundary(() => authServiceRef.current!.enterLocalMode());
-    publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
-    activeDataOwnerIdRef.current = state.dataOwnerId;
-    activeDataOwnerGenerationRef.current = state.ownerGeneration;
-    // 统一模型选择器的两根轴与本地模式的其它 owner 分区同待遇(2026-08-17 review 第五轮 M5):
-    // 本地模式也是一次 dataOwnerId 切换,漏接这两个 setter 会让本地模式下的收藏 / 引擎 override
-    // 继续读写**上一个身份**的分区 —— 跨身份可见,还会把改动写进别人的账号。
-    setModelEnginePrefsOwner(state.dataOwnerId);
-    setModelFavoritesOwner(state.dataOwnerId);
-    // 收藏**锚点**记忆(面板上哪一行打勾)与收藏本体同分区:漏接同样是多账号串号。
-    setFavoriteAnchorMemoryOwner(state.dataOwnerId);
-    setComposerDraftOwner(state.dataOwnerId);
-    setPendingHandoffOwner(state.dataOwnerId);
-    setDeferredUiAssignmentOwner(state.dataOwnerId);
-    setMode(state.mode);
-    setDataOwnerId(state.dataOwnerId);
-    setCanEnterApp(state.canEnterApp);
-    setIsAuthenticated(state.isAuthenticated);
-    setUser(state.user);
-  }, [runDataOwnerBoundary]);
+    applyIncomingState(state);
+  }, [applyIncomingState, runDataOwnerBoundary]);
 
   const exitLocalMode = useCallback(async () => {
     const state = await runDataOwnerBoundary(() => authServiceRef.current!.exitLocalMode());
-    publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
-    activeDataOwnerIdRef.current = state.dataOwnerId;
-    activeDataOwnerGenerationRef.current = state.ownerGeneration;
-    // 退出本地模式同样是一次 owner 切换:两根轴必须一起跟过去(见 enterLocalMode 的注释)。
-    setModelEnginePrefsOwner(state.dataOwnerId);
-    setModelFavoritesOwner(state.dataOwnerId);
-    // 收藏**锚点**记忆(面板上哪一行打勾)与收藏本体同分区:漏接同样是多账号串号。
-    setFavoriteAnchorMemoryOwner(state.dataOwnerId);
-    setComposerDraftOwner(state.dataOwnerId);
-    setPendingHandoffOwner(state.dataOwnerId);
-    setDeferredUiAssignmentOwner(state.dataOwnerId);
-    setMode(state.mode);
-    setDataOwnerId(state.dataOwnerId);
-    setCanEnterApp(state.canEnterApp);
-    setIsAuthenticated(state.isAuthenticated);
-    setUser(state.user);
-  }, [runDataOwnerBoundary]);
+    applyIncomingState(state);
+  }, [applyIncomingState, runDataOwnerBoundary]);
 
   const getAccountDeletionAvailability = useCallback(
     () => authServiceRef.current!.getAccountDeletionAvailability(),

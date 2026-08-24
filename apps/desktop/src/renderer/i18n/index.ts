@@ -23,6 +23,7 @@ import jaCommon from './locales/ja/common.json';
 import jaAiRename from './locales/ja/aiRename.json';
 import koCommon from './locales/ko/common.json';
 import koAiRename from './locales/ko/aiRename.json';
+import { GHOST_OFFICIAL_ID_PREFIXES } from '../../shared/ghost';
 import { DEFAULT_LOCALE } from '../../shared/locale';
 
 export {
@@ -54,7 +55,12 @@ void i18n.use(initReactI18next).init({
     escapeValue: false, // React 已转义
     // 品牌名单一事实源:locale 文案里的 {{appName}} 全部由此注入,改名只改
     // @cindy/maker-shared/branding 的 BRAND_NAME(见该文件对"不跟随改名"标识符的说明)。
-    defaultVariables: { appName: BRAND_NAME },
+    // 保留前缀同样只读 shared/ghost.ts 的正本。错误文案不各自枚举,
+    // 新增前缀后所有装入入口会自动展示完整列表。
+    defaultVariables: {
+      appName: BRAND_NAME,
+      reservedGhostIdPrefixes: GHOST_OFFICIAL_ID_PREFIXES.join(' / '),
+    },
   },
   returnNull: false,
 });

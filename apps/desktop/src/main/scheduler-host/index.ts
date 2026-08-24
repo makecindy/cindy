@@ -53,6 +53,7 @@ import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
 import { withScheduleLock } from './scheduleLock';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
+import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 
 export interface StartSchedulerDeps {
   maker: Maker;
@@ -67,9 +68,27 @@ export interface StartSchedulerDeps {
 let _scheduler: Scheduler | null = null;
 let _storage: DrizzleScheduleStorage | null = null;
 let _loader: ProjectAutomationLoader | null = null;
+// Reset increments this before awaiting stop(). A start that was already
+// blocked in scheduler.start() must not publish its stale instance after the
+// account boundary has moved on.
+let _startupGeneration = 0;
+// resetScheduler must wait for the old account's complete startup operation,
+// not only fence its eventual publication.
+let _startupPromise: Promise<Scheduler> | null = null;
 
-export async function startScheduler(deps: StartSchedulerDeps): Promise<Scheduler> {
-  if (_scheduler) return _scheduler;
+export function startScheduler(deps: StartSchedulerDeps): Promise<Scheduler> {
+  if (_scheduler) return Promise.resolve(_scheduler);
+  if (_startupPromise) return _startupPromise;
+  const startup = startSchedulerInternal(deps);
+  _startupPromise = startup;
+  void startup.finally(() => {
+    if (_startupPromise === startup) _startupPromise = null;
+  }).catch(() => {});
+  return startup;
+}
+
+async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Scheduler> {
+  const startupGeneration = _startupGeneration;
 
   const storage = new DrizzleScheduleStorage(deps.getDb);
   _storage = storage;
@@ -190,13 +209,17 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
   promptRunner.attachScheduler(scheduler);
   scriptRunner.attachScheduler(scheduler);
 
-  await scheduler.start();
-  try {
-    const orphans = await storage.deleteOrphanRuns();
-    if (orphans > 0) deps.logger.info?.(`[scheduler-host] cleaned ${orphans} orphan run(s)`);
-  } catch (err) {
-    deps.logger.warn?.(`[scheduler-host] deleteOrphanRuns failed (non-fatal): ${String(err)}`);
-  }
+  await runSchedulerStartup(startupGeneration, () => _startupGeneration, {
+    create: () => scheduler,
+    afterStart: async () => {
+      try {
+        const orphans = await storage.deleteOrphanRuns();
+        if (orphans > 0) deps.logger.info?.(`[scheduler-host] cleaned ${orphans} orphan run(s)`);
+      } catch (err) {
+        deps.logger.warn?.(`[scheduler-host] deleteOrphanRuns failed (non-fatal): ${String(err)}`);
+      }
+    },
+  });
   _scheduler = scheduler;
   _loader = loader;
   deps.logger.info?.(`[scheduler-host] started${passive ? ' (passive: auto-fire disabled)' : ''}`);
@@ -243,6 +266,15 @@ export function getProjectAutomationLoader(): ProjectAutomationLoader {
  * 当前 resetMaker（maker-host:131）也不会调本函数。
  */
 export async function resetScheduler(): Promise<void> {
+  _startupGeneration++;
+  const pendingStartup = _startupPromise;
+  if (pendingStartup) {
+    try {
+      await pendingStartup;
+    } catch {
+      // Superseded startup rejects after stopping itself; teardown continues.
+    }
+  }
   if (_scheduler) {
     await _scheduler.stop();
   }

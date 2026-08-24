@@ -27,8 +27,13 @@ import {
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
   selectTailUserMessageId,
+  isVerticalScrollbarPress,
+  shouldRepinOnDownIntent,
+  shouldRepinOnWheel,
+  shouldUnpinOnScrollbarDrag,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
+  REPIN_AT_BOTTOM_PX,
   UNPIN_MIN_SCROLLABLE_PX,
 } from '../components/chat/autoFollowIntent';
 
@@ -76,6 +81,107 @@ describe('shouldUnpinOnWheel', () => {
         clientHeight: 800,
       }),
     ).toBe(false);
+  });
+});
+
+describe('shouldRepinOnWheel', () => {
+  it('向下滚动且已贴死底部 → 恢复', () => {
+    expect(shouldRepinOnWheel({ deltaX: 0, deltaY: 40, distanceFromBottom: 0 })).toBe(true);
+    expect(
+      shouldRepinOnWheel({ deltaX: 0, deltaY: 1, distanceFromBottom: REPIN_AT_BOTTOM_PX }),
+    ).toBe(true);
+  });
+
+  it('向上滚动 → 不恢复', () => {
+    expect(shouldRepinOnWheel({ deltaX: 0, deltaY: -40, distanceFromBottom: 0 })).toBe(false);
+  });
+
+  it('距底超过贴死阈值(刚上滚一格的残留)→ 不恢复,防回弹翻回', () => {
+    expect(shouldRepinOnWheel({ deltaX: 0, deltaY: 40, distanceFromBottom: 40 })).toBe(false);
+    expect(
+      shouldRepinOnWheel({ deltaX: 0, deltaY: 40, distanceFromBottom: REPIN_AT_BOTTOM_PX + 1 }),
+    ).toBe(false);
+  });
+
+  it('水平为主轴的触控板平移 → 不恢复', () => {
+    expect(shouldRepinOnWheel({ deltaX: 60, deltaY: 3, distanceFromBottom: 0 })).toBe(false);
+  });
+});
+
+describe('shouldRepinOnDownIntent', () => {
+  it('已贴死底部 → 恢复(方向由 caller 保证)', () => {
+    expect(shouldRepinOnDownIntent({ distanceFromBottom: 0 })).toBe(true);
+    expect(shouldRepinOnDownIntent({ distanceFromBottom: REPIN_AT_BOTTOM_PX })).toBe(true);
+  });
+
+  it('距底超过贴死阈值 → 不恢复', () => {
+    expect(shouldRepinOnDownIntent({ distanceFromBottom: REPIN_AT_BOTTOM_PX + 1 })).toBe(false);
+  });
+});
+
+describe('shouldUnpinOnScrollbarDrag', () => {
+  it('指针按下且上移过死区 → 解除', () => {
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: -2,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('只按下未移动 / 下移 → 不解除(点滑块不该掐死跟随)', () => {
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: 0,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: 40,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: -1,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('指针未按下 → 不解除', () => {
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: false,
+        scrollDelta: -40,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('isVerticalScrollbarPress', () => {
+  it('点在容器自身且 offsetX 落在滚动条槽 → 进入拖拽', () => {
+    expect(isVerticalScrollbarPress({ targetIsRoot: true, offsetX: 800, clientWidth: 784 })).toBe(
+      true,
+    );
+    expect(isVerticalScrollbarPress({ targetIsRoot: true, offsetX: 784, clientWidth: 784 })).toBe(
+      true,
+    );
+  });
+
+  it('点在正文后代 / 容器内容区 → 不进入拖拽', () => {
+    expect(isVerticalScrollbarPress({ targetIsRoot: false, offsetX: 800, clientWidth: 784 })).toBe(
+      false,
+    );
+    expect(isVerticalScrollbarPress({ targetIsRoot: true, offsetX: 400, clientWidth: 784 })).toBe(
+      false,
+    );
   });
 });
 
@@ -190,6 +296,36 @@ describe('resolveNearBottomOnScroll', () => {
     ).toBe(false);
   });
 
+  it('已贴死底部 + 已解除 + 非上滚(含 delta≈0)→ 恢复跟随', () => {
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: false,
+        distanceFromBottom: 0,
+        scrollDelta: 0,
+      }),
+    ).toBe(true);
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: false,
+        distanceFromBottom: REPIN_AT_BOTTOM_PX,
+        scrollDelta: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it('已贴死底部 + 已解除 + 上滚 → 保持解除(1px 上滚解除后的 scroll 不得翻回)', () => {
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: false,
+        distanceFromBottom: 0,
+        scrollDelta: -1,
+      }),
+    ).toBe(false);
+  });
+
   it('阈值带内 + 已解除 + 明确向下 → 恢复跟随', () => {
     expect(
       resolveNearBottomOnScroll({
@@ -212,72 +348,85 @@ describe('resolveNearBottomOnScroll', () => {
 
 describe('resolveRenderPinDecision', () => {
   it('explicit tail send takes ownership from a restored history anchor', () => {
-    expect(resolveRenderPinDecision({
-      restoring: true,
-      newUserSend: true,
-      sentFromThisRenderer: true,
-      nearBottom: false,
-    })).toEqual({ clearRestoring: true, pinToBottom: true });
+    expect(
+      resolveRenderPinDecision({
+        restoring: true,
+        newUserSend: true,
+        sentFromThisRenderer: true,
+        nearBottom: false,
+      }),
+    ).toEqual({ clearRestoring: true, pinToBottom: true });
   });
 
   it('restored history remains anchored until an explicit user send', () => {
-    expect(resolveRenderPinDecision({
-      restoring: true,
-      newUserSend: false,
-      sentFromThisRenderer: false,
-      nearBottom: false,
-    })).toEqual({ clearRestoring: false, pinToBottom: false });
+    expect(
+      resolveRenderPinDecision({
+        restoring: true,
+        newUserSend: false,
+        sentFromThisRenderer: false,
+        nearBottom: false,
+      }),
+    ).toEqual({ clearRestoring: false, pinToBottom: false });
   });
 
   it('keeps ordinary near-bottom auto-follow behavior', () => {
-    expect(resolveRenderPinDecision({
-      restoring: false,
-      newUserSend: false,
-      sentFromThisRenderer: false,
-      nearBottom: true,
-    })).toEqual({ clearRestoring: false, pinToBottom: true });
-    expect(resolveRenderPinDecision({
-      restoring: false,
-      newUserSend: false,
-      sentFromThisRenderer: false,
-      nearBottom: false,
-    })).toEqual({ clearRestoring: false, pinToBottom: false });
+    expect(
+      resolveRenderPinDecision({
+        restoring: false,
+        newUserSend: false,
+        sentFromThisRenderer: false,
+        nearBottom: true,
+      }),
+    ).toEqual({ clearRestoring: false, pinToBottom: true });
+    expect(
+      resolveRenderPinDecision({
+        restoring: false,
+        newUserSend: false,
+        sentFromThisRenderer: false,
+        nearBottom: false,
+      }),
+    ).toEqual({ clearRestoring: false, pinToBottom: false });
   });
 
   // #2194: IM 渠道 / 手机端 / 定时任务注入的 user 消息没有本端发送意图，
   // 不应夺走视口——按普通新内容处理（贴底才跟随）。
   it('externally injected user message does not steal a scrolled-up viewport', () => {
-    expect(resolveRenderPinDecision({
-      restoring: false,
-      newUserSend: true,
-      sentFromThisRenderer: false,
-      nearBottom: false,
-    })).toEqual({ clearRestoring: false, pinToBottom: false });
+    expect(
+      resolveRenderPinDecision({
+        restoring: false,
+        newUserSend: true,
+        sentFromThisRenderer: false,
+        nearBottom: false,
+      }),
+    ).toEqual({ clearRestoring: false, pinToBottom: false });
   });
 
   it('externally injected user message still follows while near the bottom', () => {
-    expect(resolveRenderPinDecision({
-      restoring: false,
-      newUserSend: true,
-      sentFromThisRenderer: false,
-      nearBottom: true,
-    })).toEqual({ clearRestoring: false, pinToBottom: true });
+    expect(
+      resolveRenderPinDecision({
+        restoring: false,
+        newUserSend: true,
+        sentFromThisRenderer: false,
+        nearBottom: true,
+      }),
+    ).toEqual({ clearRestoring: false, pinToBottom: true });
   });
 
   it('externally injected user message does not take ownership from a restored anchor', () => {
-    expect(resolveRenderPinDecision({
-      restoring: true,
-      newUserSend: true,
-      sentFromThisRenderer: false,
-      nearBottom: false,
-    })).toEqual({ clearRestoring: false, pinToBottom: false });
+    expect(
+      resolveRenderPinDecision({
+        restoring: true,
+        newUserSend: true,
+        sentFromThisRenderer: false,
+        nearBottom: false,
+      }),
+    ).toEqual({ clearRestoring: false, pinToBottom: false });
   });
 });
 
 describe('selectTailUserMessageId', () => {
   type Item = { type: 'message'; id: string; role: 'user' | 'assistant' };
-  const userMessageId = (item: Item | undefined) =>
-    item?.role === 'user' ? item.id : null;
+  const userMessageId = (item: Item | undefined) => (item?.role === 'user' ? item.id : null);
   const oldUser: Item = { type: 'message', id: 'old-user', role: 'user' };
   const newUser: Item = { type: 'message', id: 'new-user', role: 'user' };
   const assistant: Item = { type: 'message', id: 'assistant-tail', role: 'assistant' };
@@ -330,17 +479,13 @@ describe('selectTailUserMessageId', () => {
 describe('findLastMatchingId', () => {
   it('returns the last matching id walking from the tail', () => {
     expect(
-      findLastMatchingId(
-        [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
-        (item) => (item.id === 'c' ? null : item.id),
+      findLastMatchingId([{ id: 'a' }, { id: 'b' }, { id: 'c' }], (item) =>
+        item.id === 'c' ? null : item.id,
       ),
     ).toBe('b');
     expect(findLastMatchingId([{ id: 'a' }], () => null)).toBeNull();
     expect(
-      findLastMatching(
-        [{ id: 'a' }, { id: 'b' }],
-        (item) => (item.id === 'b' ? item : null),
-      )?.id,
+      findLastMatching([{ id: 'a' }, { id: 'b' }], (item) => (item.id === 'b' ? item : null))?.id,
     ).toBe('b');
   });
 });
@@ -633,10 +778,7 @@ describe('resolveLastUserMessageObservation', () => {
 
 describe('MessageStream send-window handoff wiring', () => {
   it('clears any anchored window on a local send and only defers pin for stale slices', () => {
-    const source = readFileSync(
-      resolve(__dirname, '../components/chat/MessageStream.tsx'),
-      'utf8',
-    );
+    const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8');
     expect(source).toContain('resolveSendWindowHandoff({');
     expect(source).toContain('if (windowHandoff.clearWindowAnchor)');
     expect(source).toContain('if (decision.pinToBottom && !windowHandoff.deferPinToNextRender)');

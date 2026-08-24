@@ -35,20 +35,18 @@ What makes this system distinctive is the combination of a single geometric sans
 
 The interface is built from a three-tier layer system that applies symmetrically to both modes — **Surface** as the base, **Card** as the elevated layer, and **Board** as the hairline divider. This is the foundation of every page in every mode.
 
-
 | Role        | Light Mode | Dark Mode | Usage                                                                                                                                                                              |
 | ----------- | ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Surface** | `#f8f8f6`  | `#1f1f1e` | The primary page background — every page starts here. In full-window app layouts, this is the single flat background. In centered-card layouts, this is the page beneath the card. |
 | **Card**    | `#ffffff`  | `#2c2c2a` | The elevated layer sitting on top of Surface — login cards, modals, panels, raised containers, and any element that needs to visually lift off the page.                           |
 | **Board**   | `#d7d7d4`  | `#3c3c3a` | The hairline divider color — 1px borders between sections, card outlines, and any separator line within the same layer.                                                            |
 
-
 **Layer rule — flat vs. elevated:**
 
 - **Full-window applications** (e.g. main workspace, chat interface, dashboards): use **Surface** as a single flat background for the entire window — no Card layer at the page-structure level. Section boundaries (sidebar, toolbar, content area) are drawn with 1px **Board** dividers, never with background color shifts.
 - **Centered-card layouts** (e.g. login, modal, empty-state card on a blank page): use **Surface** as the page background and **Card** as the lifted card. The color difference between Surface and Card is what makes the card read as "lifted" — no shadow needed. The card outline is drawn in **Board**.
 
-> **Important — element-level vs. page-level:** The "flat Surface" rule in full-window layouts applies only to the **overall page structure**, not to individual widgets. Lifted widgets *within* a full-window layout — inputs, chat input boxes, raised cards, modal overlays, panel popups — still use **Card** color per their component rules (see Section 4). A full-window chat interface can have a flat Surface page *and* a Card-colored chat input box at the same time; those are two different scopes. "Surface flat" means "don't split the page into Page+Card layers," not "every element on the page must be Surface color."
+> **Important — element-level vs. page-level:** The "flat Surface" rule in full-window layouts applies only to the **overall page structure**, not to individual widgets. Lifted widgets _within_ a full-window layout — inputs, chat input boxes, raised cards, modal overlays, panel popups — still use **Card** color per their component rules (see Section 4). A full-window chat interface can have a flat Surface page _and_ a Card-colored chat input box at the same time; those are two different scopes. "Surface flat" means "don't split the page into Page+Card layers," not "every element on the page must be Surface color."
 
 ### Chip & Button Neutrals
 
@@ -81,10 +79,10 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 > - **Resource Usage Process Categories** — the Resource Usage table may color only its 14px process-type glyphs so dense rows can be scanned by category (user-requested 2026-08-06). The six category pairs are task Agent blue `#2563EB / #60A5FA`, Agent service purple `#7C3AED / #A78BFA`, main-process pink `#DB2777 / #F472B6`, renderer cyan `#0891B2 / #22D3EE`, GPU amber `#D97706 / #F59E0B`, and utility green `#059669 / #34D399` (Light / Dark). These colors encode process category, **not health or status**; row backgrounds, labels, metrics, selection and actions remain on the neutral system. Scope is strictly `resource-usage` process glyphs and must not be generalized to other tables or process UI. Tokens: `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon`.
 > - **ConfirmDialog Danger** — `#EF4444` used ONLY on the confirm button background in the Danger variant. The cancel button and rest of the dialog remain grayscale.
 > - **Permission Selector Mode Highlights** — selected risky permission modes may color only the option text/icon/checkmark and the collapsed trigger text/icon. The selected row background remains grayscale. Auto Approval uses `#417CDD` in both modes (finalized 2026-07-17, same value light/dark; replaces light #000050 / dark #00D9C5). Full Access uses Heart Orange `#EA6B17` in both modes (auto-follows warning-accent, finalized 2026-07-17). These hex values are the **default-theme palette only** — other themes may override `--perm-auto-selected-text` and `--perm-bypass-selected-text` with their own accent colors, provided both modes remain color-coded, distinguishable from each other, and visually distinct from neutral text. Tokens: `--perm-auto-selected-text` and `--perm-bypass-selected-text` in `apps/desktop/src/renderer/styles/globals.css`.
-> - **Diff Add Green / Diff Del Red** — GitHub-standard diff syntax colors, used on the `+` / `-` symbol glyph, the changed-line text foreground, **and the full row background** inside code-diff renderings. Applied in three places: (1) the Edit-tool DiffView card (F-MSG-6), (2) markdown ````diff` fenced code blocks in the message stream, and (3) `.diff` / `.patch` files opened in TextLightbox (the document previewer) — there hljs `.hljs-addition` / `.hljs-deletion` are forced `display: block` so the background fills to the right edge instead of stopping at the last glyph. Line-number gutter and ctx (unchanged) lines remain strictly grayscale per the layer system. **Foreground** — Add: `#22863a` Light / `#7ee787` Dark; Del: `#b31d28` Light / `#ff7b72` Dark. **Background** — Add: `#f0fff4` Light / `#033a16` Dark; Del: `#ffeef0` Light / `#67060c` Dark. Tokens: `--diff-add-fg/-bg` and `--diff-del-fg/-bg` in `apps/desktop/src/renderer/styles/globals.css`. Updated 2026-04-21: backgrounds switched from grayscale → GitHub red/green for full-row fill so additions / deletions are unambiguous at a glance.
+> - **Diff Add Green / Diff Del Red** — GitHub-standard diff syntax colors, used on the `+` / `-` symbol glyph, the changed-line text foreground, **and the full row background** inside code-diff renderings. Applied in three places: (1) the Edit-tool DiffView card (F-MSG-6), (2) markdown ````diff`fenced code blocks in the message stream, and (3)`.diff`/`.patch`files opened in TextLightbox (the document previewer) — there hljs`.hljs-addition`/`.hljs-deletion`are forced`display: block`so the background fills to the right edge instead of stopping at the last glyph. Line-number gutter and ctx (unchanged) lines remain strictly grayscale per the layer system. **Foreground** — Add:`#22863a`Light /`#7ee787`Dark; Del:`#b31d28`Light /`#ff7b72`Dark. **Background** — Add:`#f0fff4`Light /`#033a16`Dark; Del:`#ffeef0`Light /`#67060c`Dark. Tokens:`--diff-add-fg/-bg`and`--diff-del-fg/-bg`in`apps/desktop/src/renderer/styles/globals.css`. Updated 2026-04-21: backgrounds switched from grayscale → GitHub red/green for full-row fill so additions / deletions are unambiguous at a glance.
 > - **PR Status Colors (session-git-pr-context / sidebar task-info)** — closed = `--error-fg`, merged = `--focus-ring`, draft = `--text-tertiary` (single source: `PR_STATUS_COLOR` in `apps/desktop/src/renderer/features/cc-agent/gitContextPrVisuals.ts`). **Open green is split:** the session-header GitContextBadge and sidebar hover tooltip keep `--diff-add-fg` (theme-following GitHub greens). The sidebar task-info icon (registered 2026-08-17) follows the **surface**, not the theme name: it reads HSL lightness of `--sidebar` / `--sidebar-item-active` (Cindy's selected pill is inverse; many community/imported themes are not). Light surfaces use `--pr-open-on-light` `#2EA043`; dark surfaces use `--pr-open-on-dark` `#3FB950`. Both values are theme-invariant. The `#number` stays on the info-slot foreground. Open/draft PRs with `unresolvedCount > 0` add a 5px static `--status-bar-accent` corner dot on the status icon (not an AttentionDot tone). Unknown/unloaded status degrades to `--text-tertiary`. Scope is strictly PR-state surfaces; do not generalize these colors to other status systems.
 
-*Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, **Silver** (`#a3a3a3`) for secondary, **Stone** (`#737373`) for tertiary (per `--text-secondary` / `--text-tertiary` in `colors.ts` — the two swap between modes). Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds.*
+_Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, **Silver** (`#a3a3a3`) for secondary, **Stone** (`#737373`) for tertiary (per `--text-secondary` / `--text-tertiary` in `colors.ts` — the two swap between modes). Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds._
 
 ### Gradient System
 
@@ -98,28 +96,26 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 - **Display / Body / UI**: `Inter`, with fallbacks: `system-ui, -apple-system, "Segoe UI", sans-serif`
 - **Monospace**: `JetBrains Mono`, with fallbacks: `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`
 
-*Note: The entire interface uses a single sans font — Inter — for both display headlines and body text. Inter is chosen for (a) its neutral, geometric character that stays out of the way, (b) its excellent legibility at small sizes, and (c) its wide availability in both web and design tooling. A single font keeps the hierarchy clean — separation comes from size and weight, not typeface contrast.*
+_Note: The entire interface uses a single sans font — Inter — for both display headlines and body text. Inter is chosen for (a) its neutral, geometric character that stays out of the way, (b) its excellent legibility at small sizes, and (c) its wide availability in both web and design tooling. A single font keeps the hierarchy clean — separation comes from size and weight, not typeface contrast._
 
 ### Hierarchy
 
-
-| Role            | Font           | Size           | Weight  | Line Height  | Letter Spacing                         | Notes                                                                                                                                                                                                                                                        |
-| --------------- | -------------- | -------------- | ------- | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Display / Hero  | Inter          | 48px (3rem)    | 500     | 1.00 (tight) | normal                                 | Maximum impact headline                                                                                                                                                                                                                                      |
-| Section Heading | Inter          | 36px (2.25rem) | 500     | 1.11 (tight) | normal                                 | Feature section titles                                                                                                                                                                                                                                       |
+| Role            | Font           | Size           | Weight    | Line Height  | Letter Spacing                         | Notes                                                                                                                                                                                                                                                        |
+| --------------- | -------------- | -------------- | --------- | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Display / Hero  | Inter          | 48px (3rem)    | 500       | 1.00 (tight) | normal                                 | Maximum impact headline                                                                                                                                                                                                                                      |
+| Section Heading | Inter          | 36px (2.25rem) | 500       | 1.11 (tight) | normal                                 | Feature section titles                                                                                                                                                                                                                                       |
 | Sub-heading     | Inter          | 30px (1.88rem) | 400 / 500 | 1.20 (tight) | normal                                 | Card headings, feature names                                                                                                                                                                                                                                 |
-| Card Title      | Inter          | 24px (1.5rem)  | 400     | 1.33         | normal                                 | Medium emphasis headings                                                                                                                                                                                                                                     |
+| Card Title      | Inter          | 24px (1.5rem)  | 400       | 1.33         | normal                                 | Medium emphasis headings                                                                                                                                                                                                                                     |
 | Body Large      | Inter          | 18px (1.13rem) | 400 / 500 | 1.56         | normal                                 | Hero descriptions, button text                                                                                                                                                                                                                               |
 | Body / Link     | Inter          | 16px (1rem)    | 400 / 500 | 1.50         | normal                                 | Standard body text, navigation                                                                                                                                                                                                                               |
-| Caption         | Inter          | 14px (0.88rem) | 400     | 1.43         | normal                                 | Metadata, descriptions                                                                                                                                                                                                                                       |
-| Small           | Inter          | 12px (0.75rem) | 400     | 1.33         | normal                                 | Smallest reading-text size (auxiliary Micro Label may go smaller, floor 10px)                                                                                                                                                                                                                                     |
+| Caption         | Inter          | 14px (0.88rem) | 400       | 1.43         | normal                                 | Metadata, descriptions                                                                                                                                                                                                                                       |
+| Small           | Inter          | 12px (0.75rem) | 400       | 1.33         | normal                                 | Smallest reading-text size (auxiliary Micro Label may go smaller, floor 10px)                                                                                                                                                                                |
 | Micro Label     | Inter          | 10–13px        | 400 / 500 | 1.20–1.40    | optional 0.5–1px tracking on uppercase | **Auxiliary / non-reading** labels only — sidebar tree section heads (13px), tree row counts, frontmatter field names, scope chips, tag pills, status badges, breadcrumb segments. Never used for body text or anything the user reads sentence-by-sentence. |
-| Code Body       | JetBrains Mono | 16px (1rem)    | 400     | 1.50         | normal                                 | Inline code, commands                                                                                                                                                                                                                                        |
-| Code Caption    | JetBrains Mono | 14px (0.88rem) | 400     | 1.43         | normal                                 | Code snippets, secondary                                                                                                                                                                                                                                     |
+| Code Body       | JetBrains Mono | 16px (1rem)    | 400       | 1.50         | normal                                 | Inline code, commands                                                                                                                                                                                                                                        |
+| Code Caption    | JetBrains Mono | 14px (0.88rem) | 400       | 1.43         | normal                                 | Code snippets, secondary                                                                                                                                                                                                                                     |
 | Code Small      | JetBrains Mono | 11–12px        | 400 / 500 | 1.40–1.63    | normal                                 | Tags, labels, in-tree paths                                                                                                                                                                                                                                  |
 
-
-*Positioning note: the Display / Section Heading / Sub-heading rows are conceptual role targets for **brand canvases only** (the §16 login / splash family and its self-contained pages). Their concrete values live in canvas constants and §16 tables, not in app code. The 「排版豁免登记表」 below only registers exemption domains. Everything else — everyday chrome **and** in-app empty states — lives in the Body / Caption / Small / Micro rows, and for `apps/desktop` code the normative size set is the 「桌面 UI 字号白名单」 below: this table describes roles, the whitelist constrains values.*
+_Positioning note: the Display / Section Heading / Sub-heading rows are conceptual role targets for **brand canvases only** (the §16 login / splash family and its self-contained pages). Their concrete values live in canvas constants and §16 tables, not in app code. The 「排版豁免登记表」 below only registers exemption domains. Everything else — everyday chrome **and** in-app empty states — lives in the Body / Caption / Small / Micro rows, and for `apps/desktop` code the normative size set is the 「桌面 UI 字号白名单」 below: this table describes roles, the whitelist constrains values._
 
 ### Principles
 
@@ -132,12 +128,12 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 全站字重只允许以下四档整百值,禁止一切中间值(550/650…)与 800 及以上:
 
-| 档 | 名称 | 用途 |
-| --- | --- | --- |
-| 400 | Regular | 长文阅读正文、代码 |
-| 500 | Medium | UI 默认强调、标题 —— 日常 chrome 的主力档 |
+| 档  | 名称     | 用途                                                                        |
+| --- | -------- | --------------------------------------------------------------------------- |
+| 400 | Regular  | 长文阅读正文、代码                                                          |
+| 500 | Medium   | UI 默认强调、标题 —— 日常 chrome 的主力档                                   |
 | 600 | Semibold | 限量强调(徽标、表头、选中态等局部加重)。新增使用要能说出「为什么 500 不够」 |
-| 700 | Bold | **仅限下方豁免登记表中的域**,禁止出现在普通 UI chrome |
+| 700 | Bold     | **仅限下方豁免登记表中的域**,禁止出现在普通 UI chrome                       |
 
 - 与手机端 `apps/mobile/src/theme/tokens.ts` 的 `fontWeight` token(regular / medium / semibold / bold)一一对应 —— 两端一张梯子。
 - **两端 700 口径**:手机端 UI chrome 的上限仍是 600（正本为 `apps/mobile/docs/mobile-design-guide.md`,该文已同步登记本例外）。`bold` / 700 在手机端**只允许**出现在下表登记的域——原生 Markdown strong 与登录品牌画布。也就是说「四档梯子」是两端共用的**档位定义**,不等于两端 chrome 都可用 700。
@@ -155,18 +151,18 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 以下是**登记过的刻意分歧**,不要当 bug「修」;新增豁免必须先改本表:
 
-| 域 | 范围 | 允许 | 理由 |
-| --- | --- | --- | --- |
-| 登录 / Splash 品牌画布 | 桌面 `LoginControls.tsx`、`loginDesignTokens.ts`(Splash 借用同族面板)、`LegacyMigrationDialog.tsx`(仅字重)、`oauthResultPage.ts`(自包含品牌页生成器,raw CSS 为其常量载体)；手机 `apps/mobile/app/(auth)/login.tsx`(登录页本体)、`apps/mobile/src/components/LoginSkinControls.tsx` 与 `apps/mobile/src/auth/loginSkinLayout.ts` | 700 + 设计 px 字号 | §16 已登记 Bold,两端共用同源登录画布与 figma 坐标系；桌面守卫只扫描 `apps/desktop/src/renderer`，手机端由自身守卫体系负责，本登记不扩展 PR #1553 的扫描范围 |
-| markdown 内容 | **仅 Markdown 渲染路径**：桌面 Markdown 渲染器输出的 DOM `<strong>`（`MarkdownRenderer` 及其消费方；必须解析为绝对 700；嵌套 strong 仍封顶 700）、CodeMirror strong 语法节点（`codemirrorGithubTheme.ts` 的 `t.strong` → `fontWeight: 'bold'`）、移动端原生 Markdown strong（`apps/mobile/src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`） | 700 / `bold` | 用户内容语义,非 UI chrome;编辑器内 strong 与两端渲染后的 strong 同权。当前桌面 Tailwind preflight 的相对 `bolder` 会使嵌套 strong 计算到更高档位，是已知实现缺口；规则不把该结果视为合规，待独立施工。**本行不覆盖普通 UI chrome 里直接写的 `<strong>`**（如 `MakerExperimentalView.tsx` 会话状态与事件列表）——它们同样被 preflight 的相对 `bolder` 渲染成 700,但不属豁免域,是已登记缺口,待归一为 `font-medium` / `font-semibold`。 |
-| hljs 主题移植 | `globals.css` 内 hljs 规则 | `bold` | 第三方主题移植,保真优先 |
-| 第三方查看器（用户内容） | `apps/desktop/src/renderer/vendor/drawio/viewer-static.min.js`（由 `DrawioPreview.tsx` 加载）及 `vendor/` 下其他上游产物 | 上游自带字重与字号 | 上游压缩产物,渲染的是用户绘图内容而非本产品 chrome;不改上游、不逐行归一。**守卫边界**:整个 `vendor/` 目录不纳入扫描（PR #1553 已在守卫盲区中显式登记该排除,不是未登记的漏扫）。 |
-| CodeMirror / Markdown 内容字号 | `codemirrorGithubTheme.ts` 的标题等内容层级（`2.15em` / `1.62em` 等相对值,CSS-in-JS 路径） | 相对字号（`em` 派生） | 内容标题层级必须随编辑器基础字号等比缩放,固定 token 会打断这个比例关系;相对值本身不脱离缩放链,故不要求落在 numeric 白名单。**守卫边界**:`em` / `rem` / `%` 相对值不参与 numeric 白名单判定。 |
-| 命令式第三方 API（非 DOM class 路径） | xterm 的 `ITerminalOptions.fontSize`（`features/right-sidebar/plugins/terminal/lib/xtermPool.ts`）等只接受**数值字段**、无法挂 class 的第三方配置入口；SVG 的 `fontSize="N"` 属性同理 | 数值字面量 | 这类 API 不消费 DOM class,Tailwind token 类挂不上去,只能传数字。**取值规则**:数值必须取自本白名单档位,或取自用户代码字号设置（`--app-code-font-size` / `appearanceSettings.codeSize`）解析出的运行期值 —— 不允许凭手感另取一个数。**守卫边界**:按精确签名放行（文件 + 字段 + 期望次数）,不做整文件豁免,新增此类入口须先改本表。 |
-| 用户可配置代码字号（变量路径） | `--app-code-font-size` 及其派生写法（`text-[length:var(--app-code-font-size)]`、`text-[length:calc(var(--app-code-font-size)_-_1px)]` 等,消费方含 Markdown / DiffView / ToolCallCard 等约 19 个文件） | 变量与其 `calc` 派生 | 该字号是**用户设置项**,`appearanceSettings.ts` 的 `codeSize` 允许 10–24 逐整数取值,因此运行期可落在 17 / 19 / 21 / 22 / 23 等 numeric 白名单外的值;这是刻意的可配置能力,不是漏归一。本白名单约束的是**开发者写死的档位**,不约束用户设置的运行期取值。**守卫边界**:`--app-code-font-size` 的变量与 `calc` 派生写法按精确签名登记豁免（见 PR #1553 守卫的豁免表）,不按 numeric 白名单判定。 |
-| 外部页注入 | `browserCommentPreload.ts` | 系统字体族 | 注入他人网页,不强加 Inter |
-| 手机 WebView HTML 生成器 | `selectableMarkdownHtml.ts` 等 | CSS 语法字面量 | 手机守卫已自登记盲区,值仍须守本阶梯 |
-| 紧凑模式派生值 | `globals.css` `.chat-rail-compact` 段 | calc / -1px 派生 | 机制本体 |
+| 域                                    | 范围                                                                                                                                                                                                                                                                                                                                                                 | 允许                  | 理由                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 登录 / Splash 品牌画布                | 桌面 `LoginControls.tsx`、`loginDesignTokens.ts`(Splash 借用同族面板)、`LegacyMigrationDialog.tsx`(仅字重)、`oauthResultPage.ts`(自包含品牌页生成器,raw CSS 为其常量载体)；手机 `apps/mobile/app/(auth)/login.tsx`(登录页本体)、`apps/mobile/src/components/LoginSkinControls.tsx` 与 `apps/mobile/src/auth/loginSkinLayout.ts`                                      | 700 + 设计 px 字号    | §16 已登记 Bold,两端共用同源登录画布与 figma 坐标系；桌面守卫只扫描 `apps/desktop/src/renderer`，手机端由自身守卫体系负责，本登记不扩展 PR #1553 的扫描范围                                                                                                                                                                                                                                                                         |
+| markdown 内容                         | **仅 Markdown 渲染路径**：桌面 Markdown 渲染器输出的 DOM `<strong>`（`MarkdownRenderer` 及其消费方；必须解析为绝对 700；嵌套 strong 仍封顶 700）、CodeMirror strong 语法节点（`codemirrorGithubTheme.ts` 的 `t.strong` → `fontWeight: 'bold'`）、移动端原生 Markdown strong（`apps/mobile/src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`） | 700 / `bold`          | 用户内容语义,非 UI chrome;编辑器内 strong 与两端渲染后的 strong 同权。当前桌面 Tailwind preflight 的相对 `bolder` 会使嵌套 strong 计算到更高档位，是已知实现缺口；规则不把该结果视为合规，待独立施工。**本行不覆盖普通 UI chrome 里直接写的 `<strong>`**（如 `MakerExperimentalView.tsx` 会话状态与事件列表）——它们同样被 preflight 的相对 `bolder` 渲染成 700,但不属豁免域,是已登记缺口,待归一为 `font-medium` / `font-semibold`。 |
+| hljs 主题移植                         | `globals.css` 内 hljs 规则                                                                                                                                                                                                                                                                                                                                           | `bold`                | 第三方主题移植,保真优先                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 第三方查看器（用户内容）              | `apps/desktop/src/renderer/vendor/drawio/viewer-static.min.js`（由 `DrawioPreview.tsx` 加载）及 `vendor/` 下其他上游产物                                                                                                                                                                                                                                             | 上游自带字重与字号    | 上游压缩产物,渲染的是用户绘图内容而非本产品 chrome;不改上游、不逐行归一。**守卫边界**:整个 `vendor/` 目录不纳入扫描（PR #1553 已在守卫盲区中显式登记该排除,不是未登记的漏扫）。                                                                                                                                                                                                                                                     |
+| CodeMirror / Markdown 内容字号        | `codemirrorGithubTheme.ts` 的标题等内容层级（`2.15em` / `1.62em` 等相对值,CSS-in-JS 路径）                                                                                                                                                                                                                                                                           | 相对字号（`em` 派生） | 内容标题层级必须随编辑器基础字号等比缩放,固定 token 会打断这个比例关系;相对值本身不脱离缩放链,故不要求落在 numeric 白名单。**守卫边界**:`em` / `rem` / `%` 相对值不参与 numeric 白名单判定。                                                                                                                                                                                                                                        |
+| 命令式第三方 API（非 DOM class 路径） | xterm 的 `ITerminalOptions.fontSize`（`features/right-sidebar/plugins/terminal/lib/xtermPool.ts`）等只接受**数值字段**、无法挂 class 的第三方配置入口；SVG 的 `fontSize="N"` 属性同理                                                                                                                                                                                | 数值字面量            | 这类 API 不消费 DOM class,Tailwind token 类挂不上去,只能传数字。**取值规则**:数值必须取自本白名单档位,或取自用户代码字号设置（`--app-code-font-size` / `appearanceSettings.codeSize`）解析出的运行期值 —— 不允许凭手感另取一个数。**守卫边界**:按精确签名放行（文件 + 字段 + 期望次数）,不做整文件豁免,新增此类入口须先改本表。                                                                                                     |
+| 用户可配置代码字号（变量路径）        | `--app-code-font-size` 及其派生写法（`text-[length:var(--app-code-font-size)]`、`text-[length:calc(var(--app-code-font-size)_-_1px)]` 等,消费方含 Markdown / DiffView / ToolCallCard 等约 19 个文件）                                                                                                                                                                | 变量与其 `calc` 派生  | 该字号是**用户设置项**,`appearanceSettings.ts` 的 `codeSize` 允许 10–24 逐整数取值,因此运行期可落在 17 / 19 / 21 / 22 / 23 等 numeric 白名单外的值;这是刻意的可配置能力,不是漏归一。本白名单约束的是**开发者写死的档位**,不约束用户设置的运行期取值。**守卫边界**:`--app-code-font-size` 的变量与 `calc` 派生写法按精确签名登记豁免（见 PR #1553 守卫的豁免表）,不按 numeric 白名单判定。                                           |
+| 外部页注入                            | `browserCommentPreload.ts`                                                                                                                                                                                                                                                                                                                                           | 系统字体族            | 注入他人网页,不强加 Inter                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 手机 WebView HTML 生成器              | `selectableMarkdownHtml.ts` 等                                                                                                                                                                                                                                                                                                                                       | CSS 语法字面量        | 手机守卫已自登记盲区,值仍须守本阶梯                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 紧凑模式派生值                        | `globals.css` `.chat-rail-compact` 段                                                                                                                                                                                                                                                                                                                                | calc / -1px 派生      | 机制本体                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ### 排版 non-goals(2026-08 登记)
 
@@ -294,19 +290,17 @@ Three tiers — **these three only**:
 - **Container (12px)**: box radius — code blocks, cards, panels, dialogs. Implemented as Tailwind `rounded-xl` (12px).
 - **Pill (9999px)**: every interactive element that can wear the pill — buttons, tabs, single-line inputs, tags, badges.
 
-*No 4px / 6px / 10px, and no arbitrary radii. Most elements still pick between the 12px container and the pill; 8px is a narrow exception for controls that don't fit the pill. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container to nest cleanly (hence 8, not 12) — a pill there becomes a lozenge, 12px looks bloated.*
+_No 4px / 6px / 10px, and no arbitrary radii. Most elements still pick between the 12px container and the pill; 8px is a narrow exception for controls that don't fit the pill. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container to nest cleanly (hence 8, not 12) — a pill there becomes a lozenge, 12px looks bloated._
 
 > **Narrow exception — status micro-cells (2px)** (registered 2026-07-28): non-interactive status squares of 8×8px or smaller keep a 2px radius — the workflow agent status strip's cells (background-tasks panel detail + workflow chat card) and the equivalent per-category square in SystemCard. At that size any tier radius rounds the square into a dot and destroys the "block strip" read that lets a large agent fleet be scanned at a glance. Scope is exactly this: **non-interactive, ≤8px, status-only**. Do NOT generalize to buttons, tags, rows, badges or containers — those still pick a tier.
 
 ## 6. Depth & Elevation
-
 
 | Level              | Treatment                                                                 | Use                                            |
 | ------------------ | ------------------------------------------------------------------------- | ---------------------------------------------- |
 | Flat (Level 0)     | No shadow, no border                                                      | Surface background, most content               |
 | Bordered (Level 1) | `1px solid` Board (`#d7d7d4` Light / `#3c3c3a` Dark)                      | Cards, code blocks, dividers, section outlines |
 | Lifted (Card)      | Card fill (`#ffffff` Light / `#2c2c2a` Dark) + optional 1px Board outline | Login cards, modals, raised panels             |
-
 
 **Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the token-gated floating-layer exceptions registered in §10 — `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow`; never add ad-hoc shadows to in-page elements. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
 
@@ -390,13 +384,14 @@ Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait
 - **Every UI must be implemented for both Light and Dark modes.** When adding or changing any page, component, layout, style, motion, or UI copy, both modes must be designed and built within the same piece of work; designing or implementing only one mode counts as incomplete. **Visual QA in both modes is expected effort, not a blocking gate** — see the last bullet.
 - Both modes must cover every state actually touched by the change — default, hover, pressed, selected, focus, disabled, loading, empty, error, overlays and scrims. States the change does not touch need not be retrofitted just to tick a box.
 - Colors must be consumed through semantic tokens; hardcoded values or conditional patches that only fit one mode are forbidden. When the design mock provides only one mode, the other mode must still be filled in through the existing token system; if a clear semantic mapping is missing, request a design ruling first — never ship with a mode omitted.
-- **Verification is best-effort and must be reported honestly.** Eyeballing the affected surfaces in both Light and Dark before delivery is the preferred path, but skipping it does not block the change — say plainly in the commit / PR verification notes which mode was actually checked and which was not. Never upgrade "reused existing themed styles / added no raw color values" into a claim that both modes were verified. If a mode *is* checked and comes back unreadable, indistinguishable, missing states, or visibly regressed, that is a real defect and must be fixed before delivery.
+- **Verification is best-effort and must be reported honestly.** Eyeballing the affected surfaces in both Light and Dark before delivery is the preferred path, but skipping it does not block the change — say plainly in the commit / PR verification notes which mode was actually checked and which was not. Never upgrade "reused existing themed styles / added no raw color values" into a claim that both modes were verified. If a mode _is_ checked and comes back unreadable, indistinguishable, missing states, or visibly regressed, that is a real defect and must be fixed before delivery.
 
 ### Architecture
 
 Cindy Desktop manages color with a **VSCode-style ColorRegistry + theme-override** model. Every color reaches components as a CSS-variable token; **hardcoding hex / rgba inside a component is never allowed** (it makes the component un-themeable outside the default theme).
 
 Source: `apps/desktop/src/renderer/themes/`
+
 - `color-registry.ts` — the `ColorRegistry` singleton and the `registerColor(id, defaults, description)` API
 - `colors.ts` — registers every token, organized "semantic slots first, aliases and singletons after" (counts drift constantly — **`colors.ts` itself is the only authoritative inventory**; this document does not track totals)
 - `theme-service.ts` — `applyTheme(theme)` serializes all tokens into `:root{}` and injects `<style id="theme-vars">`
@@ -409,45 +404,45 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 
 **Tier 1 — Semantic slots**: the core cross-context slots; when adding a theme, this tier is the main override battleground. The table below lists every slot exhaustively — it IS the Tier-1 registry.
 
-| Category | Slot | Default Light | Default Dark | Primary use |
-|---|---|---|---|---|
-| **Surface** | `--surface` | `#f8f8f6` | `#1f1f1e` | Page Surface (hex form) |
-| | `--surface-hsl` | `60 12.5% 97%` | `60 2% 12%` | Same, HSL triplet — consume via `hsl(var(--xxx))` |
-| | `--surface-elevated` | `#ffffff` | `#2c2c2a` | Card lift / dialogs / popovers |
-| | `--surface-elevated-soft` | `#e5e5e5` | `#2c2c2a` | Disabled-state Card |
-| | `--surface-card-ivory` | `#faf9f5` | `#2c2c2a` | Slightly warm ivory Card (Settings) |
-| | `--surface-chip` | `#e5e5e5` | `#3c3c3a` | Chips / pills / selected rows |
-| | `--surface-chip-alt` | `#e5e5e5` | `#2c2c2a` | Chip variant that collapses to Card in Dark |
-| | `--surface-hover` | `#e5e5e5` | `#3c3c3a` | General hover bg |
-| | `--surface-hover-soft` | `#f8f8f6` | `#3c3c3a` | Soft hover bg |
-| | `--surface-hover-hsl` | `0 0% 90%` | `60 2% 17%` | Hover, HSL form |
-| | `--surface-on-card` | `#ffffff` | `#1f1f1e` | Dark foreground on CTAs / checked icons |
-| **Border** | `--border-default` | `#d7d7d4` | `#3c3c3a` | This spec's Board 1px border |
-| | `--border-default-hsl` | `60 3% 84%` | `60 2% 23%` | Board, HSL form |
-| | `--border-shadcn-hsl` | `0 0% 90%` | `30 4% 28%` | shadcn input/border HSL |
-| | `--border-transparent-mixed` | `transparent` | `#3c3c3a` | Single-side borders (progress track etc.) |
-| **Text** | `--text-primary` | `#262626` | `#d4d4d4` | Primary headings / body |
-| | `--text-primary-hsl` | `0 0% 9%` | `0 0% 83%` | Primary, HSL form |
-| | `--text-primary-on-dark` | `#262626` | `#ffffff` | Inverse text (stop-button icon etc.) |
-| | `--text-primary-emphasis` | `#1a1a1a` | `#d4d4d4` | Plan emphasized primary text |
-| | `--text-primary-inv` | `#1a1a1a` | `#ffffff` | Plan-action approve text |
-| | `--text-primary-body-strong` | `#525252` | `#d4d4d4` | Plan content body, strong |
-| | `--text-secondary` | `#737373` | `#a3a3a3` | Secondary text / icons |
-| | `--text-secondary-cross` | `#a3a3a3` | `#a3a3a3` | Lighter cross-theme secondary |
-| | `--text-secondary-mid` | `#525252` | `#a3a3a3` | Muted body text |
-| | `--text-tertiary` | `#a3a3a3` | `#737373` | Placeholder / tertiary |
-| | `--text-tertiary-stone` | `#737373` | `#737373` | Cross-theme Stone tertiary |
-| | `--text-tertiary-mid` | `#525252` | `#737373` | Mid-gray tertiary |
-| | `--text-tertiary-hsl` | `0 0% 45%` | `0 0% 45%` | Tertiary, HSL form |
-| | `--text-disabled` | `#d4d4d4` | `#525252` | Disabled / failed |
-| | `--text-disabled-tertiary` | `#a3a3a3` | `#737373` | Disabled placeholder variant |
-| | `--text-placeholder` | `#c4c4c4` | `#525252` | Unified placeholder slot (lighter than tertiary — reads as empty); chat/ask/settings/plan-action-fb inputs all resolve here |
-| **Accent** | `--accent-cta-bg` | `#262626` | `#ffffff` | Inverse CTA bg |
-| | `--accent-cta-bg-pure` | `#000000` | `#ffffff` | Pure CTA bg |
-| | `--accent-emphasis` | `#262626` | `#d4d4d4` | Settings primary button etc. |
-| | `--accent-soft` | `#262626` | `#ffffff` | Soft accent (folder button etc.) |
-| | `--accent-hover` | `#262626` | `#e5e5e5` | CTA pressed/hover |
-| | `--accent-pure-cta-fg` | `#ffffff` | `#000000` | Pure-inverse CTA text |
+| Category    | Slot                         | Default Light  | Default Dark | Primary use                                                                                                                 |
+| ----------- | ---------------------------- | -------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| **Surface** | `--surface`                  | `#f8f8f6`      | `#1f1f1e`    | Page Surface (hex form)                                                                                                     |
+|             | `--surface-hsl`              | `60 12.5% 97%` | `60 2% 12%`  | Same, HSL triplet — consume via `hsl(var(--xxx))`                                                                           |
+|             | `--surface-elevated`         | `#ffffff`      | `#2c2c2a`    | Card lift / dialogs / popovers                                                                                              |
+|             | `--surface-elevated-soft`    | `#e5e5e5`      | `#2c2c2a`    | Disabled-state Card                                                                                                         |
+|             | `--surface-card-ivory`       | `#faf9f5`      | `#2c2c2a`    | Slightly warm ivory Card (Settings)                                                                                         |
+|             | `--surface-chip`             | `#e5e5e5`      | `#3c3c3a`    | Chips / pills / selected rows                                                                                               |
+|             | `--surface-chip-alt`         | `#e5e5e5`      | `#2c2c2a`    | Chip variant that collapses to Card in Dark                                                                                 |
+|             | `--surface-hover`            | `#e5e5e5`      | `#3c3c3a`    | General hover bg                                                                                                            |
+|             | `--surface-hover-soft`       | `#f8f8f6`      | `#3c3c3a`    | Soft hover bg                                                                                                               |
+|             | `--surface-hover-hsl`        | `0 0% 90%`     | `60 2% 17%`  | Hover, HSL form                                                                                                             |
+|             | `--surface-on-card`          | `#ffffff`      | `#1f1f1e`    | Dark foreground on CTAs / checked icons                                                                                     |
+| **Border**  | `--border-default`           | `#d7d7d4`      | `#3c3c3a`    | This spec's Board 1px border                                                                                                |
+|             | `--border-default-hsl`       | `60 3% 84%`    | `60 2% 23%`  | Board, HSL form                                                                                                             |
+|             | `--border-shadcn-hsl`        | `0 0% 90%`     | `30 4% 28%`  | shadcn input/border HSL                                                                                                     |
+|             | `--border-transparent-mixed` | `transparent`  | `#3c3c3a`    | Single-side borders (progress track etc.)                                                                                   |
+| **Text**    | `--text-primary`             | `#262626`      | `#d4d4d4`    | Primary headings / body                                                                                                     |
+|             | `--text-primary-hsl`         | `0 0% 9%`      | `0 0% 83%`   | Primary, HSL form                                                                                                           |
+|             | `--text-primary-on-dark`     | `#262626`      | `#ffffff`    | Inverse text (stop-button icon etc.)                                                                                        |
+|             | `--text-primary-emphasis`    | `#1a1a1a`      | `#d4d4d4`    | Plan emphasized primary text                                                                                                |
+|             | `--text-primary-inv`         | `#1a1a1a`      | `#ffffff`    | Plan-action approve text                                                                                                    |
+|             | `--text-primary-body-strong` | `#525252`      | `#d4d4d4`    | Plan content body, strong                                                                                                   |
+|             | `--text-secondary`           | `#737373`      | `#a3a3a3`    | Secondary text / icons                                                                                                      |
+|             | `--text-secondary-cross`     | `#a3a3a3`      | `#a3a3a3`    | Lighter cross-theme secondary                                                                                               |
+|             | `--text-secondary-mid`       | `#525252`      | `#a3a3a3`    | Muted body text                                                                                                             |
+|             | `--text-tertiary`            | `#a3a3a3`      | `#737373`    | Placeholder / tertiary                                                                                                      |
+|             | `--text-tertiary-stone`      | `#737373`      | `#737373`    | Cross-theme Stone tertiary                                                                                                  |
+|             | `--text-tertiary-mid`        | `#525252`      | `#737373`    | Mid-gray tertiary                                                                                                           |
+|             | `--text-tertiary-hsl`        | `0 0% 45%`     | `0 0% 45%`   | Tertiary, HSL form                                                                                                          |
+|             | `--text-disabled`            | `#d4d4d4`      | `#525252`    | Disabled / failed                                                                                                           |
+|             | `--text-disabled-tertiary`   | `#a3a3a3`      | `#737373`    | Disabled placeholder variant                                                                                                |
+|             | `--text-placeholder`         | `#c4c4c4`      | `#525252`    | Unified placeholder slot (lighter than tertiary — reads as empty); chat/ask/settings/plan-action-fb inputs all resolve here |
+| **Accent**  | `--accent-cta-bg`            | `#262626`      | `#ffffff`    | Inverse CTA bg                                                                                                              |
+|             | `--accent-cta-bg-pure`       | `#000000`      | `#ffffff`    | Pure CTA bg                                                                                                                 |
+|             | `--accent-emphasis`          | `#262626`      | `#d4d4d4`    | Settings primary button etc.                                                                                                |
+|             | `--accent-soft`              | `#262626`      | `#ffffff`    | Soft accent (folder button etc.)                                                                                            |
+|             | `--accent-hover`             | `#262626`      | `#e5e5e5`    | CTA pressed/hover                                                                                                           |
+|             | `--accent-pure-cta-fg`       | `#ffffff`      | `#000000`    | Pure-inverse CTA text                                                                                                       |
 
 **Tier 2 — Aliases**: the many component-scoped tokens (`--cmd-palette-bg`, `--msg-tool-card-text`, `--settings-input-border`, …) whose defaults resolve to `var(--slot)`. The browser forward-resolves automatically; components are unaware — **keep consuming the alias names directly**.
 
@@ -455,29 +450,29 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 
 ### Semantic Exemption Colors (theme-invariant)
 
-| Token | Light | Dark | Use |
-|---|---|---|---|
-| `--destructive` (HSL) | `0 84% 60%` | `0 72% 63%` | Generic destructive text/border |
-| `--error-flat` | `#ef4444` | `#ef4444` | Flat danger foreground |
-| `--login-error-fg` | `#D91F37` | `#D91F37` | Login error text/border (see §16.1) |
-| `--error-bg/-border/-fg/-fg-strong` | (red) | (red) | Error alert card subsystem |
-| `--diff-add-fg/-bg`, `--diff-del-fg/-bg` | GitHub palette | GitHub palette | Diff rendering |
-| `--pr-open-on-light` | `#2EA043` | `#2EA043` | Sidebar task-info PR open on light surfaces (2026-08-17) |
-| `--pr-open-on-dark` | `#3FB950` | `#3FB950` | Sidebar task-info PR open on dark surfaces (2026-08-17) |
-| `--status-bar-accent` | `#EA6B17` | `#EA6B17` | Thinking Orange, theme-invariant (finalized 2026-07-17) |
-| `--plan-action-approve-icon-bg` | `#EA6B17` | `#EA6B17` | Plan approve — same thinking semantics (follows warning-accent, finalized 2026-07-17) |
-| `--perm-bypass-selected-text` | `#EA6B17` | `#EA6B17` | Heart Orange, permission semantics (auto-follows `var(--warning-accent)`, finalized 2026-07-17) |
-| `--settings-integration-warning` | `#EA6B17` | `#EA6B17` | Warning semantics (auto-follows `var(--warning-accent)`, finalized 2026-07-17) |
-| `--warning-bg-soft` | rgba(234,107,23,0.12) | rgba(234,107,23,0.18) | Warning alpha surface (alpha recomputed against `#EA6B17`, 2026-07-17) |
-| `--warning-fg` | `#F3A115` | `#F3A115` | Warning text/icons, including the update-restart busy-turn interruption hint |
-| `--focus-ring` / `--focus-ring-soft` | `#417CDD` / @50% | same | A11y focus ring, finalized 2026-07-17 (replaces #3b82f6), theme-invariant |
-| `--text-selection-bg` | `var(--focus-ring-soft)` | same | Selected text background; remains visible when focus moves into an embedded webview |
-| `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow` | rgba | rgba (deeper) | Shadows, theme-invariant |
-| `--overlay-modal` / `--overlay-lightbox` | rgba | rgba (deeper) | Modal / lightbox backdrop |
-| `--perm-auto-selected-text` | `#417CDD` | `#417CDD` | Auto Approval accent, finalized 2026-07-17 (same value both modes; replaces #000050/#00D9C5) |
-| Toast `#417CDD / #2AAE5B / #F3A115 / #D91F37` | (hardcoded in Toast.tsx, VARIANT_MAP exported) | same | Finalized 2026-07-17 (Toast exemption lifted, merged into the status-color family) |
-| `--file-badge-pdf/-doc/-sheet/-slide/-code` + `--file-badge-fg` | `#B23A26` / `#2C5CA8` / `#2E7D4F` / `#A25A12` / `#5B49A8`, fg `#FFFFFF` | same | File-type badges on the self-drawn attachment icon (2026-07-27). Bound to *what the file is*, not to the theme, so both modes share one value. Each accent is picked for ≥4.5:1 against `--file-badge-fg` (5.96 / 6.56 / 5.05 / 5.24 / 7.09) — the badge label renders at 10px (Micro Label floor, §3), so AA small-text applies. `--file-badge-fg` is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. |
-| `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon` | `#2563EB` / `#7C3AED` / `#DB2777` / `#0891B2` / `#D97706` / `#059669` | `#60A5FA` / `#A78BFA` / `#F472B6` / `#22D3EE` / `#F59E0B` / `#34D399` | Resource Usage 14px process-category glyphs only (2026-08-06). Category cue, not status; all surrounding UI stays neutral. Protected from automatic external-theme import so category identity does not drift. |
+| Token                                                                                                                                                         | Light                                                                   | Dark                                                                  | Use                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--destructive` (HSL)                                                                                                                                         | `0 84% 60%`                                                             | `0 72% 63%`                                                           | Generic destructive text/border                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `--error-flat`                                                                                                                                                | `#ef4444`                                                               | `#ef4444`                                                             | Flat danger foreground                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `--login-error-fg`                                                                                                                                            | `#D91F37`                                                               | `#D91F37`                                                             | Login error text/border (see §16.1)                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--error-bg/-border/-fg/-fg-strong`                                                                                                                           | (red)                                                                   | (red)                                                                 | Error alert card subsystem                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `--diff-add-fg/-bg`, `--diff-del-fg/-bg`                                                                                                                      | GitHub palette                                                          | GitHub palette                                                        | Diff rendering                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `--pr-open-on-light`                                                                                                                                          | `#2EA043`                                                               | `#2EA043`                                                             | Sidebar task-info PR open on light surfaces (2026-08-17)                                                                                                                                                                                                                                                                                                                                                                                         |
+| `--pr-open-on-dark`                                                                                                                                           | `#3FB950`                                                               | `#3FB950`                                                             | Sidebar task-info PR open on dark surfaces (2026-08-17)                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--status-bar-accent`                                                                                                                                         | `#EA6B17`                                                               | `#EA6B17`                                                             | Thinking Orange, theme-invariant (finalized 2026-07-17)                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--plan-action-approve-icon-bg`                                                                                                                               | `#EA6B17`                                                               | `#EA6B17`                                                             | Plan approve — same thinking semantics (follows warning-accent, finalized 2026-07-17)                                                                                                                                                                                                                                                                                                                                                            |
+| `--perm-bypass-selected-text`                                                                                                                                 | `#EA6B17`                                                               | `#EA6B17`                                                             | Heart Orange, permission semantics (auto-follows `var(--warning-accent)`, finalized 2026-07-17)                                                                                                                                                                                                                                                                                                                                                  |
+| `--settings-integration-warning`                                                                                                                              | `#EA6B17`                                                               | `#EA6B17`                                                             | Warning semantics (auto-follows `var(--warning-accent)`, finalized 2026-07-17)                                                                                                                                                                                                                                                                                                                                                                   |
+| `--warning-bg-soft`                                                                                                                                           | rgba(234,107,23,0.12)                                                   | rgba(234,107,23,0.18)                                                 | Warning alpha surface (alpha recomputed against `#EA6B17`, 2026-07-17)                                                                                                                                                                                                                                                                                                                                                                           |
+| `--warning-fg`                                                                                                                                                | `#F3A115`                                                               | `#F3A115`                                                             | Warning text/icons, including the update-restart busy-turn interruption hint                                                                                                                                                                                                                                                                                                                                                                     |
+| `--focus-ring` / `--focus-ring-soft`                                                                                                                          | `#417CDD` / @50%                                                        | same                                                                  | A11y focus ring, finalized 2026-07-17 (replaces #3b82f6), theme-invariant                                                                                                                                                                                                                                                                                                                                                                        |
+| `--text-selection-bg`                                                                                                                                         | `var(--focus-ring-soft)`                                                | same                                                                  | Selected text background; remains visible when focus moves into an embedded webview                                                                                                                                                                                                                                                                                                                                                              |
+| `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow`                                                                                                 | rgba                                                                    | rgba (deeper)                                                         | Shadows, theme-invariant                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `--overlay-modal` / `--overlay-lightbox`                                                                                                                      | rgba                                                                    | rgba (deeper)                                                         | Modal / lightbox backdrop                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `--perm-auto-selected-text`                                                                                                                                   | `#417CDD`                                                               | `#417CDD`                                                             | Auto Approval accent, finalized 2026-07-17 (same value both modes; replaces #000050/#00D9C5)                                                                                                                                                                                                                                                                                                                                                     |
+| Toast `#417CDD / #2AAE5B / #F3A115 / #D91F37`                                                                                                                 | (hardcoded in Toast.tsx, VARIANT_MAP exported)                          | same                                                                  | Finalized 2026-07-17 (Toast exemption lifted, merged into the status-color family)                                                                                                                                                                                                                                                                                                                                                               |
+| `--file-badge-pdf/-doc/-sheet/-slide/-code` + `--file-badge-fg`                                                                                               | `#B23A26` / `#2C5CA8` / `#2E7D4F` / `#A25A12` / `#5B49A8`, fg `#FFFFFF` | same                                                                  | File-type badges on the self-drawn attachment icon (2026-07-27). Bound to _what the file is_, not to the theme, so both modes share one value. Each accent is picked for ≥4.5:1 against `--file-badge-fg` (5.96 / 6.56 / 5.05 / 5.24 / 7.09) — the badge label renders at 10px (Micro Label floor, §3), so AA small-text applies. `--file-badge-fg` is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. |
+| `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon` | `#2563EB` / `#7C3AED` / `#DB2777` / `#0891B2` / `#D97706` / `#059669`   | `#60A5FA` / `#A78BFA` / `#F472B6` / `#22D3EE` / `#F59E0B` / `#34D399` | Resource Usage 14px process-category glyphs only (2026-08-06). Category cue, not status; all surrounding UI stays neutral. Protected from automatic external-theme import so category identity does not drift.                                                                                                                                                                                                                                   |
 
 Never freestyle these semantic colors as hardcoded hex — always go through the corresponding token.
 
@@ -490,14 +485,14 @@ The implementation truth is `builtinThemes` in `apps/desktop/src/renderer/themes
 1. Create `apps/desktop/src/renderer/themes/builtin/<id>.ts` exporting a `Theme` object:
    ```ts
    export const myTheme: Theme = {
-     id: 'my-theme',
-     name: 'My Theme',
-     type: 'light' | 'dark',
+     id: "my-theme",
+     name: "My Theme",
+     type: "light" | "dark",
      colors: {
        // Override only the tokens that differ from the base theme;
        // an empty object {} is also valid (identical to base).
-       'surface': '#xxx',
-       'text-primary': '#xxx',
+       surface: "#xxx",
+       "text-primary": "#xxx",
        // ... most themes only need to override 30–90 tokens
      },
    };
@@ -612,16 +607,16 @@ Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc
 
 Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
 
-| Token | Value | Use |
-|---|---|---|
-| `--motion-instant` | 80ms | Instant hover feedback; light-overlay exit |
-| `--motion-fast` | 150ms | Color/opacity state changes (`transition-colors` = this tier); light-overlay enter |
-| `--motion-base` | 200ms | Size changes: expand/collapse, panel open/close |
-| `--motion-enter` | 250ms | Heavy-overlay (dialog) enter |
-| `--motion-exit` | 150ms | Heavy-overlay (dialog) exit |
-| `--motion-ease-out` | `cubic-bezier(0.16, 1, 0.3, 1)` | Enter / expand |
-| `--motion-ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Exit |
-| `--motion-ease-move` | `cubic-bezier(0.4, 0, 0.2, 1)` | Position/size interpolation |
+| Token                | Value                           | Use                                                                                |
+| -------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
+| `--motion-instant`   | 80ms                            | Instant hover feedback; light-overlay exit                                         |
+| `--motion-fast`      | 150ms                           | Color/opacity state changes (`transition-colors` = this tier); light-overlay enter |
+| `--motion-base`      | 200ms                           | Size changes: expand/collapse, panel open/close                                    |
+| `--motion-enter`     | 250ms                           | Heavy-overlay (dialog) enter                                                       |
+| `--motion-exit`      | 150ms                           | Heavy-overlay (dialog) exit                                                        |
+| `--motion-ease-out`  | `cubic-bezier(0.16, 1, 0.3, 1)` | Enter / expand                                                                     |
+| `--motion-ease-in`   | `cubic-bezier(0.4, 0, 1, 1)`    | Exit                                                                               |
+| `--motion-ease-move` | `cubic-bezier(0.4, 0, 0.2, 1)`  | Position/size interpolation                                                        |
 
 **Semantic loop-cycle exception:** `--motion-spinner-cycle` = `1000ms` is the
 full-turn duration for functional loading spinners. It is not a sixth interaction
@@ -644,20 +639,20 @@ long duration to leak into any other hover or transition.
 
 #### Semantics → motion prototypes (one semantic, one motion, app-wide)
 
-| Semantic | Spec | Reference implementation |
-|---|---|---|
-| Light overlay (menu / popover / tooltip) | In: `animate-float-in` (opacity + scale 0.97→1, fast/ease-out; pure-opacity tooltips use `animate-fade-in`). Out: `animate-float-out` (opacity only, instant/ease-in). **Exit is always faster than enter, and never scales** (a scaling exit reads as "sucked away" — paper fades in place) | `components/ui/dropdown-menu.tsx` |
-| Heavy overlay (modal / confirm) | In: 250ms fade + scale 0.95→1; out: 150ms | `components/ui/confirm-dialog.tsx` |
-| Expand / collapse | base/ease-move, grid `0fr↔1fr` height + opacity | `features/cc-agent/sidebar/SectionCollapse.tsx` |
-| List reorder | FLIP, transform translation | `components/ui/toast/ToastContainer.tsx` |
-| Press | `active:scale-[0.98]` (all interactive pills/buttons) | ConfirmDialog buttons |
-| Done | **the app's only sanctioned overshoot** (`status-done-pop`) | `globals.css` |
-| Running | Opacity breathing; must sit on an HTML wrapper (`docs/dev-rules/engineering-conventions.md` §7) | `session-breathing` |
-| Loading spinner | `animate-spinner` (`--motion-spinner-cycle`, linear full turn); HTML wrapper only, static under reduced motion | `tailwind.config.ts` |
-| Hover / state colors | `transition-colors`, ≤ fast (150ms) | App-wide status quo |
-| Container transform (chip grows into panel) | 220ms — see the dedicated category below (explicit exception) | Composer permission/model selectors |
+| Semantic                                    | Spec                                                                                                                                                                                                                                                                                         | Reference implementation                        |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Light overlay (menu / popover / tooltip)    | In: `animate-float-in` (opacity + scale 0.97→1, fast/ease-out; pure-opacity tooltips use `animate-fade-in`). Out: `animate-float-out` (opacity only, instant/ease-in). **Exit is always faster than enter, and never scales** (a scaling exit reads as "sucked away" — paper fades in place) | `components/ui/dropdown-menu.tsx`               |
+| Heavy overlay (modal / confirm)             | In: 250ms fade + scale 0.95→1; out: 150ms                                                                                                                                                                                                                                                    | `components/ui/confirm-dialog.tsx`              |
+| Expand / collapse                           | base/ease-move, grid `0fr↔1fr` height + opacity                                                                                                                                                                                                                                              | `features/cc-agent/sidebar/SectionCollapse.tsx` |
+| List reorder                                | FLIP, transform translation                                                                                                                                                                                                                                                                  | `components/ui/toast/ToastContainer.tsx`        |
+| Press                                       | `active:scale-[0.98]` (all interactive pills/buttons)                                                                                                                                                                                                                                        | ConfirmDialog buttons                           |
+| Done                                        | **the app's only sanctioned overshoot** (`status-done-pop`)                                                                                                                                                                                                                                  | `globals.css`                                   |
+| Running                                     | Opacity breathing; must sit on an HTML wrapper (`docs/dev-rules/engineering-conventions.md` §7)                                                                                                                                                                                              | `session-breathing`                             |
+| Loading spinner                             | `animate-spinner` (`--motion-spinner-cycle`, linear full turn); HTML wrapper only, static under reduced motion                                                                                                                                                                               | `tailwind.config.ts`                            |
+| Hover / state colors                        | `transition-colors`, ≤ fast (150ms)                                                                                                                                                                                                                                                          | App-wide status quo                             |
+| Container transform (chip grows into panel) | 220ms — see the dedicated category below (explicit exception)                                                                                                                                                                                                                                | Composer permission/model selectors             |
 
-*Reference-implementation paths in this table are relative to `apps/desktop/src/renderer/`.*
+_Reference-implementation paths in this table are relative to `apps/desktop/src/renderer/`._
 
 #### Red lines (performance & restraint)
 
@@ -666,7 +661,7 @@ long duration to leak into any other hover or transition.
 - Every new `@keyframes` / `animate-*` class must be registered in the `prefers-reduced-motion` whitelist in `globals.css` (the global `* { transition: none }` does not catch keyframes).
 - Real-time direct-manipulation interactions (resizer drag, drag-follow) get **no easing** — following the hand IS the feedback.
 - Forbidden: pointless displacement, bouncing, parallax, looping decoration, `transition-all`, and typewriter per-character animation on streamed text (streaming already is the motion). Interactions stay fast and direct. (Per-**word** opacity fade-in on streamed text is **not** the typewriter — see the sanctioned stream-word-fade class below: the word is fully laid out and only its opacity ramps; ruled distinct on 2026-08-07.)
-- **Cadenced running shimmer (2026-08-07)**: the running status bar's breathing (`status-bar-shimmer`) is **event-driven, not an infinite loop** — one 1.5s dip (1 → 0.45 → 1, `steps(18)`) plays per real sign of progress (status text change / token count advance; re-triggered via keyed remount in `RunningStatusBar`, back-to-back plays merge through an animation-end pending flag). Silence (long thinking, tool wait) holds steady full opacity. Semantics: *breathing = producing*, not *heartbeat = alive*. New loading/working indicators should prefer this cadenced pattern over a new infinite loop.
+- **Cadenced running shimmer (2026-08-07)**: the running status bar's breathing (`status-bar-shimmer`) is **event-driven, not an infinite loop** — one 1.5s dip (1 → 0.45 → 1, `steps(18)`) plays per real sign of progress (status text change / token count advance; re-triggered via keyed remount in `RunningStatusBar`, back-to-back plays merge through an animation-end pending flag). Silence (long thinking, tool wait) holds steady full opacity. Semantics: _breathing = producing_, not _heartbeat = alive_. New loading/working indicators should prefer this cadenced pattern over a new infinite loop.
 
 #### Exception category: container transform (chip lifts off and grows)
 
@@ -689,11 +684,11 @@ long duration to leak into any other hover or transition.
   - **Definition**: the seal's signature running animation (two gapped arcs, outer 83/17 + inner 39/61, spinning as a whole at 2.4s linear on an HTML wrapper) is a beloved product signature and is preserved verbatim. What was missing was an ending: when the turn stops, the gaps used to freeze in place and read as "stuck mid-load". The choreography gives the animation a curtain call instead of replacing it: **while still spinning, both arcs close their gaps into full circles** (600ms one-shot `stroke-dasharray` transition — permitted as a one-shot transient per the red lines above); when the turn actually issued a `ghost_call` (fulfilled), a success-colored halo ring then dilates outward once (`summon-seal-halo`, 0.9s scale 1→1.65 + fade) while a ✓ badge pops at the avatar's corner (reusing the Done semantic's sanctioned overshoot curve, same as `status-done-pop`); the spin is removed only after the circles are closed — a spinning full circle is visually static, so the removal is seamless. Semantics stay self-consistent: gap = in progress, full circle = turn finished; ✓/halo appear **only on a fulfilled call** — a cancelled/never-issued call closes neutrally with no success badge (the ring must not fake success).
   - **Parameter red lines**: close 600ms (`--motion-ease-out`; outside the duration tiers — sanctioned here, do not reuse elsewhere), halo 0.9s one-shot, tick pop 0.3s. Historic messages mount directly on the closed static frame with zero animation; the choreography plays only for a mount that actually witnessed `running` flip false. Halo/badge fill comes from the status-dot done-green exemption (`--card-status-done`); the ✓ glyph uses `--completion-badge-fg` (dark ink both modes, 5.29:1 on the done green — white would be 2.88:1, below the WCAG 1.4.11 non-text 3:1 floor). All keyframes are in the `prefers-reduced-motion` whitelist — reduced motion lands straight on the terminal frame.
   - **Scope boundary**: this seal only. The closing-ring language must not leak into other spinners or progress indicators. Implementation: `apps/desktop/src/renderer/components/chat/GhostSummonCard.tsx` + `.summon-seal-*` in `globals.css`.
-- **Stream-word fade(流式正文逐词淡入)** — the fifth sanctioned motion class (approved 2026-08-07), **only** for streaming assistant prose in the chat message flow:
-  - **Definition**: during streaming, each newly-arrived **word** fades in over `--motion-fast` (150ms, opacity only) instead of popping in — text appears to *surface*, not *type*. This is explicitly **not** the forbidden per-character typewriter: the word is fully rendered and positioned from its first frame; only opacity ramps. CJK is segmented per word via `Intl.Segmenter`, so Chinese prose flows word-by-word too.
-  - **Architecture red lines**: CSS owns the form, JS owns only the timing — `rehypeStreamWordFade` wraps words in `span.stream-word` and writes a per-word `--wf-delay`. The nominal tick step is capped at **24ms per word**; when the pending lead would exceed the **320ms** lead budget, the step is compressed adaptively so rendering keeps up with any arrival rate. Words are keyed by stable content matching (same-position matches, prefix continuation, and bounded backward matching), not by document word index. Each word keeps an absolute scheduled start time / remaining delay across re-parse and remount, so already-seen words never replay. The animation itself is a pure-opacity one-shot keyframe in `globals.css` (compositor-only). The final (non-streaming) render carries **zero** wrapper spans — the plugin only mounts while `isStreaming`.
+- **Stream-word fade(流式正文分段淡入)** — the fifth sanctioned motion class (approved 2026-08-07, ordinary-chat timing aligned 2026-08-21), **only** for streaming assistant prose in the chat message flow:
+  - **Definition**: during streaming, each newly-arrived text **word** and each inline-code atom fades in over `--motion-fast` (150ms, opacity only) instead of popping in — content appears to *surface*, not *type*. This is explicitly **not** the forbidden per-character typewriter: each segment is fully rendered and positioned from its first frame; only opacity ramps. CJK is segmented per word via `Intl.Segmenter`; an inline-code chip keeps its internal structure and fades as one indivisible segment.
+  - **Architecture red lines**: CSS owns the form, JS owns only the timing — `rehypeStreamWordFade` wraps words and inline-code atoms in `span.stream-word` and writes `--wf-delay`. Ordinary chat has **no cross-segment stagger**: every segment newly received in one render starts at `0ms`, matching Codex Desktop's normal-chat default and preventing later semantic atoms from overtaking queued prose. Segments are keyed by type + stable content matching (same-position matches, text-prefix continuation, and bounded backward matching), not by document index. Render computes a candidate state; only a committed DOM render may publish it from a layout effect. Each segment keeps an absolute start time / remaining delay across re-parse and remount, so already-seen content never replays. The animation itself is a pure-opacity one-shot keyframe in `globals.css` (compositor-only). The final (non-streaming) render carries **zero** wrapper spans — the plugin only mounts while `isStreaming`.
   - **Degradation**: `prefers-reduced-motion` short-circuits in JS (plugin not mounted, no spans in DOM) *and* the CSS reduce block strips the animation — double coverage, and the CSS side is safe because `.stream-word` has no own opacity declaration to get stuck on.
-  - **Scope boundary**: streaming chat prose only. Skips `code`/`pre` (chips and code blocks keep whole-form) and KaTeX subtrees. Must not be applied to static content, titles, toasts, or any non-streamed text. Implementation: `apps/desktop/src/renderer/components/chat/rehypeStreamWordFade.ts` + `.stream-word` in `globals.css`; tests: `rehypeStreamWordFade.test.ts`.
+  - **Scope boundary**: streaming chat prose only. Inline `code` participates as one atomic segment; fenced `pre` code blocks and KaTeX subtrees are skipped. Must not be applied to static content, titles, toasts, or any non-streamed text. Implementation: `apps/desktop/src/renderer/components/chat/rehypeStreamWordFade.ts` + `.stream-word` in `globals.css`; tests: `rehypeStreamWordFade.test.ts`.
 - **Session-loading wordmark sheen(会话加载字标扫光)** — the sixth sanctioned motion class (approved 2026-08-10), **only** for Desktop `BrandLoadingMark` while `MessageStream` defers its message tree during a session switch:
   - **Definition**: the active theme's official Light/Dark Cindy wordmark sits centered in the empty message viewport at 35% opacity; after a 200ms delayed-reveal threshold, one narrow neutral highlight traverses the wordmark shape. The PNG alpha channel is the mask, so motion is confined to the glyphs and never paints a panel/background. This is functional loading feedback for a measured long switch, not a decorative brand loop: ordinary sessions complete before the reveal threshold and never show it; the mark unmounts immediately when the message tree mounts.
   - **Parameters / performance**: highlight cycle 1.6s, `cubic-bezier(0.4, 0, 0.2, 1)`, HTML pseudo-element `transform: translateX(-120% → 350%)` only (compositor-only). The neutral gradient is the narrow §2 exception registered under “Gradient System”; it may use only `transparent` and `--text-primary`, never brand red or a component-authored chromatic value. `prefers-reduced-motion` removes both the reveal and sheen animations and shows a static wordmark; `[data-app-hidden='true']` pauses the infinite sheen via `animation-play-state` while the window is hidden.
@@ -743,12 +738,11 @@ long duration to leak into any other hover or transition.
      两端都必须**按来源 + label 形态分三档**(判定口径同源:桌面
      `shouldRenderCodeReferenceLabel`、移动 `chatPathLabelReadsAsFileReference`):
 
-     | 来源 | label | 点亮后 |
-     |---|---|---|
-     | 正文裸写的路径 | (无独立 label) | 正文字体 + 下划线,**不套等宽** |
-     | 作者手写 `[README.md](path)` | 读起来是文件引用 | 等宽 chip + 下划线 |
-     | 作者手写 `[看这份规则](path)` | 散文 | 正文字体 + 下划线 |
-
+     | 来源                          | label            | 点亮后                         |
+     | ----------------------------- | ---------------- | ------------------------------ |
+     | 正文裸写的路径                | (无独立 label)   | 正文字体 + 下划线,**不套等宽** |
+     | 作者手写 `[README.md](path)`  | 读起来是文件引用 | 等宽 chip + 下划线             |
+     | 作者手写 `[看这份规则](path)` | 散文             | 正文字体 + 下划线              |
      - 桌面端:`remarkLocalPathLinks` 给切出的 link 节点打 `data-bare-path` 标记
        (走 mdast `data.hProperties`),`MarkdownTargetLink` 见到它就跳过
        `shouldRenderCodeReferenceLabel`、直接走 `ResolvedLocalLink`。
@@ -757,6 +751,7 @@ long duration to leak into any other hover or transition.
        再过一遍 label 形态判定。**不得无条件去掉 `markdownInlineCode`** —— 那会把
        作者手写的文件名链接一起降级(2026-07-31 PR #1144 review 实捉)。
      - 作者手写的文件名链接保留 chip 是刻意的:那是作者的排版意图,与桌面一致。
+
 2. **外链与本地文件不做外观区分**,只表达「可点」;去哪由文本自身可读性承担(斜杠路径
    vs `https://` 前缀)。
 3. **聊天正文不使用 `--msg-link`。** 该 token 是主题契约(10 个内置主题各自定义,
@@ -789,12 +784,12 @@ long duration to leak into any other hover or transition.
    > 时全部不点亮,那个错更醒目也更常见;要为它收紧就得在词法层区分正则与路径,又回到
    > 规则 4 「靠形状排除必然连真的一起砍」的老问题。两端都有用例把它钉成**显式已知项**。
 
-   | 形状 | 例 | `unknown`(链路断)时 |
-   |---|---|---|
-   | 绝对路径(**含无扩展名**) | `/abs/a.png`、`/etc/hosts`、`C:\Windows\System32`、`file:///a.md` | **乐观点亮**(不因断链把整条消息的 chip 全灭) |
-   | 尾斜杠目录 / 分隔符+扩展名 | `src/x/`、`src/App.tsx` | 同上 |
-   | 无分隔符裸名 | `package.json`、`array.map` | 必须远端明确回 `file` / `directory` |
-   | 有分隔符但无扩展名 | `src/components`、`and/or` | 同上 |
+   | 形状                       | 例                                                                | `unknown`(链路断)时                          |
+   | -------------------------- | ----------------------------------------------------------------- | -------------------------------------------- |
+   | 绝对路径(**含无扩展名**)   | `/abs/a.png`、`/etc/hosts`、`C:\Windows\System32`、`file:///a.md` | **乐观点亮**(不因断链把整条消息的 chip 全灭) |
+   | 尾斜杠目录 / 分隔符+扩展名 | `src/x/`、`src/App.tsx`                                           | 同上                                         |
+   | 无分隔符裸名               | `package.json`、`array.map`                                       | 必须远端明确回 `file` / `directory`          |
+   | 有分隔符但无扩展名         | `src/components`、`and/or`                                        | 同上                                         |
 
    > ⚠️ **「带分隔符」本身不足以乐观点亮**,必须**同时带扩展名**。`src/components` 与
    > `and/or` / `n/a` / `read/write` / `text/plain` 词法**完全同形**,词法层分不开;只按
@@ -814,11 +809,11 @@ PR #1144 的第 8、11、12、14 轮 review 各捉到这条规格的一个缺口
 字符 / 空格中段 / `( ) # %` 等未支持字符 + 行号后缀)。**逐个补字符类注定一轮补一个**,
 故收敛成一条判据(两端 `startsMidPathToken` + `endsMidPathToken`,逐字同形):
 
-| 侧 | 判据 |
-|---|---|
-| 左 | 命中点前是同一 run 内的字符时,只有**白名单**字符可以紧邻路径:开括号 / 引号 / 冒号 / 列表分隔符 / `>`。其余一律拒绝 |
-| 左 | 命中点前是空白时,看空白前那个 run:含分隔符**且不以扩展名收尾** → 拒绝(只跨空格/制表符,不跨换行) |
-| 右 | 命中之后紧跟 token 字符 → 拒绝;`.` 与 `:` 本身放过(句末标点),但**跳过整串 `.`/`:` 之后仍跟 token 字符**时同样拒绝 |
+| 侧  | 判据                                                                                                               |
+| --- | ------------------------------------------------------------------------------------------------------------------ |
+| 左  | 命中点前是同一 run 内的字符时,只有**白名单**字符可以紧邻路径:开括号 / 引号 / 冒号 / 列表分隔符 / `>`。其余一律拒绝 |
+| 左  | 命中点前是空白时,看空白前那个 run:含分隔符**且不以扩展名收尾** → 拒绝(只跨空格/制表符,不跨换行)                    |
+| 右  | 命中之后紧跟 token 字符 → 拒绝;`.` 与 `:` 本身放过(句末标点),但**跳过整串 `.`/`:` 之后仍跟 token 字符**时同样拒绝  |
 
 关键收益:`( ) # % [ ] =` 之类**不需要枚举** —— 白名单之外一律拒绝,以后出现别的未支持
 字符自动覆盖,不必再来一轮。
@@ -837,6 +832,7 @@ PR #1144 的第 8、11、12、14 轮 review 各捉到这条规格的一个缺口
 > 之后没有 token 字符。
 
 两处刻意的例外,改动它们会让真实用法退化,均有用例钉住:
+
 - **`.` 与 `:` 不进右边界字符类**:句末英文句点(`见 src/a.ts.`)与句末冒号
   (`见 src/a.ts:`)是最常见的紧随字符;把 `.` 加进去会让整条失配(SEG 含 `.`,回溯救
   不回来)。
@@ -849,10 +845,10 @@ PR #1144 的第 8、11、12、14 轮 review 各捉到这条规格的一个缺口
 
 #### 落点
 
-| 端 | 位置 |
-|---|---|
-| 桌面 | `MarkdownRenderer.tsx` 的 `MARKDOWN_LINK_CLASS` / `FileTargetChip`;`UserMessage.tsx` + `UserMessageUrlLink.tsx`;候选判定在 `lib/markdownTarget.ts` |
-| 移动 | `MessageRenderer.tsx` 的 `markdownLink` / `markdownPathChip` / `sessionLinkChipText` 与 `ChatPathChipSpan` 的点亮门槛;候选判定在 `session/chatPathCandidate.ts` |
+| 端         | 位置                                                                                                                                                                                                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 桌面       | `MarkdownRenderer.tsx` 的 `MARKDOWN_LINK_CLASS` / `FileTargetChip`;`UserMessage.tsx` + `UserMessageUrlLink.tsx`;候选判定在 `lib/markdownTarget.ts`                                                                                                       |
+| 移动       | `MessageRenderer.tsx` 的 `markdownLink` / `markdownPathChip` / `sessionLinkChipText` 与 `ChatPathChipSpan` 的点亮门槛;候选判定在 `session/chatPathCandidate.ts`                                                                                          |
 | 文件阅读器 | `session/selectableMarkdownHtml.ts`。**该面只有 http(s) 真的可点**,故规则在这里的落地是反过来的:只有 `a` 带下划线,`.xdt-image-chip` / `.xdt-session-chip` 一律不带下划线也不带 `cursor: pointer`,非 http(s) 目标(本地路径 / 会话深链 / mailto)不出 `<a>` |
 
 > **文件阅读器为什么反过来**:`MarkdownFileReader.interceptNavigation` 只把 http(s) 交给
@@ -876,18 +872,18 @@ PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点�
 > 凭记忆写的,漏掉了「远程会话 unknown 乐观点亮」与「引用 chip 无下划线」两条,下一轮
 > review 又各捉到一个。
 
-| 面 | 元素 | 可点? | 下划线 |
-|---|---|---|---|
-| 桌面聊天正文 | 外链 / anchor / 本地图片 URL | ✅ | ✅ `MARKDOWN_LINK_CLASS` |
-| 桌面聊天正文 | 已解析本地文件(chip / 散文 label) | ✅ | ✅ |
-| 桌面聊天正文 | 未解析路径、行内 code | ❌ | ❌ |
-| 桌面聊天正文 | **远程**会话里 stat 回 `unknown` 的引用 | 仅非歧义形状 | 由 `isAmbiguousPathShape` 门槛裁决 |
-| 桌面聊天正文 / 用户气泡 | 会话 / 项目深链 chip(`InlineReferenceChip`) | 取决于是否注入 onClick / onContextMenu | **与 `interactive` 同源** |
-| 桌面用户气泡 | URL / 图片路径 | ✅ | ✅（改前只有 hover 下划线） |
-| 手机聊天正文 | 外链 / 图片 chip / 会话 chip | 取决于 handler 是否注入 | **与 handler 同源**(`clickableInlineStyle`) |
-| 手机聊天正文 | 路径 chip | 取决于远端 verdict | 由 `ChatPathChipSpan.lit` 单点裁决 |
-| 手机文件阅读器 | http(s) | ✅ | ✅ |
-| 手机文件阅读器 | 会话 chip / 图片 chip / 本地路径 / mailto | ❌（无 bridge、只放行 http(s)） | ❌ |
+| 面                      | 元素                                        | 可点?                                  | 下划线                                      |
+| ----------------------- | ------------------------------------------- | -------------------------------------- | ------------------------------------------- |
+| 桌面聊天正文            | 外链 / anchor / 本地图片 URL                | ✅                                     | ✅ `MARKDOWN_LINK_CLASS`                    |
+| 桌面聊天正文            | 已解析本地文件(chip / 散文 label)           | ✅                                     | ✅                                          |
+| 桌面聊天正文            | 未解析路径、行内 code                       | ❌                                     | ❌                                          |
+| 桌面聊天正文            | **远程**会话里 stat 回 `unknown` 的引用     | 仅非歧义形状                           | 由 `isAmbiguousPathShape` 门槛裁决          |
+| 桌面聊天正文 / 用户气泡 | 会话 / 项目深链 chip(`InlineReferenceChip`) | 取决于是否注入 onClick / onContextMenu | **与 `interactive` 同源**                   |
+| 桌面用户气泡            | URL / 图片路径                              | ✅                                     | ✅（改前只有 hover 下划线）                 |
+| 手机聊天正文            | 外链 / 图片 chip / 会话 chip                | 取决于 handler 是否注入                | **与 handler 同源**(`clickableInlineStyle`) |
+| 手机聊天正文            | 路径 chip                                   | 取决于远端 verdict                     | 由 `ChatPathChipSpan.lit` 单点裁决          |
+| 手机文件阅读器          | http(s)                                     | ✅                                     | ✅                                          |
+| 手机文件阅读器          | 会话 chip / 图片 chip / 本地路径 / mailto   | ❌（无 bridge、只放行 http(s)）        | ❌                                          |
 
 **颜色也归这条不变量管**:可点态只多一条下划线,所以链接**不得写死颜色**,必须继承所在
 上下文 —— 表头(`markdownTableHeaderCell` 用 `textSecondary`)、引用块等非正文色上下文里
@@ -913,9 +909,9 @@ PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点�
 peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端一律「确定态无 TTL 缓存 + `unknown`
 落 30s 负缓存且不进 peek」:
 
-| 端 | 确定态 | `unknown` |
-|---|---|---|
-| 桌面 `lib/remoteFileOpen.ts` | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
+| 端                                  | 确定态                | `unknown`                          |
+| ----------------------------------- | --------------------- | ---------------------------------- |
+| 桌面 `lib/remoteFileOpen.ts`        | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
 | 移动 `session/remotePathVerdict.ts` | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
 
 代价是断链期间乐观点亮的引用每次重挂会先画一帧纯文本。刻意取舍:让「peek 有值」严格等价于
@@ -938,7 +934,7 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 >
 > **重验结论必须无条件覆盖旧结论,不许按 verdict 早返回。** 有了 TTL 到期重验之后,凭空多出
 > 一条状态迁移:「先按 `unknown` 乐观点亮 → 链路恢复后确认 `nonfile`」。`if (verdict ===
-> 'nonfile') return;` 这种早返回写法漏掉它,不存在的路径会一直带着下划线可点。桌面已把判据
+'nonfile') return;` 这种早返回写法漏掉它,不存在的路径会一直带着下划线可点。桌面已把判据
 > 抽成纯函数 `decideRemoteLit(verdict, href, originalHref)` —— **每个 verdict 都有返回值,
 > 没有「什么都不做」这个分支**,调用方拿结果无条件 `setAsyncResolved`,于是「忘了撤销」在结构
 > 上不可表达;sync / async 两条分支共用它,判据也随之单点化。
@@ -952,11 +948,11 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 > 第 8、9、10 三轮 review 各捉到一条缺口,根因是同一个:**组件自己存了一份结论,而真值在一个
 > 可变的模块缓存里,组件只在自己的依赖变化时去看一眼**。于是每出现一条新的状态迁移就漏一条:
 >
-> | 轮次 | 漏掉的那条边 |
-> |---|---|
-> | 8 | TTL 到期没有通道通知(长挂载视图永远停在纯文本) |
-> | 9 | 派生值没跟着新结论被覆盖(确认 `nonfile` 后仍点亮) |
-> | 10 | **另一个挂载点**写入的确定态传不过来(同一路径出现在多处时) |
+> | 轮次 | 漏掉的那条边                                               |
+> | ---- | ---------------------------------------------------------- |
+> | 8    | TTL 到期没有通道通知(长挂载视图永远停在纯文本)             |
+> | 9    | 派生值没跟着新结论被覆盖(确认 `nonfile` 后仍点亮)          |
+> | 10   | **另一个挂载点**写入的确定态传不过来(同一路径出现在多处时) |
 >
 > 逐条补边补不完 —— 每补一条,下一条新迁移又会漏。故按硬止损线做结构收敛:
 >
@@ -990,13 +986,13 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 所有入口都调它,**不得按来源硬写 `true` / `false`**(移动端曾对链接入口恒 `false`,与桌面
 不对称,review 实捉)。
 
-| 候选来源 | 桌面入口 | 移动入口 | 走门槛? |
-|---|---|---|---|
-| 行内 code | `classifyInlineCodeTarget` | `classifyInlineCodePathCandidate` | ✅ |
-| 显式 markdown 链接 | `classifyMarkdownLinkTarget` | `classifyChatPathLinkTarget` | ✅ |
-| 正文裸写路径 | `remarkLocalPathLinks` → 同上 | `matchBareFilePathLink` → 同上 | ✅(词法强制带扩展名 → 恒非歧义,实际无影响) |
-| 尾斜杠目录 | 回看 `originalHref` → 非歧义 | 同左 | ✅ |
-| `file://` 绝对路径 | 单列为非歧义 | 同左 | ✅ |
+| 候选来源           | 桌面入口                      | 移动入口                          | 走门槛?                                    |
+| ------------------ | ----------------------------- | --------------------------------- | ------------------------------------------ |
+| 行内 code          | `classifyInlineCodeTarget`    | `classifyInlineCodePathCandidate` | ✅                                         |
+| 显式 markdown 链接 | `classifyMarkdownLinkTarget`  | `classifyChatPathLinkTarget`      | ✅                                         |
+| 正文裸写路径       | `remarkLocalPathLinks` → 同上 | `matchBareFilePathLink` → 同上    | ✅(词法强制带扩展名 → 恒非歧义,实际无影响) |
+| 尾斜杠目录         | 回看 `originalHref` → 非歧义  | 同左                              | ✅                                         |
+| `file://` 绝对路径 | 单列为非歧义                  | 同左                              | ✅                                         |
 
 > `file://` 必须在判据里**单列**:`looksLikeFilePath` 会被 `URL_SCHEME_RE` 挡掉而回 `false`
 > (那条排除是为「别把 `https://` 当本地路径」服务的),照抄它会把最明确的形态判成最可疑的。
@@ -1051,16 +1047,16 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 
 ### 15.1 Palette (extracted from Figma text nodes)
 
-| Semantic | Light | Dark |
-|---|---|---|
-| Brand red | `#DF0C27` | `#DF0C27` |
-| Deep brand red (hover/pressed) | `#A61629` | `#A61629` |
-| Background | `#F2F2ED` (warm ivory — 2026-08 revision, see 15.16) | `#181818` (pure neutral — 2026-08 revision) |
-| Card / input | `#FDFDF8` | `#1F1F1F` |
-| Border | `#E4E4DF` (desktop, warm; mobile light keeps its own exception `#C6C9CE` pending the mobile follow-up — see 15.13) | `#313131` |
-| Secondary info | `#888883` (2026-08 ruling: warmed + raised to ≥3.0, supersedes the 2026-07-20 `#8C8E94`; history in 15.5) | `#6F6F6F` |
-| Body text | `#1A1A1A` (near-black neutral; emphasis tier `#0C0C0C`) | `#D4D4D4` |
-| Pure white | `#FFFFFF` | `#FFFFFF` |
+| Semantic                       | Light                                                                                                              | Dark                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| Brand red                      | `#DF0C27`                                                                                                          | `#DF0C27`                                   |
+| Deep brand red (hover/pressed) | `#A61629`                                                                                                          | `#A61629`                                   |
+| Background                     | `#F2F2ED` (warm ivory — 2026-08 revision, see 15.16)                                                               | `#181818` (pure neutral — 2026-08 revision) |
+| Card / input                   | `#FDFDF8`                                                                                                          | `#1F1F1F`                                   |
+| Border                         | `#E4E4DF` (desktop, warm; mobile light keeps its own exception `#C6C9CE` pending the mobile follow-up — see 15.13) | `#313131`                                   |
+| Secondary info                 | `#888883` (2026-08 ruling: warmed + raised to ≥3.0, supersedes the 2026-07-20 `#8C8E94`; history in 15.5)          | `#6F6F6F`                                   |
+| Body text                      | `#1A1A1A` (near-black neutral; emphasis tier `#0C0C0C`)                                                            | `#D4D4D4`                                   |
+| Pure white                     | `#FFFFFF`                                                                                                          | `#FFFFFF`                                   |
 
 ### 15.2 Red-Boundary Test Maps(品牌红边界)
 
@@ -1165,15 +1161,15 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - Do not alias the caret to `--focus-ring` even though the values match: the semantics differ, and `--caret-accent` must stay independently adjustable.
 - Mobile parity: `inputCaret` in `apps/mobile/src/theme/tokens.ts` carries the same value in both modes, consumed via TextInput `cursorColor` / `selectionColor`; `themeTokens.test.ts` locks it.
 
-*(Finalized 2026-07-18 after two same-day revisions — earlier "brand-red caret" wording anywhere is void; see design-decision-log.md.)*
+_(Finalized 2026-07-18 after two same-day revisions — earlier "brand-red caret" wording anywhere is void; see design-decision-log.md.)_
 
-### 15.12 Vibrancy (frosted glass) System (macOS; finalized 2026-07-18)
+### 15.12 Vibrancy (frosted glass) System (macOS / Windows; finalized 2026-07-18, Windows resize backing updated 2026-08-21)
 
-- **The only translucent-surface token**: `surface-translucent-sidebar` — CINDY light `rgba(255, 255, 255, 0.85)` / dark `rgba(18, 15, 15, 0.75)` (defaults to opaque `var(--surface)` in the default theme; zero effect on non-CINDY themes). Consumer: the left sidebar (`aside.bg-sidebar`); any future translucent surface **reuses this token by default** — no new ad-hoc rgba. The splash root is opaque `--surface` (it must fully cover the mounted UI until loading completes — ruling 2026-07-19).
+- **The only translucent-surface token**: `surface-translucent-sidebar` — CINDY light `rgba(238, 238, 233, 0.85)` / dark `rgba(5, 5, 5, 0.85)` (defaults to opaque `var(--surface)` in the default theme; zero effect on non-CINDY themes). Consumer: the left sidebar (`aside.bg-sidebar`); any future translucent surface **reuses this token by default** — no new ad-hoc rgba. The splash root is opaque `--surface` (it must fully cover the mounted UI until loading completes — ruling 2026-07-19).
 - **Wallpaper-through triple pipeline — missing any one yields dead black** (verified by on-device A/B, 2026-07-18):
-  1. Set `backgroundColor: '#00000000'` + vibrancy **at window creation** (`bootstrap-electron.ts` / `vibrancyConfig.ts`); changing alpha via `setBackgroundColor` at runtime is unreliable.
+  1. Set the vibrancy backing **at window creation** (`bootstrap-electron.ts` / `vibrancyConfig.ts`); changing alpha via `setBackgroundColor` at runtime is unreliable. macOS uses `backgroundColor: '#00000000'`. Windows Acrylic uses the current `surface-translucent-sidebar` RGBA as its steady-state BrowserWindow backing, and the ordinary sidebar CSS is transparent on that exact platform/material combination to avoid double tinting. The material remains stable during live resize; Renderer layout must follow the changing window through CSS rather than switching the native backdrop per gesture.
   2. Under CINDY themes the **root container steps aside**: globals.css sets `.h-screen.bg-content-area` (and the splash backing layer while present) to transparent — otherwise the opaque root blocks everything.
-  3. **No CSS `backdrop-filter`** — it renders the transparent window backing as a black box; wallpaper blur is entirely the native vibrancy material's job, CSS only lays the translucent tint.
+  3. **No CSS `backdrop-filter` on the ordinary sidebar** — it renders the transparent window backing as a black box; wallpaper blur is entirely the native vibrancy material's job. macOS CSS lays the translucent tint; Windows Acrylic gets that same tint from the creation-time native backing. The sidebar peek drawer is the intentional exception because it covers application content rather than wallpaper.
 - Material selected via the `XDT_VIBRANCY_MATERIAL` env knob, **code default `hud`** (user-tested). Windows: Win11+ uses `backgroundMaterial` (default `acrylic`, `XDT_BACKDROP_MATERIAL` knob — not yet device-verified); Win10 / non-CINDY fall back to opaque `--surface`.
 - **No gradient overlays on translucent surfaces** — the light-red gradient layer was confirmed absent from the design and removed wholesale (2026-07-18); the splash gradient glow is likewise unimplemented (backlog, awaiting a ruling).
 - The `surface-translucent-sidebar` alpha is the **only open look-and-feel knob** in the theme-frozen zone; adjusting it requires synchronized changes in three places (`cindy-light.ts` / `cindy-dark.ts` / `cindyDecisionData.ts`) with the themes suite green.
@@ -1201,19 +1197,19 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **`colors.border` light is a mobile-wide exception, not a homepage-scoped token** (ruling 2026-07-21, PR #266): mobile light `border` / `borderTranslucent` = `#C6C9CE` / `rgba(198,201,206,0.62)`, deviating from desktop `#DCDFE3` — desktop borders usually sit on `#F8F8F8` cards, while mobile hairlines sit directly on the `#EDEDED` background, where `#DCDFE3` reads at a nearly invisible 1.14:1; the darkened 1.42:1 is device-verified legible. The value lives in `apps/mobile/src/theme/tokens.ts` global `lightColors.border`, applying to every mobile-light hairline; dark stays `#434343`, isomorphic with desktop. `chatCodeBorder` / `sheetActionBorder` / `sheetGrabber` keep independent values and do not follow this exception.
 - Mobile-only tokens carry only mobile-specific layers or geometry:
 
-| Mobile token | Light | Dark | Use |
-|---|---|---|---|
-| `surfaceListRow` | `#F6F6F6` | `#312F2F` | List project/task rows |
-| `surfaceListExpanded` | `#EAEAEA` | `#2A2828` | Expanded list block |
-| `activeGlyph` | `#DF0C27` | `#A61629` | Leading active glyph in lists |
-| `chatCodeSurface` | `#F8F8F8` | `#353333` | Chat / task code card |
-| `chatCodeBorder` | `#DCDFE3` | `#3C3C3C` | Chat / task code card border |
-| `inputCaret` | `#417CDD` | `#417CDD` | All input carets |
-| `sheetSurface` | `rgba(248,248,248,0.95)` | `rgba(59,59,59,0.95)` | Bottom-sheet root |
-| `sheetActionSurface` | `#F6F6F6` | `rgba(59,59,59,0.5)` | Sheet action group / row |
-| `sheetActionBorder` | `#DCDFE3` | `#505050` | Sheet action group / row border |
-| `sheetActionText` | `#3C3F43` | `#C1C1C1` | Sheet action row label |
-| `sheetGrabber` | `#DCDFE3` | `#6F6F6F` | Sheet / composer grabber |
+| Mobile token          | Light                    | Dark                  | Use                             |
+| --------------------- | ------------------------ | --------------------- | ------------------------------- |
+| `surfaceListRow`      | `#F6F6F6`                | `#312F2F`             | List project/task rows          |
+| `surfaceListExpanded` | `#EAEAEA`                | `#2A2828`             | Expanded list block             |
+| `activeGlyph`         | `#DF0C27`                | `#A61629`             | Leading active glyph in lists   |
+| `chatCodeSurface`     | `#F8F8F8`                | `#353333`             | Chat / task code card           |
+| `chatCodeBorder`      | `#DCDFE3`                | `#3C3C3C`             | Chat / task code card border    |
+| `inputCaret`          | `#417CDD`                | `#417CDD`             | All input carets                |
+| `sheetSurface`        | `rgba(248,248,248,0.95)` | `rgba(59,59,59,0.95)` | Bottom-sheet root               |
+| `sheetActionSurface`  | `#F6F6F6`                | `rgba(59,59,59,0.5)`  | Sheet action group / row        |
+| `sheetActionBorder`   | `#DCDFE3`                | `#505050`             | Sheet action group / row border |
+| `sheetActionText`     | `#3C3F43`                | `#C1C1C1`             | Sheet action row label          |
+| `sheetGrabber`        | `#DCDFE3`                | `#6F6F6F`             | Sheet / composer grabber        |
 
 #### Iconography
 
@@ -1281,33 +1277,34 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **品牌红 `#DF0C27` 只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#EDEDED` / 深 `#1F1F1E`），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
 - **`--login-*` 调色板双态目标值** —— token 已注册于 `apps/desktop/src/renderer/themes/colors.ts`（dark 槽位当前为 light 占位值）。下表为深色实现的目标规格，经 Figma 组件库 Dark symbol 逐个核验；实现 PR 须将 dark 槽位更新为本表 dark 列的值：
 
-| token | light | dark | 核验源 |
-|---|---|---|---|
-| `--login-panel-bg` | `#FBFBFB` | `#312F2F` | callback-card dark（as-built）|
-| `--login-panel-border` | `#D4D4D4` | `#434343` | callback-card dark |
-| `--login-control-bg`（输入框底） | `#EEEEEE` | `#2C2A2A` | figma `Dark_normal` 输入 symbol |
-| `--login-action-control-bg`（方式行 / 返回钮底） | `#EEEEEE` | `#2A2828` | figma 549:850 / 549:897（暗色与输入框底分化，组件库更新 2026-07-23） |
-| `--login-back-border`（返回钮描边） | `#FFFFFF` | `#434343` | figma 549:897 |
-| `--login-control-border` | `#D4D4D4` | `#434343` | figma `Dark_normal` |
-| `--login-control-border-active`（focus / filled） | `#2A2828` | `#EEEEEE` | figma `Dark_highlight` |
-| `--login-control-text`（输入填充字，Bold） | `#252222` | `#EEEEEE` | figma Dark 填充 / error 态 |
-| `--login-control-placeholder`（空态字） | `#D4D4D4` | `#6F6F6F` | figma Dark 空态 |
-| `--login-title-text` | `#252222` | `#D4D4D4` | callback-title dark |
-| `--login-secondary-text`（副标题 / 倒计时） | `#6F6F6F` | `#6F6F6F` | 两模式同值 |
-| `--login-primary-button-bg` | `#2A2828` | `#EEEEEE` | figma `white_button` / callback-cta dark |
-| `--login-primary-button-border` | `#434343` | `#FFFFFF` | 同上 |
-| `--login-primary-button-text`（Bold） | `#D4D4D4` | `#2A2828` | 同上 |
-| `--login-link-text`（重发链接） | `#2A2828` | `#EEEEEE` | figma `dark_重新发送` symbol |
-| `--login-link-hover` | `#4A4848` | `#A8A8A8` | 推导值（无独立 dark hover symbol） |
-| `--login-link-pressed` | `#1A1818` | `#C0BEBE` | 推导值 |
-| `--login-disabled-button-overlay` | `rgba(255,255,255,0.7)` | 同 light | figma `white_button` Disable：disabled 两模式同构（见 §16.5） |
-| `--login-splash-progress-track` / `--login-splash-progress-fill` | `#D9D9D9` / `#252222` | `#434343` / `#D4D4D4` | figma Dark symbol 核验 |
-| `--login-loading-ring-track`（loading 环轨道） | `rgba(42,40,40,0.18)` | `rgba(212,212,212,0.18)` | 18% 半透明环轨二态；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token） |
-| `--login-error-fg` | `#D91F37` | `#D91F37` | 语义豁免不变 |
-| `--login-brand-accent` / `--login-brand-accent-pressed` | `#DF0C27` / `#A61629` | 同 light | 品牌红不变 |
-| `--login-bg-base`（画布底） | `#EDEDED` | `#1F1F1E` | figma 532:585 暗色帧实测；两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立） |
+| token                                                            | light                   | dark                     | 核验源                                                                                                                                                              |
+| ---------------------------------------------------------------- | ----------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--login-panel-bg`                                               | `#FBFBFB`               | `#312F2F`                | callback-card dark（as-built）                                                                                                                                      |
+| `--login-panel-border`                                           | `#D4D4D4`               | `#434343`                | callback-card dark                                                                                                                                                  |
+| `--login-control-bg`（输入框底）                                 | `#EEEEEE`               | `#2C2A2A`                | figma `Dark_normal` 输入 symbol                                                                                                                                     |
+| `--login-action-control-bg`（方式行 / 返回钮底）                 | `#EEEEEE`               | `#2A2828`                | figma 549:850 / 549:897（暗色与输入框底分化，组件库更新 2026-07-23）                                                                                                |
+| `--login-back-border`（返回钮描边）                              | `#FFFFFF`               | `#434343`                | figma 549:897                                                                                                                                                       |
+| `--login-control-border`                                         | `#D4D4D4`               | `#434343`                | figma `Dark_normal`                                                                                                                                                 |
+| `--login-control-border-active`（focus / filled）                | `#2A2828`               | `#EEEEEE`                | figma `Dark_highlight`                                                                                                                                              |
+| `--login-control-text`（输入填充字，Bold）                       | `#252222`               | `#EEEEEE`                | figma Dark 填充 / error 态                                                                                                                                          |
+| `--login-control-placeholder`（空态字）                          | `#D4D4D4`               | `#6F6F6F`                | figma Dark 空态                                                                                                                                                     |
+| `--login-title-text`                                             | `#252222`               | `#D4D4D4`                | callback-title dark                                                                                                                                                 |
+| `--login-secondary-text`（副标题 / 倒计时）                      | `#6F6F6F`               | `#6F6F6F`                | 两模式同值                                                                                                                                                          |
+| `--login-primary-button-bg`                                      | `#2A2828`               | `#EEEEEE`                | figma `white_button` / callback-cta dark                                                                                                                            |
+| `--login-primary-button-border`                                  | `#434343`               | `#FFFFFF`                | 同上                                                                                                                                                                |
+| `--login-primary-button-text`（Bold）                            | `#D4D4D4`               | `#2A2828`                | 同上                                                                                                                                                                |
+| `--login-link-text`（重发链接）                                  | `#2A2828`               | `#EEEEEE`                | figma `dark_重新发送` symbol                                                                                                                                        |
+| `--login-link-hover`                                             | `#4A4848`               | `#A8A8A8`                | 推导值（无独立 dark hover symbol）                                                                                                                                  |
+| `--login-link-pressed`                                           | `#1A1818`               | `#C0BEBE`                | 推导值                                                                                                                                                              |
+| `--login-disabled-button-overlay`                                | `rgba(255,255,255,0.7)` | 同 light                 | figma `white_button` Disable：disabled 两模式同构（见 §16.5）                                                                                                       |
+| `--login-splash-progress-track` / `--login-splash-progress-fill` | `#D9D9D9` / `#252222`   | `#434343` / `#D4D4D4`    | figma Dark symbol 核验                                                                                                                                              |
+| `--login-loading-ring-track`（loading 环轨道）                   | `rgba(42,40,40,0.18)`   | `rgba(212,212,212,0.18)` | 18% 半透明环轨二态；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token）                                             |
+| `--login-error-fg`                                               | `#D91F37`               | `#D91F37`                | 语义豁免不变                                                                                                                                                        |
+| `--login-brand-accent` / `--login-brand-accent-pressed`          | `#DF0C27` / `#A61629`   | 同 light                 | 品牌红不变                                                                                                                                                          |
+| `--login-bg-base`（画布底）                                      | `#EDEDED`               | `#1F1F1E`                | figma 532:585 暗色帧实测；两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立） |
 
-  余下 token（`-control-border-disabled` / `-inverted-button-border` / `-callback-*` 等）的**亮色**值与 callback 族**双态**值见 `token-decision-table §3`、`figma-component-spec §1.1`（注意：这两份外部 spec 只覆盖亮色 + callback 族 dark，**登录主皮 dark 值以本表为权威**，原※推导值已经 Figma 组件库核验确认，本表为目标规格）；深色反相机制与 3 处组件改动见 §16.5。
+余下 token（`-control-border-disabled` / `-inverted-button-border` / `-callback-*` 等）的**亮色**值与 callback 族**双态**值见 `token-decision-table §3`、`figma-component-spec §1.1`（注意：这两份外部 spec 只覆盖亮色 + callback 族 dark，**登录主皮 dark 值以本表为权威**，原※推导值已经 Figma 组件库核验确认，本表为目标规格）；深色反相机制与 3 处组件改动见 §16.5。
+
 - **社交圆钮深色 = 白圆**：与主按钮共用 `--login-primary-button-bg / -border`，深色自动反相为白圆 `#EEEEEE` + 白边，**圆内图标保持品牌色**（Google 彩 / WeChat 绿 / SSO），非反相（figma `white apple/google/wechat/SSO` symbol 核验）。
 
 ### 16.2 设计规则
@@ -1321,6 +1318,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 | 登录整体组 | 680×**620**（面板 500 + gap 40 + 圆钮行 80）——2026-07-27 面板增高改版，原 560 作废 | figma §5.1（新稿 `700:783`） |
 | 面板 | 680×**500**，r36，`#FBFBFB` + inset 1px `--login-panel-border` —— 2026-07-27 改版，原 440 作废；增的 60 = 面板内新增的「跳过登录」槽，**面板内其余元素 y 坐标一律不动**。面板高度对登录全步骤恒定（步骤间不得跳变）；**Splash 借用同款面板时保持 440**（无该入口，见 §16.3 `LoginPanel`） | figma §4 / §5.1（新稿 `700:791` / `705:886` / `705:1062`） |
 | 输入框 / 主按钮 | 540×80，r40，@(70, 158 / 300) | figma §4.1 / §4.3 |
+| SSO 最近组织候选层 | 与输入框同宽同 x，顶边恒为输入框底 + 8；作为浮层覆盖后续 hint / 主按钮，不参与文档流。最大高度收在当前端登录面板内并自行滚动（桌面面板 500、手机面板 440），不得再定位到面板下方。候选层与输入框必须处于同一登录组坐标系，随桌面窗口 placement、phone 短/长屏、pad surface scale 与手机键盘避让整体移动，不另写按设备尺寸分支 | 2026-08-22 小屏实机修正 |
 | 方式行 | 540×100，r60，@(70, 158 / 278)，左图标 24@(27,37)，右图标 @(490,40) | figma §4.9 |
 | 返回钮 | 60×60，r40，@(20,20) | figma §4.6 |
 | 重发 / Text_link 槽 | 540×50，20px，@(70,238) | figma §4.7 |
@@ -1336,10 +1334,10 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
 **移动端 stage 几何（2026-07-27 换品牌簇基准；2026-07-29 修正：功能区落位同步取新稿标注值）**：手机的**品牌簇**（立绘 / SLOGAN / 字标）**与功能区落位 `loginY` 一并取新稿逐字段值**——两者是同一份稿的两半，必须同源。短屏 / 长屏两档之间仍走既有线性插值体系（`loginSkinLayout.resolveLoginStage`），**不另造缩放规则**。下表为设计单位（750 设计px 基准），消费时一律 × `surface.scale`（设计单位 ≠ 物理 pt，见 §16.4「几何」条）：
 
-| 档 | 立绘 | SLOGAN（可见图形框） | 字标（图像框） | 登录组顶 `loginY` | 溯源 |
-|---|---|---|---|---|---|
-| 短屏 `designHeight=1334` | 599×720 @(75,**60**) | 254.01×72.8 @(462.55,408.37) | 335×115 @(208,487) | **622**（新稿标注值；字标底 602 → 面板顶间距 **20** = 稿内值。组高 560 + 协议行溢出 62 → 内容底 1244，底部留白 90，比稿内 30 多 60，见下「面板 500→440 的 60 去向」） | 品牌簇 + `loginY` 同源 = 新稿 `705:915`（Log_in 组 @(35,622)）+ 避脸拍板 |
-| 长屏 `designHeight=1624` | 750×902 @(0,106) | 269.66×77.29 @(444.9,**568**) | 387×132.18 @(182,669.17) | **827**（新稿标注值；字标底 801.35 → 间距 **25.65** = 稿内值。内容底 1449，底部留白 175，比稿内 115 多 60，同上） | 品牌簇 + `loginY` 同源 = 新稿 `705:799`（Log_in 组 @(35,827)）+ 避脸拍板 |
+| 档                       | 立绘                 | SLOGAN（可见图形框）          | 字标（图像框）           | 登录组顶 `loginY`                                                                                                                                                     | 溯源                                                                     |
+| ------------------------ | -------------------- | ----------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 短屏 `designHeight=1334` | 599×720 @(75,**60**) | 254.01×72.8 @(462.55,408.37)  | 335×115 @(208,487)       | **622**（新稿标注值；字标底 602 → 面板顶间距 **20** = 稿内值。组高 560 + 协议行溢出 62 → 内容底 1244，底部留白 90，比稿内 30 多 60，见下「面板 500→440 的 60 去向」） | 品牌簇 + `loginY` 同源 = 新稿 `705:915`（Log_in 组 @(35,622)）+ 避脸拍板 |
+| 长屏 `designHeight=1624` | 750×902 @(0,106)     | 269.66×77.29 @(444.9,**568**) | 387×132.18 @(182,669.17) | **827**（新稿标注值；字标底 801.35 → 间距 **25.65** = 稿内值。内容底 1449，底部留白 175，比稿内 115 多 60，同上）                                                     | 品牌簇 + `loginY` 同源 = 新稿 `705:799`（Log_in 组 @(35,827)）+ 避脸拍板 |
 
 - **面板 500→440 少掉的 60 去向（2026-07-29 审图拍板「方案 B」）**：新稿手机帧的面板是 **500 高**（含面板内「跳过登录」栏），而手机端已按产品决定剥离该入口、面板回 **440**、组回 **560**。少掉的 60 必须有个去处，两个候选经实机比例图审图：
   - **方案 B（采纳）**：`loginY` 取稿值 622 / 827，60 全部落到**底部留白**（90 / 175，比稿内多 60）。品牌簇的稿内顶部构图与间距完全保真。
@@ -1375,14 +1373,14 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **原则：登录链路里截断与省略号不可作为可见结果**。登录面板是 680×500 冻结几何（2026-07-27 改版后值）、槽位不撑高，长文案没有退路——所以约束加在**文案侧**：所有 `login.*` 文案（含 agent 代写 / 补翻的五语文本）必须言简意赅、按槽位长度预算写作。线上出现可见省略号 = 该语言文案超预算 = **文案 bug（P1，修文案，不改布局）**。
 - **长度预算自检**（写 / 翻文案时逐语言过一遍）：估宽公式——汉字 / 假名 / 谚文 ≈ 1×字号 px，拉丁字母 / 数字 / 空格 ≈ 0.5×字号 px；估宽 ≤ 槽宽 × 0.95 才算过。常用槽预算：
 
-  | 槽 | 宽×字号 | ≈汉字上限 | ≈拉丁字符上限 |
-  |---|---|---:|---:|
-  | 标题 | 680 @32 Bold（徽标变体为 inline 组：标题 shrink-to-fit + 2px 间隔 + 区域徽标，徽标宽随文案自适应，按现役最宽的 `Dev`（实测 51.7，非本表估宽公式的 46——公式是文案自检用的保守估算，徽标宽度以实测为准）算可用宽 680−54=626；v3 2026-07-27，原「固定 70px 徽标」几何随 Global 徽标撤除一并作废） | 20（徽标变体 18） | 40（徽标变体 37） |
-  | 副标题（≤2 行，2026-07-24 拍板） | 540 @20 × 2 行 | 50 | 102 |
-  | Text_link / hint / 倒计时 | 540 @20 | 25 | 51 |
-  | 「跳过登录」文字按钮（2026-07-27） | 620 @24（= 槽 680 − 双侧 30 命中区扩张；移动端命中区扩 50 时可用宽 580） | 24（移动 22） | 49（移动 45） |
-  | 主按钮 CTA | 448 @24 Bold（540 − 双侧 46 padding） | 17 | 35 |
-  | 方式行标题 / 副题 | 409 @24 / @20 | 16 / 19 | 32 / 38 |
+  | 槽                                 | 宽×字号                                                                                                                                                                                                                                                                                        |         ≈汉字上限 |     ≈拉丁字符上限 |
+  | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------: | ----------------: |
+  | 标题                               | 680 @32 Bold（徽标变体为 inline 组：标题 shrink-to-fit + 2px 间隔 + 区域徽标，徽标宽随文案自适应，按现役最宽的 `Dev`（实测 51.7，非本表估宽公式的 46——公式是文案自检用的保守估算，徽标宽度以实测为准）算可用宽 680−54=626；v3 2026-07-27，原「固定 70px 徽标」几何随 Global 徽标撤除一并作废） | 20（徽标变体 18） | 40（徽标变体 37） |
+  | 副标题（≤2 行，2026-07-24 拍板）   | 540 @20 × 2 行                                                                                                                                                                                                                                                                                 |                50 |               102 |
+  | Text_link / hint / 倒计时          | 540 @20                                                                                                                                                                                                                                                                                        |                25 |                51 |
+  | 「跳过登录」文字按钮（2026-07-27） | 620 @24（= 槽 680 − 双侧 30 命中区扩张；移动端命中区扩 50 时可用宽 580）                                                                                                                                                                                                                       |     24（移动 22） |     49（移动 45） |
+  | 主按钮 CTA                         | 448 @24 Bold（540 − 双侧 46 padding）                                                                                                                                                                                                                                                          |                17 |                35 |
+  | 方式行标题 / 副题                  | 409 @24 / @20                                                                                                                                                                                                                                                                                  |           16 / 19 |           32 / 38 |
 
 - **agent 翻译硬约束**：为 `login.*` 生成或修改任何语言文案时，必须按上表逐语言自检；超预算就换更短表述（ja / ko 往往比 zh 长，优先压缩语序与敬语冗余），**禁止**靠布局手段（缩字号 / 加折行 / 依赖截断）吸收超长文案。
 - **折行与对齐机制分级**：
@@ -1394,34 +1392,34 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
 桌面 `apps/desktop/src/renderer/components/login/LoginControls.tsx`（11 组件），手机 `apps/mobile/src/components/LoginSkinControls.tsx`（13 组件）。两端同名组件同参数源。逐组件契约（逐参数规格见 `figma-component-spec §4`）：
 
-| 组件 | 端 | 用途 | 关键 props | token / 几何 |
-|---|---|---|---|---|
-| `LoginPanel` | 双 | 白面板容器 | `children`, `testId`, `height?`（**桌面，仅 Splash 使用**） | 680×**500** r36 `--login-panel-bg` + inset 1px border；桌面由 `LoginStage` 承载缩放。`height` 默认 = 面板 500 且登录侧一律用默认值；**Splash 五帧传 440**（无「跳过登录」入口、设计稿未改版，跟随 500 会在启动态凭空多出 50 CSS px 空白；两者不同 stage、不同缩放，拆开不破坏 handoff 连续性） |
-| `LoginStage` | 桌面 | 1819×2098 画布「面板宿主」层，等比缩放 + z 序 | `children`, `ssoOrgGroupY`, `groupStyle` | 登录组 @(570, 1229 / 1227) 680×**620**；品牌层在 `LoginBrandStage` |
-| `LoginTitleBlock` | 双 | 标题 + 副标题 | `title`, `subtitle`, `regionPill?`（桌面） | 标题 y=31 h=38 32 Bold `--login-title-text`；副标题 @(70,75) 540 宽 ≤2 行顶对齐 20 Regular `--login-secondary-text`（2026-07-24 拍板，原 599×23 单行作废）。区域徽标见下方专条 |
-| `LoginInput` / `LoginSkinInput` | 桌 / 手 | 通用输入框 | `value`, `onChange`, `placeholder`, `center?`, `error?`, `prefix?` | @(70,158) 540×80 r40 `--login-control-bg`；边 placeholder→active；`center`=验证码居中变体 |
-| `LoginSkinPhoneInput` | 手机 | 手机号 + 固定国家码前缀 | `prefix`, … | 同 `LoginSkinInput` 几何，前缀不可点 |
-| `LoginPrimaryButton` | 双 | 主按钮（五态） | `label / children`, `onClick / onPress`, `disabled`, `loading / busy` | @(70,300) 540×80 r40 `--login-primary-button-bg / -border / -text`；disabled 白 70% 叠层 + 边 `--login-control-border-disabled` + 文字 opacity 0.8；loading spinner 24@(487,27) |
-| `LoginSocialRow` | 双 | 第三方圆钮行 | `children`, `count` | y=**540** 行内水平居中，80×80 gap 70；`count` 随 provider 动态（**不含游客圆钮**，2026-07-27 起该入口改为面板内文字按钮） |
-| `LoginSocialButton` | 双 | 第三方 / SSO 圆钮 | `label`, `onClick`, `children`, `isLoading / busy` | 80×80 r50 `--login-primary-button-bg / -border`；icon 48 居中；仅 normal + hover（桌面）+ pressed，**无 disabled / loading 视觉态** |
-| `LoginSocialGlyph` | 手机 | 社交图标矢量（Apple / Google / WeChat / SSO；**apple 分支仅非 iOS 场景**——iOS 走官方按钮不进圆钮行，见 §16.2） | 内部 | Google / WeChat 品牌色不变；Apple / SSO 单色随圆钮底反相（暗色白圆上 `#2A2828`） |
-| `LoginBackButton` | 双 | 返回 | `label`, `onClick`, `disabled` | @(20,20) 60×60 r40 `--login-action-control-bg` / `--login-back-border`；chevron 24 |
-| `LoginTextLink`（桌）/ `LoginTextLinkSlot`（手） | 桌 / 手 | 重发链接 / 提示文案（**文字链接**，不承载「跳过登录」） | `variant`（link / countdown，桌）, `tone`, `children` | @(70,238) 540×50 20；link 变体 `--login-link-text` 下划线可点、hover / pressed 变色；countdown / slot `--login-control-placeholder` 不可点 |
-| `LoginSkipEntry`（桌）/ `LoginSkipLoginLink`（手） | 桌 / 手 | 「跳过登录」入口（**文字按钮**，与上一行的文字链接是两种组件） | 桌：`children`, `onClick`, `disabled`, `testId`；手：`label`, `onPress`, `testID` | 槽 @(0,430) 680×60，文字 24 Regular + 下划线、`--login-secondary-text`（双模同值），**hover / pressed 不变色**；命中区 = 文字实宽 + 左右各扩（桌 30 / 手 50 设计px）、高占满 60 槽，容器不可点 —— 逐条口径见下方「登录文字按钮」 |
-| `LoginResendCountdown` | 手机 | 验证码重发（倒计时 / 重发二态） | `deadline`, `countdownTemplate`, `resendLabel`, `onResend` | @(70,238)；`deadline=null` → 常驻可点无倒计时（SSO 验证码屏用） |
-| `LoginMethodRow` | 双 | 方式选择行（企业 / 个人） | `top`, `title`, `subtitle`, `icon`(enterprise / person), `onClick` | 540×100 r60 `--login-action-control-bg` / `--login-control-border`；左图标 24@(27,37) / person 18×20@(30,39)；右 share 18@(490,40)；文字 @(67) 垂直居中 |
-| `LoginErrorText` | 双 | 错误提示 | `children` | @(0,380) 680×50 20 `--login-error-fg` |
-| `LoginLoadingRing` | 双 | 大 loading 环（浏览器 / 准备态） | `y`, `label` | 64×64 @(308, 158 / 193)；轨道 `--login-loading-ring-track`，内弧 `--login-primary-button-bg`（Splash 转圈环 64×64@(308,188) 同轨道 token，内弧为 `--login-secondary-text`） |
+| 组件                                               | 端      | 用途                                                                                                           | 关键 props                                                                        | token / 几何                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LoginPanel`                                       | 双      | 白面板容器                                                                                                     | `children`, `testId`, `height?`（**桌面，仅 Splash 使用**）                       | 680×**500** r36 `--login-panel-bg` + inset 1px border；桌面由 `LoginStage` 承载缩放。`height` 默认 = 面板 500 且登录侧一律用默认值；**Splash 五帧传 440**（无「跳过登录」入口、设计稿未改版，跟随 500 会在启动态凭空多出 50 CSS px 空白；两者不同 stage、不同缩放，拆开不破坏 handoff 连续性） |
+| `LoginStage`                                       | 桌面    | 1819×2098 画布「面板宿主」层，等比缩放 + z 序                                                                  | `children`, `ssoOrgGroupY`, `groupStyle`                                          | 登录组 @(570, 1229 / 1227) 680×**620**；品牌层在 `LoginBrandStage`                                                                                                                                                                                                                             |
+| `LoginTitleBlock`                                  | 双      | 标题 + 副标题                                                                                                  | `title`, `subtitle`, `regionPill?`（桌面）                                        | 标题 y=31 h=38 32 Bold `--login-title-text`；副标题 @(70,75) 540 宽 ≤2 行顶对齐 20 Regular `--login-secondary-text`（2026-07-24 拍板，原 599×23 单行作废）。区域徽标见下方专条                                                                                                                 |
+| `LoginInput` / `LoginSkinInput`                    | 桌 / 手 | 通用输入框                                                                                                     | `value`, `onChange`, `placeholder`, `center?`, `error?`, `prefix?`                | @(70,158) 540×80 r40 `--login-control-bg`；边 placeholder→active；`center`=验证码居中变体                                                                                                                                                                                                      |
+| `LoginSkinPhoneInput`                              | 手机    | 手机号 + 固定国家码前缀                                                                                        | `prefix`, …                                                                       | 同 `LoginSkinInput` 几何，前缀不可点                                                                                                                                                                                                                                                           |
+| `LoginPrimaryButton`                               | 双      | 主按钮（五态）                                                                                                 | `label / children`, `onClick / onPress`, `disabled`, `loading / busy`             | @(70,300) 540×80 r40 `--login-primary-button-bg / -border / -text`；disabled 白 70% 叠层 + 边 `--login-control-border-disabled` + 文字 opacity 0.8；loading spinner 24@(487,27)                                                                                                                |
+| `LoginSocialRow`                                   | 双      | 第三方圆钮行                                                                                                   | `children`, `count`                                                               | y=**540** 行内水平居中，80×80 gap 70；`count` 随 provider 动态（**不含游客圆钮**，2026-07-27 起该入口改为面板内文字按钮）                                                                                                                                                                      |
+| `LoginSocialButton`                                | 双      | 第三方 / SSO 圆钮                                                                                              | `label`, `onClick`, `children`, `isLoading / busy`                                | 80×80 r50 `--login-primary-button-bg / -border`；icon 48 居中；仅 normal + hover（桌面）+ pressed，**无 disabled / loading 视觉态**                                                                                                                                                            |
+| `LoginSocialGlyph`                                 | 手机    | 社交图标矢量（Apple / Google / WeChat / SSO；**apple 分支仅非 iOS 场景**——iOS 走官方按钮不进圆钮行，见 §16.2） | 内部                                                                              | Google / WeChat 品牌色不变；Apple / SSO 单色随圆钮底反相（暗色白圆上 `#2A2828`）                                                                                                                                                                                                               |
+| `LoginBackButton`                                  | 双      | 返回                                                                                                           | `label`, `onClick`, `disabled`                                                    | @(20,20) 60×60 r40 `--login-action-control-bg` / `--login-back-border`；chevron 24                                                                                                                                                                                                             |
+| `LoginTextLink`（桌）/ `LoginTextLinkSlot`（手）   | 桌 / 手 | 重发链接 / 提示文案（**文字链接**，不承载「跳过登录」）                                                        | `variant`（link / countdown，桌）, `tone`, `children`                             | @(70,238) 540×50 20；link 变体 `--login-link-text` 下划线可点、hover / pressed 变色；countdown / slot `--login-control-placeholder` 不可点                                                                                                                                                     |
+| `LoginSkipEntry`（桌）/ `LoginSkipLoginLink`（手） | 桌 / 手 | 「跳过登录」入口（**文字按钮**，与上一行的文字链接是两种组件）                                                 | 桌：`children`, `onClick`, `disabled`, `testId`；手：`label`, `onPress`, `testID` | 槽 @(0,430) 680×60，文字 24 Regular + 下划线、`--login-secondary-text`（双模同值），**hover / pressed 不变色**；命中区 = 文字实宽 + 左右各扩（桌 30 / 手 50 设计px）、高占满 60 槽，容器不可点 —— 逐条口径见下方「登录文字按钮」                                                               |
+| `LoginResendCountdown`                             | 手机    | 验证码重发（倒计时 / 重发二态）                                                                                | `deadline`, `countdownTemplate`, `resendLabel`, `onResend`                        | @(70,238)；`deadline=null` → 常驻可点无倒计时（SSO 验证码屏用）                                                                                                                                                                                                                                |
+| `LoginMethodRow`                                   | 双      | 方式选择行（企业 / 个人）                                                                                      | `top`, `title`, `subtitle`, `icon`(enterprise / person), `onClick`                | 540×100 r60 `--login-action-control-bg` / `--login-control-border`；左图标 24@(27,37) / person 18×20@(30,39)；右 share 18@(490,40)；文字 @(67) 垂直居中                                                                                                                                        |
+| `LoginErrorText`                                   | 双      | 错误提示                                                                                                       | `children`                                                                        | @(0,380) 680×50 20 `--login-error-fg`                                                                                                                                                                                                                                                          |
+| `LoginLoadingRing`                                 | 双      | 大 loading 环（浏览器 / 准备态）                                                                               | `y`, `label`                                                                      | 64×64 @(308, 158 / 193)；轨道 `--login-loading-ring-track`，内弧 `--login-primary-button-bg`（Splash 转圈环 64×64@(308,188) 同轨道 token，内弧为 `--login-secondary-text`）                                                                                                                    |
 
 **登录文字按钮（新组件类别，2026-07-27 拍板）**：登录域现在有**两种**纯文字操作组件，语义与视觉都不通用，**不得互相复用**：
 
-| | **文字链接**（`LoginTextLink` / `LoginTextLinkSlot`） | **文字按钮**（`LoginSkipEntry` / `LoginSkipLoginLink`） |
-|---|---|---|
-| 语义 | 链接：跳转 / 重试 / 次要说明（重发验证码、sso-org 帮助行） | 按钮：触发一次产品级动作（跳过登录 → 进入本地模式） |
-| 色 | `--login-link-text` 族（light `#2A2828` / dark `#EEEEEE`） | `--login-secondary-text`（`#6F6F6F`，**light / dark 同值**，零新增 token） |
-| hover / pressed | 变色（`--login-link-hover` / `-pressed`） | **不变色**——只靠下划线常显 + 指针形状（桌面 `cursor:pointer`）给反馈 |
-| 字号 / 槽 | 20，槽 540×50 @(70,238) | 24，槽 680×60 @(0,430) |
-| 命中区 | 槽内整块 | **文字实宽 + 左右各扩**（桌面 30 / 移动 50 设计px），高度占满 60 槽；680×60 容器只做居中定位、自身不可点（桌面 `pointer-events:none` + 内层 button `auto`；移动 `pointerEvents="box-none"` + 内层 `Pressable`） |
+|                 | **文字链接**（`LoginTextLink` / `LoginTextLinkSlot`）      | **文字按钮**（`LoginSkipEntry` / `LoginSkipLoginLink`）                                                                                                                                                         |
+| --------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 语义            | 链接：跳转 / 重试 / 次要说明（重发验证码、sso-org 帮助行） | 按钮：触发一次产品级动作（跳过登录 → 进入本地模式）                                                                                                                                                             |
+| 色              | `--login-link-text` 族（light `#2A2828` / dark `#EEEEEE`） | `--login-secondary-text`（`#6F6F6F`，**light / dark 同值**，零新增 token）                                                                                                                                      |
+| hover / pressed | 变色（`--login-link-hover` / `-pressed`）                  | **不变色**——只靠下划线常显 + 指针形状（桌面 `cursor:pointer`）给反馈                                                                                                                                            |
+| 字号 / 槽       | 20，槽 540×50 @(70,238)                                    | 24，槽 680×60 @(0,430)                                                                                                                                                                                          |
+| 命中区          | 槽内整块                                                   | **文字实宽 + 左右各扩**（桌面 30 / 移动 50 设计px），高度占满 60 槽；680×60 容器只做居中定位、自身不可点（桌面 `pointer-events:none` + 内层 button `auto`；移动 `pointerEvents="box-none"` + 内层 `Pressable`） |
 
 - **为什么命中区随语言自适应**：文字实际渲染宽度按语言不同（zh「跳过登录」96 设计px vs en `Skip Sign-In` 更宽），固定宽热区会在某些语言下偏窄或越界；扩张量固定、宽度 shrink-to-fit，热区随语言同步。
 - **为什么放大 bounds 而不是用 hitSlop**：RN 的 `hitSlop` 不越父 View 边界（Android 界外触摸不派发），与协议 radio 同一套仓内约定（§16.4 hitSlop clamp 契约）。移动端命中区高度占满 60 槽（phone ~0.5 缩放 ≈30pt，与返回钮 60 设计px 同档），向上不侵入主按钮下沿、向下不越面板底。
@@ -1437,6 +1435,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **手机端无此变体**：`apps/mobile` 的 `LoginTitleBlock` 不接 `regionPill`（移动端未做区域徽标）。
 
 **组件库新增（2026-07-24 登记；协议 UI 已随 consent PR 落地，游客圆钮方案已由上述「跳过登录」文字按钮取代）**：
+
 - **协议勾选 radio**（figma `radiobutton 600:627`，四态双模式）：24×24 命中区，圈 20×20 r9 + 2px 描边，选中为**对勾**（非圆点）。亮：未选 `#F1F0F1` 底 / `#434343` 边 → 选中 `#2A2828` 实底 + 白勾；暗：未选 `#2A2828` 底 / `#F1F0F1` 边 → 选中 `#F1F0F1` 底 + `#2A2828` 勾——选中反色与登录黑白反色体系同构。用于登录页 `服务条款` 协议行。
 - **服务条款弹窗小按钮**（figma `light_button_*` / `Dark_button_*` 四母版，`602:846/863/1297/1311`）：260×80 r40 文字 Bold 24；强调钮 = 模式反色（亮强调深底 `#2A2828`、暗强调浅底 `#EEEEEE`），暗模式普通钮引入新灰 `#434141` 底 / `#565454` 边。逐态值见 `figma-component-spec §11.3`。
 - 既有组件扩容：`SSO 登录_企业` 与 `back` 均扩为含 Dark 三态的六态集（值已并入 §16.1 `--login-action-control-bg` / `--login-back-border` 口径），`white_button` 增 loading 五态。
@@ -1445,27 +1444,27 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
 登录状态机权威 = `packages/auth-client` 源码（`AuthFlowState` / `LoginOutcome` 判别联合；`flow-map` 为辅助导航，个别 UI 段落滞后于区域定形态改版）。共享 step ∈ {`identifier`, `method-choice`, `verification-code`, `sso-verification`, `browser-redirect`, `account-selection`, `binding`, `completed`, `error`}（`sso-org` **不是**共享 step，是 `identifier` 下的页面局部 `ssoOrgMode` 子视图）；其中 `account-selection` / `binding` / `sso-verification` / `completed` 由服务端 `LoginOutcome.status`（`ok` / `select_account` / `binding_required` / `sso_verification_required`）分支决定，**不是固定步骤**——任意 outcome 调用都可能命中。逐屏职责与关键组件（逐屏坐标 / 文案见 `DESIGN-login §3` 国区 / `§4` 国际区 / `§5` 移动）：
 
-| 屏（step） | 职责 | 关键组件 |
-|---|---|---|
-| `identifier` | 输入手机号 / 邮箱（国区 phone / 国际区 email），含 social 圆钮行（Apple / Google / SSO，**无游客圆钮**）+ SSO 入口 + 协议同意行；**面板内常驻「跳过登录」入口**（2026-07-27 起，**仅桌面**；手机端 2026-07-28 剥离） | `LoginInput` / `LoginSkinPhoneInput` + `LoginPrimaryButton` + `LoginSocialRow` + `LoginConsentRow` + `LoginSkipEntry` / `LoginSkipLoginLink` |
-| `method-choice` | 存在真正选择时：企业 SSO / 个人邮箱验证码，或多条 SSO 连接。探测结果只剩唯一 SSO 或唯一邮箱验证码时不展示本屏——前者投影 `browser-redirect`，后者直接发码进入 `verification-code`（跨区确认窗随 step 离开一并关掉） | `LoginMethodRow`×2（top 158 / 278）+ `LoginTitleBlock`（`chooseMethod`） |
-| `verification-code` | 输入 6 位验证码，42s 重发倒计时 | `LoginInput`(center) / `CodeInput` + `LoginTextLink` / `LoginResendCountdown` + `LoginPrimaryButton` |
-| `sso-verification` | SSO 登录后验证企业联系方式，两子态（`codeRequested` false = 只发码 / true = 输码 + 常驻重发，**无倒计时**） | `LoginPrimaryButton`(sendCode) → `LoginInput`(center) + `LoginPrimaryButton`(completeSignIn / signIn) + `LoginTextLink` / `LoginResendCountdown`(deadline=null) |
-| `sso-org`（`identifier` 局部子视图，非共享 step） | 输入企业 ID / 组织 slug / 已验证域名跳转 SSO（`ssoOrgMode`） | `LoginInput` + `LoginPrimaryButton` + `LoginTextLinkSlot`（ssoOrgHint） |
-| `account-selection` | 服务端返回 ≥2 membership，用户选一个 | account row + `LoginTitleBlock`（`chooseAccount`） |
-| `binding` | 身份未绑 membership，补绑 phone / email（`codeRequested` 两子态；**无重发钮**，桌面 harness 锁定） | `LoginInput` / `LoginSkinPhoneInput` → `LoginInput`(center) + `LoginPrimaryButton` |
-| `account-deletion`（状态浮层） | 账号删除**状态展示**（发起流程在 Settings 的 `AccountDeletionSection`；登录页仅在存在删除回执时以**根层浮层气泡**展示 status，非主状态机 step；详见下方「注销状态浮层气泡」） | `AccountDeletionStatusPanel`（**登录皮容器外**的根层浮层，非面板内） |
-| `browser-redirect` | 社交 / SSO 跳浏览器验证，等待回调 | `LoginLoadingRing` + `LoginPrimaryButton`（取消）+ `LoginTitleBlock` |
-| `completed` / `error` | 登录成功 / 失败（含 browser 回调终态页）；`error` 步桌面另有面板下方 footer 的「跳过登录」**逃生入口**（登录服务不可用时仍能进未登录状态，与面板内入口同口径**过协议门**——2026-07-29 拍板） | 成功无面板（进主界面）；error = `LoginTitleBlock` + `LoginPrimaryButton`（重试）+ `LoginErrorText` + footer「跳过登录」按钮（桌面）；browser 回调页 `oauthResultPage`（系统浏览器独立 HTML，main 侧内联常量,色值与 `--login-callback-*` token 同源——renderer CSS var 不可达,改值需两处同步） |
+| 屏（step）                                        | 职责                                                                                                                                                                                                                 | 关键组件                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identifier`                                      | 输入手机号 / 邮箱（国区 phone / 国际区 email），含 social 圆钮行（Apple / Google / SSO，**无游客圆钮**）+ SSO 入口 + 协议同意行；**面板内常驻「跳过登录」入口**（2026-07-27 起，**仅桌面**；手机端 2026-07-28 剥离） | `LoginInput` / `LoginSkinPhoneInput` + `LoginPrimaryButton` + `LoginSocialRow` + `LoginConsentRow` + `LoginSkipEntry` / `LoginSkipLoginLink`                                                                                                                                                 |
+| `method-choice`                                   | 存在真正选择时：企业 SSO / 个人邮箱验证码，或多条 SSO 连接。探测结果只剩唯一 SSO 或唯一邮箱验证码时不展示本屏——前者投影 `browser-redirect`，后者直接发码进入 `verification-code`（跨区确认窗随 step 离开一并关掉）   | `LoginMethodRow`×2（top 158 / 278）+ `LoginTitleBlock`（`chooseMethod`）                                                                                                                                                                                                                     |
+| `verification-code`                               | 输入 6 位验证码，42s 重发倒计时                                                                                                                                                                                      | `LoginInput`(center) / `CodeInput` + `LoginTextLink` / `LoginResendCountdown` + `LoginPrimaryButton`                                                                                                                                                                                         |
+| `sso-verification`                                | SSO 登录后验证企业联系方式，两子态（`codeRequested` false = 只发码 / true = 输码 + 常驻重发，**无倒计时**）                                                                                                          | `LoginPrimaryButton`(sendCode) → `LoginInput`(center) + `LoginPrimaryButton`(completeSignIn / signIn) + `LoginTextLink` / `LoginResendCountdown`(deadline=null)                                                                                                                              |
+| `sso-org`（`identifier` 局部子视图，非共享 step） | 输入企业 ID / 组织 slug / 已验证域名跳转 SSO（`ssoOrgMode`）                                                                                                                                                         | `LoginInput` + `LoginPrimaryButton` + `LoginTextLinkSlot`（ssoOrgHint）                                                                                                                                                                                                                      |
+| `account-selection`                               | 服务端返回 ≥2 membership，用户选一个                                                                                                                                                                                 | account row + `LoginTitleBlock`（`chooseAccount`）                                                                                                                                                                                                                                           |
+| `binding`                                         | 身份未绑 membership，补绑 phone / email（`codeRequested` 两子态；**无重发钮**，桌面 harness 锁定）                                                                                                                   | `LoginInput` / `LoginSkinPhoneInput` → `LoginInput`(center) + `LoginPrimaryButton`                                                                                                                                                                                                           |
+| `account-deletion`（状态浮层）                    | 账号删除**状态展示**（发起流程在 Settings 的 `AccountDeletionSection`；登录页仅在存在删除回执时以**根层浮层气泡**展示 status，非主状态机 step；详见下方「注销状态浮层气泡」）                                        | `AccountDeletionStatusPanel`（**登录皮容器外**的根层浮层，非面板内）                                                                                                                                                                                                                         |
+| `browser-redirect`                                | 社交 / SSO 跳浏览器验证，等待回调                                                                                                                                                                                    | `LoginLoadingRing` + `LoginPrimaryButton`（取消）+ `LoginTitleBlock`                                                                                                                                                                                                                         |
+| `completed` / `error`                             | 登录成功 / 失败（含 browser 回调终态页）；`error` 步桌面另有面板下方 footer 的「跳过登录」**逃生入口**（登录服务不可用时仍能进未登录状态，与面板内入口同口径**过协议门**——2026-07-29 拍板）                          | 成功无面板（进主界面）；error = `LoginTitleBlock` + `LoginPrimaryButton`（重试）+ `LoginErrorText` + footer「跳过登录」按钮（桌面）；browser 回调页 `oauthResultPage`（系统浏览器独立 HTML，main 侧内联常量,色值与 `--login-callback-*` token 同源——renderer CSS var 不可达,改值需两处同步） |
 
 **~~配置错误屏同样承载「跳过登录」逃生入口（移动端）~~〔已作废 2026-07-28：手机端整体剥离，配置错误屏无该入口〕**：`getMobileConfigIssues()` 命中（如 auth base URL 非法）时面板切到 config 提示态，该面板内仍渲染同一个 `LoginSkipLoginLink`（同槽 @(0,430)、同 handler、同 in-flight 门）——跳过登录不发任何网络请求，配置坏掉时恰恰最需要这个入口。
 
 **协议门（consent gate）过门点与豁免（2026-07-29 更新）**：`identifier` 屏的协议同意行是一道**发起前拦截**——未勾选时点过门入口先弹服务条款 / 隐私协议弹窗，同意后续接原动作；同意即写入统计采集同意。
 
-| | 入口 |
-|---|---|
+|                                | 入口                                                                                                                                                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **过门**（个人链路一律先同意） | 手机号提交、邮箱提交（含仅查方式的 discover）、`method-choice` 个人行发码、社交圆钮（Apple / Google / 未来微信）、**「跳过登录」**（面板内常驻入口 + 桌面 `error` 步 footer 逃生口）——2026-07-29 拍板 |
-| **豁免** | 显式企业 SSO 入口（SSO 圆钮、组织标识提交、`method-choice` sso 行） |
+| **豁免**                       | 显式企业 SSO 入口（SSO 圆钮、组织标识提交、`method-choice` sso 行）                                                                                                                                   |
 
 「跳过登录」过门的口径（2026-07-29 拍板，**推翻 07-27 的免门结论**）：不登录账号也是在使用 Cindy 客户端，因此与个人账号登录同口径——未勾选时先弹协议弹窗，同意后才进未登录状态，并写入统计采集同意（是否真的上报另由 main 侧闸决定：`analyticsSettingsService` 对本地会话一律 `!isLocalMode()` 不放行）。协议 UI（radio 四态、弹窗小按钮）与企业 SSO 豁免均不变。
 
@@ -1499,6 +1498,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 **大部分组件纯 token 驱动**（补 §16.1 双态表的 dark 值即自动深色，组件不动）：`LoginPanel` / `LoginInput` / `LoginPrimaryButton`（底 / 边 / 字 + spinner）/ `LoginSocialButton`（随主按钮 token 自动反相白圆）/ `LoginBackButton` / `LoginTitleBlock` / `LoginTextLink` / `LoginMethodRow` / `LoginErrorText` / `LoginLoadingRing`。
 
 **3 处非纯 token、需组件改动**：
+
 1. **hover / pressed 叠层二态**：叠层原为组件内 figma 实测 rgba 字面值，暗色起 token 化为 `--login-overlay-*` 二态。**〔2026-07-24 组件库更新改判〕hover 统一「叠白变亮」**：全按钮族 hover = normal 底上叠白色半透明（深底 `#2A2828`/`#434141` 族 +白 8%；浅底 `#EEEEEE` 族 +白 10%；**唯一例外**：`back` 亮色 hover 维持既有白 70%），两模式同向——旧「白底钮 hover = 黑 5% 变暗」口径作废（figma `white_button 347:2529`、SSO `549:779` 已按新值改稿）。pressed 维持叠黑，alpha 分档：**深底强调钮 50%**（`log_in_button` 与亮模式强调小钮 `light_button_highlight`，不论尺寸）/ 暗普通小钮 `Dark_button_Normal` 20% / 浅底钮 10%（边 `#E5E5E5`）/ 方式行与返回钮 8%。归纳仅作速记，**落码逐组件对拍 `figma-component-spec §11.1` 的状态矩阵，不按类别名推断**。**〔落码状态〕本改判当前仅在文档层生效**：as-built 组件（含回调页 dark CTA / `oauthResultPage`）仍消费改判前的旧叠层值（浅底 hover 黑 5%、pressed 黑 10% 等），与新口径的同步随暗色实现 PR 的 `--login-overlay-*` token 化一并落地——在那之前「文档新口径 vs 代码旧值」的差异是已知且有意的，不构成实现缺陷；落地后以本段口径为准。hover 方向不再随底色反转，但 alpha 档位随组件底色深浅取值，`--login-overlay-*` 系列 light / dark 二态 token 照常承载，组件把字面 rgba 改为 `var(--login-overlay-*)`（机械替换，零行为变化）。
 2. **`--login-bg-base` 前提变更**：画布底原为「跨主题恒定白 `#EDEDED`」，深色为 `#1F1F1E`（figma 532:585 帧实测）——即 `--login-*` 从「跨主题恒定」改为「随 light / dark 二态」（见 §16.2）。
 3. **`LoginBrandStage` 资产按模式切**：深色画布用**登录专用**白字版字标 / slogan 资产（`assets/login/wordmark-dark*.png` / `slogan-dark*.png`，源自 figma 532:585 `CINDY_Standard_White` 与 SLOGAN `#FBFBFB`，由暗色实现 PR 新增；**不是** §15.7 的新页横版 `cindy-logo-dark.png`——落位与尺寸不同）；立绘两模式同资产。

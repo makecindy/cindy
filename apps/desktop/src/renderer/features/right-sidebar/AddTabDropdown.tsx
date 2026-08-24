@@ -49,6 +49,8 @@ interface AddTabDropdownProps {
   existingKinds?: ReadonlySet<TabKindId>;
   /** Host viewer is a public surface only while the product plugin is enabled. */
   iosSimulatorAvailable?: boolean;
+  /** Pi is the only harness with the complete Subagents detail contract. */
+  subagentsAvailable?: boolean;
 }
 
 // Phase 1 硬编码。Phase 2 之后由 plugin registry 自动汇总。
@@ -113,6 +115,7 @@ export function AddTabDropdown({
   onSelect,
   existingKinds,
   iosSimulatorAvailable = false,
+  subagentsAvailable = false,
 }: AddTabDropdownProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
@@ -211,7 +214,9 @@ export function AddTabDropdown({
   }, [anchorRef, onClose]);
 
   const visibleItems = MENU_ITEMS.filter(
-    (item) => item.kind !== 'ios-simulator' || iosSimulatorAvailable,
+    (item) =>
+      (item.kind !== 'ios-simulator' || iosSimulatorAvailable) &&
+      (item.kind !== 'subagents' || subagentsAvailable),
   );
   const enabled = visibleItems.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
   const coming = visibleItems.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);
