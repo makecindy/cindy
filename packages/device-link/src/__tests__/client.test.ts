@@ -3049,6 +3049,7 @@ describe('DeviceLinkClient', () => {
       deviceId: 'dev-b',
       state: 'offline',
       connectionEpoch: expect.any(Number),
+      linkGeneration: expect.any(Number),
     });
     await expect(invoke).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
     h.client.stop();
@@ -3073,6 +3074,52 @@ describe('DeviceLinkClient', () => {
 
     expect(routeChanges).toHaveLength(1);
     expect(routeChanges[0]).toMatchObject({ deviceId: 'dev-b', state: 'offline' });
+    h.client.stop();
+  });
+
+  it('同一 WebSocket 内旧可靠帧的迟到 DEVICE_OFFLINE 保留原 link 代次', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-old');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendPush('dev-b', 'maker:event', { stale: true });
+    const oldFrame = h.current().sent.filter((env) => (
+      env.kind === 'push' && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+    expect(oldFrame.id).toBeTruthy();
+
+    await establishInboundReliableLink(h, 'controller-stream-new');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    expect(h.client.isLinkReady('dev-b')).toBe(true);
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'delayed old route error',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: oldGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(true);
     h.client.stop();
   });
 
@@ -3191,6 +3238,7 @@ describe('DeviceLinkClient', () => {
 
     expect(h.current().terminated).toBe(false);
     expect(h.client.getStatus()).toBe('online');
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
   });
 

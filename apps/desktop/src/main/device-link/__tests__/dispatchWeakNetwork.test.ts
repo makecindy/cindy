@@ -55,6 +55,7 @@ import * as subscriptions from '../subscriptions';
 function mkClient(
   over: Partial<{
     getConnectionEpoch: ReturnType<typeof vi.fn>;
+    getPeerLinkGeneration: ReturnType<typeof vi.fn>;
     getStatus: ReturnType<typeof vi.fn>;
     sendInvokeResult: ReturnType<typeof vi.fn>;
     sendLinkAccept: ReturnType<typeof vi.fn>;
@@ -62,6 +63,7 @@ function mkClient(
 ) {
   return {
     getConnectionEpoch: over.getConnectionEpoch ?? vi.fn(() => 1),
+    getPeerLinkGeneration: over.getPeerLinkGeneration ?? vi.fn(() => 1),
     getStatus: over.getStatus ?? vi.fn(() => 'online'),
     sendInvokeResult: over.sendInvokeResult ?? vi.fn(),
     sendLinkAccept: over.sendLinkAccept ?? vi.fn(),
@@ -727,6 +729,7 @@ describe('[6] active controller 生命周期与故障半径', () => {
       deviceId: 'ctrl-a',
       state: 'offline',
       connectionEpoch: 1,
+      linkGeneration: 1,
     });
     expect(__testing.getActiveControllers().map((controller) => controller.deviceId)).toEqual([
       'ctrl-a',
@@ -736,6 +739,38 @@ describe('[6] active controller 生命周期与故障半径', () => {
       deviceId: 'ctrl-a',
       state: 'offline',
       connectionEpoch: 2,
+      linkGeneration: 1,
+    });
+    expect(__testing.getActiveControllers()).toEqual([]);
+  });
+
+  it('同一 connection 内旧 link 的 offline 事件不能清掉重新打开后的 controller', () => {
+    let linkGeneration = 1;
+    const client = mkClient({
+      getConnectionEpoch: vi.fn(() => 1),
+      getPeerLinkGeneration: vi.fn(() => linkGeneration),
+    });
+    __testing.setActiveClient(client as never);
+
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-old', undefined);
+    linkGeneration = 2;
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-new', undefined);
+
+    handleControllerOffline('ctrl-a', {
+      deviceId: 'ctrl-a',
+      state: 'offline',
+      connectionEpoch: 1,
+      linkGeneration: 1,
+    });
+    expect(__testing.getActiveControllers().map((controller) => controller.deviceId)).toEqual([
+      'ctrl-a',
+    ]);
+
+    handleControllerOffline('ctrl-a', {
+      deviceId: 'ctrl-a',
+      state: 'offline',
+      connectionEpoch: 1,
+      linkGeneration: 2,
     });
     expect(__testing.getActiveControllers()).toEqual([]);
   });

@@ -384,6 +384,8 @@ export interface DeviceLinkPeerRouteStateChanged {
   deviceId: string;
   state: 'offline';
   connectionEpoch: number;
+  /** 本地已接受的 peer link 代次；同一 WebSocket 内重开也会递增。 */
+  linkGeneration: number;
 }
 
 /**
@@ -420,6 +422,8 @@ interface PendingRequest {
   dst?: string;
   /** 可靠 invoke 未 ACK 时可跨 relay 短断线继续等；其它请求立即失败。 */
   reliableDst?: string;
+  /** 请求真正发出时所属的 peer link 代次，供迟到 relay-error 归属。 */
+  linkGeneration?: number;
 }
 
 interface PendingReliableMessage {
@@ -433,6 +437,8 @@ interface PendingReliableMessage {
   sent: boolean;
   /** 入队时刻（monotonicNow 单调时钟）；push 帧按 TRANSPORT_PENDING_PUSH_MAX_AGE_MS 判定过期。 */
   enqueuedAt: number;
+  /** 逻辑消息首次发出时所属的 peer link 代次。 */
+  linkGeneration: number;
 }
 
 type ReliableSendPhase = 'down' | 'awaiting-confirm' | 'ready';
@@ -522,6 +528,8 @@ interface PeerTransportState {
   pushAdmissionDropCount: number;
   /** 上次输出 latest-wins 驱逐告警的单调时刻;0 表示从未输出。 */
   pushAdmissionDropLogAt: number;
+  /** 同一 relay WebSocket 内每次接受 link-open/link-accept 都递增。 */
+  linkGeneration: number;
 }
 
 interface PendingInboundLinkOffer {
@@ -632,7 +640,18 @@ export class DeviceLinkClient {
     (change: DeviceLinkPeerRouteStateChanged) => void
   >();
   /** Avoid emitting the same authoritative route failure once per queued frame. */
-  private peerOfflineNotifiedEpoch = new Map<string, number>();
+  private peerOfflineNotifiedGeneration = new Map<
+    string,
+    { connectionEpoch: number; linkGeneration: number }
+  >();
+  /**
+   * relay-error 回带原帧 id；据此把迟到错误归回消息发出时的 peer link 代次。
+   * 只保留有界的近期路由尝试，不进入 wire protocol，也不跨 client 生命周期。
+   */
+  private outboundRouteGenerationById = new Map<
+    string,
+    { deviceId: string; linkGeneration: number }
+  >();
 
   constructor(opts: DeviceLinkClientOptions) {
     this.opts = opts;
@@ -857,6 +876,11 @@ export class DeviceLinkClient {
     return this.connEpoch;
   }
 
+  /** Current accepted link generation for one peer within the WebSocket lifecycle. */
+  getPeerLinkGeneration(deviceId: string): number {
+    return this.peerTransport.get(deviceId)?.linkGeneration ?? 0;
+  }
+
   /** Subscribe to typed peer route lifecycle changes (currently authoritative offline). */
   onPeerRouteStateChanged(
     cb: (change: DeviceLinkPeerRouteStateChanged) => void,
@@ -880,14 +904,24 @@ export class DeviceLinkClient {
     return () => this.presenceHandlers.delete(cb);
   }
 
-  private notifyPeerRouteOffline(deviceId: string): void {
-    if (this.peerOfflineNotifiedEpoch.get(deviceId) === this.connEpoch) return;
-    this.peerOfflineNotifiedEpoch.set(deviceId, this.connEpoch);
+  private notifyPeerRouteOffline(deviceId: string, linkGeneration: number): void {
+    const notified = this.peerOfflineNotifiedGeneration.get(deviceId);
+    if (
+      notified?.connectionEpoch === this.connEpoch
+      && notified.linkGeneration === linkGeneration
+    ) {
+      return;
+    }
+    this.peerOfflineNotifiedGeneration.set(deviceId, {
+      connectionEpoch: this.connEpoch,
+      linkGeneration,
+    });
     if (this.peerRouteStateHandlers.size === 0) return;
     const change: DeviceLinkPeerRouteStateChanged = {
       deviceId,
       state: 'offline',
       connectionEpoch: this.connEpoch,
+      linkGeneration,
     };
     for (const cb of this.peerRouteStateHandlers) {
       try {
@@ -898,8 +932,11 @@ export class DeviceLinkClient {
     }
   }
 
-  private markPeerRouteOnline(deviceId: string): void {
-    this.peerOfflineNotifiedEpoch.delete(deviceId);
+  private markPeerRouteOnline(deviceId: string, linkGeneration?: number): number {
+    const peer = this.getPeerTransport(deviceId);
+    peer.linkGeneration = linkGeneration ?? peer.linkGeneration + 1;
+    this.peerOfflineNotifiedGeneration.delete(deviceId);
+    return peer.linkGeneration;
   }
 
   /** 订阅入站隧道帧(invoke / link-open / link-close / push / 未配对的响应帧) */
@@ -1055,7 +1092,7 @@ export class DeviceLinkClient {
     // 已经清掉的可靠 pending 也绝不能在下一次 openLink 后复活。
     if (this.status !== 'online') return;
     try {
-      this.sendEnvelope({
+      this.sendRoutedEnvelope({
         v: PROTOCOL_VERSION,
         kind: 'link-close',
         dst,
@@ -1088,7 +1125,7 @@ export class DeviceLinkClient {
     // 超过单帧上限的大 result 只能靠可靠层分片,回落入队等 link 重建。
     if (peer?.reliable && !this.isPeerSendReady(peer) && this.status === 'online') {
       try {
-        this.sendEnvelope(env);
+        this.sendRoutedEnvelope(env);
         peer.unlinkedLegacyResponseIds.delete(requestId);
         return;
       } catch (err) {
@@ -1124,7 +1161,8 @@ export class DeviceLinkClient {
     if (peerSupportsReliable) {
       this.dropDiscardablePendingPrefix(dst, peer, false, 'before link re-establishment replay');
     }
-    this.sendEnvelope({
+    const linkGeneration = peer.linkGeneration + 1;
+    this.sendRoutedEnvelope({
       v: PROTOCOL_VERSION,
       kind: 'link-accept',
       id: requestId,
@@ -1144,8 +1182,8 @@ export class DeviceLinkClient {
             }
           : {}),
       },
-    });
-    this.markPeerRouteOnline(dst);
+    }, linkGeneration);
+    this.markPeerRouteOnline(dst, linkGeneration);
     if (matchingOffer) {
       this.pendingInboundLinkOffers.delete(dst);
       this.setPeerCapabilities(
@@ -1182,7 +1220,7 @@ export class DeviceLinkClient {
       ...(ownerStamp ? { ownerStamp } : {}),
     };
     if (channel === DEVICE_LINK_TRANSPORT_ACK_CHANNEL) {
-      this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
+      this.sendRoutedEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
       return;
     }
     this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
@@ -1255,6 +1293,7 @@ export class DeviceLinkClient {
         timer,
         expectKind,
         dst: env.dst,
+        linkGeneration: env.dst ? this.getPeerLinkGeneration(env.dst) : undefined,
       });
 
       try {
@@ -1266,7 +1305,7 @@ export class DeviceLinkClient {
             if (pending) pending.reliableDst = outbound.dst;
           }
         } else {
-          this.sendEnvelope(outbound);
+          this.sendRoutedEnvelope(outbound);
         }
       } catch (err) {
         this.pending.delete(id);
@@ -1935,11 +1974,25 @@ export class DeviceLinkClient {
         );
         const pending = env.id ? this.pending.get(env.id) : undefined;
         const routeDeviceId = payload.dst ?? pending?.dst;
+        const reliableGeneration = (
+          env.id && routeDeviceId
+            ? this.findReliableRouteGeneration(routeDeviceId, env.id)
+            : undefined
+        );
+        const rememberedGeneration = env.id
+          ? this.consumeOutboundRouteGeneration(env.id, routeDeviceId)
+          : undefined;
+        const routeLinkGeneration = pending?.linkGeneration
+          ?? reliableGeneration
+          ?? rememberedGeneration
+          ?? (routeDeviceId ? this.getPeerLinkGeneration(routeDeviceId) : 0);
+        const stalePeerRouteError = !!routeDeviceId
+          && routeLinkGeneration < this.getPeerLinkGeneration(routeDeviceId);
         // DEVICE_OFFLINE is a peer route transition, not merely a rejected
         // request. Emit it before the pending fast path so the host cannot
         // miss it when the relay error is paired with an in-flight request.
         if (payload.code === 'DEVICE_OFFLINE' && routeDeviceId) {
-          this.notifyPeerRouteOffline(routeDeviceId);
+          this.notifyPeerRouteOffline(routeDeviceId, routeLinkGeneration);
         }
         if (env.id && pending) {
           const p = pending;
@@ -1949,7 +2002,7 @@ export class DeviceLinkClient {
           // 可能稍后突然执行。永久断链错误丢弃该 peer 全部 pending、靠下次握手 baseSeq
           // 跨过；其它单帧错误改成同 seq skip。
           if (p.reliableDst) {
-            if (terminalRouteFailure) {
+            if (terminalRouteFailure && !stalePeerRouteError) {
               this.markPeerLinkDown(this.getPeerTransport(p.reliableDst));
               this.abandonReliablePending(
                 p.reliableDst,
@@ -1962,7 +2015,7 @@ export class DeviceLinkClient {
           p.reject(new DeviceLinkError(payload.code, payload.message));
           return true;
         }
-        if (payload.dst && terminalRouteFailure) {
+        if (payload.dst && terminalRouteFailure && !stalePeerRouteError) {
           const peer = this.getPeerTransport(payload.dst);
           this.markPeerLinkDown(peer);
           peer.recoveryNeedsAck = true;
@@ -2397,9 +2450,10 @@ export class DeviceLinkClient {
 
   private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false): boolean {
     if (!env.dst || !isReliableKind(env.kind)) {
-      this.sendEnvelope(env);
+      this.sendRoutedEnvelope(env);
       return false;
     }
+    const routedEnv: Envelope = env.id ? env : { ...env, id: createRequestId() };
     const peer = this.getPeerTransport(env.dst);
     if (
       peer.explicitlyClosed
@@ -2410,7 +2464,7 @@ export class DeviceLinkClient {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'control link is closed');
     }
     if (!peer.reliable) {
-      this.sendEnvelope(env);
+      this.sendRoutedEnvelope(routedEnv);
       return false;
     }
 
@@ -2436,12 +2490,12 @@ export class DeviceLinkClient {
     let reservedBytes: number;
     try {
       frames = encodeReliableFrames(
-        env,
+        routedEnv,
         peer.streamId,
         seq,
         this.getTransportBaseSeq(peer),
       );
-      reservedBytes = this.measurePendingReservation(env, peer.streamId, seq);
+      reservedBytes = this.measurePendingReservation(routedEnv, peer.streamId, seq);
     } catch (err) {
       throw new DeviceLinkError(
         'PAYLOAD_TOO_LARGE',
@@ -2462,12 +2516,12 @@ export class DeviceLinkClient {
       this.assertWebSocketCapacity(this.measureReliableFrames(frames));
     }
     if (!hasPendingCapacity()) {
-      if (env.kind === 'invoke-result') {
+      if (routedEnv.kind === 'invoke-result') {
         // invoke-result 是控制端确认被控端存活的唯一凭据，绝不能被堆积的可丢弃
         // 帧饿死：丢弃整个队头可丢弃前缀（fresh push 一并放弃——单 FIFO 无法同时
         // 做到 push 无损与 result 抢占），让 result 成为最早可交付的 live seq。
         this.dropDiscardablePendingPrefix(env.dst, peer, false, 'to make room for invoke-result');
-      } else if (env.kind === 'push' && isCoalesciblePushEnvelope(env)) {
+      } else if (routedEnv.kind === 'push' && isCoalesciblePushEnvelope(routedEnv)) {
         // 可合并镜像 push（COALESCIBLE_PUSH_CHANNELS）是尽力而为的状态镜像
         // （控制端重连/回前台会整体 resync + 重新订阅）。拥塞即对端未在 ACK：
         // 2026-08-07 线上该形态一小时内 5168 次连续 BACKPRESSURE（maker:event），
@@ -2494,12 +2548,13 @@ export class DeviceLinkClient {
     // （ws 容量已在驱逐前预检）。
     const pending: PendingReliableMessage = {
       seq,
-      envelope: env,
+      envelope: routedEnv,
       bytes: reservedBytes,
       attempts: 0,
       lastSentAt: 0,
       sent: false,
       enqueuedAt: this.monotonicNow(),
+      linkGeneration: peer.linkGeneration,
     };
     peer.pending.set(seq, pending);
     peer.pendingBytes += reservedBytes;
@@ -2539,7 +2594,7 @@ export class DeviceLinkClient {
     let sent = 0;
     try {
       for (const frame of frames) {
-        this.sendEnvelope(frame);
+        this.sendRoutedEnvelope(frame, pending.linkGeneration);
         pending.sent = true;
         sent += 1;
       }
@@ -2603,6 +2658,47 @@ export class DeviceLinkClient {
     ws.send(text);
   }
 
+  private sendRoutedEnvelope(env: Envelope, linkGeneration?: number): void {
+    if (!env.dst) {
+      this.sendEnvelope(env);
+      return;
+    }
+    const routed: Envelope = env.id ? env : { ...env, id: createRequestId() };
+    const generation = linkGeneration ?? this.getPeerLinkGeneration(env.dst);
+    this.rememberOutboundRouteGeneration(routed.id!, env.dst, generation);
+    this.sendEnvelope(routed);
+  }
+
+  private rememberOutboundRouteGeneration(
+    id: string,
+    deviceId: string,
+    linkGeneration: number,
+  ): void {
+    this.outboundRouteGenerationById.delete(id);
+    this.outboundRouteGenerationById.set(id, { deviceId, linkGeneration });
+    while (this.outboundRouteGenerationById.size > 1_024) {
+      const oldest = this.outboundRouteGenerationById.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.outboundRouteGenerationById.delete(oldest);
+    }
+  }
+
+  private consumeOutboundRouteGeneration(id: string, deviceId?: string): number | undefined {
+    const attempt = this.outboundRouteGenerationById.get(id);
+    if (!attempt || (deviceId && attempt.deviceId !== deviceId)) return undefined;
+    this.outboundRouteGenerationById.delete(id);
+    return attempt.linkGeneration;
+  }
+
+  private findReliableRouteGeneration(deviceId: string, id: string): number | undefined {
+    const peer = this.peerTransport.get(deviceId);
+    if (!peer) return undefined;
+    for (const pending of peer.pending.values()) {
+      if (pending.envelope.id === id) return pending.linkGeneration;
+    }
+    return undefined;
+  }
+
   private assertWebSocketCapacity(additionalBytes: number): void {
     const ws = this.ws;
     if (!ws) throw new DeviceLinkError('NOT_CONNECTED', 'no active connection');
@@ -2664,6 +2760,7 @@ export class DeviceLinkClient {
         recoveryFramesSent: 0,
         pushAdmissionDropCount: 0,
         pushAdmissionDropLogAt: 0,
+        linkGeneration: 0,
       };
       this.peerTransport.set(dst, peer);
     }
@@ -2844,7 +2941,7 @@ export class DeviceLinkClient {
         : undefined
     );
     try {
-      this.sendEnvelope(makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId));
+      this.sendRoutedEnvelope(makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId));
     } catch (err) {
       this.log.debug(
         `reliable transport ACK send failed dst=${dst.slice(0, 8)}`
@@ -3423,7 +3520,7 @@ export class DeviceLinkClient {
    */
   private notifyTransportTimeoutClose(dst: string, attempt: number): void {
     try {
-      this.sendEnvelope({
+      this.sendRoutedEnvelope({
         v: PROTOCOL_VERSION,
         kind: 'link-close',
         dst,
@@ -3575,6 +3672,8 @@ export class DeviceLinkClient {
       }
     }
     this.peerTransport.clear();
+    this.peerOfflineNotifiedGeneration.clear();
+    this.outboundRouteGenerationById.clear();
     for (const timer of this.timeoutCloseNotifyTimers.values()) clearTimeout(timer);
     this.timeoutCloseNotifyTimers.clear();
   }
