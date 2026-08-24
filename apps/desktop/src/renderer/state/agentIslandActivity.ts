@@ -26,9 +26,19 @@ function emit(): void {
 function sameActivity(a: AgentIslandSessionActivity, b: AgentIslandSessionActivity): boolean {
   return (
     a.phase === b.phase &&
+    a.recordStatus === b.recordStatus &&
     a.compactDetail === b.compactDetail &&
+    a.currentActionSummary === b.currentActionSummary &&
     a.interactionKind === b.interactionKind &&
-    a.attention === b.attention
+    a.attention === b.attention &&
+    a.startedAtMs === b.startedAtMs &&
+    a.lastActivityAtMs === b.lastActivityAtMs &&
+    a.workflow?.key === b.workflow?.key &&
+    a.workflow?.label === b.workflow?.label &&
+    a.workflow?.waitingOn === b.workflow?.waitingOn &&
+    a.turnGeneration === b.turnGeneration &&
+    a.gracefulStopState === b.gracefulStopState &&
+    a.source === b.source
   );
 }
 

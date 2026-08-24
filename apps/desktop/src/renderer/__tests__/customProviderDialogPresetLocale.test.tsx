@@ -4,7 +4,7 @@ import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testi
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderPreset } from '@cindy/model-providers';
+import type { PiModelApi, ProviderPreset } from '@cindy/model-providers';
 
 const i18nState = vi.hoisted(() => ({ language: 'zh-TW' }));
 
@@ -24,12 +24,15 @@ vi.mock('@/lib/customProviderId', () => ({
 }));
 
 vi.mock('@/lib/customProviders', () => ({
-  clearCustomProviderModelPiApiOverrides: vi.fn((models: Array<Record<string, unknown>>) =>
-    models.map((model) => {
-      const next = { ...model };
-      delete next.piApi;
-      return next;
-    }),
+  setCustomProviderModelPiApi: vi.fn(
+    (models: Array<Record<string, unknown>>, index: number, piApi?: string) =>
+      models.map((model, modelIndex) => {
+        if (modelIndex !== index) return model;
+        const next = { ...model };
+        if (piApi) next.piApi = piApi;
+        else delete next.piApi;
+        return next;
+      }),
   ),
   createCustomProvider: vi.fn(async () => undefined),
   customProviderWireProtocolForSave: vi.fn(
@@ -53,7 +56,10 @@ vi.mock('@/lib/customProviders', () => ({
   updateCustomProvider: vi.fn(),
 }));
 
-import { CustomProviderDialog } from '@/components/settings/CustomProviderDialog';
+import {
+  CustomProviderDialog,
+  PiModelProtocolDropdown,
+} from '@/components/settings/CustomProviderDialog';
 import { createCustomProvider } from '@/lib/customProviders';
 
 const localizedPreset: ProviderPreset = {
@@ -65,15 +71,17 @@ const localizedPreset: ProviderPreset = {
   runtimes: {
     codex: {
       baseUrl: 'http://127.0.0.1:4000/v1',
-      models: [{
-        id: 'local-model',
-        name: 'Local Model',
-        route: {
-          baseUrl: 'http://127.0.0.1:4000/v1',
-          wireProtocol: 'openai-responses',
-          requestPath: '/responses',
+      models: [
+        {
+          id: 'local-model',
+          name: 'Local Model',
+          route: {
+            baseUrl: 'http://127.0.0.1:4000/v1',
+            wireProtocol: 'openai-responses',
+            requestPath: '/responses',
+          },
         },
-      }],
+      ],
     },
   },
 };
@@ -94,6 +102,22 @@ const piProtocolPreset: ProviderPreset = {
           piApi: 'openai-responses',
         },
       ],
+    },
+  },
+};
+
+const legacyMissingPiProtocolPreset: ProviderPreset = {
+  id: 'legacy-missing-pi-protocol',
+  name: 'Legacy Missing Pi Protocol',
+  authMethod: 'none',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'http://127.0.0.1:4010/anthropic',
+      models: [{ id: 'model-a', name: 'Model A' }],
+    },
+    pi: {
+      baseUrl: 'http://127.0.0.1:4010/pi',
+      models: [{ id: 'model-a', name: 'Model A' }],
     },
   },
 };
@@ -148,7 +172,7 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       listProviderPresets: vi.fn(async () => ({
-        presets: [localizedPreset, piProtocolPreset],
+        presets: [localizedPreset, piProtocolPreset, legacyMissingPiProtocolPreset],
       })),
       fetchProviderModels: vi.fn(async () => ({
         ok: true,
@@ -193,6 +217,17 @@ describe('CustomProviderDialog preset locale ownership', () => {
       expect(vi.mocked(createCustomProvider).mock.calls[0][0].name).toBe(expectedName);
     },
   );
+
+  it('skips a legacy preset Pi runtime instead of guessing Chat', async () => {
+    renderDialog();
+    const trigger = await findReadyPresetTrigger();
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Legacy Missing Pi Protocol' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toBeUndefined();
+  });
 
   it('dismisses only the topmost preset menu on Escape and preserves unsaved form edits', async () => {
     i18nState.language = 'zh-TW';
@@ -306,11 +341,15 @@ describe('CustomProviderDialog preset locale ownership', () => {
     await screen.findByRole('heading', {
       name: 'settings.providers.custom.fetch.pickerTitle',
     });
-    fireEvent.click(screen.getByRole('button', { name: /settings\.providers\.custom\.fetch\.confirm/ }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /settings\.providers\.custom\.fetch\.confirm/ }),
+    );
     await waitFor(() => {
-      expect(screen.queryByRole('heading', {
-        name: 'settings.providers.custom.fetch.pickerTitle',
-      })).toBeNull();
+      expect(
+        screen.queryByRole('heading', {
+          name: 'settings.providers.custom.fetch.pickerTitle',
+        }),
+      ).toBeNull();
     });
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
@@ -330,31 +369,120 @@ describe('CustomProviderDialog preset locale ownership', () => {
     ['settings.providers.custom.wireProtocol.piChat', 'openai-chat'],
     ['settings.providers.custom.wireProtocol.piAnthropic', 'anthropic-messages'],
   ] as const)(
-    'saves an explicit %s PI selection without the preset piApi override',
+    'saves an explicit %s PI default without deleting the model override',
     async (buttonName, wireProtocol) => {
       i18nState.language = 'en';
       renderDialog();
 
-      fireEvent.click(
-        await screen.findByRole('button', {
-          name: 'settings.providers.custom.presets.label',
-        }),
-      );
+      fireEvent.click(await findReadyPresetTrigger());
       fireEvent.click(await screen.findByRole('option', { name: 'PI Protocol Preset' }));
-      fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' }));
+      const piTab = screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' });
+      fireEvent.click(piTab);
+      await waitFor(() => expect(piTab.getAttribute('aria-selected')).toBe('true'));
       fireEvent.click(screen.getByRole('button', { name: buttonName }));
+      await screen.findByText(
+        wireProtocol === 'anthropic-messages'
+          ? 'settings.providers.custom.wireProtocol.piAnthropicHelp'
+          : 'settings.providers.custom.wireProtocol.piChatHelp',
+      );
       fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
       await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
       expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toMatchObject({
         wireProtocol,
-        models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        models: [
+          {
+            id: 'deepseek-v4-pro',
+            name: 'DeepSeek V4 Pro',
+            piApi: 'openai-responses',
+          },
+        ],
       });
-      expect(
-        vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi?.models[0],
-      ).not.toHaveProperty('piApi');
     },
   );
+
+  it('offers all per-model PI protocols and maps Chat to openai-completions', async () => {
+    const onChange = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <PiModelProtocolDropdown
+        modelName="DeepSeek V4 Pro"
+        value="openai-responses"
+        open
+        onOpenChange={onOpenChange}
+        onChange={onChange}
+      />,
+    );
+
+    for (const optionName of [
+      'settings.providers.custom.modelProtocol.inherit',
+      'settings.providers.custom.modelProtocol.messages',
+      'settings.providers.custom.modelProtocol.chat',
+      'settings.providers.custom.modelProtocol.responses',
+      'settings.providers.custom.modelProtocol.google',
+    ]) {
+      expect(await screen.findByRole('menuitemradio', { name: optionName })).not.toBeNull();
+    }
+    const menu = screen.getByRole('menu');
+    expect(menu.className).toContain('--radix-dropdown-menu-trigger-width');
+    expect(menu.className).not.toContain('--radix-popover-trigger-width');
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'settings.providers.custom.modelProtocol.chat',
+      }),
+    );
+    expect(onChange).toHaveBeenCalledWith('openai-completions');
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it('supports arrow-key selection, Escape, and focus return for the PI model protocol menu', async () => {
+    function Harness() {
+      const [open, setOpen] = React.useState(false);
+      const [value, setValue] = React.useState<PiModelApi | undefined>();
+      return (
+        <>
+          <PiModelProtocolDropdown
+            modelName="DeepSeek V4 Pro"
+            value={value}
+            open={open}
+            onOpenChange={setOpen}
+            onChange={setValue}
+          />
+          <output>{value ?? 'inherit'}</output>
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.custom.modelProtocol.ariaLabel',
+    });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+
+    const inherit = await screen.findByRole('menuitemradio', {
+      name: 'settings.providers.custom.modelProtocol.inherit',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(inherit));
+    fireEvent.keyDown(inherit, { key: 'ArrowDown' });
+    const messages = screen.getByRole('menuitemradio', {
+      name: 'settings.providers.custom.modelProtocol.messages',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(messages));
+
+    fireEvent.keyDown(messages, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('menuitemradio')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    });
+
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const reopenedMessages = await screen.findByRole('menuitemradio', {
+      name: 'settings.providers.custom.modelProtocol.messages',
+    });
+    fireEvent.keyDown(reopenedMessages, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('anthropic-messages'));
+  });
 
   it.each([
     ['isComposing', { isComposing: true }],

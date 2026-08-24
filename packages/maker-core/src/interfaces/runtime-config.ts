@@ -10,9 +10,11 @@
 import type { SubagentModelDiagnostic } from '../agents/claude-code/subagent-model-default.js';
 import type { AgentCredentialMode } from './auth-adapter.js';
 
-/** 函数形态 behaviorFlags 的入参:本次 spawn 的凭证形态(undefined = 未显式指定,走 adapter fallback)。 */
+/** 函数形态 behaviorFlags 的入参:本次 spawn 的凭证形态、来源与执行位置。 */
 export interface BehaviorFlagsContext {
   credentialMode?: AgentCredentialMode;
+  /** 本次 spawn 的会话来源。null/undefined = 隐式默认路由。 */
+  sessionProviderId?: string | null;
   /**
    * 本次 spawn 落在哪台机器:'local' = 本机子进程,'remote' = 远端 daemon。
    * host 据此决定"只对本机有意义"的 flag(如按本机核数算的工具链限核 env)
@@ -47,12 +49,13 @@ export interface AgentRuntimeConfig {
 
   /**
    * 业务行为 flag。Agent 内部决定哪些 key 有意义。
-   * Claude 当前用到：CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS
+   * Claude 当前用到：CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS、
+   * CLAUDE_CODE_ATTRIBUTION_HEADER、ENABLE_TOOL_SEARCH
    *
-   * 函数形态:flag 需要按本次 spawn 的凭证形态分叉时用(env-builder 在组装 env 时
-   * 以 spawn 的 credentialMode 调用)。典型:CLAUDE_CODE_ATTRIBUTION_HEADER 只对
-   * gateway-key spawn 禁用——oauth 侧禁用会让订阅直连的 Auto 分类器子请求被上游
-   * 429(desktop issue #758)。静态对象形态语义不变。
+   * 函数形态:flag 需要按本次 spawn 的凭证形态或来源分叉时用(env-builder 在组装 env
+   * 时传入 route context)。典型:CLAUDE_CODE_ATTRIBUTION_HEADER 只对 gateway-key
+   * spawn 禁用(issue #758);ENABLE_TOOL_SEARCH 只对确认兼容 deferred tools 的来源
+   * 开启(issue #2929)。静态对象形态语义不变。
    */
   behaviorFlags?: Record<string, string> | ((ctx: BehaviorFlagsContext) => Record<string, string>);
 
@@ -62,10 +65,9 @@ export interface AgentRuntimeConfig {
    * - undefined / blank: do not override the agent's native selection logic
    * - non-blank: the agent implementation injects the vendor-supported deterministic override
    *
-   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume this field:
-   * the desktop host injects its subagent default via spawn-time `-c agents.default_subagent_model`
-   * overrides instead (see apps/desktop/src/main/maker-host/codex-subagent-config.ts) — the bundled
-   * codex binary treats it as a fallback that explicit spawn params may still override.
+   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume this field. Desktop's
+   * personalized Codex Subagent route is enforced by its loopback proxy after native child-thread
+   * creation, so maker-core must not reinterpret it as a Codex spawn-time model override.
    *
    * ⚠️ 该 env 在 cc 的解析顺序里是**最高优先级**,不仅压过 agent frontmatter 的 `model:`,
    * 也压过每次 Task/Agent 调用传入的 `model` 参数,而平台不提供更低优先级的槽位。
@@ -90,14 +92,27 @@ export interface AgentRuntimeConfig {
   ) => string | undefined;
 
   /**
-   * Claude Code 自动上下文压缩阈值百分比。
+   * Host 管的自动上下文压缩阈值百分比。Claude Code 与 Pi 共用同一份设置；Codex 仍由上游自己压。
    *
    * - undefined: host 不接管自动压缩 (保持 agent 默认行为)
-   * - 50-95: 每个 turn 结束时, maker-core 基于最新 usage 快照判断是否静默注入 `/compact`
+   * - 50-95: 每个 turn 结束时, maker-core 基于最新 usage 快照判断。
+   *   同模型占用达到该比例且尚未满窗时, Claude Code 静默注入 `/compact`；Pi 调 compact RPC。
+   *   占用 ≥ 100%，或 host/bridge 自动 compact 确定性失败后,下次 send 换干净原生窗口。
+   *   切到更小窗口模型的 danger 预检仍用同一百分比,与同模型 compact 解耦。
+   *   Pi 原生 `window - reserveTokens` 仍作顶满抢救。本地 Pi 继续关掉引擎自己的自动压缩。
    *
-   * Host 可以用 getter 注入, Claude agent 会在每次判断时读取最新值。
+   * Host 可以用 getter 注入, agent 会在每次判断时读取最新值。
    */
   autoCompactThresholdPct?: number;
+
+  /**
+   * Host-owned context switch assessment for **changing to a smaller model window**.
+   * Same-model host compact no longer consults this callback.
+   */
+  shouldHandoffAfterContextAssessment?: (
+    contextTokens: number,
+    contextWindow: number,
+  ) => boolean;
 
   /**
    * Host-managed executable directories to prepend to agent subprocess PATH.

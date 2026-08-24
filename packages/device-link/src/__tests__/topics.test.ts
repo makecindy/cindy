@@ -45,6 +45,10 @@ describe('topicForPush', () => {
       sourceBranch: 'feature/mobile',
       revision: 2,
     })).toBe('sessions');
+    expect(topicForPush('sidebar-settings:project-order-changed', {
+      projectOrder: 'custom',
+      manualProjectOrder: ['local:/a'],
+    })).toBe('sessions');
   });
 
   it('learn:event → sessions(账号级:run 关联触发/蒸馏两个任务,单 sessionId 路由会漏)', () => {

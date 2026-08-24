@@ -46,7 +46,7 @@ export interface RendererBridgeOptions {
    * waits for its renderer's ready handshake so the tab-op has a live host.
    * Rejection fails the tab-op (no host to run it against).
    */
-  ensureHost?: () => Promise<void>;
+  ensureHost?: (sessionId?: string) => Promise<void>;
   /**
    * Whether the user currently prefers the sidebar in a detached window.
    * Consumers use it to decide if a tab-resolve miss is worth waiting on
@@ -108,7 +108,8 @@ export async function dispatchTabOp(
 ): Promise<RsbBrowserBridgeTabOpResult> {
   assertActive?.();
   if (dispatchOptions.ensureHost !== false && opts.ensureHost) {
-    await opts.ensureHost();
+    const sessionId = 'sessionId' in op ? op.sessionId : undefined;
+    await opts.ensureHost(sessionId);
     assertActive?.();
   }
   const wc = opts.getHostWebContents();

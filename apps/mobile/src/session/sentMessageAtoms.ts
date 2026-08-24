@@ -3,6 +3,7 @@ import {
   type ChatQuote,
   type ChatQuoteSegment,
 } from '@cindy/maker-shared/chat-quotes';
+import { slashCommandDisplayLabel } from '@cindy/maker-shared/composer-palette';
 
 export interface SentPastedTextRange {
   start: number;
@@ -178,7 +179,11 @@ export function sentInlineTokensDisplayText(tokens: readonly SentInlineToken[]):
       if (!display.endsWith('\n')) display += '\n';
       continue;
     }
-    display += token.kind === 'pasted' ? token.display : token.text;
+    display += token.kind === 'pasted'
+      ? token.display
+      : token.kind === 'slash'
+        ? slashCommandDisplayLabel(token.text)
+        : token.text;
   }
   return display.trimEnd();
 }

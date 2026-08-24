@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const serverApiFetchMock = vi.hoisted(() => vi.fn());
 const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
+const listProviderMediaModelsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../serverApiClient.js', () => ({
   serverApiFetch: serverApiFetchMock,
@@ -21,11 +22,17 @@ vi.mock('../../clientEndpointsService.js', () => ({
 vi.mock('../../maker-host/model-disable-store.js', () => ({
   readModelDisableOverrides: readModelDisableOverridesMock,
 }));
+vi.mock('../../cindy-media/providerMediaRuntime.js', () => ({
+  listProviderMediaModels: listProviderMediaModelsMock,
+}));
 
 import {
   fetchMediaInvocationGuide,
+  isMediaModelExecutableForGuide,
   listAvailableMediaModels,
+  listExecutableMediaModels,
   MediaGuideCompatibilityError,
+  resetExecutableMediaModelCache,
 } from '../mediaModels.js';
 
 const payload = {
@@ -71,8 +78,10 @@ const payload = {
 
 describe('listAvailableMediaModels', () => {
   beforeEach(() => {
+    resetExecutableMediaModelCache();
     serverApiFetchMock.mockReset().mockResolvedValue(payload);
     readModelDisableOverridesMock.mockReset().mockReturnValue({});
+    listProviderMediaModelsMock.mockReset().mockReturnValue([]);
   });
 
   it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
@@ -99,6 +108,25 @@ describe('listAvailableMediaModels', () => {
     ]);
   });
 
+  it('同名媒体模型按 providerId 保留为两个可选来源', async () => {
+    listProviderMediaModelsMock.mockReturnValue([
+      {
+        id: 'image-with-guide',
+        name: 'Provider Image',
+        providerId: 'openai',
+        mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+
+    const models = await listAvailableMediaModels('image.generate');
+
+    expect(models.filter((model) => model.id === 'image-with-guide')).toMatchObject([
+      { id: 'image-with-guide', providerId: 'xd' },
+      { id: 'image-with-guide', providerId: 'openai' },
+    ]);
+  });
+
   it('叠加客户端现有 XD provider/model 停用准入', async () => {
     readModelDisableOverridesMock.mockReturnValueOnce({
       disabledModels: { 'xd:image-without-guide': true },
@@ -109,6 +137,18 @@ describe('listAvailableMediaModels', () => {
 
     readModelDisableOverridesMock.mockReturnValueOnce({ disabledProviders: { xd: true } });
     await expect(listAvailableMediaModels()).resolves.toEqual([]);
+  });
+
+  it('namespaced modelId 唯一时继承旧裸 ID 的停用项', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      ...payload,
+      models: [{ ...payload.models[1], id: 'openai/image-with-guide' }],
+    });
+    readModelDisableOverridesMock.mockReturnValueOnce({
+      disabledModels: { 'xd:image-with-guide': true },
+    });
+
+    await expect(listAvailableMediaModels('image.generate')).resolves.toEqual([]);
   });
 
   it('拒绝旧版聊天目录，不把版本不匹配静默解释为空媒体列表', async () => {
@@ -169,6 +209,56 @@ describe('listAvailableMediaModels', () => {
     );
   });
 
+  it('只在 Guide 查询边界移除 modelId namespace', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      modelId: 'gpt-image-2',
+      guide: {
+        schemaVersion: 1,
+        guideId: 'openai-images-v1',
+        revision: '2026-08-20.1',
+        connection: { providerId: 'xd' },
+        operations: [
+          {
+            capability: 'image.generate',
+            request: {
+              method: 'POST',
+              path: '/images/generations',
+              bodyEncoding: 'json',
+              bodyModelPath: ['model'],
+              timeoutMs: 1_000,
+              maxRequestBytes: 1_024,
+              maxResponseBytes: 1_024,
+            },
+            response: {
+              mode: 'sync',
+              media: [
+                {
+                  path: ['data', '*', 'url'],
+                  encoding: 'url',
+                  kind: 'image',
+                  allowedUrlHosts: ['example.com'],
+                },
+              ],
+            },
+            instructions: '按协议组装请求。',
+            exampleBody: { prompt: 'hello' },
+            inputSchema: { type: 'object' },
+            officialDocs: 'https://example.com/images-api',
+          },
+        ],
+      },
+    });
+
+    await expect(fetchMediaInvocationGuide('openai/gpt-image-2')).resolves.toMatchObject({
+      modelId: 'gpt-image-2',
+      guide: { guideId: 'openai-images-v1' },
+    });
+    expect(serverApiFetchMock).toHaveBeenLastCalledWith(
+      '/api/model-access/invocation-guide?modelId=gpt-image-2',
+      expect.any(Object),
+    );
+  });
+
   it('把更高 Guide schemaVersion 分类为客户端需要升级', async () => {
     serverApiFetchMock.mockResolvedValueOnce({
       modelId: 'image-with-guide',
@@ -178,5 +268,72 @@ describe('listAvailableMediaModels', () => {
     await expect(fetchMediaInvocationGuide('image-with-guide')).rejects.toMatchObject({
       code: 'CLIENT_UPGRADE_REQUIRED',
     } satisfies Partial<MediaGuideCompatibilityError>);
+  });
+
+  it('批量预检缓存 modelId 对应的协议 Guide', async () => {
+    const modelId = 'openai/image-with-guide';
+    serverApiFetchMock.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/model-access/models')) {
+        return {
+          ...payload,
+          models: [{ ...payload.models[1], id: modelId }],
+        };
+      }
+      if (path === '/api/model-access/invocation-guides') {
+        return {
+          guides: [
+            {
+              modelId,
+              guide: {
+                schemaVersion: 1,
+                guideId: 'openai-images-v1',
+                revision: '2026-08-20.1',
+                connection: { providerId: 'xd' },
+                operations: [
+                  {
+                    capability: 'image.generate',
+                    request: {
+                      method: 'POST',
+                      path: '/images/generations',
+                      bodyEncoding: 'json',
+                      bodyModelPath: ['model'],
+                      timeoutMs: 1_000,
+                      maxRequestBytes: 1_024,
+                      maxResponseBytes: 1_024,
+                    },
+                    response: {
+                      mode: 'sync',
+                      media: [
+                        {
+                          path: ['data', '*', 'url'],
+                          encoding: 'url',
+                          kind: 'image',
+                          allowedUrlHosts: ['example.com'],
+                        },
+                      ],
+                    },
+                    instructions: '按协议组装请求。',
+                    exampleBody: { prompt: 'hello' },
+                    inputSchema: { type: 'object' },
+                    officialDocs: 'https://example.com/images-api',
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await expect(
+      listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
+    ).resolves.toMatchObject({ models: [{ id: modelId }] });
+    expect(
+      isMediaModelExecutableForGuide(modelId, 'openai-images-v1', 'image.generate'),
+    ).toBe(true);
+    expect(
+      isMediaModelExecutableForGuide(modelId, 'other-images-v1', 'image.generate'),
+    ).toBe(false);
   });
 });

@@ -1,3 +1,5 @@
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
+
 export interface InteractionRequestLike {
   kind?: string;
   requestId?: string;
@@ -127,7 +129,7 @@ export function buildInteractionResolveActionPresentation(input: {
   label: string;
   readOnlyReason?: string | null;
   requestId?: string | null;
-}): InteractionResolveActionPresentation {
+}, localizer?: PresentationLocalizer): InteractionResolveActionPresentation {
   if (input.readOnlyReason) {
     return {
       disabled: true,
@@ -138,15 +140,16 @@ export function buildInteractionResolveActionPresentation(input: {
   if (!input.requestId) {
     return {
       disabled: true,
-      disabledReason: '这个远程交互缺少 requestId，无法回传决定。',
+      disabledReason: presentationText(localizer, 'interaction.panel.missingRequestId', '这个远程交互缺少 requestId，无法回传决定。'),
       label: input.label,
     };
   }
   if (input.busy) {
     return {
       disabled: true,
-      disabledReason: '正在把决定回传到电脑端，请不要重复提交。',
-      label: input.busyLabel ?? '提交中',
+      disabledReason: presentationText(localizer, 'interaction.panel.submittingHint', '正在把决定回传到电脑端，请不要重复提交。'),
+      label: input.busyLabel
+        ?? presentationText(localizer, 'interaction.presentation.action.submitting', '提交中'),
     };
   }
   if (input.invalidReason) {
@@ -174,31 +177,32 @@ export function buildPermissionDecisionSummary(input: {
   toolName: string;
   riskSummary: string | null;
   canAlwaysAllow: boolean;
-}): InteractionDecisionSummary {
+}, localizer?: PresentationLocalizer): InteractionDecisionSummary {
   if (input.riskSummary) {
     return {
-      title: '高风险授权需要二次确认',
-      detail: '先核对命令内容，再点一次确认允许；不确定就拒绝。',
+      title: presentationText(localizer, 'interaction.presentation.permission.highRiskTitle', '高风险授权需要二次确认'),
+      detail: presentationText(localizer, 'interaction.presentation.permission.highRiskDetail', '先核对命令内容，再点一次确认允许；不确定就拒绝。'),
     };
   }
   if (input.canAlwaysAllow) {
     return {
-      title: '可以只允许一次，也可以本任务总是允许',
-      detail: `工具: ${input.toolName}`,
+      title: presentationText(localizer, 'interaction.presentation.permission.sessionAllowTitle', '可以只允许一次，也可以本任务总是允许'),
+      detail: presentationText(localizer, 'interaction.presentation.permission.tool', `工具: ${input.toolName}`, { tool: input.toolName }),
     };
   }
   return {
-    title: '允许后电脑端会继续执行',
-    detail: `工具: ${input.toolName}`,
+    title: presentationText(localizer, 'interaction.presentation.permission.allowTitle', '允许后电脑端会继续执行'),
+    detail: presentationText(localizer, 'interaction.presentation.permission.tool', `工具: ${input.toolName}`, { tool: input.toolName }),
   };
 }
 
 export function buildPermissionReviewPresentation(
   request: InteractionRequestLike,
+  localizer?: PresentationLocalizer,
 ): PermissionReviewPresentation {
   const toolName = permissionToolName(request);
   const input = permissionInput(request);
-  const riskSummary = permissionRiskSummary(request);
+  const riskSummary = permissionRiskSummary(request, localizer);
   const canAlwaysAllow = sessionScopedPermissionSuggestions(request.suggestions).length > 0;
 
   return {
@@ -207,8 +211,8 @@ export function buildPermissionReviewPresentation(
     code: formatPermissionInput(toolName, input),
     description: permissionDescription(request),
     riskSummary,
-    summary: buildPermissionDecisionSummary({ toolName, riskSummary, canAlwaysAllow }),
-    title: permissionTitle(request),
+    summary: buildPermissionDecisionSummary({ toolName, riskSummary, canAlwaysAllow }, localizer),
+    title: permissionTitle(request, localizer),
     toolName,
   };
 }
@@ -217,19 +221,24 @@ export function buildAskQuestionProgressSummary(input: {
   currentIndex: number;
   total: number;
   multiSelect: boolean;
-}): InteractionDecisionSummary {
+}, localizer?: PresentationLocalizer): InteractionDecisionSummary {
   const total = Math.max(1, input.total);
   const current = Math.min(Math.max(0, input.currentIndex), total - 1) + 1;
   return {
-    title: `第 ${current}/${total} 个问题`,
-    detail: input.multiSelect ? '可多选，也可以输入其他回答。' : '选择一个回答，或输入其他回答。',
+    title: presentationText(localizer, 'interaction.presentation.ask.progress', `第 ${current}/${total} 个问题`, {
+      current,
+      total,
+    }),
+    detail: input.multiSelect
+      ? presentationText(localizer, 'interaction.presentation.ask.multiSelect', '可多选，也可以输入其他回答。')
+      : presentationText(localizer, 'interaction.presentation.ask.singleSelect', '选择一个回答，或输入其他回答。'),
   };
 }
 
 export function buildAskQuestionReviewPresentation(input: {
   currentIndex: number;
   questions: readonly AskQuestion[];
-}): AskQuestionReviewPresentation {
+}, localizer?: PresentationLocalizer): AskQuestionReviewPresentation {
   const totalCount = input.questions.length;
   if (totalCount === 0) {
     return {
@@ -242,10 +251,10 @@ export function buildAskQuestionReviewPresentation(input: {
       optionCount: 0,
       pageLabel: '0/0',
       summary: {
-        title: '没有具体问题',
-        detail: '可以提交空回答让电脑端继续。',
+        title: presentationText(localizer, 'interaction.presentation.ask.emptyTitle', '没有具体问题'),
+        detail: presentationText(localizer, 'interaction.presentation.ask.emptyDetail', '可以提交空回答让电脑端继续。'),
       },
-      title: 'Agent 正在等待确认',
+      title: presentationText(localizer, 'interaction.presentation.ask.waiting', 'Agent 正在等待确认'),
       totalCount: 0,
     };
   }
@@ -269,8 +278,9 @@ export function buildAskQuestionReviewPresentation(input: {
       currentIndex,
       total: totalCount,
       multiSelect,
-    }),
-    title: current?.question || 'Agent 正在等待确认',
+    }, localizer),
+    title: current?.question
+      || presentationText(localizer, 'interaction.presentation.ask.waiting', 'Agent 正在等待确认'),
     totalCount,
   };
 }
@@ -279,11 +289,17 @@ export function buildPlanReviewDecisionSummary(input: {
   outlineCount: number;
   hasFilePath: boolean;
   edited: boolean;
-}): InteractionDecisionSummary {
-  const outline = input.outlineCount > 0 ? `${input.outlineCount} 个章节` : '无章节目录';
-  const file = input.hasFilePath ? '有计划文件' : '无计划文件路径';
+}, localizer?: PresentationLocalizer): InteractionDecisionSummary {
+  const outline = input.outlineCount > 0
+    ? presentationText(localizer, 'interaction.presentation.plan.outlineCount', `${input.outlineCount} 个章节`, { count: input.outlineCount })
+    : presentationText(localizer, 'interaction.presentation.plan.noOutline', '无章节目录');
+  const file = input.hasFilePath
+    ? presentationText(localizer, 'interaction.presentation.plan.hasFile', '有计划文件')
+    : presentationText(localizer, 'interaction.presentation.plan.noFile', '无计划文件路径');
   return {
-    title: input.edited ? '已编辑计划，批准后按当前版本执行' : '批准后电脑端会按计划继续执行',
+    title: input.edited
+      ? presentationText(localizer, 'interaction.presentation.plan.editedTitle', '已编辑计划，批准后按当前版本执行')
+      : presentationText(localizer, 'interaction.presentation.plan.approveTitle', '批准后电脑端会按计划继续执行'),
     detail: `${outline} · ${file}`,
   };
 }
@@ -293,7 +309,7 @@ export function buildPlanReviewEvidencePresentation(input: {
   filePath?: string | null;
   maxOutlineItems?: number;
   plan: string;
-}): PlanReviewEvidencePresentation {
+}, localizer?: PresentationLocalizer): PlanReviewEvidencePresentation {
   const outline = extractPlanOutline(input.plan);
   const maxOutlineItems = Math.max(0, Math.floor(input.maxOutlineItems ?? 3));
   const filePath = input.filePath?.trim() || null;
@@ -311,7 +327,7 @@ export function buildPlanReviewEvidencePresentation(input: {
       edited: input.edited,
       hasFilePath: !!filePath,
       outlineCount: outline.length,
-    }),
+    }, localizer),
   };
 }
 
@@ -358,32 +374,52 @@ export function interactionKind(item: PendingInteractionLike): string {
   return typeof item.request.kind === 'string' ? item.request.kind : 'interaction';
 }
 
-export function interactionDisplayTitle(kind: string): string {
-  if (kind === 'plan_review') return '需要确认执行计划';
-  if (kind === 'permission') return '需要授权电脑端操作';
-  if (kind === 'ask_user_question') return '需要回答 Agent 问题';
-  if (kind === 'issue_confirm') return '需要确认 Issue 内容';
-  if (kind === 'plugin_setup') return '需要在电脑端配置插件';
-  return '需要处理远程请求';
+export function interactionDisplayTitle(kind: string, localizer?: PresentationLocalizer): string {
+  const known = ['plan_review', 'permission', 'ask_user_question', 'issue_confirm', 'plugin_setup'];
+  const key = known.includes(kind) ? kind : 'fallback';
+  const fallback: Record<string, string> = {
+    plan_review: '需要确认执行计划',
+    permission: '需要授权电脑端操作',
+    ask_user_question: '需要回答 Agent 问题',
+    issue_confirm: '需要确认 Issue 内容',
+    plugin_setup: '需要在电脑端配置插件',
+    fallback: '需要处理远程请求',
+  };
+  return presentationText(localizer, `interaction.kinds.${key}.title`, fallback[key]);
 }
 
-export function interactionDisplayHint(kind: string, readOnly = false): string {
-  if (readOnly) return '协作只读模式，仅展示电脑端请求。';
-  if (kind === 'plan_review') return '先看计划，必要时反馈修改，确认后电脑端才继续执行。';
-  if (kind === 'permission') return '只把本次决定回传给当前电脑端任务。';
-  if (kind === 'ask_user_question') return '回答会保存草稿,提交后电脑端继续。';
-  if (kind === 'issue_confirm') return '确认标题和正文后再提交。';
-  if (kind === 'plugin_setup') return '配置要在电脑端完成，这里可以取消这次请求。';
-  return '手机版会按桌面端的请求顺序处理。';
+export function interactionDisplayHint(
+  kind: string,
+  readOnly = false,
+  localizer?: PresentationLocalizer,
+): string {
+  if (readOnly) {
+    return presentationText(localizer, 'interaction.presentation.queue.readOnlyHint', '协同只读模式，仅展示电脑端请求。');
+  }
+  const fallback: Record<string, string> = {
+    plan_review: '先看计划，必要时反馈修改，确认后电脑端才继续执行。',
+    permission: '只把本次决定回传给当前电脑端任务。',
+    ask_user_question: '回答会保存草稿，提交后电脑端继续。',
+    issue_confirm: '确认标题和正文后再提交。',
+    plugin_setup: '配置要在电脑端完成，这里可以取消这次请求。',
+    fallback: '手机版会按桌面端的请求顺序处理。',
+  };
+  const key = Object.prototype.hasOwnProperty.call(fallback, kind) ? kind : 'fallback';
+  return presentationText(localizer, `interaction.presentation.queue.hint.${key}`, fallback[key]);
 }
 
-export function interactionKindLabel(kind: string): string {
-  if (kind === 'plan_review') return '计划';
-  if (kind === 'permission') return '授权';
-  if (kind === 'ask_user_question') return '问题';
-  if (kind === 'issue_confirm') return 'Issue';
-  if (kind === 'plugin_setup') return '插件';
-  return '请求';
+export function interactionKindLabel(kind: string, localizer?: PresentationLocalizer): string {
+  const known = ['plan_review', 'permission', 'ask_user_question', 'issue_confirm', 'plugin_setup'];
+  const key = known.includes(kind) ? kind : 'fallback';
+  const fallback: Record<string, string> = {
+    plan_review: '计划',
+    permission: '授权',
+    ask_user_question: '问题',
+    issue_confirm: 'Issue',
+    plugin_setup: '插件',
+    fallback: '请求',
+  };
+  return presentationText(localizer, `interaction.kinds.${key}.label`, fallback[key]);
 }
 
 /**
@@ -689,6 +725,7 @@ export function buildPendingInteractionQueuePresentation(
     maxVisible?: number;
     readOnly?: boolean;
   } = {},
+  localizer?: PresentationLocalizer,
 ): PendingInteractionQueuePresentation {
   const sorted = sortPendingInteractions(interactions);
   const totalCount = sorted.length;
@@ -699,10 +736,10 @@ export function buildPendingInteractionQueuePresentation(
     return {
       active: index === 0,
       kind,
-      label: interactionKindLabel(kind),
-      positionLabel: interactionPositionLabel(index),
+      label: interactionKindLabel(kind, localizer),
+      positionLabel: interactionPositionLabel(index, localizer),
       requestId: readRequestId(item),
-      title: interactionDisplayTitle(kind),
+      title: interactionDisplayTitle(kind, localizer),
     };
   });
   const active = items[0] ?? null;
@@ -710,12 +747,16 @@ export function buildPendingInteractionQueuePresentation(
 
   return {
     active,
-    countLabel: totalCount > 1 ? `${totalCount} 个` : '当前',
-    hint: interactionDisplayHint(activeKind, readOnly),
+    countLabel: totalCount > 1
+      ? presentationText(localizer, 'interaction.presentation.queue.count', `${totalCount} 个`, { count: totalCount })
+      : presentationText(localizer, 'interaction.panel.queuePositionCurrent', '当前'),
+    hint: interactionDisplayHint(activeKind, readOnly, localizer),
     items,
     overflowCount: Math.max(0, totalCount - items.length),
     readOnly,
-    title: active ? active.title : '没有待处理请求',
+    title: active
+      ? active.title
+      : presentationText(localizer, 'interaction.presentation.queue.empty', '没有待处理请求'),
     totalCount,
   };
 }
@@ -755,10 +796,12 @@ export function readRequestId(item: PendingInteractionLike): string | null {
   return typeof requestId === 'string' && requestId.length > 0 ? requestId : null;
 }
 
-function interactionPositionLabel(index: number): string {
-  if (index === 0) return '当前';
-  if (index === 1) return '接着';
-  return `第 ${index + 1}`;
+function interactionPositionLabel(index: number, localizer?: PresentationLocalizer): string {
+  if (index === 0) return presentationText(localizer, 'interaction.panel.queuePositionCurrent', '当前');
+  if (index === 1) return presentationText(localizer, 'interaction.panel.queuePositionNext', '接着');
+  return presentationText(localizer, 'interaction.panel.queuePositionNth', `第 ${index + 1}`, {
+    index: index + 1,
+  });
 }
 
 export function formatPermissionInput(toolName: string, input: Record<string, unknown>): string {
@@ -779,12 +822,16 @@ export function formatPermissionInput(toolName: string, input: Record<string, un
   }
 }
 
-export function permissionTitle(request: InteractionRequestLike): string {
+export function permissionTitle(
+  request: InteractionRequestLike,
+  localizer?: PresentationLocalizer,
+): string {
   const explicit = readString(request.title);
   if (explicit) return explicit;
   const displayName = readString(request.displayName);
   const toolName = readString(request.toolName) || 'tool';
-  return `允许使用 ${displayName || toolName}?`;
+  const tool = displayName || toolName;
+  return presentationText(localizer, 'interaction.presentation.permission.title', `允许使用 ${tool}?`, { tool });
 }
 
 export function permissionDescription(request: InteractionRequestLike): string | null {
@@ -803,14 +850,17 @@ export function permissionInput(request: InteractionRequestLike): Record<string,
   return isRecord(request.input) ? request.input : {};
 }
 
-export function permissionRiskSummary(request: InteractionRequestLike): string | null {
+export function permissionRiskSummary(
+  request: InteractionRequestLike,
+  localizer?: PresentationLocalizer,
+): string | null {
   const toolName = permissionToolName(request);
   const input = permissionInput(request);
   if (toolName !== 'Bash') return null;
   const command = typeof input.command === 'string' ? input.command.trim() : '';
   if (!command) return null;
   if (!isHighRiskShellCommand(command)) return null;
-  return '这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。';
+  return presentationText(localizer, 'interaction.presentation.permission.risk', '这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。');
 }
 
 export function sessionScopedPermissionSuggestions(suggestions: unknown): unknown[] {

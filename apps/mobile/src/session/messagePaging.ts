@@ -278,3 +278,33 @@ export function compareMessageOrder(a: RemoteMessage, b: RemoteMessage): number 
   // arrival order is meaningful; message ids are not insertion ordered.
   return 0;
 }
+
+/**
+ * Cross-clock-domain sort fix (called by remoteSessionStore.applyRemoteTextEvent when it
+ * stamps a live streaming/finalized assistant row with the *device* clock).
+ *
+ * Persisted rows carry the *host* clock's createdAt; live rows created before the host
+ * persists them are stamped with the device's local clock. When the device clock runs
+ * ahead of the host clock, a brand-new persisted row (host time) can sort *before* the
+ * stale device-stamped live row under compareMessageOrder's plain createdAt comparison —
+ * the message list's tail then keeps showing the old live row instead of the just-sent
+ * message, even though the live row is about to be reconciled away.
+ *
+ * Fix: when the session already has a newest createdAt, anchor the temporary live row to
+ * that watermark verbatim. A stable tie records the only trustworthy ordering fact we have:
+ * this live row was observed after all currently known rows. It also avoids letting a device
+ * clock that is ahead of the host dominate future host-persisted rows, which must still be
+ * able to sort after this temporary row. The later authoritative persisted-row reconciliation
+ * overwrites the temporary row with the real host time. Without a watermark, fall back to the
+ * device timestamp because there is no host-domain anchor yet; remoteSessionStore marks that row
+ * as provisional and reanchors it when the first session metadata or created-message push supplies
+ * a host timestamp. Do not fabricate a `+1ms` value: that would invent an ordering fact no clock
+ * actually observed.
+ */
+export function clampLiveRowCreatedAt(
+  deviceNowIso: string,
+  latestExistingCreatedAt: string | undefined,
+): string {
+  if (!latestExistingCreatedAt) return deviceNowIso;
+  return latestExistingCreatedAt;
+}

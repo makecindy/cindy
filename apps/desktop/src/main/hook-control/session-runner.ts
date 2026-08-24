@@ -33,10 +33,12 @@ import path from 'node:path';
 
 import { app, BrowserWindow } from 'electron';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
   PermissionMode,
+  TurnPermissionOrigin,
   UserContentBlock,
   UserMessage,
 } from '@cindy/maker-core';
@@ -52,6 +54,7 @@ import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
   beginTurnChangeSetAtDispatch,
+  prepareUnhealthySessionForSend,
   wireSessionToIpc,
   isSessionInTurn,
   noteSilentStopUserSend,
@@ -64,7 +67,11 @@ import {
   type InteractionRouteLease,
   type TurnOrigin as RoutedTurnOrigin,
 } from '../maker-ipc/interactionRouter.js';
-import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
+import {
+  buildHandoffText,
+  prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
+} from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
@@ -108,6 +115,27 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+
+type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
+
+function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
+  switch (value) {
+    case 'telegram':
+      // `source.im=telegram` identifies the official server-backed hook here,
+      // not the authenticated personal-bot adapter. Keep managed package
+      // mutations on the Desktop confirmation path.
+      return { kind: 'hook', source: value };
+    case 'feishu':
+    case 'discord':
+    case 'slack':
+    case 'wechat':
+    case 'dingtalk':
+    case 'wecom':
+      return { kind: 'im', channel: value as MainOwnedImChannel };
+    default:
+      return value ? { kind: 'hook', source: value } : null;
+  }
+}
 
 /**
  * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
@@ -609,6 +637,7 @@ export function createMakerHookSessionRunner(deps: {
         resumeSessionId,
       };
       try {
+        await prepareUnhealthySessionForSend(req.sessionId);
         session = await maker.createSession(createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
@@ -956,10 +985,89 @@ export function createMakerHookSessionRunner(deps: {
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
       const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}`;
-      const sendContent =
+      let replacementHandoff: string | null = null;
+      if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
+        try {
+          const previousMessages = await enqueueDurableWrite(
+            `hook-replacement-handoff:${req.replacementOfSessionId}`,
+            () => listMessagesForAgentHandoff(req.replacementOfSessionId!, 400),
+          );
+          let handoffMessages: typeof previousMessages;
+          if (previousMessages.length > 0) {
+            const hasFirstUserMessage = previousMessages.some(
+              (m, i) => i === 0 && m.role === 'user',
+            );
+            if (!hasFirstUserMessage && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: previousMessages[0].createdAt - 1,
+                  agentMeta: null,
+                  toolUseId: null,
+                },
+                ...previousMessages,
+              ];
+            } else {
+              handoffMessages = previousMessages;
+            }
+          } else {
+            const sessionRow = await getSessionRowSnapshotStrict(
+              req.replacementOfSessionId,
+            );
+            const sessionPersistedAndCleared = sessionRow !== null;
+            if (!sessionPersistedAndCleared && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: startedAt,
+                  agentMeta: null,
+                  toolUseId: null,
+                },
+              ];
+            } else {
+              handoffMessages = [];
+            }
+          }
+          if (handoffMessages.length > 0) {
+            replacementHandoff = buildHandoffText(handoffMessages, {
+              fromLabel: 'Cindy',
+              toLabel: 'Cindy',
+            });
+          }
+        } catch (err) {
+          if (req.replacementPrompt) {
+            replacementHandoff = buildHandoffText(
+              [
+                {
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: startedAt,
+                },
+              ],
+              { fromLabel: 'Cindy', toLabel: 'Cindy' },
+            );
+          }
+          log.warn(
+            `hook replacement history unavailable; ${
+              replacementHandoff ? 'using in-memory dispatch context' : 'continuing without handoff'
+            }: ${err instanceof Error ? err.name : 'unknown-error'}`,
+          );
+        }
+      }
+      const sendContentBase =
         imageBlocks.length > 0 || fileBlocks.length > 0
           ? [{ type: 'text' as const, text: promptWithNote }, ...imageBlocks, ...fileBlocks]
           : promptWithNote;
+      const sendContent = replacementHandoff
+        ? (prependHandoffToUserMessage(
+            { type: 'user', content: sendContentBase },
+            replacementHandoff,
+          ) as UserMessage).content
+        : sendContentBase;
       // 落库形态: 有附件用 {text, images, files} 对象(createMessage safeStringify
       // 存 JSON, 读回 parseUserContent 提取 images/files); 无附件纯文本 string。
       const userMessageContent =
@@ -991,9 +1099,23 @@ export function createMakerHookSessionRunner(deps: {
         const outgoingMessage: UserMessage = planReconcileNote
           ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
           : withHandoff;
+        const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          ...(trustedChannelOrigin
+            ? {
+                [MAIN_OWNED_SEND_CONTEXT]: {
+                  origin: trustedChannelOrigin,
+                  // Slack/X thread prompts may already contain Main-owned
+                  // context decoration. The server-provided userText is the
+                  // clean channel message used for deterministic managed Pi
+                  // package commands; only older servers that omit the field
+                  // fall back to the decorated prompt.
+                  rawChannelText: req.source?.userText ?? req.prompt,
+                },
+              }
+            : {}),
           afterTurnReserved: () => {
             // 只取 lease, 不动权限档(用户配的就是最终档)。取在预约之后:
             // 忙的 Desktop 轮次已在 send 预约阶段被拒, 轮到这里就是本轮的世界。

@@ -16,9 +16,10 @@ import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentia
 import type { MobileVoiceCredentialSyncDictionaryEntry as MobileVoiceDictionaryEntry } from '@cindy/maker-shared/device-link-contract';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import {
-  composerVoiceStateLabel,
+  composerVoiceStateLabel as composerVoiceStateLabelShared,
   type ComposerVoiceState,
 } from '@cindy/maker-shared/session-operation';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 
 export const MOBILE_MAX_VOICE_AUDIO_BYTES = 64 * 1024 * 1024;
 
@@ -138,7 +139,7 @@ export function replaceVoiceTranscriptDraftRange(
 }
 
 export function mobileVoiceStateLabel(state: MobileVoiceState): string {
-  return composerVoiceStateLabel(state);
+  return composerVoiceStateLabelShared(state, mobilePresentationLocalizer);
 }
 
 export function canCancelMobileVoiceRecording(state: MobileVoiceState): boolean {

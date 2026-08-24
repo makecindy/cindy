@@ -27,6 +27,7 @@ describe('mobile maker transport', () => {
       'maker:get-capabilities',
       'maker:provider:list',
       'local-db:sessions:get',
+      'local-db:conversations:search',
       'local-db:sessions:patch-meta',
       'local-db:messages:dismiss-error',
       'local-db:sessions:ack-interrupted',
@@ -42,6 +43,7 @@ describe('mobile maker transport', () => {
       'maker:set-effort',
       'maker:set-permission-mode',
       'maker:set-fast-mode',
+      'maker:set-thinking-enabled',
       'maker:set-extra-dirs',
       'maker:set-session-model-pref',
       'maker:apply-new-maker-draft-pref',
@@ -204,6 +206,19 @@ describe('mobile maker transport', () => {
     }]);
   });
 
+  it('routes task search through the controlled desktop conversations:search channel', async () => {
+    const { calls, maker } = harness();
+    const request = { query: 'needle', semanticMode: 'keyword' as const };
+
+    await maker.searchConversations(request);
+
+    expect(calls).toEqual([{
+      deviceId: 'dev-1',
+      channel: 'local-db:conversations:search',
+      args: [request],
+    }]);
+  });
+
   it('routes capability reads through the controlled desktop maker channel', async () => {
     const { calls, maker } = harness();
 
@@ -282,7 +297,9 @@ describe('mobile maker transport', () => {
     await maker.setFastMode('s1', true);
     await maker.setExtraDirs('s1', ['/repo/docs']);
     await maker.listAgentCommands('claude-code');
+    await maker.listAgentCommands('pi', { sessionId: 's1' });
     await maker.listAgentSkills('claude-code', { workingDir: '/repo' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 's1' });
     await maker.listAgentSkills('codex', {});
     await maker.scanAtResources('claude-code', { workingDir: '/repo', cap: 2000, query: 'session' });
     await maker.fetchRemoteMedia('xdt-image://local/a.png');
@@ -327,7 +344,9 @@ describe('mobile maker transport', () => {
       ['maker:set-fast-mode', ['s1', true]],
       ['maker:set-extra-dirs', ['s1', ['/repo/docs']]],
       ['maker:list-agent-commands', ['claude-code']],
+      ['maker:list-agent-commands', ['pi', { sessionId: 's1' }]],
       ['maker:list-agent-skills', ['claude-code', { workingDir: '/repo' }]],
+      ['maker:list-agent-skills', ['pi', { workingDir: '/repo', sessionId: 's1' }]],
       ['maker:list-agent-skills', ['codex', {}]],
       ['maker:scan-at-resources', ['claude-code', { workingDir: '/repo', cap: 2000, query: 'session' }]],
       ['device-link:media:fetch', [{ url: 'xdt-image://local/a.png' }]],

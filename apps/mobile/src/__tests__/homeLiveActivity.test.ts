@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 import { buildMobileHomePresentation } from '@/session/mobileHome';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import {
@@ -104,5 +105,42 @@ describe('mobile Home live activity', () => {
     expect(item?.liveActivity?.compactDetail).toBe('正在检查失败测试');
     expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
     expect(item ? buildRemoteSessionCardPreview(item, { running: true }) : null).toBe('正在检查失败测试');
+  });
+
+  it('preserves a real project basename that matches the shared fallback copy', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      await i18n.changeLanguage('en');
+      const home = buildMobileHomePresentation({
+        devices: [{ canOpen: true, deviceId: 'dev-1', name: 'Mac' }],
+        sessions: [session('same-as-fallback', {
+          deviceLinkDeviceId: 'dev-1',
+          deviceLinkDeviceName: 'Mac',
+          workingDir: '/repo/未分类项目',
+        })],
+      });
+
+      expect(home.projects[0]?.title).toBe('未分类项目');
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
+
+  it('preserves a real device name that matches the shared fallback copy', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      await i18n.changeLanguage('en');
+      const home = buildMobileHomePresentation({
+        devices: [{ canOpen: true, deviceId: 'dev-1', name: '未知电脑' }],
+        sessions: [session('device-name-matches-fallback', {
+          deviceLinkDeviceId: 'dev-1',
+        })],
+      });
+
+      expect(home.projects[0]?.deviceName).toBe('未知电脑');
+      expect(home.projects[0]?.subtitle).toContain('未知电脑');
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
 });

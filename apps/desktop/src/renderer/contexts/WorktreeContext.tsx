@@ -29,6 +29,18 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('WorktreeContext');
 
+/** store 仍可能留着已被 `git worktree remove` 的路径；探测失败不摘标，避免 IPC 抖动清空侧栏。 */
+async function isLiveOfficialPath(cwd: string): Promise<boolean> {
+  const detect = window.electronAPI?.worktreeDetectCwd;
+  if (!detect) return true;
+  try {
+    const result = await detect({ cwd });
+    return Boolean(result?.isInsideWorktree);
+  } catch {
+    return true;
+  }
+}
+
 interface WorktreeContextValue {
   /** sessionId → meta；非 null 即代表此 session 正绑定一个 worktree。 */
   metas: Record<string, WorktreeMeta>;
@@ -50,9 +62,15 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
       // 中间发生了更新的 refresh，丢弃本次结果
       if (myTurn !== inflightRef.current) return;
       const next: Record<string, WorktreeMeta> = {};
-      for (const m of list ?? []) {
-        if (m && m.sessionId) next[m.sessionId] = m;
-      }
+      await Promise.all(
+        (list ?? []).map(async (meta) => {
+          if (!meta?.sessionId || !meta.path) return;
+          if (!(await isLiveOfficialPath(meta.path))) return;
+          if (myTurn !== inflightRef.current) return;
+          next[meta.sessionId] = meta;
+        }),
+      );
+      if (myTurn !== inflightRef.current) return;
       setMetas(next);
     } catch (err) {
       log.warn('refresh failed:', err);
@@ -61,6 +79,11 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
+    const onFocus = () => {
+      void refresh();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   }, [refresh]);
 
   // 复用 sessionsBus 的 refresh 事件 —— delete / archive 完成后会触发一次，
@@ -84,24 +107,15 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
     });
   }, [refresh]);
 
-  const value = useMemo<WorktreeContextValue>(
-    () => ({ metas, refresh }),
-    [metas, refresh],
-  );
+  const value = useMemo<WorktreeContextValue>(() => ({ metas, refresh }), [metas, refresh]);
 
-  return (
-    <WorktreeContext.Provider value={value}>
-      {children}
-    </WorktreeContext.Provider>
-  );
+  return <WorktreeContext.Provider value={value}>{children}</WorktreeContext.Provider>;
 }
 
 function useCtx(): WorktreeContextValue {
   const ctx = useContext(WorktreeContext);
   if (!ctx) {
-    throw new Error(
-      '[WorktreeContext] missing provider — wrap your tree in <WorktreeProvider>',
-    );
+    throw new Error('[WorktreeContext] missing provider — wrap your tree in <WorktreeProvider>');
   }
   return ctx;
 }
@@ -112,9 +126,7 @@ export function useWorktrees(): Record<string, WorktreeMeta> {
 }
 
 /** 单条快捷查询；徽标 (M4) / 各 session 视图都用它。 */
-export function useWorktreeForSession(
-  sessionId: string | null | undefined,
-): WorktreeMeta | null {
+export function useWorktreeForSession(sessionId: string | null | undefined): WorktreeMeta | null {
   const { metas } = useCtx();
   if (!sessionId) return null;
   return metas[sessionId] ?? null;

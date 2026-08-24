@@ -20,6 +20,7 @@ import { ChevronDown, ChevronRight, KeyRound } from 'lucide-react';
 
 import { presetDisplayName } from '@cindy/model-providers';
 
+import { localCliDisplayName } from '../../../shared/localCliDetect';
 import { cn } from '@/lib/utils';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { providerMonogram } from '@/lib/providerModels';
@@ -91,7 +92,7 @@ export function ConnectProviderCard({ className }: { className?: string }) {
         {/* 本机 CLI 检测行置顶(hook 已保证 installed && loggedIn):本机有登录态
             凭证 = 一键授权大概率直接成功,是最低摩擦路径,优先于推荐行。 */}
         {detectedRows.map(({ provider, detection }) => {
-          const cliName = detection.cli === 'claude-cli' ? 'Claude Code CLI' : 'Codex CLI';
+          const cliName = localCliDisplayName(detection.cli);
           return (
             <ProviderRow
               key={`detected-${provider.id}`}

@@ -3,6 +3,8 @@ export {
   createCindyGhostsMcpServer,
   handleForgeGuide,
   handleForgePack,
+  handleForgePublish,
+  handleForgePublishStatus,
   handleForgeScaffold,
   handleGhostCall,
   handleGhostInfo,
@@ -14,6 +16,9 @@ export {
 export type {
   CindyForgePackErrorCode,
   CindyForgePackResult,
+  CindyForgePublishErrorCode,
+  CindyForgePublishResult,
+  CindyForgePublishStatusResult,
   CindyForgeScaffoldResult,
   CindyForgeScaffoldTemplate,
   CindyGhostCallErrorCode,

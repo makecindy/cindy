@@ -211,6 +211,34 @@ describe('mobile auth-server login', () => {
     expect(authSource).toContain("sole?.type === 'email_code'");
   });
 
+  it('remembers successful organization discovery before sole-SSO browser auth starts', () => {
+    const authSource = readFileSync(
+      resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
+      'utf8',
+    );
+    const discoveryStart = authSource.indexOf(
+      "if (action.type === 'discover-sso-org') {",
+    );
+    const discoveryEnd = authSource.indexOf(
+      "if (action.type === 'request-code') {",
+      discoveryStart,
+    );
+    const discoveryBody = authSource.slice(discoveryStart, discoveryEnd);
+    const methodsAt = discoveryBody.indexOf(
+      'const methods = ssoOrgDiscoveryToMethods(discovery);',
+    );
+    const rememberAt = discoveryBody.indexOf(
+      'await rememberSsoOrgIdentifier(action.org);',
+    );
+    const autoStartAt = discoveryBody.indexOf(
+      'return startBrowserAuthorization({',
+    );
+
+    expect(methodsAt).toBeGreaterThanOrEqual(0);
+    expect(rememberAt).toBeGreaterThan(methodsAt);
+    expect(autoStartAt).toBeGreaterThan(rememberAt);
+  });
+
   it('keeps account tokens inside membership selection and private tickets off screen', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),

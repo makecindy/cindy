@@ -26,6 +26,7 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   },
 }));
@@ -69,6 +70,7 @@ function mount(state: AuthFlowState) {
     errorCode: null,
     loginState: state,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   };
   return render(<LoginPage />);

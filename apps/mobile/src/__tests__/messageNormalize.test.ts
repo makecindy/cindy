@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   CONTINUE_AFTER_ERROR_PROMPT,
   UI_ACTION_TRIGGER_PREFIX,
@@ -19,6 +20,28 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  beforeAll(async () => {
+    await i18n.changeLanguage('zh-CN');
+  });
+
+  it('projects a persisted agent task terminal state from tool_use metadata', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'agent-tool',
+        role: 'tool_use',
+        toolUseId: 'toolu-agent',
+        content: { toolUseId: 'toolu-agent', toolName: 'Agent', input: { prompt: 'Inspect auth' } },
+        agentMeta: { agentTaskStatus: 'stopped' },
+      }),
+    ]);
+
+    expect(item).toMatchObject({
+      kind: 'tool',
+      label: 'Agent',
+      agentTaskStatus: 'stopped',
+    });
+  });
+
   it('sorts messages and extracts user/assistant text from desktop content shapes', () => {
     const items = normalizeRemoteMessages([
       message({

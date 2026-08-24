@@ -18,7 +18,7 @@ import {
   ghostLocalePathFor,
   ghostInstallApprovalToken,
   ghostIconMimeType,
-  isOfficialGhostId,
+  isBrokerEligibleGhostId,
   isValidGhostId,
   resolveGhostManifestLocale,
   validateGhostManifest,
@@ -45,6 +45,7 @@ import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 import {
   createGhostInstallReceipt,
+  effectiveInstallOrigin,
   GhostInstallReceiptStore,
   hashApprovedSkillContent,
   readLegacyInstallTrust,
@@ -56,6 +57,7 @@ import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
 } from './ghostManualValidation.js';
+import { installedFileModeFromZip, isZipSymbolicLinkMode } from './ghostZipPermissions.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -112,9 +114,7 @@ const DISABLED_MARKER_FILE = '.disabled';
 export const TRUST_METADATA_FILE = '.cindy-trust.json';
 
 function isZipSymbolicLink(entry: JSZip.JSZipObject): boolean {
-  return (
-    typeof entry.unixPermissions === 'number' && (entry.unixPermissions & 0o170000) === 0o120000
-  );
+  return isZipSymbolicLinkMode(entry.unixPermissions);
 }
 
 /** 只有宿主安装/播种路径可以写入的 Cindy 官方身份。 */
@@ -195,6 +195,11 @@ export interface GhostManagerOptions {
    * 该入口不经用户确认就铸出批准，因此 id 与 source 都必须由生产接线明确放行。
    */
   isTrustedBundledId?: (id: string) => boolean;
+  /**
+   * tokenBroker 装入闸。缺省只认静态官方前缀（测试夹具）。生产接线问
+   * first-party 判据，官方前缀命中仍走静态表。
+   */
+  isTokenBrokerAuthorized?: (manifest: GhostManifest) => boolean;
   /** sourceDir 是否就是该 id 的随包只读种子目录，而非任意本机可变目录。 */
   isTrustedBundledSource?: (id: string, sourceDir: string) => boolean;
   /** Persist the user's builtin-uninstall intent before approval/content removal. */
@@ -1051,6 +1056,21 @@ export class GhostManager {
   }
 
   /**
+   * Authorization-time install origin. Missing / unreadable receipts are
+   * `manual` — same fail-closed as today, never a privilege upgrade.
+   */
+  readEffectiveInstallOrigin(id: string): 'manual' | 'agent-forge' {
+    this.ensureCurrentOwnerContextSync();
+    try {
+      const approval = this.readApproval(id);
+      if (approval.state !== 'approved') return 'manual';
+      return effectiveInstallOrigin(approval.receipt);
+    } catch {
+      return 'manual';
+    }
+  }
+
+  /**
    * Host-owned evidence for reconnecting an installation to retained source metadata.
    * A pending package mutation or an invalid approval fails closed. Legacy provenance
    * is accepted only from the completed one-time migration's explicit id list.
@@ -1727,9 +1747,10 @@ export class GhostManager {
    *   坏 locale;迁移时读到坏 locale 只可能是**装入后被损坏**,属 §5 的"自相矛盾即
    *   fail closed",也与 receipt「localeResources 键集必须等于 manifest.locales」的
    *   不变量一致(跳过坏 locale 会写出被 validateReceipt 拒绝的 receipt);
-   * - `packageSha256` **不算**(它是 audit-only、运行期不消费,见 §7);省掉它让迁移更快、
-   *   更不会因安装目录里的异常条目误伤——真正的运行期判据 `skillContentSha256` 仍逐字节算,
-   *   技能目录含链接等异常会在那里如实 fail closed。
+   * - `packageSha256` **不回填**：旧安装目录无法反推出原始 `.cindy` 整包 SHA。省略后，
+   *   组织市场 Broker 资格会 fail closed，直到一次经校验的市场更新写入新来源指纹；
+   *   既有 organization-market OIDC 仍沿用 manifestDigest，不受影响。其它运行期字节判据
+   *   `skillContentSha256` 仍逐字节计算，技能目录含链接等异常会在那里如实 fail closed。
    */
   private async backfillLegacyApproval(
     dir: string,
@@ -1855,16 +1876,18 @@ export class GhostManager {
     if (validated.manifest.id !== id) {
       return { rejection: { code: 'file-invalid', reason: '清单 id 与安装目录不一致' } };
     }
-    // tokenBroker 门控与装入侧同一条规则(XDT 授权 broker 仅第一方官方插件可用,
-    // 不区分 dev/packaged):走已装目录重新确认的都不是随包插件,声明即拒。
+    // tokenBroker 门控与装入侧同一条规则。官方前缀命中照旧放行；其余问
+    // 生产接线的 first-party 判据（含 receipt 装入来源）。
+    const brokerAuthorized =
+      this.options.isTokenBrokerAuthorized?.(validated.manifest) ?? isBrokerEligibleGhostId(id);
     if (
-      !isOfficialGhostId(id) &&
+      !brokerAuthorized &&
       (validated.manifest.network?.secrets ?? []).some((s) => s.oauth?.tokenBroker !== undefined)
     ) {
       return {
         rejection: {
           code: 'file-invalid',
-          reason: `id "${id}" 声明了 oauth.tokenBroker——XDT 授权 broker 仅第一方官方插件可用`,
+          reason: `id "${id}" 声明了 oauth.tokenBroker——当前安装来源或组织身份无权使用授权 broker`,
         },
       };
     }
@@ -2886,6 +2909,7 @@ export class GhostManager {
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: string;
     },
   ) {
     return this.runExclusiveMutation(() => this.installUnlocked(lizFilePath, opts));
@@ -2897,6 +2921,7 @@ export class GhostManager {
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: string;
     },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
     // 装入初始启用态由 UI 层决定(装入确认框勾选,默认沉睡);缺省 true
@@ -3004,6 +3029,7 @@ export class GhostManager {
           packageSha256,
           revision: receiptRevision,
           ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+          ...(opts?.installOrigin !== undefined ? { installOrigin: opts.installOrigin } : {}),
         });
         await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
         let tombstoneClearPending = false;
@@ -3101,6 +3127,7 @@ export class GhostManager {
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: string;
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
       onPackagePlaced?: () => void;
@@ -3115,6 +3142,7 @@ export class GhostManager {
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: string;
       /** 新目录已换位、旧目录仍可回滚时执行；抛错会恢复旧版本。 */
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
@@ -3338,6 +3366,7 @@ export class GhostManager {
         packageSha256,
         revision: receiptRevision,
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+        ...(opts.installOrigin !== undefined ? { installOrigin: opts.installOrigin } : {}),
       });
       await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
     } catch (err) {
@@ -3807,6 +3836,17 @@ export class GhostManager {
       }
       await fs.promises.mkdir(path.dirname(dest), { recursive: true });
       await fs.promises.writeFile(dest, data);
+      // 签名与 mode 的关系是**有意如此**,别当成漏改:statement 只覆盖
+      // (path, sha256, bytes),mode 不在其中,所以归档 mode 属未认证元数据。
+      // 仍然采纳它,是因为在 `installedFileModeFromZip` 的钳位之后,能篡改包
+      // 字节的攻击者只剩下「翻转 r / x 位」:内容改不了、文件增删不了(白名单
+      // + 逐文件哈希)、特殊位剥掉、group/other 写位钳掉、owner 读写强制保留。
+      // 去掉 +x 只是他本来就能造成的可用性破坏(改坏一字节即验签失败);加上
+      // +x 作用在他无法选择内容的文件上,而执行流指向哪个文件由签名覆盖的
+      // manifest 与插件自身代码决定 —— 拿不到代码执行。若日后有任何逻辑开始
+      // 依赖 mode 做安全判断,这个前提就失效,届时须把归一化 mode 签进 statement。
+      const mode = installedFileModeFromZip(entry.unixPermissions);
+      if (mode !== null) await fs.promises.chmod(dest, mode);
     }
     if (opts.disabled) {
       await fs.promises.writeFile(path.join(stagingDir, DISABLED_MARKER_FILE), '');

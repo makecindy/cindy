@@ -102,6 +102,23 @@ export {
   type ListSessionsToolDeps,
 } from './list_sessions.js';
 export {
+  registerListSessionQueueTool,
+  type SessionQueueDeps,
+  type SessionQueuedMessageEntry,
+} from './list_session_queue.js';
+export {
+  registerUpdateSessionQueuedMessageTool,
+  registerCancelSessionQueuedMessageTool,
+  registerSteerSessionTool,
+  registerStopSessionTurnTool,
+  registerGetSessionRuntimeTool,
+  type SessionControlDeps,
+  type SessionQueueControlErrorCode,
+  type SessionRuntimeSnapshot,
+  type SessionSteerErrorCode,
+  type SessionStopErrorCode,
+} from './session_control.js';
+export {
   registerGetChatHistoryTool,
   type GetChatHistoryToolDeps,
 } from './get_chat_history.js';

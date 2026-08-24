@@ -83,6 +83,8 @@ export interface SessionEntryRowsProps extends Omit<
   'sessions' | 'scheduleSessionIndex' | 'sectionCollapsed'
 > {
   entries: readonly SidebarSessionEntry[];
+  automationGroupCollapsed?: (groupKey: string) => boolean;
+  onAutomationGroupCollapsedChange?: (groupKey: string, collapsed: boolean) => void;
 }
 
 export function SessionEntryRows({
@@ -104,6 +106,8 @@ export function SessionEntryRows({
   sourceLabelMap,
   sessionVariant = 'text',
   showFirstDivider = true,
+  automationGroupCollapsed,
+  onAutomationGroupCollapsedChange,
 }: SessionEntryRowsProps) {
   return (
     <>
@@ -162,8 +166,17 @@ export function SessionEntryRows({
             onAction={onAction}
             onRename={onRename}
             onTogglePin={onTogglePin}
+            onMoveSession={onMoveSession}
+            projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
+            collapsed={automationGroupCollapsed?.(entry.group.id)}
+            onCollapsedChange={
+              onAutomationGroupCollapsedChange
+                ? (collapsed) => onAutomationGroupCollapsedChange(entry.group.id, collapsed)
+                : undefined
+            }
             indented={indented}
+            matchMap={matchMap}
             sourceLabelMap={sourceLabelMap}
             sessionVariant={sessionVariant}
           />

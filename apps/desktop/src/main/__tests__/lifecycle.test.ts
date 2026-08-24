@@ -236,7 +236,8 @@ describe('runQuitDisposers', () => {
     const ingress = source.indexOf(
       "onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');",
     );
-    const maker = source.indexOf("onQuit('shutdown-maker', shutdownMaker, 'async');");
+    const maker = source.indexOf("'shutdown-maker'");
+    const makerPhase = source.indexOf("'async',", maker);
     const dbClient = source.indexOf(
       "onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');",
     );
@@ -246,7 +247,8 @@ describe('runQuitDisposers', () => {
 
     expect(ingress).toBeGreaterThan(-1);
     expect(maker).toBeGreaterThan(ingress);
-    expect(dbClient).toBeGreaterThan(maker);
+    expect(makerPhase).toBeGreaterThan(maker);
+    expect(dbClient).toBeGreaterThan(makerPhase);
     expect(localDb).toBeGreaterThan(dbClient);
   });
 

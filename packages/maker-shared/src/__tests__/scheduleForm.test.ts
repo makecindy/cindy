@@ -443,7 +443,13 @@ describe('mobile schedule form model', () => {
       ],
     };
 
-    expect(validateTemplateParamValues(template, {})).toBe('请输入模板参数：Project');
+    expect(validateTemplateParamValues(template, {})).toMatchObject({
+      field: 'prompt',
+      message: '请输入模板参数：Project',
+      messageKey: 'devices.automations.presentation.validation.templateParameter',
+      messageValues: { label: 'Project' },
+      parameterKey: 'project',
+    });
     expect(() => applyMobileTemplateParams('Run {{project}}', {}, template.parameters))
       .toThrow('Missing required template parameter');
   });

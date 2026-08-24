@@ -342,17 +342,19 @@ export function PinnedSection({
             图标 = 当前选中的显示模式(2026-08-12 用户裁决),不再恒为网格。 */}
         <div className={cn(HEADER_HOVER_ACTION_CLASS, 'flex items-center gap-0.5')}>
           <ViewStyleMenu mode={mode} setMode={setMode}>
-            <button
-              type="button"
-              aria-label={t('ccAgent.sidebar.viewStyle')}
-              className={cn(
-                'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
-                'text-[var(--sidebar-list-muted)]',
-                'transition-colors hover:text-[var(--sidebar-nav-text)]',
-              )}
-            >
-              <ViewStyleTriggerIcon size={13} strokeWidth={2} />
-            </button>
+            <Tip text={t('ccAgent.sidebar.viewStyle')} side="bottom">
+              <button
+                type="button"
+                aria-label={t('ccAgent.sidebar.viewStyle')}
+                className={cn(
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+                  'text-[var(--sidebar-list-muted)]',
+                  'transition-colors hover:text-[var(--sidebar-nav-text)]',
+                )}
+              >
+                <ViewStyleTriggerIcon size={13} strokeWidth={2} />
+              </button>
+            </Tip>
           </ViewStyleMenu>
         </div>
       </div>

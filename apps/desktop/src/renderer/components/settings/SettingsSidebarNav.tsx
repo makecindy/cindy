@@ -3,13 +3,12 @@ import { useTranslation } from 'react-i18next';
 import type { LucideProps } from 'lucide-react';
 import {
   Boxes,
+  ChartColumn,
   CircleDollarSign,
   CircleHelp,
   FileUp,
   Info,
   Keyboard,
-  KeyRound,
-  Link2,
   MessageCircle,
   Mic,
   MonitorCog,
@@ -17,12 +16,11 @@ import {
   Plug,
   Settings2,
   Sparkles,
-  UserRound,
   Wrench,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { TAB_LABEL_KEY, type SettingsTab } from '@/lib/tabLabels';
+import { TAB_LABEL_KEY, type SettingsTab, type VisibleSettingsTab } from '@/lib/tabLabels';
 
 const NAV_ITEM_CLASS = 'flex h-9 items-center gap-2.5 rounded-full px-3 text-sm transition-colors';
 const NAV_ITEM_IDLE_CLASS =
@@ -59,19 +57,17 @@ function AgentIslandNavIcon({
 
 type SettingsNavIcon = ComponentType<LucideProps>;
 
-const TAB_ICON: Record<SettingsTab, SettingsNavIcon> = {
+const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   general: Settings2,
   billing: CircleDollarSign,
+  usage: ChartColumn,
   personalization: Sparkles,
   providers: Boxes,
-  'api-keys': KeyRound,
   'voice-input': Mic,
   shortcuts: Keyboard,
   'agent-island': AgentIslandNavIcon,
   import: FileUp,
-  connections: Link2,
   'remote-control': MonitorSmartphone,
-  tina: UserRound,
   ghosts: Plug,
   'builtin-tools': Wrench,
   'computer-use': MonitorCog,
@@ -81,7 +77,7 @@ const TAB_ICON: Record<SettingsTab, SettingsNavIcon> = {
 };
 
 interface SettingsSidebarNavProps {
-  tabIds: readonly SettingsTab[];
+  tabIds: readonly VisibleSettingsTab[];
   activeTab: SettingsTab;
   onSelectTab: (tab: SettingsTab) => void;
 }

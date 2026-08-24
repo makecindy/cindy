@@ -50,6 +50,102 @@ type ReviewSearchHelpers = {
   ) => Promise<string[]>;
 };
 
+function loadBashIsolationHelper(
+  pathImpl: typeof path,
+): (
+  env: Record<string, string | undefined>,
+  home: string | undefined,
+) => Record<string, string | undefined> {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function withoutPiSecrets');
+  const end = source.indexOf('function managedRipgrepPath');
+  if (start < 0 || end <= start) throw new Error('bash isolation helper was not found');
+  const executableSource = [
+    "const SECRET_ENV_NAMES = new Set(['PI_CODING_AGENT_DIR', 'CINDY_PI_PACKAGE_MANAGEMENT', 'CINDY_PI_BASH_PACKAGE_HOME']);",
+    source.slice(start, end),
+    '(globalThis as any).isolatedBashEnvironment = isolatedBashEnvironment;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = { path: pathImpl };
+  runInNewContext(compiled, context);
+  return context.isolatedBashEnvironment as (
+    env: Record<string, string | undefined>,
+    home: string | undefined,
+  ) => Record<string, string | undefined>;
+}
+
+function loadBashPackageHomeHelper(): {
+  resolveBashPackageHome: () => string | undefined;
+  env: Record<string, string | undefined>;
+  globalThis: Record<string, unknown>;
+} {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const BRIDGE_RELOAD_STASH_GLOBAL');
+  const end = source.indexOf('// 凭证/密钥路径特征由 maker-core 的单一来源生成');
+  if (start < 0 || end <= start) throw new Error('bash package home helper was not found');
+  const executableSource = [
+    "const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';",
+    source.slice(start, end),
+    '(globalThis as any).resolveBashPackageHome = resolveBashPackageHome;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {
+    process: { env: {} },
+    path,
+  };
+  // runInNewContext 的 context 即该 realm 的 globalThis,stash 会落在上面。
+  runInNewContext(compiled, context);
+  const resolveBashPackageHome = context.resolveBashPackageHome as () => string | undefined;
+  if (typeof resolveBashPackageHome !== 'function') {
+    throw new Error('bash package home helper was not loaded');
+  }
+  return {
+    resolveBashPackageHome,
+    env: context.process.env as Record<string, string | undefined>,
+    globalThis: context,
+  };
+}
+
+function loadPiPackageMutationCommandHelper(): (input: unknown) => boolean {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const parserStart = source.indexOf('function readShellRedirectionTarget');
+  const parserEnd = source.indexOf('type BashPathCandidates');
+  const helperStart = source.indexOf('const PI_PACKAGE_MUTATION_SUBCOMMANDS');
+  const helperEnd = source.indexOf('function managedRipgrepPath');
+  const redirectionStart = source.indexOf('function bashLeadingRedirectionAt');
+  const redirectionEnd = source.indexOf('function bashAssignmentPrefixAt');
+  if (parserStart < 0 || parserEnd <= parserStart
+    || helperStart < 0 || helperEnd <= helperStart
+    || redirectionStart < 0 || redirectionEnd <= redirectionStart) {
+    throw new Error('Pi package mutation command helper was not found');
+  }
+  const executableSource = [
+    source.slice(parserStart, parserEnd),
+    source.slice(redirectionStart, redirectionEnd),
+    source.slice(helperStart, helperEnd),
+    '(globalThis as any).bashCommandMutatesPiPackages = bashCommandMutatesPiPackages;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {};
+  runInNewContext(compiled, context);
+  return context.bashCommandMutatesPiPackages as (input: unknown) => boolean;
+}
+
 function loadReviewSearchHelpers(
   workingDir: string,
   overrides: {
@@ -864,6 +960,16 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('${');
   });
 
+  it('preserves the permission denial source across the private Pi UI envelope', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    expect(source).toContain('await ctx.ui.input(');
+    expect(source).toContain("const PERMISSION_USER_DENY = 'user-deny'");
+    expect(source).toContain("const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny'");
+    expect(source).toContain('User denied this tool call via Cindy.');
+    expect(source).toContain('Cindy Auto-review denied this tool call.');
+    expect(source).toContain('Cindy could not approve this tool call.');
+  });
+
   it('normalizes bash timeout at the execute boundary without a host-side timer', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     expect(source).toContain(
@@ -936,6 +1042,7 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain("'data:'");
     // 错误脱敏：模型侧只看到泛化文案，不含本地路径 / key / URL。
     expect(source).toContain("'vision: vision backend request failed'");
+    expect(source).toContain("'vision: wire protocol is not configured'");
     expect(source).toContain("'vision HTTP '");
     expect(source).toContain("'vision: unable to read the image file'");
     // host 可关联日志：fallback 行为有结构化 stderr 输出（脱敏，仅 backendRole/model）。
@@ -950,6 +1057,213 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_result'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("event.toolName !== 'bash'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
+  });
+
+  it('resolves the bash package home across reloads with a tamper-proof stash and keeps the package token out of globalThis', () => {
+    // #3070 回归:首次加载读 env → 删 → 防篡改 stash;重载时 env 已被消费,
+    // 经 stash 与 PI_CODING_AGENT_DIR 派生值双重验证后取回,bash 不再永久 fail-closed。
+    const helper = loadBashPackageHomeHelper();
+    const injected = '/host/agent-home/run-tmp/abc/bash-package-home';
+
+    // 首次加载:读到 host 注入值,env 随即被删,stash 以 non-writable /
+    // non-configurable 属性建立。
+    helper.env.CINDY_PI_BASH_PACKAGE_HOME = injected;
+    helper.env.PI_CODING_AGENT_DIR = '/host/agent-home/run-tmp/abc';
+    expect(helper.resolveBashPackageHome()).toBe(injected);
+    expect(helper.env.CINDY_PI_BASH_PACKAGE_HOME).toBeUndefined();
+    const descriptor = Object.getOwnPropertyDescriptor(
+      helper.globalThis,
+      '__cindyBridgeBashPackageHome',
+    );
+    expect(descriptor?.writable).toBe(false);
+    expect(descriptor?.configurable).toBe(false);
+    expect(descriptor?.value).toBe(injected);
+
+    // 重载(#3070 现场):env 已被首次加载删除,stash 与 PI_CODING_AGENT_DIR 派生值
+    // 双重一致 → 取回原始值。
+    expect(helper.resolveBashPackageHome()).toBe(injected);
+    expect(helper.env.CINDY_PI_BASH_PACKAGE_HOME).toBeUndefined();
+
+    // 进程内代码事后改写注入 env:被删除并忽略,stash 值不变。
+    helper.env.CINDY_PI_BASH_PACKAGE_HOME = '/attacker/home';
+    expect(helper.resolveBashPackageHome()).toBe(injected);
+    expect(helper.env.CINDY_PI_BASH_PACKAGE_HOME).toBeUndefined();
+
+    // 事后改写 PI_CODING_AGENT_DIR(canary 失配)→ 重载 fail-closed。
+    helper.env.PI_CODING_AGENT_DIR = '/attacker/controlled';
+    expect(helper.resolveBashPackageHome()).toBeUndefined();
+    helper.env.PI_CODING_AGENT_DIR = '/host/agent-home/run-tmp/abc';
+    expect(helper.resolveBashPackageHome()).toBe(injected);
+
+    // stash 属性被替换成 plain 赋值(可写可配置)→ 不被信任 → 走首次加载路径。
+    // (defineProperty 定义 non-configurable 属性后无法 redefine,这里用一个
+    // fresh context 模拟「攻击者抢跑预置了 plain stash」的形态。)
+    const hostile = loadBashPackageHomeHelper();
+    hostile.env.PI_CODING_AGENT_DIR = '/attacker/agent-home';
+    Object.defineProperty(hostile.globalThis, '__cindyBridgeBashPackageHome', {
+      value: '/attacker/agent-home/bash-package-home',
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+    // 攻击者形态 stash 不被信任 → 走首次加载路径;env 未注入 → 从 PI_CODING_AGENT_DIR 派生。
+    // PI_CODING_AGENT_DIR 本就常驻可写,控制它与控制注入 env 同级,不新增威胁面。
+    expect(hostile.resolveBashPackageHome()).toBe('/attacker/agent-home/bash-package-home');
+
+    // 非 Cindy 初始化的进程(env 从未注入、无 stash、PI_CODING_AGENT_DIR 未设置)保持 fail-closed。
+    const fresh = loadBashPackageHomeHelper();
+    expect(fresh.resolveBashPackageHome()).toBeUndefined();
+
+    // 结构断言:入口走 resolveBashPackageHome,注入 env 的裸 delete 只在 helper 内。
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    expect(source).toContain('const bashPackageHome = resolveBashPackageHome();');
+    expect(source.match(/delete process\.env\[PI_BASH_PACKAGE_HOME_ENV\];/g)).toHaveLength(1);
+    expect(source.indexOf('delete process.env[PI_BASH_PACKAGE_HOME_ENV];')).toBeLessThan(
+      source.indexOf('export default async function cindyBridge'),
+    );
+
+    // 凭证不进 globalThis stash(review P1):包管理 token 保持读一次即删、
+    // 仅闭包持有 —— 同进程的第三方托管扩展与 bridge 共享 globalThis,stash
+    // 等于把 bearer token 暴露给任意托管代码。重载后工具退场是可接受代价。
+    expect(source).toContain('const piPackageManagementToken = process.env[PI_PACKAGE_MANAGEMENT_ENV];');
+    expect(source).toContain('delete process.env[PI_PACKAGE_MANAGEMENT_ENV];');
+    expect(source.indexOf('delete process.env[PI_PACKAGE_MANAGEMENT_ENV];')).toBeGreaterThan(
+      source.indexOf('export default async function cindyBridge'),
+    );
+    const helperSlice = source.slice(
+      source.indexOf('const BRIDGE_RELOAD_STASH_GLOBAL'),
+      source.indexOf('// 凭证/密钥路径特征由 maker-core 的单一来源生成'),
+    );
+    expect(helperSlice).not.toContain('CINDY_PI_PACKAGE_MANAGEMENT');
+  });
+
+  it('falls back to PI_CODING_AGENT_DIR derivation when neither env nor stash is available (subagent subprocess, #3132)', () => {
+    // subagent 子进程：父 bridge 已消费并删除 CINDY_PI_BASH_PACKAGE_HOME，子进程无 stash。
+    // PI_CODING_AGENT_DIR 存在且为绝对路径时从中派生；否则 fail-closed。
+    const sub = loadBashPackageHomeHelper();
+    sub.env.PI_CODING_AGENT_DIR = '/host/agent-home/run-tmp/abc';
+    expect(sub.resolveBashPackageHome()).toBe('/host/agent-home/run-tmp/abc/bash-package-home');
+    expect(sub.env.CINDY_PI_BASH_PACKAGE_HOME).toBeUndefined();
+
+    // 相对路径 fail-closed。
+    const rel = loadBashPackageHomeHelper();
+    rel.env.PI_CODING_AGENT_DIR = 'relative/path';
+    expect(rel.resolveBashPackageHome()).toBeUndefined();
+
+    // PI_CODING_AGENT_DIR 缺失 fail-closed。
+    const noDir = loadBashPackageHomeHelper();
+    expect(noDir.resolveBashPackageHome()).toBeUndefined();
+  });
+
+  it('blocks Pi package mutations before bash while preserving ordinary commands', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('bashCommandMutatesPiPackages(nextParams)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('clean.PI_CODING_AGENT_DIR = bashPackageHome');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('delete clean.PI_PACKAGE_DIR');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('token: piPackageManagementToken');
+
+    const mutatesPiPackages = loadPiPackageMutationCommandHelper();
+    const commands = [
+      'pi install npm:context-mode',
+      "sh -c 'pi install npm:context-mode'",
+      'p=pi; "$p" install npm:context-mode',
+      '/opt/cindy/pi install npm:context-mode',
+      'C:/Cindy/pi.exe remove npm:context-mode',
+      'PI_CODING_AGENT_DIR=/tmp/elsewhere pi update npm:context-mode',
+      'env -u PI_CODING_AGENT_DIR pi install npm:context-mode',
+      'env PI_CODING_AGENT_DIR=/tmp/elsewhere /opt/cindy/pi update npm:context-mode',
+      'command -p pi remove npm:context-mode',
+      'exec -- /opt/cindy/pi install npm:context-mode',
+      'exec -a managed-pi /opt/cindy/pi update npm:context-mode',
+      'sudo -u root env -u PI_CODING_AGENT_DIR pi update npm:context-mode',
+      'sudo --user root /opt/cindy/pi remove npm:context-mode',
+      "bash -lc 'command pi remove npm:context-mode'",
+      "eval 'unset PI_CODING_AGENT_DIR; pi install npm:context-mode'",
+      "command eval 'pi update npm:context-mode'",
+      "builtin eval 'pi remove npm:context-mode'",
+      "exec eval 'pi install npm:context-mode'",
+      "env eval 'pi update npm:context-mode'",
+      "sudo env eval 'pi remove npm:context-mode'",
+      "bash -lc \"eval 'pi install npm:context-mode'\"",
+      "eval \"eval 'pi update npm:context-mode'\"",
+      "eval 'env -u PI_CODING_AGENT_DIR pi remove npm:context-mode'",
+      'eval "$DYNAMIC_COMMAND"',
+      'eval "$(printf pi) install npm:context-mode"',
+      "printf '%s\\0' '-u PI_CODING_AGENT_DIR pi install npm:context-mode' | xargs -0 env",
+      "printf '%s\\0' 'pi update npm:context-mode' | xargs -0 sh -c",
+      "printf '%s\\0' 'pi remove npm:context-mode' | parallel",
+      'find . -exec env -u PI_CODING_AGENT_DIR pi install npm:context-mode +',
+      '$(printf pi) install npm:context-mode',
+      'echo safe && pi install npm:context-mode',
+    ];
+    for (const command of commands) {
+      expect(mutatesPiPackages({ command }), command).toBe(true);
+      const isolate = loadBashIsolationHelper(path);
+      const env = isolate(
+        {
+          PI_CODING_AGENT_DIR: '/real/runtime-home',
+          PI_PACKAGE_DIR: '/cindy/managed-package-home',
+          CINDY_PI_PACKAGE_MANAGEMENT: 'secret',
+          COMMAND_CANARY: command,
+        },
+        '/isolated/bash-pi-home',
+      );
+      expect(env).toMatchObject({
+        PI_CODING_AGENT_DIR: '/isolated/bash-pi-home',
+        COMMAND_CANARY: command,
+      });
+      expect(env.PI_PACKAGE_DIR).toBeUndefined();
+      expect(env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain('/real/runtime-home');
+      expect(JSON.stringify(env)).not.toContain('/cindy/managed-package-home');
+    }
+
+    for (const command of [
+      'pi --version',
+      'pi help install',
+      'npm install context-mode',
+      'echo pi install npm:context-mode',
+      "printf '%s\\n' 'pi install npm:context-mode'",
+      "eval 'printf safe'",
+      "eval -- 'printf safe'",
+      "eval 'echo pi install npm:context-mode'",
+      "printf '%s\\0' safe | xargs -0 echo",
+      "printf '%s\\n' safe | parallel echo {}",
+      "find . -name '*.ts' -print",
+      'bash --version',
+      'source ./ordinary-script.sh',
+      '. ./ordinary-script.sh',
+      'command source ./ordinary-script.sh',
+      'builtin . ./ordinary-script.sh',
+      'bash ./ordinary-script.sh',
+      'cat ./pi',
+      'curl https://example.test/pi-install-notes',
+      'sudo whoami',
+      'ps aux',
+      'cat ~/.ssh/id_ed25519',
+      'rm -rf ./ordinary-worktree-directory',
+    ]) {
+      expect(mutatesPiPackages({ command }), command).toBe(false);
+    }
+    expect(mutatesPiPackages({})).toBe(false);
+    expect(mutatesPiPackages({ command: 42 })).toBe(false);
+
+    const isolateWindows = loadBashIsolationHelper(path.win32);
+    expect(
+      isolateWindows({ PI_CODING_AGENT_DIR: 'C:\\real' }, 'D:\\isolated').PI_CODING_AGENT_DIR,
+    ).toBe('D:\\isolated');
+    expect(() => isolateWindows({}, 'relative\\home')).toThrow(/unavailable/);
+  });
+
+  it('does not let Full Access bypass Cindy-managed extension confirmation', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "if (event.toolName === 'cindy_pi_extension') return;",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "if (permission.mode === 'bypassPermissions') return;",
+    );
   });
 
   it('checks the Review deny-by-default boundary before ordinary permission handling', () => {

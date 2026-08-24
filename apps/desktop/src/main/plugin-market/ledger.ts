@@ -256,7 +256,7 @@ export class PluginMarketLedger {
    * directory bytes, so an organization-scoped market record is demoted to
    * legacy-adopted until a verified market update installs fresh bytes. This
    * keeps automatic updates available without restoring Connection JWT trust
-   * from audit-only evidence. The compare-and-write prevents a concurrent
+   * from historical source evidence. The compare-and-write prevents a concurrent
    * uninstall or source replacement from being overwritten by a stale snapshot.
    */
   restoreDisconnectedInstallation(

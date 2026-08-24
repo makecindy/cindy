@@ -378,7 +378,7 @@ export function ScheduleChip({
   const intervalIsPreset = timingPresentation.kind !== 'intervalExact';
   const scheduleUnset = intervalMs === undefined && cronExpr.trim() === '';
   const scheduleSummary = intervalMs === undefined
-    ? summarizeConfig(normalizeScheduleConfig(config))
+    ? summarizeConfig(normalizeScheduleConfig(config), t)
     : formatIntervalDuration(intervalMs, i18n.resolvedLanguage ?? i18n.language);
   const chipLabel = scheduleUnset
     ? t('scheduler.chips.chooseTime')
@@ -575,21 +575,21 @@ function ScheduleConfigPanel({
         {(mode === 'daily' || mode === 'weekdays') && (
           <>
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode, ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
         {mode === 'weekly' && (
           <>
             <WeekdayRow value={panelConfig.weekday} onFocus={commit} onChange={(weekday) => onUpdate({ mode: 'weekly', weekday })} />
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode: 'weekly', ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
         {mode === 'monthly' && (
           <>
             <MonthDayRow value={panelConfig.monthDay} onFocus={commit} onChange={(monthDay) => onUpdate({ mode: 'monthly', monthDay })} />
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode: 'monthly', ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
       </div>
@@ -931,6 +931,7 @@ function WeekdayRow({
   onFocus: () => void;
   multi?: boolean;
 }) {
+  const { t } = useTranslation();
   const selected = multi ? [1, 2, 3, 4, 5] : [value];
   return (
     <div className="flex min-h-[34px] w-full items-center">
@@ -949,9 +950,11 @@ function WeekdayRow({
                   ? 'border-transparent bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'border-[var(--cmd-palette-border)] bg-transparent text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] dark:border-[var(--cmd-palette-border)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               )}
-              aria-label={WEEKDAY_LABELS[day]}
+              aria-label={t(`scheduler.presentation.weekday.full.${day}`)}
             >
-              {WEEKDAY_SHORT[day]}
+              {t(`scheduler.presentation.weekday.short.${day}`, {
+                defaultValue: WEEKDAY_SHORT[day],
+              })}
             </button>
           );
         })}

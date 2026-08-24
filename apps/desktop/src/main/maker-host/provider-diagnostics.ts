@@ -30,6 +30,7 @@ import {
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { outboundFetch } from './outbound-fetch.js';
+import { providerRoutingForModel } from './provider-route.js';
 
 /** 探测请求超时。 */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -107,8 +108,8 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
     : normalizedHeaders(spec.headers);
   headers['content-type'] = 'application/json';
   const anthropicMessages =
-    spec.wireProtocol === 'anthropic-messages'
-    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+    spec.wireProtocol === 'anthropic-messages' ||
+    (spec.wireProtocol === undefined && spec.agent === 'claude-code');
   if (anthropicMessages) {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
@@ -209,12 +210,17 @@ async function readFirstSsePayload(res: Response): Promise<string | null> {
 
 function classifyStreamedError(error: Record<string, unknown>): ProviderErrorClassification {
   const bodyText = JSON.stringify(error).slice(0, MAX_ERROR_BODY_BYTES);
-  const explicitStatus = typeof error.status === 'number' ? error.status
-    : typeof error.status_code === 'number' ? error.status_code
-      : typeof error.code === 'number' ? error.code
-        : undefined;
+  const explicitStatus =
+    typeof error.status === 'number'
+      ? error.status
+      : typeof error.status_code === 'number'
+        ? error.status_code
+        : typeof error.code === 'number'
+          ? error.code
+          : undefined;
   const type = typeof error.type === 'string' ? error.type.toLowerCase() : '';
-  const inferredStatus = explicitStatus ?? (type.includes('server') || type.includes('overload') ? 503 : 400);
+  const inferredStatus =
+    explicitStatus ?? (type.includes('server') || type.includes('overload') ? 503 : 400);
   return classifyProviderError({ status: inferredStatus, bodyText });
 }
 
@@ -322,7 +328,8 @@ export async function runProviderProbe(
 export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): ProviderProbeSpec {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) throw new Error(`provider '${providerId}' not found`);
-  if (provider.source !== 'user') throw new Error(`provider '${providerId}' is not a custom provider`);
+  if (provider.source !== 'user')
+    throw new Error(`provider '${providerId}' is not a custom provider`);
   const routing = provider.routing[agent];
   if (!routing) throw new Error(`provider '${providerId}' has no runtime for '${agent}'`);
   if (routing.disabled) throw new Error(`provider '${providerId}' runtime '${agent}' is disabled`);
@@ -333,14 +340,16 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
   );
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
-  const baseUrl = model.route?.baseUrl ?? routing.upstream;
-  const wireProtocol = model.route?.wireProtocol ?? routing.wireProtocol;
+  const modelRouting = providerRoutingForModel(provider, agent, model.id);
+  if (!modelRouting) {
+    throw new Error(
+      `provider '${providerId}' model '${model.id}' has no supported protocol for '${agent}'`,
+    );
+  }
+  const baseUrl = modelRouting.upstream;
+  const wireProtocol = modelRouting.wireProtocol;
   // Pi derives its inference path from wireProtocol and does not consume requestPath.
-  const requestPath = agent === 'pi'
-    ? undefined
-    : model.route
-      ? model.route.requestPath
-      : routing.requestPath;
+  const requestPath = agent === 'pi' ? undefined : modelRouting.requestPath;
   // OAuth 形态：探测凭证用 Runner 持有的 access_token（与 oauth-token 路由同源），未登录时
   // 无 token → 探测会得到 AUTH_INVALID，这本身就是「先去登录」的正确结论。
   // token 走 authorization 头而**不走 apiKey 字段**——apiKey 会让 cc 探测同时发
@@ -405,6 +414,7 @@ export async function testProviderConnection(
   input: ProviderTestInput,
   fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderTestResult> {
-  const spec = input.kind === 'saved' ? resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  const spec =
+    input.kind === 'saved' ? resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
   return runProviderProbe(spec, fetchImpl);
 }

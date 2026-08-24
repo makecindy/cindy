@@ -7,6 +7,136 @@
     "deleting": "削除中",
     "create": "新規"
   },
+  "presentation": {
+    "deviceList": {
+      "headerAvailable": "操作可能なコンピューター {{count}} 台",
+      "headerUnavailable": "現在利用できないコンピューター {{count}} 台",
+      "waitingForDesktop": "コンピューターがオンラインになるのを待っています",
+      "filterAvailable": "操作可能なデバイス",
+      "filterEmpty": "操作可能なデバイスはありません",
+      "filterMeta": "{{available}} 台を開けます",
+      "filterMetaWithUnavailable": "{{available}} 台を開けます · {{unavailable}} 台は対応が必要です",
+      "showUnavailableReason": "デバイスを展開すると利用できない理由を確認できます",
+      "emptyCopy": "コンピューターで同じアカウントにログインし、設定のリモートコントロールで「同じアカウントのデバイスによるこのコンピューターの操作を許可」をオンにしてください。",
+      "emptyTitle": "表示できるコンピューターはまだありません",
+      "hideUnavailableA11y": "利用できないコンピューターを非表示",
+      "showUnavailableA11y": "利用できないコンピューターを表示",
+      "availableOnly": "利用可能のみ",
+      "unavailableCount": "利用不可 {{count}}",
+      "status": {
+        "ready": "操作可能",
+        "busy": "実行中",
+        "offline": "オフライン",
+        "remoteDisabled": "リモートコントロールがオフ",
+        "accessRevoked": "アクセス権が取り消されました",
+        "self": "このデバイス"
+      },
+      "detail": {
+        "accessRevoked": "コンピューター側でこのスマートフォンのアクセス権を復元してください",
+        "remoteDisabled": "コンピューターの設定でリモートコントロールを有効にしてください",
+        "self": "現在のスマートフォン",
+        "busy": "コンピューターでタスクを処理しています",
+        "ready": "リモートコントロールが許可されています"
+      },
+      "lastSeen": {
+        "never": "オンラインになったことがありません",
+        "unknown": "最終オンライン時刻は不明です",
+        "justNow": "たった今オンライン",
+        "minutesAgo": "{{count}} 分前にオンライン",
+        "hoursAgo": "{{count}} 時間前にオンライン",
+        "daysAgo": "{{count}} 日前にオンライン",
+        "onDate": "最終オンライン {{date}}"
+      }
+    },
+    "sessionList": {
+      "section": { "pinned": "ピン留め", "dialogue": "会話" },
+      "filterWithCount": "{{label}} {{count}}",
+      "controlsSummary": "{{filter}} · {{group}}別にグループ化",
+      "automation": "自動化",
+      "sessionCount": "{{count}} 件のセッション",
+      "messageCount": "{{count}} 件のメッセージ",
+      "status": { "archived": "アーカイブ済み", "deleted": "削除済み" },
+      "preview": {
+        "permission": "権限の確認待ち",
+        "planReview": "計画レビュー待ち",
+        "answer": "回答待ち",
+        "attention": "対応待ち",
+        "automationRunning": "自動化を実行中",
+        "running": "実行中"
+      },
+      "context": {
+        "matchingTasks": "一致するセッション {{count}} 件",
+        "tasks": "セッション {{count}} 件",
+        "noMatchingTasks": "一致するセッションはありません",
+        "noResults": "現在のフィルターに結果はありません",
+        "rows": " · {{count}} 行",
+        "detail": "{{result}}{{rows}} · {{filter}} · {{group}}別にグループ化",
+        "searchResults": "検索結果",
+        "title": {
+          "active": "アクティブなセッション",
+          "waiting": "保留中のセッション",
+          "automation": "自動化セッション",
+          "archived": "アーカイブ済みセッション",
+          "all": "すべてのセッション"
+        },
+        "hint": {
+          "search": "タイトル、プロジェクトパス、モデル、自動化名、メッセージプレビューを検索します。",
+          "active": "セッションを開いて操作を続けるか、長押しして複数選択します。",
+          "waiting": "スマートフォンで確認が必要な権限、計画、質問がここに表示されます。",
+          "automation": "自動化セッションはタスクごとにまとめられ、展開すると各実行を開けます。",
+          "archived": "アーカイブ済みセッションを長押しすると、一括で復元または削除できます。",
+          "all": "アクティブ、アーカイブ済み、自動化セッションをまとめて表示します。"
+        }
+      },
+      "empty": {
+        "search": { "title": "一致するセッションはありません", "copy": "別のタイトル、プロジェクトパス、モデル、またはメッセージのキーワードを試してください。" },
+        "waiting": { "title": "保留中のリクエストはありません", "copy": "権限の確認、計画レビュー、質問がここに表示されます。" },
+        "automation": { "title": "自動化セッションはありません", "copy": "自動化の実行後に作成されたセッションがここにまとめられます。" },
+        "archived": { "title": "アーカイブ済みセッションはありません", "copy": "セッションを長押しすると、一括でアーカイブまたは削除できます。" },
+        "active": { "title": "このコンピューターにアクティブなセッションはありません", "copy": "コンピューターでセッションを作成または再開すると、ここに表示されます。" }
+      },
+      "time": {
+        "unknown": "最近のアクティビティ時刻は不明です",
+        "justNow": "たった今",
+        "minutesAgo": "{{count}} 分前",
+        "hoursAgo": "{{count}} 時間前",
+        "daysAgo": "{{count}} 日前",
+        "minutes": "{{count}} 分",
+        "hours": "{{count}} 時間",
+        "days": "{{count}} 日",
+        "weeks": "{{count}} 週間",
+        "months": "{{count}} か月",
+        "years": "{{count}} 年"
+      }
+    },
+    "home": {
+      "allDevices": "すべて",
+      "allComputers": "すべてのコンピューター",
+      "waitingCount": "保留中 {{count}} 件",
+      "synced": "同期済み",
+      "unknownComputer": "不明なコンピューター",
+      "uncategorizedProject": "未分類のプロジェクト",
+      "empty": {
+        "search": { "title": "一致する結果はありません", "copy": "別のプロジェクト名、セッション名、コンピューター名、またはメッセージのキーワードを試してください。" },
+        "waiting": { "title": "保留中のリクエストはありません", "copy": "権限の確認、計画レビュー、質問がここに表示されます。" },
+        "automation": { "title": "自動化セッションはありません", "copy": "自動化の実行後に作成されたセッションがプロジェクト別にまとめられます。" },
+        "archived": { "title": "アーカイブ済みセッションはありません", "copy": "［すべて］または［アクティブ］に切り替えて、現在のプロジェクトとセッションを確認してください。" },
+        "noSession": { "title": "セッションはまだありません", "copy": "コンピューターでセッションを作成または再開すると、対応するプロジェクトとセッションがここに表示されます。" }
+      },
+      "noDevice": {
+        "accessRevoked": { "title": "アクセス権が取り消されました", "copy": "{{names}} がこのスマートフォンのリモートアクセスを取り消しました。アクセスを再試行するか、コンピューター側で再度許可してください。" },
+        "remoteDisabled": { "title": "コンピューターでリモートコントロールを許可", "copy": "{{names}} はオンラインです。コンピューター側でスマートフォンからの操作を有効にしてください。" },
+        "offline": { "title": "コンピューターで Cindy を開く", "copy": "接続済みのコンピューターは現在オフラインです。コンピューターで Cindy を開いてログインしたままにすると、自動的に再接続します。" },
+        "firstRun": { "title": "コンピューターの Cindy に接続", "copy": "現在 Cindy はコンピューター上で動作します。モバイルアプリはリモートアクセスを使って、そのコンピューターの Agent を利用します。" }
+      }
+    },
+    "bulk": {
+      "action": { "archive": "アーカイブ", "delete": "削除", "pin": "固定", "restore": "復元", "unpin": "固定解除" },
+      "title": "{{count}} 件のタスクを{{action}}",
+      "description": "選択した {{count}} 件のタスクを{{action}}します。",
+      "descriptionWithSkipped": "選択した {{count}} 件のタスクを{{action}}します。対象外の {{skippedCount}} 件はスキップされます。"
+    }
+  },
   "list": {
     "thisComputer": "このデバイス",
     "allConversations": "すべてのセッション",
@@ -31,6 +161,10 @@
     },
     "a11y": {
       "selectScope": "セッションの範囲を選択",
+      "openMenu": "メニューを開く",
+      "closeMenu": "メニューを閉じる",
+      "openDisplaySettings": "表示設定を開く",
+      "openSearch": "検索",
       "openSettings": "設定を開く",
       "syncing": "再同期中",
       "sync": "再同期",
@@ -38,6 +172,7 @@
       "newRemoteConversation": "新しいリモートセッション",
       "renameDevice": "{{label}} の名前を変更",
       "project": "プロジェクト {{title}}",
+      "dialogue": "チャット",
       "openAutomationLatest": "自動化タスク {{title}} の最新セッションを開く",
       "automationTask": "自動化タスク {{title}}",
       "openConversation": "セッション {{title}} を開く",
@@ -51,7 +186,64 @@
       "cancelRename": "名前の変更をキャンセル"
     },
     "menu": {
-      "groupByProject": "プロジェクトごとにグループ化"
+      "groupByProject": "プロジェクトごとにグループ化",
+      "groupDialogue": "チャットをまとめる",
+      "sortByTime": "時間順",
+      "sortByPriority": "優先度",
+      "statusActive": "アクティブ",
+      "statusArchived": "アーカイブ済み",
+      "statusAll": "すべて",
+      "dialogueFolder": "チャット",
+      "search": "検索",
+      "settings": "設定",
+      "remoteSettings": "リモート接続設定",
+      "displaySettings": "表示設定",
+      "groupHeading": "グループ",
+      "sortHeading": "タスクの並び替え",
+      "projectOrderHeading": "プロジェクト順",
+      "projectOrderActivity": "最近のアクティビティ順",
+      "projectOrderManual": "手動",
+      "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
+      "statusHeading": "ステータス"
+    },
+    "search": {
+      "placeholder": "タイトルまたは内容を検索…",
+      "filterA11y": "検索フィルター",
+      "filterAria": "検索フィルターと並び順（並び順：{{sort}}、状態：{{status}}、Agent：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
+      "filter": {
+        "label": "検索条件",
+        "reset": "リセット",
+        "sortHeading": "並び替え",
+        "statusHeading": "ステータス",
+        "projectsHeading": "プロジェクト",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "最近のアクティビティ",
+        "allProjects": "すべてのプロジェクト",
+        "selectedProjects": "{{count}} 件選択",
+        "sort": {
+          "relevance": "関連度",
+          "activityDesc": "最近アクティブ",
+          "activityAsc": "古いアクティブ順"
+        },
+        "status": {
+          "active": "アクティブ",
+          "archived": "アーカイブ済み",
+          "all": "すべて"
+        },
+        "agent": {
+          "all": "すべて",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1日",
+          "3d": "3日",
+          "7d": "7日",
+          "30d": "30日",
+          "all": "すべて"
+        }
+      }
     },
     "renameDevice": {
       "title": "デバイス名を変更",
@@ -108,7 +300,7 @@
       "openA11y": "リモートセッションを検索",
       "closeA11y": "リモートセッションの検索を閉じる",
       "label": "検索",
-      "placeholder": "タイトル、プロジェクト、モデル、メッセージを検索",
+      "placeholder": "タイトルまたは内容を検索…",
       "clearA11y": "検索をクリア",
       "closeInputA11y": "検索を閉じる",
       "clear": "クリア",
@@ -182,6 +374,12 @@
     "viewAllRuns": "すべての実行 {{count}} 回を表示"
   },
   "automations": {
+    "heading": {
+      "delete": "自動化を削除",
+      "pause": "自動化を一時停止",
+      "deleteRun": "実行記録を削除"
+    },
+    "runNow": "今すぐ実行",
     "error": {
       "projectMissingConfig": "プロジェクト自動化に projectConfigId がありません。デスクトップで削除してください。",
       "deletePartial": "自動化を削除しましたが、{{count}} 件の生成されたセッションの状態を更新できませんでした。デスクトップでこれらのセッションを確認してください。"
@@ -203,7 +401,7 @@
     "createAutomation": "自動化を新規作成",
     "recentRuns": "最近の実行",
     "runs": {
-      "emptyCopy": "Run now をタップすると、新しい実行がここに表示されます。",
+      "emptyCopy": "「{{runNow}}」をタップすると、新しい実行がここに表示されます。",
       "emptyTitle": "まだ実行記録がありません"
     },
     "form": {
@@ -297,7 +495,51 @@
       "loading": "読み込み中",
       "refresh": "更新",
       "cardA11y": "自動化テンプレート {{name}}",
-      "manualConfig": "手動設定"
+      "manualConfig": "手動設定",
+      "builtin": {
+        "nightly-test-heal": {
+          "name": "夜間セルフヒーリングテスト",
+          "description": "毎晩テストを実行し、失敗項目を分離ワークツリーで最小修正",
+          "prompt": "プロジェクトのテストスイートを実行し、失敗があれば隔離された worktree で最小限の修正を試みてください。\n制約：\n- リポジトリのドキュメントまたは package スクリプトから標準のテストコマンドを特定してから、テストスイート全体を実行する\n- 明確な失敗の証拠がある問題だけを修正し、影響範囲が最小の変更を優先して、ついでのリファクタリングは避ける\n- 修正後は関連テストを再実行して成功を確認し、diff 全体をレビューする\n- リポジトリのワークフローに従って修正を提出する（例：ブランチを作成して PR を開く）。main ブランチを直接変更しない\n- 安全に修正できない失敗については、原因、疑わしいファイル、推奨する調査手順を報告する"
+        },
+        "pr-gatekeeper": {
+          "name": "PR ゲートキーパー",
+          "description": "平日にオープン PR の新規変更を事前レビューし、重大度別にリスクを報告",
+          "prompt": "リポジトリで現在オープンな PR を確認し、新しい変更を事前レビューしてください。\n制約：\n- 過去 24 時間以内に新しいコミットがあるオープン PR を 1 件ずつ確認する（月曜日は週末全体を対象）。PR 番号、ファイルパス、具体的な diff を引用する\n- 正確性、セキュリティ、データ損失、互換性の問題に重点を置き、深刻度別に分類する\n- 証拠で裏付けられる問題だけを報告し、失敗シナリオを説明する。スタイル上の好みだけで指摘しない\n- ユーザーが明示的に許可しない限り、レビュー結果のみを出力し、PR へのコメントやコード変更は行わない"
+        },
+        "domain-radar": {
+          "name": "分野レーダー",
+          "description": "注目分野の最新動向を定期収集し、見解付きサマリーを出力",
+          "prompt": "テーマ「{{topic}}」について過去 24 時間の最新動向（月曜日は週末全体）を収集し、見解を含むダイジェストを作成してください。\n制約：\n- Web 検索を使い、複数の情報源で照合してから採用し、各項目に出典リンクを付ける\n- リリース、研究、政策、重要な議論など実質的な進展を優先し、宣伝記事や転載を除外する\n- リンクを並べるだけでなく、各動向に「なぜ注目すべきか」を 1 文で示す\n- 情報が少ない場合や情報源に疑義がある場合は率直に明記し、推測で補わない",
+          "params": {
+            "topic": {
+              "label": "注目テーマ",
+              "placeholder": "例：AI エージェント、新エネルギー、フロントエンド"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "競合ウォッチ",
+          "description": "競合の製品・市場動向を週次でまとめ、自社への影響を分析",
+          "prompt": "次の競合の過去 1 週間の動向を追跡してください：{{competitors}}。\n制約：\n- Web 検索で製品更新、リリース、価格変更、市場動向、ユーザー評価を調べ、出典を示す\n- 公式情報と第三者による情報を区別し、未確認の噂は明示する\n- 重要な動向ごとに、それが自社に何を意味するかを分析し、対応案を示す\n- 実質的な動きがない場合は、水増しせず率直にその旨を伝える",
+          "params": {
+            "competitors": {
+              "label": "競合リスト",
+              "placeholder": "例：Notion、Linear、Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "週報ドラフトアシスタント",
+          "description": "作業ディレクトリのドキュメントから今週の作業を整理し、週報ドラフトを生成",
+          "prompt": "作業ディレクトリ内で今週変更されたドキュメント、メモ、成果物を基に、週報の下書きを作成してください。\n制約：\n- 作業ディレクトリ内に実際の変更履歴がある内容だけを根拠とし、対応するファイルを示す\n- 「今週完了 / 進行中 / 来週の予定 / 調整が必要」の構成で、そのまま提出できる簡潔な文章にする\n- 実質的な進捗と定常作業を区別し、価値のある成果を強調する\n- 判断材料が足りない箇所には説明付きのプレースホルダーを残し、ユーザーが追記できるようにする"
+        },
+        "knowledge-freshness": {
+          "name": "ナレッジベース鮮度チェック",
+          "description": "毎月ドキュメントを点検し、古い内容や矛盾を洗い出す",
+          "prompt": "作業ディレクトリ内のドキュメントを点検し、更新が必要な内容を見つけてください。\n制約：\n- 古い情報（過去の日付、無効なリンク、廃止された手順やツール）、矛盾、重複を確認する\n- 各問題についてファイルパスと具体的な場所を示し、判断理由を説明する\n- 「更新を推奨 / 統合を推奨 / 削除を推奨」に分類し、修正チェックリストを作成する\n- 点検レポートだけを出力し、ドキュメント自体は変更しない"
+        }
+      }
     },
     "scheduleRowA11y": "自動化タスク {{title}}",
     "detail": {
@@ -324,6 +566,90 @@
       "marking": "マーク中",
       "markRead": "既読",
       "deleteA11y": "実行記録を削除"
+    },
+    "presentation": {
+      "validation": {
+        "templateParameter": "テンプレートパラメーターを入力してください：{{label}}",
+        "name": "タスク名を入力してください",
+        "prompt": "タスクのプロンプトを入力してください",
+        "timezone": "タイムゾーンを入力してください",
+        "boundSession": "ひも付けるタスクを選択してください",
+        "cron": "cron 式を入力してください",
+        "workingDir": "プロジェクトディレクトリを入力してください",
+        "effort": "推論強度は次のいずれかを指定してください：{{values}}",
+        "intervalPositiveInteger": "間隔（分）は正の整数で入力してください",
+        "intervalUnsupported": "分間隔は 1～59 分、または 1～23 時間の正時の間隔に対応しています"
+      },
+      "schedule": {
+        "paused": "一時停止中",
+        "manual": "手動トリガー",
+        "once": "単発タスク",
+        "waitingFirstRun": "初回実行待ち",
+        "every": "{{duration}}ごと",
+        "recurring": "定期タスク",
+        "dialogueWorkspace": "会話ワークスペース",
+        "noDirectory": "ディレクトリ未設定",
+        "lastRun": "前回 {{relative}}",
+        "imminent": "まもなく実行",
+        "nextRun": "{{duration}}後",
+        "status": {
+          "active": "実行中",
+          "paused": "一時停止中",
+          "expired": "完了"
+        },
+        "session": {
+          "persistent": "継続タスク",
+          "bound": "ひも付けタスク",
+          "fresh": "新規タスク",
+          "persistentWithId": "継続タスク {{id}}",
+          "persistentDetail": "初回トリガー後も同じタスクを再利用します",
+          "boundWithId": "{{id}} にひも付け"
+        }
+      },
+      "run": {
+        "session": "タスク {{id}}",
+        "delete": "削除",
+        "markRead": "既読",
+        "canRestart": "再実行できます",
+        "noSession": "タスク未作成",
+        "open": "開く",
+        "restart": "再実行",
+        "durationUnknown": "所要時間不明",
+        "runningFor": "実行時間 {{duration}}",
+        "duration": "所要時間 {{duration}}",
+        "unknownTime": "時刻不明",
+        "status": {
+          "running": "実行中",
+          "success": "成功",
+          "failed": "失敗",
+          "aborted": "中止済み",
+          "interrupted": "中断",
+          "skipped": "スキップ"
+        }
+      },
+      "pause": {
+        "title": "{{name}} を一時停止",
+        "detail": "この自動化では現在 {{count}} 件の実行が進行中です。一時停止すると今後のトリガーを直ちに止め、進行中の実行も停止します。",
+        "preview": "実行中：{{count}} 件"
+      },
+      "delete": {
+        "noSessions": "この自動化が生成したタスクは見つかりませんでした",
+        "sessions": "この自動化が生成したタスクが {{count}} 件見つかりました",
+        "withInflight": "{{sessions}}。さらに {{count}} 件の実行が進行中です"
+      },
+      "duration": {
+        "seconds": "{{count}} 秒",
+        "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
+        "minutes": "{{count}} 分",
+        "hours": "{{count}} 時間",
+        "days": "{{count}} 日"
+      },
+      "relative": {
+        "justNow": "たった今",
+        "minutesAgo": "{{count}} 分前",
+        "hoursAgo": "{{count}} 時間前",
+        "daysAgo": "{{count}} 日前"
+      }
     }
   }
 }

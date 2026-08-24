@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,7 +13,12 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost';
 import { CINDY_OFFICIAL_GHOST_TRUST, GhostManager, readLegacyGhostApprovalProjection } from '../GhostManager';
-import { hashApprovedSkillContent } from '../ghostInstallReceipt';
+import {
+  installedFileModeFromZip,
+  unixPermissionsForRepackedEntry,
+} from '../ghostZipPermissions';
+import { signGhostPackage } from '../ghostSignature';
+import { GhostInstallReceiptStore, hashApprovedSkillContent } from '../ghostInstallReceipt';
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 
 /** 每个用例独立的临时仓库根 + 源文件目录(规则 23:测试路径一律 os.tmpdir)。 */
@@ -72,6 +78,26 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
   };
 }
 
+describe('installedFileModeFromZip', () => {
+  it('normalizes strings, strips special bits, and skips Windows or missing metadata', () => {
+    expect(installedFileModeFromZip('755', 'linux')).toBe(0o755);
+    expect(installedFileModeFromZip(0o644, 'linux')).toBe(0o644);
+    expect(installedFileModeFromZip(0o4755, 'darwin')).toBe(0o755);
+    expect(installedFileModeFromZip(0o777, 'linux')).toBe(0o755);
+    expect(installedFileModeFromZip(0o666, 'linux')).toBe(0o644);
+    expect(installedFileModeFromZip(0o700, 'linux')).toBe(0o700);
+    expect(installedFileModeFromZip(0o000, 'linux')).toBe(0o600);
+    expect(installedFileModeFromZip(0o120777, 'linux')).toBeNull();
+    expect(installedFileModeFromZip(null, 'linux')).toBeNull();
+    expect(installedFileModeFromZip(0o755, 'win32')).toBeNull();
+  });
+
+  it('does not turn non-directory entry types into executable directories when repacking', () => {
+    expect(unixPermissionsForRepackedEntry(0o120777, true)).toBe(0o040755);
+    expect(unixPermissionsForRepackedEntry(0o040700, true)).toBe(0o040700);
+  });
+});
+
 function setupKvManifest(id = 'hello'): Record<string, unknown> {
   return {
     ...goodManifest(id),
@@ -114,6 +140,24 @@ async function makeCindy(
   if (manifest) zip.file('ghost.json', JSON.stringify(manifest));
   for (const [name, content] of Object.entries(entries)) zip.file(name, content);
   const buf = await zip.generateAsync({ type: 'nodebuffer' });
+  const out = path.join(workDir, fileName);
+  await fs.promises.writeFile(out, buf);
+  return out;
+}
+
+/** 用 UNIX central-directory metadata 构造 mode 回归包。 */
+async function makeUnixModeCindy(
+  fileName: string,
+  manifest: Record<string, unknown>,
+  versionMarker: string,
+): Promise<string> {
+  const zip = new JSZip();
+  zip.file('ghost.json', JSON.stringify(manifest), { unixPermissions: 0o644 });
+  zip.file('main.js', '// browser entry', { unixPermissions: 0o644 });
+  zip.file('bin/tool', `#!/bin/sh\necho ${versionMarker}\n`, { unixPermissions: 0o755 });
+  zip.file('config.txt', versionMarker, { unixPermissions: 0o644 });
+  zip.file('bin/special', '#!/bin/sh\n', { unixPermissions: 0o4755 });
+  const buf = await zip.generateAsync({ type: 'nodebuffer', platform: 'UNIX' });
   const out = path.join(workDir, fileName);
   await fs.promises.writeFile(out, buf);
   return out;
@@ -1763,21 +1807,34 @@ describe('GhostManager · review 第 6 轮回归(P0/P1 修复钉住)', () => {
   });
 
   it('P1-6:声明 tokenBroker 的目录拒走已装目录重新确认', async () => {
+    const brokerNetwork = {
+      hosts: ['api.example.com', 'accounts.example.com'],
+      secrets: [
+        {
+          key: 'token',
+          label: 'Account',
+          source: 'oauth' as const,
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+          oauth: {
+            authorizeUrl: 'https://accounts.example.com/authorize',
+            tokenUrl: 'https://accounts.example.com/token',
+            clientId: 'broker-client',
+            tokenBroker: 'github',
+          },
+        },
+      ],
+    };
     await writeLegacyInstall('brokered', {
       ...goodManifest('brokered'),
-      network: {
-        hosts: ['api.example.com'],
-        secrets: [
-          {
-            key: 'token',
-            source: 'oauth',
-            oauth: { tokenBroker: 'github' },
-          },
-        ],
-      },
+      slots: ['tool', 'network'],
+      settingsHtml: 'settings.html',
+      network: brokerNetwork,
     });
     const inspected = await manager.inspectInstalledReapproval('brokered');
     expect('rejection' in inspected && inspected.rejection.code).toBe('file-invalid');
+    if ('rejection' in inspected) {
+      expect(inspected.rejection.reason).toMatch(/tokenBroker/);
+    }
   });
 
   it('P1-7:重新确认的启停默认值取镜像读数,不重置用户停用偏好', async () => {
@@ -3253,6 +3310,62 @@ describe('GhostManager · Host approval receipt', () => {
       '---\nname: demo\ndescription: Demo skill\n---\n\nApproved instructions\n',
   });
 
+  it('keeps a legacy broker receipt approved and present in list without redirectPort', async () => {
+    const legacyBrokerManifest = {
+      ...goodManifest('legacy-broker'),
+      slots: ['network'],
+      tools: undefined,
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['accounts.example.com'],
+        secrets: [
+          {
+            key: 'account',
+            label: 'Account',
+            source: 'oauth',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+            oauth: {
+              authorizeUrl: 'https://accounts.example.com/authorize',
+              tokenUrl: 'https://accounts.example.com/token',
+              clientId: 'builtin-client-id',
+              tokenBroker: 'jira',
+            },
+          },
+        ],
+      },
+    };
+    const installed = await manager.install(
+      await makeCindy('legacy-broker.cindy', legacyBrokerManifest, {
+        'main.js': '// previously installed broker plugin',
+      }),
+    );
+    expect(installed).toMatchObject({ ghost: { approval: { state: 'approved' } } });
+
+    // stateRoot 必须先规范化再交给 store，避免 macOS /var 别名制造假失败。
+    const stateRoot = fs.realpathSync.native(path.join(workDir, 'ghosts-install-state'));
+    const receiptStore = new GhostInstallReceiptStore(
+      () => stateRoot,
+      async ({ parentDir, targetName, operation }) => {
+        if (operation === 'remove') {
+          await fs.promises.rm(path.join(parentDir, targetName), {
+            recursive: true,
+            force: true,
+          });
+        }
+      },
+    );
+    expect(receiptStore.read('legacy-broker')).toMatchObject({ state: 'approved' });
+
+    // 新进程从盘上回读仍须投影该插件；若规则误放回共用 validator，这里会消失。
+    const restarted = new GhostManager({ getRootDir: () => rootDir });
+    expect(restarted.list()).toEqual([
+      expect.objectContaining({
+        manifest: expect.objectContaining({ id: 'legacy-broker' }),
+        approval: expect.objectContaining({ state: 'approved' }),
+      }),
+    ]);
+  });
+
   it('rejects an approved snapshot root replaced by a same-bytes link', async () => {
     await manager.install(await makeCindy('skill.cindy', skillManifest(), skillFiles()));
     const ghost = manager.list()[0];
@@ -4631,6 +4744,104 @@ describe('GhostManager · author / icon(身份卡展示字段)', () => {
     const listed = manager.list();
     expect(listed[0].iconDataUrl).toBeUndefined();
     expect(listed[0].manifest.author).toBeUndefined();
+  });
+});
+
+describe('GhostManager · Unix file permissions', () => {
+  it('fresh install and overwrite update preserve declared modes and strip setuid', async () => {
+    const v1 = await makeUnixModeCindy('modes-v1.cindy', goodManifest(), 'v1');
+    const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+    try {
+      expect(await manager.install(v1)).toHaveProperty('ghost');
+      // Windows 不做正面 mode 断言(chmod 在那里只切只读位),但必须断言我们**确实
+      // 没调 chmod**;非 win32 反过来断言确实调过,否则这条路径以后静默退化成
+      // 「什么都没做」也会绿。
+      if (process.platform === 'win32') {
+        expect(chmodSpy).not.toHaveBeenCalled();
+      } else {
+        expect(chmodSpy).toHaveBeenCalled();
+      }
+    } finally {
+      chmodSpy.mockRestore();
+    }
+
+    if (process.platform !== 'win32') {
+      expect((await fs.promises.stat(path.join(rootDir, 'hello', 'bin', 'tool'))).mode & 0o777)
+        .toBe(0o755);
+      expect((await fs.promises.stat(path.join(rootDir, 'hello', 'config.txt'))).mode & 0o777)
+        .toBe(0o644);
+      const special = await fs.promises.stat(path.join(rootDir, 'hello', 'bin', 'special'));
+      expect(special.mode & 0o777).toBe(0o755);
+      expect(special.mode & 0o4000).toBe(0);
+    }
+
+    const v2 = await makeUnixModeCindy(
+      'modes-v2.cindy',
+      { ...goodManifest(), version: '2.0.0' },
+      'v2',
+    );
+    expect(await updateGhost(v2)).toHaveProperty('ghost');
+    expect(await fs.promises.readFile(path.join(rootDir, 'hello', 'config.txt'), 'utf8')).toBe('v2');
+    if (process.platform !== 'win32') {
+      expect((await fs.promises.stat(path.join(rootDir, 'hello', 'bin', 'tool'))).mode & 0o777)
+        .toBe(0o755);
+      expect((await fs.promises.stat(path.join(rootDir, 'hello', 'config.txt'))).mode & 0o777)
+        .toBe(0o644);
+      expect((await fs.promises.stat(path.join(rootDir, 'hello', 'bin', 'special'))).mode & 0o777)
+        .toBe(0o755);
+    }
+  });
+
+  it('signed packages restore declared modes too, with special bits stripped', async () => {
+    // 有意如此:statement 只覆盖 (path, sha256, bytes),mode 属未认证元数据,但
+    // 钳位后攻击者只剩「翻转 r / x 位」,拿不到代码执行(详见 extractToStaging
+    // 的注释)。若哪天决定改成「签名包不采纳 mode」,这条用例会红 —— 那正是
+    // 我们要的:这是个产品/安全决定,不该被静默改掉。
+    const unsigned = await makeUnixModeCindy('signed-modes.cindy', goodManifest(), 'v1');
+    const publisher = crypto.generateKeyPairSync('ed25519');
+    const signed = await signGhostPackage(await fs.promises.readFile(unsigned), {
+      publisherName: 'Publisher',
+      privateKey: publisher.privateKey,
+    });
+    const signedPath = path.join(workDir, 'signed-modes-out.cindy');
+    await fs.promises.writeFile(signedPath, signed);
+
+    // 前提自检:包里确实带着 0755，否则这条用例证明不了任何事。
+    const loaded = await JSZip.loadAsync(signed);
+    expect(Number(loaded.files['bin/tool'].unixPermissions) & 0o777).toBe(0o755);
+
+    const installed = await manager.install(signedPath);
+    expect(installed).toHaveProperty('ghost');
+    expect((installed as { ghost: InstalledGhost }).ghost.trust?.publisherSigned).toBe(true);
+
+    expect(
+      await fs.promises.readFile(path.join(rootDir, 'hello', 'bin', 'tool'), 'utf8'),
+    ).toContain('v1');
+    if (process.platform !== 'win32') {
+      // 签名包与未签名包走同一条恢复路径:0755 保留、0644 保留、特殊位剥除。
+      expect((await fs.promises.stat(path.join(rootDir, 'hello', 'bin', 'tool'))).mode & 0o777)
+        .toBe(0o755);
+      expect((await fs.promises.stat(path.join(rootDir, 'hello', 'config.txt'))).mode & 0o777)
+        .toBe(0o644);
+      const special = await fs.promises.stat(path.join(rootDir, 'hello', 'bin', 'special'));
+      expect(special.mode & 0o777).toBe(0o755);
+      expect(special.mode & 0o4000).toBe(0);
+    }
+  });
+
+  it('DOS packages without unixPermissions still install with filesystem defaults', async () => {
+    const cindy = await makeCindy('dos-modes.cindy', goodManifest(), { 'plain.txt': 'plain' });
+    const loaded = await JSZip.loadAsync(await fs.promises.readFile(cindy));
+    expect(loaded.files['plain.txt'].unixPermissions).toBeNull();
+    const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+    try {
+      expect(await manager.install(cindy)).toHaveProperty('ghost');
+      expect(chmodSpy).not.toHaveBeenCalled();
+      await expect(fs.promises.readFile(path.join(rootDir, 'hello', 'plain.txt'), 'utf8'))
+        .resolves.toBe('plain');
+    } finally {
+      chmodSpy.mockRestore();
+    }
   });
 });
 

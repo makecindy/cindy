@@ -21,7 +21,17 @@ import { ManagerServer } from '../server.js';
 import { SessionRegistry, type SdkQueryFactoryOptions, type SdkQueryLike } from '../session-registry.js';
 import { wireSdkHandlers } from '../sdk-handlers.js';
 import { ensureRemoteClaudeConfigDir } from '../remote-claude-env.js';
-import { CC_MGR_BUNDLE_VERSION, PROTOCOL_VERSION, SERVER_METHODS, type ApprovalRequestParams, type ApprovalRequestResult, type OAuthRefreshParams, type OAuthRefreshResult } from '../protocol.js';
+import {
+  CC_MGR_BUNDLE_VERSION,
+  PROTOCOL_VERSION,
+  SERVER_METHODS,
+  type ApprovalRequestParams,
+  type ApprovalRequestResult,
+  type OAuthRefreshParams,
+  type OAuthRefreshResult,
+  type SubagentModelAccessParams,
+  type SubagentModelAccessResult,
+} from '../protocol.js';
 
 const MANAGER_VERSION = CC_MGR_BUNDLE_VERSION;
 
@@ -61,6 +71,7 @@ const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'CLAUDE_CODE_OAUTH_SCOPES',
   'CLAUDE_CODE_SUBSCRIPTION_TYPE',
   'CLAUDE_CODE_RATE_LIMIT_TIER',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_UNIX_SOCKET',
   'ANTHROPIC_CUSTOM_HEADERS',
@@ -372,6 +383,19 @@ async function runDaemon(socketPath: string): Promise<void> {
         SERVER_METHODS.APPROVAL_REQUEST,
         params,
         { timeoutMs: 120_000 },
+      );
+    },
+    onSubagentModelAccessRequest: async (
+      sessionId: string,
+      params: SubagentModelAccessParams,
+    ): Promise<SubagentModelAccessResult> => {
+      const ctx = getAttachedClientCtx?.(sessionId);
+      if (!ctx) return { status: 'unknown' };
+      return await server.sendRequest<SubagentModelAccessResult>(
+        ctx,
+        SERVER_METHODS.SUBAGENT_MODEL_ACCESS,
+        params,
+        { timeoutMs: 15_000 },
       );
     },
     onOAuthRefresh: async (sessionId: string, params: OAuthRefreshParams): Promise<OAuthRefreshResult> => {

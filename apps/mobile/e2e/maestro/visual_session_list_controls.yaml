@@ -24,10 +24,6 @@ appId: ${APP_ID}
     id: "deviceDetail.statusFilter.archived"
 - assertVisible:
     id: "deviceDetail.statusFilter.all"
-- assertVisible:
-    id: "deviceDetail.groupMode.project"
-- assertVisible:
-    id: "deviceDetail.groupMode.date"
 - takeScreenshot:
     path: visual-device-detail-filters
 - tapOn:
