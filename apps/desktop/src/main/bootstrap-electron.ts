@@ -2217,8 +2217,15 @@ setCodexImageAuthBinding({
 registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
+let runtimeControlOwnerScopeKey: string | null = null;
 authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {
-  clearAllSessionRuntimeControlStates();
+  // Stable-owner follow-up work retries on transient market/OAuth failures. Runtime
+  // selections belong to the committed owner scope, so clear them once when that
+  // scope changes rather than on every retry for the same owner.
+  if (runtimeControlOwnerScopeKey !== scopeKey) {
+    clearAllSessionRuntimeControlStates();
+    runtimeControlOwnerScopeKey = scopeKey;
+  }
   const builtinOutcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
   if (builtinOutcome === 'deferred') return builtinOutcome;
 

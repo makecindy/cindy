@@ -49,13 +49,17 @@ describe('session runtime control wiring', () => {
     }
   });
 
-  it('clears runtime overrides before owner-scoped post-commit work', () => {
+  it('clears runtime overrides once per committed owner scope before post-commit work', () => {
     const body = handlerBody(
       bootstrapSource,
-      'authManager.setStableOwnerPostCommitTask',
+      'let runtimeControlOwnerScopeKey',
       '// ── Custom protocol registration',
     );
+    expect(body).toContain('if (runtimeControlOwnerScopeKey !== scopeKey) {');
     expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
+      body.indexOf('runStableOwnerPostCommitTask('),
+    );
+    expect(body.indexOf('runtimeControlOwnerScopeKey = scopeKey;')).toBeLessThan(
       body.indexOf('runStableOwnerPostCommitTask('),
     );
   });

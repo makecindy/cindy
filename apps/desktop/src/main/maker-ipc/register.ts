@@ -715,7 +715,6 @@ import { tryInjectProjectContext } from './projectContextInject.js';
 import { registerMakerSessionCreateHandler } from './sessionCreateHandler.js';
 import {
   applyPendingAgentSwitchIfIdle,
-  applySetModelThenCancelAgentSwitchIntent,
   createPendingAgentSwitchRegistry,
   registerMakerSessionAgentSwitchHandler,
   type MakerSessionAgentSwitchHandlerDeps,
@@ -14708,55 +14707,53 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             normalizeSessionProviderId(effectiveProviderId) ?? null,
         };
       }
-      const previousAtomicRuntime = atomicSelection
-        ? {
-            hadProviderRoute: hasSessionProvider(sessionId),
-            providerId: getSessionProvider(sessionId),
-            effort: getSessionEffort(sessionId) as SessionRuntimeProfile['effort'],
-            fastMode: getSessionFastMode(sessionId),
-          }
-        : null;
+      const previousRuntime = {
+        hadProviderRoute: hasSessionProvider(sessionId),
+        providerId: getSessionProvider(sessionId),
+        effort: getSessionEffort(sessionId) as SessionRuntimeProfile['effort'],
+        fastMode: getSessionFastMode(sessionId),
+        pendingCredentialSwitch: pendingCredentialSwitchHolder?.get(sessionId),
+        hadLiveSession: maker.getSession(sessionId) !== undefined,
+      };
+      const restoreControlStores = () => {
+        if (previousRuntime.hadProviderRoute) {
+          setSessionProvider(sessionId, previousRuntime.providerId);
+        } else {
+          clearSessionProvider(sessionId);
+        }
+        setSessionEffort(sessionId, previousRuntime.effort);
+        setSessionFastMode(sessionId, previousRuntime.fastMode);
+      };
       try {
-        const result = await applySetModelThenCancelAgentSwitchIntent(
-          agentSwitchPending,
+        const result = await applyRuntimeSetModelChange({
+          maker,
           sessionId,
-          () => {
-            return applyRuntimeSetModelChange({
-              maker,
-              sessionId,
-              model,
-              providerId: effectiveProviderId,
-              ...(atomicSelection?.effort
-                ? {
-                    effort: atomicSelection.effort as
-                      | 'minimal'
-                      | 'low'
-                      | 'medium'
-                      | 'high'
-                      | 'xhigh'
-                      | 'max'
-                      | 'ultra',
-                  }
-                : {}),
-              isSessionInTurn,
-              registerPendingCredentialSwitch:
-                registerPendingCredentialSwitchForSession,
-              clearPendingCredentialSwitch:
-                clearPendingCredentialSwitchForSession,
-              wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
-              getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
-              // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
-              // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
-              codexAuthInjection: getCodexProxyAuthInjectionState(),
-              logger: log,
-            });
-          },
-          (id) =>
-            broadcastSessionPatched(id, {
-              agentSwitchIntent: null,
-              agentSwitchIntentCanceled: true,
-            }),
-        );
+          model,
+          providerId: effectiveProviderId,
+          ...(atomicSelection?.effort
+            ? {
+                effort: atomicSelection.effort as
+                  | 'minimal'
+                  | 'low'
+                  | 'medium'
+                  | 'high'
+                  | 'xhigh'
+                  | 'max'
+                  | 'ultra',
+              }
+            : {}),
+          isSessionInTurn,
+          registerPendingCredentialSwitch:
+            registerPendingCredentialSwitchForSession,
+          clearPendingCredentialSwitch:
+            clearPendingCredentialSwitchForSession,
+          wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
+          getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+          // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
+          // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
+          codexAuthInjection: getCodexProxyAuthInjectionState(),
+          logger: log,
+        });
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
         const response = {
@@ -14775,15 +14772,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const commitControlStores = () => {
             setSessionEffort(sessionId, selectionToCommit.effort);
             setSessionFastMode(sessionId, selectionToCommit.fastMode);
-          };
-          const restoreControlStores = () => {
-            if (previousAtomicRuntime?.hadProviderRoute) {
-              setSessionProvider(sessionId, previousAtomicRuntime.providerId);
-            } else {
-              clearSessionProvider(sessionId);
-            }
-            setSessionEffort(sessionId, previousAtomicRuntime?.effort);
-            setSessionFastMode(sessionId, previousAtomicRuntime?.fastMode ?? false);
           };
           const sess = maker.getSession(sessionId);
           if (
@@ -14823,12 +14811,53 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             patch.effort = atomicSelection.effort;
             patch.fastMode = atomicSelection.fastMode;
           }
-          await persistSessionFields(sessionId, patch);
+          try {
+            await persistSessionFields(sessionId, patch);
+          } catch (persistenceError) {
+            // The live route and host stores are applied before SQLite so the
+            // harness can switch atomically. If SQLite rejects, unwind every
+            // in-memory side effect while generation/effectiveOverride still
+            // describe the old profile.
+            pendingCredentialSwitchHolder?.clear(sessionId);
+            restoreControlStores();
+            let recoveryError: unknown;
+            if (
+              result.status !== 'deferred'
+              && previousRuntime.hadLiveSession
+              && maker.getSession(sessionId)
+            ) {
+              try {
+                await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+              } catch (error) {
+                recoveryError = error;
+              }
+            }
+            if (previousRuntime.pendingCredentialSwitch) {
+              pendingCredentialSwitchHolder?.register(
+                sessionId,
+                previousRuntime.pendingCredentialSwitch,
+              );
+            } else if (!recoveryError) {
+              wakeSessionInputAfterCredentialSwitch(sessionId);
+            }
+            if (recoveryError) {
+              throw new AggregateError(
+                [persistenceError, recoveryError],
+                'runtime selection persistence and session recovery both failed',
+              );
+            }
+            throw persistenceError;
+          }
           if (isDeviceLinkInvoke()) {
             // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
             markRemoteSettingPersistedInsideHandler(response);
           }
         }
+        agentSwitchPending.clear(sessionId);
+        broadcastSessionPatched(sessionId, {
+          agentSwitchIntent: null,
+          agentSwitchIntentCanceled: true,
+        });
         if (!response.deferred) {
           const currentAgentKind =
             maker.getSession(sessionId)?.agentKind ??

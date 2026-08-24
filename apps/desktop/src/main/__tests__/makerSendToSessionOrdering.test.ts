@@ -483,7 +483,7 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
-      'applySetModelThenCancelAgentSwitchIntent(',
+      'applyRuntimeSetModelChange({',
     );
     expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
     expect(setModelBlock).toContain('if (atomicSelection) {');
@@ -502,7 +502,7 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
     expectOrder(
       setModelBlock,
-      'applySetModelThenCancelAgentSwitchIntent(',
+      'applyRuntimeSetModelChange({',
       'const commitControlStores',
     );
     expectOrder(
@@ -518,7 +518,21 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'await persistSessionFields(sessionId, patch);',
+      'agentSwitchPending.clear(sessionId);',
+    );
+    expectOrder(
+      setModelBlock,
+      'agentSwitchPending.clear(sessionId);',
       '...response,',
+    );
+    expect(setModelBlock).toContain('pendingCredentialSwitchHolder?.clear(sessionId);');
+    expect(setModelBlock).toContain('restoreControlStores();');
+    expect(setModelBlock).toContain('previousRuntime.pendingCredentialSwitch');
+    expect(setModelBlock).toContain('withRehydrateCloseSuppressed(sessionId');
+    expectOrder(
+      setModelBlock,
+      'restoreControlStores();',
+      'throw persistenceError;',
     );
     expect(preloadSource).toContain('selection?: { effort: string; fastMode: boolean },');
     expectOrder(
