@@ -299,8 +299,9 @@ async function readTextTable(
     delimiter: delimiterForExtension(ext),
     startRow,
     maxRows,
+    includeTotalColumns: true,
   });
-  const totalColumns = parsed.rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const totalColumns = parsed.totalColumns ?? 0;
   const endColumn = Math.min(totalColumns, startColumn + maxColumns - 1);
   return {
     rows: parsed.rows.map((row) => row.slice(startColumn - 1, endColumn)),

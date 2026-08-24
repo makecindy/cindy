@@ -110,9 +110,18 @@ async function snapshotAllowedFileRoot(root: string): Promise<AllowedFileRoot> {
 
 async function prepareSource(input: DocsPdfRenderInput): Promise<PreparedSource> {
   if (input.htmlPath) {
+    // Never hand Chromium a caller-controlled path. Read the prepared source
+    // once, then load a renderer-owned temp copy; subsequent path swaps or
+    // symlinks cannot change the main document that gets printed.
+    const sourceRealPath = await fs.realpath(input.htmlPath);
+    const sourceHtml = await fs.readFile(sourceRealPath, 'utf8');
+    const dir = await fs.mkdtemp(path.join(tempRoot(), 'cindy-docs-html-'));
+    const file = path.join(dir, 'source.html');
+    await fs.writeFile(file, sourceHtml, 'utf8');
     return {
-      fileUrlPath: input.htmlPath,
-      allowedFileRoots: [await snapshotAllowedFileRoot(path.dirname(input.htmlPath))],
+      fileUrlPath: file,
+      allowedFileRoots: [await snapshotAllowedFileRoot(dir)],
+      cleanupDir: dir,
     };
   }
   const baseRootIdentity = input.htmlBaseDir

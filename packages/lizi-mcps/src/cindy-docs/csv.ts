@@ -23,11 +23,14 @@ export interface ParseDelimitedWindowOptions extends ParseDelimitedOptions {
   startRow: number;
   /** 最多保留多少行；解析器仍会计数到文件尾，以便返回准确总行数。 */
   maxRows: number;
+  /** Also return the widest logical row seen while scanning the whole input. */
+  includeTotalColumns?: boolean;
 }
 
 export interface ParseDelimitedWindowResult {
   rows: string[][];
   totalRows: number;
+  totalColumns?: number;
 }
 
 /** 把分隔符文本解析成二维字符串数组。永不 throw。 */
@@ -52,6 +55,7 @@ export function parseDelimitedWindow(
   const maxRows = Math.max(0, Math.trunc(opts.maxRows));
   const lastRow = Math.min(Number.MAX_SAFE_INTEGER, firstRow + maxRows - 1);
   let totalRows = 0;
+  let totalColumns = 0;
   let row: string[] = [];
   let field = '';
   let inQuotes = false;
@@ -66,6 +70,7 @@ export function parseDelimitedWindow(
   };
   const endRow = (): void => {
     endField();
+    totalColumns = Math.max(totalColumns, row.length);
     totalRows += 1;
     lastRowWasEmpty = row.length === 1 && row[0] === '';
     if (totalRows >= firstRow && totalRows <= lastRow) rows.push(row);
@@ -123,7 +128,11 @@ export function parseDelimitedWindow(
     if (totalRows >= firstRow && totalRows <= lastRow) rows.pop();
     totalRows -= 1;
   }
-  return { rows, totalRows };
+  return {
+    rows,
+    totalRows,
+    ...(opts.includeTotalColumns ? { totalColumns } : {}),
+  };
 }
 
 /** 按扩展名推断分隔符;未知扩展名按逗号处理。 */

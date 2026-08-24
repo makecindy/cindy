@@ -596,6 +596,19 @@ describe('read_sheet', () => {
     expect(last.nextStartRow).toBeUndefined();
   });
 
+  it('CSV 列分页元数据按全文件最宽行统计,不随当前行页缩小', async () => {
+    const client = await connect();
+    const wideRow = Array.from({ length: 100 }, (_, i) => `v${i}`).join(',');
+    await fs.writeFile(path.join(workdir, 'wide.csv'), `a,b\n${wideRow}\n`, 'utf8');
+    const first = await callTool(client, 'read_sheet', {
+      path: 'wide.csv',
+      maxRows: 1,
+      maxColumns: 8,
+    });
+    expect(first.totalColumns).toBe(100);
+    expect(first.nextStartColumn).toBe(9);
+  });
+
   it('按 worksheet.rowCount 保留物理行号,稀疏尾行会正确标记截断', async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Sparse');

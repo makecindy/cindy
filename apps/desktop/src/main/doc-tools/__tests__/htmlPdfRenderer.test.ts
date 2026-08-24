@@ -190,6 +190,7 @@ describe('渲染窗的安全配置', () => {
     const movedSourceDir = path.join(tempRoot, 'source-original');
     const outsideDir = path.join(tempRoot, 'outside');
     await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
+    await fs.writeFile(path.join(sourceDir, 'src.html'), '<p>x</p>');
     await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: path.join(sourceDir, 'src.html') });
     await fs.rename(sourceDir, movedSourceDir);
     await fs.symlink(outsideDir, sourceDir, process.platform === 'win32' ? 'junction' : 'dir');
@@ -207,6 +208,7 @@ describe('渲染窗的安全配置', () => {
     const sourceDir = path.join(tempRoot, 'source');
     const outsideDir = path.join(tempRoot, 'outside');
     await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
+    await fs.writeFile(path.join(sourceDir, 'src.html'), '<p>x</p>');
     await fs.writeFile(path.join(outsideDir, 'secret.png'), 'secret');
     const link = path.join(sourceDir, 'secret.png');
     await fs.symlink(
@@ -228,6 +230,7 @@ describe('渲染窗的安全配置', () => {
   it('请求级 URL 策略只放行内联 URL,阻断本地 file URL 与网络', async () => {
     const localAsset = path.join(tempRoot, 'asset.txt');
     await fs.writeFile(localAsset, 'asset', 'utf8');
+    await fs.writeFile(path.join(tempRoot, 'src.html'), '<p>x</p>');
     await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: path.join(tempRoot, 'src.html') }).catch(() => undefined);
     const win = FakeBrowserWindow.instances[0]!;
     const handler = win.webContents.session.beforeRequestHandler!;
@@ -315,13 +318,31 @@ describe('渲染主流程', () => {
     expect(response.cancel).toBe(true);
   });
 
-  it('htmlPath 直接加载,不产生临时文件', async () => {
+  it('htmlPath 先复制到渲染器临时目录,不让源路径竞态影响主文档', async () => {
     const source = path.join(tempRoot, 'src.html');
     await fs.writeFile(source, '<p>x</p>', 'utf-8');
     await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: source });
-    expect(FakeBrowserWindow.instances[0]!.loadedFile).toBe(source);
+    expect(FakeBrowserWindow.instances[0]!.loadedFile).not.toBe(source);
     // 源文件不属于渲染器,绝不能被清理掉
     await expect(fs.stat(source)).resolves.toBeTruthy();
+  });
+
+  it('主文档快照完成后源路径被换成外部链接也不会改变待打印内容', async () => {
+    const source = path.join(tempRoot, 'src.html');
+    const outside = path.join(tempRoot, 'outside.html');
+    const moved = path.join(tempRoot, 'src-original.html');
+    await fs.writeFile(source, '<p>safe</p>', 'utf-8');
+    await fs.writeFile(outside, '<p>outside</p>', 'utf-8');
+    let loadedContent = '';
+    FakeBrowserWindow.loadBehavior = async (_win, file) => {
+      await fs.rename(source, moved);
+      await fs.symlink(outside, source, process.platform === 'win32' ? 'file' : undefined);
+      loadedContent = await fs.readFile(file, 'utf-8');
+    };
+
+    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: source });
+
+    expect(loadedContent).toBe('<p>safe</p>');
   });
 
   it('排版参数原样交给 printToPDF(margins 用 custom)', async () => {
