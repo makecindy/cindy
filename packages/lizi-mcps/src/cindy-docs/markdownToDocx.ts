@@ -41,10 +41,15 @@ import {
   styledDocxTable,
   columnPercents,
 } from './docxStyles.js';
-import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsTheme, type DocsThemeName } from './themes.js';
+import {
+  DEFAULT_DOCS_THEME,
+  resolveDocsTheme,
+  type DocsTheme,
+  type DocsThemeName,
+} from './themes.js';
 
-/** 有序列表用的 numbering reference;每个顶层有序列表分配一个 instance 以便重新从 1 开始。 */
-const ORDERED_REF = 'cindy-docs-ordered';
+/** 有序列表 numbering reference 的前缀;每个列表独立配置起始数字并重新编号。 */
+const ORDERED_REF_PREFIX = 'cindy-docs-ordered';
 const MONO_FONT = 'Courier New';
 
 const HEADING_BY_DEPTH = [
@@ -77,13 +82,28 @@ function inlineRuns(
   for (const token of tokens) {
     switch (token.type) {
       case 'strong':
-        out.push(...inlineRuns((token as Tokens.Strong).tokens, theme, { ...style, bold: true }));
+        out.push(
+          ...inlineRuns((token as Tokens.Strong).tokens, theme, {
+            ...style,
+            bold: true,
+          }),
+        );
         break;
       case 'em':
-        out.push(...inlineRuns((token as Tokens.Em).tokens, theme, { ...style, italics: true }));
+        out.push(
+          ...inlineRuns((token as Tokens.Em).tokens, theme, {
+            ...style,
+            italics: true,
+          }),
+        );
         break;
       case 'del':
-        out.push(...inlineRuns((token as Tokens.Del).tokens, theme, { ...style, strike: true }));
+        out.push(
+          ...inlineRuns((token as Tokens.Del).tokens, theme, {
+            ...style,
+            strike: true,
+          }),
+        );
         break;
       case 'codespan':
         out.push(
@@ -126,9 +146,8 @@ function inlineRuns(
           out.push(...inlineRuns(nested, theme, style));
           break;
         }
-        const text = (token as { text?: string; raw?: string }).text
-          ?? (token as { raw?: string }).raw
-          ?? '';
+        const text =
+          (token as { text?: string; raw?: string }).text ?? (token as { raw?: string }).raw ?? '';
         if (text.length > 0) out.push(new TextRun({ text, ...style }));
         break;
       }
@@ -137,32 +156,38 @@ function inlineRuns(
   return out;
 }
 
-/**
- * 跨整篇文档共享的可变状态。目前只有有序列表的 instance 号:同一个顶层列表的所有
- * 层级共享一个 instance,不同列表各占一个,Word 才会让第二个列表重新从 1 开始。
- * 必须是同一个对象引用穿到底 —— 复制一份会让引用块里的列表和块外的列表撞号。
- */
+/** 跨整篇文档共享的编号配置状态;每个有序列表保留自己的起始数字与编号引用。 */
 interface BlockContext {
-  instance: number;
   theme: DocsTheme;
+  nextOrderedListId: number;
+  orderedLists: Array<{ reference: string; level: number; start: number }>;
 }
 
 function quoteParagraphStyle(theme: DocsTheme) {
   return {
     indent: { left: 360 },
     border: {
-      left: { style: BorderStyle.SINGLE, size: 12, space: 8, color: theme.muted },
+      left: {
+        style: BorderStyle.SINGLE,
+        size: 12,
+        space: 8,
+        color: theme.muted,
+      },
     },
   } as const;
 }
 
-function listParagraphs(
-  list: Tokens.List,
-  depth: number,
-  ctx: BlockContext,
-): Paragraph[] {
+function listParagraphs(list: Tokens.List, depth: number, ctx: BlockContext): Paragraph[] {
   const out: Paragraph[] = [];
   const level = Math.min(depth, 3);
+  const orderedReference = list.ordered
+    ? `${ORDERED_REF_PREFIX}-${ctx.nextOrderedListId++}`
+    : undefined;
+  if (orderedReference) {
+    const start =
+      Number.isInteger(list.start) && (list.start as number) > 0 ? (list.start as number) : 1;
+    ctx.orderedLists.push({ reference: orderedReference, level, start });
+  }
   for (const item of list.items) {
     const inline: Token[] = [];
     const blocks: Token[] = [];
@@ -170,8 +195,8 @@ function listParagraphs(
       if (child.type === 'list') blocks.push(child);
       else inline.push(child);
     }
-    const numbering: IParagraphOptions['numbering'] = list.ordered
-      ? { reference: ORDERED_REF, level, instance: ctx.instance }
+    const numbering: IParagraphOptions['numbering'] = orderedReference
+      ? { reference: orderedReference, level, instance: 0 }
       : undefined;
     out.push(
       new Paragraph({
@@ -209,7 +234,9 @@ function codeParagraphs(code: Tokens.Code, theme: DocsTheme): Paragraph[] {
   );
 }
 
-function alignmentFor(align: 'center' | 'left' | 'right' | null): (typeof AlignmentType)[keyof typeof AlignmentType] | undefined {
+function alignmentFor(
+  align: 'center' | 'left' | 'right' | null,
+): (typeof AlignmentType)[keyof typeof AlignmentType] | undefined {
   if (align === 'center') return AlignmentType.CENTER;
   if (align === 'right') return AlignmentType.RIGHT;
   if (align === 'left') return AlignmentType.LEFT;
@@ -304,7 +331,11 @@ function blocksFromTokens(
             children:
               children.length > 0
                 ? children
-                : [new TextRun({ text: (token as { text?: string }).text ?? '' })],
+                : [
+                    new TextRun({
+                      text: (token as { text?: string }).text ?? '',
+                    }),
+                  ],
             spacing: { after: 120 },
             ...quoteStyle,
           }),
@@ -312,7 +343,6 @@ function blocksFromTokens(
         break;
       }
       case 'list': {
-        ctx.instance += 1;
         out.push(...listParagraphs(token as Tokens.List, 0, ctx));
         break;
       }
@@ -332,7 +362,12 @@ function blocksFromTokens(
           new Paragraph({
             children: [],
             border: {
-              bottom: { style: BorderStyle.SINGLE, size: 6, space: 1, color: ctx.theme.line },
+              bottom: {
+                style: BorderStyle.SINGLE,
+                size: 6,
+                space: 1,
+                color: ctx.theme.line,
+              },
             },
             spacing: { before: 120, after: 120 },
           }),
@@ -381,7 +416,7 @@ export async function markdownToDocxBuffer(
   const title = options.title?.trim() ?? '';
   const useCover = Boolean(title) && (options.cover ?? true);
   const tokens = marked.lexer(markdown ?? '');
-  const ctx: BlockContext = { instance: 0, theme };
+  const ctx: BlockContext = { theme, nextOrderedListId: 0, orderedLists: [] };
   const body = blocksFromTokens(tokens, ctx);
 
   const children: Array<Paragraph | Table> = [];
@@ -410,20 +445,19 @@ export async function markdownToDocxBuffer(
     background: { color: theme.background },
     styles: docxDocumentStyles(theme),
     numbering: {
-      config: [
-        {
-          reference: ORDERED_REF,
-          levels: [0, 1, 2, 3].map((level) => ({
-            level,
-            format: LevelFormat.DECIMAL,
-            text: `%${level + 1}.`,
-            alignment: AlignmentType.START,
-            style: {
-              paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } },
-            },
-          })),
-        },
-      ],
+      config: ctx.orderedLists.map(({ reference, level: startLevel, start }) => ({
+        reference,
+        levels: [0, 1, 2, 3].map((level) => ({
+          level,
+          format: LevelFormat.DECIMAL,
+          text: `%${level + 1}.`,
+          alignment: AlignmentType.START,
+          ...(level === startLevel ? { start } : {}),
+          style: {
+            paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } },
+          },
+        })),
+      })),
     },
     sections: useCover
       ? [

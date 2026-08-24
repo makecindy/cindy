@@ -77,6 +77,65 @@ interface ResourceSnapshotContext {
   totalBytes: number;
   cache: Map<string, string>;
   cssStack: Set<string>;
+  directorySnapshots: Map<string, DirectorySnapshot>;
+}
+
+interface DirectorySnapshot {
+  path: string;
+  realPath: string;
+  dev: bigint;
+  ino: bigint;
+}
+
+function resourceDirectoryChanged(directory: string): DocsPathError {
+  return new DocsPathError(
+    'PATH_NOT_ALLOWED',
+    `HTML 快照期间资源目录发生变化: ${directory}`,
+    'HTML 与相对资源不再来自同一份任务目录快照，请确认资源目录未被并发修改后重试。',
+  );
+}
+
+async function captureDirectorySnapshot(directory: string): Promise<DirectorySnapshot> {
+  try {
+    const [realPath, stat] = await Promise.all([
+      fs.realpath(directory),
+      fs.stat(directory, { bigint: true }),
+    ]);
+    if (!stat.isDirectory()) throw resourceDirectoryChanged(directory);
+    return { path: directory, realPath, dev: stat.dev, ino: stat.ino };
+  } catch (error) {
+    if (error instanceof DocsPathError) throw error;
+    throw resourceDirectoryChanged(directory);
+  }
+}
+
+function sameDirectorySnapshot(left: DirectorySnapshot, right: DirectorySnapshot): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.realPath === right.realPath;
+}
+
+async function recordDirectorySnapshot(
+  context: ResourceSnapshotContext,
+  directory: string,
+  expected?: DirectorySnapshot,
+): Promise<void> {
+  const current = await captureDirectorySnapshot(directory);
+  if (expected && !sameDirectorySnapshot(expected, current)) {
+    throw resourceDirectoryChanged(directory);
+  }
+  const previous = context.directorySnapshots.get(directory);
+  if (previous && !sameDirectorySnapshot(previous, current)) {
+    throw resourceDirectoryChanged(directory);
+  }
+  context.directorySnapshots.set(directory, current);
+}
+
+async function verifyDirectorySnapshots(context: ResourceSnapshotContext): Promise<void> {
+  for (const snapshot of context.directorySnapshots.values()) {
+    const current = await captureDirectorySnapshot(snapshot.path);
+    if (!sameDirectorySnapshot(snapshot, current)) {
+      throw resourceDirectoryChanged(snapshot.path);
+    }
+  }
 }
 
 function dataUri(mime: string, bytes: Uint8Array): string {
@@ -394,6 +453,10 @@ async function snapshotLocalResource(
   const cached = context.cache.get(cacheKey);
   if (cached) return cached;
 
+  const resourceDirectory = path.dirname(preparedPath);
+  const beforeDirectory = await captureDirectorySnapshot(resourceDirectory);
+  await recordDirectorySnapshot(context, resourceDirectory, beforeDirectory);
+
   const bytes = await readInputFileWithinLimit(
     context.root,
     preparedPath,
@@ -405,6 +468,10 @@ async function snapshotLocalResource(
         `这份本地资源有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单个资源上限(8 MB)。请压缩或改成更小的 data URI。`,
       ),
   );
+  const afterDirectory = await captureDirectorySnapshot(resourceDirectory);
+  if (!sameDirectorySnapshot(beforeDirectory, afterDirectory)) {
+    throw resourceDirectoryChanged(resourceDirectory);
+  }
   context.totalBytes += bytes.byteLength;
   if (context.totalBytes > MAX_LOCAL_RESOURCE_TOTAL_BYTES) {
     throw new DocsPathError(
@@ -436,13 +503,26 @@ async function snapshotLocalResource(
   return snapshot;
 }
 
-async function inlineLocalResources(root: string, sourcePath: string, html: string): Promise<string> {
+async function inlineLocalResources(
+  root: string,
+  sourcePath: string,
+  html: string,
+  expectedSourceDirectory?: DirectorySnapshot,
+): Promise<string> {
   const context: ResourceSnapshotContext = {
     root,
     totalBytes: 0,
     cache: new Map(),
     cssStack: new Set(),
+    directorySnapshots: new Map(),
   };
+  await recordDirectorySnapshot(
+    context,
+    path.dirname(sourcePath),
+    expectedSourceDirectory
+      ? { ...expectedSourceDirectory, path: path.dirname(sourcePath) }
+      : undefined,
+  );
   const documentUrl = pathToFileURL(sourcePath);
   let baseUrl = documentUrl;
   let baseTag: string | undefined;
@@ -466,15 +546,19 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
       );
     }
   }
-  let rewritten = await replaceHtmlTagsAsync(html, (tag) => /^<link\b/i.test(tag), async (tag) => {
-    const href = readHtmlAttribute(tag, 'href');
-    if (!href) return tag;
-    const rel = readHtmlAttribute(tag, 'rel') ?? '';
-    if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(href)) return tag;
-    return rewriteHtmlAttributes(tag, ['href'], async (reference) => {
-      return (await snapshotLocalResource(context, baseUrl, reference)) ?? reference;
-    });
-  });
+  let rewritten = await replaceHtmlTagsAsync(
+    html,
+    (tag) => /^<link\b/i.test(tag),
+    async (tag) => {
+      const href = readHtmlAttribute(tag, 'href');
+      if (!href) return tag;
+      const rel = readHtmlAttribute(tag, 'rel') ?? '';
+      if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(href)) return tag;
+      return rewriteHtmlAttributes(tag, ['href'], async (reference) => {
+        return (await snapshotLocalResource(context, baseUrl, reference)) ?? reference;
+      });
+    },
+  );
   rewritten = await replaceHtmlTagsAsync(
     rewritten,
     (tag) => /^<(?:img|source|audio|video|track|object|input|image)\b/i.test(tag),
@@ -482,12 +566,11 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
       const withSources = await rewriteHtmlAttributes(
         tag,
         ['src', 'poster', 'data', 'href', 'xlink:href'],
-        async (reference) => (await snapshotLocalResource(context, baseUrl, reference)) ?? reference,
+        async (reference) =>
+          (await snapshotLocalResource(context, baseUrl, reference)) ?? reference,
       );
-      return rewriteHtmlAttributes(
-        withSources,
-        ['srcset'],
-        async (value) => inlineSrcset(value, baseUrl, context),
+      return rewriteHtmlAttributes(withSources, ['srcset'], async (value) =>
+        inlineSrcset(value, baseUrl, context),
       );
     },
   );
@@ -499,7 +582,7 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
       return `${opening}${await inlineCssUrls(imported, baseUrl, context)}${closing}`;
     },
   );
-  return replaceHtmlTagsAsync(
+  const result = await replaceHtmlTagsAsync(
     rewritten,
     (tag) => tag[1] !== '/' && /\bstyle\s*=/i.test(tag),
     (tag) =>
@@ -508,6 +591,8 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
         return rewrittenCss;
       }),
   );
+  await verifyDirectorySnapshots(context);
+  return result;
 }
 
 const DESCRIPTION = [
@@ -617,6 +702,9 @@ export function registerRenderPdfTool(
         assertOutputExtension(outPath, '.pdf');
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
+        const sourceDirectory = sourcePath
+          ? await captureDirectorySnapshot(path.dirname(sourcePath))
+          : undefined;
         // Capture the source's canonical relative location before reading. Keep the
         // lexical root prefix (macOS commonly exposes /var as /private/var through
         // realpath) so later resource boundary checks use the same root spelling.
@@ -665,7 +753,12 @@ export function registerRenderPdfTool(
           }
         }
         const snapshotHtml = sourcePath
-          ? await inlineLocalResources(root, sourceSnapshotPath ?? sourcePath, sourceHtml)
+          ? await inlineLocalResources(
+              root,
+              sourceSnapshotPath ?? sourcePath,
+              sourceHtml,
+              sourceDirectory,
+            )
           : sourceHtml;
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
         const wrapped = applyReportTemplate(snapshotHtml, palette, template);
