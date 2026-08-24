@@ -59,7 +59,6 @@ export function parseDelimitedWindow(
   let row: string[] = [];
   let field = '';
   let inQuotes = false;
-  let lastRowWasEmpty = false;
   let recordStarted = false;
   // 字段是否还停在「第一个字符」上 —— 决定引号算引号态还是普通字符。
   let atFieldStart = true;
@@ -73,7 +72,6 @@ export function parseDelimitedWindow(
     endField();
     totalColumns = Math.max(totalColumns, row.length);
     totalRows += 1;
-    lastRowWasEmpty = row.length === 1 && row[0] === '' && !recordStarted;
     if (totalRows >= firstRow && totalRows <= lastRow) rows.push(row);
     row = [];
     recordStarted = false;
@@ -128,11 +126,6 @@ export function parseDelimitedWindow(
     endRow();
   }
 
-  // 尾部单个空行(文本以换行结尾)不是数据行,去掉。
-  if (totalRows > 0 && lastRowWasEmpty) {
-    if (totalRows >= firstRow && totalRows <= lastRow) rows.pop();
-    totalRows -= 1;
-  }
   return {
     rows,
     totalRows,

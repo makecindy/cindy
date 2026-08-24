@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { isLocalGeneratedFileInTurn } from '../components/chat/GeneratedFilesCard';
+import {
+  getDocumentCoverThemeStyle,
+  isLocalGeneratedFileInTurn,
+} from '../components/chat/GeneratedFilesCard';
 import type { GeneratedFileRef } from '../lib/generatedFiles';
 
 const START = Date.parse('2026-08-05T10:00:00.000Z');
@@ -95,5 +98,16 @@ describe('isLocalGeneratedFileInTurn', () => {
         END,
       ),
     ).toBe(true);
+  });
+});
+
+describe('document cover theme tokens', () => {
+  it('maps each artifact theme to semantic preview tokens', () => {
+    const light = getDocumentCoverThemeStyle('light');
+    const dark = getDocumentCoverThemeStyle('dark');
+    const navy = getDocumentCoverThemeStyle('navy');
+    expect(light['--doc-cover-surface']).not.toBe(dark['--doc-cover-surface']);
+    expect(navy['--doc-cover-accent']).not.toBe(light['--doc-cover-accent']);
+    expect(light['--doc-cover-ink']).toContain('var(--text-primary)');
   });
 });

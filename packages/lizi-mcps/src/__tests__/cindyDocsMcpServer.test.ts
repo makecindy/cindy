@@ -31,6 +31,7 @@ import {
   isSupportedPptxImage,
   PPTX_THEMES,
   resolvePptxGenConstructor,
+  validateDecodablePptxImage,
 } from '../cindy-docs/make_pptx.js';
 import { DocsPathError, readInputFileWithinLimit } from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
@@ -557,6 +558,17 @@ describe('make_pptx', () => {
       0xff, 0xd9,
     ]);
     expect(detectPptxImageMime(progressiveJpeg)).toBe('image/jpeg');
+
+    const invalidPng = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x49, 0x44, 0x41, 0x54,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+      0xae, 0x42, 0x60, 0x82,
+    ]);
+    expect(detectPptxImageMime(invalidPng)).toBe('image/png');
+    await expect(validateDecodablePptxImage(invalidPng)).resolves.toBe(false);
   });
 });
 
@@ -1012,6 +1024,53 @@ describe('render_pdf', () => {
     expect(rendered).not.toContain('./chart.png');
     expect(rendered).not.toContain('./theme.css');
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
+  });
+
+  it('HTML 属性值含 > 时仍完整快照资源', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'quoted-tag.html'),
+      '<img alt="1 > 0" src="./chart.png">',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'quoted-tag.html',
+      outPath: 'quoted-tag.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('data:image/png;base64,');
+    expect(rendered).not.toContain('./chart.png');
+  });
+
+  it('CSS 注释与字符串里的 url 不被误当成本地资源', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(
+      path.join(workdir, 'css-safe.html'),
+      '<style>/* background: url(./missing.png) */ body::before { content: "url(./missing.png)"; }</style>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'css-safe.html',
+      outPath: 'css-safe.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toContain('./missing.png');
   });
 
   it('按 HTML base href 解析相对资源而不是固定使用 HTML 同目录', async () => {

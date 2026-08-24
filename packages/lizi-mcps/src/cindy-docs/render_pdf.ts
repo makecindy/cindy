@@ -158,28 +158,56 @@ async function replaceAsync(
   return parts.join('');
 }
 
+/** HTML tag scanner that does not terminate on `>` inside a quoted attribute. */
+async function replaceHtmlTagsAsync(
+  input: string,
+  predicate: (tag: string) => boolean,
+  replacer: (tag: string) => Promise<string>,
+): Promise<string> {
+  const parts: string[] = [];
+  let cursor = 0;
+  let index = 0;
+  while (index < input.length) {
+    const start = input.indexOf('<', index);
+    if (start < 0) break;
+    if (input.startsWith('<!--', start)) {
+      const endComment = input.indexOf('-->', start + 4);
+      index = endComment < 0 ? input.length : endComment + 3;
+      continue;
+    }
+    let quote: string | undefined;
+    let end = start + 1;
+    for (; end < input.length; end += 1) {
+      const ch = input[end]!;
+      if (quote) {
+        if (ch === quote) quote = undefined;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '>') {
+        break;
+      }
+    }
+    if (end >= input.length) break;
+    const tag = input.slice(start, end + 1);
+    if (predicate(tag)) {
+      parts.push(input.slice(cursor, start));
+      parts.push(await replacer(tag));
+      cursor = end + 1;
+    }
+    index = end + 1;
+  }
+  parts.push(input.slice(cursor));
+  return parts.join('');
+}
+
 async function inlineCssImports(
   css: string,
   baseUrl: URL,
   context: ResourceSnapshotContext,
 ): Promise<string> {
-  let rewritten = await replaceAsync(
-    css,
-    /@import\s+(["'])(.*?)\1([^;]*);?/gi,
-    async (match, _quote, reference, suffix) => {
-      const snapshot = await snapshotLocalResource(context, baseUrl, reference.trim());
-      return snapshot ? `@import url("${snapshot}")${suffix};` : match;
-    },
-  );
-  return replaceAsync(
-    rewritten,
-    /@import\s+url\(\s*(?:(['"])(.*?)\1|([^)]*?))\s*\)([^;]*);?/gi,
-    async (match, _quote, quoted, bare, suffix) => {
-      const reference = (quoted || bare).trim();
-      const snapshot = await snapshotLocalResource(context, baseUrl, reference);
-      return snapshot ? `@import url("${snapshot}")${suffix};` : match;
-    },
-  );
+  return rewriteCssResources(css, baseUrl, context);
 }
 
 async function inlineCssUrls(
@@ -187,15 +215,94 @@ async function inlineCssUrls(
   baseUrl: URL,
   context: ResourceSnapshotContext,
 ): Promise<string> {
-  return replaceAsync(
-    css,
-    /url\(\s*(?:(['"])(.*?)\1|([^)]*?))\s*\)/gi,
-    async (match, _quote, quoted, bare) => {
-      const reference = (quoted || bare).trim();
-      const snapshot = await snapshotLocalResource(context, baseUrl, reference);
-      return snapshot ? `url("${snapshot}")` : match;
-    },
-  );
+  return rewriteCssResources(css, baseUrl, context);
+}
+
+async function rewriteCssResources(
+  css: string,
+  baseUrl: URL,
+  context: ResourceSnapshotContext,
+): Promise<string> {
+  const out: string[] = [];
+  let index = 0;
+  while (index < css.length) {
+    if (css.startsWith('/*', index)) {
+      const end = css.indexOf('*/', index + 2);
+      const stop = end < 0 ? css.length : end + 2;
+      out.push(css.slice(index, stop));
+      index = stop;
+      continue;
+    }
+    const current = css[index]!;
+    if (current === '"' || current === "'") {
+      const quote = current;
+      let end = index + 1;
+      while (end < css.length) {
+        if (css[end] === '\\') end += 2;
+        else if (css[end] === quote) {
+          end += 1;
+          break;
+        } else end += 1;
+      }
+      out.push(css.slice(index, end));
+      index = end;
+      continue;
+    }
+    const importMatch = css.slice(index).match(/^@import\b/i);
+    if (importMatch) {
+      let cursor = index + importMatch[0].length;
+      while (/\s/.test(css[cursor] ?? '')) cursor += 1;
+      if (css[cursor] === '"' || css[cursor] === "'") {
+        const quote = css[cursor]!;
+        const start = cursor;
+        cursor += 1;
+        while (cursor < css.length && css[cursor] !== quote) {
+          if (css[cursor] === '\\') cursor += 2;
+          else cursor += 1;
+        }
+        const reference = css.slice(start + 1, cursor);
+        const snapshot = await snapshotLocalResource(context, baseUrl, reference.trim());
+        out.push(css.slice(index, start));
+        out.push(snapshot ? `url("${snapshot}")` : css.slice(start, cursor + 1));
+        index = Math.min(css.length, cursor + 1);
+        continue;
+      }
+    }
+    if (/^url\s*\(/i.test(css.slice(index))) {
+      const open = css.indexOf('(', index);
+      let cursor = open + 1;
+      while (/\s/.test(css[cursor] ?? '')) cursor += 1;
+      let reference = '';
+      if (css[cursor] === '"' || css[cursor] === "'") {
+        const quote = css[cursor]!;
+        cursor += 1;
+        const start = cursor;
+        while (cursor < css.length && css[cursor] !== quote) {
+          if (css[cursor] === '\\') cursor += 2;
+          else cursor += 1;
+        }
+        reference = css.slice(start, cursor);
+        cursor += 1;
+      } else {
+        const start = cursor;
+        while (cursor < css.length && css[cursor] !== ')') cursor += 1;
+        reference = css.slice(start, cursor).trim();
+      }
+      while (/\s/.test(css[cursor] ?? '')) cursor += 1;
+      if (css[cursor] === ')') {
+        const original = css.slice(index, cursor + 1);
+        const snapshot = await snapshotLocalResource(context, baseUrl, reference);
+        out.push(snapshot ? `url("${snapshot}")` : original);
+        index = cursor + 1;
+        continue;
+      }
+    }
+    out.push(current);
+    index += 1;
+  }
+  const rewritten = out.join('');
+  assertSnapshotHtmlSize(Buffer.byteLength(rewritten, 'utf8'));
+  return rewritten;
 }
 
 function splitSrcset(value: string): string[] {
@@ -331,7 +438,15 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
   };
   const documentUrl = pathToFileURL(sourcePath);
   let baseUrl = documentUrl;
-  const baseTag = html.match(/<base\b[^>]*>/i)?.[0];
+  let baseTag: string | undefined;
+  await replaceHtmlTagsAsync(
+    html,
+    (tag) => /^<base\b/i.test(tag),
+    async (tag) => {
+      baseTag ??= tag;
+      return tag;
+    },
+  );
   const baseHref = baseTag ? readHtmlAttribute(baseTag, 'href') : undefined;
   if (baseHref) {
     try {
@@ -344,7 +459,7 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
       );
     }
   }
-  let rewritten = await replaceAsync(html, /<link\b[^>]*>/gi, async (tag) => {
+  let rewritten = await replaceHtmlTagsAsync(html, (tag) => /^<link\b/i.test(tag), async (tag) => {
     const href = readHtmlAttribute(tag, 'href');
     if (!href) return tag;
     const rel = readHtmlAttribute(tag, 'rel') ?? '';
@@ -353,9 +468,9 @@ async function inlineLocalResources(root: string, sourcePath: string, html: stri
       return (await snapshotLocalResource(context, baseUrl, reference)) ?? reference;
     });
   });
-  rewritten = await replaceAsync(
+  rewritten = await replaceHtmlTagsAsync(
     rewritten,
-    /<(?:img|source|audio|video|track|object|input|image)\b[^>]*>/gi,
+    (tag) => /^<(?:img|source|audio|video|track|object|input|image)\b/i.test(tag),
     async (tag) => {
       const withSources = await rewriteHtmlAttributes(
         tag,

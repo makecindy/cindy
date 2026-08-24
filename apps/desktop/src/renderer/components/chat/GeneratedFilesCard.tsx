@@ -59,6 +59,33 @@ function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']
   return `${value.toFixed(precision)} ${units[unitIndex]}`;
 }
 
+const DOCUMENT_COVER_THEME_TOKENS = {
+  light: {
+    '--doc-cover-surface': 'var(--surface-elevated)',
+    '--doc-cover-accent': 'var(--accent-cta-bg)',
+    '--doc-cover-ink': 'var(--text-primary)',
+    '--doc-cover-muted': 'var(--text-tertiary)',
+  },
+  dark: {
+    '--doc-cover-surface': 'var(--surface)',
+    '--doc-cover-accent': 'var(--text-primary)',
+    '--doc-cover-ink': 'var(--text-primary)',
+    '--doc-cover-muted': 'var(--text-secondary)',
+  },
+  navy: {
+    '--doc-cover-surface': 'color-mix(in srgb, var(--surface-elevated) 88%, var(--focus-ring))',
+    '--doc-cover-accent': 'var(--focus-ring)',
+    '--doc-cover-ink': 'var(--text-primary)',
+    '--doc-cover-muted': 'var(--text-secondary)',
+  },
+} as const;
+
+export function getDocumentCoverThemeStyle(
+  theme: DocumentArtifactMetadata['theme'] = 'light',
+): Record<string, string> {
+  return DOCUMENT_COVER_THEME_TOKENS[theme] ?? DOCUMENT_COVER_THEME_TOKENS.light;
+}
+
 function DocumentCoverPreview({
   artifact,
   title,
@@ -70,9 +97,13 @@ function DocumentCoverPreview({
   const formatLabel = t(`chat.generatedFiles.formats.${artifact.format}`);
 
   return (
-    <span className="flex h-[142px] border-b border-[var(--border-default)] bg-[var(--surface)] p-3">
-      <span className="flex h-full w-full flex-col rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3.5">
-        <span className="flex items-center justify-between text-11 font-medium uppercase tracking-[0.1em] text-[var(--text-tertiary)]">
+    <span
+      className="flex h-[142px] border-b border-[var(--border-default)] bg-[var(--surface)] p-3"
+      style={getDocumentCoverThemeStyle(artifact.theme)}
+      data-document-theme={artifact.theme ?? 'light'}
+    >
+      <span className="flex h-full w-full flex-col rounded-lg border border-[var(--border-default)] bg-[var(--doc-cover-surface)] px-4 py-3.5">
+        <span className="flex items-center justify-between text-11 font-medium uppercase tracking-[0.1em] text-[var(--doc-cover-muted)]">
           <span>{formatLabel}</span>
           {artifact.summary && (
             <span className="normal-case tracking-normal">
@@ -82,12 +113,12 @@ function DocumentCoverPreview({
             </span>
           )}
         </span>
-        <span className="mt-5 block h-1 w-9 rounded-[9999px] bg-[var(--text-primary)]" />
-        <span className="mt-3 line-clamp-2 text-15 font-semibold leading-5 text-[var(--text-primary)]">
+        <span className="mt-5 block h-1 w-9 rounded-[9999px] bg-[var(--doc-cover-accent)]" />
+        <span className="mt-3 line-clamp-2 text-15 font-semibold leading-5 text-[var(--doc-cover-ink)]">
           {title}
         </span>
         {artifact.subtitle && (
-          <span className="mt-1 line-clamp-1 text-11 text-[var(--text-tertiary)]">
+          <span className="mt-1 line-clamp-1 text-11 text-[var(--doc-cover-muted)]">
             {artifact.subtitle}
           </span>
         )}

@@ -11,6 +11,7 @@ import path from 'node:path';
 
 import * as pptxgenModule from 'pptxgenjs';
 import type pptxgen from 'pptxgenjs';
+import sharp from 'sharp';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
@@ -232,6 +233,24 @@ export function detectPptxImageMime(bytes: Buffer): PptxImageMime | null {
   return null;
 }
 
+/** Decode the payload before handing it to pptxgenjs; signatures alone accept corrupt PNGs. */
+export async function validateDecodablePptxImage(bytes: Buffer): Promise<boolean> {
+  try {
+    const decoded = await sharp(bytes, { limitInputPixels: 50_000_000 })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return (
+      decoded.info.width > 0 &&
+      decoded.info.height > 0 &&
+      decoded.info.channels === 4 &&
+      decoded.data.byteLength === decoded.info.width * decoded.info.height * 4
+    );
+  } catch {
+    return false;
+  }
+}
+
 function pptxImageDataUri(mime: PptxImageMime, bytes: Buffer): string {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
@@ -404,7 +423,7 @@ export function registerMakePptxTool(
                 ),
             );
             const mime = detectPptxImageMime(bytes);
-            if (!mime) {
+            if (!mime || !(await validateDecodablePptxImage(bytes))) {
               return errorPayload(
                 'INVALID_IMAGE',
                 `第 ${index + 1} 页的图片内容不是有效的 PNG / JPEG / GIF。请重新导出或更换图片。`,

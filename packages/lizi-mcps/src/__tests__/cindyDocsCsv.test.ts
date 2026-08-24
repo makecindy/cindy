@@ -50,6 +50,11 @@ describe('parseDelimited', () => {
     ]);
   });
 
+  it('保留换行终止的显式空记录,但不把单个结尾换行算成数据', () => {
+    expect(csv('a\n\n')).toEqual([['a'], ['']]);
+    expect(csv('a\n')).toEqual([['a']]);
+  });
+
   it('空文本返回零行', () => {
     expect(csv('')).toEqual([]);
   });
