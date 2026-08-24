@@ -658,6 +658,8 @@ const LEGACY_ASK_USER_DYNAMIC_TOOL_NAMESPACE = 'xdt_maker';
 const ASK_USER_DYNAMIC_TOOL_NAME = 'ask_user_question';
 const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
   `${ASK_USER_DYNAMIC_TOOL_NAMESPACE}__${ASK_USER_DYNAMIC_TOOL_NAME}`;
+const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
+  'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
 const MAX_REQUEST_USER_INPUT_QUESTIONS = 3;
 const MAX_REQUEST_USER_INPUT_OPTIONS = 10;
 const MAX_REQUEST_USER_INPUT_TEXT_CHARS = 1_000;
@@ -7494,6 +7496,16 @@ export class CodexAgent extends BaseAgent {
       const questions = normalizeRequestUserInputQuestions(params.questions);
       if (questions.length === 0) return { answers: {} };
       const kind = classifyUserInputRequest(params);
+      if (kind === 'ask_user_question' && params.threadId !== threadId) {
+        log.warn('native requestUserInput rejected for descendant user question', {
+          requestId,
+          threadId: params.threadId,
+          rootThreadId: threadId,
+          turnId: params.turnId,
+          itemId: params.itemId,
+        });
+        return { answers: {} };
+      }
       const activeToolContext = activeToolContexts.get(params.itemId);
       const hasToolGenerationBoundary =
         activeToolContext?.type === 'mcpToolCall'
@@ -7570,6 +7582,19 @@ export class CodexAgent extends BaseAgent {
       }
       const toolUseId = activeDynamicToolUseId(params);
       if (isAskUserDynamicTool(params)) {
+        // Codex app-server keeps dynamic tools at the root thread and may make
+        // them callable from descendant threads. User interaction is a
+        // root-owned capability: a native subagent must report the question to
+        // its parent instead of opening a Cindy card of its own.
+        if (params.threadId !== threadId) {
+          return {
+            contentItems: [{
+              type: 'inputText',
+              text: CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE,
+            }],
+            success: false,
+          };
+        }
         const requestId = String(meta.requestId);
         // 挂起期间服务端已取消本请求 (greptile R13 P1): 直接回失败响应, 不注册
         // broker 不上 UI (与 resolved 的 cancel 响应同款文案)。
