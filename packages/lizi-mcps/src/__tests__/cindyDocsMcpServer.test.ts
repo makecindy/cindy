@@ -1133,6 +1133,29 @@ describe('render_pdf', () => {
     expect(rendered).toContain('./missing.png');
   });
 
+  it('不把 script 内 tag-shaped 字符串当成真实资源标签', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(
+      path.join(workdir, 'raw-text-safe.html'),
+      `<script>const sample = '<img src="./missing.png">';</script><p>ok</p>`,
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'raw-text-safe.html',
+      outPath: 'raw-text-safe.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('<img src="./missing.png">');
+  });
+
   it('按 HTML base href 解析相对资源而不是固定使用 HTML 同目录', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.mkdir(path.join(workdir, 'assets'));
@@ -1162,6 +1185,42 @@ describe('render_pdf', () => {
       `data:image/png;base64,${Buffer.from('assets-chart').toString('base64')}`,
     );
     expect(rendered).not.toContain(Buffer.from('root-chart').toString('base64'));
+  });
+
+  it('在首个资源快照前替换 base 子目录时拒绝混合目录版本', async () => {
+    const assetsDir = path.join(workdir, 'assets');
+    const movedDir = path.join(workdir, 'assets-original');
+    await fs.mkdir(assetsDir);
+    await fs.writeFile(path.join(assetsDir, 'chart.png'), 'original-chart', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'base-rebound.html'),
+      '<base href="assets/"><img src="chart.png">',
+      'utf8',
+    );
+
+    const originalStat = fs.stat.bind(fs);
+    let swapped = false;
+    vi.spyOn(fs, 'stat').mockImplementation(async (target, options) => {
+      if (!swapped && String(target).endsWith(`${path.sep}assets${path.sep}chart.png`)) {
+        swapped = true;
+        await fs.rename(assetsDir, movedDir);
+        await fs.mkdir(assetsDir);
+        await fs.writeFile(path.join(assetsDir, 'chart.png'), 'replacement-chart', 'utf8');
+      }
+      return originalStat(target, options as never);
+    });
+
+    const client = await connect({
+      renderHtmlToPdf: async () => ({ buffer: pdfBytes, fontsReady: true }),
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'base-rebound.html',
+      outPath: 'base-rebound.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
   });
 
   it('快照 SVG image 的 href 与 xlink:href 本地资源', async () => {

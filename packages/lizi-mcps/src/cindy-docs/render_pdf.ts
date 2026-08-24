@@ -78,6 +78,7 @@ interface ResourceSnapshotContext {
   cache: Map<string, string>;
   cssStack: Set<string>;
   directorySnapshots: Map<string, DirectorySnapshot>;
+  requireInitialDirectorySnapshots: boolean;
 }
 
 interface DirectorySnapshot {
@@ -85,6 +86,71 @@ interface DirectorySnapshot {
   realPath: string;
   dev: bigint;
   ino: bigint;
+}
+
+/**
+ * Resource directories must be snapshotted before the source HTML is read.
+ * Otherwise a directory that is replaced in the gap between the HTML read and
+ * the first resource reference becomes the (wrong) initial baseline.  Node's
+ * cross-platform fs API does not expose openat-style directory capabilities,
+ * so we take a bounded metadata snapshot of the task tree up front and bind
+ * every later resource directory to that identity.
+ */
+const MAX_DIRECTORY_SNAPSHOTS = 100_000;
+
+async function captureDirectoryTreeSnapshots(root: string): Promise<Map<string, DirectorySnapshot>> {
+  const snapshots = new Map<string, DirectorySnapshot>();
+  const pending = [path.resolve(root)];
+  const visitedRealPaths = new Set<string>();
+  const realRoot = await fs.realpath(root);
+
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    const key = path.resolve(directory);
+    if (snapshots.has(key)) continue;
+    if (snapshots.size >= MAX_DIRECTORY_SNAPSHOTS) {
+      throw new DocsPathError(
+        'FILE_TOO_LARGE',
+        '任务目录过大，无法建立安全的资源目录快照',
+        '请把 HTML 与其资源放在较小的任务目录中后重试。',
+      );
+    }
+
+    const snapshot = await captureDirectorySnapshot(directory);
+    const relative = path.relative(realRoot, snapshot.realPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw resourceDirectoryChanged(directory);
+    }
+    snapshots.set(key, snapshot);
+    if (visitedRealPaths.has(snapshot.realPath)) continue;
+    visitedRealPaths.add(snapshot.realPath);
+
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      throw resourceDirectoryChanged(directory);
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        pending.push(path.join(directory, entry.name));
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      const candidate = path.join(directory, entry.name);
+      try {
+        const target = await fs.realpath(candidate);
+        const targetRelative = path.relative(realRoot, target);
+        if (targetRelative.startsWith('..') || path.isAbsolute(targetRelative)) continue;
+        const targetStat = await fs.stat(candidate, { bigint: true });
+        if (targetStat.isDirectory()) pending.push(candidate);
+      } catch {
+        // A dangling or concurrently changing symlink will be rejected later
+        // by prepareInputPath; it is not a directory baseline to recurse into.
+      }
+    }
+  }
+  return snapshots;
 }
 
 function resourceDirectoryChanged(directory: string): DocsPathError {
@@ -118,15 +184,19 @@ async function recordDirectorySnapshot(
   directory: string,
   expected?: DirectorySnapshot,
 ): Promise<void> {
+  const key = path.resolve(directory);
   const current = await captureDirectorySnapshot(directory);
   if (expected && !sameDirectorySnapshot(expected, current)) {
     throw resourceDirectoryChanged(directory);
   }
-  const previous = context.directorySnapshots.get(directory);
+  const previous = context.directorySnapshots.get(key);
+  if (!previous && context.requireInitialDirectorySnapshots) {
+    throw resourceDirectoryChanged(directory);
+  }
   if (previous && !sameDirectorySnapshot(previous, current)) {
     throw resourceDirectoryChanged(directory);
   }
-  context.directorySnapshots.set(directory, current);
+  context.directorySnapshots.set(key, current);
 }
 
 async function verifyDirectorySnapshots(context: ResourceSnapshotContext): Promise<void> {
@@ -224,6 +294,7 @@ async function replaceHtmlTagsAsync(
   predicate: (tag: string) => boolean,
   replacer: (tag: string) => Promise<string>,
 ): Promise<string> {
+  const rawTextTags = new Set(['script', 'style', 'textarea', 'title']);
   const parts: string[] = [];
   let outputBytes = 0;
   const pushPart = (part: string): void => {
@@ -257,6 +328,20 @@ async function replaceHtmlTagsAsync(
     }
     if (end >= input.length) break;
     const tag = input.slice(start, end + 1);
+    const rawTextMatch = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/i);
+    if (rawTextMatch && rawTextTags.has(rawTextMatch[1]!.toLowerCase())) {
+      if (predicate(tag)) {
+        pushPart(input.slice(cursor, start));
+        pushPart(await replacer(tag));
+        cursor = end + 1;
+      }
+      const name = rawTextMatch[1]!;
+      const closing = new RegExp(`<\\/\\s*${name}\\s*>`, 'ig');
+      closing.lastIndex = end + 1;
+      const closingMatch = closing.exec(input);
+      index = closingMatch ? closingMatch.index + closingMatch[0].length : input.length;
+      continue;
+    }
     if (predicate(tag)) {
       pushPart(input.slice(cursor, start));
       pushPart(await replacer(tag));
@@ -508,13 +593,15 @@ async function inlineLocalResources(
   sourcePath: string,
   html: string,
   expectedSourceDirectory?: DirectorySnapshot,
+  initialDirectorySnapshots?: Map<string, DirectorySnapshot>,
 ): Promise<string> {
   const context: ResourceSnapshotContext = {
     root,
     totalBytes: 0,
     cache: new Map(),
     cssStack: new Set(),
-    directorySnapshots: new Map(),
+    directorySnapshots: new Map(initialDirectorySnapshots),
+    requireInitialDirectorySnapshots: initialDirectorySnapshots !== undefined,
   };
   await recordDirectorySnapshot(
     context,
@@ -701,9 +788,13 @@ export function registerRenderPdfTool(
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.pdf');
         const abs = await prepareOutputPath(root, outPath, overwrite);
+        const initialDirectorySnapshots = hasPath
+          ? await captureDirectoryTreeSnapshots(root)
+          : undefined;
         const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
         const sourceDirectory = sourcePath
-          ? await captureDirectorySnapshot(path.dirname(sourcePath))
+          ? initialDirectorySnapshots?.get(path.resolve(path.dirname(sourcePath)))
+              ?? (await captureDirectorySnapshot(path.dirname(sourcePath)))
           : undefined;
         // Capture the source's canonical relative location before reading. Keep the
         // lexical root prefix (macOS commonly exposes /var as /private/var through
@@ -758,6 +849,7 @@ export function registerRenderPdfTool(
               sourceSnapshotPath ?? sourcePath,
               sourceHtml,
               sourceDirectory,
+              initialDirectorySnapshots,
             )
           : sourceHtml;
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);

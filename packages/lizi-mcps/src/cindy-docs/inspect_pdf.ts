@@ -69,7 +69,7 @@ const DESCRIPTION = [
   '',
   '【怎么判读】',
   '- blankPages 非空 → 那几页是结构上确定为空的,大概率 CSS 把内容藏了或外部资源没加载上,重做;',
-  '- visibilityUnverified=true → 只确认到结构算子,没有做位图级可见性验证;白色/透明内容仍需人工打开确认,不要把 verdict 当作视觉验收;',
+  '- visibilityUnverified=true → 某页算子解析未完成,结构检查证据不完整;请重试或人工打开确认,不要把 verdict 当作视觉验收;',
   '- numPages 远超预期 → 分页样式没生效(检查 page-break / break-inside);',
   '- paper 不是你要的尺寸 → render_pdf 的 pageSize 传错了;',
   '- textPreview 和你写的内容对不上 → 装错了内容或页序错乱。',
@@ -201,7 +201,7 @@ export function registerInspectPdfTool(
                 ? {
                     verdict: 'warning',
                     warning:
-                      `第 ${visibilityUnverifiedPages.join('、')} 页含结构内容,但本工具未做位图级可见性确认。请打开 PDF 目检后再交付,尤其留意白色/透明文字与背景。${coverageWarning ? ` ${coverageWarning}` : ''}`,
+                      `第 ${visibilityUnverifiedPages.join('、')} 页的结构算子解析未完成,本次检查证据不完整。请重试并在必要时打开 PDF 确认。${coverageWarning ? ` ${coverageWarning}` : ''}`,
                   }
                 : partial
                   ? { verdict: 'incomplete', warning: coverageWarning! }

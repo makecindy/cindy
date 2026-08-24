@@ -113,6 +113,7 @@ describe('inspectPdfPages', () => {
   it('算子表解析失败时把空文本页标记为未验证', () => {
     expect(pageVisibilityUnverified(0, null, null)).toBe(true);
     expect(pageVisibilityUnverified(0, 0, 0)).toBe(false);
+    expect(pageVisibilityUnverified(12, 3, 0)).toBe(false);
   });
 
   it('maxPages 卡住检查页数,不会把整份文档读完', async () => {
