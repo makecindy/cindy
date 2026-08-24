@@ -27,6 +27,63 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     expect(order).toEqual(['effort', 'fast', 'commit']);
   });
 
+  it('retires a live session before committing a fixed-effort profile', async () => {
+    const order: string[] = [];
+    const setEffort = vi.fn(async () => {
+      order.push('effort');
+    });
+    const setFastMode = vi.fn(async () => {
+      order.push('fast');
+    });
+    const restoreControlStores = vi.fn(() => order.push('restore'));
+
+    await applyRuntimeSelectionAxesWithRecovery({
+      session: {
+        agentKind: 'codex',
+        setEffort,
+        setFastMode,
+      },
+      effort: null,
+      fastMode: true,
+      commitControlStores: () => order.push('commit'),
+      restoreControlStores,
+      terminateSession: vi.fn(async () => {
+        order.push('terminate');
+      }),
+    });
+
+    expect(order).toEqual(['terminate', 'commit']);
+    expect(setEffort).not.toHaveBeenCalled();
+    expect(setFastMode).not.toHaveBeenCalled();
+    expect(restoreControlStores).not.toHaveBeenCalled();
+  });
+
+  it('restores the old stores when a fixed-effort session cannot be retired', async () => {
+    const terminationError = new Error('close rejected');
+    const commitControlStores = vi.fn();
+    const restoreControlStores = vi.fn();
+
+    await expect(
+      applyRuntimeSelectionAxesWithRecovery({
+        session: {
+          agentKind: 'claude-code',
+          setEffort: vi.fn(),
+          setFastMode: vi.fn(),
+        },
+        effort: null,
+        fastMode: false,
+        commitControlStores,
+        restoreControlStores,
+        terminateSession: vi.fn(async () => {
+          throw terminationError;
+        }),
+      }),
+    ).rejects.toBe(terminationError);
+
+    expect(restoreControlStores).toHaveBeenCalledOnce();
+    expect(commitControlStores).not.toHaveBeenCalled();
+  });
+
   it('restores the old stores and retires a partially-mutated session on axis failure', async () => {
     const order: string[] = [];
     const axisError = new Error('fast transport disconnected');

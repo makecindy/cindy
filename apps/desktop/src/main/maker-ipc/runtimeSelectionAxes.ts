@@ -26,8 +26,22 @@ export interface ApplyRuntimeSelectionAxesWithRecoveryInput {
 export async function applyRuntimeSelectionAxesWithRecovery(
   input: ApplyRuntimeSelectionAxesWithRecoveryInput,
 ): Promise<void> {
+  // A fixed-effort model has no representable live setEffort value. Keeping the
+  // current Session would leave each harness's mutable effort on the previous
+  // model, so retire the idle Session and let the next send rebuild from the
+  // committed null-effort runtime profile.
+  if (input.effort === null) {
+    try {
+      await input.terminateSession();
+    } catch (terminationError) {
+      input.restoreControlStores();
+      throw terminationError;
+    }
+    input.commitControlStores();
+    return;
+  }
   try {
-    if (input.effort !== null) await input.session.setEffort(input.effort);
+    await input.session.setEffort(input.effort);
     if (input.session.agentKind === 'codex') {
       await input.session.setFastMode(input.fastMode);
     }
