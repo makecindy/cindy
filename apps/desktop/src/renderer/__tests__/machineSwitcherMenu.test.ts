@@ -569,9 +569,13 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('<span className="truncate">{archivedLabel}</span>');
   });
 
-  it('归档菜单项向读屏暴露选中状态', () => {
-    expect(menuSource).toContain('role="menuitemcheckbox"');
-    expect(menuSource).toContain('aria-checked={filter.status === \'archived\'}');
+  it('归档菜单项向读屏暴露当前范围，而不暗示可取消的复选行为', () => {
+    expect(menuSource).toContain('role="menuitem"');
+    expect(menuSource).toContain(
+      "aria-current={filter.status === 'archived' ? 'page' : undefined}",
+    );
+    expect(menuSource).not.toContain('role="menuitemcheckbox"');
+    expect(menuSource).not.toContain('aria-checked=');
   });
 
   it('MachineSwitcherMenu 保留设备选择 / 显示设置 / 远程设置入口;无远程时仍带箭头只留设置项', () => {
