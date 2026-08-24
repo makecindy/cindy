@@ -38,6 +38,7 @@ interface SessionRuntimeControlState {
 }
 
 const states = new Map<string, SessionRuntimeControlState>();
+let ownerEpoch = 0;
 
 function routeKey(profile: Pick<SessionRuntimeProfile, 'providerId' | 'model'>): string {
   return `${profile.providerId ?? ''}\u0000${profile.model}`;
@@ -158,6 +159,19 @@ export function getSessionRuntimeControlSnapshot(sessionId: string): SessionRunt
 
 export function clearSessionRuntimeControlState(sessionId: string): void {
   states.delete(sessionId);
+}
+
+export function clearAllSessionRuntimeControlStates(): void {
+  ownerEpoch += 1;
+  states.clear();
+}
+
+export function captureSessionRuntimeControlOwnerEpoch(): number {
+  return ownerEpoch;
+}
+
+export function sessionRuntimeControlOwnerEpochMatches(expected: number): boolean {
+  return ownerEpoch === expected;
 }
 
 const EFFORT_ORDER: readonly Effort[] = [

@@ -1231,18 +1231,26 @@ function applyPendingTitlePreview(session: RemoteSession): RemoteSession {
 }
 
 /**
- * SQLite session 快照不包含 desktop main 内存里的 pending Agent intent。全量列表 / getSession
- * 对账只能刷新持久化字段，不能顺手抹掉已由 push / 权威查询写入的运行时镜像；显式携带该字段
- * 的新快照仍优先（包括 null）。
+ * 老 Desktop 的 SQLite session 快照不包含 main 内存里的 pending Agent intent / runtime
+ * projection。全量列表 / getSession 对账只能刷新它实际携带的字段，不能顺手抹掉已由 push /
+ * 权威查询写入的运行时镜像；新 Desktop 显式携带这些字段时仍优先（包括 null）。
  */
-function preserveSessionRuntimeFields(fresh: RemoteSession, local: RemoteSession | undefined): RemoteSession {
+function preserveSessionRuntimeFields(
+  fresh: RemoteSession,
+  local: RemoteSession | undefined,
+): RemoteSession {
   if (!local) return fresh;
   let next = fresh;
-  if (
-    !Object.prototype.hasOwnProperty.call(fresh, 'agentSwitchIntent')
-    && local.agentSwitchIntent !== undefined
-  ) {
-    next = { ...next, agentSwitchIntent: local.agentSwitchIntent };
+  for (const key of [
+    'agentSwitchIntent',
+    'runtimeGeneration',
+    'runtimeBaseline',
+    'runtimeEffective',
+    'runtimePending',
+  ] as const) {
+    if (!Object.prototype.hasOwnProperty.call(fresh, key) && local[key] !== undefined) {
+      next = { ...next, [key]: local[key] };
+    }
   }
   return next;
 }

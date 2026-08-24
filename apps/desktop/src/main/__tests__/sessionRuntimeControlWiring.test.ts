@@ -1,0 +1,120 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const mainRoot = resolve(__dirname, '..');
+const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8');
+const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 'utf8');
+
+function handlerBody(source: string, channel: string, nextChannel: string): string {
+  const start = source.indexOf(channel);
+  const end = source.indexOf(nextChannel, start + channel.length);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
+describe('session runtime control wiring', () => {
+  it('guards every fallback setting IPC before reading or mutating the setting', () => {
+    for (const [channel, nextChannel] of [
+      [
+        'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_GET',
+        'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_SET',
+      ],
+      [
+        'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_SET',
+        'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET',
+      ],
+      ['MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET', 'MAKER_IPC_INVOKE.COMPACTION_GET_PCT'],
+    ] as const) {
+      const body = handlerBody(bootstrapSource, channel, nextChannel);
+      const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
+      expect(guard).toBeGreaterThan(-1);
+      const storeAccess = Math.min(
+        ...[
+          'sessionRuntimeFallbackWire()',
+          'writeSessionRuntimeFallbackEnabled(',
+          'resetSessionRuntimeFallbackSettings()',
+        ]
+          .map((needle) => body.indexOf(needle))
+          .filter((index) => index >= 0),
+      );
+      expect(guard).toBeLessThan(storeAccess);
+    }
+  });
+
+  it('clears runtime overrides before owner-scoped post-commit work', () => {
+    const body = handlerBody(
+      bootstrapSource,
+      'authManager.setStableOwnerPostCommitTask',
+      '// ── Custom protocol registration',
+    );
+    expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
+      body.indexOf('runStableOwnerPostCommitTask('),
+    );
+  });
+
+  it('serializes user effort and Fast mutations with model route changes', () => {
+    const effort = handlerBody(
+      registerSource,
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+      'ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE',
+    );
+    const fast = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_FAST_MODE',
+      'MAKER_INVOKE.SET_THINKING_ENABLED',
+    );
+    for (const [body, applyCall] of [
+      [effort, 'return await applyEffort();'],
+      [fast, 'return await applyFastMode();'],
+    ] as const) {
+      expect(body).toContain('withSendToSessionLock(sessionId');
+      expect(body.indexOf('withSendToSessionLock(sessionId')).toBeLessThan(
+        body.indexOf(applyCall),
+      );
+    }
+  });
+
+  it('preserves runtime state only across the close emitted by an in-flight model rebuild', () => {
+    const closeBoundary = handlerBody(
+      registerSource,
+      "if (status === 'closed') {",
+      'const closedDirectAbortBoundary',
+    );
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+    );
+
+    expect(closeBoundary).toContain("closeReason !== 'requested'");
+    expect(closeBoundary).toContain('!runtimeSelectionInFlightSessionIds.has(session.id)');
+    expect(closeBoundary).toContain('clearSessionRuntimeControlState(session.id);');
+    expect(setModel).toContain('runtimeSelectionInFlightSessionIds.add(sessionId);');
+    expect(setModel).toContain('runtimeSelectionInFlightSessionIds.delete(sessionId);');
+    expect(setModel.indexOf('runtimeSelectionInFlightSessionIds.add(sessionId);')).toBeLessThan(
+      setModel.indexOf('return applyRuntimeSetModelChange({'),
+    );
+    expect(setModel.indexOf('return applyRuntimeSetModelChange({')).toBeLessThan(
+      setModel.indexOf('runtimeSelectionInFlightSessionIds.delete(sessionId);'),
+    );
+  });
+
+  it('keeps explicit provider null and fixed-effort null through runtime settlement', () => {
+    expect(registerSource).toMatch(
+      /effectiveProviderId === null\s*\? null\s*: \(normalizeSessionProviderId\(effectiveProviderId\) \?\? currentProviderId\)/,
+    );
+    expect(registerSource).toContain('effort: pending.profile.effort,');
+    expect(registerSource).toContain('effort: candidate.effort, fastMode: candidate.fastMode');
+    expect(registerSource).toContain('effort: next.effort, fastMode: next.fastMode');
+  });
+
+  it('projects runtime state into shared session snapshots and patch notifications', () => {
+    expect(registerSource).toContain('setSessionRuntimeProjector((session) =>');
+    expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) =>');
+    expect(registerSource).toContain('broadcastSessionRuntimeProjection(sessionId');
+    expect(registerSource).toContain('runtimeEffective: effective');
+    expect(registerSource).toContain('runtimePending: control.pending');
+  });
+});

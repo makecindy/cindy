@@ -1,17 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
   acceptSessionRuntimeMutation,
+  captureSessionRuntimeControlOwnerEpoch,
+  clearAllSessionRuntimeControlStates,
+  clearSessionRuntimeControlState,
   getSessionRuntimeControlSnapshot,
   pickSessionRuntimeFallback,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes,
+  sessionRuntimeControlOwnerEpochMatches,
   sessionRuntimeGenerationMatches,
   settlePendingSessionRuntimeMutation,
   type SessionRuntimeProfile,
 } from '../sessionRuntimeControl.js';
+
+afterEach(() => {
+  clearAllSessionRuntimeControlStates();
+});
 
 const current: SessionRuntimeProfile = {
   agentKind: 'codex',
@@ -110,6 +118,72 @@ describe('session runtime control state', () => {
       pending: null,
       fallbackHop: 0,
       visitedRoutes: [],
+    });
+  });
+
+  it('clears one terminal session without disturbing another runtime override', () => {
+    acceptSessionRuntimeMutation({
+      sessionId: 'runtime-clear-one',
+      source: 'agent',
+      profile: current,
+      deferred: false,
+    });
+    acceptSessionRuntimeMutation({
+      sessionId: 'runtime-keep-one',
+      source: 'agent',
+      profile: { ...current, model: 'gpt-other' },
+      deferred: false,
+    });
+
+    clearSessionRuntimeControlState('runtime-clear-one');
+
+    expect(getSessionRuntimeControlSnapshot('runtime-clear-one')).toMatchObject({
+      generation: 0,
+      effectiveOverride: null,
+      pending: null,
+    });
+    expect(getSessionRuntimeControlSnapshot('runtime-keep-one').effectiveOverride).toMatchObject({
+      model: 'gpt-other',
+    });
+  });
+
+  it('clears every runtime override at an account boundary', () => {
+    const previousOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+    acceptSessionRuntimeMutation({
+      sessionId: 'runtime-owner-a',
+      source: 'agent',
+      profile: current,
+      deferred: true,
+    });
+    acceptSessionRuntimeMutation({
+      sessionId: 'runtime-owner-b',
+      source: 'fallback',
+      profile: { ...current, providerId: 'xd' },
+      deferred: false,
+    });
+
+    clearAllSessionRuntimeControlStates();
+
+    expect(getSessionRuntimeControlSnapshot('runtime-owner-a').generation).toBe(0);
+    expect(getSessionRuntimeControlSnapshot('runtime-owner-b').generation).toBe(0);
+    expect(sessionRuntimeControlOwnerEpochMatches(previousOwnerEpoch)).toBe(false);
+    expect(sessionRuntimeControlOwnerEpochMatches(captureSessionRuntimeControlOwnerEpoch())).toBe(
+      true,
+    );
+  });
+
+  it('preserves null effort in a deferred fixed-effort switch', () => {
+    const generation = acceptSessionRuntimeMutation({
+      sessionId: 'runtime-fixed-effort',
+      source: 'agent',
+      profile: { ...current, effort: null },
+      deferred: true,
+    });
+
+    expect(getSessionRuntimeControlSnapshot('runtime-fixed-effort').pending).toEqual({
+      generation,
+      source: 'agent',
+      profile: { ...current, effort: null },
     });
   });
 });

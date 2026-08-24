@@ -83,6 +83,7 @@ export interface RegisterSessionIpcOpts {
 
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
+let sessionRuntimeCleanup: ((sessionId: string) => void) | null = null;
 
 /** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
 export function setSessionRemovalCancelOperations(
@@ -96,6 +97,10 @@ export function setSessionRemovalCleanup(
   cleanupRemovedSession: SessionRemovalCleanup | null,
 ): void {
   sessionRemovalCleanup = cleanupRemovedSession;
+}
+
+export function setSessionRuntimeCleanup(cleanup: ((sessionId: string) => void) | null): void {
+  sessionRuntimeCleanup = cleanup;
 }
 
 function captureOwnerScope(): OwnerScope {
@@ -2092,6 +2097,7 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
  */
 function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
+  sessionRuntimeCleanup?.(sessionId);
   if (status === 'deleted') {
     void removeTurnChangeSetsForSession(sessionId).catch((err) => {
       log.warn('turn change-set cleanup failed', {

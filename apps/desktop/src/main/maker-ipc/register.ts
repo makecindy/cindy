@@ -64,7 +64,7 @@ import {
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
-import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
+import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
   getAgentFacingText,
@@ -216,7 +216,7 @@ import {
   updateMessageContent,
 } from '../localDb/ipc/messages.js';
 import { invalidateWorkersByLeadSingleFlight } from '../localDb/ipc/orcaWorkerListSingleFlight.js';
-import { messageToCamel } from '../localDb/mapper.js';
+import { messageToCamel, setSessionRuntimeProjector } from '../localDb/mapper.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import { buildReviewPrompt } from '../reviewer/reviewPrompt.js';
 import {
@@ -283,6 +283,7 @@ import {
   getSessionRowSnapshotStrict,
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
+  setSessionRuntimeCleanup,
 } from '../localDb/ipc/sessions.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
 import {
@@ -864,6 +865,8 @@ import {
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
 import {
   acceptSessionRuntimeMutation,
+  captureSessionRuntimeControlOwnerEpoch,
+  clearSessionRuntimeControlState,
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
   pickSessionRuntimeFallback,
@@ -871,6 +874,7 @@ import {
   recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes,
   sessionRuntimeGenerationMatches,
+  sessionRuntimeControlOwnerEpochMatches,
   settlePendingSessionRuntimeMutation,
   type SessionRuntimeMutationSource,
   type SessionRuntimeProfile,
@@ -1041,6 +1045,27 @@ const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
 });
 let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
   null;
+const runtimeSelectionInFlightSessionIds = new Set<string>();
+let broadcastSessionRuntimeProjectionHolder:
+  ((sessionId: string, baselineOverride?: SessionRuntimeProfile) => Promise<void>) | null = null;
+
+function projectSessionRuntimeControl(
+  sessionId: string,
+  baseline: SessionRuntimeProfile,
+): Partial<RendererSession> {
+  const control = getSessionRuntimeControlSnapshot(sessionId);
+  const effective = control.effectiveOverride ?? baseline;
+  return {
+    model: effective.model,
+    providerId: effective.providerId,
+    ...(effective.effort !== null ? { effort: effective.effort } : {}),
+    fastMode: effective.fastMode,
+    runtimeGeneration: control.generation,
+    runtimeBaseline: baseline,
+    runtimeEffective: effective,
+    runtimePending: control.pending,
+  };
+}
 
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」
@@ -5625,11 +5650,23 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         });
       }
       if (status === 'closed') {
+        const closeReason = getWiredSessionCloseReason(session);
+        if (
+          closeReason !== 'requested' ||
+          !runtimeSelectionInFlightSessionIds.has(session.id)
+        ) {
+          clearSessionRuntimeControlState(session.id);
+          void broadcastSessionRuntimeProjectionHolder?.(session.id).catch((error) => {
+            log.debug('closed session runtime projection cleanup failed', {
+              sessionId: session.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
         const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(
           session.id,
           session,
         );
-        const closeReason = getWiredSessionCloseReason(session);
         const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(
           session,
           closeReason,
@@ -5831,6 +5868,56 @@ export function registerModelVisibilitySyncIpc(): void {
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
   log.info('registering maker:* IPC handlers');
+  const broadcastSessionRuntimeProjection = async (
+    sessionId: string,
+    baselineOverride?: SessionRuntimeProfile,
+  ): Promise<void> => {
+    let baseline = baselineOverride;
+    if (!baseline) {
+      const [row] = await getDbClient()
+        .drizzle.select({
+          agentKind: sessions.agentKind,
+          model: sessions.model,
+          providerId: sessions.providerId,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!row) return;
+      baseline = {
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        model: row.model,
+        providerId: row.providerId?.trim() || null,
+        effort: row.effort,
+        fastMode: row.fastMode === true,
+      };
+    }
+    broadcastSessionPatched(
+      sessionId,
+      projectSessionRuntimeControl(sessionId, baseline) as Record<string, unknown>,
+    );
+  };
+  broadcastSessionRuntimeProjectionHolder = broadcastSessionRuntimeProjection;
+  setSessionRuntimeProjector((session) =>
+    projectSessionRuntimeControl(session.id, {
+      agentKind: dbToMakerAgentKind(session.agentKind),
+      model: session.model,
+      providerId: session.providerId?.trim() || null,
+      effort: session.effort as SessionRuntimeProfile['effort'],
+      fastMode: session.fastMode,
+    }),
+  );
+  setSessionRuntimeCleanup((sessionId) => {
+    clearSessionRuntimeControlState(sessionId);
+    void broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+      log.debug('session runtime cleanup projection failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
   disposePiPackagesChangedBroadcast?.();
   disposePiPackagesChangedBroadcast = onPiPackagesChanged(() => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -10767,14 +10854,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           pending.profile.model,
           pending.profile.providerId,
           {
-            effort: pending.profile.effort ?? 'medium',
+            effort: pending.profile.effort,
             fastMode: pending.profile.fastMode,
           },
           {
             source: pending.source,
             expectedGeneration: pending.generation,
             applyingPendingGeneration: pending.generation,
-            effortExplicit: true,
+            effortExplicit: pending.profile.effort !== null,
             fastExplicit: true,
           },
         );
@@ -10800,27 +10887,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const readSessionRuntimeProfiles = async (sessionId: string) => {
     const meta = await maker.getSessionMeta(sessionId);
     if (!meta) return null;
-    let baselineProviderId: string | null = null;
+    let baseline: SessionRuntimeProfile = {
+      agentKind: meta.agentKind,
+      model: meta.model,
+      providerId: null,
+      effort: meta.effort ?? null,
+      fastMode: meta.fastMode === true,
+    };
     try {
       const [row] = await getDbClient()
-        .drizzle.select({ providerId: sessions.providerId })
+        .drizzle.select({
+          agentKind: sessions.agentKind,
+          model: sessions.model,
+          providerId: sessions.providerId,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+        })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      baselineProviderId = row?.providerId?.trim() || null;
+      if (row) {
+        baseline = {
+          agentKind: dbToMakerAgentKind(row.agentKind),
+          model: row.model,
+          providerId: row.providerId?.trim() || null,
+          effort: row.effort,
+          fastMode: row.fastMode === true,
+        };
+      }
     } catch (error) {
-      log.debug('session runtime baseline provider lookup failed', {
+      log.debug('session runtime baseline lookup failed', {
         sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    const baseline: SessionRuntimeProfile = {
-      agentKind: meta.agentKind,
-      model: meta.model,
-      providerId: baselineProviderId,
-      effort: meta.effort ?? null,
-      fastMode: meta.fastMode === true,
-    };
     const control = getSessionRuntimeControlSnapshot(sessionId);
     const live = maker.getSession(sessionId);
     const effective: SessionRuntimeProfile = control.effectiveOverride ?? {
@@ -10828,7 +10928,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       model: live?.model ?? meta.model,
       providerId: hasSessionProvider(sessionId)
         ? getSessionProvider(sessionId)
-        : baselineProviderId,
+        : baseline.providerId,
       effort:
         (getSessionEffort(sessionId) as SessionRuntimeProfile['effort']) ?? meta.effort ?? null,
       fastMode: live ? getSessionFastMode(sessionId) : meta.fastMode === true,
@@ -10875,13 +10975,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sessionId,
         candidate.model,
         candidate.providerId,
-        { effort: candidate.effort ?? 'medium', fastMode: candidate.fastMode },
+        { effort: candidate.effort, fastMode: candidate.fastMode },
         {
           source: 'fallback',
           expectedGeneration: profiles.control.generation,
           previousProfile: currentForFallback,
-          effortExplicit: true,
-          fastExplicit: true,
+          effortExplicit: false,
+          fastExplicit: false,
         },
       );
       log.info('automatic session runtime fallback evaluated', {
@@ -10944,14 +11044,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetSessionId,
           next.model,
           next.providerId,
-          { effort: next.effort ?? 'medium', fastMode: next.fastMode },
-        {
-          source: 'agent',
-          expectedGeneration,
-          deferWhileRunning: true,
-          effortExplicit: patch.effort !== undefined,
-          fastExplicit: patch.fastMode !== undefined,
-        },
+          { effort: next.effort, fastMode: next.fastMode },
+          {
+            source: 'agent',
+            expectedGeneration,
+            deferWhileRunning: true,
+            effortExplicit: patch.effort !== undefined,
+            fastExplicit: patch.fastMode !== undefined,
+          },
         );
       } catch (error) {
         const code = (error as { code?: unknown }).code;
@@ -14362,11 +14462,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     let atomicSelection = selection as
       { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
+    const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+    const supersededByOwnerBoundary = (): boolean => {
+      if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return false;
+      if (internalOptions.source === 'user') {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'app session changed during runtime selection; request dropped',
+        );
+      }
+      return true;
+    };
     // 与 send 事务共用 session 锁:发送时刻执行的跨引擎切换必须先落定,
     // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
     // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
-    return withSendToSessionLock(sessionId, async () => {
+    const applyLocked = async () => {
       await assertReviewSettingsUnlocked(sessionId);
+      if (supersededByOwnerBoundary()) {
+        return { deferred: false, superseded: true };
+      }
       if (
         internalOptions.source !== 'user' &&
         !sessionRuntimeGenerationMatches(
@@ -14460,7 +14574,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
         const selectedProviderId =
-          normalizeSessionProviderId(effectiveProviderId) ?? currentProviderId;
+          effectiveProviderId === null
+            ? null
+            : (normalizeSessionProviderId(effectiveProviderId) ?? currentProviderId);
         const runtimeProviders = await getDesktopProviderService().listProviders({
           allowSideEffects: false,
           catalog: getActiveCatalog(),
@@ -14512,6 +14628,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
         const meta = await maker.getSessionMeta(sessionId);
         if (!meta) return { deferred: false, superseded: true };
+        if (supersededByOwnerBoundary()) {
+          return { deferred: false, superseded: true };
+        }
         const generation = acceptSessionRuntimeMutation({
           sessionId,
           source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
@@ -14528,6 +14647,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             fastMode: atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
           },
         });
+        await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+          log.debug('deferred session runtime projection broadcast failed', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
         return {
           deferred: true,
           superseded: false,
@@ -14540,8 +14665,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const result = await applySetModelThenCancelAgentSwitchIntent(
           agentSwitchPending,
           sessionId,
-          () =>
-            applyRuntimeSetModelChange({
+          () => {
+            runtimeSelectionInFlightSessionIds.add(sessionId);
+            return applyRuntimeSetModelChange({
               maker,
               sessionId,
               model,
@@ -14569,7 +14695,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
               codexAuthInjection: getCodexProxyAuthInjectionState(),
               logger: log,
-            }),
+            }).finally(() => {
+              runtimeSelectionInFlightSessionIds.delete(sessionId);
+            });
+          },
           (id) =>
             broadcastSessionPatched(id, {
               agentSwitchIntent: null,
@@ -14582,6 +14711,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: result.status === 'deferred',
           superseded: false,
         };
+        if (supersededByOwnerBoundary()) {
+          return { deferred: false, superseded: true };
+        }
         if (atomicSelection) {
           // model/provider/effort/fast 是一次选择快照，必须在同一把 session 锁内收敛。
           // applyRuntimeSetModelChange 可能 close + wake；若 effort/fast 留给 renderer
@@ -14667,6 +14799,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
         }
+        if (supersededByOwnerBoundary()) {
+          return { deferred: false, superseded: true };
+        }
         let generation: number;
         if (internalOptions.source === 'user') {
           generation = recordUserSessionRuntimeMutation(sessionId);
@@ -14701,6 +14836,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
           });
         }
+        const projectionMeta = await maker.getSessionMeta(sessionId);
+        const userBaselineOverride =
+          internalOptions.source === 'user'
+            ? {
+                agentKind:
+                  maker.getSession(sessionId)?.agentKind ??
+                  projectionMeta?.agentKind ??
+                  'claude-code',
+                model,
+                providerId:
+                  effectiveProviderId === undefined
+                    ? getSessionProvider(sessionId)
+                    : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+                effort:
+                  atomicSelection?.effort ??
+                  (getSessionEffort(sessionId) as
+                    | SessionRuntimeProfile['effort']
+                    | undefined) ??
+                  projectionMeta?.effort ??
+                  null,
+                fastMode: atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
+              }
+            : undefined;
+        await broadcastSessionRuntimeProjection(sessionId, userBaselineOverride).catch((error) => {
+          log.debug('session runtime projection broadcast failed', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
         return {
           ...response,
           generation,
@@ -14715,7 +14879,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         throw err;
       }
-    });
+    };
+    return withSendToSessionLock(sessionId, applyLocked);
   };
   applySessionRuntimeSelection = (
     sessionId,
@@ -14744,47 +14909,61 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof effort !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
     }
-    await assertReviewSettingsUnlocked(sessionId);
-    recordUserSessionRuntimeAxisMutation(sessionId, {
-      effort: effort as SessionRuntimeProfile['effort'],
-    });
-    // 记下会话 effort:responses-bridge 模型(chatgpt/ / xai/)的 effort 无法经请求体流到 bridge,
-    // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(不影响 session 是否在跑)。
-    setSessionEffort(sessionId, effort);
-    const sess = maker.getSession(sessionId);
-    if (!sess) {
-      log.debug('set-effort: session not found, no-op', { sessionId });
-      return;
-    }
-    // 有 pending 凭证切换 = 本会话的 model/effort 变更已整体延迟到 turn 结束重建:
-    // 跳过对仍在跑的旧 turn 的 runtime 推送(与 renderer 本地分支的 deferred 守卫同因,
-    // 这里是唯一 choke point,同时覆盖 device-link 远程入口;review P2 2026-07-04)。
-    // 持久化不受影响:本地由 renderer sessionService.update 落盘,远程由 device-link
-    // dispatch 的 persistRemoteSetting 按请求值落被控端 DB,重建时生效。
-    if (pendingCredentialSwitchHolder?.has(sessionId)) {
-      log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
-      return;
-    }
-    try {
-      const result = await applyRuntimeEffortWithRecovery({
-        applyRuntime: () =>
-          sess.setEffort(
-            effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
-          ),
-        terminateSession: () => maker.closeSession(sessionId),
+    const applyEffort = async () => {
+      recordUserSessionRuntimeAxisMutation(sessionId, {
+        effort: effort as SessionRuntimeProfile['effort'],
       });
-      if (result === 'session-terminated') {
-        log.warn('set-effort: timed-out runtime session terminated for lazy rebuild', {
+      // 记下会话 effort:responses-bridge 模型(chatgpt/ / xai/)的 effort 无法经请求体流到 bridge,
+      // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(不影响 session 是否在跑)。
+      setSessionEffort(sessionId, effort);
+      const sess = maker.getSession(sessionId);
+      if (!sess) {
+        log.debug('set-effort: session not found, no-op', { sessionId });
+        return;
+      }
+      // 有 pending 凭证切换 = 本会话的 model/effort 变更已整体延迟到 turn 结束重建:
+      // 跳过对仍在跑的旧 turn 的 runtime 推送(与 renderer 本地分支的 deferred 守卫同因,
+      // 这里是唯一 choke point,同时覆盖 device-link 远程入口;review P2 2026-07-04)。
+      // 持久化不受影响:本地由 renderer sessionService.update 落盘,远程由 device-link
+      // dispatch 的 persistRemoteSetting 按请求值落被控端 DB,重建时生效。
+      if (pendingCredentialSwitchHolder?.has(sessionId)) {
+        log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
+        return;
+      }
+      try {
+        const result = await applyRuntimeEffortWithRecovery({
+          applyRuntime: () =>
+            sess.setEffort(
+              effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
+            ),
+          terminateSession: () => maker.closeSession(sessionId),
+        });
+        if (result === 'session-terminated') {
+          log.warn('set-effort: timed-out runtime session terminated for lazy rebuild', {
+            sessionId,
+          });
+        }
+      } catch (error) {
+        log.warn('set-effort runtime update failed', {
           sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError('INTERNAL', 'Runtime effort update failed');
+      }
+    };
+    return withSendToSessionLock(sessionId, async () => {
+      await assertReviewSettingsUnlocked(sessionId);
+      try {
+        return await applyEffort();
+      } finally {
+        await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+          log.debug('set-effort runtime projection broadcast failed', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
       }
-    } catch (error) {
-      log.warn('set-effort runtime update failed', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throwIpcError('INTERNAL', 'Runtime effort update failed');
-    }
+    });
   });
 
   ipcMain.handle(
@@ -15089,36 +15268,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof sessionId !== 'string' || typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
-      await assertReviewSettingsUnlocked(sessionId);
-      recordUserSessionRuntimeAxisMutation(sessionId, { fastMode: enabled });
-      // 记下会话 Fast 态:responses-bridge 模型(chatgpt/ 前缀)的 fast 无法经请求体流到 bridge,
-      // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(与 SET_EFFORT 的 effort 同机制)。
-      setSessionFastMode(sessionId, enabled);
-      const sess = maker.getSession(sessionId);
-      if (!sess) {
-        log.debug('set-fast-mode: session not found, no-op', { sessionId });
-        return;
-      }
-      if (sess.agentKind === 'pi') {
-        // Pi 的 ChatGPT 请求不从 pi 请求体携带 Fast，而是由上面的 session store
-        // 在 compat-proxy 决策点闭包进 responses bridge prefs。到这里已经即时生效，
-        // 无需向 pi RPC 再发一份不存在的 set_fast_mode 控制命令。
-        log.debug('set-fast-mode: pi responses bridge state updated', { sessionId, enabled });
-        return;
-      }
-      if (sess.agentKind !== 'codex') {
-        log.debug('set-fast-mode: agent does not implement fast mode, no-op', {
-          sessionId,
-          agentKind: sess.agentKind,
-        });
-        return;
-      }
-      // 同 set-effort:pending 凭证切换期间不触碰仍在跑的旧 turn,持久化走各自 DB 路径。
-      if (pendingCredentialSwitchHolder?.has(sessionId)) {
-        log.debug('set-fast-mode: skipped live push (pending credential switch)', { sessionId });
-        return;
-      }
-      await sess.setFastMode(enabled);
+      const applyFastMode = async () => {
+        recordUserSessionRuntimeAxisMutation(sessionId, { fastMode: enabled });
+        // 记下会话 Fast 态:responses-bridge 模型(chatgpt/ 前缀)的 fast 无法经请求体流到 bridge,
+        // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(与 SET_EFFORT 的 effort 同机制)。
+        setSessionFastMode(sessionId, enabled);
+        const sess = maker.getSession(sessionId);
+        if (!sess) {
+          log.debug('set-fast-mode: session not found, no-op', { sessionId });
+          return;
+        }
+        if (sess.agentKind === 'pi') {
+          // Pi 的 ChatGPT 请求不从 pi 请求体携带 Fast，而是由上面的 session store
+          // 在 compat-proxy 决策点闭包进 responses bridge prefs。到这里已经即时生效，
+          // 无需向 pi RPC 再发一份不存在的 set_fast_mode 控制命令。
+          log.debug('set-fast-mode: pi responses bridge state updated', { sessionId, enabled });
+          return;
+        }
+        if (sess.agentKind !== 'codex') {
+          log.debug('set-fast-mode: agent does not implement fast mode, no-op', {
+            sessionId,
+            agentKind: sess.agentKind,
+          });
+          return;
+        }
+        // 同 set-effort:pending 凭证切换期间不触碰仍在跑的旧 turn,持久化走各自 DB 路径。
+        if (pendingCredentialSwitchHolder?.has(sessionId)) {
+          log.debug('set-fast-mode: skipped live push (pending credential switch)', { sessionId });
+          return;
+        }
+        await sess.setFastMode(enabled);
+      };
+      return withSendToSessionLock(sessionId, async () => {
+        await assertReviewSettingsUnlocked(sessionId);
+        try {
+          return await applyFastMode();
+        } finally {
+          await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+            log.debug('set-fast-mode runtime projection broadcast failed', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+      });
     },
   );
 

@@ -459,7 +459,7 @@ describe('sendToSession ordering', () => {
   it('serializes SET_MODEL behind the send-time agent switch for the same session', () => {
     const setModelBlock = extractBetween(
       source,
-      'ipcMain.handle(\n    MAKER_INVOKE.SET_MODEL',
+      'const handleSetModel = async (',
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
     );
     const directSendSwitchBlock = extractBetween(
@@ -469,7 +469,7 @@ describe('sendToSession ordering', () => {
     );
 
     expect(setModelBlock).toContain(
-      'return withSendToSessionLock(sessionId, async () => {',
+      'return withSendToSessionLock(sessionId, applyLocked);',
     );
     expect(setModelBlock).toContain(
       'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
@@ -477,7 +477,7 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('return { deferred: false, superseded: true };');
     expectOrder(
       setModelBlock,
-      'return withSendToSessionLock(sessionId, async () => {',
+      'const applyLocked = async () => {',
       'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
     );
     expectOrder(
@@ -492,7 +492,9 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('setSessionFastMode(sessionId, atomicSelection.fastMode);');
     expect(setModelBlock).toContain('await sess.setEffort(');
     expect(setModelBlock).toContain('await sess.setFastMode(atomicSelection.fastMode);');
-    expect(setModelBlock).toContain('if (isDeviceLinkInvoke() || atomicSelection) {');
+    expect(setModelBlock).toMatch(
+      /internalOptions\.source === 'user'\s*&&\s*\(isDeviceLinkInvoke\(\) \|\| atomicSelection\)/,
+    );
     expect(setModelBlock).toContain('patch.effort = atomicSelection.effort;');
     expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
     expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
@@ -515,7 +517,7 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'await persistSessionFields(sessionId, patch);',
-      'return response;',
+      '...response,',
     );
     expect(preloadSource).toContain('selection?: { effort: string; fastMode: boolean },');
     expectOrder(
@@ -537,7 +539,7 @@ describe('sendToSession ordering', () => {
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
     const setModelBlock = extractBetween(
       source,
-      'ipcMain.handle(\n    MAKER_INVOKE.SET_MODEL',
+      'const handleSetModel = async (',
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
     );
     expect(setModelBlock).toContain('normalizeDeviceLinkSetModelWireArgs(');
