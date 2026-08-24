@@ -660,6 +660,12 @@ const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
   `${ASK_USER_DYNAMIC_TOOL_NAMESPACE}__${ASK_USER_DYNAMIC_TOOL_NAME}`;
 const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
   'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
+// Item provenance is normally delivered before the corresponding server
+// request, but an unknown descendant request must still have a bounded,
+// fail-closed path when the app-server never emits provenance or cancellation.
+// This is deliberately much longer than the old 500ms grace period so normal
+// out-of-order permission notifications are not reclassified as user input.
+const DESCENDANT_INPUT_PROVENANCE_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_USER_INPUT_QUESTIONS = 3;
 const MAX_REQUEST_USER_INPUT_OPTIONS = 10;
 const MAX_REQUEST_USER_INPUT_TEXT_CHARS = 1_000;
@@ -7241,9 +7247,9 @@ export class CodexAgent extends BaseAgent {
       requestId: string,
       turnId: string | null | undefined,
     ): Promise<{ context: ActiveToolContext | undefined; cancelled: boolean }> {
-      // Item notifications may be delayed well beyond a wall-clock threshold;
-      // resolve from provenance or lifecycle cancellation instead of guessing
-      // that an unknown descendant request is a user question.
+      // Prefer provenance or lifecycle cancellation. The bounded fallback is
+      // only to keep an unknown descendant request from hanging forever when
+      // neither signal arrives; it remains fail-closed for descendant input.
       const existing = toolContextForItem(itemId);
       if (existing) {
         return Promise.resolve({ context: existing, cancelled: false });
@@ -7254,6 +7260,7 @@ export class CodexAgent extends BaseAgent {
       return new Promise((resolve) => {
         let settled = false;
         let cancel!: () => void;
+        let timeout: ReturnType<typeof setTimeout>;
         const pending = {
           turnId,
           cancelled: false,
@@ -7262,6 +7269,7 @@ export class CodexAgent extends BaseAgent {
         const finish = (context: ActiveToolContext | undefined): void => {
           if (settled) return;
           settled = true;
+          clearTimeout(timeout);
           const waiters = activeToolContextWaiters.get(itemId);
           waiters?.delete(finish);
           if (waiters?.size === 0) activeToolContextWaiters.delete(itemId);
@@ -7271,6 +7279,7 @@ export class CodexAgent extends BaseAgent {
           pending.cancelled = true;
           if (settled) return;
           settled = true;
+          clearTimeout(timeout);
           const waiters = activeToolContextWaiters.get(itemId);
           waiters?.delete(finish);
           if (waiters?.size === 0) activeToolContextWaiters.delete(itemId);
@@ -7281,6 +7290,16 @@ export class CodexAgent extends BaseAgent {
         waiters.add(finish);
         activeToolContextWaiters.set(itemId, waiters);
         pendingUserInputClassifications.set(requestId, pending);
+        timeout = setTimeout(() => {
+          log.warn('descendant requestUserInput provenance timed out; rejecting unknown request', {
+            requestId,
+            threadId,
+            turnId,
+            itemId,
+            timeoutMs: DESCENDANT_INPUT_PROVENANCE_TIMEOUT_MS,
+          });
+          finish(undefined);
+        }, DESCENDANT_INPUT_PROVENANCE_TIMEOUT_MS);
       });
     }
 

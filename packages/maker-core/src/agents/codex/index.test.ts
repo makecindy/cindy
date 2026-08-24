@@ -16505,6 +16505,49 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('rejects an unknown descendant native request after provenance timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-native-user-input-descendant-timeout',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.requestUserInput || !handlers.descendantThreadStarted) {
+        throw new Error('expected requestUserInput and descendant thread handlers');
+      }
+      handlers.descendantThreadStarted({
+        thread: { id: 'child-thread-native-user-input-timeout', parentThreadId: 'start-thread-id' },
+      });
+      const resolveInteraction = vi.fn();
+      handle.setInteractionResolver(resolveInteraction);
+
+      const resultPromise = handlers.requestUserInput({
+        threadId: 'child-thread-native-user-input-timeout',
+        turnId: 'turn-native-descendant-timeout',
+        itemId: 'native-input-descendant-timeout',
+        questions: [{
+          id: 'direction',
+          header: 'Direction',
+          question: 'Choose child direction?',
+          isOther: false,
+          isSecret: false,
+          options: [],
+        }],
+      }, { requestId: 'req-native-descendant-timeout' });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(resultPromise).resolves.toEqual({ answers: {} });
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps descendant native permission input requests available', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
