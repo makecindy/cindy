@@ -3146,6 +3146,75 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('新代重放已 ACK 后迟到的旧代 DEVICE_OFFLINE 仍不拆当前 link', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-before-ack');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendInvokeResult('dev-b', 'acked-replay-with-late-error', {
+      ok: true,
+      result: 'pending',
+    });
+    const oldFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'acked-replay-with-late-error'
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+
+    await establishInboundReliableLink(h, 'controller-stream-after-ack');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.id === oldFrame.id
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+    const replayedMeta = parseTransportPayload(replayedFrame.payload)!.meta;
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: replayedMeta.streamId,
+          ackSeq: replayedMeta.seq,
+        },
+      },
+    });
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'delayed old route error after current ACK',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: oldGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(true);
+    h.client.stop();
+  });
+
   it('link down 时排队的可靠帧按首次物理发送代次处理 DEVICE_OFFLINE', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     const routeChanges: Array<{

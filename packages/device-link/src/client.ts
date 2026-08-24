@@ -646,7 +646,9 @@ export class DeviceLinkClient {
   >();
   /**
    * relay-error 回带原帧 id；据此把迟到错误归回消息发出时的 peer link 代次。
-   * 只保留有界的近期路由尝试，不进入 wire protocol，也不跨 client 生命周期。
+   * transport ACK 后仍保留有界的近期路由尝试：同一 socket 内旧代 relay-error
+   * 可能晚于新代重放 ACK 到达；跨 socket 时由 resetLinkStateForReconnect 清空。
+   * 本账本不进入 wire protocol，也不跨 client 生命周期。
    */
   private outboundRouteGenerationById = new Map<
     string,
@@ -2725,13 +2727,6 @@ export class DeviceLinkClient {
     }
   }
 
-  private clearOutboundRouteGeneration(id: string | undefined, deviceId?: string): void {
-    if (!id) return;
-    const attempt = this.outboundRouteGenerationById.get(id);
-    if (!attempt || (deviceId && attempt.deviceId !== deviceId)) return;
-    this.outboundRouteGenerationById.delete(id);
-  }
-
   private assertWebSocketCapacity(additionalBytes: number): void {
     const ws = this.ws;
     if (!ws) throw new DeviceLinkError('NOT_CONNECTED', 'no active connection');
@@ -3067,7 +3062,6 @@ export class DeviceLinkClient {
     peer.highestAckSeq = ackSeq;
     for (const [seq, pending] of peer.pending) {
       if (seq > ackSeq) break;
-      this.clearOutboundRouteGeneration(pending.envelope.id, src);
       peer.pending.delete(seq);
       peer.pendingBytes -= pending.bytes;
     }
