@@ -5,6 +5,7 @@ import {
   buildWindowsNetworkDriveProbeScript,
   buildWindowsPathKindProbeScript,
   buildWindowsRegistryProbeScript,
+  terminateWindowsPowerShellDescendants,
   type WindowsGitPathLogger,
   warnWindowsGitPathProbeDiagnostics,
   warnWindowsGitPathProbeFailure,
@@ -265,6 +266,11 @@ function defaultProbeWindowsPathKindBatches(
     warnWindowsGitPathProbeDiagnostics(logger, 'path-kinds', output);
     return decodeWindowsPathKindLines(output);
   } catch (error) {
+    terminateWindowsPowerShellDescendants(
+      powershell,
+      (error as { pid?: number } | undefined)?.pid,
+      logger,
+    );
     warnWindowsGitPathProbeFailure(logger, 'path-kinds', error);
     return decodeWindowsPathKindsFromProbeError(error);
   }

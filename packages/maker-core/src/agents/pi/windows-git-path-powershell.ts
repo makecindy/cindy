@@ -1,141 +1,13 @@
+import { execFileSync } from 'node:child_process';
+
 import type { Logger } from '../../interfaces/logger.js';
 
 export type WindowsGitPathLogger = Pick<Logger, 'warn'>;
 
 const DIAGNOSTIC_PREFIX = '__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__';
+const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 2_000;
 
-const WINDOWS_KILL_ON_CLOSE_JOB_TYPE = `
-using System;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-
-public static class CindyWindowsGitPathJob
-{
-    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
-    private const int JobObjectExtendedLimitInformation = 9;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
-    {
-        public long PerProcessUserTimeLimit;
-        public long PerJobUserTimeLimit;
-        public uint LimitFlags;
-        public UIntPtr MinimumWorkingSetSize;
-        public UIntPtr MaximumWorkingSetSize;
-        public uint ActiveProcessLimit;
-        public UIntPtr Affinity;
-        public uint PriorityClass;
-        public uint SchedulingClass;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct IO_COUNTERS
-    {
-        public ulong ReadOperationCount;
-        public ulong WriteOperationCount;
-        public ulong OtherOperationCount;
-        public ulong ReadTransferCount;
-        public ulong WriteTransferCount;
-        public ulong OtherTransferCount;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-    {
-        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
-        public IO_COUNTERS IoInfo;
-        public UIntPtr ProcessMemoryLimit;
-        public UIntPtr JobMemoryLimit;
-        public UIntPtr PeakProcessMemoryUsed;
-        public UIntPtr PeakJobMemoryUsed;
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateJobObject(IntPtr jobAttributes, string name);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetInformationJobObject(
-        IntPtr job,
-        int informationClass,
-        IntPtr information,
-        uint informationLength);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-
-    [DllImport("kernel32.dll", EntryPoint = "IsProcessInJob", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsProcessInJobNative(IntPtr process, IntPtr job, out bool contains);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr handle);
-
-    public static IntPtr CreateKillOnCloseForCurrentProcess()
-    {
-        IntPtr job = CreateJobObject(IntPtr.Zero, null);
-        if (job == IntPtr.Zero)
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
-        }
-
-        try
-        {
-            var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-            information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            int informationLength = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-            IntPtr informationPointer = Marshal.AllocHGlobal(informationLength);
-            try
-            {
-                Marshal.StructureToPtr(information, informationPointer, false);
-                if (!SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    informationPointer,
-                    (uint)informationLength))
-                {
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(informationPointer);
-            }
-
-            using (Process current = Process.GetCurrentProcess())
-            {
-                if (!AssignProcessToJobObject(job, current.Handle))
-                {
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                }
-            }
-            return job;
-        }
-        catch
-        {
-            CloseHandle(job);
-            throw;
-        }
-    }
-
-    public static bool ContainsProcess(IntPtr job, IntPtr process)
-    {
-        bool contains;
-        if (!IsProcessInJobNative(process, job, out contains))
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
-        }
-        return contains;
-    }
-}
-`.trim();
-
-const WINDOWS_KILL_ON_CLOSE_JOB_TYPE_BASE64 = Buffer
-  .from(WINDOWS_KILL_ON_CLOSE_JOB_TYPE, 'utf16le')
-  .toString('base64');
+type WindowsPowerShellProbe = 'registry' | 'network-drives' | 'path-kinds' | 'path-cleanup';
 
 export function buildWindowsRegistryProbeScript(registryPaths: readonly string[]): string {
   const quotedPaths = registryPaths.map((registryPath) => `'${registryPath.replaceAll("'", "''")}'`).join(', ');
@@ -166,6 +38,51 @@ export function buildWindowsNetworkDriveProbeScript(): string {
     `  [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tnetwork-drives")`,
     '}',
   ].join('\n');
+}
+
+export function buildWindowsDescendantCleanupScript(rootProcessId: number): string {
+  if (!Number.isInteger(rootProcessId) || rootProcessId <= 0) {
+    throw new RangeError('rootProcessId must be a positive integer');
+  }
+  return [
+    '$pending = New-Object System.Collections.ArrayList',
+    '$descendants = New-Object System.Collections.ArrayList',
+    `[void]$pending.Add(${rootProcessId})`,
+    'while ($pending.Count -gt 0) {',
+    '  $parentProcessId = [int]$pending[0]',
+    '  $pending.RemoveAt(0)',
+    '  $children = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $parentProcessId) -ErrorAction Stop)',
+    '  foreach ($child in $children) {',
+    '    $childProcessId = [int]$child.ProcessId',
+    '    [void]$descendants.Add($childProcessId)',
+    '    [void]$pending.Add($childProcessId)',
+    '  }',
+    '}',
+    'for ($index = $descendants.Count - 1; $index -ge 0; $index -= 1) {',
+    '  Stop-Process -Id ([int]$descendants[$index]) -Force -ErrorAction SilentlyContinue',
+    '}',
+  ].join('\n');
+}
+
+export function terminateWindowsPowerShellDescendants(
+  powershell: string,
+  rootProcessId: number | undefined,
+  logger?: WindowsGitPathLogger,
+): void {
+  if (typeof rootProcessId !== 'number' || !Number.isInteger(rootProcessId) || rootProcessId <= 0) return;
+  try {
+    execFileSync(
+      powershell,
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', buildWindowsDescendantCleanupScript(rootProcessId)],
+      {
+        stdio: 'ignore',
+        timeout: WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS,
+        windowsHide: true,
+      },
+    );
+  } catch (error) {
+    warnWindowsGitPathProbeFailure(logger, 'path-cleanup', error);
+  }
 }
 
 function windowsPathKindProbeLines(outputLine: string): string[] {
@@ -220,14 +137,6 @@ export function buildWindowsPathKindProbeScript(
     ...inputPrelude,
     '$groups = @($json | ConvertFrom-Json)',
     `$probeCommand = '${encodedProbeCommand}'`,
-    `$jobTypeSource = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${WINDOWS_KILL_ON_CLOSE_JOB_TYPE_BASE64}'))`,
-    'try {',
-    '  Add-Type -TypeDefinition $jobTypeSource -ErrorAction Stop | Out-Null',
-    '  $jobHandle = [CindyWindowsGitPathJob]::CreateKillOnCloseForCurrentProcess()',
-    '} catch {',
-    `  [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
-    '  return',
-    '}',
     `$budgetMs = ${budgetMs}`,
     `$operationTimeoutMs = ${operationTimeoutMs}`,
     '$clock = [Diagnostics.Stopwatch]::StartNew()',
@@ -262,23 +171,11 @@ export function buildWindowsPathKindProbeScript(
     '        $process = New-Object System.Diagnostics.Process',
     '        $process.StartInfo = $startInfo',
     '        [void]$process.Start()',
-    '        if (-not [CindyWindowsGitPathJob]::ContainsProcess($jobHandle, $process.Handle)) {',
-    "          throw 'path probe child escaped kill-on-close job'",
-    '        }',
     '        [void]$operations.Add([PSCustomObject]@{ Process = $process; StartedAt = $clock.ElapsedMilliseconds })',
     '      } catch {',
     `        [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
     '        if ($null -ne $process) {',
-    '          try {',
-    '            if (-not $process.HasExited) {',
-    '              $process.Kill()',
-    '              $process.WaitForExit()',
-    '            }',
-    '          } catch {',
-    `            [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
-    '          } finally {',
-    '            $process.Dispose()',
-    '          }',
+    '          $process.Dispose()',
     '        }',
     '      }',
     '    }',
@@ -349,7 +246,7 @@ export function countWindowsPowerShellDiagnostics(output: string): number {
 
 export function warnWindowsGitPathProbeDiagnostics(
   logger: WindowsGitPathLogger | undefined,
-  probe: 'registry' | 'network-drives' | 'path-kinds',
+  probe: WindowsPowerShellProbe,
   output: string,
 ): void {
   const failures = countWindowsPowerShellDiagnostics(output);
@@ -359,7 +256,7 @@ export function warnWindowsGitPathProbeDiagnostics(
 
 export function warnWindowsGitPathProbeFailure(
   logger: WindowsGitPathLogger | undefined,
-  probe: 'registry' | 'network-drives' | 'path-kinds',
+  probe: WindowsPowerShellProbe,
   error: unknown,
 ): void {
   if (!logger) return;
