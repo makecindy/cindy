@@ -16550,6 +16550,63 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('keeps descendant native permission input requests available when item context arrives later', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-native-permission-input-descendant-out-of-order',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput || !handlers.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected requestUserInput and descendant notification handlers');
+    }
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-thread-permission-input-late', parentThreadId: 'start-thread-id' },
+    });
+    const resolveInteraction = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
+      expect(request.kind).toBe('permission');
+      expect(request.toolName).toBe('mcp:third_party:needs_confirmation');
+      return { kind: 'permission', behavior: 'allow' };
+    });
+    handle.setInteractionResolver(resolveInteraction);
+
+    const resultPromise = handlers.requestUserInput({
+      threadId: 'child-thread-permission-input-late',
+      turnId: 'turn-permission-descendant-late',
+      itemId: 'child-permission-input-late',
+      questions: [{
+        id: 'confirm',
+        header: 'Confirm',
+        question: 'Allow the child tool?',
+        isOther: false,
+        isSecret: false,
+        options: [
+          { label: 'Deny', description: '' },
+          { label: 'Allow', description: '' },
+        ],
+      }],
+    }, { requestId: 'req-permission-descendant-late' });
+
+    handlers.descendantNotification('child-thread-permission-input-late', 'item/updated', {
+      threadId: 'child-thread-permission-input-late',
+      turnId: 'turn-permission-descendant-late',
+      item: {
+        id: 'child-permission-input-late',
+        type: 'mcpToolCall',
+        server: 'third_party',
+        tool: 'needs_confirmation',
+      },
+    });
+
+    await expect(resultPromise).resolves.toEqual({
+      answers: { confirm: { answers: ['Allow'] } },
+    });
+    expect(resolveInteraction).toHaveBeenCalledTimes(1);
+    await handle.close();
+  });
+
   it('preserves submitted answers from different concurrent user input prompts', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

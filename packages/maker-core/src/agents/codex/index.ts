@@ -660,6 +660,10 @@ const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
   `${ASK_USER_DYNAMIC_TOOL_NAMESPACE}__${ASK_USER_DYNAMIC_TOOL_NAME}`;
 const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
   'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
+// Codex may deliver a server request before the matching item notification.
+// Keep the classification race bounded while preserving fail-closed behavior
+// for a descendant whose tool provenance never arrives.
+const CODEX_TOOL_CONTEXT_WAIT_TIMEOUT_MS = 500;
 const MAX_REQUEST_USER_INPUT_QUESTIONS = 3;
 const MAX_REQUEST_USER_INPUT_OPTIONS = 10;
 const MAX_REQUEST_USER_INPUT_TEXT_CHARS = 1_000;
@@ -5514,6 +5518,7 @@ export class CodexAgent extends BaseAgent {
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
+    const activeToolContextWaiters = new Map<string, Set<() => void>>();
     const completedActiveToolTurns = new Map<string, string | null | undefined>();
     // A single model turn can surface the same visible question through both
     // the native requestUserInput request and the dynamic-tool compatibility
@@ -7192,6 +7197,10 @@ export class CodexAgent extends BaseAgent {
         && completedActiveToolTurns.get(active.id) === turnId
       ) return;
       activeToolContexts.set(active.id, active.ctx);
+      const waiters = activeToolContextWaiters.get(active.id);
+      if (!waiters) return;
+      activeToolContextWaiters.delete(active.id);
+      for (const resolve of [...waiters]) resolve();
     }
 
     function completeActiveToolContext(item: unknown, turnId?: string | null): void {
@@ -7202,6 +7211,34 @@ export class CodexAgent extends BaseAgent {
       if (!itemId) return;
       activeToolContexts.delete(itemId);
       completedActiveToolTurns.set(itemId, turnId);
+      const waiters = activeToolContextWaiters.get(itemId);
+      if (!waiters) return;
+      activeToolContextWaiters.delete(itemId);
+      for (const resolve of [...waiters]) resolve();
+    }
+
+    function waitForActiveToolContext(itemId: string): Promise<void> {
+      if (activeToolContexts.has(itemId) || completedActiveToolTurns.has(itemId)) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          const waiters = activeToolContextWaiters.get(itemId);
+          waiters?.delete(finish);
+          if (waiters?.size === 0) activeToolContextWaiters.delete(itemId);
+          resolve();
+        };
+        timer = setTimeout(finish, CODEX_TOOL_CONTEXT_WAIT_TIMEOUT_MS);
+        timer.unref?.();
+        const waiters = activeToolContextWaiters.get(itemId) ?? new Set<() => void>();
+        waiters.add(finish);
+        activeToolContextWaiters.set(itemId, waiters);
+      });
     }
 
     function activeDynamicToolUseId(params: DynamicToolCallParams): string | undefined {
@@ -7265,8 +7302,7 @@ export class CodexAgent extends BaseAgent {
       }
     }
 
-    function classifyUserInputRequest(params: ToolRequestUserInputParams): 'ask_user_question' | 'permission' {
-      const ctx = activeToolContexts.get(params.itemId);
+    function classifyToolContext(ctx: ActiveToolContext | undefined): 'ask_user_question' | 'permission' {
       if (!ctx) return 'ask_user_question';
       if (ctx.type === 'mcpToolCall') return 'permission';
       if (ctx.type === 'dynamicToolCall') {
@@ -7275,6 +7311,15 @@ export class CodexAgent extends BaseAgent {
           : 'permission';
       }
       return 'ask_user_question';
+    }
+
+    function classifyUserInputRequest(
+      params: ToolRequestUserInputParams,
+    ): 'ask_user_question' | 'permission' | Promise<'ask_user_question' | 'permission'> {
+      const ctx = activeToolContexts.get(params.itemId);
+      if (ctx || params.threadId === threadId) return classifyToolContext(ctx);
+      return waitForActiveToolContext(params.itemId).then(() =>
+        classifyToolContext(activeToolContexts.get(params.itemId)));
     }
 
     async function askUserViaInteraction(
@@ -7495,7 +7540,8 @@ export class CodexAgent extends BaseAgent {
       if (resolvedWhileBufferedRequestIds.delete(requestId)) return { answers: {} };
       const questions = normalizeRequestUserInputQuestions(params.questions);
       if (questions.length === 0) return { answers: {} };
-      const kind = classifyUserInputRequest(params);
+      const classifiedKind = classifyUserInputRequest(params);
+      const kind = typeof classifiedKind === 'string' ? classifiedKind : await classifiedKind;
       if (kind === 'ask_user_question' && params.threadId !== threadId) {
         log.warn('native requestUserInput rejected for descendant user question', {
           requestId,
