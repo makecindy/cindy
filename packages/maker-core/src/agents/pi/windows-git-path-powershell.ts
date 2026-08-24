@@ -121,11 +121,10 @@ export function buildWindowsPathKindProbeScript(
   const budgetMs = Math.max(timeoutMs - 250, 1);
   const operationCount = Math.min(Math.max(batchCount, 1), Math.max(candidateCount, 1));
   const maxConcurrency = Math.min(operationCount, 4);
-  const operationWaves = Math.ceil(operationCount / maxConcurrency);
-  const operationTimeoutMs = Math.min(
-    Math.max(Math.floor(Math.max(budgetMs - 250, 1) / operationWaves), 1),
-    1_250,
-  );
+  const availableOperationBudgetMs = Math.max(budgetMs - 250, 1);
+  const operationTimeoutMs = Math.min(availableOperationBudgetMs, 1_250);
+  const maxOperationWaves = Math.max(Math.floor(availableOperationBudgetMs / operationTimeoutMs), 1);
+  const maxOperationCount = Math.min(operationCount, maxConcurrency * maxOperationWaves);
   const encodedProbeCommand = Buffer.from([
     '$paths = @(([string]$env:CINDY_WINDOWS_GIT_PATH_CANDIDATES | ConvertFrom-Json))',
     'foreach ($pathValue in $paths) {',
@@ -135,7 +134,11 @@ export function buildWindowsPathKindProbeScript(
   ].join('\n'), 'utf16le').toString('base64');
   return [
     ...inputPrelude,
-    '$groups = @($json | ConvertFrom-Json)',
+    '$allGroups = @($json | ConvertFrom-Json)',
+    `$groups = @($allGroups | Select-Object -First ${maxOperationCount})`,
+    'if ($allGroups.Count -gt $groups.Count) {',
+    `  [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-budget")`,
+    '}',
     `$probeCommand = '${encodedProbeCommand}'`,
     `$budgetMs = ${budgetMs}`,
     `$operationTimeoutMs = ${operationTimeoutMs}`,

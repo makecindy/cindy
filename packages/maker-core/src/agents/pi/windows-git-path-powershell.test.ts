@@ -53,7 +53,8 @@ describe('Windows Git PATH PowerShell probes', () => {
   it('locks the bounded install-root process coordinator for multiple candidates', () => {
     const script = buildWindowsPathKindProbeScript(8, 3_000);
 
-    expect(script).toContain('$groups = @($json | ConvertFrom-Json)');
+    expect(script).toContain('$allGroups = @($json | ConvertFrom-Json)');
+    expect(script).toContain('$groups = @($allGroups | Select-Object -First 8)');
     expect(script).toContain('$clock = [Diagnostics.Stopwatch]::StartNew()');
     expect(script).toContain('$maxConcurrency = 4');
     expect(script).toContain('$operationTimeoutMs = 1250');
@@ -85,11 +86,13 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(probeCommand).toContain('WriteLine($kind + "`t" + $encoded)');
   });
 
-  it('allocates enough shared budget for every queued install-root batch', () => {
-    const script = buildWindowsPathKindProbeScript(28, 3_000, 9);
+  it('caps queued install roots instead of shrinking PowerShell startup time', () => {
+    const script = buildWindowsPathKindProbeScript(25, 3_000, 25);
 
     expect(script).toContain('$maxConcurrency = 4');
-    expect(script).toContain('$operationTimeoutMs = 833');
+    expect(script).toContain('$operationTimeoutMs = 1250');
+    expect(script).toContain('$groups = @($allGroups | Select-Object -First 8)');
+    expect(script).toContain('__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__`tpath-budget');
     expect(script).toContain('$nextGroupIndex += 1');
   });
 

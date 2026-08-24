@@ -390,10 +390,18 @@ function pathExecutableValidatesInstallRoot(
 ): boolean {
   const normalized = path.win32.normalize(gitPath);
   const parent = path.win32.dirname(normalized);
-  if (path.win32.basename(parent).toLowerCase() !== 'bin') return true;
+  const parentName = path.win32.basename(parent).toLowerCase();
+  const root = path.win32.normalize(installRoot);
+  if (parentName === 'cmd') {
+    const bin = path.win32.join(root, 'bin');
+    const usrBin = path.win32.join(root, 'usr', 'bin');
+    return hasGitCommand(bin, probes)
+      || hasGitCommand(usrBin, probes)
+      || probes.isFile(path.win32.join(usrBin, 'ls.exe'));
+  }
+  if (parentName !== 'bin') return true;
   const grandparentName = path.win32.basename(path.win32.dirname(parent)).toLowerCase();
   if (grandparentName === 'usr' || grandparentName.startsWith('mingw')) return true;
-  const root = path.win32.normalize(installRoot);
   const cmd = path.win32.join(root, 'cmd');
   const usrBin = path.win32.join(root, 'usr', 'bin');
   return hasGitCommand(cmd, probes)
@@ -437,7 +445,7 @@ function msysRootProbeCandidates(segments: readonly string[], installRoots: read
   const candidates: string[] = [];
   for (const segment of segments) {
     const trimmed = segment.trim().replace(/^"|"$/g, '');
-    if (!trimmed || /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\\\')) continue;
+    if (!trimmed || /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\')) continue;
     const forward = trimmed.replaceAll('\\', '/');
     if (!forward.startsWith('/')) continue;
     const rest = forward.slice(1);
@@ -464,7 +472,7 @@ function fileProbesFromPathKinds(kinds: ReadonlyMap<string, WindowsPathKind>): W
 
 export function translateMsysPathSegment(segment: string, installRoots: readonly string[], isDirectory: (candidate: string) => boolean): string | undefined {
   const trimmed = segment.trim().replace(/^"|"$/g, '');
-  if (!trimmed || /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\\\')) return undefined;
+  if (!trimmed || /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\')) return undefined;
   const forward = trimmed.replaceAll('\\', '/');
   if (!forward.startsWith('/')) return undefined;
   const rest = forward.slice(1);

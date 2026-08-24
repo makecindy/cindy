@@ -314,6 +314,8 @@ describe('Windows Git/PATH helpers', () => {
     const staleGit = 'Z:\\OldGit\\cmd\\git.exe';
     const git = 'C:\\PortableGit\\cmd\\git.exe';
     const cmd = 'C:\\PortableGit\\cmd';
+    const bin = 'C:\\PortableGit\\bin';
+    const binGit = `${bin}\\git.exe`;
     const snapshots: string[][] = [];
 
     const result = resolveWindowsGitPath({
@@ -327,14 +329,16 @@ describe('Windows Git/PATH helpers', () => {
           return new Map([
             [git, 'file'],
             [cmd, 'directory'],
+            [binGit, 'file'],
+            [bin, 'directory'],
           ]);
         },
       },
     });
 
     expect(snapshots).toHaveLength(1);
-    expect(snapshots[0]).toEqual(expect.arrayContaining([staleGit, git, cmd]));
-    expect(result).toBe(`C:\\Windows;${cmd}`);
+    expect(snapshots[0]).toEqual(expect.arrayContaining([staleGit, git, cmd, binGit, bin]));
+    expect(result).toBe(`C:\\Windows;${cmd};${bin}`);
   });
 
   it('keeps path records emitted before a bounded probe timeout', () => {
@@ -454,13 +458,24 @@ describe('Windows Git/PATH helpers', () => {
     })).toBe('C:\\Windows');
   });
 
+  it('does not let a cmd shim prove its own Git for Windows root', () => {
+    const shim = 'C:\\Tools\\cmd\\git.exe';
+    const fs = fakeFs([shim]);
+
+    expect(resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: 'C:\\Windows',
+      probes: { readRegistryInstallPaths: () => [], findGitExecutablesOnPath: () => [shim], ...fs },
+    })).toBe('C:\\Windows');
+  });
+
   it.each([
     'C:\\Git\\cmd\\git.exe',
     'C:\\Git\\bin\\git.exe',
     'C:\\Git\\usr\\bin\\git.exe',
     'C:\\Git\\mingw64\\bin\\git.exe',
   ])('uses a PATH executable at %s to add the inferred root paths', (gitPath) => {
-    const fs = fakeFs([gitPath, 'C:\\Git\\cmd\\git.exe']);
+    const fs = fakeFs([gitPath, 'C:\\Git\\cmd\\git.exe', 'C:\\Git\\bin\\git.exe']);
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: '',
@@ -472,7 +487,7 @@ describe('Windows Git/PATH helpers', () => {
   it('ignores executable shims without running PATH candidates', () => {
     const shim = 'C:\\Users\\alice\\workspace\\tools\\git.exe';
     const standardGit = 'C:\\PortableGit\\cmd\\git.exe';
-    const fs = fakeFs([shim, standardGit]);
+    const fs = fakeFs([shim, standardGit, 'C:\\PortableGit\\bin\\git.exe']);
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: 'C:\\Windows',
@@ -482,7 +497,7 @@ describe('Windows Git/PATH helpers', () => {
         ...fs,
       },
     });
-    expect(result).toBe('C:\\Windows;C:\\PortableGit\\cmd');
+    expect(result).toBe('C:\\Windows;C:\\PortableGit\\cmd;C:\\PortableGit\\bin');
   });
 
   it('fails open when a wrapper cannot identify a valid Git for Windows root', () => {
@@ -529,7 +544,37 @@ describe('Windows Git/PATH helpers', () => {
     expect(translateMsysPathSegment('/d', [], () => false)).toBe('D:\\');
     expect(translateMsysPathSegment('/usr/bin', ['C:\\Git'], (candidate) => candidate === 'C:\\Git\\usr\\bin'))
       .toBe('C:\\Git\\usr\\bin');
+    expect(translateMsysPathSegment('\\usr\\bin', ['C:\\Git'], () => true)).toBeUndefined();
     expect(translateMsysPathSegment('C:\\Windows', ['C:\\Git'], () => true)).toBeUndefined();
+  });
+
+  it('preserves native root-relative PATH entries when Git is discovered', () => {
+    const rootRelative = '\\custom\\bin';
+    const gitRoot = 'C:\\Git';
+    const gitCmd = `${gitRoot}\\cmd`;
+    const gitExecutable = `${gitCmd}\\git.exe`;
+    const translatedCandidate = `${gitRoot}\\custom\\bin`;
+    const captured: string[] = [];
+
+    const result = resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: `${rootRelative};C:\\Windows`,
+      probes: {
+        readRegistryInstallPaths: () => [gitRoot],
+        findGitExecutablesOnPath: () => [],
+        probePathKinds: (candidates) => {
+          captured.push(...candidates);
+          return new Map([
+            [gitCmd.toLowerCase(), 'directory'],
+            [gitExecutable.toLowerCase(), 'file'],
+            [translatedCandidate.toLowerCase(), 'directory'],
+          ]);
+        },
+      },
+    });
+
+    expect(captured).not.toContain(translatedCandidate);
+    expect(result).toBe(`${rootRelative};C:\\Windows;${gitCmd}`);
   });
 
   it('keeps the original PATH when Git is unavailable', () => {
