@@ -375,8 +375,8 @@ interface MessageStreamProps {
   historyWindowHasIsland?: boolean;
   /** Dynamic bottom padding (px) to reserve space for the input overlay */
   bottomPadding?: number;
-  /** Distance from the chat viewport bottom to the visible composer stack top. */
-  composerStackTopOffset?: number;
+  /** Distance from the chat viewport bottom to the topmost occupied bottom-center layer. */
+  bottomCenterClearanceOffset?: number;
   /** Content width — shared with the input overlay so chat stream + input
    *  box stay horizontally aligned (same width, same center, symmetric
    *  padding when the main area is compressed). */
@@ -2957,7 +2957,7 @@ export function MessageStream({
   hasMoreMessages,
   historyWindowHasIsland = false,
   bottomPadding,
-  composerStackTopOffset,
+  bottomCenterClearanceOffset,
   contentWidth,
   getContentWidth,
   focusMessageClientId,
@@ -5658,12 +5658,12 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // chip 垂直位置：优先使用父层实测的输入框卡片顶边，避免 RunningStatusBar
-  // 出现 / 收起改变 overlay 总高度后，把按钮带进输入框。旧调用方保留历史兜底。
+  // chip 垂直位置：优先使用父层实测的底部中央避让边界。普通状态行不占中央槽，
+  // 步骤 / 接管胶囊在场时则把按钮抬到它们上方；旧调用方保留历史兜底。
   const resolvedBottomPadding = bottomPadding ?? 200;
   const indicatorBottomOffset = resolveMessageStreamIndicatorBottomOffset({
     bottomPadding,
-    composerStackTopOffset,
+    bottomCenterClearanceOffset,
   });
 
   const latestInlinePlanRendered = Boolean(
