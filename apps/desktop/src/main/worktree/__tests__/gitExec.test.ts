@@ -7,6 +7,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
@@ -621,7 +622,7 @@ describe('gitExec dubious-ownership safe.directory', () => {
     expect(mocks.ensureCindySafeDirectory).toHaveBeenCalledOnce();
     expect(mocks.ensureCindySafeDirectory).toHaveBeenCalledWith({
       appDataPath: '/app-data',
-      directory: '/repo',
+      directory: path.resolve('/repo'),
       executeGitConfig: expect.any(Function),
     });
 
