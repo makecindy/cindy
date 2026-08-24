@@ -6380,7 +6380,7 @@
       "myDevices": "我的裝置",
       "deviceOffline": "離線",
       "allowControl": "允許同帳號裝置控制本機",
-      "deviceId": "本機 · {{id}}",
+      "deviceName": "本機 · {{name}}",
       "remoteAction": {
         "checking": "正在檢查…",
         "unavailable": "暫不可用",

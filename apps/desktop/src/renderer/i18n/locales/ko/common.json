@@ -6388,7 +6388,7 @@
       "myDevices": "내 기기",
       "deviceOffline": "오프라인",
       "allowControl": "동일 계정 기기에서 이 컴퓨터를 제어하도록 허용",
-      "deviceId": "이 기기 · {{id}}",
+      "deviceName": "이 기기 · {{name}}",
       "remoteAction": {
         "checking": "확인 중…",
         "unavailable": "사용할 수 없음",

@@ -6390,7 +6390,7 @@
       "myDevices": "My Devices",
       "deviceOffline": "Offline",
       "allowControl": "Allow same-account devices to control this machine",
-      "deviceId": "This device · {{id}}",
+      "deviceName": "This device · {{name}}",
       "remoteAction": {
         "checking": "Checking…",
         "unavailable": "Unavailable",

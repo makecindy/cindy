@@ -6388,7 +6388,7 @@
       "myDevices": "自分のデバイス",
       "deviceOffline": "オフライン",
       "allowControl": "同じアカウントのデバイスによるこのマシンの操作を許可",
-      "deviceId": "このデバイス · {{id}}",
+      "deviceName": "このデバイス · {{name}}",
       "remoteAction": {
         "checking": "確認中…",
         "unavailable": "利用できません",
