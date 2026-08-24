@@ -403,6 +403,32 @@ describe('Windows Git/PATH helpers', () => {
     expect(result).toBe('C:\\Tools\\Git\\cmd;C:\\Tools\\Git\\bin');
   });
 
+  it('keeps the PATH-selected Git root ahead of registry fallbacks', () => {
+    const fs = fakeFs([
+      'C:\\Git\\cmd\\git.exe',
+      'C:\\Git\\bin\\git.exe',
+      'D:\\Git\\cmd\\git.exe',
+      'D:\\Git\\bin\\git.exe',
+    ]);
+    const result = resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: 'D:\\Git\\cmd;C:\\Windows',
+      probes: {
+        readRegistryInstallPaths: () => ['C:\\Git'],
+        findGitExecutablesOnPath: () => ['D:\\Git\\cmd\\git.exe'],
+        ...fs,
+      },
+    });
+
+    expect(result.split(';')).toEqual([
+      'D:\\Git\\cmd',
+      'C:\\Windows',
+      'D:\\Git\\bin',
+      'C:\\Git\\cmd',
+      'C:\\Git\\bin',
+    ]);
+  });
+
   it.each([
     ['C:\\Git\\cmd\\git.exe', 'C:\\Git'],
     ['C:\\Git\\bin\\git.exe', 'C:\\Git'],
