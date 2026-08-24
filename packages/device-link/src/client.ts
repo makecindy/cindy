@@ -1518,6 +1518,9 @@ export class DeviceLinkClient {
   private resetLinkStateForReconnect(): void {
     // hello 会从 host 读取完整最新状态；旧连接上尚未发出的覆盖型 patch 不跨世代重放。
     this.clearPendingPresence();
+    // 旧 socket 的 relay-error 已被 connection epoch 守卫隔离，不可能再合法到达；
+    // 保留它的物理发送记录只会让新连接重放产生的错误先消费旧代次，误判为 stale。
+    this.outboundRouteGenerationById.clear();
     for (const peer of this.peerTransport.values()) {
       this.markPeerLinkDown(peer);
       peer.recoveryNeedsAck = true;

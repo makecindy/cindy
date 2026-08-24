@@ -3205,6 +3205,74 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('WebSocket 重连后重放帧的 DEVICE_OFFLINE 不消费旧连接发送代次', async () => {
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        pingIntervalMs: 60_000,
+      },
+    });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-before-reconnect');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendInvokeResult('dev-b', 'replayed-after-websocket-reconnect', {
+      ok: true,
+      result: 'pending',
+    });
+    expect(h.current().sent.some((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'replayed-after-websocket-reconnect'
+      && parseTransportPayload(env.payload) !== null
+    ))).toBe(true);
+
+    const oldSocketCount = h.sockets.length;
+    h.current().emit('close', 1006);
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(oldSocketCount + 1));
+    const reconnectedSocket = h.current();
+    reconnectedSocket.ack();
+    await tick();
+
+    await establishInboundReliableLink(h, 'controller-stream-after-reconnect');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = reconnectedSocket.sent.find((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'replayed-after-websocket-reconnect'
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    reconnectedSocket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: replayedFrame!.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'replay target offline',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
+
   it('可靠 link 收到 DEVICE_OFFLINE 后清空 pending，下次握手用 baseSeq 跨过', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
