@@ -26,6 +26,9 @@ export interface SchedulerToolError {
   message: string;
 }
 
+const UTILITY_MODEL_SCRIPT_HINT =
+  ' description 模式需要宿主 utility model 生成脚本；可改为传入 script（Node ESM）以跳过模型生成并继续安装。';
+
 /**
  * Map an unknown error thrown by `Scheduler` (or `getScheduler()`) to a
  * structured `{code, message}` payload. Pure — no throw, no logging.
@@ -35,7 +38,10 @@ export function classifySchedulerError(err: unknown): SchedulerToolError {
   const utilityCode = /^\[(UTILITY_MODEL_(?:NO_CANDIDATE|ALL_CANDIDATES_FAILED|EMPTY_RESPONSE|TIMEOUT))\]/
     .exec(message)?.[1];
   if (utilityCode) {
-    return { code: utilityCode as SchedulerToolErrorCode, message };
+    return {
+      code: utilityCode as SchedulerToolErrorCode,
+      message: `${message}${UTILITY_MODEL_SCRIPT_HINT}`,
+    };
   }
   if (/scheduler not started/i.test(message)) {
     return { code: 'SCHEDULER_NOT_READY', message };

@@ -13,6 +13,8 @@ describe('classifySchedulerError utility model diagnostics', () => {
       new Error(`[${code}] safe diagnostic`),
     );
 
-    expect(result).toEqual({ code, message: `[${code}] safe diagnostic` });
+    expect(result.code).toBe(code);
+    expect(result.message).toContain(`[${code}] safe diagnostic`);
+    expect(result.message).toContain('可改为传入 script');
   });
 });
