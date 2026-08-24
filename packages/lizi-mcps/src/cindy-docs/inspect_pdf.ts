@@ -163,6 +163,16 @@ export function registerInspectPdfTool(
         const visibilityUnverifiedPages = decorated
           .filter((p) => p.visibilityUnverified)
           .map((p) => p.page);
+        const partial = inspection.pagesInspected < inspection.numPages;
+        const inspectedPageNumbers = new Set(decorated.map((page) => page.page));
+        const nextPages = partial
+          ? Array.from({ length: inspection.numPages }, (_, index) => index + 1)
+              .filter((page) => !inspectedPageNumbers.has(page))
+              .slice(0, maxPages)
+          : [];
+        const coverageWarning = partial
+          ? `本次只检查了 ${inspection.pagesInspected}/${inspection.numPages} 页，未覆盖页码 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}] 继续检查。`
+          : undefined;
 
         return okPayload({
           path: abs,
@@ -172,24 +182,27 @@ export function registerInspectPdfTool(
           pages: decorated,
           blankPages,
           visibilityUnverifiedPages,
+          ...(partial ? { nextPages } : {}),
           ...(allInspectedBlank
             ? {
                 verdict: 'blank',
                 warning:
-                  '检查到的每一页都是空白 —— 这份 PDF 不能交付。回去检查 HTML 是否真有可见内容、外部图片/字体是否加载失败,修好后重新生成再查一次。',
+                  `检查到的每一页都是空白 —— 这份 PDF 不能交付。回去检查 HTML 是否真有可见内容、外部图片/字体是否加载失败,修好后重新生成再查一次。${coverageWarning ? ` ${coverageWarning}` : ''}`,
               }
             : blankPages.length > 0
               ? {
                   verdict: 'partial-blank',
-                  warning: `第 ${blankPages.join('、')} 页是空白的。通常是分页把内容挤走了(检查 page-break / break-inside),修好后重新生成。`,
+                  warning: `第 ${blankPages.join('、')} 页是空白的。通常是分页把内容挤走了(检查 page-break / break-inside),修好后重新生成。${coverageWarning ? ` ${coverageWarning}` : ''}`,
                 }
               : visibilityUnverifiedPages.length > 0
                 ? {
                     verdict: 'warning',
                     warning:
-                      `第 ${visibilityUnverifiedPages.join('、')} 页含结构内容,但本工具未做位图级可见性确认。请打开 PDF 目检后再交付,尤其留意白色/透明文字与背景。`,
+                      `第 ${visibilityUnverifiedPages.join('、')} 页含结构内容,但本工具未做位图级可见性确认。请打开 PDF 目检后再交付,尤其留意白色/透明文字与背景。${coverageWarning ? ` ${coverageWarning}` : ''}`,
                   }
-                : { verdict: 'ok' }),
+                : partial
+                  ? { verdict: 'incomplete', warning: coverageWarning! }
+                  : { verdict: 'ok' }),
         });
       } catch (err) {
         if (err instanceof DocsPathError) {

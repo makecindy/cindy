@@ -537,7 +537,16 @@ describe('make_pptx', () => {
       0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03, 0x01, 0x11, 0x00,
       0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
     ]);
-    expect(detectPptxImageMime(jpegNamedPng)).toBe('image/jpeg');
+    expect(detectPptxImageMime(jpegNamedPng)).toBeNull();
+
+    const completeJpeg = Buffer.from([
+      0xff, 0xd8,
+      0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
+      0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+      0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00,
+      0x00, 0x3f, 0x00, 0x01, 0xff, 0xd9,
+    ]);
+    expect(detectPptxImageMime(completeJpeg)).toBe('image/jpeg');
   });
 });
 
@@ -1277,6 +1286,19 @@ describe('inspect_pdf', () => {
     expect(result.verdict).toBe('ok');
     expect(result.warning).toBeUndefined();
     expect(result.blankPages).toEqual([]);
+  });
+
+  it('只检查部分页时返回 incomplete 并给出下一批页码', async () => {
+    const client = await withPdf({
+      numPages: 12,
+      pagesInspected: 10,
+      pages: Array.from({ length: 10 }, (_, index) => page({ page: index + 1 })),
+    });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.verdict).toBe('incomplete');
+    expect(result.nextPages).toEqual([11, 12]);
+    expect(result.warning).toContain('11、12');
+    expect(result.verdict).not.toBe('ok');
   });
 
   it('算子表未能解析时 verdict 不得误报 ok', async () => {

@@ -156,12 +156,45 @@ export function detectPptxImageMime(bytes: Buffer): PptxImageMime | null {
     bytes[bytes.length - 1] === 0xd9
   ) {
     let offset = 2;
+    let sawFrame = false;
     while (offset + 3 < bytes.length) {
       while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
       if (offset >= bytes.length) break;
       const marker = bytes[offset]!;
       offset += 1;
-      if (marker === 0xd9 || marker === 0xda) break;
+      if (marker === 0xd9) return null;
+      if (marker === 0xda) {
+        if (offset + 2 > bytes.length) return null;
+        const segmentLength = bytes.readUInt16BE(offset);
+        if (segmentLength < 8 || offset + segmentLength > bytes.length) return null;
+        const componentCount = bytes[offset + 2]!;
+        if (componentCount === 0 || segmentLength !== 6 + componentCount * 2) return null;
+        offset += segmentLength;
+
+        // After SOS, scan data may contain stuffed 0xFF bytes and restart
+        // markers. Require actual scan bytes and a terminating EOI instead of
+        // treating a bare SOF followed by EOI as a valid JPEG.
+        let scanBytes = 0;
+        while (offset < bytes.length) {
+          if (bytes[offset] !== 0xff) {
+            scanBytes += 1;
+            offset += 1;
+            continue;
+          }
+          let markerOffset = offset + 1;
+          while (markerOffset < bytes.length && bytes[markerOffset] === 0xff) markerOffset += 1;
+          if (markerOffset >= bytes.length) return null;
+          const scanMarker = bytes[markerOffset]!;
+          if (scanMarker === 0x00 || (scanMarker >= 0xd0 && scanMarker <= 0xd7)) {
+            scanBytes += 1;
+            offset = markerOffset + 1;
+            continue;
+          }
+          if (scanMarker === 0xd9) return sawFrame && scanBytes > 0 ? 'image/jpeg' : null;
+          return null;
+        }
+        return null;
+      }
       if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
       if (offset + 2 > bytes.length) break;
       const segmentLength = bytes.readUInt16BE(offset);
@@ -172,11 +205,17 @@ export function detectPptxImageMime(bytes: Buffer): PptxImageMime | null {
         (marker >= 0xc9 && marker <= 0xcb) ||
         (marker >= 0xcd && marker <= 0xcf);
       if (isStartOfFrame) {
-        return segmentLength >= 7 &&
-          bytes.readUInt16BE(offset + 3) > 0 &&
-          bytes.readUInt16BE(offset + 5) > 0
-          ? 'image/jpeg'
-          : null;
+        if (segmentLength < 8) return null;
+        const componentCount = bytes[offset + 7]!;
+        if (
+          componentCount === 0 ||
+          segmentLength !== 8 + componentCount * 3 ||
+          bytes.readUInt16BE(offset + 3) === 0 ||
+          bytes.readUInt16BE(offset + 5) === 0
+        ) {
+          return null;
+        }
+        sawFrame = true;
       }
       offset += segmentLength;
     }
