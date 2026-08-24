@@ -139,6 +139,8 @@ export interface DeviceLinkContextValue {
   /** 当前 relay 连接代内的逐设备 availability；null = 本代尚无权威 verdict。 */
   getPresenceAvailability(deviceId: string): boolean | null;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
+  /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
+  reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   /**
    * opts.preSend:在连接就绪之后、真正 client.invoke 之前的最后同步检查点。抛错即
@@ -342,6 +344,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     client: DeviceLinkClient,
     deviceId: string,
     allowProbe = false,
+    refreshSettled = false,
   ) => {
     return getOrCreatePresenceTrackedRequest(
       openLinkInFlightRef.current,
@@ -349,7 +352,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       remoteResponseEvidenceEpochs,
       deviceId,
       () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe),
-      { retainSuccessful: true },
+      { retainSuccessful: true, refreshSettled },
     );
   }, []);
 
@@ -1084,6 +1087,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     [sendOpenLinkOnce],
   );
 
+  const reopenLink = useCallback(
+    async (deviceId: string) => {
+      registryRef.current.trackOpenLink(deviceId);
+      return sendOpenLinkOnce(
+        requireClient(clientRef.current),
+        deviceId,
+        false,
+        true,
+      ).request;
+    },
+    [sendOpenLinkOnce],
+  );
+
   const closeLink = useCallback((deviceId: string) => {
     registryRef.current.untrackOpenLink(deviceId);
     openLinkInFlightRef.current.delete(deviceId);
@@ -1139,6 +1155,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     lastPresenceSnapshot,
     getPresenceAvailability,
     openLink,
+    reopenLink,
     closeLink,
     invoke,
     subscribe,
@@ -1151,6 +1168,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     invoke,
     lastPresenceSnapshot,
     openLink,
+    reopenLink,
     presenceVersion,
     status,
     subscribe,

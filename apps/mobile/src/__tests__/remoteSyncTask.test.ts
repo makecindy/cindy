@@ -179,6 +179,17 @@ describe('remote sync coordinator', () => {
     );
   });
 
+  it('uses the force-reopen callback for subscription and snapshot retries', () => {
+    const source = readSessionScreenSource();
+    expect(source).toContain(
+      'reopenLink: async () => {\n          await reopenLink(deviceId);\n        }',
+    );
+    expect(source).toContain('if (attempt > 0) await reopenLink(deviceId);');
+    expect(source).not.toContain(
+      'reopenLink: async () => {\n          await openLink(deviceId);\n        }',
+    );
+  });
+
   it('applies coordinator context and task changes after render commits', () => {
     const source = readFileSync(
       resolve(process.cwd(), 'src/device-link/remoteSyncTask.ts'),

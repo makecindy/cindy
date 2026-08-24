@@ -946,6 +946,7 @@ export default function SessionScreen() {
     getPresenceAvailability,
     invoke,
     openLink,
+    reopenLink,
     status,
     subscribe,
     unsubscribe,
@@ -3687,7 +3688,7 @@ export default function SessionScreen() {
         identity: subscriptionIdentityAtStart,
         isStale: subscriptionRetryIsStale,
         reopenLink: async () => {
-          await openLink(deviceId);
+          await reopenLink(deviceId);
         },
         subscribe: () => subscribe(`session:${sessionId}`, deviceId, ['sessions']),
       });
@@ -3697,7 +3698,7 @@ export default function SessionScreen() {
       return withTransientRemoteRetry(async () => {
         // 首轮复用上面统一完成的 link-open。只有本项真的因瞬态错误重试时才
         // 重开 peer link，避免一个失败把其它已成功读取和 subscribe 一起重放。
-        if (attempt > 0) await openLink(deviceId);
+        if (attempt > 0) await reopenLink(deviceId);
         attempt += 1;
         return read();
       });
@@ -3868,7 +3869,7 @@ export default function SessionScreen() {
     } finally {
       if (!syncRun.isStale() && messageAuthorityCurrent()) setLoading(false);
     }
-  }, [deviceId, deviceName, latchOutboxTransportHold, maker, openLink, sessionId, subscribe]);
+  }, [deviceId, deviceName, latchOutboxTransportHold, maker, openLink, reopenLink, sessionId, subscribe]);
   // 任一连接恢复身份变化都会让旧读取失去提交资格。否则断线前启动的同步可能在
   // 新 hold 锁存后迟到，并从成功尾误清恢复屏障。
   const remoteSyncContextKey = JSON.stringify([
