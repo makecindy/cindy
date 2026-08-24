@@ -150,6 +150,20 @@ type ReadResults<Reads extends readonly AsyncRead[]> = {
 };
 
 /**
+ * Publishes authoritative session metadata as soon as that read succeeds,
+ * independently from sibling snapshots in the same opening batch.
+ */
+export async function runConnectionScopedSessionMetadataRead<T>(
+  read: () => Promise<T>,
+  isCurrent: () => boolean,
+  commit: (value: T) => void,
+): Promise<T> {
+  const value = await read();
+  if (isCurrent()) commit(value);
+  return value;
+}
+
+/**
  * Applies retry to each read independently. One timeout therefore retries only
  * that item instead of replaying every sibling request in the opening batch.
  */

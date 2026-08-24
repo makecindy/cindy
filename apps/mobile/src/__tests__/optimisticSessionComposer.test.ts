@@ -277,6 +277,18 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('error={connectionRecoveryError}');
   });
 
+  it('separates the interrupted metadata fence from the full read-ack sync gate', () => {
+    const source = readSource(SCREEN);
+
+    expect(source).toContain('const [sessionMetadataSyncedKey, setSessionMetadataSyncedKey]');
+    expect(source).toContain('const fetchSessionMetadata = () => runConnectionScopedSessionMetadataRead(');
+    expect(source).toContain('setSessionMetadataSyncedKey(`${sessionId}:${readAckEpochAtStart}`);');
+    expect(source).toContain(
+      'sessionMetadataSyncedForConnection: sessionMetadataSyncedKey === `${sessionId}:${connectionEpoch}`',
+    );
+    expect(source).toContain('setReadAckSyncedKey(`${sessionId}:${readAckEpochAtStart}`);');
+  });
+
   it('fences every pre-outbox await against an in-place session switch', () => {
     const source = readSource(SCREEN);
 

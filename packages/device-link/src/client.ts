@@ -2017,8 +2017,12 @@ export class DeviceLinkClient {
           ? this.consumeOutboundRouteGeneration(env.id, routeDeviceId)
           : undefined;
         // 所有 routed frame 都在物理发送前登记。未决记录会在成功结算后转入
-        // 不占发送额度的近期历史；若两边都查不到且没有 legacy request generation，
-        // 说明历史已安全淘汰或生命周期已结束，不得回退成当前代去拆新 link。
+        // 不占发送额度的近期历史；transport ACK 则确认逻辑 seq 已交付并释放记录。
+        // ACK / relay-error 都没有物理 attempt id，重试又复用同一逻辑 id：ACK 后再来的
+        // 同 id 错误无法区分「旧发送迟到」与「后续重试失败」。此时 fail-stale 忽略，
+        // 避免拆掉刚恢复的新 link 或让已在对端执行的 invoke 向用户报失败；精确关联需要
+        // wire 携带物理发送标识，由分层传输任务继续处理。
+        // 若两份账本都查不到且没有 legacy request generation，不回退成当前代拆 link。
         const releasedOrSettledRouteError = !!env.id
           && rememberedGeneration === undefined
           && (pending?.reliableDst !== undefined || pending?.linkGeneration === undefined);

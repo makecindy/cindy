@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  runConnectionScopedSessionMetadataRead,
   runIndependentSnapshotReads,
   runSessionMessagesSnapshotSingleFlight,
   runSessionPendingInteractionsSnapshotSingleFlight,
@@ -171,5 +172,26 @@ describe('independent snapshot retries', () => {
       'projection',
     ]);
     expect(attempts).toEqual([1, 2, 1]);
+  });
+
+  it('commits session metadata even when a sibling snapshot later fails', async () => {
+    const sibling = deferred<string>();
+    const committed: string[] = [];
+    const retry = <T,>(read: () => Promise<T>): Promise<T> => read();
+    const reads = [
+      () => runConnectionScopedSessionMetadataRead(
+        async () => 'authoritative-meta',
+        () => true,
+        (value) => committed.push(value),
+      ),
+      () => sibling.promise,
+    ] as const;
+
+    const batch = runIndependentSnapshotReads(reads, retry);
+    await vi.waitFor(() => expect(committed).toEqual(['authoritative-meta']));
+    sibling.reject(new Error('projection retry exhausted'));
+
+    await expect(batch).rejects.toThrow('projection retry exhausted');
+    expect(committed).toEqual(['authoritative-meta']);
   });
 });
