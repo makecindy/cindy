@@ -103,21 +103,58 @@ describe('PPT 母版版式', () => {
     expect(split.image).toBeDefined();
   });
 
-  it('三套版式写入母版,封面无页码,内容页有页码和页脚标签', async () => {
+  it('六套版式写入母版,结构化对比/指标/大图页写进真文件', async () => {
+    await fs.writeFile(
+      path.join(workdir, 'chart.png'),
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
     const client = await connect();
     const result = await callTool(client, 'make_pptx', {
       title: 'Q3 经营回顾',
       theme: 'navy',
       slides: [
-        { title: 'Q3 经营回顾', layout: 'cover', subtitle: '华东区 · 内部汇报' },
+        {
+          title: 'Q3 经营回顾',
+          layout: 'cover',
+          subtitle: '华东区 · 内部汇报',
+        },
         { title: '增长从哪里来', layout: 'section' },
-        { title: '结论先行', layout: 'content', bullets: ['续约拉动', '新品尚未放量'] },
+        {
+          title: '结论先行',
+          layout: 'content',
+          bullets: ['续约拉动', '新品尚未放量'],
+        },
+        {
+          title: '两条路径各有取舍',
+          layout: 'comparison',
+          columns: [
+            { title: '无插件基础版', bullets: ['随时可用', '结构稳定'] },
+            { title: '模板增强版', bullets: ['场景更细', '选择更简单'] },
+          ],
+        },
+        {
+          title: '关键目标一眼读完',
+          layout: 'metrics',
+          metrics: [
+            { value: '98%', label: '生成成功率', detail: '标准输入口径' },
+            { value: 4, label: '核心格式' },
+          ],
+        },
+        {
+          title: '让图承担主体',
+          layout: 'image',
+          imagePath: 'chart.png',
+          body: '示意图 · 数据口径见备注',
+        },
       ],
       outPath: 'deck.pptx',
     });
     expect(result.ok).toBe(true);
     expect(result.theme).toBe('navy');
-    expect(result.layouts).toEqual(['cover', 'section', 'content']);
+    expect(result.layouts).toEqual(['cover', 'section', 'content', 'comparison', 'metrics', 'image']);
     expect(result.footer).toBe(true);
 
     const layouts = await unzipAll(
@@ -127,6 +164,9 @@ describe('PPT 母版版式', () => {
     expect(layouts).toContain(PPTX_LAYOUT_IDS.cover);
     expect(layouts).toContain(PPTX_LAYOUT_IDS.section);
     expect(layouts).toContain(PPTX_LAYOUT_IDS.content);
+    expect(layouts).toContain(PPTX_LAYOUT_IDS.comparison);
+    expect(layouts).toContain(PPTX_LAYOUT_IDS.metrics);
+    expect(layouts).toContain(PPTX_LAYOUT_IDS.image);
 
     const slide1 = await unzip(result.path as string, 'ppt/slides/slide1.xml');
     expect(slide1).toContain('Q3 经营回顾');
@@ -140,6 +180,16 @@ describe('PPT 母版版式', () => {
     expect(layouts).toContain('Q3 经营回顾');
     // pptxgenjs 把页码写成 type="slidenum" 字段;母版上的 hf sldNum="0" 只是关闭位,不算。
     expect(layouts).toMatch(/type="slidenum"/);
+
+    const comparison = await unzip(result.path as string, 'ppt/slides/slide4.xml');
+    expect(comparison).toContain('无插件基础版');
+    expect(comparison).toContain('模板增强版');
+    const metrics = await unzip(result.path as string, 'ppt/slides/slide5.xml');
+    expect(metrics).toContain('98%');
+    expect(metrics).toContain('生成成功率');
+    const image = await unzip(result.path as string, 'ppt/slides/slide6.xml');
+    expect(image).toContain('示意图');
+    expect(image).toContain('r:embed');
   });
 
   it('footer:false 时母版不登记页码', async () => {

@@ -1,8 +1,9 @@
 /**
  * cindy-docs/make_pptx.ts —— 结构化幻灯片 → PowerPoint(.pptx)。
  *
- * 版式走 pptxgenjs 母版(封面 / 分节 / 内容页),色板走 themes.ts。模型只选命名
- * 主题和版式,不喂色号、不捆图片字体。页脚页码登记在母版上,由 PowerPoint 自己递增。
+ * 版式走 pptxgenjs 母版(封面 / 分节 / 内容 / 对比 / 指标 / 大图),色板走 themes.ts。
+ * 模型只选命名主题和结构化版式,不喂色号、不喂自由坐标、不捆图片字体。页脚页码
+ * 登记在母版上,由 PowerPoint 自己递增。
  */
 
 import { promises as fs } from 'node:fs';
@@ -82,44 +83,78 @@ const DESCRIPTION = [
   '',
   '【何时用】用户要 PPT / 演示文稿 / 汇报材料 / 「几页讲清楚」。',
   '',
-  '【每页可给】title(标题,必填)、layout(cover 封面 / section 分节 / content 内容页,默认 content)、',
+  '【每页可给】title(标题,必填)、layout(cover 封面 / section 分节 / content 内容 / comparison 双栏对比 / metrics 数据强调 / image 大图,默认 content)、',
   'subtitle(封面副题或分节导语)、bullets(要点数组)、body(整段正文)、',
-  'notes(演讲者备注,只在演讲者视图可见)、imagePath(工作目录内的 png / jpg / gif,内容页放右半区)。',
+  'notes(演讲者备注,只在演讲者视图可见)、imagePath(工作目录内的 png / jpg / gif)。',
+  'comparison 必须给 columns(恰好两栏,每栏含 title + bullets/body);metrics 必须给 metrics(2–4 个 value + label + 可选 detail);image 必须给 imagePath,图片会自动裁切铺满主体区,body 可作题注。',
   '',
   '【主题】theme: "light"(浅色,默认,适合打印和明亮会议室)、"dark"(深色,适合投影)、',
   '"navy"(商务蓝,适合正式汇报)。三套都是克制色板,不要指望自定义配色。',
   '',
-  '【版式】封面大标题 + 左侧强调条、无页码;分节页中部标题 + 页脚页码;内容页标题短线 + 要点 + 页脚页码。',
-  'footer 默认 true,会在分节/内容页显示页脚标签(用 title)和页码;封面始终不显示页码。',
+  '【版式】封面、分节和普通内容页用于叙事骨架;真正的左右比较用 comparison;关键数字用 metrics;一张图承担主体时用 image。',
+  'footer 默认 true,会在分节页和除封面外的内容类页面显示页脚标签(用 title)和页码;封面始终不显示页码。',
   '',
-  '【写作建议】每页 3-5 条要点、每条一行以内;标题写结论而不是名词短语。首页用 cover,章节切换用 section。',
+  '【写作建议】每页只表达一个结论;标题写结论而不是名词短语。首页用 cover,章节切换用 section,不要把“左右对比”或“核心数据”硬塞成普通要点。',
   '',
   '【输出】outPath 必须在本任务的工作目录内。同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
 ].join('\n');
 
-const SlideSchema = z.object({
-  title: z.string().min(1).describe('本页标题。'),
-  layout: z
-    .enum(PPTX_LAYOUT_NAMES)
-    .default(DEFAULT_PPTX_LAYOUT)
-    .describe(
-      '版式:cover 封面 / section 分节 / content 内容页。默认 content。',
-    ),
-  subtitle: z
-    .string()
-    .optional()
-    .describe('封面副题、分节导语或内容页标题下的一行说明。'),
-  bullets: z.array(z.string()).optional().describe('要点数组,建议 3-5 条。'),
-  body: z
-    .string()
-    .optional()
-    .describe('整段正文。与 bullets 可并存(正文排在要点之后)。'),
-  notes: z.string().optional().describe('演讲者备注。'),
-  imagePath: z
-    .string()
-    .optional()
-    .describe('工作目录内的图片路径(png/jpg/gif)。给了图,文字会收窄到左半区。'),
+const ComparisonColumnSchema = z.object({
+  title: z.string().min(1).describe('这一栏的短标题。'),
+  bullets: z.array(z.string().min(1)).max(5).optional().describe('这一栏的 1–5 条要点。'),
+  body: z.string().optional().describe('这一栏的补充正文。'),
 });
+
+const MetricSchema = z.object({
+  value: z.union([z.string(), z.number()]).describe('醒目的指标值,如 98% 或 4。'),
+  label: z.string().min(1).describe('指标名称。'),
+  detail: z.string().optional().describe('一句口径或解释。'),
+});
+
+const SlideSchema = z
+  .object({
+    title: z.string().min(1).describe('本页标题。'),
+    layout: z
+      .enum(PPTX_LAYOUT_NAMES)
+      .default(DEFAULT_PPTX_LAYOUT)
+      .describe(
+        '版式:cover 封面 / section 分节 / content 内容 / comparison 双栏对比 / metrics 数据强调 / image 大图。默认 content。',
+      ),
+    subtitle: z.string().optional().describe('封面副题、分节导语或内容页标题下的一行说明。'),
+    bullets: z.array(z.string()).optional().describe('要点数组,建议 3-5 条。'),
+    body: z.string().optional().describe('整段正文。与 bullets 可并存(正文排在要点之后)。'),
+    notes: z.string().optional().describe('演讲者备注。'),
+    imagePath: z.string().optional().describe('工作目录内的图片路径(png/jpg/gif)。content 放右半区,image 放通栏主体。'),
+    columns: z
+      .array(ComparisonColumnSchema)
+      .length(2)
+      .optional()
+      .describe('comparison 专用的两栏内容。固定两栏,不接收坐标。'),
+    metrics: z.array(MetricSchema).min(2).max(4).optional().describe('metrics 专用的 2–4 个指标卡。'),
+  })
+  .superRefine((slide, ctx) => {
+    if (slide.layout === 'comparison' && !slide.columns) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['columns'],
+        message: 'comparison 版式需要恰好两栏 columns。',
+      });
+    }
+    if (slide.layout === 'metrics' && !slide.metrics) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['metrics'],
+        message: 'metrics 版式需要 2–4 个 metrics。',
+      });
+    }
+    if (slide.layout === 'image' && !slide.imagePath) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imagePath'],
+        message: 'image 版式需要 imagePath。',
+      });
+    }
+  });
 
 export function registerMakePptxTool(
   registry: DocsToolRegistry,
@@ -146,9 +181,7 @@ export function registerMakePptxTool(
       footer: z
         .boolean()
         .default(true)
-        .describe(
-          '分节页和内容页是否显示页脚与页码。封面始终不显示页码。默认 true。',
-        ),
+        .describe('分节页和除封面外的内容类页面是否显示页脚与页码。封面始终不显示页码。默认 true。'),
       overwrite: z
         .boolean()
         .default(false)
@@ -218,7 +251,7 @@ export function registerMakePptxTool(
             fontSize: slots.title.fontSize,
             bold: true,
             color: palette.title,
-            valign: layout === 'content' ? 'middle' : 'top',
+            valign: layout === 'cover' || layout === 'section' ? 'top' : 'middle',
             margin: 0,
           });
 
@@ -246,61 +279,213 @@ export function registerMakePptxTool(
             });
           }
 
-          const hasBullets = Boolean(slide.bullets && slide.bullets.length > 0);
-          const hasBody = Boolean(slide.body && slide.body.trim().length > 0);
-          if (hasBullets || hasBody) {
-            const bulletBlockH = hasBullets
-              ? Math.min(
-                  slots.body.h * 0.72,
-                  0.42 * (slide.bullets?.length ?? 0) + 0.25,
-                )
-              : 0;
-            if (hasBullets) {
-              page.addText(
-                slide.bullets!.map((text) => ({
-                  text,
-                  options: { bullet: true, breakLine: true },
-                })),
-                {
-                  x: slots.body.x,
-                  y: slots.body.y,
-                  w: slots.body.w,
-                  h: hasBody ? bulletBlockH : slots.body.h,
-                  // 要点少就放大字号占住版面(见 bodyFontSize)。正文一律顶着标题排 ——
-                  // 试过垂直居中,目检下来标题与正文之间裂开一条空白,更糟。
-                  fontSize: hasBody
-                    ? slots.body.fontSize
-                    : bodyFontSize(
-                        slots.body.fontSize,
-                        slide.bullets?.length ?? 0,
-                      ),
-                  color: palette.body,
-                  // 行距放到 1.5:1.3 在实机目检里几行要点糊成一坨,读起来很挤。
-                  lineSpacingMultiple: 1.5,
-                  valign: 'top',
+          if (layout === 'comparison') {
+            const columns = slide.columns ?? [];
+            const gap = 0.36;
+            const cardW = (slots.body.w - gap) / 2;
+            for (const [columnIndex, column] of columns.entries()) {
+              const x = slots.body.x + columnIndex * (cardW + gap);
+              page.addShape('rect', {
+                x,
+                y: slots.body.y,
+                w: cardW,
+                h: slots.body.h,
+                fill: { color: palette.surface },
+                line: { color: palette.line, width: 1 },
+              });
+              page.addShape('rect', {
+                x,
+                y: slots.body.y,
+                w: cardW,
+                h: 0.08,
+                fill: { color: palette.accent },
+                line: { color: palette.accent, width: 0 },
+              });
+              page.addText(column.title, {
+                x: x + 0.34,
+                y: slots.body.y + 0.34,
+                w: cardW - 0.68,
+                h: 0.5,
+                fontSize: 20,
+                bold: true,
+                color: palette.title,
+                margin: 0,
+              });
+              const columnBullets = column.bullets ?? [];
+              if (columnBullets.length > 0) {
+                page.addText(
+                  columnBullets.map((text) => ({
+                    text,
+                    options: { bullet: true, breakLine: true },
+                  })),
+                  {
+                    x: x + 0.34,
+                    y: slots.body.y + 1.05,
+                    w: cardW - 0.68,
+                    h: column.body ? slots.body.h - 2.15 : slots.body.h - 1.4,
+                    fontSize: bodyFontSize(16, columnBullets.length),
+                    color: palette.body,
+                    lineSpacingMultiple: 1.35,
+                    valign: 'top',
+                    margin: 0,
+                  },
+                );
+              }
+              if (column.body?.trim()) {
+                page.addText(column.body.trim(), {
+                  x: x + 0.34,
+                  y: slots.body.y + slots.body.h - 0.92,
+                  w: cardW - 0.68,
+                  h: 0.58,
+                  fontSize: 13,
+                  color: palette.muted,
                   margin: 0,
-                },
-              );
+                  valign: 'bottom',
+                });
+              }
             }
-            if (hasBody) {
-              const bodyY = hasBullets
-                ? slots.body.y + bulletBlockH + 0.12
-                : slots.body.y;
-              page.addText(slide.body!.trim(), {
+          } else if (layout === 'metrics') {
+            const metrics = slide.metrics ?? [];
+            const columns = metrics.length <= 3 ? metrics.length : 2;
+            const rows = Math.ceil(metrics.length / columns);
+            const gapX = 0.3;
+            const gapY = 0.28;
+            const cardW = (slots.body.w - gapX * (columns - 1)) / columns;
+            const cardH = (slots.body.h - gapY * (rows - 1)) / rows;
+            for (const [metricIndex, metric] of metrics.entries()) {
+              const column = metricIndex % columns;
+              const row = Math.floor(metricIndex / columns);
+              const x = slots.body.x + column * (cardW + gapX);
+              const y = slots.body.y + row * (cardH + gapY);
+              page.addShape('rect', {
+                x,
+                y,
+                w: cardW,
+                h: cardH,
+                fill: { color: palette.surface },
+                line: { color: palette.line, width: 1 },
+              });
+              page.addText(String(metric.value), {
+                x: x + 0.3,
+                y: y + 0.36,
+                w: cardW - 0.6,
+                h: Math.min(0.95, cardH * 0.4),
+                fontSize: metrics.length <= 3 ? 32 : 27,
+                bold: true,
+                color: palette.accent,
+                margin: 0,
+              });
+              page.addText(metric.label, {
+                x: x + 0.3,
+                y: y + Math.min(1.36, cardH * 0.48),
+                w: cardW - 0.6,
+                h: 0.42,
+                fontSize: 16,
+                bold: true,
+                color: palette.title,
+                margin: 0,
+              });
+              if (metric.detail?.trim()) {
+                page.addText(metric.detail.trim(), {
+                  x: x + 0.3,
+                  y: y + Math.min(1.92, cardH * 0.7),
+                  w: cardW - 0.6,
+                  h: Math.max(0.36, cardH * 0.22),
+                  fontSize: 12,
+                  color: palette.muted,
+                  margin: 0,
+                  valign: 'top',
+                });
+              }
+            }
+          } else if (layout === 'image') {
+            if (imageAbs && slots.image) {
+              page.addShape('rect', {
+                x: slots.image.x,
+                y: slots.image.y,
+                w: slots.image.w,
+                h: slots.image.h,
+                fill: { color: palette.surface },
+                line: { color: palette.line, width: 1 },
+              });
+              page.addImage({
+                path: imageAbs,
+                x: slots.image.x,
+                y: slots.image.y,
+                w: slots.image.w,
+                h: slots.image.h,
+                sizing: { type: 'cover', w: slots.image.w, h: slots.image.h },
+              });
+            }
+            if (slide.body?.trim()) {
+              page.addText(slide.body.trim(), {
                 x: slots.body.x,
-                y: bodyY,
+                y: slots.body.y,
                 w: slots.body.w,
-                h: Math.max(0.6, slots.body.y + slots.body.h - bodyY),
-                fontSize: Math.max(13, slots.body.fontSize - 3),
+                h: slots.body.h,
+                fontSize: slots.body.fontSize,
                 color: palette.muted,
-                lineSpacingMultiple: 1.35,
-                valign: 'top',
+                align: 'right',
                 margin: 0,
               });
             }
+          } else {
+            const hasBullets = Boolean(slide.bullets && slide.bullets.length > 0);
+            const hasBody = Boolean(slide.body && slide.body.trim().length > 0);
+            if (hasBullets || hasBody) {
+              const bulletBlockH = hasBullets
+                ? Math.min(
+                    slots.body.h * 0.72,
+                    0.42 * (slide.bullets?.length ?? 0) + 0.25,
+                  )
+                : 0;
+              if (hasBullets) {
+                page.addText(
+                  slide.bullets!.map((text) => ({
+                    text,
+                    options: { bullet: true, breakLine: true },
+                  })),
+                  {
+                    x: slots.body.x,
+                    y: slots.body.y,
+                    w: slots.body.w,
+                    h: hasBody ? bulletBlockH : slots.body.h,
+                    // 要点少就放大字号占住版面(见 bodyFontSize)。正文一律顶着标题排 ——
+                    // 试过垂直居中,目检下来标题与正文之间裂开一条空白,更糟。
+                    fontSize: hasBody
+                      ? slots.body.fontSize
+                      : bodyFontSize(
+                          slots.body.fontSize,
+                          slide.bullets?.length ?? 0,
+                        ),
+                    color: palette.body,
+                    // 行距放到 1.5:1.3 在实机目检里几行要点糊成一坨,读起来很挤。
+                    lineSpacingMultiple: 1.5,
+                    valign: 'top',
+                    margin: 0,
+                  },
+                );
+              }
+              if (hasBody) {
+                const bodyY = hasBullets
+                  ? slots.body.y + bulletBlockH + 0.12
+                  : slots.body.y;
+                page.addText(slide.body!.trim(), {
+                  x: slots.body.x,
+                  y: bodyY,
+                  w: slots.body.w,
+                  h: Math.max(0.6, slots.body.y + slots.body.h - bodyY),
+                  fontSize: Math.max(13, slots.body.fontSize - 3),
+                  color: palette.muted,
+                  lineSpacingMultiple: 1.35,
+                  valign: 'top',
+                  margin: 0,
+                });
+              }
+            }
           }
 
-          if (imageAbs && slots.image) {
+          if (layout !== 'image' && imageAbs && slots.image) {
             page.addImage({
               path: imageAbs,
               x: slots.image.x,

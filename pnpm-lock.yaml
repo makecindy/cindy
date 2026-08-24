@@ -211,6 +211,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
+      '@napi-rs/canvas':
+        specifier: ^0.1.100
+        version: 0.1.100
       '@paralleldrive/cuid2':
         specifier: ^2.3.1
         version: 2.3.1
@@ -13197,7 +13200,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 0.1.100
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.100
       '@napi-rs/canvas-win32-x64-msvc': 0.1.100
-    optional: true
 
   '@napi-rs/wasm-runtime@1.1.6(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)':
     dependencies:

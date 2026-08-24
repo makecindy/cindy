@@ -104,6 +104,7 @@
     "@google/model-viewer": "^4.0.0",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@napi-rs/canvas": "^0.1.100",
     "@paralleldrive/cuid2": "^2.3.1",
     "@parcel/watcher": "^2.5.6",
     "@radix-ui/react-alert-dialog": "^1.1.15",

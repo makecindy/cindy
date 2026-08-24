@@ -7,6 +7,10 @@
  * 正式包关闭 RunAsNode,PDF.js 一律在这个一次性进程里跑,超时直接 kill。
  */
 
+// Electron utility processes have `process.type="utility"`, so PDF.js does not
+// run its own Node bootstrap. This import must stay before both PDF.js bundles.
+import './pdfNodeDomPolyfills.js';
+
 // PDF.js uses a fake worker under Node and otherwise loads `./pdf.worker.mjs`
 // with a variable dynamic import. Forge/Vite cannot discover or copy that
 // sibling into the packaged `.vite/build` directory. Importing it here both

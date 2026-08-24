@@ -1,10 +1,13 @@
 /**
  * cindy-docs/pptxMasters.ts —— pptxgenjs 母版版式(纯几何 + 色板,不捆图不捆字体)。
  *
- * 三套版式:
+ * 六套版式:
  *  - cover   封面:左侧强调条、大标题、无页码
  *  - section 分节:左侧强调条、居中偏上标题、页脚页码
  *  - content 内容:标题区 + 正文区 + 页脚页码;有图时文字收窄到左半
+ *  - comparison 双栏对比:两个结构化信息卡并排
+ *  - metrics 数据强调:2–4 个指标卡
+ *  - image 大图:标题区 + 通栏图片 + 可选题注
  *
  * 母版只放「每一页都一样」的铬件(底色、强调条、页脚线、页码)。标题和正文仍由
  * 调用方按本文件给出的槽位往 slide 上写 —— 占位符在 pptxgenjs 里不好测,也容易
@@ -24,7 +27,14 @@ export const COVER_PANEL_W = 4.4;
 /** 分节页顶部强调带的高度(英寸)。 */
 export const SECTION_BAND_H = 0.62;
 
-export const PPTX_LAYOUT_NAMES = ['cover', 'section', 'content'] as const;
+export const PPTX_LAYOUT_NAMES = [
+  'cover',
+  'section',
+  'content',
+  'comparison',
+  'metrics',
+  'image',
+] as const;
 export type PptxLayoutName = (typeof PPTX_LAYOUT_NAMES)[number];
 export const DEFAULT_PPTX_LAYOUT: PptxLayoutName = 'content';
 
@@ -32,6 +42,9 @@ export const PPTX_LAYOUT_IDS = {
   cover: 'CINDY_COVER',
   section: 'CINDY_SECTION',
   content: 'CINDY_CONTENT',
+  comparison: 'CINDY_COMPARISON',
+  metrics: 'CINDY_METRICS',
+  image: 'CINDY_IMAGE',
 } as const;
 
 export interface PptxBox {
@@ -64,7 +77,7 @@ function footerLabelText(label: string | undefined): string {
 }
 
 /**
- * 给一份演示文稿登记三套母版。同一份 deck 只应调一次;主题在登记时固化。
+ * 给一份演示文稿登记六套母版。同一份 deck 只应调一次;主题在登记时固化。
  */
 export function defineCindyPptxMasters(
   pptx: pptxgen,
@@ -140,17 +153,22 @@ export function defineCindyPptxMasters(
     ],
   });
 
-  pptx.defineSlideMaster({
-    title: PPTX_LAYOUT_IDS.content,
-    background: { color: theme.background },
-    ...(pageNumber ? { slideNumber: pageNumber } : {}),
-    objects: [
-      // 顶部一条细强调线贯穿:内容页原来只有孤零零的标题和一小段短线,页面没有
-      // 任何边界感。这条线成本极低,但让每一页都「有个头」。
-      { rect: { x: 0, y: 0, w: SLIDE_W, h: 0.075, fill: { color: theme.accent } } },
-      ...footerChrome,
-    ],
-  });
+  const contentChrome = [
+    // 顶部一条细强调线贯穿:内容页原来只有孤零零的标题和一小段短线,页面没有
+    // 任何边界感。这条线成本极低,但让每一页都「有个头」。
+    {
+      rect: { x: 0, y: 0, w: SLIDE_W, h: 0.075, fill: { color: theme.accent } },
+    },
+    ...footerChrome,
+  ];
+  for (const layout of ['content', 'comparison', 'metrics', 'image'] as const) {
+    pptx.defineSlideMaster({
+      title: PPTX_LAYOUT_IDS[layout],
+      background: { color: theme.background },
+      ...(pageNumber ? { slideNumber: pageNumber } : {}),
+      objects: contentChrome,
+    });
+  }
 }
 
 /** 按版式 + 是否有图算出这一页内容该落在哪。几何是唯一真相,make_pptx 不要再手写坐标。 */
@@ -185,7 +203,31 @@ export function layoutSlots(
     };
   }
 
-  const textW = hasImage ? SLIDE_W / 2 - 0.7 : 11.93;
+  if (layout === 'image') {
+    const titleY = 0.52;
+    const titleH = hasSubtitle ? 0.6 : 0.78;
+    const accentY = titleY + titleH + (hasSubtitle ? 0.44 : 0.1);
+    const imageY = accentY + 0.3;
+    return {
+      title: { x: 0.7, y: titleY, w: 11.93, h: titleH, fontSize: 28 },
+      ...(hasSubtitle
+        ? {
+            subtitle: {
+              x: 0.7,
+              y: titleY + titleH + 0.08,
+              w: 11.93,
+              h: 0.38,
+              fontSize: 15,
+            },
+          }
+        : {}),
+      accentLine: { x: 0.7, y: accentY, w: 2.2, h: 0.06 },
+      body: { x: 0.7, y: 6.35, w: 11.93, h: 0.38, fontSize: 12 },
+      image: { x: 0.7, y: imageY, w: 11.93, h: 6.15 - imageY },
+    };
+  }
+
+  const textW = layout === 'content' && hasImage ? SLIDE_W / 2 - 0.7 : 11.93;
   const titleH = hasSubtitle ? 0.6 : 0.78;
   // 标题下压一点,给顶部那条强调线让位。
   const titleY = 0.52;
@@ -205,8 +247,15 @@ export function layoutSlots(
       h: SLIDE_H - bodyY - 0.75,
       fontSize: 18,
     },
-    ...(hasImage
-      ? { image: { x: SLIDE_W / 2 + 0.15, y: bodyY, w: SLIDE_W / 2 - 0.85, h: SLIDE_H - bodyY - 0.85 } }
+    ...(layout === 'content' && hasImage
+      ? {
+          image: {
+            x: SLIDE_W / 2 + 0.15,
+            y: bodyY,
+            w: SLIDE_W / 2 - 0.85,
+            h: SLIDE_H - bodyY - 0.85,
+          },
+        }
       : {}),
   };
 }

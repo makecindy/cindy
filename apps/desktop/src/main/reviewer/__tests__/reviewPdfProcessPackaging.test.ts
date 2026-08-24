@@ -16,6 +16,10 @@ describe('Review PDF utility process packaging contract', () => {
       path.join(desktopRoot, 'src/main/reviewer/reviewPdfUtilityProcess.ts'),
       'utf8',
     );
+    const polyfills = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/reviewer/pdfNodeDomPolyfills.ts'),
+      'utf8',
+    );
     const viteConfig = fs.readFileSync(
       path.join(desktopRoot, 'vite.review-pdf-process.config.ts'),
       'utf8',
@@ -28,8 +32,14 @@ describe('Review PDF utility process packaging contract', () => {
     expect(controller).toContain('utilityProcess.fork');
     expect(controller).not.toContain('ELECTRON_RUN_AS_NODE');
     expect(controller).not.toContain('process.execPath');
+    expect(worker.indexOf("import './pdfNodeDomPolyfills.js'")).toBeLessThan(
+      worker.indexOf("import 'pdfjs-dist/legacy/build/pdf.worker.mjs'"),
+    );
     expect(worker).toContain("import 'pdfjs-dist/legacy/build/pdf.worker.mjs'");
     expect(worker).toContain("from 'pdfjs-dist/legacy/build/pdf.mjs'");
+    expect(polyfills).toContain("from '@napi-rs/canvas'");
+    expect(polyfills).toContain("typeof globalThis.DOMMatrix === 'undefined'");
+    expect(viteConfig).toContain("external: ['@napi-rs/canvas']");
     expect(viteConfig).toContain('inlineDynamicImports: true');
   });
 
