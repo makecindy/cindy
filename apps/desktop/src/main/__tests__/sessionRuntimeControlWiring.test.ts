@@ -119,6 +119,29 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('return withSendToSessionLock(sessionId, applyLocked);');
   });
 
+  it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {
+    const effort = handlerBody(
+      registerSource,
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+      'MAKER_INVOKE.SET_PERMISSION_MODE',
+    );
+    const fast = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_FAST_MODE',
+      'MAKER_INVOKE.SET_THINKING_ENABLED',
+    );
+    for (const [body, commit] of [
+      [effort, 'commitEffort();'],
+      [fast, 'commitFastMode();'],
+    ] as const) {
+      const terminalGuard = body.indexOf("runtimeStatus.status !== 'active'");
+      expect(terminalGuard).toBeGreaterThan(-1);
+      expect(terminalGuard).toBeLessThan(body.indexOf(commit));
+      expect(body.indexOf('.select({ status: sessions.status })')).toBeLessThan(terminalGuard);
+      expect(body).toContain('return withSendToSessionLock(sessionId');
+    }
+  });
+
   it('retains runtime state across process closes and clears it at task lifecycle boundaries', () => {
     const closeBoundary = handlerBody(
       registerSource,

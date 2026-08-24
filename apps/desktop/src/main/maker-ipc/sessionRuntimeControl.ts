@@ -94,16 +94,41 @@ export function recordUserSessionRuntimeMutation(sessionId: string): number {
   return state.generation;
 }
 
+/**
+ * Persistence failed after the live Session had already switched, and the
+ * compensating close could not retire it. Keep that unavoidable live profile
+ * explicit so readers and CAS do not continue from the stale DB baseline.
+ */
+export function recordRecoveredSessionRuntimeMutation(
+  sessionId: string,
+  profile: SessionRuntimeProfile,
+): number {
+  const state = stateFor(sessionId);
+  state.generation += 1;
+  state.effectiveOverride = profile;
+  state.pending = null;
+  state.fallbackHop = 0;
+  state.visitedRoutes.clear();
+  return state.generation;
+}
+
 export function recordUserSessionRuntimeAxisMutation(
   sessionId: string,
   patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,
 ): number {
   const state = stateFor(sessionId);
   state.generation += 1;
-  state.pending = null;
+  const pending = state.pending;
+  state.pending = pending
+    ? {
+        ...pending,
+        generation: state.generation,
+        profile: { ...pending.profile, ...patch },
+      }
+    : null;
   state.fallbackHop = 0;
   state.visitedRoutes.clear();
-  if (state.effectiveOverride) {
+  if (!pending && state.effectiveOverride) {
     state.effectiveOverride = { ...state.effectiveOverride, ...patch };
   }
   return state.generation;

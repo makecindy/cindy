@@ -9,6 +9,7 @@ import {
   getSessionRuntimeControlSnapshot,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
+  recordRecoveredSessionRuntimeMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes,
@@ -125,6 +126,50 @@ describe('session runtime control state', () => {
       fallbackHop: 0,
       visitedRoutes: [],
     });
+  });
+
+  it('preserves a deferred route when a user changes one runtime axis', () => {
+    const sessionId = 'runtime-user-axis-pending';
+    const pending = { ...current, model: 'gpt-next', providerId: 'xd', fastMode: false };
+    const firstGeneration = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: pending,
+      deferred: true,
+    });
+
+    const secondGeneration = recordUserSessionRuntimeAxisMutation(sessionId, {
+      fastMode: true,
+    });
+
+    expect(secondGeneration).toBe(firstGeneration + 1);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation: secondGeneration,
+      effectiveOverride: null,
+      pending: {
+        generation: secondGeneration,
+        source: 'agent',
+        profile: { ...pending, fastMode: true },
+      },
+      fallbackHop: 0,
+      visitedRoutes: [],
+    });
+  });
+
+  it('records an unavoidable live profile after persistence recovery fails', () => {
+    const sessionId = 'runtime-persistence-recovery';
+    const observedGeneration = getSessionRuntimeControlSnapshot(sessionId).generation;
+    const generation = recordRecoveredSessionRuntimeMutation(sessionId, current);
+
+    expect(generation).toBe(observedGeneration + 1);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      effectiveOverride: current,
+      pending: null,
+      fallbackHop: 0,
+      visitedRoutes: [],
+    });
+    expect(sessionRuntimeGenerationMatches(sessionId, observedGeneration)).toBe(false);
   });
 
   it('clears one terminal session without disturbing another runtime override', () => {

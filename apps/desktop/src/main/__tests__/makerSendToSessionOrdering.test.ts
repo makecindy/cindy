@@ -529,6 +529,11 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('restoreControlStores();');
     expect(setModelBlock).toContain('previousRuntime.pendingCredentialSwitch');
     expect(setModelBlock).toContain('withRehydrateCloseSuppressed(sessionId');
+    expect(setModelBlock).toContain('recordRecoveredSessionRuntimeMutation(sessionId');
+    expect(setModelBlock).toContain(
+      'sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)',
+    );
+    expect(setModelBlock).toContain('recovered runtime projection broadcast failed');
     expectOrder(
       setModelBlock,
       'restoreControlStores();',

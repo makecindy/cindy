@@ -872,6 +872,7 @@ import {
   getSessionRuntimeControlSnapshot,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
+  recordRecoveredSessionRuntimeMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes,
@@ -10891,6 +10892,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       } finally {
         settlingSessionRuntimeControls.delete(sessionId);
+        const latest = getPendingSessionRuntimeMutation(sessionId);
+        if (latest && latest.generation !== pending.generation) {
+          settlePendingSessionRuntimeControl(sessionId, `${reason}:generation-advanced`);
+        }
       }
     })();
   };
@@ -14841,6 +14846,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               wakeSessionInputAfterCredentialSwitch(sessionId);
             }
             if (recoveryError) {
+              const retainedSession = maker.getSession(sessionId);
+              if (
+                retainedSession &&
+                sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)
+              ) {
+                const retainedProfile: SessionRuntimeProfile = {
+                  agentKind: retainedSession.agentKind,
+                  model: retainedSession.model,
+                  providerId:
+                    effectiveProviderId === undefined
+                      ? (previousRuntime.providerId ?? null)
+                      : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+                  effort: atomicSelection
+                    ? atomicSelection.effort
+                    : (previousRuntime.effort ?? null),
+                  fastMode: atomicSelection?.fastMode ?? previousRuntime.fastMode,
+                };
+                if (effectiveProviderId !== undefined) {
+                  setSessionProvider(sessionId, retainedProfile.providerId);
+                }
+                setSessionEffort(sessionId, retainedProfile.effort);
+                setSessionFastMode(sessionId, retainedProfile.fastMode);
+                pendingCredentialSwitchHolder?.clear(sessionId);
+                recordRecoveredSessionRuntimeMutation(sessionId, retainedProfile);
+                agentSwitchPending.clear(sessionId);
+                broadcastSessionPatched(sessionId, {
+                  agentSwitchIntent: null,
+                  agentSwitchIntentCanceled: true,
+                });
+                wakeSessionInputAfterCredentialSwitch(sessionId);
+                await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+                  log.debug('recovered runtime projection broadcast failed', {
+                    sessionId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                });
+              }
               throw new AggregateError(
                 [persistenceError, recoveryError],
                 'runtime selection persistence and session recovery both failed',
@@ -14998,6 +15040,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
     }
     const applyEffort = async () => {
+      const [runtimeStatus] = await getDbClient()
+        .drizzle.select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!runtimeStatus) return;
+      if (runtimeStatus.status !== 'active') {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'archived or deleted task cannot change runtime effort',
+        );
+      }
       const commitEffort = () => {
         recordUserSessionRuntimeAxisMutation(sessionId, {
           effort: effort as SessionRuntimeProfile['effort'],
@@ -15362,6 +15416,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
       const applyFastMode = async () => {
+        const [runtimeStatus] = await getDbClient()
+          .drizzle.select({ status: sessions.status })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        if (!runtimeStatus) return;
+        if (runtimeStatus.status !== 'active') {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'archived or deleted task cannot change runtime Fast mode',
+          );
+        }
         const commitFastMode = () => {
           recordUserSessionRuntimeAxisMutation(sessionId, { fastMode: enabled });
           // 记下会话 Fast 态:responses-bridge 模型(chatgpt/ 前缀)的 fast 无法经请求体流到 bridge,
