@@ -30,6 +30,11 @@ function samePath(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
+function sameRelativePath(left: string, right: string): boolean {
+  const normalize = (value: string) => path.normalize(value.replace(/[\\/]+/g, path.sep));
+  return normalize(left) === normalize(right);
+}
+
 async function verifyParent(request: DocsOutputWriteRequest, workingDir: string): Promise<void> {
   try {
     const rootStat = await fs.promises.lstat(request.expectedRoot.realPath, { bigint: true });
@@ -51,7 +56,7 @@ async function verifyParent(request: DocsOutputWriteRequest, workingDir: string)
         (stat.dev !== request.expectedParent.dev ||
           stat.ino !== request.expectedParent.ino ||
           !samePath(realParent, request.expectedParent.realPath))) ||
-      relative !== request.parentRelativePath ||
+      !sameRelativePath(relative, request.parentRelativePath) ||
       relative.startsWith('..') ||
       path.isAbsolute(relative)
     ) {

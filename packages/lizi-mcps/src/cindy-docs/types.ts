@@ -34,12 +34,6 @@ export interface DocsPdfMargins {
 export interface DocsPdfRenderInput {
   htmlBytes?: Uint8Array;
   html?: string;
-  /**
-   * Base directory for relative file resources when source content was
-   * wrapped in memory. The host injects a file:// base URL and allows only
-   * this directory plus its own temporary source directory.
-   */
-  htmlBaseDir?: string;
   pageSize: DocsPdfPageSize;
   landscape: boolean;
   printBackground: boolean;

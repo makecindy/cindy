@@ -28,12 +28,22 @@ class FakeSession extends EventEmitter {
   permissionRequestHandler: ((...args: any[]) => void) | undefined;
   permissionCheckHandler: ((...args: any[]) => boolean) | undefined;
   beforeRequestHandler:
-    | ((details: { url: string; resourceType?: string }, callback: (response: { cancel: boolean }) => void) => void)
+    | ((
+        details: { url: string; resourceType?: string },
+        callback: (response: { cancel: boolean }) => void,
+      ) => void)
     | undefined;
   webRequest = {
-    onBeforeRequest: vi.fn((handler: (details: { url: string; resourceType?: string }, callback: (response: { cancel: boolean }) => void) => void) => {
-      this.beforeRequestHandler = handler;
-    }),
+    onBeforeRequest: vi.fn(
+      (
+        handler: (
+          details: { url: string; resourceType?: string },
+          callback: (response: { cancel: boolean }) => void,
+        ) => void,
+      ) => {
+        this.beforeRequestHandler = handler;
+      },
+    ),
   };
 
   constructor() {
@@ -185,29 +195,6 @@ describe('渲染窗的安全配置', () => {
     expect(win.shown).toBe(false);
   });
 
-  it('资源根目录在校验后被替换时 fail closed', async () => {
-    const sourceDir = path.join(tempRoot, 'source');
-    const movedSourceDir = path.join(tempRoot, 'source-original');
-    const outsideDir = path.join(tempRoot, 'outside');
-    await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
-    await fs.writeFile(path.join(sourceDir, 'src.html'), '<p>x</p>');
-    await renderHtmlToPdf({
-      ...BASE_INPUT,
-      htmlBytes: await fs.readFile(path.join(sourceDir, 'src.html')),
-      htmlBaseDir: sourceDir,
-    });
-    await fs.rename(sourceDir, movedSourceDir);
-    await fs.symlink(outsideDir, sourceDir, process.platform === 'win32' ? 'junction' : 'dir');
-    const outsideAsset = path.join(sourceDir, 'secret.png');
-    await fs.writeFile(path.join(outsideDir, 'secret.png'), 'secret');
-
-    const handler = FakeBrowserWindow.instances[0]!.webContents.session.beforeRequestHandler!;
-    const response = await new Promise<{ cancel: boolean }>((resolve) =>
-      handler({ url: pathToFileURL(outsideAsset).href }, resolve),
-    );
-    expect(response.cancel).toBe(true);
-  });
-
   it('本地资源路径含 symlink 时 fail closed,不把 file URL 交给 Chromium', async () => {
     const sourceDir = path.join(tempRoot, 'source');
     const outsideDir = path.join(tempRoot, 'outside');
@@ -223,7 +210,6 @@ describe('渲染窗的安全配置', () => {
     await renderHtmlToPdf({
       ...BASE_INPUT,
       htmlBytes: await fs.readFile(path.join(sourceDir, 'src.html')),
-      htmlBaseDir: sourceDir,
     }).catch(() => undefined);
     const handler = FakeBrowserWindow.instances[0]!.webContents.session.beforeRequestHandler!;
     const response = await new Promise<{ cancel: boolean }>((resolve) =>
@@ -239,12 +225,13 @@ describe('渲染窗的安全配置', () => {
     await renderHtmlToPdf({
       ...BASE_INPUT,
       htmlBytes: await fs.readFile(path.join(tempRoot, 'src.html')),
-      htmlBaseDir: tempRoot,
     }).catch(() => undefined);
     const win = FakeBrowserWindow.instances[0]!;
     const handler = win.webContents.session.beforeRequestHandler!;
     const decide = async (url: string): Promise<boolean> => {
-      const response = await new Promise<{ cancel: boolean }>((resolve) => handler({ url }, resolve));
+      const response = await new Promise<{ cancel: boolean }>((resolve) =>
+        handler({ url }, resolve),
+      );
       return !response.cancel;
     };
     expect(await decide(`file://${localAsset}`)).toBe(false);
@@ -298,33 +285,6 @@ describe('渲染主流程', () => {
 
     const tempFile = FakeBrowserWindow.instances[0]!.loadedFile!;
     await expect(fs.stat(path.dirname(tempFile))).rejects.toThrow();
-  });
-
-  it('套模板后的内联 HTML 保留原文件目录作为相对资源基准', async () => {
-    const sourceDir = path.join(tempRoot, 'report');
-    await fs.mkdir(sourceDir);
-    const asset = path.join(sourceDir, 'chart.png');
-    await fs.writeFile(asset, 'image');
-    let loadedContent = '';
-    FakeBrowserWindow.loadBehavior = async (_win, file) => {
-      loadedContent = await fs.readFile(file, 'utf-8');
-    };
-
-    await renderHtmlToPdf({
-      ...BASE_INPUT,
-      html: '<html><head></head><body><img src="./chart.png"></body></html>',
-      htmlBaseDir: sourceDir,
-    });
-    const realSourceDir = await fs.realpath(sourceDir);
-    expect(loadedContent).toContain(
-      `<base href="${pathToFileURL(`${realSourceDir}${path.sep}`).href}" />`,
-    );
-
-    const handler = FakeBrowserWindow.instances[0]!.webContents.session.beforeRequestHandler!;
-    const response = await new Promise<{ cancel: boolean }>((resolve) =>
-      handler({ url: pathToFileURL(asset).href }, resolve),
-    );
-    expect(response.cancel).toBe(true);
   });
 
   it('只加载传入的 HTML 快照,不按调用方路径重新打开源文件', async () => {
@@ -452,9 +412,7 @@ describe('故障隔离', () => {
         /* 永不 resolve —— 真实 loadFile 在失败时也不会正常完成 */
       });
     };
-    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow(
-      /HTML 加载失败/,
-    );
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow(/HTML 加载失败/);
     const win = FakeBrowserWindow.instances[0]!;
     expect(win.destroyed).toBe(true);
     expect(win.webContents.printToPDF).not.toHaveBeenCalled();
@@ -473,7 +431,9 @@ describe('故障隔离', () => {
 
   it('printToPDF 抛错时窗口照样销毁,不泄漏', async () => {
     FakeBrowserWindow.pdfResult = () => Promise.reject(new Error('printToPDF boom'));
-    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow('printToPDF boom');
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow(
+      'printToPDF boom',
+    );
     expect(FakeBrowserWindow.instances[0]!.destroyed).toBe(true);
   });
 
@@ -508,9 +468,9 @@ describe('超时与并发', () => {
         /* 卡住不返回,模拟加载不出来的外部资源 */
       });
     };
-    await expect(
-      renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>', timeoutMs: 50 }),
-    ).rejects.toThrow(/渲染超时\(50ms timeout\)/);
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>', timeoutMs: 50 })).rejects.toThrow(
+      /渲染超时\(50ms timeout\)/,
+    );
     expect(FakeBrowserWindow.instances[0]!.destroyed).toBe(true);
   });
 

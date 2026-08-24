@@ -24,15 +24,8 @@ import {
   resolveSessionRoot,
 } from './_paths.js';
 import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
-import {
-  applyReportTemplate,
-  extractHtmlTitle,
-} from './pdfTemplate.js';
-import {
-  DEFAULT_DOCS_THEME,
-  resolveDocsTheme,
-  type DocsThemeName,
-} from './themes.js';
+import { applyReportTemplate, extractHtmlTitle } from './pdfTemplate.js';
+import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsThemeName } from './themes.js';
 import type {
   DocsMcpSessionCtx,
   DocsPdfPageSize,
@@ -52,8 +45,203 @@ export const RENDER_PDF_FONT_TIMEOUT_MS = 5_000;
 export const RENDER_PDF_MAX_HTML_BYTES = 16 * 1024 * 1024;
 /** 空/超小 PDF 的告警阈值:低于这个字节数几乎必然是白页,值得让模型自查。 */
 const SUSPICIOUS_PDF_BYTES = 2_048;
+/** 单个任务目录资源的上限,避免 HTML 引用一个超大本地文件拖垮 main。 */
+const MAX_LOCAL_RESOURCE_BYTES = 8 * 1024 * 1024;
+/** 一个 HTML 快照允许带入的本地资源总量。 */
+const MAX_LOCAL_RESOURCE_TOTAL_BYTES = 32 * 1024 * 1024;
 
 const DEFAULT_MARGIN_INCHES = 0.4;
+
+const LOCAL_RESOURCE_MIME_TYPES: Record<string, string> = {
+  '.avif': 'image/avif',
+  '.css': 'text/css',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.otf': 'font/otf',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+interface ResourceSnapshotContext {
+  root: string;
+  totalBytes: number;
+  cache: Map<string, string>;
+  cssStack: Set<string>;
+}
+
+function dataUri(mime: string, bytes: Uint8Array): string {
+  return `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
+}
+
+function isLocalResourceReference(reference: string): boolean {
+  const value = reference.trim();
+  if (!value || value.startsWith('#') || value.startsWith('//')) return false;
+  try {
+    return new URL(value).protocol === '';
+  } catch {
+    return !/^[a-z][a-z\d+.-]*:/i.test(value);
+  }
+}
+
+function resolveLocalResourcePath(baseDir: string, reference: string): string {
+  const withoutFragment = reference.trim().split('#', 1)[0]!.split('?', 1)[0]!;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(withoutFragment);
+  } catch {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      `本地资源 URL 无法解码: ${reference}`,
+      '请把图片、字体或样式表改成有效的相对路径或 data URI。',
+    );
+  }
+  return path.resolve(baseDir, decoded);
+}
+
+function resourceMime(absPath: string): string {
+  return (
+    LOCAL_RESOURCE_MIME_TYPES[path.extname(absPath).toLowerCase()] ?? 'application/octet-stream'
+  );
+}
+
+async function replaceAsync(
+  input: string,
+  pattern: RegExp,
+  replacer: (match: string, ...groups: string[]) => Promise<string>,
+): Promise<string> {
+  const matches = Array.from(input.matchAll(pattern));
+  if (matches.length === 0) return input;
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    const index = match.index ?? 0;
+    parts.push(input.slice(cursor, index));
+    parts.push(await replacer(match[0]!, ...match.slice(1).map((group) => group ?? '')));
+    cursor = index + match[0]!.length;
+  }
+  parts.push(input.slice(cursor));
+  return parts.join('');
+}
+
+async function inlineCssUrls(
+  css: string,
+  baseDir: string,
+  context: ResourceSnapshotContext,
+): Promise<string> {
+  return replaceAsync(
+    css,
+    /url\(\s*(?:(['"])(.*?)\1|([^)]*?))\s*\)/gi,
+    async (match, _quote, quoted, bare) => {
+      const reference = (quoted || bare).trim();
+      const snapshot = await snapshotLocalResource(context, baseDir, reference);
+      return snapshot ? `url("${snapshot}")` : match;
+    },
+  );
+}
+
+async function snapshotLocalResource(
+  context: ResourceSnapshotContext,
+  baseDir: string,
+  reference: string,
+): Promise<string | undefined> {
+  if (!isLocalResourceReference(reference)) return undefined;
+  const absPath = resolveLocalResourcePath(baseDir, reference);
+  const preparedPath = await prepareInputPath(context.root, absPath);
+  const cacheKey = path.resolve(preparedPath);
+  const cached = context.cache.get(cacheKey);
+  if (cached) return cached;
+
+  const bytes = await readInputFileWithinLimit(
+    context.root,
+    preparedPath,
+    MAX_LOCAL_RESOURCE_BYTES,
+    (size) =>
+      new DocsPathError(
+        'FILE_TOO_LARGE',
+        `本地资源过大: ${preparedPath}`,
+        `这份本地资源有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单个资源上限(8 MB)。请压缩或改成更小的 data URI。`,
+      ),
+  );
+  context.totalBytes += bytes.byteLength;
+  if (context.totalBytes > MAX_LOCAL_RESOURCE_TOTAL_BYTES) {
+    throw new DocsPathError(
+      'FILE_TOO_LARGE',
+      'HTML 引用的本地资源总量过大',
+      '这份 HTML 引用的本地图片、字体和样式表总量超过 32 MB。请压缩资源或拆分文档后重试。',
+    );
+  }
+
+  const mime = resourceMime(preparedPath);
+  let snapshotBytes = bytes;
+  if (mime === 'text/css') {
+    if (context.cssStack.has(cacheKey)) return dataUri(mime, bytes);
+    context.cssStack.add(cacheKey);
+    try {
+      const rewritten = await inlineCssUrls(
+        bytes.toString('utf8'),
+        path.dirname(preparedPath),
+        context,
+      );
+      snapshotBytes = Buffer.from(rewritten, 'utf8');
+    } finally {
+      context.cssStack.delete(cacheKey);
+    }
+  }
+  const snapshot = dataUri(mime, snapshotBytes);
+  context.cache.set(cacheKey, snapshot);
+  return snapshot;
+}
+
+async function inlineLocalResources(root: string, baseDir: string, html: string): Promise<string> {
+  const context: ResourceSnapshotContext = {
+    root,
+    totalBytes: 0,
+    cache: new Map(),
+    cssStack: new Set(),
+  };
+  let rewritten = await replaceAsync(html, /<link\b[^>]*>/gi, async (tag) => {
+    const hrefMatch = tag.match(/(\s+href\s*=\s*)(["'])([^"']+)\2/i);
+    if (!hrefMatch) return tag;
+    const rel = tag.match(/\srel\s*=\s*(["'])([^"']+)\1/i)?.[2] ?? '';
+    if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(hrefMatch[3]!)) return tag;
+    const snapshot = await snapshotLocalResource(context, baseDir, hrefMatch[3]!);
+    if (!snapshot) return tag;
+    return tag.replace(hrefMatch[0]!, `${hrefMatch[1]}${hrefMatch[2]}${snapshot}${hrefMatch[2]}`);
+  });
+  rewritten = await replaceAsync(
+    rewritten,
+    /<(?:img|source|audio|video|track|object|input|image)\b[^>]*>/gi,
+    async (tag) =>
+      replaceAsync(
+        tag,
+        /(\s+(?:src|poster|data)\s*=\s*)(["'])([^"']*)\2/gi,
+        async (match, prefix, quote, reference) => {
+          const snapshot = await snapshotLocalResource(context, baseDir, reference);
+          return snapshot ? `${prefix}${quote}${snapshot}${quote}` : match;
+        },
+      ),
+  );
+  rewritten = await replaceAsync(
+    rewritten,
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    async (match, opening, css, closing) =>
+      `${opening}${await inlineCssUrls(css, baseDir, context)}${closing}`,
+  );
+  return replaceAsync(
+    rewritten,
+    /(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi,
+    async (match, prefix, quote, css) => {
+      const rewrittenCss = await inlineCssUrls(css, baseDir, context);
+      return `${prefix}${quote}${rewrittenCss}${quote}`;
+    },
+  );
+}
 
 const DESCRIPTION = [
   '把 HTML 渲染成 PDF(用 Cindy 内置的 Chromium 排版,不需要用户装任何东西)。',
@@ -65,7 +253,7 @@ const DESCRIPTION = [
   '【输入】htmlPath(工作目录内的 .html 文件)与 html(内联源码)二选一,必须给且只给一个。',
   'HTML 源码上限 16 MB;文件路径与内联源码使用同一上限。',
   '为防止不可信 HTML 借用户网络身份探测内网或触发跟踪,渲染窗会阻断外部网络请求。',
-  '图片/字体/样式请内联成 data URI;为避免不可信 HTML 的本地资源竞态,file:// 子资源一律阻断。',
+  '图片/字体/样式可直接引用任务目录内的相对路径;工具会先把已验证的本地资源快照成 data URI,再交给渲染器。外部网络请求仍会阻断。',
   '',
   '【模板】template 默认 auto:没有 <style> / 外链 CSS 的裸 HTML 会自动套内置报告模板',
   '(系统字体、标题层级、表格斑马纹、打印页边距)。已经自己写了样式的原样透传。',
@@ -87,14 +275,7 @@ const DESCRIPTION = [
   '【输出】outPath 必须在本任务的工作目录内。同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
 ].join('\n');
 
-const PAGE_SIZES: readonly DocsPdfPageSize[] = [
-  'A3',
-  'A4',
-  'A5',
-  'Legal',
-  'Letter',
-  'Tabloid',
-];
+const PAGE_SIZES: readonly DocsPdfPageSize[] = ['A3', 'A4', 'A5', 'Legal', 'Letter', 'Tabloid'];
 
 export function registerRenderPdfTool(
   registry: DocsToolRegistry,
@@ -107,29 +288,20 @@ export function registerRenderPdfTool(
     category: 'convert',
     description: DESCRIPTION,
     inputShape: {
-      htmlPath: z
-        .string()
-        .optional()
-        .describe('工作目录内的 .html 文件路径。与 html 二选一。'),
+      htmlPath: z.string().optional().describe('工作目录内的 .html 文件路径。与 html 二选一。'),
       html: z
         .string()
         .optional()
         .describe(
           '内联 HTML 源码。与 htmlPath 二选一。图片/字体请使用 data URI,file:// 子资源不会被解析。',
         ),
-      outPath: z
-        .string()
-        .min(1)
-        .describe('输出 .pdf 路径,工作目录内的相对路径或绝对路径。'),
+      outPath: z.string().min(1).describe('输出 .pdf 路径,工作目录内的相对路径或绝对路径。'),
       pageSize: z
         .enum(PAGE_SIZES as unknown as [DocsPdfPageSize, ...DocsPdfPageSize[]])
         .default('A4')
         .describe('纸张尺寸,默认 A4。'),
       landscape: z.boolean().default(false).describe('是否横向。默认纵向。'),
-      printBackground: z
-        .boolean()
-        .default(true)
-        .describe('是否打印背景色与背景图。默认 true。'),
+      printBackground: z.boolean().default(true).describe('是否打印背景色与背景图。默认 true。'),
       margins: z
         .object({
           top: z.number().min(0).max(5).default(DEFAULT_MARGIN_INCHES),
@@ -142,17 +314,12 @@ export function registerRenderPdfTool(
       template: z
         .enum(['auto', 'report', 'none'])
         .default('auto')
-        .describe(
-          'auto=无样式时套内置报告模板;report=同样只套无样式 HTML;none=不套。',
-        ),
+        .describe('auto=无样式时套内置报告模板;report=同样只套无样式 HTML;none=不套。'),
       theme: z
         .enum(['light', 'dark', 'navy'])
         .default('light')
         .describe('自动套模板时使用的色板。已有样式的 HTML 不受影响。'),
-      overwrite: z
-        .boolean()
-        .default(false)
-        .describe('目标文件已存在时是否覆盖。默认 false。'),
+      overwrite: z.boolean().default(false).describe('目标文件已存在时是否覆盖。默认 false。'),
     },
     handler: async ({
       htmlPath,
@@ -182,9 +349,7 @@ export function registerRenderPdfTool(
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.pdf');
         const abs = await prepareOutputPath(root, outPath, overwrite);
-        const sourcePath = hasPath
-          ? await prepareInputPath(root, htmlPath!)
-          : undefined;
+        const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
         const sourceBytes = sourcePath
           ? await readInputFileWithinLimit(
               root,
@@ -209,10 +374,11 @@ export function registerRenderPdfTool(
             );
           }
         }
-        const palette = resolveDocsTheme(
-          (theme ?? DEFAULT_DOCS_THEME) as DocsThemeName,
-        );
-        const wrapped = applyReportTemplate(sourceHtml, palette, template);
+        const snapshotHtml = sourcePath
+          ? await inlineLocalResources(root, path.dirname(sourcePath), sourceHtml)
+          : sourceHtml;
+        const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
+        const wrapped = applyReportTemplate(snapshotHtml, palette, template);
         const userSetMargins = margins !== undefined;
         const effectiveMargins = userSetMargins
           ? {
@@ -230,20 +396,15 @@ export function registerRenderPdfTool(
                 right: DEFAULT_MARGIN_INCHES,
               };
 
-        const renderInput = wrapped.applied || !sourcePath
+        const renderInput = sourcePath
           ? {
-              html: wrapped.html,
-              ...(sourcePath ? { htmlBaseDir: path.dirname(sourcePath) } : {}),
+              // The host must consume the exact bytes already checked above.
+              // Local task resources have already been converted to data:
+              // snapshots, so the host never needs to reopen the caller's directory.
+              htmlBytes: Buffer.from(wrapped.html, 'utf8'),
             }
-          : {
-              // The host must consume the exact bytes already checked above;
-              // passing sourcePath here would reopen a mutable path.
-              htmlBytes: sourceBytes!,
-              htmlBaseDir: path.dirname(sourcePath),
-            };
+          : { html: wrapped.html };
         const { buffer, fontsReady } = await renderHtmlToPdf({
-          // 套模板后走内联 html，host 会注入原文件目录的受限 base URL，既不改
-          // 用户源文件，也能继续加载同目录相对资源。
           ...renderInput,
           pageSize,
           landscape,
@@ -283,11 +444,10 @@ export function registerRenderPdfTool(
           template,
           theme,
           templateApplied: wrapped.applied,
-          nextStep:
-            '用 inspect_pdf 回读这份 PDF,确认页数、纸张与是否有空白页,再交付。',
+          nextStep: '用 inspect_pdf 回读这份 PDF,确认页数、纸张与是否有空白页,再交付。',
           artifact: artifactMetadata({
             format: 'pdf',
-            title: extractHtmlTitle(sourceHtml),
+            title: extractHtmlTitle(snapshotHtml),
             theme,
           }),
           ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),

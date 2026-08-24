@@ -103,9 +103,18 @@ async function unzipAll(file: string, predicate: (name: string) => boolean): Pro
 describe('PPT 母版版式', () => {
   it('layoutSlots 封面/分节/内容页几何互不相同,有图时正文收窄', () => {
     const cover = layoutSlots('cover', { hasImage: false, hasSubtitle: true });
-    const section = layoutSlots('section', { hasImage: false, hasSubtitle: false });
-    const content = layoutSlots('content', { hasImage: false, hasSubtitle: false });
-    const split = layoutSlots('content', { hasImage: true, hasSubtitle: false });
+    const section = layoutSlots('section', {
+      hasImage: false,
+      hasSubtitle: false,
+    });
+    const content = layoutSlots('content', {
+      hasImage: false,
+      hasSubtitle: false,
+    });
+    const split = layoutSlots('content', {
+      hasImage: true,
+      hasSubtitle: false,
+    });
 
     expect(cover.title.fontSize).toBeGreaterThan(section.title.fontSize);
     expect(section.title.fontSize).toBeGreaterThan(content.title.fontSize);
@@ -168,7 +177,14 @@ describe('PPT 母版版式', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.theme).toBe('navy');
-    expect(result.layouts).toEqual(['cover', 'section', 'content', 'comparison', 'metrics', 'image']);
+    expect(result.layouts).toEqual([
+      'cover',
+      'section',
+      'content',
+      'comparison',
+      'metrics',
+      'image',
+    ]);
     expect(result.footer).toBe(true);
 
     const layouts = await unzipAll(
@@ -247,7 +263,10 @@ describe('PPT 母版版式', () => {
     await repeatedHandle.truncate(repeatedBytes);
     await repeatedHandle.close();
     const aggregate = await callTool(client, 'make_pptx', {
-      slides: [1, 2, 3, 4].map((n) => ({ title: `重复 ${n}`, imagePath: 'repeated.png' })),
+      slides: [1, 2, 3, 4].map((n) => ({
+        title: `重复 ${n}`,
+        imagePath: 'repeated.png',
+      })),
       outPath: 'aggregate-limit.pptx',
     });
     expect(aggregate.errorCode).toBe('FILE_TOO_LARGE');
@@ -367,11 +386,15 @@ describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(result.path as string);
     const ws = wb.getWorksheet('明细')!;
-    const headerFill = ws.getRow(1).getCell(1).fill as { fgColor?: { argb?: string } };
+    const headerFill = ws.getRow(1).getCell(1).fill as {
+      fgColor?: { argb?: string };
+    };
     expect(headerFill.fgColor?.argb).toBe(themeToArgb(DOCS_THEMES.navy.accent));
     expect(ws.getRow(1).font?.color?.argb).toBe(themeToArgb(DOCS_THEMES.navy.accentOn));
 
-    const zebra = ws.getRow(3).getCell(1).fill as { fgColor?: { argb?: string } };
+    const zebra = ws.getRow(3).getCell(1).fill as {
+      fgColor?: { argb?: string };
+    };
     expect(zebra.fgColor?.argb).toBe(themeToArgb(DOCS_THEMES.navy.zebra));
     const even = ws.getRow(2).getCell(1).fill as { fgColor?: { argb?: string } } | undefined;
     expect(even?.fgColor?.argb ?? '').not.toBe(themeToArgb(DOCS_THEMES.navy.zebra));
@@ -391,8 +414,7 @@ describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(result.path as string);
     const fill = wb.getWorksheet('S')!.getRow(3).getCell(1).fill as
-      | { fgColor?: { argb?: string } }
-      | undefined;
+      { fgColor?: { argb?: string } } | undefined;
     expect(fill?.fgColor?.argb ?? '').not.toBe(themeToArgb(DOCS_THEMES.light.zebra));
   });
 
@@ -400,7 +422,13 @@ describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
     const client = await connect();
     const result = await callTool(client, 'make_xlsx', {
       theme: 'dark',
-      sheets: [{ name: 'Dark', header: ['项目', '值', '备注'], rows: [['A', 1], ['B']] }],
+      sheets: [
+        {
+          name: 'Dark',
+          header: ['项目', '值', '备注'],
+          rows: [['A', 1], ['B']],
+        },
+      ],
       outPath: 'dark.xlsx',
     });
     expect(result.ok).toBe(true);
@@ -434,9 +462,7 @@ describe('PDF 无样式 HTML 套报告模板', () => {
   it('htmlLooksUnstyled 只在没有 stylesheet 时为真', () => {
     expect(htmlLooksUnstyled('<h1>hi</h1>')).toBe(true);
     expect(htmlLooksUnstyled('<style>h1{color:red}</style><h1>hi</h1>')).toBe(false);
-    expect(
-      htmlLooksUnstyled('<link rel="stylesheet" href="a.css"><h1>hi</h1>'),
-    ).toBe(false);
+    expect(htmlLooksUnstyled('<link rel="stylesheet" href="a.css"><h1>hi</h1>')).toBe(false);
     const wrapped = applyReportTemplate('<h1>hi</h1>', DOCS_THEMES.light);
     expect(wrapped.applied).toBe(true);
     expect(wrapped.html).toContain('data-cindy-docs-template="report"');
@@ -471,7 +497,12 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(styled.ok).toBe(true);
     expect(styled.templateApplied).toBe(false);
     expect(seen[1]!.html).toBe('<style>h1{color:red}</style><h1>已有样式</h1>');
-    expect(seen[1]!.margins).toEqual({ top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 });
+    expect(seen[1]!.margins).toEqual({
+      top: 0.4,
+      bottom: 0.4,
+      left: 0.4,
+      right: 0.4,
+    });
 
     const sourceDir = path.join(workdir, 'report-assets');
     await fs.mkdir(sourceDir);
@@ -480,13 +511,14 @@ describe('PDF 无样式 HTML 套报告模板', () => {
       '<h1>相对资源</h1><img src="./chart.png">',
       'utf8',
     );
+    await fs.writeFile(path.join(sourceDir, 'chart.png'), 'png-bytes', 'utf8');
     const relative = await callTool(client, 'render_pdf', {
       htmlPath: 'report-assets/report.html',
       outPath: 'relative.pdf',
     });
     expect(relative.ok).toBe(true);
-    expect(seen[2]!.html).toContain('./chart.png');
-    expect(seen[2]!.htmlBaseDir).toBe(sourceDir);
+    expect(Buffer.from(seen[2]!.htmlBytes!).toString('utf8')).toContain('data:image/png;base64,');
+    expect(Object.prototype.hasOwnProperty.call(seen[2], 'htmlBaseDir')).toBe(false);
     expect(relative.warning).toBeUndefined();
   });
 
@@ -513,7 +545,12 @@ describe('PDF 无样式 HTML 套报告模板', () => {
       margins: { top: 1, bottom: 1, left: 0.5, right: 0.5 },
     });
     expect(custom.templateApplied).toBe(true);
-    expect(seen[1]!.margins).toEqual({ top: 1, bottom: 1, left: 0.5, right: 0.5 });
+    expect(seen[1]!.margins).toEqual({
+      top: 1,
+      bottom: 1,
+      left: 0.5,
+      right: 0.5,
+    });
   });
 });
 

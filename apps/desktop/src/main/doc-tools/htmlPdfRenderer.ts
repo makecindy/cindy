@@ -41,11 +41,7 @@ import { pathToFileURL } from 'node:url';
 
 import { BrowserWindow, app } from 'electron';
 
-import type {
-  DocsPdfRenderInput,
-  DocsPdfRenderOutput,
-  RenderHtmlToPdfFn,
-} from '@cindy/mcps';
+import type { DocsPdfRenderInput, DocsPdfRenderOutput, RenderHtmlToPdfFn } from '@cindy/mcps';
 
 import { createLogger } from '../logger.js';
 
@@ -83,61 +79,21 @@ function tempRoot(): string {
 
 interface PreparedSource {
   fileUrlPath: string;
-  /** 原始资源基准目录,保留用于诊断;file:// 子资源本身始终 fail closed。 */
-  allowedFileRoots: AllowedFileRoot[];
   /** 需要清理的临时目录(仅内联 HTML 走这条路)。 */
   cleanupDir?: string;
 }
 
-interface AllowedFileRoot {
-  path: string;
-  realPath: string;
-  dev: bigint;
-  ino: bigint;
-}
-
-async function snapshotAllowedFileRoot(root: string): Promise<AllowedFileRoot> {
-  const realPath = await fs.realpath(root);
-  const stat = await fs.lstat(realPath, { bigint: true });
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error(`HTML resource root is not a directory: ${root}`);
-  }
-  // Keep the caller's literal root for component-wise symlink checks. On macOS
-  // /var is a symlink to /private/var; replacing it with realPath here would
-  // make every ordinary resource look outside the root before Chromium loads it.
-  return { path: path.resolve(root), realPath, dev: stat.dev, ino: stat.ino };
-}
-
 async function prepareSource(input: DocsPdfRenderInput): Promise<PreparedSource> {
-  const baseRootIdentity = input.htmlBaseDir
-    ? await snapshotAllowedFileRoot(input.htmlBaseDir)
-    : undefined;
   const dir = await fs.mkdtemp(path.join(tempRoot(), 'cindy-docs-html-'));
   const file = path.join(dir, 'source.html');
-  const tempRootIdentity = await snapshotAllowedFileRoot(dir);
   const sourceHtml = input.htmlBytes
     ? Buffer.from(input.htmlBytes).toString('utf8')
     : (input.html ?? '');
-  const html = baseRootIdentity
-    ? injectBaseHref(sourceHtml, baseRootIdentity.realPath)
-    : sourceHtml;
-  await fs.writeFile(file, html, 'utf-8');
+  await fs.writeFile(file, sourceHtml, 'utf-8');
   return {
     fileUrlPath: file,
-    allowedFileRoots: baseRootIdentity
-      ? [tempRootIdentity, baseRootIdentity]
-      : [tempRootIdentity],
     cleanupDir: dir,
   };
-}
-
-function injectBaseHref(html: string, baseDir: string): string {
-  const href = pathToFileURL(`${path.resolve(baseDir)}${path.sep}`).href;
-  const base = `<base href="${href}" />`;
-  if (/<head(?:\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<head(\s[^>]*)?>/i, (head) => `${head}\n${base}`);
-  }
-  return `<head>${base}</head>\n${html}`;
 }
 
 function createRenderWindow(partition: string): BrowserWindow {
@@ -179,7 +135,6 @@ function createRenderWindow(partition: string): BrowserWindow {
  */
 async function isAllowedResourceUrl(
   requestUrl: string,
-  _allowedFileRoots: readonly AllowedFileRoot[],
   entryUrl: string,
   resourceType?: string,
 ): Promise<boolean> {
@@ -197,23 +152,19 @@ async function isAllowedResourceUrl(
   // remain blocked and cannot reopen a path after the security check.
   if (resourceType === 'mainFrame' && requestUrl === entryUrl) return true;
   // Never let Chromium reopen a user-controlled file path after this check.
-  // The allowlisted roots remain part of PreparedSource for compatibility and
-  // diagnostics, but file:// resources must be converted to data: before render.
+  // Task-directory resources are converted to data: snapshots by the MCP tool
+  // before this host receives the HTML bytes.
   if (parsed.protocol === 'file:') return false;
   return false;
 }
 
-function lockRequests(
-  win: BrowserWindow,
-  allowedFileRoots: readonly AllowedFileRoot[],
-  entryUrl: string,
-): void {
+function lockRequests(win: BrowserWindow, entryUrl: string): void {
   const session = win.webContents.session;
   session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.setPermissionCheckHandler(() => false);
   session.on('will-download', (event) => event.preventDefault());
   session.webRequest.onBeforeRequest((details, callback) => {
-    void isAllowedResourceUrl(details.url, allowedFileRoots, entryUrl, details.resourceType)
+    void isAllowedResourceUrl(details.url, entryUrl, details.resourceType)
       .then((allowed) => callback({ cancel: !allowed }))
       .catch(() => callback({ cancel: true }));
   });
@@ -251,9 +202,7 @@ function lockNavigation(win: BrowserWindow): void {
 async function waitForFonts(win: BrowserWindow, timeoutMs: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
   try {
-    const ready = win.webContents.executeJavaScript(
-      'document.fonts.ready.then(() => true)',
-    );
+    const ready = win.webContents.executeJavaScript('document.fonts.ready.then(() => true)');
     const timeout = new Promise<false>((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);
     });
@@ -281,7 +230,7 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
     win = createRenderWindow(`temp:cindy-docs-${randomUUID()}`);
     const target = win;
     lockNavigation(target);
-    lockRequests(target, source.allowedFileRoots, pathToFileURL(source.fileUrlPath).href);
+    lockRequests(target, pathToFileURL(source.fileUrlPath).href);
 
     const work = (async (): Promise<RenderAttemptResult> => {
       // 加载失败与 Renderer 崩溃都要把这次渲染判死,否则 printToPDF 会在一个空白
@@ -294,18 +243,18 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
             reject(new Error(`HTML 加载失败(${errorCode} ${errorDescription})`));
           },
         );
-        target.webContents.once('render-process-gone', (_event: unknown, details: { reason?: string }) => {
-          reject(new Error(`渲染进程异常退出(${details?.reason ?? 'unknown'})`));
-        });
+        target.webContents.once(
+          'render-process-gone',
+          (_event: unknown, details: { reason?: string }) => {
+            reject(new Error(`渲染进程异常退出(${details?.reason ?? 'unknown'})`));
+          },
+        );
       });
 
       await Promise.race([target.loadFile(source.fileUrlPath), failure]);
       // 顺序是硬要求:加载完成 → 等字体就绪 → 才允许 printToPDF。
       // 提前打印会拿到字体回退后的排版,而且不会有任何报错。
-      const fontsReady = await Promise.race([
-        waitForFonts(target, input.fontTimeoutMs),
-        failure,
-      ]);
+      const fontsReady = await Promise.race([waitForFonts(target, input.fontTimeoutMs), failure]);
       const pdf = await Promise.race([
         target.webContents.printToPDF({
           landscape: input.landscape,
