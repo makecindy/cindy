@@ -3082,6 +3082,32 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('已移出发送额度的当前代 best-effort 帧仍能用带 id 错误收口 peer', async () => {
+    const h = makeHarness();
+    const routeChanges: unknown[] = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.client.sendPush('dev-b', 'maker:event', { current: true });
+    const sent = h.current().sent.find((env) => env.kind === 'push' && env.dst === 'dev-b')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: sent.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current best-effort route failed',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges).toHaveLength(1);
+    expect(routeChanges[0]).toMatchObject({ deviceId: 'dev-b', state: 'offline' });
+    h.client.stop();
+  });
+
   it('同一 WebSocket 内旧可靠帧的迟到 DEVICE_OFFLINE 保留原 link 代次', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     const routeChanges: Array<{
@@ -3166,20 +3192,23 @@ describe('DeviceLinkClient', () => {
 
     const internals = h.client as unknown as {
       markPeerRouteOnline(deviceId: string): number;
+      rememberOutboundRouteGeneration(
+        id: string,
+        deviceId: string,
+        linkGeneration: number,
+      ): void;
     };
     const oldGeneration = internals.markPeerRouteOnline('dev-a');
-    let oldestRouteId = '';
+    const oldestRouteId = 'route-cap-0';
     for (let index = 0; index < 1_024; index += 1) {
-      h.client.sendPush('dev-a', 'maker:event', { index });
-      if (index === 0) oldestRouteId = h.current().sent.at(-1)?.id ?? '';
+      internals.rememberOutboundRouteGeneration(`route-cap-${index}`, 'dev-a', oldGeneration);
     }
-    expect(oldestRouteId).toBeTruthy();
 
     expect(() => {
-      h.client.sendPush('dev-a', 'maker:event', { overflow: true });
+      internals.rememberOutboundRouteGeneration('route-cap-overflow', 'dev-a', oldGeneration);
     }).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
     expect(() => {
-      h.client.sendPush('dev-b', 'maker:event', { independent: true });
+      internals.rememberOutboundRouteGeneration('route-cap-independent', 'dev-b', 1);
     }).not.toThrow();
 
     const currentGeneration = internals.markPeerRouteOnline('dev-a');
@@ -3200,6 +3229,59 @@ describe('DeviceLinkClient', () => {
       state: 'offline',
       linkGeneration: oldGeneration,
     });
+    h.client.stop();
+  });
+
+  it('健康可靠链路在 ACK 后释放路由历史，不会把 1024 个成功 ID 变成永久配额', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'route-history-release');
+
+    for (let index = 0; index < 1_025; index += 1) {
+      const requestId = `route-history-success-${index}`;
+      h.client.sendInvokeResult('dev-b', requestId, { ok: true, result: index });
+      const frame = h.current().sent.filter((env) => (
+        env.kind === 'invoke-result'
+        && env.id === requestId
+        && parseTransportPayload(env.payload) !== null
+      )).at(-1)!;
+      const meta = parseTransportPayload(frame.payload)!.meta;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        },
+      });
+    }
+
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+    expect(() => {
+      h.client.sendInvokeResult('dev-b', 'route-history-after-cap', {
+        ok: true,
+        result: 'still-sending',
+      });
+    }).not.toThrow();
+    h.client.stop();
+  });
+
+  it('健康 best-effort 链路持续发送超过 1024 个唯一 ID 也不会永久停发', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    expect(() => {
+      for (let index = 0; index < 1_025; index += 1) {
+        h.client.sendPush('dev-b', 'maker:event', { index });
+      }
+    }).not.toThrow();
+    expect(h.current().sent.filter((env) => env.kind === 'push' && env.dst === 'dev-b'))
+      .toHaveLength(1_025);
     h.client.stop();
   });
 
@@ -3263,11 +3345,7 @@ describe('DeviceLinkClient', () => {
       },
     });
 
-    expect(routeChanges.at(-1)).toMatchObject({
-      deviceId: 'dev-b',
-      state: 'offline',
-      linkGeneration: oldGeneration,
-    });
+    expect(routeChanges).toHaveLength(0);
     expect(h.client.isLinkReady('dev-b')).toBe(true);
     h.client.stop();
   });
