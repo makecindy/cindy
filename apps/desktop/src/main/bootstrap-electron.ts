@@ -439,7 +439,6 @@ import {
   registerWorktreeIpc,
   WorktreePool,
   reconcileWorktreesForDeletedSessions,
-  reconcilePendingSafeDirectoryCleanups,
 } from './worktree';
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
@@ -5596,10 +5595,6 @@ const registerIpcHandlers = () => {
     // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
     void reconcileWorktreesForDeletedSessions().catch((err) => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
-    });
-    // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
-    void reconcilePendingSafeDirectoryCleanups().catch((err) => {
-      console.error('[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):', err);
     });
     // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
     // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
