@@ -66,6 +66,11 @@ describe('parseDelimited', () => {
     expect(csv('a,,c')).toEqual([['a', '', 'c']]);
   });
 
+  it('保留文件末尾没有换行的显式空记录', () => {
+    expect(csv('""')).toEqual([['']]);
+    expect(csv('header\n""')).toEqual([['header'], ['']]);
+  });
+
   it('tsv 用制表符切分', () => {
     expect(parseDelimited('a\tb\n1\t2', { delimiter: '\t' })).toEqual([
       ['a', 'b'],

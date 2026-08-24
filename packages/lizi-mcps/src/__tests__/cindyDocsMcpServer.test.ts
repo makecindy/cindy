@@ -547,6 +547,16 @@ describe('make_pptx', () => {
       0x00, 0x3f, 0x00, 0x01, 0xff, 0xd9,
     ]);
     expect(detectPptxImageMime(completeJpeg)).toBe('image/jpeg');
+
+    const progressiveJpeg = Buffer.from([
+      0xff, 0xd8,
+      0xff, 0xc2, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00,
+      0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01,
+      0xff, 0xc4, 0x00, 0x02,
+      0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x01, 0x3f, 0x00, 0x02, 0x02,
+      0xff, 0xd9,
+    ]);
+    expect(detectPptxImageMime(progressiveJpeg)).toBe('image/jpeg');
   });
 });
 
@@ -1002,6 +1012,37 @@ describe('render_pdf', () => {
     expect(rendered).not.toContain('./chart.png');
     expect(rendered).not.toContain('./theme.css');
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
+  });
+
+  it('按 HTML base href 解析相对资源而不是固定使用 HTML 同目录', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.mkdir(path.join(workdir, 'assets'));
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'root-chart', 'utf8');
+    await fs.writeFile(path.join(workdir, 'assets/chart.png'), 'assets-chart', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'base.html'),
+      '<base href="assets/"><img src="chart.png">',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'base.html',
+      outPath: 'base.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain(
+      `data:image/png;base64,${Buffer.from('assets-chart').toString('base64')}`,
+    );
+    expect(rendered).not.toContain(Buffer.from('root-chart').toString('base64'));
   });
 
   it('快照 SVG image 的 href 与 xlink:href 本地资源', async () => {

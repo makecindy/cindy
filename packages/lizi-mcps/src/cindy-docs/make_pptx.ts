@@ -157,24 +157,25 @@ export function detectPptxImageMime(bytes: Buffer): PptxImageMime | null {
   ) {
     let offset = 2;
     let sawFrame = false;
-    while (offset + 3 < bytes.length) {
+    let sawScan = false;
+    while (offset + 1 < bytes.length) {
       while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
       if (offset >= bytes.length) break;
       const marker = bytes[offset]!;
       offset += 1;
-      if (marker === 0xd9) return null;
+      if (marker === 0xd9) return sawFrame && sawScan && offset === bytes.length ? 'image/jpeg' : null;
       if (marker === 0xda) {
         if (offset + 2 > bytes.length) return null;
         const segmentLength = bytes.readUInt16BE(offset);
-        if (segmentLength < 8 || offset + segmentLength > bytes.length) return null;
+        if (!sawFrame || segmentLength < 8 || offset + segmentLength > bytes.length) return null;
         const componentCount = bytes[offset + 2]!;
         if (componentCount === 0 || segmentLength !== 6 + componentCount * 2) return null;
         offset += segmentLength;
 
-        // After SOS, scan data may contain stuffed 0xFF bytes and restart
-        // markers. Require actual scan bytes and a terminating EOI instead of
-        // treating a bare SOF followed by EOI as a valid JPEG.
+        // Scan data may contain stuffed 0xFF bytes, restart markers, and
+        // another marker segment before the next SOS in progressive JPEGs.
         let scanBytes = 0;
+        let scanEnded = false;
         while (offset < bytes.length) {
           if (bytes[offset] !== 0xff) {
             scanBytes += 1;
@@ -185,15 +186,23 @@ export function detectPptxImageMime(bytes: Buffer): PptxImageMime | null {
           while (markerOffset < bytes.length && bytes[markerOffset] === 0xff) markerOffset += 1;
           if (markerOffset >= bytes.length) return null;
           const scanMarker = bytes[markerOffset]!;
-          if (scanMarker === 0x00 || (scanMarker >= 0xd0 && scanMarker <= 0xd7)) {
+          if (scanMarker === 0x00) {
             scanBytes += 1;
             offset = markerOffset + 1;
             continue;
           }
-          if (scanMarker === 0xd9) return sawFrame && scanBytes > 0 ? 'image/jpeg' : null;
-          return null;
+          if (scanMarker >= 0xd0 && scanMarker <= 0xd7) {
+            offset = markerOffset + 1;
+            continue;
+          }
+          if (scanBytes === 0) return null;
+          sawScan = true;
+          offset = markerOffset - 1;
+          scanEnded = true;
+          break;
         }
-        return null;
+        if (!scanEnded) return null;
+        continue;
       }
       if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
       if (offset + 2 > bytes.length) break;

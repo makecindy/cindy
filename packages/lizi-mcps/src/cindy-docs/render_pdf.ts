@@ -10,6 +10,7 @@
  */
 
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { z } from 'zod';
 
@@ -91,11 +92,10 @@ function isLocalResourceReference(reference: string): boolean {
   }
 }
 
-function resolveLocalResourcePath(baseDir: string, reference: string): string {
-  const withoutFragment = reference.trim().split('#', 1)[0]!.split('?', 1)[0]!;
-  let decoded: string;
+function resolveLocalResourcePath(baseUrl: URL, reference: string): string | undefined {
+  let resolved: URL;
   try {
-    decoded = decodeURIComponent(withoutFragment);
+    resolved = new URL(reference.trim(), baseUrl);
   } catch {
     throw new DocsPathError(
       'PATH_NOT_ALLOWED',
@@ -103,7 +103,18 @@ function resolveLocalResourcePath(baseDir: string, reference: string): string {
       '请把图片、字体或样式表改成有效的相对路径或 data URI。',
     );
   }
-  return path.resolve(baseDir, decoded);
+  if (resolved.protocol !== 'file:') return undefined;
+  resolved.hash = '';
+  resolved.search = '';
+  try {
+    return fileURLToPath(resolved);
+  } catch {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      `本地资源 URL 无法解析: ${reference}`,
+      '请把图片、字体或样式表改成有效的相对路径或 data URI。',
+    );
+  }
 }
 
 function resourceMime(absPath: string): string {
@@ -149,14 +160,14 @@ async function replaceAsync(
 
 async function inlineCssImports(
   css: string,
-  baseDir: string,
+  baseUrl: URL,
   context: ResourceSnapshotContext,
 ): Promise<string> {
   let rewritten = await replaceAsync(
     css,
     /@import\s+(["'])(.*?)\1([^;]*);?/gi,
     async (match, _quote, reference, suffix) => {
-      const snapshot = await snapshotLocalResource(context, baseDir, reference.trim());
+      const snapshot = await snapshotLocalResource(context, baseUrl, reference.trim());
       return snapshot ? `@import url("${snapshot}")${suffix};` : match;
     },
   );
@@ -165,7 +176,7 @@ async function inlineCssImports(
     /@import\s+url\(\s*(?:(['"])(.*?)\1|([^)]*?))\s*\)([^;]*);?/gi,
     async (match, _quote, quoted, bare, suffix) => {
       const reference = (quoted || bare).trim();
-      const snapshot = await snapshotLocalResource(context, baseDir, reference);
+      const snapshot = await snapshotLocalResource(context, baseUrl, reference);
       return snapshot ? `@import url("${snapshot}")${suffix};` : match;
     },
   );
@@ -173,7 +184,7 @@ async function inlineCssImports(
 
 async function inlineCssUrls(
   css: string,
-  baseDir: string,
+  baseUrl: URL,
   context: ResourceSnapshotContext,
 ): Promise<string> {
   return replaceAsync(
@@ -181,7 +192,7 @@ async function inlineCssUrls(
     /url\(\s*(?:(['"])(.*?)\1|([^)]*?))\s*\)/gi,
     async (match, _quote, quoted, bare) => {
       const reference = (quoted || bare).trim();
-      const snapshot = await snapshotLocalResource(context, baseDir, reference);
+      const snapshot = await snapshotLocalResource(context, baseUrl, reference);
       return snapshot ? `url("${snapshot}")` : match;
     },
   );
@@ -241,7 +252,7 @@ async function rewriteHtmlAttributes(
 
 async function inlineSrcset(
   value: string,
-  baseDir: string,
+  baseUrl: URL,
   context: ResourceSnapshotContext,
 ): Promise<string> {
   const candidates = splitSrcset(value);
@@ -249,7 +260,7 @@ async function inlineSrcset(
     candidates.map(async (candidate) => {
       const match = candidate.match(/^(\S+)(?:\s+(.+))?$/);
       if (!match) return candidate;
-      const snapshot = await snapshotLocalResource(context, baseDir, match[1]!);
+      const snapshot = await snapshotLocalResource(context, baseUrl, match[1]!);
       return `${snapshot ?? match[1]}${match[2] ? ` ${match[2]}` : ''}`;
     }),
   );
@@ -258,11 +269,12 @@ async function inlineSrcset(
 
 async function snapshotLocalResource(
   context: ResourceSnapshotContext,
-  baseDir: string,
+  baseUrl: URL,
   reference: string,
 ): Promise<string | undefined> {
   if (!isLocalResourceReference(reference)) return undefined;
-  const absPath = resolveLocalResourcePath(baseDir, reference);
+  const absPath = resolveLocalResourcePath(baseUrl, reference);
+  if (!absPath) return undefined;
   const preparedPath = await prepareInputPath(context.root, absPath);
   const cacheKey = path.resolve(preparedPath);
   const cached = context.cache.get(cacheKey);
@@ -296,10 +308,10 @@ async function snapshotLocalResource(
     try {
       const imported = await inlineCssImports(
         bytes.toString('utf8'),
-        path.dirname(preparedPath),
+        pathToFileURL(preparedPath),
         context,
       );
-      const rewritten = await inlineCssUrls(imported, path.dirname(preparedPath), context);
+      const rewritten = await inlineCssUrls(imported, pathToFileURL(preparedPath), context);
       snapshotBytes = Buffer.from(rewritten, 'utf8');
     } finally {
       context.cssStack.delete(cacheKey);
@@ -310,20 +322,35 @@ async function snapshotLocalResource(
   return snapshot;
 }
 
-async function inlineLocalResources(root: string, baseDir: string, html: string): Promise<string> {
+async function inlineLocalResources(root: string, sourcePath: string, html: string): Promise<string> {
   const context: ResourceSnapshotContext = {
     root,
     totalBytes: 0,
     cache: new Map(),
     cssStack: new Set(),
   };
+  const documentUrl = pathToFileURL(sourcePath);
+  let baseUrl = documentUrl;
+  const baseTag = html.match(/<base\b[^>]*>/i)?.[0];
+  const baseHref = baseTag ? readHtmlAttribute(baseTag, 'href') : undefined;
+  if (baseHref) {
+    try {
+      baseUrl = new URL(baseHref, documentUrl);
+    } catch {
+      throw new DocsPathError(
+        'PATH_NOT_ALLOWED',
+        `HTML 的 base href 无法解析: ${baseHref}`,
+        '请把 <base href> 改成有效的本地相对路径。',
+      );
+    }
+  }
   let rewritten = await replaceAsync(html, /<link\b[^>]*>/gi, async (tag) => {
     const href = readHtmlAttribute(tag, 'href');
     if (!href) return tag;
     const rel = readHtmlAttribute(tag, 'rel') ?? '';
     if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(href)) return tag;
     return rewriteHtmlAttributes(tag, ['href'], async (reference) => {
-      return (await snapshotLocalResource(context, baseDir, reference)) ?? reference;
+      return (await snapshotLocalResource(context, baseUrl, reference)) ?? reference;
     });
   });
   rewritten = await replaceAsync(
@@ -333,12 +360,12 @@ async function inlineLocalResources(root: string, baseDir: string, html: string)
       const withSources = await rewriteHtmlAttributes(
         tag,
         ['src', 'poster', 'data', 'href', 'xlink:href'],
-        async (reference) => (await snapshotLocalResource(context, baseDir, reference)) ?? reference,
+        async (reference) => (await snapshotLocalResource(context, baseUrl, reference)) ?? reference,
       );
       return rewriteHtmlAttributes(
         withSources,
         ['srcset'],
-        async (value) => inlineSrcset(value, baseDir, context),
+        async (value) => inlineSrcset(value, baseUrl, context),
       );
     },
   );
@@ -346,8 +373,8 @@ async function inlineLocalResources(root: string, baseDir: string, html: string)
     rewritten,
     /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
     async (match, opening, css, closing) => {
-      const imported = await inlineCssImports(css, baseDir, context);
-      return `${opening}${await inlineCssUrls(imported, baseDir, context)}${closing}`;
+      const imported = await inlineCssImports(css, baseUrl, context);
+      return `${opening}${await inlineCssUrls(imported, baseUrl, context)}${closing}`;
     },
   );
   return replaceAsync(
@@ -356,7 +383,7 @@ async function inlineLocalResources(root: string, baseDir: string, html: string)
     async (match, leading, attributeName, equals, quote, quoted, bare) => {
       if (attributeName.toLowerCase() !== 'style') return match;
       const css = quote ? quoted : bare;
-      const rewrittenCss = await inlineCssUrls(css, baseDir, context);
+      const rewrittenCss = await inlineCssUrls(css, baseUrl, context);
       return `${leading}${attributeName}${equals}${quote ? `${quote}${rewrittenCss}${quote}` : rewrittenCss}`;
     },
   );
@@ -494,7 +521,7 @@ export function registerRenderPdfTool(
           }
         }
         const snapshotHtml = sourcePath
-          ? await inlineLocalResources(root, path.dirname(sourcePath), sourceHtml)
+          ? await inlineLocalResources(root, sourcePath, sourceHtml)
           : sourceHtml;
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
         const wrapped = applyReportTemplate(snapshotHtml, palette, template);

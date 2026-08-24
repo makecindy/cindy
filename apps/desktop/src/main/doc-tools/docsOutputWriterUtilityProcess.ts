@@ -30,9 +30,17 @@ function samePath(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
-function sameRelativePath(left: string, right: string): boolean {
+export function sameRelativePath(
+  left: string,
+  right: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   const normalize = (value: string) => path.normalize(value.replace(/[\\/]+/g, path.sep));
-  return normalize(left) === normalize(right);
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  return platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
 }
 
 async function verifyParent(request: DocsOutputWriteRequest, workingDir: string): Promise<void> {

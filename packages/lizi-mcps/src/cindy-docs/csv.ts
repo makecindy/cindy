@@ -60,6 +60,7 @@ export function parseDelimitedWindow(
   let field = '';
   let inQuotes = false;
   let lastRowWasEmpty = false;
+  let recordStarted = false;
   // 字段是否还停在「第一个字符」上 —— 决定引号算引号态还是普通字符。
   let atFieldStart = true;
 
@@ -72,9 +73,10 @@ export function parseDelimitedWindow(
     endField();
     totalColumns = Math.max(totalColumns, row.length);
     totalRows += 1;
-    lastRowWasEmpty = row.length === 1 && row[0] === '';
+    lastRowWasEmpty = row.length === 1 && row[0] === '' && !recordStarted;
     if (totalRows >= firstRow && totalRows <= lastRow) rows.push(row);
     row = [];
+    recordStarted = false;
   };
 
   for (let i = 0; i < src.length; i += 1) {
@@ -97,9 +99,11 @@ export function parseDelimitedWindow(
     if (ch === '"' && atFieldStart) {
       inQuotes = true;
       atFieldStart = false;
+      recordStarted = true;
       continue;
     }
     if (ch === delimiter) {
+      recordStarted = true;
       endField();
       continue;
     }
@@ -115,11 +119,12 @@ export function parseDelimitedWindow(
     }
     field += ch;
     atFieldStart = false;
+    recordStarted = true;
   }
 
   // 未闭合的引号:按「读到文件尾即字段结束」收尾,不报错 —— 半截文件也应该
   // 尽量给出可用内容,让模型自己判断要不要重取。
-  if (inQuotes || field.length > 0 || row.length > 0) {
+  if (inQuotes || field.length > 0 || row.length > 0 || recordStarted) {
     endRow();
   }
 

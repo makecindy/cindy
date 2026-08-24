@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DocsOutputWriteRequest } from '../docsOutputWriterProtocol.js';
-import { runDocsOutputWrite } from '../docsOutputWriterUtilityProcess.js';
+import { runDocsOutputWrite, sameRelativePath } from '../docsOutputWriterUtilityProcess.js';
 
 let root: string;
 const cleanup: string[] = [];
@@ -64,6 +64,11 @@ async function missingParentRequest(targetName: string, data: string): Promise<D
 }
 
 describe('docs output cwd-bound writer', () => {
+  it('uses Windows case-insensitive semantics for relative parent paths', () => {
+    expect(sameRelativePath('Documents/Reports', 'documents\\reports', 'win32')).toBe(true);
+    expect(sameRelativePath('Documents/Reports', 'documents\\reports', 'darwin')).toBe(false);
+  });
+
   it('creates exclusively and never truncates an existing file by default', async () => {
     const first = await request('report.bin', 'one', false);
     await runDocsOutputWrite(first, root);
