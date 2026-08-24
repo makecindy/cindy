@@ -5,14 +5,14 @@
  * 拓扑(全本地,无网络):
  *   真 pi 二进制  ──RPC──▶ PiAgent
  *        │ HTTP(streamable MCP, SDK) ──▶ 假 MCP server(注册一个 cindy_echo 工具)
- *        │ HTTP(anthropic SSE)       ──▶ 假网关(脚本化两轮:先 tool_use 调 cindy_echo,
- *        │                                拿到 tool_result 后再出最终 text)
+ *        │ HTTP(anthropic SSE)       ──▶ 假网关(脚本化三轮:先发现、再经稳定网关调用，
+ *        │                                拿到真实 tool_result 后再出最终 text)
  *   PiAgent.interactionResolver ◀── extension_ui_request(权限询问)
  *
  * 断言:
- *   1. 模型发起的 tool_use 打到假 MCP server(工具确实经 cindy-bridge 注册+转发)
- *   2. ask 档下该工具触发 interactionResolver;allow → 工具执行、最终 text 含回显
- *   3. deny 场景:另一会话 resolver 返回 deny → 工具不执行,MCP server 未被命中
+ *   1. 模型启动面只有两个稳定网关 schema，不再含每个 mcp__<server>__<tool>
+ *   2. list_tools → call_tool 真正打到假 MCP server，全部能力仍可达
+ *   3. ask 档下 Host 仍看到真实 MCP identity；allow/deny 与错误修正链保持成立
  *
  * pi 二进制缺失时 skip。
  */
@@ -81,46 +81,48 @@ function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-// ── 假网关:脚本化两轮 anthropic Messages 流 ─────────────────────────────────
-// 第 1 次请求(messages 里没有 tool_result)→ 出 tool_use 调 cindy_echo。
-// 第 2 次请求(已带 tool_result)→ 出最终 text。
-function anthropicTurn(hasToolResult: boolean, toolName: string): string {
-  if (!hasToolResult) {
-    return (
-      sseEvent('message_start', {
-        type: 'message_start',
-        message: {
-          id: 'msg_1', type: 'message', role: 'assistant', model: 'pi-test-model',
-          content: [], stop_reason: null, usage: { input_tokens: 20, output_tokens: 0 },
-        },
-      }) +
-      sseEvent('content_block_start', {
-        type: 'content_block_start', index: 0,
-        content_block: { type: 'tool_use', id: 'toolu_1', name: toolName, input: {} },
-      }) +
-      sseEvent('content_block_delta', {
-        type: 'content_block_delta', index: 0,
-        delta: { type: 'input_json_delta', partial_json: JSON.stringify({ text: 'hello-pi' }) },
-      }) +
-      sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }) +
-      sseEvent('message_delta', {
-        type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 },
-      }) +
-      sseEvent('message_stop', { type: 'message_stop' })
-    );
-  }
+function anthropicToolTurn(
+  sequence: number,
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
   return (
     sseEvent('message_start', {
       type: 'message_start',
       message: {
-        id: 'msg_2', type: 'message', role: 'assistant', model: 'pi-test-model',
+        id: `msg_${sequence}`, type: 'message', role: 'assistant', model: 'pi-test-model',
+        content: [], stop_reason: null, usage: { input_tokens: 20, output_tokens: 0 },
+      },
+    }) +
+    sseEvent('content_block_start', {
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'tool_use', id: `toolu_${sequence}`, name: toolName, input: {} },
+    }) +
+    sseEvent('content_block_delta', {
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) },
+    }) +
+    sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }) +
+    sseEvent('message_delta', {
+      type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 },
+    }) +
+    sseEvent('message_stop', { type: 'message_stop' })
+  );
+}
+
+function anthropicTextTurn(sequence: number, text: string): string {
+  return (
+    sseEvent('message_start', {
+      type: 'message_start',
+      message: {
+        id: `msg_${sequence}`, type: 'message', role: 'assistant', model: 'pi-test-model',
         content: [], stop_reason: null, usage: { input_tokens: 30, output_tokens: 0 },
       },
     }) +
     sseEvent('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) +
     sseEvent('content_block_delta', {
       type: 'content_block_delta', index: 0,
-      delta: { type: 'text_delta', text: 'tool said: ECHO[hello-pi]' },
+      delta: { type: 'text_delta', text },
     }) +
     sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }) +
     sseEvent('message_delta', {
@@ -128,6 +130,77 @@ function anthropicTurn(hasToolResult: boolean, toolName: string): string {
     }) +
     sseEvent('message_stop', { type: 'message_stop' })
   );
+}
+
+function countToolResults(requestBody: string): number {
+  return (requestBody.match(/"type":"tool_result"/g) ?? []).length;
+}
+
+function scriptedAnthropicTurn(requestBody: string): string {
+  const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('unknown gateway tool')) {
+    return toolResultCount === 0
+      ? anthropicToolTurn(1, 'cindy_mcp_call_tool', {
+          server: 'missing_server',
+          tool: 'missing_tool',
+          args: {},
+        })
+      : anthropicTextTurn(2, 'unknown tool rejected safely');
+  }
+  if (requestBody.includes('inspect unavailable MCP')) {
+    return toolResultCount === 0
+      ? anthropicToolTurn(1, 'cindy_mcp_list_tools', {})
+      : anthropicTextTurn(2, 'unavailable servers reported');
+  }
+  if (requestBody.includes('call without schema inspection')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: { text: 'hello-pi' },
+      });
+    }
+    if (toolResultCount === 1) {
+      return anthropicToolTurn(2, 'cindy_mcp_list_tools', {
+        server: 'cindy_echo', tool: 'echo',
+      });
+    }
+    if (toolResultCount === 2) {
+      return anthropicToolTurn(3, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: { text: 'hello-pi' },
+      });
+    }
+    return anthropicTextTurn(4, 'blind call was gated safely');
+  }
+  if (requestBody.includes('invalid args then correct')) {
+    if (toolResultCount === 0) return anthropicToolTurn(1, 'cindy_mcp_list_tools', {});
+    if (toolResultCount === 1) {
+      return anthropicToolTurn(2, 'cindy_mcp_list_tools', {
+        server: 'cindy_echo', tool: 'echo',
+      });
+    }
+    if (toolResultCount === 2) {
+      return anthropicToolTurn(3, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: {},
+      });
+    }
+    if (toolResultCount === 3) {
+      return anthropicToolTurn(4, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: { text: 'hello-pi' },
+      });
+    }
+    return anthropicTextTurn(5, 'tool said: ECHO[hello-pi]');
+  }
+  if (toolResultCount === 0) return anthropicToolTurn(1, 'cindy_mcp_list_tools', {});
+  if (toolResultCount === 1) {
+    return anthropicToolTurn(2, 'cindy_mcp_list_tools', {
+      server: 'cindy_echo', tool: 'echo',
+    });
+  }
+  if (toolResultCount === 2) {
+    return anthropicToolTurn(3, 'cindy_mcp_call_tool', {
+      server: 'cindy_echo', tool: 'echo', args: { text: 'hello-pi' },
+    });
+  }
+  return anthropicTextTurn(4, 'tool said: ECHO[hello-pi]');
 }
 
 describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + permission gate)', () => {
@@ -147,16 +220,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const seenRemoteHeaders: Array<{ authorization?: string; apiKey?: string }> = [];
   const paginatedListCursors: Array<string | undefined> = [];
   const timedOutPaginationCursors: Array<string | undefined> = [];
+  const modelRequestBodies: string[] = [];
+  const modelRequests: Array<Record<string, unknown>> = [];
+  const opaqueTurnCaptures: Array<{ sessionId: string; provider: string; cwd: string }> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
 
-    // 假网关:按 messages 是否含 tool_result 决定出哪一轮。
+    // 假网关:按 user prompt + tool_result 数量脚本化发现、调用、纠错与终答。
     gateway = createServer(async (req, res) => {
       const body = await readBody(req);
-      const hasToolResult = body.includes('tool_result') || body.includes('toolResult');
+      modelRequestBodies.push(body);
+      modelRequests.push(JSON.parse(body) as Record<string, unknown>);
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-      res.end(anthropicTurn(hasToolResult, 'mcp__cindy_echo__echo'));
+      res.end(scriptedAnthropicTurn(body));
     });
     await new Promise<void>((r) => gateway.listen(0, '127.0.0.1', r));
     const gAddr = gateway.address();
@@ -375,6 +452,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       runtimeConfig: { endpoint: gatewayUrl },
       binaryPath: PI_BINARY,
       logger,
+      turnChangeCapture: {
+        beforeKnownFileWrite: async () => {},
+        noteOpaqueWrite: (input) => opaqueTurnCaptures.push(input),
+      },
       capabilityAdditions: {
         availableModels: [
           { id: 'pi-test-model', displayName: 'Pi Test', contextWindow: 200_000, efforts: [], defaultEffort: null },
@@ -524,9 +605,17 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode: 'local' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
-  ): Promise<{ events: AgentEvent[]; permissionAsked: boolean }> {
+    prompt = 'call the echo tool',
+  ): Promise<{
+    events: AgentEvent[];
+    permissionAsked: boolean;
+    requestBodies: string[];
+    requests: Array<Record<string, unknown>>;
+  }> {
     const agent = new PiAgent(buildDeps(bridgeMode));
     const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-cwd-'));
+    const requestStart = modelRequests.length;
+    const requestBodyStart = modelRequestBodies.length;
     let handle: AgentSessionHandle | null = null;
     let permissionAsked = false;
     try {
@@ -547,9 +636,14 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           if (ev.type === 'done') break;
         }
       })();
-      await handle.send({ type: 'user', content: 'call the echo tool' });
+      await handle.send({ type: 'user', content: prompt });
       await done;
-      return { events, permissionAsked };
+      return {
+        events,
+        permissionAsked,
+        requestBodies: modelRequestBodies.slice(requestBodyStart),
+        requests: modelRequests.slice(requestStart),
+      };
     } finally {
       await handle?.close();
       rmSync(cwd, { recursive: true, force: true });
@@ -562,10 +656,12 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     async () => {
       echoCalls.length = 0;
       seenMcpUrls.length = 0;
-      const { events, permissionAsked } = await runOneTurn('ask', async (req) => {
+      opaqueTurnCaptures.length = 0;
+      const { events, permissionAsked, requestBodies, requests } = await runOneTurn('ask', async (req) => {
         expect(req.kind).toBe('permission');
         if (req.kind === 'permission') {
           expect(req.toolName).toBe('mcp__cindy_echo__echo');
+          expect(req.input).toEqual({ text: 'hello-pi' });
         }
         return { kind: 'permission', behavior: 'allow' };
       });
@@ -573,6 +669,27 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       expect(permissionAsked).toBe(true);
       expect(echoCalls.length).toBeGreaterThan(0);
       expect(echoCalls[0]?.text).toBe('hello-pi');
+      await waitFor(() => opaqueTurnCaptures.length === 1);
+      expect(opaqueTurnCaptures[0]).toMatchObject({
+        sessionId: 'mcp-itest-ask',
+        provider: 'pi',
+      });
+      expect(requestBodies[1]).toContain('cindy_echo');
+      expect(requestBodies[1]).toContain('Echo text back in uppercase');
+      expect(requestBodies[1]).not.toContain('inputSchema');
+      expect(requestBodies[2]).toContain('inputSchema');
+      expect(requestBodies[2]).toContain('"required"');
+      expect(requestBodies[2]).toContain('"text"');
+
+      const firstTools = requests[0]?.tools as Array<{ name?: string }> | undefined;
+      const firstToolNames = firstTools?.map((tool) => tool.name) ?? [];
+      expect(firstToolNames).toContain('cindy_mcp_list_tools');
+      expect(firstToolNames).toContain('cindy_mcp_call_tool');
+      expect(firstToolNames).not.toContain('mcp__cindy_echo__echo');
+      expect(firstToolNames.filter((name) => name?.startsWith('cindy_mcp_'))).toEqual([
+        'cindy_mcp_list_tools',
+        'cindy_mcp_call_tool',
+      ]);
 
       // 真 pi(经 cindy-bridge)必须把 host 下发的 `?session=<sessionId>` 原样带到
       // MCP 请求上 —— 这是 orca 身份路由能在真 pi 上生效的 pi 侧前提。
@@ -586,6 +703,89 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .map((d) => d.text)
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it(
+    'invalid MCP args expose the selected schema and let Pi correct the call without losing the capability',
+    { timeout: 90_000 },
+    async () => {
+      echoCalls.length = 0;
+      const { events, permissionAsked, requestBodies } = await runOneTurn(
+        'bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'deny' }),
+        'local',
+        'invalid args then correct',
+      );
+
+      expect(permissionAsked).toBe(false);
+      expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
+      expect(requestBodies.some((body) =>
+        body.includes('Expected args schema') && body.includes('"required"') && body.includes('"text"')
+      )).toBe(true);
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it(
+    'unknown gateway targets fail before MCP execution and do not prompt for a fake wrapper capability',
+    { timeout: 90_000 },
+    async () => {
+      echoCalls.length = 0;
+      const { events, permissionAsked, requestBodies } = await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'deny' }),
+        'local',
+        'unknown gateway tool',
+      );
+
+      expect(permissionAsked).toBe(false);
+      expect(echoCalls).toHaveLength(0);
+      expect(requestBodies.some((body) => body.includes('Unknown Cindy MCP tool'))).toBe(true);
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('unknown tool rejected safely');
+    },
+  );
+
+  it(
+    'known tools cannot execute or prompt until their exact input schema has been inspected',
+    { timeout: 90_000 },
+    async () => {
+      echoCalls.length = 0;
+      opaqueTurnCaptures.length = 0;
+      let permissionCount = 0;
+      const { permissionAsked, requestBodies } = await runOneTurn(
+        'ask',
+        async (req) => {
+          permissionCount += 1;
+          expect(req.kind).toBe('permission');
+          if (req.kind === 'permission') {
+            expect(req.toolName).toBe('mcp__cindy_echo__echo');
+            expect(req.input).toEqual({ text: 'hello-pi' });
+          }
+          return { kind: 'permission', behavior: 'allow' };
+        },
+        'local',
+        'call without schema inspection',
+      );
+
+      expect(permissionAsked).toBe(true);
+      expect(permissionCount).toBe(1);
+      expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
+      expect(requestBodies[1]).toContain('Inspect this tool before execution');
+      expect(requestBodies[2]).toContain('inputSchema');
+      await waitFor(() => opaqueTurnCaptures.length === 1);
     },
   );
 
@@ -678,7 +878,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     async () => {
       echoCalls.length = 0;
       paginatedListCursors.length = 0;
-      const { events, permissionAsked } = await runOneTurn(
+      const { events, permissionAsked, requestBodies, requests } = await runOneTurn(
         'bypassPermissions',
         async () => ({ kind: 'permission', behavior: 'deny' }),
         'remote-paginated',
@@ -687,6 +887,15 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       expect(permissionAsked).toBe(false);
       expect(paginatedListCursors).toEqual([undefined, 'page-2', 'page-3']);
       expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
+      expect(requestBodies[1]).toContain('page_one');
+      expect(requestBodies[1]).toContain('page_two');
+      expect(requestBodies[1]).toContain('echo');
+      expect(requestBodies[1]).not.toContain('inputSchema');
+      expect(requestBodies[2]).toContain('inputSchema');
+      const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
+        ?.map((tool) => tool.name) ?? [];
+      expect(startupToolNames.filter((name) => name?.startsWith('cindy_mcp_'))).toHaveLength(2);
+      expect(startupToolNames.some((name) => name?.startsWith('mcp__'))).toBe(false);
       const finalText = events
         .filter((event) => event.type === 'text')
         .map((event) => event.data as { text: string; isFinal?: boolean })
@@ -706,6 +915,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       timedOutPaginationCursors.length = 0;
       const agent = new PiAgent(buildDeps('remote-failures', logger));
       const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-failure-cwd-'));
+      const requestBodyStart = modelRequestBodies.length;
       let handle: AgentSessionHandle | null = null;
       try {
         handle = await agent.startSession({
@@ -714,6 +924,15 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           model: 'pi-test-model',
           permissionMode: 'bypassPermissions',
         });
+        const events: AgentEvent[] = [];
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'inspect unavailable MCP' });
+        await done;
         await waitFor(() => {
           const logs = JSON.stringify(entries);
           return logs.includes('HTTP 401')
@@ -727,8 +946,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         expect(logs).toContain('connect stalling_body_remote failed: request timed out');
         expect(logs).toContain('connect paginated_timeout_remote failed: request timed out');
         expect(timedOutPaginationCursors).toEqual([undefined, 'slow-page']);
+        const requestBodies = modelRequestBodies.slice(requestBodyStart);
+        expect(requestBodies.some((body) =>
+          body.includes('unavailableServers')
+          && body.includes('rejecting_remote')
+          && body.includes('slow_remote')
+        )).toBe(true);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string; isFinal?: boolean }).isFinal
+          && (event.data as { text?: string }).text?.includes('unavailable servers reported')
+        )).toBe(true);
         for (const forbidden of [REMOTE_BEARER, REMOTE_API_KEY, REMOTE_ERROR_CANARY, mcpUrl]) {
           expect(logs).not.toContain(forbidden);
+          expect(requestBodies.join('\n')).not.toContain(forbidden);
         }
       } finally {
         await handle?.close();
@@ -742,6 +973,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     { timeout: 90_000 },
     async () => {
       echoCalls.length = 0;
+      opaqueTurnCaptures.length = 0;
       const { permissionAsked } = await runOneTurn('ask', async () => ({
         kind: 'permission',
         behavior: 'deny',
@@ -749,6 +981,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       }));
       expect(permissionAsked).toBe(true);
       expect(echoCalls.length).toBe(0);
+      expect(opaqueTurnCaptures).toHaveLength(0);
     },
   );
 });

@@ -959,6 +959,32 @@ describe('a custom server cannot take over a builtin name', () => {
     await handle.close();
   });
 
+  it('keeps Claude on direct per-server MCP registration instead of the Pi gateway', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+
+    const agent = new ClaudeCodeAgent(createDeps(() => 'prompt', [
+      'cindy_browser',
+      'cindy_contacts',
+    ]));
+    const handle = await agent.startSession({
+      sessionId: 'session-direct-mcp-contract',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, unknown>
+      | undefined;
+    expect(Object.keys(mcpServers ?? {}).sort()).toEqual(['cindy_browser', 'cindy_contacts']);
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_list_tools');
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_call_tool');
+    await handle.close();
+  });
+
   it('treats an unsafe object-key server name as an ordinary key', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
