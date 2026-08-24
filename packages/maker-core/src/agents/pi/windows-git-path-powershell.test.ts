@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,12 @@ import {
   warnWindowsGitPathProbeDiagnostics,
   warnWindowsGitPathProbeFailure,
 } from './windows-git-path-powershell.js';
+
+function decodeJobTypeSource(script: string): string {
+  const encoded = script.match(/\$jobTypeSource = .*FromBase64String\('([^']+)'\)/)?.[1];
+  if (!encoded) throw new Error('kill-on-close job type source is missing');
+  return Buffer.from(encoded, 'base64').toString('utf16le');
+}
 
 describe('Windows Git PATH PowerShell probes', () => {
   it('locks the registry probe command and distinguishes missing keys from real failures', () => {
@@ -52,6 +58,7 @@ describe('Windows Git PATH PowerShell probes', () => {
     const script = buildWindowsPathKindProbeScript(8, 3_000);
 
     expect(script).toContain('$groups = @($json | ConvertFrom-Json)');
+    expect(script).toContain('$jobHandle = [CindyWindowsGitPathJob]::CreateKillOnCloseForCurrentProcess()');
     expect(script).toContain('$clock = [Diagnostics.Stopwatch]::StartNew()');
     expect(script).toContain('$maxConcurrency = 4');
     expect(script).toContain('$operationTimeoutMs = 1250');
@@ -60,6 +67,7 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).toContain("$startInfo.FileName = [IO.Path]::Combine($PSHOME, 'powershell.exe')");
     expect(script).toContain("$startInfo.EnvironmentVariables['CINDY_WINDOWS_GIT_PATH_CANDIDATES']");
     expect(script).toContain('[void]$process.Start()');
+    expect(script).toContain('[CindyWindowsGitPathJob]::ContainsProcess($jobHandle, $process.Handle)');
     expect(script).toContain('$expired = @($operations | Where-Object');
     expect(script).toContain('$operation.Process.Kill()');
     expect(script).toContain('Write-ProbeOutput $operation.Process');
@@ -70,9 +78,18 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).not.toContain('[RunspaceFactory]');
     expect(script.indexOf('$clock = [Diagnostics.Stopwatch]::StartNew()'))
       .toBeLessThan(script.indexOf('[void]$process.Start()'));
+    expect(script.indexOf('$jobHandle = [CindyWindowsGitPathJob]::CreateKillOnCloseForCurrentProcess()'))
+      .toBeLessThan(script.indexOf('[void]$process.Start()'));
     expect(script.indexOf('$completed = @($operations | Where-Object { $_.Process.HasExited })'))
       .toBeLessThan(script.indexOf('foreach ($operation in $completed)'));
     expect(script).not.toContain('catch {}');
+
+    const jobTypeSource = decodeJobTypeSource(script);
+    expect(jobTypeSource).toContain('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE');
+    expect(jobTypeSource).toContain('SetInformationJobObject(');
+    expect(jobTypeSource).toContain('AssignProcessToJobObject(job, current.Handle)');
+    expect(jobTypeSource).toContain('IsProcessInJobNative(process, job, out contains)');
+    expect(jobTypeSource).toContain('CloseHandle(job)');
 
     const encodedProbeCommand = script.match(/\$probeCommand = '([^']+)'/)?.[1];
     expect(encodedProbeCommand).toBeTruthy();
@@ -122,6 +139,76 @@ describe('Windows Git PATH PowerShell probes', () => {
       expect(output).toContain(`F\t${Buffer.from(validGit, 'utf16le').toString('base64')}`);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('kills inherited probe children when the coordinator times out', () => {
+    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+    if (!systemRoot) throw new Error('Windows system root is unavailable');
+    const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const jobTypeSource = decodeJobTypeSource(buildWindowsPathKindProbeScript(2, 3_000, 2));
+    const encodedJobTypeSource = Buffer.from(jobTypeSource, 'utf16le').toString('base64');
+    const encodedSleepCommand = Buffer.from('Start-Sleep -Seconds 30', 'utf16le').toString('base64');
+    const script = [
+      `$jobTypeSource = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedJobTypeSource}'))`,
+      'Add-Type -TypeDefinition $jobTypeSource -ErrorAction Stop | Out-Null',
+      '$jobHandle = [CindyWindowsGitPathJob]::CreateKillOnCloseForCurrentProcess()',
+      '$startInfo = New-Object System.Diagnostics.ProcessStartInfo',
+      `$startInfo.FileName = '${powershell.replaceAll("'", "''")}'`,
+      `$startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encodedSleepCommand}'`,
+      '$startInfo.UseShellExecute = $false',
+      '$startInfo.CreateNoWindow = $true',
+      '$process = New-Object System.Diagnostics.Process',
+      '$process.StartInfo = $startInfo',
+      '[void]$process.Start()',
+      'if (-not [CindyWindowsGitPathJob]::ContainsProcess($jobHandle, $process.Handle)) { exit 2 }',
+      '[Console]::Out.WriteLine($process.Id)',
+      '[Console]::Out.Flush()',
+      'Start-Sleep -Seconds 30',
+    ].join('\n');
+    let childPid: number | undefined;
+    try {
+      execFileSync(
+        powershell,
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 5_000,
+          windowsHide: true,
+        },
+      );
+      throw new Error('coordinator unexpectedly completed before its timeout');
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException & { stdout?: string | Buffer };
+      expect(failure.code).toBe('ETIMEDOUT');
+      const output = Buffer.isBuffer(failure.stdout)
+        ? failure.stdout.toString('utf8')
+        : failure.stdout ?? '';
+      childPid = Number(output.trim().split(/\r?\n/).at(-1));
+      expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+    }
+
+    try {
+      execFileSync(
+        powershell,
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          [
+            '$deadline = [DateTime]::UtcNow.AddSeconds(3)',
+            `while (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) {`,
+            '  if ([DateTime]::UtcNow -ge $deadline) { exit 1 }',
+            '  Start-Sleep -Milliseconds 50',
+            '}',
+          ].join('\n'),
+        ],
+        { stdio: 'ignore', timeout: 5_000, windowsHide: true },
+      );
+    } finally {
+      spawnSync('taskkill.exe', ['/PID', String(childPid), '/F'], { stdio: 'ignore', windowsHide: true });
     }
   });
 
