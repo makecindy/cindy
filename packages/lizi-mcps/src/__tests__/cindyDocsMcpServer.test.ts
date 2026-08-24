@@ -980,6 +980,63 @@ describe('render_pdf', () => {
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
   });
 
+  it('限制重复本地资源展开后的 HTML 快照大小', async () => {
+    const renderHtmlToPdf = vi.fn(async () => ({
+      buffer: pdfBytes,
+      fontsReady: true,
+    }));
+    await fs.writeFile(path.join(workdir, 'repeat.png'), Buffer.alloc(512 * 1024, 0x61));
+    const repeatedImages = Array.from({ length: 100 }, () => '<img src="./repeat.png">').join('');
+    await fs.writeFile(
+      path.join(workdir, 'repeated.html'),
+      `<html><body>${repeatedImages}</body></html>`,
+      'utf8',
+    );
+    const client = await connect({ renderHtmlToPdf });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'repeated.html',
+      outPath: 'repeated.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('FILE_TOO_LARGE');
+    expect(renderHtmlToPdf).not.toHaveBeenCalled();
+  });
+
+  it('递归快照 CSS 的本地 @import', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'theme.css'), 'body { color: #123456; }', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'style.css'),
+      '@import "./theme.css"; .hero { color: red; }',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(workdir, 'import.html'),
+      '<html><head><link rel="stylesheet" href="./style.css"></head><body>ok</body></html>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'import.html',
+      outPath: 'import.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('data:text/css;base64,');
+    expect(rendered).not.toContain('./theme.css');
+  });
+
   it('htmlPath 与 html 必须二选一', async () => {
     const client = await connect({
       renderHtmlToPdf: async () => ({ buffer: pdfBytes, fontsReady: true }),

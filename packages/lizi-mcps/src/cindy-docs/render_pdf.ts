@@ -49,6 +49,8 @@ const SUSPICIOUS_PDF_BYTES = 2_048;
 const MAX_LOCAL_RESOURCE_BYTES = 8 * 1024 * 1024;
 /** 一个 HTML 快照允许带入的本地资源总量。 */
 const MAX_LOCAL_RESOURCE_TOTAL_BYTES = 32 * 1024 * 1024;
+/** 资源展开成 data URI 后的 HTML 硬上限,防止重复引用放大主进程字符串。 */
+const MAX_SNAPSHOT_HTML_BYTES = 64 * 1024 * 1024;
 
 const DEFAULT_MARGIN_INCHES = 0.4;
 
@@ -110,6 +112,16 @@ function resourceMime(absPath: string): string {
   );
 }
 
+function assertSnapshotHtmlSize(bytes: number): void {
+  if (bytes > MAX_SNAPSHOT_HTML_BYTES) {
+    throw new DocsPathError(
+      'FILE_TOO_LARGE',
+      'HTML 引用的本地资源展开后过大',
+      '这份 HTML 的本地资源在转换成 data URI 后超过 64 MB。请减少重复引用、压缩资源或拆分文档后重试。',
+    );
+  }
+}
+
 async function replaceAsync(
   input: string,
   pattern: RegExp,
@@ -118,15 +130,45 @@ async function replaceAsync(
   const matches = Array.from(input.matchAll(pattern));
   if (matches.length === 0) return input;
   const parts: string[] = [];
+  let outputBytes = 0;
+  const pushPart = (part: string): void => {
+    outputBytes += Buffer.byteLength(part, 'utf8');
+    assertSnapshotHtmlSize(outputBytes);
+    parts.push(part);
+  };
   let cursor = 0;
   for (const match of matches) {
     const index = match.index ?? 0;
-    parts.push(input.slice(cursor, index));
-    parts.push(await replacer(match[0]!, ...match.slice(1).map((group) => group ?? '')));
+    pushPart(input.slice(cursor, index));
+    pushPart(await replacer(match[0]!, ...match.slice(1).map((group) => group ?? '')));
     cursor = index + match[0]!.length;
   }
-  parts.push(input.slice(cursor));
+  pushPart(input.slice(cursor));
   return parts.join('');
+}
+
+async function inlineCssImports(
+  css: string,
+  baseDir: string,
+  context: ResourceSnapshotContext,
+): Promise<string> {
+  let rewritten = await replaceAsync(
+    css,
+    /@import\s+(["'])(.*?)\1([^;]*);?/gi,
+    async (match, _quote, reference, suffix) => {
+      const snapshot = await snapshotLocalResource(context, baseDir, reference.trim());
+      return snapshot ? `@import url("${snapshot}")${suffix};` : match;
+    },
+  );
+  return replaceAsync(
+    rewritten,
+    /@import\s+url\(\s*(?:(['"])(.*?)\1|([^)]*?))\s*\)([^;]*);?/gi,
+    async (match, _quote, quoted, bare, suffix) => {
+      const reference = (quoted || bare).trim();
+      const snapshot = await snapshotLocalResource(context, baseDir, reference);
+      return snapshot ? `@import url("${snapshot}")${suffix};` : match;
+    },
+  );
 }
 
 async function inlineCssUrls(
@@ -183,11 +225,12 @@ async function snapshotLocalResource(
     if (context.cssStack.has(cacheKey)) return dataUri(mime, bytes);
     context.cssStack.add(cacheKey);
     try {
-      const rewritten = await inlineCssUrls(
+      const imported = await inlineCssImports(
         bytes.toString('utf8'),
         path.dirname(preparedPath),
         context,
       );
+      const rewritten = await inlineCssUrls(imported, path.dirname(preparedPath), context);
       snapshotBytes = Buffer.from(rewritten, 'utf8');
     } finally {
       context.cssStack.delete(cacheKey);
