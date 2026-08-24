@@ -106,7 +106,7 @@ function makeHarness(opts?: {
   return { client, sockets, current: () => sockets[sockets.length - 1] };
 }
 
-const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 let inboundLinkId = 0;
 
 async function establishInboundReliableLink(
@@ -232,13 +232,13 @@ class MemoryRelay {
   }
 
   /** 按顺序逐帧投递直到静默；每帧之间让微任务（drain/ACK）跑完。 */
-  async settle(): Promise<void> {
+  async settle(yieldControl: () => Promise<void> = () => tick()): Promise<void> {
     let idle = 0;
     while (idle < 3) {
       const entry = this.queue.shift();
       if (!entry) {
         idle += 1;
-        await tick();
+        await yieldControl();
         continue;
       }
       idle = 0;
@@ -256,7 +256,7 @@ class MemoryRelay {
           member.ws.push(entry.env);
         }
       }
-      await tick();
+      await yieldControl();
     }
   }
 
@@ -5175,6 +5175,7 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
   }, 10_000);
 
   it('新确认阶段:确认 ACK 丢失后自动有界重发,无需等待下一条控制端业务', async () => {
+    vi.useFakeTimers();
     const relay = new MemoryRelay();
     const host = makeRelayClient(relay, 'desktop', {
       transportRetryIntervalMs: 20,
@@ -5196,49 +5197,75 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
         controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'retry-confirmed' });
       }
     });
-    host.start();
-    controller.start();
-    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+    const settleRelay = () => relay.settle(() => Promise.resolve());
+    try {
+      host.start();
+      controller.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await settleRelay();
+      expect(host.getStatus()).toBe('online');
+      expect(controller.getStatus()).toBe('online');
 
-    relay.dropNext((senderId, env) => (
-      senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
-    ));
-    const opened = controller.openLink('desktop', {
-      controllerName: 'iPhone',
-      protocolVersion: 1,
-      appVersion: '1',
-    }, 500);
-    await relay.settleUntil(() => host.isLinkReady('ios'));
-    await expect(opened).resolves.toBeTruthy();
-    const linkRequestId = (relay.deliveredTo.get('desktop') ?? [])
-      .filter((env) => env.kind === 'link-open')
-      .at(-1)?.id;
-    expect(linkRequestId).toBeTruthy();
+      relay.dropNext((senderId, env) => (
+        senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      const opened = controller.openLink('desktop', {
+        controllerName: 'iPhone',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 500);
+      await settleRelay();
+      await expect(opened).resolves.toBeTruthy();
+      expect(host.isLinkReady('ios')).toBe(false);
 
-    const liveInvoke = host.invoke('ios', {
-      channel: 'maker:confirmed-by-retry',
-      args: [],
-    }, 500);
-    await relay.settleUntil(() => receivedInvokes.length === 1);
-    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'retry-confirmed' });
+      const linkRequestId = (relay.deliveredTo.get('desktop') ?? [])
+        .filter((env) => env.kind === 'link-open')
+        .at(-1)?.id;
+      expect(linkRequestId).toBeTruthy();
 
-    const confirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
-      parseTransportAck(env)?.linkRequestId !== undefined
-    ));
-    // 第一包确认被丢弃后，host 收到首个重试便会恢复发送；但在其首个可靠业务帧
-    // 回到 controller、取消确认计时器之前，下一次 20ms 重试可能已经进入 relay。
-    // Windows runner 更容易命中这个合法竞态，因此这里只约束协议不变量：至少
-    // 有一次确认送达，且不会超过首包丢失后的剩余重试预算，也不跨 request 代际。
-    expect(confirmationAcks.length).toBeGreaterThanOrEqual(1);
-    expect(confirmationAcks.length).toBeLessThanOrEqual(3);
-    expect(confirmationAcks.every((env) => (
-      parseTransportAck(env)?.linkRequestId === linkRequestId
-    ))).toBe(true);
+      await vi.advanceTimersByTimeAsync(20);
+      await settleRelay();
+      expect(host.isLinkReady('ios')).toBe(true);
+      const retryConfirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(retryConfirmationAcks).toHaveLength(1);
+      expect(parseTransportAck(retryConfirmationAcks[0])?.linkRequestId).toBe(linkRequestId);
 
-    offHost();
-    offController();
-    host.stop();
-    controller.stop();
+      // 首次立即发送已被丢弃，剩余预算只允许再发送两次。推进到第三次尝试后的
+      // 下一个重试窗口，确认计时器已经停止，且所有确认仍属于当前 request 代际。
+      await vi.advanceTimersByTimeAsync(40);
+      await settleRelay();
+      const boundedConfirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(boundedConfirmationAcks).toHaveLength(2);
+      expect(boundedConfirmationAcks.every((env) => (
+        parseTransportAck(env)?.linkRequestId === linkRequestId
+      ))).toBe(true);
+
+      const liveInvoke = host.invoke('ios', {
+        channel: 'maker:confirmed-by-retry',
+        args: [],
+      }, 500);
+      await settleRelay();
+      expect(receivedInvokes).toHaveLength(1);
+      await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'retry-confirmed' });
+
+      const confirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(confirmationAcks).toHaveLength(3);
+      expect(confirmationAcks.every((env) => (
+        parseTransportAck(env)?.linkRequestId === linkRequestId
+      ))).toBe(true);
+    } finally {
+      offHost();
+      offController();
+      host.stop();
+      controller.stop();
+      vi.useRealTimers();
+    }
   }, 10_000);
 
   it('新确认阶段:旧帧执行完才提交的新基线会刷新确认 ACK,不复用首次 stale ackSeq', async () => {

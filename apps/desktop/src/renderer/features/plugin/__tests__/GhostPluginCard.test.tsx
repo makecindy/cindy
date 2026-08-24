@@ -226,6 +226,8 @@ const commandPlugin: GhostPluginListItem = {
   approvalState: 'approved',
   builtin: false,
   tabPanel: false,
+  hasMainView: false,
+  mainViewTitle: null,
   hostCapability: null,
   oauthAuthorizationExpired: false,
 };
@@ -249,6 +251,14 @@ const simulatorPlugin: GhostPluginListItem = {
   id: 'ios-simulator',
   name: 'iOS Simulator',
   hostCapability: 'ios-simulator',
+};
+
+const mainViewPlugin: GhostPluginListItem = {
+  ...panelPlugin,
+  id: 'workspace',
+  name: 'Workspace',
+  hasMainView: true,
+  mainViewTitle: 'Workspace',
 };
 
 const marketPlugin: PluginMarketItem = {
@@ -352,6 +362,32 @@ describe('GhostPluginCard', () => {
     expect(onPrimary).toHaveBeenCalledTimes(1);
     expect(onManage).not.toHaveBeenCalled();
     expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
+  });
+
+  it('keeps the tab-panel action when the plugin also declares main-view', () => {
+    const onPrimary = vi.fn();
+    render(<GhostPluginCard item={mainViewPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
+  });
+
+  it('does not add a primary action for a main-view-only tool plugin', () => {
+    render(
+      <GhostPluginCard
+        item={{
+          ...toolPlugin,
+          hasMainView: true,
+          mainViewTitle: 'Workspace',
+        }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.page.agentInvoked')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
   });
 
   it('routes the manage icon to detail without firing the primary action', () => {

@@ -98,7 +98,7 @@ import {
   toGhostPluginDetail,
   toGhostPluginListItem,
   filterGhostPluginItems,
-  ghostPanelOwnerKey,
+  ghostWebviewOwnerKey,
   ghostPrimaryAction,
   marketPresentationForInstalledGhost,
   installedVisibleCount,
@@ -126,6 +126,12 @@ import {
 } from './PluginManagementLayout';
 import { GhostPagePanelHost } from './GhostPagePanelHost';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
+import {
+  currentMainViewVisibilityOwner,
+  readMainViewSidebarVisible,
+  useMainViewVisibilityRevision,
+  writeMainViewSidebarVisible,
+} from '@/cindy-brain/mainViewVisibilityStore';
 import { UpdateAllDialog } from './UpdateAllDialog';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
@@ -419,6 +425,7 @@ export function GhostPluginPage({
   const { user, mode, dataOwnerId } = useAuth();
   const showEnterprise = user?.membershipKind === 'org';
   const ghosts = useInstalledGhosts();
+  useMainViewVisibilityRevision();
   const installedGhostIds = useMemo(() => ghosts.map((ghost) => ghost.manifest.id), [ghosts]);
   const installedGhostIdsKey = useMemo(
     () => [...installedGhostIds].sort().join('\0'),
@@ -435,7 +442,7 @@ export function GhostPluginPage({
   const [marketSnapshot, setMarketSnapshot] = useState<PluginMarketSnapshot | null>(null);
   const [openPanelId, setOpenPanelId] = useState<string | null>(null);
   // 数据归属键:面板宿主按它失效(定义要早于消费点)。
-  const panelOwnerKey = ghostPanelOwnerKey(mode, dataOwnerId);
+  const panelOwnerKey = ghostWebviewOwnerKey(mode, dataOwnerId);
   const ignoredRoundKey = ignoredRoundStorageKey(mode, dataOwnerId);
   const [ignoredRound, setIgnoredRound] = useState(() => readIgnoredRound(ignoredRoundKey));
   // 账号 / 本地云模式切换:换桶重读,不把上一个身份的「忽略本轮」带进来。
@@ -840,6 +847,9 @@ export function GhostPluginPage({
   const selectedMarketUpdate = selectedDetail
     ? pluginUpdateForInstalledVersion(selectedMarketInstall)
     : null;
+  const selectedMainViewSidebarVisible = selectedDetail?.hasMainView
+    ? readMainViewSidebarVisible(dataOwnerId, selectedDetail.id)
+    : true;
 
   // ── 面板收束:页面独占的插件面板宿主;停用/卸载/换形态自动失效 ──
   const openPanelGhost = useMemo(() => {
@@ -988,10 +998,7 @@ export function GhostPluginPage({
             to: next.version,
           }),
           content: (
-            <GhostUpdateReview
-              diff={diff}
-              manualCount={next.manifest.manual?.items.length ?? 0}
-            />
+            <GhostUpdateReview diff={diff} manualCount={next.manifest.manual?.items.length ?? 0} />
           ),
           maxWidth: 520,
           confirmText: t('settings.ghosts.updateConfirm.confirm'),
@@ -1208,7 +1215,7 @@ export function GhostPluginPage({
     [confirm, ghosts, navigate, openGhostConfiguration, t],
   );
 
-  /** 卡片胶囊/详情主动作分发:面板型开页面内面板,指令/Host 能力型起对话,工具型进管理。整卡点击不走这里。 */
+  /** 卡片胶囊/详情主动作分发:面板型开页面内面板,指令/Host 能力起对话。 */
   const handlePrimaryAction = useCallback(
     (item: Pick<GhostPluginListItem, 'id' | 'name' | 'tabPanel' | 'canUse' | 'hostCapability'>) => {
       const action = ghostPrimaryAction(item);
@@ -1223,6 +1230,22 @@ export function GhostPluginPage({
       setSelectedId(item.id);
     },
     [handleUseGhost],
+  );
+
+  const handleMainViewSidebarVisibleChange = useCallback(
+    (visible: boolean) => {
+      const selected = selectedDetail;
+      if (!selected?.hasMainView) return;
+      const owner = currentMainViewVisibilityOwner();
+      void writeMainViewSidebarVisible(owner, selected.id, visible)
+        .then((persisted) => {
+          if (!persisted) toast.error(t('settings.ghosts.errors.generic'));
+        })
+        .catch(() => {
+          toast.error(t('settings.ghosts.errors.generic'));
+        });
+    },
+    [selectedDetail, t],
   );
 
   const handleUse = useCallback(() => {
@@ -1377,9 +1400,7 @@ export function GhostPluginPage({
           ...(isUpdate && installedGhost
             ? { expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval) }
             : {}),
-          ...(isUpdate &&
-            (diff!.added.length > 0 ||
-              installedGhost?.approval.state !== 'approved')
+          ...(isUpdate && (diff!.added.length > 0 || installedGhost?.approval.state !== 'approved')
             ? {
                 allowPermissionExpansion: true,
                 ...(installedGhost
@@ -1548,6 +1569,8 @@ export function GhostPluginPage({
               void handleToggle(selectedDetail.id, enabled, selectedDetail.name)
             }
             onUse={handleUse}
+            mainViewSidebarVisible={selectedMainViewSidebarVisible}
+            onMainViewSidebarVisibleChange={handleMainViewSidebarVisibleChange}
             onUpdate={() => void handleUpdate()}
             onUpdateFromFile={() => void handleUpdateFromFile()}
             // 受体模型的 §5 恢复入口:缺批准的安装在详情页重新确认(市场包重装 /

@@ -2673,6 +2673,14 @@ export class GhostManager {
         },
       };
     }
+    if (v.manifest.mainView && !zip.file(`${prefix}${v.manifest.mainView.html}`)) {
+      return {
+        rejection: {
+          code: 'file-invalid',
+          reason: `清单声明了 mainView.html,但压缩包内缺少 ${v.manifest.mainView.html}`,
+        },
+      };
+    }
     let localizedManifest = withGhostResolvedLocale(v.manifest, this.options.getLocale?.());
     const localeResources: Record<string, GhostManifestLocaleResource> = {};
     if (v.manifest.locales !== undefined) {
