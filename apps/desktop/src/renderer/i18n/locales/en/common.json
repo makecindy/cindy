@@ -2670,7 +2670,7 @@
     "chatEmbedding": {
       "cell": {
         "label": "Enable chat semantic indexing",
-        "description": "New chat messages are embedded into a local vector store (voyage-4) for future semantic search. Stays on this device. Only messages after enabling are indexed; existing history is not backfilled."
+        "description": "New messages and semantic search queries are sent to the vector model (voyage-4) to create vectors. Message vectors are stored in a local index. Only messages created after this setting is enabled are indexed; existing chat history is not backfilled."
       },
       "toggleAria": "Toggle chat semantic indexing",
       "toast": {

@@ -674,6 +674,11 @@ import {
   writeChatEmbeddingEnabled,
 } from './maker-host/chat-embedding-settings-store.js';
 import {
+  isChatEmbeddingOwnerStampCurrent,
+  parseChatEmbeddingOwnerStamp,
+} from './maker-host/chat-embedding-owner-stamp.js';
+import { createChatEmbeddingSettingsWatcher } from './maker-host/chat-embedding-settings-watcher.js';
+import {
   readGitSafetySettingsState,
   resetGitSafetySettings,
   writeGitSafetyAutoSnapshotEnabled,
@@ -812,6 +817,7 @@ import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
   getActiveAppSession,
+  getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
 } from './appSessionState.js';
@@ -1080,12 +1086,42 @@ function isChatEmbeddingAvailable(): boolean {
   }
 }
 
+function chatEmbeddingDefaultContext() {
+  const state = authManager.getAuthState();
+  return {
+    mode: state.mode,
+    isAuthenticated: state.isAuthenticated,
+    userId: state.user?.id ?? null,
+    membershipKind: state.user?.membershipKind ?? null,
+  };
+}
+
+function assertChatEmbeddingMutationOwner(raw: unknown): void {
+  const expected = parseChatEmbeddingOwnerStamp(raw);
+  if (!expected) {
+    throwIpcError('INVALID_PARAMS', 'chat embedding owner stamp required');
+  }
+  if (
+    !isChatEmbeddingOwnerStampCurrent(
+      expected,
+      getActiveDataOwnerPushStamp(),
+      isAppSessionBoundaryPending(),
+    )
+  ) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Chat embedding setting belongs to a stale account session.',
+    );
+  }
+}
+
 function attemptStartEmbeddingHost(): void {
   // 谁都不要用就别启:插件 consumer 的标记由 ensureEmbeddingServiceForPluginVector
   // 在回调本函数之前打上,所以这里读到的是"含本次请求"的最新意向。
   const chatAvailable = isChatEmbeddingAvailable();
   setEmbeddingSourceSuspended('chat', !chatAvailable);
-  const chatEnabled = chatAvailable && readChatEmbeddingSettings().enabled;
+  const chatEnabled =
+    chatAvailable && readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled;
   if (!chatEnabled && !isPluginVectorConsumerActive()) {
     console.log(
       '[bootstrap-electron] no embedding consumer active (chat off, no plugin vector); embeddingHost not started',
@@ -1154,15 +1190,21 @@ registerEmbeddingHostLazyStart(attemptStartEmbeddingHost);
 
 let chatEmbeddingRuntimeReconcile: Promise<void> = Promise.resolve();
 
-function scheduleChatEmbeddingRuntimeReconcile(): void {
+function scheduleChatEmbeddingRuntimeReconcile(): Promise<void> {
   // Stop new enqueue work before an async host shutdown can run. The queued
-  // reconciliation re-reads the latest catalog so rapid refreshes are last-write-wins.
+  // reconciliation re-reads the latest account, preference and catalog so rapid refreshes are
+  // last-write-wins across both provider and auth boundaries.
   const chatAvailable = isChatEmbeddingAvailable();
+  const chatEnabled =
+    chatAvailable && readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled;
   setEmbeddingSourceSuspended('chat', !chatAvailable);
-  if (!chatAvailable) setChatEmbeddingEnabled(false);
+  if (!chatEnabled) setChatEmbeddingEnabled(false);
   chatEmbeddingRuntimeReconcile = chatEmbeddingRuntimeReconcile
     .then(async () => {
-      if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled) {
+      if (
+        isChatEmbeddingAvailable()
+        && readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled
+      ) {
         attemptStartEmbeddingHost();
       } else {
         await shutdownChatEmbeddingConsumer();
@@ -1173,9 +1215,33 @@ function scheduleChatEmbeddingRuntimeReconcile(): void {
         error: String(err),
       });
     });
+  return chatEmbeddingRuntimeReconcile;
 }
 
 setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);
+
+function broadcastChatEmbeddingSettingsChanged(): void {
+  const stamp = getActiveDataOwnerPushStamp();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send(MAKER_PUSH.CHAT_EMBEDDING_CHANGED, stamp);
+    }
+  }
+}
+
+const chatEmbeddingSettingsWatcher = createChatEmbeddingSettingsWatcher(() => {
+  void scheduleChatEmbeddingRuntimeReconcile().finally(() => {
+    broadcastChatEmbeddingSettingsChanged();
+  });
+});
+
+function rebindChatEmbeddingSettingsWatcher(): void {
+  chatEmbeddingSettingsWatcher.rebind(
+    ownerScopedUserDataPath('chat-embedding-settings.json'),
+  );
+}
+
+app.once('will-quit', () => chatEmbeddingSettingsWatcher.dispose());
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -4214,39 +4280,42 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_GET, async () => {
     return chatEmbeddingWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET, async (_e, enabled: unknown) => {
-    if (typeof enabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'chat embedding enabled required (boolean)');
-    }
-    if (enabled && !isChatEmbeddingAvailable()) {
-      throwIpcError(
-        'UNSUPPORTED_CAPABILITY',
-        'Chat embedding is not available for this account or region.',
-      );
-    }
-    // 先落盘 setting (即使后续 host 启停失败, 用户偏好已记下, 下次启动会用)
-    writeChatEmbeddingEnabled(enabled);
-    if (enabled) {
-      // ON: 交给 attemptStartEmbeddingHost —— 它会读新 settings, host 没起就起、
-      // 已被插件 consumer 起过就复用, 两种情况都补上 setupChatHistoryEmbedder +
-      // setChatEmbeddingEnabled(true) (后者第一次为 true 时写 cutoff)。
-      attemptStartEmbeddingHost();
-    } else {
-      // OFF: 先 setEnabled(false) 让 hook 守卫立即生效 (新消息不再 enqueue);
-      // 没有插件向量 consumer 时才停 Worker setInterval + reset 模块级 state。
-      await shutdownChatEmbeddingConsumer();
-    }
-    return chatEmbeddingWire();
-  });
-  ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET, async () => {
-    const settings = resetChatEmbeddingSettings();
-    if (settings.enabled) {
-      attemptStartEmbeddingHost();
-    } else {
-      await shutdownChatEmbeddingConsumer();
-    }
-    return chatEmbeddingWire();
-  });
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET,
+    async (_e, enabled: unknown, owner: unknown) => {
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'chat embedding enabled required (boolean)');
+      }
+      assertChatEmbeddingMutationOwner(owner);
+      if (enabled && !isChatEmbeddingAvailable()) {
+        throwIpcError(
+          'UNSUPPORTED_CAPABILITY',
+          'Chat embedding is not available for this account or region.',
+        );
+      }
+      // 先把用户选择原子写入当前 owner；锁等待期间切号会 fail closed，不会把 A 的选择写给 B。
+      try {
+        await writeChatEmbeddingEnabled(enabled, chatEmbeddingDefaultContext());
+      } catch (error) {
+        // 写入可能在跨进程锁或 owner boundary 上失败；无论如何按磁盘最新真值 reconcile，
+        // 避免 UI 收到错误时 runtime 仍沿用旧开关。
+        await scheduleChatEmbeddingRuntimeReconcile();
+        throw error;
+      }
+      // 运行时 reconcile 总是重读最新账号。即使写入完成后立刻切号，旧请求也不会直接控制新账号。
+      await scheduleChatEmbeddingRuntimeReconcile();
+      return chatEmbeddingWire();
+    },
+  );
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET,
+    async (_e, owner: unknown) => {
+      assertChatEmbeddingMutationOwner(owner);
+      await resetChatEmbeddingSettings(chatEmbeddingDefaultContext());
+      await scheduleChatEmbeddingRuntimeReconcile();
+      return chatEmbeddingWire();
+    },
+  );
 
   // Git safety settings IPC —— store 独立于 Maker 单例,提前注册以便 renderer
   // 启动时同步本地镜像。SET 只影响之后的 turn 边界,已运行 turn 不追溯。
@@ -5946,7 +6015,13 @@ const registerIpcHandlers = () => {
   });
   disposeProviderAccessAuthListener = authManager.onAuthStateChange(() => {
     refreshProviderAccessAfterAuthChange();
+    rebindChatEmbeddingSettingsWatcher();
+    // Chat embedding has an account-derived default in addition to provider availability.
+    // Reconcile on every committed auth projection so same-owner membership changes cannot
+    // leave the previous default running until an unrelated provider refresh occurs.
+    void scheduleChatEmbeddingRuntimeReconcile();
   });
+  rebindChatEmbeddingSettingsWatcher();
   // 默认插件同步不能依赖用户先打开插件页。启动时本地 owner 已经稳定则立刻
   // 复用市场快照；云端登录/切号的通知可能早于 owner boundary 释放，因此
   // 延迟到当前调用栈结束后再按已提交的新 owner 补跑一次。
@@ -8671,7 +8746,7 @@ function compactionWire() {
 }
 
 function chatEmbeddingWire() {
-  const state = readChatEmbeddingSettingsState();
+  const state = readChatEmbeddingSettingsState(chatEmbeddingDefaultContext());
   const available = isChatEmbeddingAvailable();
   return {
     enabled: available && state.value.enabled,
