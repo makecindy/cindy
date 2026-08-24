@@ -43,27 +43,37 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).not.toContain('catch {}');
   });
 
-  it('locks the bounded concurrent runspace coordinator for multiple candidates', () => {
+  it('locks the bounded per-candidate process coordinator for multiple candidates', () => {
     const script = buildWindowsPathKindProbeScript(8, 3_000);
 
     expect(script).toContain('$paths = @($json | ConvertFrom-Json)');
     expect(script).toContain('$clock = [Diagnostics.Stopwatch]::StartNew()');
     expect(script).toContain('$maxConcurrency = 4');
-    expect(script).toContain('[RunspaceFactory]::CreateRunspacePool(1, $maxConcurrency)');
+    expect(script).toContain('$candidateTimeoutMs = 1250');
     expect(script).toContain('$operations.Count -lt $maxConcurrency');
     expect(script).toContain('$nextPathIndex -lt $paths.Count -or $operations.Count -gt 0');
-    expect(script).toContain('$shell.RunspacePool = $runspacePool');
-    expect(script).toContain('$async = $shell.BeginInvoke()');
-    expect(script).toContain('$operation.Shell.EndInvoke($operation.Async)');
+    expect(script).toContain("$startInfo.FileName = [IO.Path]::Combine($PSHOME, 'powershell.exe')");
+    expect(script).toContain("$startInfo.EnvironmentVariables['CINDY_WINDOWS_GIT_PATH_CANDIDATE']");
+    expect(script).toContain('[void]$process.Start()');
+    expect(script).toContain('$expired = @($operations | Where-Object');
+    expect(script).toContain('$operation.Process.Kill()');
     expect(script).toContain('$budgetMs = 2750');
     expect(script).toContain('if ($nextPathIndex -lt $paths.Count -or $operations.Count -gt 0) {');
-    expect(script).toContain('WriteLine("__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__`tpath-runspace")');
+    expect(script).toContain('WriteLine("__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__`tpath-process")');
     expect(script).not.toContain('foreach ($candidate in $paths)');
+    expect(script).not.toContain('[RunspaceFactory]');
     expect(script.indexOf('$clock = [Diagnostics.Stopwatch]::StartNew()'))
-      .toBeLessThan(script.indexOf('$async = $shell.BeginInvoke()'));
-    expect(script.indexOf('$completed = @($operations | Where-Object { $_.Async.IsCompleted })'))
+      .toBeLessThan(script.indexOf('[void]$process.Start()'));
+    expect(script.indexOf('$completed = @($operations | Where-Object { $_.Process.HasExited })'))
       .toBeLessThan(script.indexOf('foreach ($operation in $completed)'));
     expect(script).not.toContain('catch {}');
+
+    const encodedProbeCommand = script.match(/\$probeCommand = '([^']+)'/)?.[1];
+    expect(encodedProbeCommand).toBeTruthy();
+    const probeCommand = Buffer.from(encodedProbeCommand ?? '', 'base64').toString('utf16le');
+    expect(probeCommand).toContain('$candidate = [string]$env:CINDY_WINDOWS_GIT_PATH_CANDIDATE');
+    expect(probeCommand).toContain('Get-Item -LiteralPath $candidate -Force -ErrorAction Stop');
+    expect(probeCommand).toContain('WriteLine($kind + "`t" + $encoded)');
   });
 
   it('reports recoverable script failures only when a logger is supplied', () => {
