@@ -24,11 +24,18 @@ const items = [
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
   useGhostMainViews: () => ({ declared: items, routeCapable: items, sidebarVisible: items }),
 }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, options?: { name?: string }) =>
+      key === 'settings.ghosts.page.manageAria' ? `Manage ${options?.name}` : key,
+  }),
+}));
 
 import { GhostMainViewNavEntries } from '../GhostMainViewNavEntries';
 
 function LocationProbe() {
-  return <output data-testid="location">{useLocation().pathname}</output>;
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
 }
 
 describe('GhostMainViewNavEntries', () => {
@@ -49,21 +56,23 @@ describe('GhostMainViewNavEntries', () => {
       </MemoryRouter>,
     );
 
-    const buttons = screen.getAllByRole('button');
-    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-      'Alpha',
-      'Workspace',
-    ]);
-    expect(buttons[0]?.getAttribute('aria-current')).toBe('page');
-    expect(buttons[0]?.getAttribute('title')).toBe('Alpha');
-    expect(buttons[0]?.getAttribute('data-native-title')).toBe('truncated-text');
-    expect(buttons[0]?.querySelector('.lucide-puzzle')).toBeTruthy();
-    expect(buttons[1]?.querySelector('.lucide-globe')).toBeTruthy();
-    expect(buttons[0]?.querySelector('svg')?.getAttribute('width')).toBe('15');
-    expect(buttons[0]?.querySelector('img')).toBeNull();
+    const alphaButton = screen.getByRole('button', { name: 'Alpha' });
+    const workspaceButton = screen.getByRole('button', { name: 'Workspace' });
+    expect(alphaButton.getAttribute('aria-current')).toBe('page');
+    expect(alphaButton.getAttribute('title')).toBe('Alpha');
+    expect(alphaButton.getAttribute('data-native-title')).toBe('truncated-text');
+    expect(alphaButton.querySelector('.lucide-puzzle')).toBeTruthy();
+    expect(workspaceButton.querySelector('.lucide-globe')).toBeTruthy();
+    expect(alphaButton.querySelector('svg')?.getAttribute('width')).toBe('15');
+    expect(alphaButton.querySelector('img')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }));
+    fireEvent.click(workspaceButton);
     expect(screen.getByTestId('location').textContent).toBe('/apps/workspace');
+
+    const manageAlphaButton = screen.getByRole('button', { name: 'Manage Alpha Plugin' });
+    expect(manageAlphaButton.querySelector('.lucide-sliders-horizontal')).toBeTruthy();
+    fireEvent.click(manageAlphaButton);
+    expect(screen.getByTestId('location').textContent).toBe('/settings?tab=ghosts&ghost=alpha');
   });
 
   it('uses the native 18px rail icon geometry without a fallback tile', () => {

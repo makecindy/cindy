@@ -147,8 +147,8 @@ export function SidebarTopNav({
       <>
         <div className="flex flex-col gap-0.5 pr-3 pl-3">
           {automationsRow}
-          {mainViewRows}
           {pluginsRow}
+          {mainViewRows}
           {restoreRow}
         </div>
         <div
@@ -188,8 +188,8 @@ export function SidebarTopNav({
         </button>
       )}
       {automationsRow}
-      {mainViewRows}
       {pluginsRow}
+      {mainViewRows}
       {restoreRow}
       {searchRow}
     </div>

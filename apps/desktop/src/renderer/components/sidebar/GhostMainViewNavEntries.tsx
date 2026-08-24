@@ -8,8 +8,10 @@ import {
   Image,
   MessageCircle,
   Puzzle,
+  SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useMatch, useNavigate } from 'react-router-dom';
 
 import { useGhostMainViews } from '@/cindy-brain/ghostMainViews';
@@ -40,6 +42,7 @@ const MAIN_VIEW_ICONS: Record<GhostMainViewIcon, LucideIcon> = {
 
 /** Expanded and rail variants consume the exact same sorted visibility projection. */
 export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const activeMatch = useMatch('/apps/:ghostId');
   const activeGhostId = activeMatch?.params.ghostId;
@@ -57,6 +60,8 @@ export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }
       />
     );
     const open = () => navigate(`/apps/${encodeURIComponent(item.ghostId)}`);
+    const openDetails = () =>
+      navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(item.ghostId)}`);
 
     if (variant === 'rail') {
       return (
@@ -75,19 +80,38 @@ export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }
     }
 
     return (
-      <button
+      <div
         key={item.ghostId}
-        type="button"
-        aria-label={item.title}
-        title={item.title}
-        data-native-title="truncated-text"
-        aria-current={active ? 'page' : undefined}
-        onClick={open}
-        className={cn(ROW_CLASS, active && ROW_ACTIVE_CLASS)}
+        className={cn(ROW_CLASS, 'group/main-view gap-0 px-0', active && ROW_ACTIVE_CLASS)}
       >
-        {icon}
-        <span className="min-w-0 truncate leading-none">{item.title}</span>
-      </button>
+        <button
+          type="button"
+          aria-label={item.title}
+          title={item.title}
+          data-native-title="truncated-text"
+          aria-current={active ? 'page' : undefined}
+          onClick={open}
+          className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch rounded-full pl-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {icon}
+          <span className="min-w-0 truncate leading-none">{item.title}</span>
+        </button>
+        <Tip text={t('settings.ghosts.page.manageAria', { name: item.manifest.name })} side="right">
+          <button
+            type="button"
+            onClick={openDetails}
+            aria-label={t('settings.ghosts.page.manageAria', { name: item.manifest.name })}
+            className={cn(
+              'pointer-events-none mr-1.5 grid size-6 shrink-0 place-items-center rounded-full opacity-0 transition-[background-color,color,opacity] duration-150 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] group-hover/main-view:pointer-events-auto group-hover/main-view:opacity-100 group-focus-within/main-view:pointer-events-auto group-focus-within/main-view:opacity-100',
+              active
+                ? 'text-sidebar-item-active-foreground hover:bg-[var(--sidebar-item-active-border)] hover:text-sidebar-item-active-foreground'
+                : 'text-[var(--sidebar-nav-text)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
+            )}
+          >
+            <SlidersHorizontal size={14} aria-hidden="true" />
+          </button>
+        </Tip>
+      </div>
     );
   });
 }
