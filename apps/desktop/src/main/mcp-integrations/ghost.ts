@@ -11,8 +11,8 @@
  *   - callGhostTool:透传给管子派发器(pipeDispatcher),资格审/按需拉起/
  *     配对超时/崩溃收卷全在那边,错误码两侧同构直接原样交回;
  *   - forgeGuide / forgeScaffold / forgePack:意识锻造(agent 帮用户做意识)——
- *     手册、骨架与打包真身在 cindy-brain/forge.ts,打包成功后经双击转交
- *     通道弹装入确认框(与拖入/双击完全同一个弹窗,装不装永远由用户点头)。
+ *     手册、骨架与打包真身在 cindy-brain/forge.ts。缺省打包经双击转交
+ *     通道弹装入确认框；publish intent 改签一次性发布票据。
  *
  * cindy-tools 是意识系统工具集,包内零 Electron
  * 依赖,全部能力经本文件注入(设计规范规则 2)。
@@ -25,6 +25,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { buildGhostRosterPrompt } from 'cindy-tools';
 import type {
   CindyForgePackResult,
+  CindyForgePublishResult,
+  CindyForgePublishStatusResult,
   CindyForgeScaffoldResult,
   CindyGhostInfo,
   CindyGhostsMcpDeps,
@@ -52,7 +54,8 @@ import {
 } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
-import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionFsSnapshot, getSessionTitle } from '../localDb/ipc/sessions.js';
+import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   deriveGhostSessionContext,
   type GhostSessionContextInjected,
@@ -77,8 +80,21 @@ import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
+import {
+  completeForgePackStaging,
+  getForgePackStagingController,
+  invalidateForgePackTicket,
+  releaseForgePackStaging,
+} from '../cindy-brain/forgePackStaging.js';
+import { consumeForgePackForPublish } from '../cindy-brain/forgePackPublishConsume.js';
+import {
+  currentPublisherIdentity,
+  getPluginPublisherOrchestrator,
+  startPluginPublish,
+} from '../plugin-publisher/host.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
+import type { GhostInstallOrigin } from '../../shared/ghostInstallOrigin.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
@@ -1705,7 +1721,7 @@ export function getCindyGhostsMcpDeps(
         return result;
       });
     },
-    async forgePack({ dir, iconSource }): Promise<CindyForgePackResult> {
+    async forgePack({ dir, iconSource, intent = 'install' }): Promise<CindyForgePackResult> {
       return withForgeOwnerLease(async () => {
         const gate = await getForgeSessionFsGate(resolveSessionContext());
         if (!gate.ok) return gate;
@@ -1749,19 +1765,170 @@ export function getCindyGhostsMcpDeps(
           }
         }
         if (!packed.ok) return packed;
-        // 与双击 .cindy 同一条转交通道:renderer 弹标准确认框(同 id 已装则
-        // 自动转"更新 vX → vY"),用户点头才真装。lease 持到转交完成。
-        await handleIncomingCindyFile(packed.cindyPath, 'ghost-forge');
-        log.info('ghost forge packed', { dir, cindyPath: packed.cindyPath, id: packed.manifest.id });
+        // Agent 来源标记:这次装入是 Agent 调 ghost_forge_pack 发起的,不是用户
+        // 亲手点的。标题与源码相对路径都由主机侧算(agent 改不了),供确认框如实
+        // 展示"哪个任务里的 Agent 发起 + 打包了工作目录里的哪个源码目录"。
+        // 相对路径:forge 已强制源码在会话工作目录内,故 path.relative 可靠;
+        // 若源码目录恰是工作目录本身(relative='')回落目录名,不给空串。
+        const forgeSessionId = resolveSessionContext()?.sessionId;
+        const sessionTitle = forgeSessionId
+          ? (await getSessionTitle(forgeSessionId)) ?? undefined
+          : undefined;
+        const relFromWorkdir = path.relative(gate.workingDir, dir);
+        const sourceRelPath =
+          relFromWorkdir && !relFromWorkdir.startsWith('..')
+            ? relFromWorkdir
+            : path.basename(dir);
+        const origin: GhostInstallOrigin = {
+          kind: 'agent-forge',
+          ...(sessionTitle ? { sessionTitle } : {}),
+          ...(sourceRelPath ? { sourceRelPath } : {}),
+        };
+        const owner = captureGhostMutationOwnerForMcp();
+        const alreadyInstalled = getGhostManager()
+          .list()
+          .some((ghost) => ghost.manifest.id === packed.manifest.id);
+        let staged;
+        try {
+          // 安装链路只认这份内存字节直写的 staging。workdir 里的 .cindy 只是
+          // 作者副本；agent 换掉它不能改确认框将要检查的包。
+          // operationKind 只是打包时点的提示/审计，不是不可变拒绝条件：
+          // 打包到消费之间同 id 可能被另一入口装上或卸掉，真实分类在消费
+          // 入口持锁后重做，允许与票里的值不同。
+          staged = completeForgePackStaging({
+            buf: packed.buf,
+            manifestId: packed.manifest.id,
+            owner,
+            operationKind: alreadyInstalled ? 'update' : 'install',
+            authorCindyPath: packed.cindyPath,
+          });
+        } catch (err) {
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: err instanceof Error ? err.message : String(err),
+          };
+        }
+        if (intent === 'publish') {
+          log.info('ghost forge packed for publish', { dir, id: packed.manifest.id });
+          return {
+            ok: true,
+            cindyPath: staged.agentCindyPath,
+            id: packed.manifest.id,
+            name: packed.manifest.name,
+            version: packed.manifest.version,
+            publishToken: staged.ticket,
+            note: `${iconNote}已打包为待发布产物。仅企业组织成员可用 ghost_forge_publish 提交;个人账号不可用。`,
+          };
+        }
+        try {
+          // 与双击 .cindy 同一条转交通道:renderer 弹标准确认框(同 id 已装则
+          // 自动转"更新 vX → vY"),用户点头才真装。lease 持到转交完成。带上 agent
+          // 来源,确认框据此展示来源横幅 + 分级加重(高危需手输 id 确认)。
+          // 交给这条通道的必须是 staging,不能是 workdir 产物。
+          await handleIncomingCindyFile(staged.installPath, 'ghost-forge', origin);
+        } catch (err) {
+          invalidateForgePackTicket(staged.ticket);
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: err instanceof Error ? err.message : String(err),
+          };
+        }
+        log.info('ghost forge packed', { dir, id: packed.manifest.id });
+        const publishHint = currentPublisherIdentity()
+          ? "若接下来要发布到组织市场,请用 intent='publish' 重新打包。"
+          : '';
         return {
           ok: true,
-          cindyPath: packed.cindyPath,
+          // 给 agent 的只是作者副本文件名提示，不可用于访问；staging 路径不下发。
+          cindyPath: staged.agentCindyPath,
           id: packed.manifest.id,
           name: packed.manifest.name,
           version: packed.manifest.version,
-          note: `${iconNote}已打包并弹出装入/更新确认框,请告知用户在应用内确认(装入默认沉睡)。`,
+          // 不在这里说明确认框的加重形式(如"需手输 id"):本 note 会回到 agent,
+          // 被注入的 agent 读到就能照着编引导话术,帮用户"过掉"那一步。
+          // 告知"必须在应用内确认才会安装"已足够让作者知道下一步做什么。
+          note: `${iconNote}已打包并弹出装入/更新确认框,请提示用户:只有在应用内确认后插件才会真正安装。${publishHint}`,
         };
       });
+    },
+    async forgePublish({ token }): Promise<CindyForgePublishResult> {
+      const boundaryPending = isAppSessionBoundaryPending();
+      const consumed = consumeForgePackForPublish(getForgePackStagingController(), {
+        token,
+        currentOwner: getActiveAppSession(),
+        boundaryPending,
+      });
+      if (consumed.kind === 'rejected') {
+        const errorCode =
+          consumed.reason === 'session-boundary-pending'
+            ? 'SESSION_BOUNDARY_PENDING'
+            : consumed.reason === 'owner-mismatch'
+              ? 'PUBLISH_TOKEN_OWNER_MISMATCH'
+              : 'PUBLISH_TOKEN_INVALID';
+        return {
+          ok: false,
+          errorCode,
+          message:
+            consumed.reason === 'session-boundary-pending'
+              ? '账号切换中，请稍后重试'
+              : consumed.reason === 'owner-mismatch'
+                ? '发布票据无效、已过期或已被使用，请重新打包'
+                : "发布票据无效、已过期或已被使用。发布票据只能由 ghost_forge_pack(intent='publish') 签发;若刚才是按缺省 install 打的包,请用 intent='publish' 重新打一次。",
+        };
+      }
+      const ticket = consumed.ticket;
+      if (!currentPublisherIdentity()) {
+        releaseForgePackStaging(ticket.stagingPath);
+        return {
+          ok: false,
+          errorCode: 'NOT_ORG_MEMBER',
+          message: '需要组织身份才能发布插件',
+        };
+      }
+      try {
+        const started = startPluginPublish(ticket.stagingPath, null, {
+          manifestId: ticket.manifestId,
+          packageSha256: ticket.packageSha256,
+          onTerminal: () => releaseForgePackStaging(ticket.stagingPath),
+        });
+        return {
+          ok: true,
+          transferId: started.transferId,
+          uploadId: started.uploadId,
+          note: '已开始发布并弹出确认屏。用 ghost_forge_publish_status 查询进度;用户取消或确认后才会继续传输。',
+        };
+      } catch (err) {
+        releaseForgePackStaging(ticket.stagingPath);
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+    async forgePublishStatus({ transferId }): Promise<CindyForgePublishStatusResult> {
+      const orch = getPluginPublisherOrchestrator();
+      const progress = await orch.refreshReviewStatus(transferId);
+      if (!progress) {
+        return { ok: false, errorCode: 'NOT_FOUND', message: '找不到这次发布传输' };
+      }
+      return {
+        ok: true,
+        transferId: progress.transferId,
+        uploadId: progress.uploadId,
+        stage: progress.stage,
+        status: progress.status ?? null,
+        reviewStatus: progress.reviewStatus ?? null,
+        ghostId: progress.ghostId ?? null,
+        version: progress.version ?? null,
+        bytesHashed: progress.bytesHashed,
+        bytesSent: progress.bytesSent,
+        totalBytes: progress.totalBytes,
+        errorCode: progress.errorCode ?? null,
+        message: progress.message ?? null,
+      };
     },
     logger: log,
   };

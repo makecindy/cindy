@@ -286,11 +286,40 @@ describe('ghost · oauth 凭证声明校验', () => {
     }
   });
 
+  it('tokenBroker 无 redirectPort 仍可从共用读路径解析;新包约束由 Host 准入点承担', () => {
+    const base = {
+      authorizeUrl: 'https://accounts.example.com/authorize',
+      tokenUrl: 'https://accounts.example.com/token',
+      clientId: 'builtin-client-id',
+    };
+    const missingPort = validateGhostManifest(
+      oauthManifest({ oauth: { ...base, tokenBroker: 'jira' } }),
+    );
+    expect(missingPort.ok).toBe(true);
+    if (missingPort.ok) {
+      expect(missingPort.manifest.network?.secrets?.[0]?.oauth).toMatchObject({
+        tokenBroker: 'jira',
+      });
+      expect(
+        missingPort.manifest.network?.secrets?.[0]?.oauth?.redirectPort,
+      ).toBeUndefined();
+    }
+
+    // 这两个对照防止兼容调整误伤原本合法的显式端口与普通 OAuth。
+    expect(
+      validateGhostManifest(
+        oauthManifest({ oauth: { ...base, tokenBroker: 'jira', redirectPort: 17872 } }),
+      ).ok,
+    ).toBe(true);
+    expect(validateGhostManifest(oauthManifest({ oauth: base })).ok).toBe(true);
+  });
+
   it('tokenBroker:合法 slug 通过并保留;非法形状 / 与 clientSecret 互斥 → 拒', () => {
     const base = {
       authorizeUrl: 'https://accounts.example.com/authorize',
       tokenUrl: 'https://accounts.example.com/token',
       clientId: 'builtin-client-id',
+      redirectPort: 17872,
     };
     // broker 模式典型组合:内置 clientId + 无 clientSecret + pkce:false。
     const ok = validateGhostManifest(
@@ -322,6 +351,7 @@ describe('ghost · oauth 凭证声明校验', () => {
       tokenUrl: 'https://accounts.example.com/token',
       clientId: 'cn-client-id',
       tokenBroker: 'slack',
+      redirectPort: 17872,
     };
     const ok = validateGhostManifest(
       oauthManifest({ oauth: { ...base, clientIdAlternatives: ['global-client-id'] } }),

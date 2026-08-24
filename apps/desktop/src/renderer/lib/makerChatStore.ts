@@ -5305,11 +5305,19 @@ export function handleStreamEvent(
       // Claude 的 plan_review 发生在 turn 内(ExitPlanMode 阻塞中),done 必然晚于决策,
       // 清扫语义不变。真正的放弃路径(abort/close)由 main 的 interaction dismissal
       // (permission_dismissed 事件)负责标 expired,不依赖这里。
+      //
+      // Codex ask_user 同款:code-mode 可能在提问 RPC 未决时就 turn/completed。
+      // 卡片必须跨 done 存活,等用户回答后走 detached continuation。
       const keepPlanReviewAcrossDone = state.agentKind === 'codex';
+      const keepAskUserAcrossDone = state.agentKind === 'codex';
       const cleanedMessages = finalized.messages.map((m) => {
         let next = m;
         if (m.isStreaming) next = { ...next, isStreaming: false };
-        if (m.role === 'ask_user' && m.askUserStatus === 'pending') {
+        if (
+          !keepAskUserAcrossDone &&
+          m.role === 'ask_user' &&
+          m.askUserStatus === 'pending'
+        ) {
           next = { ...next, askUserStatus: 'expired' as const };
         }
         if (
@@ -5359,14 +5367,14 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
-        pendingAskUser: null,
+        pendingAskUser: keepAskUserAcrossDone ? state.pendingAskUser : null,
         continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
         // pending question is gone, reset so the next one starts expanded.
-        askUserViewerState: 'expanded',
+        askUserViewerState: keepAskUserAcrossDone ? state.askUserViewerState : 'expanded',
         // F-AUQ-DRAFT: pending question gone → in-progress wizard draft is
         // meaningless, drop it so the next question starts clean.
-        askUserDraft: null,
+        askUserDraft: keepAskUserAcrossDone ? state.askUserDraft : null,
         pendingPlanReview: keepPlanReviewAcrossDone ? state.pendingPlanReview : null,
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
@@ -5690,22 +5698,27 @@ export function handleStreamEvent(
             ),
         };
       }
-      if (state.pendingAskUser?.requestId === data.requestId) {
+      if (
+        state.pendingAskUser?.requestId === data.requestId ||
+        state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
+      ) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
         // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
+        // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
-        const askUserReply = answers ? formatAskUserReply(answers) : '';
+        const dismissed = resolved?.dismissed === true;
+        const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
         return {
           ...state,
-          pendingAskUser: null,
-          askUserViewerState: 'expanded',
-          // F-AUQ-DRAFT: question dismissed → drop draft.
-          askUserDraft: null,
+          pendingAskUser:
+            state.pendingAskUser?.requestId === data.requestId ? null : state.pendingAskUser,
+          askUserViewerState:
+            state.pendingAskUser?.requestId === data.requestId ? 'expanded' : state.askUserViewerState,
+          askUserDraft:
+            state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
           messages: state.messages.map((m) =>
-            m.role === 'ask_user' &&
-            m.askUserRequestId === data.requestId &&
-            m.askUserStatus === 'pending'
-              ? answers
+            m.role === 'ask_user' && m.askUserRequestId === data.requestId
+              ? answers && !dismissed
                 ? {
                     ...m,
                     askUserStatus: 'answered' as const,
@@ -13871,11 +13884,6 @@ function answerUserQuestion(
   // Build a human-readable reply summary
   const replySummary = formatAskUserReply(answers);
 
-  // Find the clientId for persistence update
-  const askMsg = state.messages.find(
-    (m) => m.askUserRequestId === requestId && m.askUserStatus === 'pending',
-  );
-
   // Update message to answered + clear pendingAskUser
   setState(sessionId, (s) => ({
     ...s,
@@ -13897,21 +13905,8 @@ function answerUserQuestion(
     ),
   }));
 
-  // F7.6: Persist answered state via PATCH API。
-  // device-link 远程会话:被控端在 RESOLVE_INTERACTION 里权威落库(onInteractionResolved),
-  // 控制端再写就是写自己的空库(dead write + 错误日志)→ 远程跳过,只本机会话走这条。
-  if (askMsg && !isRemoteSession(sessionId)) {
-    messageService
-      .updateContent(sessionId, askMsg.clientId, {
-        requestId,
-        questions: askMsg.askUserQuestions ?? null,
-        status: 'answered',
-        answers,
-      })
-      .catch((err) => log.error('Failed to persist ask_user answered state:', err));
-  }
-
-  // Send to maker (InteractionDecision kind: 'ask_user_question')
+  // 落库只走 main 的 onInteractionResolved。renderer 先写会让多窗口输家/
+  // Stop-vs-answer 的迟到 updateContent 覆盖赢家或 cancelled。
   makerApiFor(sessionId)
     .resolveInteraction(requestId, { kind: 'ask_user_question', answers })
     .catch((err) => log.error('Failed to answer user question:', err));

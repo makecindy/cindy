@@ -4066,6 +4066,8 @@
       "page": {
         "search": "プラグインを検索",
         "clearSearch": "プラグイン検索をクリア",
+        "secondaryTabsAria": "プラグインページのセクション",
+        "overviewTab": "概要",
         "addPlugin": "プラグインを追加",
         "addPluginAria": "プラグイン追加オプション",
         "installedSection": "インストール済み",
@@ -4143,7 +4145,8 @@
           "stateChanged": "操作中にアカウント、プラグイン、またはリリースが変更されました。最新の状態を確認して、もう一度お試しください。",
           "accessDenied": "このプラグイン操作は許可されていないか、キャンセルされました。",
           "notConfigured": "この環境ではプラグインマーケットを利用できません。",
-          "invalidPackage": "このプラグインパッケージは無効か、現在の Cindy バージョンではサポートされていません。"
+          "invalidPackage": "このプラグインパッケージは無効か、現在の Cindy バージョンではサポートされていません。",
+          "brokerRedirectPortRequired": "このプラグインは認可 broker を宣言していますが、同じ OAuth 設定に redirectPort がないため、プラグインマーケットからインストールできません。発行元にこのフィールドを追加して新しいバージョンを公開するよう連絡してください。"
         },
         "securityTitle": "インストールと権限",
         "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。初回インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持されます。",
@@ -4210,7 +4213,7 @@
             "authTitle": "プライベートリポジトリ",
             "authBody": "認証はすべてシステムの Git 設定に依存し、Cindy は Git の認証情報を一切保存しません。SSH の場合: 利用可能な key がマシンに設定されている必要があります。組織が SAML SSO を強制している場合は、GitHub の SSH key 設定で Configure SSO からその組織に key を承認してください。HTTPS の場合: Personal Access Token を使用し、システムの credential helper に保存します。",
             "rulesTitle": "インストールルール",
-            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。cindy- などの公式予約プレフィックスを使うプラグインはカスタムマーケットからインストールできません。インストール前にプラグインが宣言する権限をすべて表示し、確認するとインストールが完了して自動的に有効になります。",
+            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。公式予約プレフィックス {{reservedGhostIdPrefixes}} を使うプラグインは、ドラッグ、ファイル選択、ghost_forge_pack からの受け渡し、カスタムプラグインマーケットからはインストールできません。インストール前にプラグインが宣言する権限をすべて表示し、確認するとインストールが完了して自動的に有効になります。",
             "copy": "ガイドをコピー",
             "copied": "ガイドをクリップボードにコピーしました。",
             "copyFailed": "コピーに失敗しました。もう一度お試しください。"
@@ -4281,7 +4284,6 @@
       "toast": {
         "installed": "「{{name}}」をインストールしました",
         "uninstalled": "「{{name}}」をアンインストールしました",
-        "installedAsleep": "「{{name}}」をインストールしました(無効状態。ここでいつでも有効化できます)",
         "updated": "「{{name}}」を v{{version}} に更新しました",
         "reapproved": "「{{name}}」を復元しました",
         "exported": "「{{name}}」の .cindy ファイルを書き出しました",
@@ -4301,11 +4303,22 @@
         "cancel": "キャンセル",
         "meta": "バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "metaWithAuthor": "作者 {{author}} · バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
-        "enableNow": "インストール後すぐに有効化",
-        "enableNowOpenPanel": "インストール後すぐに有効化してパネルを開く",
         "manualCount": "同梱マニュアル {{count}} 件",
         "expandDescription": "紹介全文を表示",
-        "collapseDescription": "紹介を折りたたむ"
+        "collapseDescription": "紹介を折りたたむ",
+        "typedIdLabel": "プラグイン id「{{id}}」を入力してインストールを確認",
+        "agentBanner": {
+          "title": "このインストールは Agent が開始しました。あなたが押したものではありません。",
+          "context": "タスク「{{title}}」の作業中に、{{path}} 配下のプラグインソースをパッケージしました。",
+          "contextNoPath": "タスク「{{title}}」の作業中に、プラグインのソースディレクトリをパッケージしました。",
+          "contextNoTitle": "{{path}} 配下のプラグインソースをパッケージしました。",
+          "contextBare": "プラグインのソースディレクトリをパッケージしました。",
+          "advice": "このタスクでプラグイン作成を頼んでいないなら、キャンセルしてください —— そのうえで、このタスクが直前に読み込んだ外部コンテンツを見直してください。",
+          "firstInstall": "このプラグイン id はこれまで一度もインストールされていません。",
+          "hazardSkill": "スキル指示を含みます。AI はそれをあなたの全権限で実行し、プラグインのサンドボックス外で、すべてのプロジェクトに対して有効になります。",
+          "hazardNode": "ブラウザのサンドボックス外で、あなたのコンピュータ上でプログラムを実行できます。",
+          "hazardCredential": "設定ページで入力した認証情報を {{hosts}} に送信します。"
+        }
       },
       "trust": {
         "official": "Cindy 公式プラグイン",
@@ -4430,7 +4443,10 @@
         "alreadyInstalled": "このプラグインは既にインストールされています",
         "approvalRequired": "続けるには、このプラグインの権限を再確認する必要があります",
         "commandConflict": "コマンドがインストール済みのプラグインと重複しています。先に相手をアンインストールするか、コマンド名を変更してください。",
-        "idReserved": "この id は公式予約プレフィックス cindy- を使用しています。アプリに同梱されたプラグインのみ使用できます",
+        "idReserved": "{{reservedGhostIdPrefixes}} は公式プラグイン用の予約済みプレフィックスです。ドラッグ、ファイル選択、ghost_forge_pack からの受け渡し、カスタムプラグインマーケットからはインストールできません。対応する公式プラグインは Cindy プラグインマーケットからインストールしてください",
+        "brokerManualInstallNotAuthorized": "手動でインストールした .cindy は認可 broker を使用できません。組織のプラグインマーケットからインストールするか、作者に組織アカウントで ghost_forge_pack を使ってビルドするよう依頼してください。",
+        "brokerNotAuthorized": "現在のインストール元または組織アカウントには、認可 broker を使用する権限がありません。組織のプラグインマーケットからインストールするか、作者に組織アカウントで ghost_forge_pack を使ってビルドするよう依頼してください。",
+        "brokerRedirectPortRequired": "このプラグインは認可 broker を宣言していますが、同じ OAuth 設定に redirectPort がありません。認可の最後の転送先をローカルの待受ポートに戻せるよう、作者にこのフィールドの追加を依頼してください。",
         "sourceMissing": "選択したファイルが見つかりません",
         "generic": "操作に失敗しました。もう一度お試しください",
         "updateIdMismatch": "選択したファイルはプラグイン「{{id}}」で、このプラグイン「{{expected}}」と一致しません"
@@ -4595,7 +4611,9 @@
       "reapproveConfirm": {
         "title": "「{{name}}」の権限を再確認しますか?",
         "body": "以下の権限を確認して、このインストール済みプラグインをあらためて許可します。インストールファイルは不要です。",
-        "confirm": "確認して復元"
+        "confirm": "確認して復元",
+        "enableNoticeEnabled": "確認後も現在の有効状態を維持します。",
+        "enableNoticeAsleep": "確認後もスリープ状態のままにします（自動では有効化しません）。あとでここから手動で有効化できます。"
       },
       "pick": {
         "dialogTitle": "フォルダを選択",
@@ -4630,6 +4648,46 @@
         "reviewOutdated": "レビュー期限切れ",
         "approve": "承認",
         "skip": "スキップ"
+      },
+      "publish": {
+        "section": "自分の公開",
+        "action": "プラグインを公開…",
+        "confirmTitle": "{{name}} を公開",
+        "confirmDescription": "確認後、現在の組織へアップロードします。",
+        "org": "組織",
+        "pluginId": "プラグイン id",
+        "version": "バージョン",
+        "size": "サイズ",
+        "confirm": "公開",
+        "cancel": "キャンセル",
+        "disabled": "この組織ではメンバー公開が有効になっていません。管理者に連絡してください。",
+        "loadFailed": "公開一覧を読み込めません",
+        "startFailed": "公開を開始できません",
+        "empty": "公開履歴はまだありません",
+        "unknownPlugin": "プラグイン",
+        "uploading": "公開中",
+        "badge": {
+          "validating": "検証中",
+          "processing": "処理中",
+          "pending": "審査待ち",
+          "approved": "公開済み",
+          "rejected": "却下",
+          "failed": "失敗",
+          "expired": "期限切れ"
+        },
+        "stage": {
+          "confirming": "確認待ち",
+          "hashing": "ファイルを検証中",
+          "preparing": "アップロードを作成中",
+          "uploading": "アップロード中",
+          "committing": "送信中",
+          "processing": "処理中",
+          "succeeded": "完了",
+          "failed": "失敗",
+          "expired": "期限切れ",
+          "cancelled": "キャンセル済み",
+          "cancelledTracking": "追跡を停止しました。サーバー側では処理が続いています。"
+        }
       }
     },
     "mcp": {

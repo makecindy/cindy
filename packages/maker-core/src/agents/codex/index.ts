@@ -960,6 +960,32 @@ function hasSubmittedUserInput(answersByPosition: readonly (readonly string[])[]
   );
 }
 
+function formatAskUserContinuationMessage(
+  questions: readonly ToolRequestUserInputQuestion[],
+  answers: Record<string, string>,
+): string {
+  const lines = [ASK_USER_CONTINUATION_INTRO, ''];
+  for (const question of questions) {
+    const raw = answers[question.question] ?? answers[question.header] ?? answers[question.id] ?? '';
+    lines.push(`Q: ${question.question}`);
+    lines.push(`A: ${raw.trim() || '(no answer)'}`);
+    lines.push('');
+  }
+  lines.push(ASK_USER_CONTINUATION_OUTRO);
+  return lines.join('\n');
+}
+
+interface LiveAskUserRequest {
+  requestId: string;
+  turnId: string | null;
+  questions: ToolRequestUserInputQuestion[];
+  detached: boolean;
+  continuationStarted: boolean;
+  permissionPolicy: TurnPermissionPolicy | null;
+  capabilitySelectionText: string;
+  autoReviewIntent: string;
+}
+
 function normalizeServiceTier(serviceTier: ServiceTier | null | undefined): ServiceTier | null | undefined {
   return serviceTier === 'priority' ? 'fast' : serviceTier;
 }
@@ -1124,6 +1150,8 @@ function codexPermissionStrictnessRank(mode: PermissionMode): number {
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
 // PLAN_IMPLEMENTATION_CODING_MESSAGE), 模型对这句有训练分布上的既有理解。
 const PLAN_IMPLEMENTATION_MESSAGE = 'Implement the plan.';
+const ASK_USER_CONTINUATION_INTRO = 'The user answered the pending question.';
+const ASK_USER_CONTINUATION_OUTRO = 'Continue from the previous turn. Do not ask the same question again.';
 const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySelection');
 // 计划实施/修订 turn 的**审查意图**:这些 turn 的 message 是固定内部串('Implement the plan.'),
 // 直接拿它当 review intent 会让灰区 reviewer 完全看不到用户原始请求与获批计划(codex 报)。
@@ -5503,6 +5531,7 @@ export class CodexAgent extends BaseAgent {
       pendingForTurn: Map<string, PendingUserInputInteraction>;
       pendingInteraction: PendingUserInputInteraction;
     }>();
+    const liveAskUserByRequestId = new Map<string, LiveAskUserRequest>();
     registerRootCodexMcpContext();
     let mcpElicitationSeq = 0;
 
@@ -5520,7 +5549,9 @@ export class CodexAgent extends BaseAgent {
 
     function defaultInteractionDecision(req: InteractionRequest, reason: string): InteractionDecision {
       if (req.kind === 'ask_user_question') {
-        return { kind: 'ask_user_question', answers: {} };
+        // dismissed: 系统性取消(无 resolver / resolver 抛错)。空 answers 是用户 Skip，
+        // 不能和系统兜底长得一样，否则 detach 后会误开 continuation。
+        return { kind: 'ask_user_question', answers: {}, dismissed: true };
       }
       if (req.kind === 'plan_review') {
         // dismissed: 系统性 deny(无 resolver / resolver 抛错), reason 是系统代码,
@@ -5904,6 +5935,19 @@ export class CodexAgent extends BaseAgent {
         const requestId = String(meta.requestId);
         if (dismissed.has(requestId)) continue;
         dismissed.add(requestId);
+        liveAskUserByRequestId.delete(requestId);
+        forgetPendingUserInputRequest(requestId);
+        eventQueue.push({
+          type: 'interaction_dismissed',
+          data: { requestId, reason, resolvedAs: 'deny' },
+          source: 'codex',
+        });
+      }
+      for (const [requestId, live] of liveAskUserByRequestId) {
+        if (!predicate({ threadId, turnId: live.turnId })) continue;
+        liveAskUserByRequestId.delete(requestId);
+        if (dismissed.has(requestId)) continue;
+        dismissed.add(requestId);
         forgetPendingUserInputRequest(requestId);
         eventQueue.push({
           type: 'interaction_dismissed',
@@ -5915,6 +5959,80 @@ export class CodexAgent extends BaseAgent {
 
     function dismissPendingUserInputForTurn(turnId: string, reason: string): void {
       dismissPendingUserInput(reason, (meta) => meta.turnId === turnId);
+    }
+
+    function detachPendingAskUserForSuccessfulTurn(turnId: string): void {
+      const cancelledUserInput = userInputBroker.cancelWhere(
+        (meta) => meta.turnId === turnId,
+        { answers: {} },
+      );
+      const cancelledDynamicTools = dynamicToolBroker.cancelWhere(
+        (meta) => meta.turnId === turnId,
+        cancelledDynamicToolResponse('turn_completed'),
+      );
+      // Desktop 只有一个 pendingAskUser。同 turn 多个提问只留最后一张，
+      // 否则被盖住的 resolver 会一直占着 hasPendingAgentInteraction。
+      const lives = [...liveAskUserByRequestId.values()].filter((live) => live.turnId === turnId);
+      const keep = lives.at(-1) ?? null;
+      if (keep) keep.detached = true;
+      const keepUiRequestIds = new Set(keep ? [keep.requestId] : []);
+      const dismissed = new Set<string>();
+      const dismiss = (requestId: string, reason: string): void => {
+        if (keepUiRequestIds.has(requestId) || dismissed.has(requestId)) return;
+        dismissed.add(requestId);
+        liveAskUserByRequestId.delete(requestId);
+        forgetPendingUserInputRequest(requestId);
+        eventQueue.push({
+          type: 'interaction_dismissed',
+          data: { requestId, reason, resolvedAs: 'deny' },
+          source: 'codex',
+        });
+      };
+      for (const live of lives) {
+        if (keep && live.requestId === keep.requestId) continue;
+        dismiss(live.requestId, 'superseded');
+      }
+      for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
+        dismiss(String(meta.requestId), 'turn_completed');
+      }
+    }
+
+    const emitAskUserContinuationStartFailure = (error: unknown): void => {
+      log.warn('ask_user continuation turn failed to start', { error: String(error) });
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: `ask_user continuation turn failed to start: ${String(error)}`,
+          isTerminal: true,
+        },
+        source: 'codex',
+      });
+      eventQueue.push({
+        type: 'status',
+        data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+        source: 'codex',
+      });
+    };
+
+    async function startAskUserContinuation(
+      live: LiveAskUserRequest,
+      answers: Record<string, string>,
+      autoReviewIntent?: string,
+    ): Promise<void> {
+      if (closed) return;
+      const message = formatAskUserContinuationMessage(live.questions, answers);
+      const sendOptions: CodexInternalSendOptions = {
+        ...(live.permissionPolicy ? { turnPermissionPolicy: live.permissionPolicy } : {}),
+        ...(live.capabilitySelectionText
+          ? { [CODEX_INHERITED_CAPABILITY_SELECTION]: live.capabilitySelectionText }
+          : {}),
+        ...(autoReviewIntent ? { [CODEX_AUTO_REVIEW_INTENT]: autoReviewIntent } : {}),
+      };
+      try {
+        await handle.send({ type: 'user', content: message }, sendOptions);
+      } catch (error) {
+        emitAskUserContinuationStartFailure(error);
+      }
     }
 
     function dismissAllPendingUserInput(reason: string): void {
@@ -7211,6 +7329,20 @@ export class CodexAgent extends BaseAgent {
       }
 
       const interactionPromise = (async (): Promise<UserInputAnswersByPosition> => {
+        liveAskUserByRequestId.set(requestId, {
+          requestId,
+          turnId: turnId ?? null,
+          questions,
+          detached: false,
+          continuationStarted: false,
+          permissionPolicy: activeTurnPermissionPolicy,
+          capabilitySelectionText: (
+            (turnId ? capabilitySelectionTextByTurnId.get(turnId) : undefined)
+            ?? capabilitySelectionTextByThreadId.get(threadId)
+            ?? ''
+          ),
+          autoReviewIntent: currentAutoReviewIntent,
+        });
         const decision = await dispatchInteraction({
           kind: 'ask_user_question',
           requestId,
@@ -7221,16 +7353,28 @@ export class CodexAgent extends BaseAgent {
           log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
           return questions.map(() => []);
         }
-        // 澄清答案改变本轮授权范围(把范围从 src/ 收窄到 build/ 后,后续 `rm -rf src` 必须按澄清后的
-        // 意图裁决)→ 并入有界 review intent 并清缓存,与 Claude 侧 AskUserQuestion 对称(codex 报)。
-        setAutoReviewIntent(composeAutoReviewIntentWithClarification(
-          currentAutoReviewIntent,
+        const live = liveAskUserByRequestId.get(requestId);
+        // 澄清必须锚在发起提问那一轮的审查意图上。卡片挂起期间后续 turn 可能改写
+        // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
+        const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
+          live?.autoReviewIntent ?? currentAutoReviewIntent,
           Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
-        ));
-        return userInputAnswersByPosition(
+        );
+        setAutoReviewIntent(continuationAutoReviewIntent);
+        const answersByPosition = userInputAnswersByPosition(
           questions,
           responseFromAskUserAnswers(questions, decision.answers),
         );
+        if (
+          live
+          && live.detached
+          && !live.continuationStarted
+          && decision.dismissed !== true
+        ) {
+          live.continuationStarted = true;
+          void startAskUserContinuation(live, decision.answers ?? {}, continuationAutoReviewIntent);
+        }
+        return answersByPosition;
       })();
 
       let cancelPendingInteraction!: () => void;
@@ -7275,6 +7419,7 @@ export class CodexAgent extends BaseAgent {
         }
         return responseFromUserInputAnswersByPosition(questions, answersByPosition);
       } finally {
+        liveAskUserByRequestId.delete(requestId);
         const ownedPending = pendingUserInputOwnerByRequestId.get(requestId);
         if (ownedPending?.pendingInteraction === pendingInteraction) {
           pendingUserInputOwnerByRequestId.delete(requestId);
@@ -8333,7 +8478,11 @@ export class CodexAgent extends BaseAgent {
       if (currentTurnId === turn.id || currentTurnId === null) {
         stopActiveRolloutPlanFallback();
       }
-      dismissPendingUserInputForTurn(turn.id, `turn_${turn.status}`);
+      if (turn.status === 'completed') {
+        detachPendingAskUserForSuccessfulTurn(turn.id);
+      } else {
+        dismissPendingUserInputForTurn(turn.id, `turn_${turn.status}`);
+      }
       clearActiveToolContextsForTurn(turn.id);
       const overlapsActiveTurn = suppressTerminalUi && currentTurnId !== null && currentTurnId !== turn.id;
       if (overlapsActiveTurn) return;

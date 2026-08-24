@@ -851,6 +851,7 @@ import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
 import { registerPluginMarketIpc, syncDefaultMarketPlugins } from './plugin-market/registerIpc.js';
+import { registerPluginPublisherIpc } from './plugin-publisher/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
@@ -2208,6 +2209,7 @@ setCodexImageAuthBinding({
 });
 registerGhostIpc();
 registerPluginMarketIpc();
+registerPluginPublisherIpc();
 authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {
   const builtinOutcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
   if (builtinOutcome === 'deferred') return builtinOutcome;

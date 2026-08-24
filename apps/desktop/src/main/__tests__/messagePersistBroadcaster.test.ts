@@ -83,6 +83,7 @@ import {
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
   onInteractionMessage,
+  onInteractionResolved,
   onThinkingEvent,
   flushAssistantBlock,
   flushOrphanToolResults,
@@ -2716,5 +2717,39 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
     flushOrphanToolResults(SESSION, null);
     await flushWrites();
     expect(createMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('ask_user persist first-write-wins', () => {
+  it('ignores a later cancelled write after the winner already answered', async () => {
+    const persistId = onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'ask-winner',
+      questions: [{ question: 'Pick one' }],
+    });
+    onInteractionResolved(
+      SESSION,
+      persistId,
+      'ask_user_question',
+      { requestId: 'ask-winner', questions: [{ question: 'Pick one' }] },
+      { answers: { 'Pick one': 'Keep going' } },
+    );
+    onInteractionResolved(
+      SESSION,
+      persistId,
+      'ask_user_question',
+      { requestId: 'ask-winner', questions: [{ question: 'Pick one' }] },
+      { answers: {}, dismissed: true },
+    );
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledTimes(1);
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        status: 'answered',
+        answers: { 'Pick one': 'Keep going' },
+      }),
+    );
   });
 });

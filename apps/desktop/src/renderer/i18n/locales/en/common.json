@@ -4067,6 +4067,8 @@
       "page": {
         "search": "Search plugins",
         "clearSearch": "Clear Plugin Search",
+        "secondaryTabsAria": "Plugin page sections",
+        "overviewTab": "Overview",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "installedSection": "Installed",
@@ -4144,7 +4146,8 @@
           "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
           "accessDenied": "This plugin operation is not permitted or was cancelled.",
           "notConfigured": "The plugin market is not available in this environment.",
-          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
+          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy.",
+          "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release."
         },
         "securityTitle": "Install and permissions",
         "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
@@ -4211,7 +4214,7 @@
             "authTitle": "Private Repositories",
             "authBody": "Authentication relies entirely on your system Git configuration — Cindy never stores Git credentials. SSH: a working key must be configured on this machine; if the organization enforces SAML SSO, authorize the key for that organization via Configure SSO in your GitHub SSH key settings. HTTPS: use a Personal Access Token stored by the system credential helper.",
             "rulesTitle": "Install Rules",
-            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins using officially reserved prefixes like cindy- cannot be installed from custom marketplaces. Before install, every permission the plugin declares is shown for review; confirming completes the install and enables the plugin.",
+            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins using the officially reserved prefixes {{reservedGhostIdPrefixes}} cannot be installed by dragging in a package, choosing a file, transferring from ghost_forge_pack, or using a custom plugin marketplace. Before install, every permission the plugin declares is shown for review; confirming completes the install and enables the plugin.",
             "copy": "Copy guide",
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Please try again."
@@ -4282,7 +4285,6 @@
       "toast": {
         "installed": "Installed \"{{name}}\"",
         "uninstalled": "Uninstalled \"{{name}}\"",
-        "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
         "reapproved": "\"{{name}}\" restored",
         "exported": "Exported the .cindy file for \"{{name}}\"",
@@ -4302,11 +4304,22 @@
         "cancel": "Cancel",
         "meta": "Version {{version}}. Installs locally and can be uninstalled anytime.",
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
-        "enableNow": "Enable right after install",
-        "enableNowOpenPanel": "Enable and open its panel right after install",
         "manualCount": "Bundled manuals: {{count}}",
         "expandDescription": "Show Full Description",
-        "collapseDescription": "Hide Full Description"
+        "collapseDescription": "Hide Full Description",
+        "typedIdLabel": "Type the plugin id \"{{id}}\" to confirm installation",
+        "agentBanner": {
+          "title": "An Agent started this install — you didn't click it.",
+          "context": "It packaged the plugin source under {{path}} while working on the task \"{{title}}\".",
+          "contextNoPath": "It packaged a plugin source directory while working on the task \"{{title}}\".",
+          "contextNoTitle": "It packaged the plugin source under {{path}}.",
+          "contextBare": "It packaged a plugin source directory.",
+          "advice": "If you didn't ask it to make a plugin in this task, cancel — and look back at what external content this task just read.",
+          "firstInstall": "This plugin id has never been installed before.",
+          "hazardSkill": "It ships skill instructions the AI runs with all your permissions, outside the plugin sandbox, across all your projects.",
+          "hazardNode": "It can run programs on your computer, outside the browser sandbox.",
+          "hazardCredential": "It will send the credentials you enter on its settings page to {{hosts}}."
+        }
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -4431,7 +4444,10 @@
         "alreadyInstalled": "This plugin is already installed",
         "approvalRequired": "This plugin's permissions must be reviewed again before continuing.",
         "commandConflict": "Its command conflicts with an installed plugin. Uninstall the other one or rename the command.",
-        "idReserved": "This id uses the reserved official prefix cindy-; it is only available to plugins bundled with the app",
+        "idReserved": "{{reservedGhostIdPrefixes}} are reserved for official plugins and can’t be installed by dragging in a package, choosing a file, transferring from ghost_forge_pack, or using a custom plugin marketplace. Install the corresponding official plugin from the Cindy plugin market",
+        "brokerManualInstallNotAuthorized": "A manually installed .cindy package is not authorized to use the authorization broker. Install it from your organization’s plugin market, or ask the author to build it with ghost_forge_pack while signed in to the organization.",
+        "brokerNotAuthorized": "This installation source or organization identity is not authorized to use the authorization broker. Install it from your organization’s plugin market, or ask the author to build it with ghost_forge_pack while signed in to the organization.",
+        "brokerRedirectPortRequired": "This plugin declares an authorization broker but does not declare redirectPort in the same OAuth configuration. Ask the author to add the field so the final authorization hop can return to the local listening port.",
         "sourceMissing": "The selected file could not be found",
         "generic": "Operation failed. Please try again.",
         "updateIdMismatch": "The selected file is plugin \"{{id}}\", which does not match this plugin \"{{expected}}\""
@@ -4596,7 +4612,9 @@
       "reapproveConfirm": {
         "title": "Re-approve permissions for \"{{name}}\"?",
         "body": "Review the permissions below to re-approve this installed plugin — no install file needed.",
-        "confirm": "Approve & Restore"
+        "confirm": "Approve & Restore",
+        "enableNoticeEnabled": "Keeps its current enabled state after you confirm.",
+        "enableNoticeAsleep": "Stays asleep after you confirm (not enabled automatically); you can enable it here later."
       },
       "pick": {
         "dialogTitle": "Choose a folder",
@@ -4631,6 +4649,46 @@
         "reviewOutdated": "Review outdated",
         "approve": "Approve",
         "skip": "Skip"
+      },
+      "publish": {
+        "section": "My publishes",
+        "action": "Publish plugin…",
+        "confirmTitle": "Publish {{name}}",
+        "confirmDescription": "After you confirm, the package is uploaded to the current organization.",
+        "org": "Organization",
+        "pluginId": "Plugin id",
+        "version": "Version",
+        "size": "Size",
+        "confirm": "Publish",
+        "cancel": "Cancel",
+        "disabled": "This organization has not enabled member publishing. Contact an admin.",
+        "loadFailed": "Could not load your publishes",
+        "startFailed": "Could not start publishing",
+        "empty": "No publishes yet",
+        "unknownPlugin": "Plugin",
+        "uploading": "Publishing",
+        "badge": {
+          "validating": "Checking",
+          "processing": "Processing",
+          "pending": "Pending review",
+          "approved": "Published",
+          "rejected": "Rejected",
+          "failed": "Failed",
+          "expired": "Expired"
+        },
+        "stage": {
+          "confirming": "Waiting for confirmation",
+          "hashing": "Checking the file",
+          "preparing": "Creating the upload",
+          "uploading": "Uploading",
+          "committing": "Submitting",
+          "processing": "Processing",
+          "succeeded": "Finished",
+          "failed": "Failed",
+          "expired": "Expired",
+          "cancelled": "Cancelled",
+          "cancelledTracking": "Stopped watching. The server is still processing."
+        }
       }
     },
     "mcp": {

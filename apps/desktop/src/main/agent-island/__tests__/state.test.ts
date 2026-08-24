@@ -1165,6 +1165,35 @@ describe('Agent Island display state', () => {
     });
   });
 
+  it('keeps ask_user waiting after a successful done instead of completing', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, statusEvent(true, 'Running'), 1_000);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, askUserQuestionRequest('r1'), 1_100);
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, doneEvent(), 1_200);
+
+    const display = buildAgentIslandDisplayState(state, 1_300);
+    expect(display.sessions[0]).toMatchObject({
+      sessionId: 'ask',
+      phase: 'needs-interaction',
+      interactionKind: 'ask_user_question',
+    });
+    expect(display.pillSnapshot.pendingInteractionCount).toBe(1);
+  });
+
+  it('still completes the island on done when only a permission card was pending', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, statusEvent(true, 'Running'), 1_000);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_100);
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, doneEvent(), 1_200);
+
+    const display = buildAgentIslandDisplayState(state, 1_300);
+    expect(display.sessions[0]).toMatchObject({
+      sessionId: 'ask',
+      phase: 'completed',
+    });
+    expect(display.pillSnapshot.pendingInteractionCount).toBe(0);
+  });
+
   it('expands visible-session permission prompts so users can approve in the island', () => {
     const state = createAgentIslandState();
     setAgentIslandVisibleSession(state, 'ask', 900);

@@ -122,14 +122,41 @@ const D_GHOST_FORGE_SCAFFOLD = [
 ].join("\n");
 
 const D_GHOST_FORGE_PACK = [
-  "把一个插件源码目录校验并打包成 .cindy,随后主机会弹出装入确认框(同 id 已装则显示",
-  '"更新 vX → vY")——装不装永远由用户在弹窗上决定,本工具不会私自装入。',
+  "把一个插件源码目录校验并打包成 .cindy。缺省 intent=install,随后主机会弹出装入确认框",
+  '(同 id 已装则显示"更新 vX → vY");intent=publish 时不装入,只返回一次性 publishToken。',
+  "intent=publish 仅企业组织成员可用;个人账号不可用,请用缺省的 install。",
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
   "隐藏文件 / *.cindy)。仅当用户明确选择 AI 生成图标时,可把图片工具结果的",
   "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入,失败保留默认图标继续打包。",
   "失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
-  "按 message 修正源码后重新打包即可。打包成功 ≠ 已装入:告知用户去点确认框。",
+  "按 message 修正源码后重新打包即可。install 打包成功 ≠ 已装入:告知用户去点确认框;publish 不会触发装入。",
 ].join("\n");
+
+const D_GHOST_FORGE_PUBLISH = [
+  "把 ghost_forge_pack(intent=publish) 刚打出的确切插件包发布到当前登录组织。token 传 pack 返回的一次性 publishToken,不能传文件路径。",
+  "仅企业组织成员可用;个人账号不可用。",
+  "本工具立即返回 transferId(以及稍后才有的 uploadId),传输在后台跑;",
+  "用 ghost_forge_publish_status 查阶段与结果。不要把它和 ghost_forge_pack 混成一次调用:",
+  "打包失败和发布失败语义不同。主机会弹出确认屏(组织 / 插件 id / 版本 / 大小),",
+  "用户确认后才真正开传。立即失败会返回结构化 code；传输开始后的失败看 status 的 message,",
+  "不要按固定枚举分支。",
+].join("\n");
+
+const D_GHOST_FORGE_PUBLISH_STATUS = [
+  "查询一次 ghost_forge_publish 后台传输的当前状态。transferId 来自 publish 的立即返回。",
+  "status 变成 succeeded 即可告知用户已提交、等待管理员审核并收口;不要守着轮询 reviewStatus,",
+  "等用户下次问起时再查一次。errorCode / message 是自由字符串,读 message 向用户说明,",
+  "不要按固定枚举分支。",
+].join("\n");
+
+export const ghostForgePublishInputSchema = z
+  .object({
+    token: z
+      .string()
+      .min(1)
+      .describe("ghost_forge_pack(intent=publish) 返回的一次性 publishToken"),
+  })
+  .strict();
 
 /**
  * 花名册 recall 召回线索(whenToUse 优先、description 回落)的截断上限,
@@ -1012,11 +1039,12 @@ export async function handleForgeScaffold(
 /** ghost_forge_pack 的 handler 主体(导出供单测)。 */
 export async function handleForgePack(
   deps: CindyGhostsMcpDeps,
-  input: { dir: string; icon_source?: string },
+  input: { dir: string; icon_source?: string; intent?: "install" | "publish" },
 ): Promise<McpTextResult> {
   try {
     const result = await deps.forgePack({
       dir: input.dir,
+      ...(input.intent !== undefined ? { intent: input.intent } : {}),
       ...(input.icon_source !== undefined ? { iconSource: input.icon_source } : {}),
     });
     if (!result.ok) {
@@ -1024,6 +1052,55 @@ export async function handleForgePack(
         dir: input.dir,
         errorCode: result.errorCode,
       });
+      return textResult(result, true);
+    }
+    return textResult(result);
+  } catch (err) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      true,
+    );
+  }
+}
+
+/** ghost_forge_publish 的 handler 主体(导出供单测)。 */
+export async function handleForgePublish(
+  deps: CindyGhostsMcpDeps,
+  input: { token: string },
+): Promise<McpTextResult> {
+  try {
+    const result = await deps.forgePublish({ token: input.token });
+    if (!result.ok) {
+      deps.logger?.warn("ghost_forge_publish rejected", {
+        errorCode: result.errorCode,
+      });
+      return textResult(result, true);
+    }
+    return textResult(result);
+  } catch (err) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      true,
+    );
+  }
+}
+
+/** ghost_forge_publish_status 的 handler 主体(导出供单测)。 */
+export async function handleForgePublishStatus(
+  deps: CindyGhostsMcpDeps,
+  input: { transferId: string },
+): Promise<McpTextResult> {
+  try {
+    const result = await deps.forgePublishStatus({ transferId: input.transferId });
+    if (!result.ok) {
       return textResult(result, true);
     }
     return textResult(result);
@@ -1217,8 +1294,32 @@ export function createCindyGhostsMcpServer(
         .describe(
           "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败会保留默认图标继续打包",
         ),
+      intent: z
+        .enum(["install", "publish"])
+        .optional()
+        .describe(
+          "缺省 install:弹装入确认;publish:不装入,返回一次性发布票据。publish 仅企业组织成员可用;个人账号不可用,请用缺省的 install",
+        ),
     },
     async (input) => handleForgePack(deps, input),
+  );
+
+  server.registerTool(
+    "ghost_forge_publish",
+    {
+      description: D_GHOST_FORGE_PUBLISH,
+      inputSchema: ghostForgePublishInputSchema,
+    },
+    async (input) => handleForgePublish(deps, input),
+  );
+
+  server.tool(
+    "ghost_forge_publish_status",
+    D_GHOST_FORGE_PUBLISH_STATUS,
+    {
+      transferId: z.string().describe("ghost_forge_publish 立即返回的 transferId"),
+    },
+    async (input) => handleForgePublishStatus(deps, input),
   );
 
   return server;

@@ -801,6 +801,18 @@
       "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
     },
     {
+      "id": "overview",
+      "status": "proposed",
+      "en": "Overview",
+      "translations": {
+        "zh-CN": "概览",
+        "zh-TW": "總覽",
+        "ja": "概要",
+        "ko": "개요"
+      },
+      "note": "插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。"
+    },
+    {
       "id": "plugin",
       "status": "decided",
       "en": "Plugin",

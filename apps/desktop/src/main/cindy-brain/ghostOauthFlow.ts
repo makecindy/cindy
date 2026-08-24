@@ -76,8 +76,10 @@ export interface GhostOauthClientConfig {
   /**
    * 可选:XDT server token broker 的 provider slug(如 'jira')。声明后
    * code 换 token 与 refresh 不直连 tokenUrl,改经注入的 broker 调用器
-   * (client secret 在服务端,不随包分发)。仅第一方官方意识可用,门控在
-   * 运行时接线层。broker 模式兼容 PKCE(pkce 缺省开):verifier 经 broker
+   * (client secret 在服务端,不随包分发)。静态官方前缀照旧放行；其余资格由装入
+   * 来源与当前组织事实共同判定。校验层保持纯函数不感知装入语境，门控在运行时
+   * 接线层。broker 模式兼容
+   * PKCE(pkce 缺省开):verifier 经 broker
    * exchange 透传到服务端,由 provider 决定是否消费(feishu 要、jira/slack
    * 显式声明 pkce:false)。
    */

@@ -13,7 +13,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from '@cindy/plugin-protocol';
+import {
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
+  PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES,
+  PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES,
+  PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES,
+} from '@cindy/plugin-protocol';
 
 import {
   FORGE_GUIDE,
@@ -25,7 +30,12 @@ import {
   type ForgeScaffoldWriteRequest,
   type ForgeScaffoldTemplate,
 } from '../forge';
-import { GhostManager } from '../GhostManager';
+import {
+  GhostManager,
+  MAX_NODE_CINDY_FILE_BYTES,
+  MAX_NODE_UNCOMPRESSED_BYTES,
+  MAX_NODE_ZIP_ENTRIES,
+} from '../GhostManager';
 import { sameForgeScaffoldParentIdentity } from '../forgeScaffoldIdentity';
 import { GHOST_SIGNATURE_FILE, signGhostPackage } from '../ghostSignature';
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
@@ -137,6 +147,51 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
+  it('rejects a new tokenBroker package without redirectPort but accepts the declared-port shape', async () => {
+    const brokerManifest = {
+      ...GOOD_MANIFEST,
+      slots: ['network'],
+      tools: undefined,
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['accounts.example.com'],
+        secrets: [
+          {
+            key: 'account',
+            label: 'Account',
+            source: 'oauth',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+            oauth: {
+              authorizeUrl: 'https://accounts.example.com/authorize',
+              tokenUrl: 'https://accounts.example.com/token',
+              clientId: 'builtin-client-id',
+              tokenBroker: 'jira',
+            },
+          },
+        ],
+      },
+    };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(brokerManifest),
+      'main.js': '// broker plugin',
+      'settings.html': '<main>settings</main>',
+    });
+
+    await expect(packGhostDir(dir)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('同一项 oauth 中声明 redirectPort'),
+    });
+    expect(fs.existsSync(path.join(dir, 'demo-1.0.0.cindy'))).toBe(false);
+
+    const secret = brokerManifest.network.secrets[0] as {
+      oauth: Record<string, unknown>;
+    };
+    secret.oauth.redirectPort = 17872;
+    await fs.promises.writeFile(path.join(dir, 'ghost.json'), JSON.stringify(brokerManifest));
+    await expect(packGhostDir(dir)).resolves.toMatchObject({ ok: true });
+  });
+
   it.skipIf(process.platform === 'win32')(
     'archives real Unix execute bits while stripping special bits',
     async () => {
@@ -1072,6 +1127,57 @@ describe('packGhostDir', () => {
     if (r2.ok) return;
     expect(r2.message).toContain('chip');
   });
+
+  // plugin-server 数的是**所有 ZIP entry**,Forge 数的是**文件**。JSZip 默认
+  // createFolders:true 会为每层目录补一个 entry,于是「Forge 放行的 2048 文件包」
+  // 在服务端可能是 4000+ entry 而被拒——打包侧完全看不出问题。这两条钉住
+  // 「包里不含目录 entry」,让两侧口径按构造相等。
+  it('嵌套路径不产生目录 entry:ZIP 条目数与文件数一致', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+      'a/b/c.txt': 'deep one',
+      'a/b/d.txt': 'deep two',
+    });
+    const r = await packGhostDir(dir);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(r.cindyPath));
+    const allEntries = Object.keys(zip.files).sort();
+    // 修复前这里会多出 'a/' 与 'a/b/' 两个目录 entry(2 文件 → 4 entry)。
+    expect(allEntries).toEqual(['a/b/c.txt', 'a/b/d.txt', 'ghost.json', 'main.js']);
+    expect(allEntries.filter((name) => zip.files[name].dir)).toEqual([]);
+    await fs.promises.rm(r.cindyPath, { force: true });
+  });
+
+  it('装入侧目录仍然建得出来:去掉目录 entry 不影响解包', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+      'nested/deep/file.txt': 'payload',
+    });
+    const r = await packGhostDir(dir);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // inspect 是装入侧的同一条契约:产物没有目录 entry 也必须能被认可。
+    const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
+    const inspected = await manager.inspect(r.cindyPath);
+    expect('manifest' in inspected, JSON.stringify(inspected)).toBe(true);
+    await fs.promises.rm(r.cindyPath, { force: true });
+  });
+});
+
+describe('打包上限与协议常量', () => {
+  // D18:同一份 `.cindy` 之后要过 plugin-server 成员发布链路的权威校验。
+  // Forge 的 node 档已直接引用协议常量;装入侧(GhostManager)有自己的策略语义
+  // ——协议文件明说它「只治理成员上传通道」——所以不改成读它,而是在这里钉住相等。
+  // 一旦任一侧被单独调整,这条会红:发布上限高于装入上限会造出「服务端收了、
+  // 客户端装不上」的包,反过来则是能装但发不出去。
+  it('装入侧 node 档三个上限与成员上传协议常量一致', () => {
+    expect(MAX_NODE_CINDY_FILE_BYTES).toBe(PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES);
+    expect(MAX_NODE_UNCOMPRESSED_BYTES).toBe(PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES);
+    expect(MAX_NODE_ZIP_ENTRIES).toBe(PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES);
+  });
 });
 
 describe('scaffoldGhostDir', () => {
@@ -1328,6 +1434,13 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('documents the org-only token publish flow without exposing a file path handoff', () => {
+    expect(FORGE_GUIDE).toContain("intent: 'publish'");
+    expect(FORGE_GUIDE).toContain('一次性 `publishToken`');
+    expect(FORGE_GUIDE).toContain("ghost_forge_publish({ token: '<publishToken>' })");
+    expect(FORGE_GUIDE).toContain('仅企业组织成员可用，个人账号不可用');
+  });
+
   it('开场白必读口径与 createPrompt 一致:三章且卡槽总览带真实章号', () => {
     // 聊天里直接说"帮我做个插件"的路径只看到手册,看不到 createPrompt;
     // 两处必读口径分叉会让不同入口的 agent 走出不同的阅读深度。

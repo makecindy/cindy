@@ -35,6 +35,15 @@ export interface ConfirmOptions {
    * 破坏性确认(删除/重置等)请保持默认。
    */
   autoFocusConfirm?: boolean;
+  /**
+   * 高危确认的「手输一致才放行」闸(见 ConfirmDialogProps.requireTypedConfirmation)。
+   * 设了就要求用户逐字打出 expected 才解锁主按钮;有它时焦点自动落到输入框。
+   */
+  requireTypedConfirmation?: {
+    expected: string;
+    label: string;
+    placeholder?: string;
+  };
 }
 
 const DONT_SHOW_AGAIN_PREFIX = 'confirm-dialog.skip:';
@@ -282,6 +291,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}
+          requireTypedConfirmation={currentItem.options.requireTypedConfirmation}
           dontShowAgainLabel={
             currentItem.options.dontShowAgainKey
               ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'

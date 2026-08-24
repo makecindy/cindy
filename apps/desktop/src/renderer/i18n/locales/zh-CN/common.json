@@ -4066,6 +4066,8 @@
       "page": {
         "search": "搜索插件",
         "clearSearch": "清除插件搜索",
+        "secondaryTabsAria": "插件页内容",
+        "overviewTab": "概览",
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
         "installedSection": "已安装",
@@ -4143,7 +4145,8 @@
           "stateChanged": "操作期间账号、插件或版本已发生变化，请确认最新状态后重试。",
           "accessDenied": "当前插件操作不被允许，或操作已取消。",
           "notConfigured": "当前环境未提供插件市场。",
-          "invalidPackage": "该插件包无效，或当前 Cindy 版本不支持它。"
+          "invalidPackage": "该插件包无效，或当前 Cindy 版本不支持它。",
+          "brokerRedirectPortRequired": "该插件声明了授权 broker，但同一项 OAuth 配置缺少 redirectPort，无法从插件市场安装。请联系发布者补充该字段并重新发布。"
         },
         "securityTitle": "安装与权限",
         "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。首次安装完成后即自动开启，可随时在插件页停用；更新会保留当前生效状态。",
@@ -4210,7 +4213,7 @@
             "authTitle": "私有仓库",
             "authBody": "认证完全依赖系统的 Git 配置，Cindy 不保存任何 Git 凭证。SSH 方式：本机已配置可用的 key；若组织开启了 SAML SSO，还需在 GitHub 的 SSH key 设置里为该组织点 Configure SSO 授权。HTTPS 方式：使用 Personal Access Token，并由系统 credential helper 保存。",
             "rulesTitle": "安装规则",
-            "rulesBody": "插件 id 全局唯一、先装先得——与已安装插件冲突时会明确提示。使用 cindy- 等官方保留前缀的插件不能从自定义市场安装。安装前会逐项展示插件声明的权限，确认后即完成安装并自动开启。",
+            "rulesBody": "插件 id 全局唯一、先装先得——与已安装插件冲突时会明确提示。id 使用官方保留前缀（{{reservedGhostIdPrefixes}}）的插件，不能通过拖入、选择文件、ghost_forge_pack 转交或自定义插件市场装入。安装前会逐项展示插件声明的权限，确认后即完成安装并自动开启。",
             "copy": "复制指南",
             "copied": "指南已复制到剪贴板。",
             "copyFailed": "复制失败，请重试。"
@@ -4281,7 +4284,6 @@
       "toast": {
         "installed": "已安装「{{name}}」",
         "uninstalled": "已卸载「{{name}}」",
-        "installedAsleep": "已安装「{{name}}」（已停用，可随时在此启用）",
         "updated": "「{{name}}」已更新到 v{{version}}",
         "reapproved": "已恢复「{{name}}」",
         "exported": "已导出「{{name}}」的 .cindy 文件",
@@ -4301,11 +4303,22 @@
         "cancel": "取消",
         "meta": "版本 {{version}}。将安装到本机，可随时卸载。",
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。将安装到本机，可随时卸载。",
-        "enableNow": "安装后立即生效",
-        "enableNowOpenPanel": "安装后立即生效并打开面板",
         "manualCount": "随包手册 {{count}} 篇",
         "expandDescription": "展开完整介绍",
-        "collapseDescription": "收起介绍"
+        "collapseDescription": "收起介绍",
+        "typedIdLabel": "输入插件 id「{{id}}」以确认安装",
+        "agentBanner": {
+          "title": "这次安装是 Agent 发起的，不是你点的。",
+          "context": "它在任务「{{title}}」里打包了 {{path}} 下的插件源码。",
+          "contextNoPath": "它在任务「{{title}}」里打包了一个插件源码目录。",
+          "contextNoTitle": "它打包了 {{path}} 下的插件源码。",
+          "contextBare": "它打包了一个插件源码目录。",
+          "advice": "如果你没在这个任务里要求做插件，请取消 —— 并回头看看这个任务刚才读过哪些外部内容。",
+          "firstInstall": "这个插件 id 此前从未安装过。",
+          "hazardSkill": "它带了技能指令，AI 会以你的全部权限执行，不受插件沙箱限制，而且对你所有项目生效。",
+          "hazardNode": "它可以在你的电脑上运行程序，不受浏览器沙箱限制。",
+          "hazardCredential": "它会把你在它设置页填的凭证发给 {{hosts}}。"
+        }
       },
       "trust": {
         "official": "Cindy 官方插件",
@@ -4430,7 +4443,10 @@
         "alreadyInstalled": "这个插件已经安装",
         "approvalRequired": "需要重新确认这个插件的权限后才能继续",
         "commandConflict": "它的指令和已装插件撞名了，先卸载占用方或让作者改名",
-        "idReserved": "该 id 使用了官方保留前缀 cindy-，仅随应用内置的插件可用",
+        "idReserved": "{{reservedGhostIdPrefixes}} 是官方插件保留前缀，不能通过拖入、选择文件、ghost_forge_pack 转交或自定义插件市场装入；请从 Cindy 插件市场安装对应的官方插件",
+        "brokerManualInstallNotAuthorized": "手动装入的 .cindy 不能使用授权 broker；请改从组织插件市场安装，或让作者在组织身份下使用 ghost_forge_pack 构建",
+        "brokerNotAuthorized": "当前安装来源或组织身份无权使用授权 broker；请从组织插件市场安装，或让作者在组织身份下使用 ghost_forge_pack 构建",
+        "brokerRedirectPortRequired": "这个插件声明了授权 broker，但没有在同一项 OAuth 配置中声明 redirectPort。请让作者补上该字段，确保授权最后一跳能回到本机监听端口。",
         "sourceMissing": "找不到所选文件",
         "generic": "操作失败，请稍后重试",
         "updateIdMismatch": "所选文件是插件「{{id}}」，与当前插件「{{expected}}」不一致"
@@ -4595,7 +4611,9 @@
       "reapproveConfirm": {
         "title": "重新确认「{{name}}」的权限？",
         "body": "按下方清单重新授权这个已安装的插件，无需重新提供安装包文件。",
-        "confirm": "确认并恢复"
+        "confirm": "确认并恢复",
+        "enableNoticeEnabled": "确认后保持当前启用状态。",
+        "enableNoticeAsleep": "确认后保持沉睡（不自动启用）；你可以稍后在这里手动启用。"
       },
       "pick": {
         "dialogTitle": "选择文件夹",
@@ -4630,6 +4648,46 @@
         "reviewOutdated": "审查过期",
         "approve": "同意",
         "skip": "跳过"
+      },
+      "publish": {
+        "section": "我的发布",
+        "action": "发布插件…",
+        "confirmTitle": "发布 {{name}}",
+        "confirmDescription": "确认后开始上传到当前组织。",
+        "org": "组织",
+        "pluginId": "插件 id",
+        "version": "版本",
+        "size": "大小",
+        "confirm": "发布",
+        "cancel": "取消",
+        "disabled": "本企业未开启成员发布，请联系管理员",
+        "loadFailed": "发布列表暂时不可用",
+        "startFailed": "无法开始发布",
+        "empty": "还没有发布记录",
+        "unknownPlugin": "插件",
+        "uploading": "正在发布",
+        "badge": {
+          "validating": "校验中",
+          "processing": "处理中",
+          "pending": "待审核",
+          "approved": "已上架",
+          "rejected": "被驳回",
+          "failed": "失败",
+          "expired": "已过期"
+        },
+        "stage": {
+          "confirming": "等待确认",
+          "hashing": "正在校验文件",
+          "preparing": "正在创建上传",
+          "uploading": "正在上传",
+          "committing": "正在提交",
+          "processing": "正在处理",
+          "succeeded": "已完成",
+          "failed": "失败",
+          "expired": "已过期",
+          "cancelled": "已取消",
+          "cancelledTracking": "已停止跟踪，服务端仍在处理"
+        }
       }
     },
     "mcp": {
