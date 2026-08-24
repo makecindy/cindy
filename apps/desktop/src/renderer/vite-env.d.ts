@@ -3581,7 +3581,7 @@ interface ElectronAPI {
    *   - 'ready'            → 新版本已就绪,等待重启
    *   - 'manifest_failed'  → 拉清单失败(网络问题)
    *   - 'download_failed'  → 找到了新版本但下载失败
-   *   - 'manual_download'  → Linux 首版仅支持手动下载安装包
+   *   - 'manual_download'  → 保留给仍走手动安装的旧路径；现行 Linux 已应用内下 .deb
    */
   checkForUpdate: () => Promise<{
     result:
@@ -4175,6 +4175,17 @@ interface ElectronAPI {
     onHiddenProjectKeysChanged: (
       cb: (
         projectKeys: string[],
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    setMainViewHidden: (
+      ghostId: string,
+      hidden: boolean,
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<string[]>;
+    onHiddenMainViewGhostIdsChanged: (
+      cb: (
+        ghostIds: string[],
         ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
       ) => void,
     ) => () => void;

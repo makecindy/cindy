@@ -126,6 +126,7 @@ import {
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
 } from './mobileNotify';
+import { createSubscriptionReplayScheduler } from './subscriptionReplayScheduler';
 import { getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
@@ -1209,8 +1210,7 @@ function teardownActiveLink(): void {
   dropAllControllers(client, 'shutdown');
   // 熔断状态是账号 / 链路作用域的:登出或失去持有权后全部翻篇,不串到下一段链路。
   responsivenessTracker?.resetAll();
-  for (const timer of subscriptionReplayRetryTimers.values()) clearTimeout(timer);
-  subscriptionReplayRetryTimers.clear();
+  subscriptionReplayScheduler.teardown();
   presenceAvailableByDevice.clear();
   revokedByRemote.clear();
   // 词典同步驱动是进程级的,**不随单次链路起停**:多实例仲裁的 demote → acquire
@@ -1229,38 +1229,8 @@ function teardownActiveLink(): void {
 }
 
 function replayActiveSubscriptions(reason: string, deviceId?: string): void {
-  const refs = snapshotSubscriptions(deviceId);
-  if (refs.length === 0) return;
-  const topicCount = refs.reduce((sum, item) => sum + item.topics.length, 0);
-  log.debug(
-    `device-link replay subscriptions (${reason}): devices=${refs.length} topics=${topicCount}`,
-  );
-  for (const { deviceId, topics } of refs) {
-    // 这里**不套** presence 离线门禁(2026-08-08 review 的收敛结论,别再加回来):
-    //  - 唯一的广播型调用者是 ws-online,而它跑在「非 online 时清空视图」之后、
-    //    本代首帧 presence 之前,当代 presence 必然为空 → 门禁在此恒不成立,是死码;
-    //  - 其余三个调用者都是定向的(link-reopen / responsiveness-recovered /
-    //    presence-online),各自的触发证据(收到 link-accept、探测 invoke 刚成功、
-    //    presence 刚翻成 online)都比 presence 视图更新更强,拿更旧的 presence 去
-    //    拦它们只会把恢复事件拦死——与 dispatch 侧「定向 flush 不受门禁约束」同构。
-    // 已知离线目标的无效 subscribe 由 replayDeviceSubscription 的重试前置门
-    // (presenceAvailableByDevice !== true)在当代内收敛,首发放行一帧即可。
-    replayDeviceSubscription(deviceId, topics, reason, 0);
-  }
+  subscriptionReplayScheduler.replay(reason, deviceId);
 }
-
-/**
- * 重放失败的退避收敛循环(mobile rehydrate 同精神):重连后的 subscribe 若赶上
- * 链路抖动失败,不再「补 2 次后放弃」——push 流静默缺失会一直持续到下次重连或
- * 用户手动操作。改为 3s×2^n 指数退避、封顶 30s,重试到成功或命中终止条件
- * (登出 / relay 离线 / presence 不可用 / 订阅快照已空)。与熔断器的分工:超时类
- * 失败由 subscribe 回包喂熔断,open 后本循环让位(终止条件之一),恢复时 tracker
- * 触发定向重放接棒;本循环负责熔断覆盖不到的非超时瞬时失败(BACKPRESSURE /
- * NOT_CONNECTED / 链路重建竞态)的持续收敛。
- */
-const SUBSCRIPTION_REPLAY_RETRY_BASE_MS = 3_000;
-const SUBSCRIPTION_REPLAY_RETRY_MAX_MS = 30_000;
-const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
  * 订阅重放的永久失败判据:这些码代表「重试同一动作不可能改变结果」的终态
@@ -1289,87 +1259,22 @@ function isPermanentSubscriptionReplayError(err: unknown): boolean {
   return code !== undefined && PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code);
 }
 
-/**
- * 每设备的重放代次:只有当前代允许排下一次重试。timer map 只能取消**未触发**的
- * 排期,取消不了已在途的 remoteSubscribe——并发触发(ws-online / presence 恢复 /
- * 熔断恢复重叠)会让新旧两轮各自失败后各排各的 timer,旧轮回调还会误删新轮的
- * 登记,退化成多条并行永久循环(review P2)。代次是在途请求失败回调的身份证:
- * 外部触发翻代,旧代失败回调见代次不符即终止,任意并发形态下每设备至多一条
- * 收敛循环存活。
- */
-const subscriptionReplayGenerations = new Map<string, number>();
+const subscriptionReplayScheduler = createSubscriptionReplayScheduler({
+  snapshotSubscriptions,
+  remoteSubscribe,
+  isLinkTornDown: () => linkTornDown,
+  isRelayOnline: () => client?.getStatus() === 'online',
+  isDeviceUnresponsive: (deviceId) => responsivenessTracker?.isUnresponsive(deviceId) ?? false,
+  isPresenceAvailable: (deviceId) => presenceAvailableByDevice.get(deviceId) === true,
+  isPermanentError: isPermanentSubscriptionReplayError,
+  log: {
+    debug: (message) => log.debug(message),
+    warn: (message) => log.warn(message),
+  },
+});
 
-/**
- * 取消某设备的订阅重放收敛循环:翻代作废在途请求的失败回调 + 清已排期定时器。
- * closeRemoteLink 的取消义务之一——循环无上限收敛后,不取消的话 close 后定时器
- * 仍会以**新代次**重新 remoteSubscribe,经按需建链把用户刚关的链路建回来。
- */
 function cancelSubscriptionReplay(deviceId: string): void {
-  subscriptionReplayGenerations.set(
-    deviceId,
-    (subscriptionReplayGenerations.get(deviceId) ?? 0) + 1,
-  );
-  const timer = subscriptionReplayRetryTimers.get(deviceId);
-  if (timer) {
-    clearTimeout(timer);
-    subscriptionReplayRetryTimers.delete(deviceId);
-  }
-}
-
-function replayDeviceSubscription(
-  deviceId: string,
-  topics: string[],
-  reason: string,
-  attempt: number,
-  generation?: number,
-): void {
-  // 外部触发(无 generation)翻代:顶掉挂起的 timer,同时使旧代在途请求失效。
-  let gen: number;
-  if (generation === undefined) {
-    gen = (subscriptionReplayGenerations.get(deviceId) ?? 0) + 1;
-    subscriptionReplayGenerations.set(deviceId, gen);
-  } else {
-    gen = generation;
-  }
-  const prev = subscriptionReplayRetryTimers.get(deviceId);
-  if (prev) {
-    clearTimeout(prev);
-    subscriptionReplayRetryTimers.delete(deviceId);
-  }
-  void remoteSubscribe(deviceId, topics).catch((err) => {
-    // 旧代在途请求的迟到失败:已被新一轮取代,不再排重试也不动新代的登记。
-    if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
-    // 永久失败不进收敛循环(review P2):VERSION_MISMATCH 等终态下 presence 可能
-    // 一直 online、熔断也把终态应答记为恢复证据,定时器的终止条件全不命中,
-    // 移除次数上限后会永久每 30s 重发刷 warn。放弃后由对应终态自己的恢复事件
-    // 兜底(presence 翻转 / 版本升级后重连 / 用户显式重开)。
-    if (isPermanentSubscriptionReplayError(err)) {
-      log.warn(
-        `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, permanent, giving up: ${String(err)}`,
-      );
-      return;
-    }
-    const delay = Math.min(
-      SUBSCRIPTION_REPLAY_RETRY_BASE_MS * 2 ** attempt,
-      SUBSCRIPTION_REPLAY_RETRY_MAX_MS,
-    );
-    log.warn(
-      `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, retrying in ${delay}ms: ${String(err)}`,
-    );
-    const timer = setTimeout(() => {
-      subscriptionReplayRetryTimers.delete(deviceId);
-      if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
-      if (linkTornDown || client?.getStatus() !== 'online') return;
-      if (responsivenessTracker?.isUnresponsive(deviceId)) return;
-      if (presenceAvailableByDevice.get(deviceId) !== true) return;
-      // 快照可能已变(窗口退订 / 新增 topic):按该设备当前的订阅快照重放。
-      const current = snapshotSubscriptions(deviceId).find((ref) => ref.deviceId === deviceId);
-      if (!current || current.topics.length === 0) return;
-      replayDeviceSubscription(deviceId, current.topics, `${reason}-retry`, attempt + 1, gen);
-    }, delay);
-    timer.unref?.();
-    subscriptionReplayRetryTimers.set(deviceId, timer);
-  });
+  subscriptionReplayScheduler.cancel(deviceId);
 }
 
 export function getDeviceLinkStatus(): DeviceLinkStatus {

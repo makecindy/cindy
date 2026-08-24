@@ -313,10 +313,26 @@ function SocialPlatformIcon({ id }: { id: (typeof DESKTOP_SOCIAL_LINKS)[number][
   );
 }
 
-function AutoUpdateToggleRow() {
+export function AutoUpdateToggleRow() {
   const { t } = useTranslation();
+  const isLinux = window.electronAPI?.platform === 'linux';
   const { state, setAutoRelaunchOnIdle, reset } = useAutoUpdateSettings();
   const [saving, setSaving] = useState(false);
+
+  if (isLinux) {
+    return (
+      <div className="flex flex-col gap-1.5 px-[18px] py-4">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-13 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.autoUpdateLabel')}
+          </span>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.linuxUpdateDescription')}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const handleToggle = async (next: boolean) => {
     setSaving(true);

@@ -199,7 +199,7 @@ export interface DeviceLinkTiming {
    */
   reconnectStableResetMs: number;
   pingIntervalMs: number;
-  /** 连续无 pong 判定僵死的周期数 */
+  /** 连续无 pong 判定僵死的周期数；入站业务流量会把这组计数清零。 */
   pongMissLimit: number;
   /** invoke / link-open 默认等待响应时长 */
   requestTimeoutMs: number;
@@ -258,7 +258,8 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   reconnectMaxMs: 30_000,
   reconnectStableResetMs: 10_000,
   pingIntervalMs: 20_000,
-  pongMissLimit: 2,
+  // 允许弱网在一个额外周期内恢复；真正无响应仍由连续 miss + 无入站流量判定。
+  pongMissLimit: 3,
   requestTimeoutMs: 30_000,
   getTokenTimeoutMs: 15_000,
   handshakeTimeoutMs: 15_000,
@@ -567,6 +568,8 @@ export class DeviceLinkClient {
   private handshakeTimeoutStreak = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private pongMisses = 0;
+  /** 最近一次收到任何有效 relay 帧的时刻；避免把有业务流量的 socket 误判为僵死。 */
+  private lastInboundAt = 0;
   /** 当前连接的代号,用于丢弃过期 socket 的事件回调 */
   private connEpoch = 0;
   /** 本轮连接的最后一条 socket error message(升级失败 401 只在 error 事件里可见) */
@@ -1540,11 +1543,20 @@ export class DeviceLinkClient {
       this.pingTimer = null;
     }
     this.pongMisses = 0;
+    this.lastInboundAt = this.monotonicNow();
     this.pingTimer = setInterval(() => {
       if (this.status !== 'online') return;
+      const now = this.monotonicNow();
+      // pong 之外的有效入站帧同样证明 relay/socket 仍在工作。弱网下 pong
+      // 可能丢在业务帧之后，不能因为单独的心跳计数把共享连接整条拆掉。
+      if (now - this.lastInboundAt <= this.timing.pingIntervalMs) {
+        this.pongMisses = 0;
+      }
       this.pongMisses++;
       if (this.pongMisses > this.timing.pongMissLimit) {
-        this.log.warn('heartbeat lost, forcing reconnect');
+        this.log.warn(
+          `heartbeat lost, forcing reconnect (misses=${this.pongMisses}, idleForMs=${now - this.lastInboundAt})`,
+        );
         const ws = this.ws;
         this.ws = null;
         this.connEpoch++;
@@ -1628,13 +1640,27 @@ export class DeviceLinkClient {
   // ─── 内部:入站分发 ─────────────────────────────────────────────────────────
 
   private handleMessage(raw: string): void {
-    let env: Envelope;
+    let parsed: unknown;
     try {
-      env = JSON.parse(raw) as Envelope;
+      parsed = JSON.parse(raw) as unknown;
     } catch {
       this.log.warn('dropping unparseable frame');
       return;
     }
+    if (!isKnownInboundEnvelope(parsed)) {
+      this.log.warn('dropping invalid device-link frame');
+      return;
+    }
+    const env = parsed;
+    const validForHeartbeat = isValidInboundEnvelope(env);
+    // 畸形 invoke / link-close 仍须进入 Desktop 业务层：前者生成结构化拒绝，后者
+    // 走既有 fail-generic 的 peer teardown；但两者都不能因此喂活 heartbeat。
+    // 其它已知 kind 的非法 payload 直接丢弃。
+    if (!validForHeartbeat && env.kind !== 'invoke' && env.kind !== 'link-close') {
+      this.log.warn(`dropping invalid device-link frame kind=${env.kind}`);
+      return;
+    }
+    if (validForHeartbeat) this.lastInboundAt = this.monotonicNow();
 
     const ack = parseTransportAck(env);
     if (ack) {
@@ -3553,6 +3579,140 @@ function closeReasonToString(reason: unknown): string {
   if (typeof reason === 'string') return reason;
   const text = String(reason);
   return text === '[object Object]' ? '' : text;
+}
+
+const DEVICE_LINK_ENVELOPE_KINDS: ReadonlySet<string> = new Set([
+  'hello',
+  'hello-ack',
+  'presence-set',
+  'presence-changed',
+  'ping',
+  'pong',
+  'notify',
+  'link-open',
+  'link-accept',
+  'link-close',
+  'invoke',
+  'invoke-result',
+  'push',
+  'relay-error',
+]);
+
+function isKnownInboundEnvelope(value: unknown): value is Envelope {
+  if (!isRecord(value) || value.v !== PROTOCOL_VERSION || typeof value.kind !== 'string') {
+    return false;
+  }
+  return DEVICE_LINK_ENVELOPE_KINDS.has(value.kind);
+}
+
+/**
+ * 入站帧的轻量 heartbeat 活性校验。它不复制完整隧道协议 validator，只拦截会让
+ * heartbeat 误判为“仍有流量”的明显坏帧；业务分发仍由各自 handler 负责。
+ */
+function isValidInboundEnvelope(value: Envelope): boolean {
+  const payload = value.payload;
+  // 可靠传输帧把原业务 payload 包在 transport marker/data 中；该形状由
+  // parseTransportPayload 负责完整校验，不能再按 legacy channel/payload 解释。
+  if (isReliableKind(value.kind)) {
+    const parsed = parseTransportPayload(payload);
+    if (parsed !== null) {
+      if (value.kind !== 'invoke') return true;
+      // reliable invoke 仍要有 relay 注入的源设备和请求 id；缺任一项时
+      // ingestTransportEnvelope / Desktop dispatch 都无法把它当作可处理请求。
+      // 这类帧不能仅凭内层 channel/args 把坏连接喂活。
+      if (
+        typeof value.src !== 'string'
+        || value.src.length === 0
+        || typeof value.id !== 'string'
+        || value.id.length === 0
+      ) return false;
+      // 分片的 data 只是完整 JSON 文本的一段，不能在此处单独解析；transport
+      // 元数据已经证明 relay/socket 正在工作，重组后的完整 payload 再由接收
+      // 状态机做 JSON 与业务分发校验。
+      if (parsed.meta.segment) return true;
+      try {
+        const inner = decodeTransportJson(parsed.data);
+        return isRecord(inner)
+          && typeof inner.channel === 'string'
+          && Array.isArray(inner.args);
+      } catch {
+        return false;
+      }
+    }
+  }
+  // `isReliableKind` above narrows the union on its non-transport fallback path;
+  // switch on the wire string here so legacy invoke/push/result payloads remain
+  // eligible for their existing business-layer validation.
+  switch (value.kind as string) {
+    case 'ping':
+    case 'pong':
+      return payload === undefined || payload === null;
+    case 'hello-ack':
+      return isRecord(payload)
+        && typeof payload.serverProtocolVersion === 'number'
+        && Number.isFinite(payload.serverProtocolVersion)
+        && typeof payload.deviceId === 'string'
+        && payload.deviceId.length > 0
+        && typeof payload.userId === 'string'
+        && payload.userId.length > 0;
+    case 'presence-changed':
+      return isRecord(payload)
+        && typeof payload.deviceId === 'string'
+        && payload.deviceId.length > 0
+        && typeof payload.online === 'boolean';
+    case 'relay-error':
+      return isRecord(payload)
+        && typeof payload.code === 'string'
+        && typeof payload.message === 'string';
+    case 'invoke':
+      // Desktop dispatch requires relay-injected src + request id before it can
+      // deliver an invoke. A legacy-looking frame without either identifier is
+      // therefore not usable inbound activity and must not keep a dead socket online.
+      return typeof value.src === 'string'
+        && value.src.length > 0
+        && typeof value.id === 'string'
+        && value.id.length > 0
+        && isRecord(payload)
+        && typeof payload.channel === 'string'
+        && Array.isArray(payload.args);
+    case 'invoke-result':
+      if (!isRecord(payload) || typeof payload.ok !== 'boolean') return false;
+      if (payload.ok) return true;
+      return isRecord(payload.error)
+        && typeof payload.error.code === 'string'
+        && typeof payload.error.message === 'string';
+    case 'push':
+      return isRecord(payload)
+        && typeof payload.channel === 'string'
+        && Object.prototype.hasOwnProperty.call(payload, 'payload');
+    case 'link-open':
+      return isRecord(payload)
+        && typeof payload.controllerName === 'string'
+        && typeof payload.protocolVersion === 'number'
+        && Number.isFinite(payload.protocolVersion)
+        && typeof payload.appVersion === 'string';
+    case 'link-accept':
+      return isRecord(payload)
+        && typeof payload.appVersion === 'string'
+        && typeof payload.allowlistHash === 'string';
+    case 'link-close':
+      return isRecord(payload) && typeof payload.reason === 'string';
+    case 'presence-set':
+      return isRecord(payload)
+        && (payload.remoteControlEnabled === undefined
+          || typeof payload.remoteControlEnabled === 'boolean')
+        && (payload.busy === undefined || typeof payload.busy === 'boolean');
+    case 'notify':
+      return isRecord(payload)
+        && typeof payload.category === 'string'
+        && typeof payload.title === 'string'
+        && typeof payload.deepLink === 'string'
+        && typeof payload.collapseId === 'string';
+    case 'hello':
+      return isRecord(payload);
+    default:
+      return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

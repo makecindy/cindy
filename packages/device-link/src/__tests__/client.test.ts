@@ -106,7 +106,7 @@ function makeHarness(opts?: {
   return { client, sockets, current: () => sockets[sockets.length - 1] };
 }
 
-const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 let inboundLinkId = 0;
 
 async function establishInboundReliableLink(
@@ -232,13 +232,13 @@ class MemoryRelay {
   }
 
   /** 按顺序逐帧投递直到静默；每帧之间让微任务（drain/ACK）跑完。 */
-  async settle(): Promise<void> {
+  async settle(yieldControl: () => Promise<void> = () => tick()): Promise<void> {
     let idle = 0;
     while (idle < 3) {
       const entry = this.queue.shift();
       if (!entry) {
         idle += 1;
-        await tick();
+        await yieldControl();
         continue;
       }
       idle = 0;
@@ -256,7 +256,7 @@ class MemoryRelay {
           member.ws.push(entry.env);
         }
       }
-      await tick();
+      await yieldControl();
     }
   }
 
@@ -3327,6 +3327,278 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('非 pong 的有效入站流量也能阻止心跳误判共享连接', async () => {
+    // 这条验证的是 heartbeat tick 与入站活动的逻辑顺序，不是宿主定时器精度。
+    // Windows 高负载 runner 会把 4ms/8ms 真实 timer 一起推迟，再先执行较早注册的
+    // heartbeat，制造测试自身的假空闲窗口；用 fake timers 固定每个周期的先后关系。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      // 模拟 relay 仍在持续推送 presence，但 pong 偶发丢失；有效业务帧证明
+      // 共享 socket 仍有入站流量，不应因单独的 pong 计数拆掉所有 peer。
+      const activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'dev-b', online: true, deviceName: 'Test' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      expect(ws.terminated).toBe(false);
+      expect(h.client.getStatus()).toBe('online');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('多 peer 心跳:一个 peer 静默时健康 peer 的 link 与在途请求零感知', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 8,
+        pongMissLimit: 1,
+        requestTimeoutMs: 200,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    let healthyPending: Promise<unknown> | null = null;
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      const silentLink = establishInboundReliableLink(
+        h,
+        'heartbeat-silent-stream',
+        1,
+        'peer-silent',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await silentLink;
+      const healthyLink = establishInboundReliableLink(
+        h,
+        'heartbeat-healthy-stream',
+        1,
+        'peer-healthy',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await healthyLink;
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+      // peer-silent 此后不再发送任何帧；peer-healthy 上保留一个真实在途请求。
+      healthyPending = h.client.invoke('peer-healthy', {
+        channel: 'local-db:sessions:list',
+        args: [10],
+      }, 200);
+      const healthyInvoke = ws.sent
+        .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
+        .at(-1)!;
+      const socketsBefore = h.sockets.length;
+
+      // relay 仍持续报告健康 peer 的有效入站活动，但 pong 丢失。heartbeat 必须按
+      // 共享 socket 的真实活性判断，不能因另一 peer 静默拆掉所有 link。
+      activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'peer-healthy', online: true, deviceName: 'Healthy' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      activity = null;
+
+      expect(ws.terminated).toBe(false);
+      expect(h.sockets).toHaveLength(socketsBefore);
+      expect(h.client.isLinkReady('peer-silent')).toBe(true);
+      expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'invoke-result',
+        id: healthyInvoke.id,
+        src: 'peer-healthy',
+        payload: { ok: true, result: ['healthy-ok'] },
+      });
+      await expect(healthyPending).resolves.toMatchObject({
+        ok: true,
+        result: ['healthy-ok'],
+      });
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      await healthyPending?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it('可解析但协议无效的入站帧不会刷新 heartbeat 活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const invalidFrames = [
+      { v: PROTOCOL_VERSION + 1, kind: 'pong' },
+      { v: PROTOCOL_VERSION, kind: 'future-kind' },
+      {
+        v: PROTOCOL_VERSION,
+        kind: 'presence-changed',
+        payload: { online: true },
+      },
+    ] as unknown as Envelope[];
+    let index = 0;
+    const activity = setInterval(() => {
+      ws.push(invalidFrames[index % invalidFrames.length]);
+      index += 1;
+    }, 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('畸形 invoke 继续分发但不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    h.client.onFrame((env) => frames.push(env));
+    h.client.start();
+    await tick();
+    const ws = h.current();
+    ws.ack();
+
+    const malformed = {
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-heartbeat-invoke',
+      src: 'dev-b',
+      payload: { args: [] },
+    } as unknown as Envelope;
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('缺少 src 或 id 的 legacy invoke 不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'invoke',
+        payload: { channel: 'maker:valid-looking', args: [] },
+      } as unknown as Envelope;
+      const activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('可靠 invoke 分片在重组前也算入站活性', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 50, pongMissLimit: 2 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-fragment-stream');
+
+    const frames = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'fragmented-heartbeat-invoke',
+      src: 'dev-b',
+      dst: 'dev-self',
+      payload: { channel: 'maker:large', args: ['x'.repeat(150_000)] },
+    }, 'heartbeat-fragment-stream', 1);
+    expect(frames.length).toBeGreaterThan(1);
+
+    const activity = setInterval(() => {
+      for (const frame of frames) h.current().push(frame);
+    }, 10);
+    await tick(180);
+    clearInterval(activity);
+
+    expect(h.current().terminated).toBe(false);
+    expect(h.client.getStatus()).toBe('online');
+    h.client.stop();
+  });
+
+  it('缺少 src 或 id 的可靠 invoke 不会喂活 heartbeat', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'heartbeat-missing-id-stream');
+    const ws = h.current();
+
+    const malformed = encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      payload: { channel: 'maker:valid-looking', args: [] },
+    }, 'heartbeat-missing-id-stream', 1)[0]!;
+    const activity = setInterval(() => ws.push(malformed), 4);
+    for (let i = 0; i < 40 && !ws.terminated; i++) await tick(10);
+    clearInterval(activity);
+
+    expect(ws.terminated).toBe(true);
+    expect(h.client.getStatus()).toBe('connecting');
+    h.client.stop();
+  });
+
+  it('heartbeat idle 使用单调时钟，不受系统时间回拨影响', async () => {
+    const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+    let monotonicMs = 100;
+    const monotonic = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => monotonicMs);
+    const wallClock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await tick();
+      const ws = h.current();
+      ws.ack();
+      wallClock.mockReturnValue(-1_000_000);
+
+      for (let i = 0; i < 40 && !ws.terminated; i++) {
+        monotonicMs += 10;
+        await tick(10);
+      }
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      wallClock.mockRestore();
+      monotonic.mockRestore();
+    }
+  });
+
   it('getToken 返回 null:不建连,按退避重试', async () => {
     const h = makeHarness({ token: null });
     h.client.start();
@@ -3368,6 +3640,64 @@ describe('DeviceLinkClient', () => {
     h.current().push({ v: PROTOCOL_VERSION, kind: 'link-close', src: 'dev-a', payload: { reason: 'user' } });
     expect(frames.map((f) => f.kind)).toEqual(['invoke', 'push', 'link-close']);
     h.client.stop();
+  });
+
+  it('畸形 invoke 仍交给业务层生成结构化拒绝', async () => {
+    const h = makeHarness();
+    const frames: Envelope[] = [];
+    h.client.onFrame((e) => frames.push(e));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      src: 'dev-a',
+      payload: { channel: 'maker:send' },
+    });
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      kind: 'invoke',
+      id: 'malformed-invoke',
+      payload: { channel: 'maker:send' },
+    });
+    h.client.stop();
+  });
+
+  it('畸形 link-close 仍交给业务层收口但不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+    const frames: Envelope[] = [];
+    let activity: ReturnType<typeof setInterval> | null = null;
+    try {
+      h.client.onFrame((env) => frames.push(env));
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        src: 'dev-a',
+        payload: {},
+      } as unknown as Envelope;
+      activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      if (activity) clearInterval(activity);
+      activity = null;
+
+      expect(frames.length).toBeGreaterThan(0);
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+    } finally {
+      if (activity) clearInterval(activity);
+      h.client.stop();
+      vi.useRealTimers();
+    }
   });
 
   it('epoch 守卫:过期 socket 的迟到 close/message 回调被忽略,不触发额外重连', async () => {
@@ -4845,6 +5175,7 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
   }, 10_000);
 
   it('新确认阶段:确认 ACK 丢失后自动有界重发,无需等待下一条控制端业务', async () => {
+    vi.useFakeTimers();
     const relay = new MemoryRelay();
     const host = makeRelayClient(relay, 'desktop', {
       transportRetryIntervalMs: 20,
@@ -4866,49 +5197,75 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
         controller.sendInvokeResult(env.src, env.id, { ok: true, result: 'retry-confirmed' });
       }
     });
-    host.start();
-    controller.start();
-    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+    const settleRelay = () => relay.settle(() => Promise.resolve());
+    try {
+      host.start();
+      controller.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await settleRelay();
+      expect(host.getStatus()).toBe('online');
+      expect(controller.getStatus()).toBe('online');
 
-    relay.dropNext((senderId, env) => (
-      senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
-    ));
-    const opened = controller.openLink('desktop', {
-      controllerName: 'iPhone',
-      protocolVersion: 1,
-      appVersion: '1',
-    }, 500);
-    await relay.settleUntil(() => host.isLinkReady('ios'));
-    await expect(opened).resolves.toBeTruthy();
-    const linkRequestId = (relay.deliveredTo.get('desktop') ?? [])
-      .filter((env) => env.kind === 'link-open')
-      .at(-1)?.id;
-    expect(linkRequestId).toBeTruthy();
+      relay.dropNext((senderId, env) => (
+        senderId === 'ios' && parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      const opened = controller.openLink('desktop', {
+        controllerName: 'iPhone',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 500);
+      await settleRelay();
+      await expect(opened).resolves.toBeTruthy();
+      expect(host.isLinkReady('ios')).toBe(false);
 
-    const liveInvoke = host.invoke('ios', {
-      channel: 'maker:confirmed-by-retry',
-      args: [],
-    }, 500);
-    await relay.settleUntil(() => receivedInvokes.length === 1);
-    await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'retry-confirmed' });
+      const linkRequestId = (relay.deliveredTo.get('desktop') ?? [])
+        .filter((env) => env.kind === 'link-open')
+        .at(-1)?.id;
+      expect(linkRequestId).toBeTruthy();
 
-    const confirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
-      parseTransportAck(env)?.linkRequestId !== undefined
-    ));
-    // 第一包确认被丢弃后，host 收到首个重试便会恢复发送；但在其首个可靠业务帧
-    // 回到 controller、取消确认计时器之前，下一次 20ms 重试可能已经进入 relay。
-    // Windows runner 更容易命中这个合法竞态，因此这里只约束协议不变量：至少
-    // 有一次确认送达，且不会超过首包丢失后的剩余重试预算，也不跨 request 代际。
-    expect(confirmationAcks.length).toBeGreaterThanOrEqual(1);
-    expect(confirmationAcks.length).toBeLessThanOrEqual(3);
-    expect(confirmationAcks.every((env) => (
-      parseTransportAck(env)?.linkRequestId === linkRequestId
-    ))).toBe(true);
+      await vi.advanceTimersByTimeAsync(20);
+      await settleRelay();
+      expect(host.isLinkReady('ios')).toBe(true);
+      const retryConfirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(retryConfirmationAcks).toHaveLength(1);
+      expect(parseTransportAck(retryConfirmationAcks[0])?.linkRequestId).toBe(linkRequestId);
 
-    offHost();
-    offController();
-    host.stop();
-    controller.stop();
+      // 首次立即发送已被丢弃，剩余预算只允许再发送两次。推进到第三次尝试后的
+      // 下一个重试窗口，确认计时器已经停止，且所有确认仍属于当前 request 代际。
+      await vi.advanceTimersByTimeAsync(40);
+      await settleRelay();
+      const boundedConfirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(boundedConfirmationAcks).toHaveLength(2);
+      expect(boundedConfirmationAcks.every((env) => (
+        parseTransportAck(env)?.linkRequestId === linkRequestId
+      ))).toBe(true);
+
+      const liveInvoke = host.invoke('ios', {
+        channel: 'maker:confirmed-by-retry',
+        args: [],
+      }, 500);
+      await settleRelay();
+      expect(receivedInvokes).toHaveLength(1);
+      await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'retry-confirmed' });
+
+      const confirmationAcks = (relay.deliveredTo.get('desktop') ?? []).filter((env) => (
+        parseTransportAck(env)?.linkRequestId !== undefined
+      ));
+      expect(confirmationAcks).toHaveLength(3);
+      expect(confirmationAcks.every((env) => (
+        parseTransportAck(env)?.linkRequestId === linkRequestId
+      ))).toBe(true);
+    } finally {
+      offHost();
+      offController();
+      host.stop();
+      controller.stop();
+      vi.useRealTimers();
+    }
   }, 10_000);
 
   it('新确认阶段:旧帧执行完才提交的新基线会刷新确认 ACK,不复用首次 stale ackSeq', async () => {

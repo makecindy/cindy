@@ -718,6 +718,13 @@
         "item2": "大きな仕事は複数ターンに分けます。まず理解し、その次に編集し、最後に検証します。",
         "item3": "独立した問題は一つのスレッドに混ぜず、新しいセッションを作って扱います。"
       },
+      "linuxUpdates": {
+        "title": "Linux のインストールと更新",
+        "description": "Linux は現在 Ubuntu 22.04 / 24.04 向けの .deb として提供されます。新しいビルドがある場合、アプリがダウンロードし、インストール時にシステムパスワードを求めます。",
+        "item1": "初回は sudo apt install ./cindy-<バージョン>-<アーキテクチャ>.deb でインストールします（x64 は amd64、arm64 は arm64）。",
+        "item2": "アプリ内更新は .deb をダウンロードします。更新を選ぶと、システム権限の確認後に上書きインストールします。",
+        "item3": "インストールにパスワードが必要なため、Linux では Beta チャネルとアイドル時の自動インストールは提供しません。"
+      },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "overview に載っていない内容でも、やりたいことを聞けば次に開く場所や進め方を案内します。",
       "qnaPlaceholder": "例：Codex のセッションをインポートするには？",
@@ -776,6 +783,7 @@
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
       "autoUpdateDescription": "更新のダウンロード完了後、このコンピューターが 10 分間操作されず、実行中のタスクがない場合に、アプリを自動的に再起動してインストールします。",
+      "linuxUpdateDescription": "新しいビルドがある場合、アプリ内で .deb をダウンロードします。インストールにはシステムパスワードが必要なため、アイドル時の自動インストールは行いません。",
       "autoUpdateEnabledToast": "アイドル時の更新インストールを有効にしました",
       "autoUpdateDisabledToast": "アイドル時の更新インストールを無効にしました",
       "autoUpdateSaveFailed": "自動更新設定を保存できませんでした",
@@ -1783,15 +1791,23 @@
         "invalidLibraryName": "Ollama のライブラリ名を入力するか、huggingface.co のモデルページ URL を貼り付けてください",
         "advancedExactName": "上級：正確なライブラリ名",
         "models": {
-          "qwen38-27b": { "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。" },
+          "qwen38-27b": {
+            "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。"
+          },
           "gpt-oss-20b": { "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。" },
           "gemma4-e2b": { "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。" },
           "gemma4-e4b": { "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。" },
           "gemma4-12b": { "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。" },
-          "gemma4-31b": { "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。" },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。"
+          },
           "gemma4-26b": { "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。" },
-          "ornith15-35b": { "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。" },
-          "glm-47-flash": { "blurb": "智譜の新しいコーディングモデル。30B MoE で、コードと Agent 向き。" }
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。"
+          },
+          "glm-47-flash": {
+            "blurb": "智譜の新しいコーディングモデル。30B MoE で、コードと Agent 向き。"
+          }
         },
         "onboardingTitle": "先に Ollama ランタイムをインストール",
         "onboardingBody": "Ollama をインストールすれば、Ollama アプリを開かなくても Cindy 内でローカルモデルをダウンロードして使えます。Ollama は無料のオープンソース製サードパーティランタイムです。",
@@ -4371,6 +4387,8 @@
         "command": "チャット指令 ${{command}}",
         "panelLeft": "パネル「{{title}}」· チャットの左側にドッキング",
         "panelTab": "パネル「{{title}}」· プラグインページ内で開く",
+        "mainView": "Cindy のサイドバーに「{{title}}」への入口を追加できます",
+        "mainViewDetail": "クリックするとプラグインのサンドボックス内でメインビューが開き、ファイル、ネットワーク、認証情報へのアクセスが追加で付与されることはありません。",
         "code": "実行コード",
         "codeDetail": "独立したサンドボックスで実行され、ファイルやネットワークにはアクセスできません。",
         "resident": "常駐実行(有効化すると起動し、呼び出されなくてもバックグラウンドプロセスを維持)",
@@ -4525,6 +4543,9 @@
         "settingsUnavailableUntilRestore": "この設定を再び使用するには、プラグインを復元してください。",
         "oauthScopeStale": "現在の認証には新しく追加された権限が含まれていません。再接続して権限を取得してください。",
         "configurationTitle": "設定",
+        "sidebarEntryTitle": "サイドバー項目",
+        "showInSidebar": "サイドバーに表示",
+        "sidebarEntryDescription": "オンにすると、サイドバーに「{{title}}」が表示されます。非表示にしてもプラグインは無効になりません。",
         "openTool": "Tool {{name}} の詳細を表示",
         "noToolDescription": "この Tool には説明がありません。",
         "viewAllTools": "さらに表示",
@@ -4534,6 +4555,7 @@
         "closeDialog": "ダイアログを閉じる"
       },
       "contents": {
+        "mainView": "メインビュー",
         "panel": "パネル",
         "settingsUi": "カスタム設定画面",
         "code": "実行コード",
@@ -5438,7 +5460,7 @@
       "ready": "新バージョン準備完了 — サイドバーをクリックして更新を完了",
       "manifestFailed": "更新確認に失敗しました。ネットワークを確認してください",
       "downloadFailed": "新バージョンのダウンロードに失敗しました。後でもう一度お試しください",
-      "manualDownload": "Linux 初版は手動ダウンロードのみ対応です。ダウンロードページから最新版インストーラーを取得してください。"
+      "manualDownload": "アプリ内で更新をダウンロードしてください。インストールにはシステムパスワードが必要です。"
     },
     "closeConfirm": {
       "title": "終了しますか？",
@@ -6370,7 +6392,7 @@
       "myDevices": "自分のデバイス",
       "deviceOffline": "オフライン",
       "allowControl": "同じアカウントのデバイスによるこのマシンの操作を許可",
-      "deviceId": "このデバイス · {{id}}",
+      "deviceName": "このデバイス · {{name}}",
       "remoteAction": {
         "checking": "確認中…",
         "unavailable": "利用できません",

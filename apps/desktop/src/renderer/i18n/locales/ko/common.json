@@ -718,6 +718,13 @@
         "item2": "큰 작업은 여러 턴으로 나누세요. 먼저 이해하고, 다음에 수정하고, 마지막에 검증하세요.",
         "item3": "독립적인 문제는 한 스레드에 섞지 말고 새 세션을 만들어 처리하세요."
       },
+      "linuxUpdates": {
+        "title": "Linux 설치와 업데이트",
+        "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
+        "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-<아키텍처>.deb 를 사용하세요(x64는 amd64, arm64는 arm64).",
+        "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
+        "item3": "설치에 비밀번호가 필요하므로 Linux에서는 Beta 채널과 유휴 상태 자동 설치를 제공하지 않습니다."
+      },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
       "qnaPlaceholder": "예: Codex 세션을 어떻게 가져오나요?",
@@ -776,6 +783,7 @@
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
+      "linuxUpdateDescription": "새 빌드가 있으면 앱에서 .deb를 다운로드합니다. 설치할 때 시스템 비밀번호가 필요하므로 유휴 상태에서는 자동 설치하지 않습니다.",
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
@@ -1783,13 +1791,21 @@
         "invalidLibraryName": "Ollama 라이브러리 이름을 입력하거나 huggingface.co 모델 페이지 URL을 붙여넣으세요",
         "advancedExactName": "고급: 정확한 라이브러리 이름",
         "models": {
-          "qwen38-27b": { "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다." },
+          "qwen38-27b": {
+            "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다."
+          },
           "gpt-oss-20b": { "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택." },
-          "gemma4-e2b": { "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다." },
+          "gemma4-e2b": {
+            "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다."
+          },
           "gemma4-e4b": { "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다." },
           "gemma4-12b": { "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다." },
-          "gemma4-31b": { "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다." },
-          "gemma4-26b": { "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다." },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다."
+          },
+          "gemma4-26b": {
+            "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다."
+          },
           "ornith15-35b": { "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안." },
           "glm-47-flash": { "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음." }
         },
@@ -4371,6 +4387,8 @@
         "command": "채팅 명령 ${{command}}",
         "panelLeft": "패널 \"{{title}}\" · 채팅 왼쪽에 도킹",
         "panelTab": "패널 \"{{title}}\" · 플러그인 페이지에서 열기",
+        "mainView": "Cindy 사이드바에 “{{title}}” 항목을 추가할 수 있음",
+        "mainViewDetail": "클릭하면 플러그인 샌드박스에서 메인 보기가 열리며 파일, 네트워크 또는 자격 증명 접근 권한이 추가로 부여되지 않습니다.",
         "code": "실행 코드",
         "codeDetail": "격리된 샌드박스에서 실행되며 파일과 네트워크에 접근할 수 없습니다.",
         "resident": "상주 실행(활성화하면 시작되며 호출이 없어도 백그라운드 프로세스 유지)",
@@ -4525,6 +4543,9 @@
         "settingsUnavailableUntilRestore": "이 설정을 다시 사용하려면 플러그인을 복원하세요.",
         "oauthScopeStale": "현재 인증에 새로 추가된 권한이 포함되어 있지 않습니다. 다시 연결해 권한을 받으세요.",
         "configurationTitle": "설정",
+        "sidebarEntryTitle": "사이드바 항목",
+        "showInSidebar": "사이드바에 표시",
+        "sidebarEntryDescription": "켜면 사이드바에 “{{title}}” 항목이 표시됩니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
         "viewAllTools": "더 보기",
@@ -4534,6 +4555,7 @@
         "closeDialog": "대화 상자 닫기"
       },
       "contents": {
+        "mainView": "메인 보기",
         "panel": "패널",
         "settingsUi": "사용자 정의 설정 화면",
         "code": "실행 코드",
@@ -5438,7 +5460,7 @@
       "ready": "새 버전 준비 완료 — 사이드바를 클릭해 업데이트 완료",
       "manifestFailed": "업데이트 확인 실패, 네트워크를 확인하세요",
       "downloadFailed": "새 버전 다운로드 실패, 나중에 다시 시도하세요",
-      "manualDownload": "Linux 첫 릴리스는 수동 다운로드만 지원합니다. 다운로드 페이지에서 최신 설치 프로그램을 받아 주세요."
+      "manualDownload": "앱에서 업데이트를 다운로드하세요. 설치하려면 시스템 비밀번호가 필요합니다."
     },
     "closeConfirm": {
       "title": "정말 나가시겠습니까?",
@@ -6370,7 +6392,7 @@
       "myDevices": "내 기기",
       "deviceOffline": "오프라인",
       "allowControl": "동일 계정 기기에서 이 컴퓨터를 제어하도록 허용",
-      "deviceId": "이 기기 · {{id}}",
+      "deviceName": "이 기기 · {{name}}",
       "remoteAction": {
         "checking": "확인 중…",
         "unavailable": "사용할 수 없음",

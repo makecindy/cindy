@@ -62,6 +62,7 @@ import {
 import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
+import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
 import { disposeAndroidAdb } from './mcp-integrations/android';
 import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
@@ -206,7 +207,7 @@ function broadcastStatus(payload: UpdateStatusPayload): void {
 
 function channelSettingsWire() {
   return {
-    enableBeta: readUpdateChannelSettings().enableBeta,
+    enableBeta: process.platform === 'linux' ? false : readUpdateChannelSettings().enableBeta,
     isCustomized: isEnableBetaUserCustomized(),
   };
 }
@@ -293,6 +294,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
     nowMs,
     lastBusyAtMs,
     lastResumeAtMs,
+    requiresInteractiveAuth: process.platform === 'linux',
   });
 }
 
@@ -316,6 +318,8 @@ async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason 
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
+  // pkexec 必须用户在场输入密码，启动时不能自己装。
+  if (process.platform === 'linux') return 'interactive-auth';
   return null;
 }
 
@@ -498,6 +502,8 @@ export function isUpdateRelaunchImminent(): boolean {
   if (currentStatus !== 'downloading' && currentStatus !== 'ready') return false;
   // The native updater replaces the *installed* app; it never runs in dev.
   if (isDev()) return false;
+  // Linux 安装要 pkexec 密码，不会在空闲/启动时自己装。
+  if (process.platform === 'linux') return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
   // there until they click the banner, which is not "imminent".
   return readAutoUpdateSettings().autoRelaunchOnIdle;
@@ -748,6 +754,8 @@ function discardStagedPatchFiles(): void {
   readyVersion = undefined;
   readyFilePath = undefined;
   readyChannelEpoch = undefined;
+  linuxStagedDebSha256 = null;
+  linuxStagedDebSize = null;
   removePatchInfo();
   const flag = discardedVersion ? readReloginFlag() : null;
   if (flag?.version === discardedVersion) {
@@ -913,6 +921,23 @@ function isMacAppTranslocated(): boolean {
   return !isDev() && process.platform === 'darwin' && !app.isInApplicationsFolder();
 }
 
+/**
+ * mac/win 热更下 hotfix zip；Linux 没有 hotfix，清单只挂 installer .deb。
+ * 非 .deb 的 Linux installer 直接丢掉，避免把任意文件交给 pkexec。
+ */
+function resolveUpdateAsset(manifest: Manifest): { file: string; sha256: string; size: number } | undefined {
+  if (process.platform === 'linux') {
+    const installer = manifest.app.installer;
+    if (!installer?.file || !installer.sha256) return undefined;
+    if (!installer.file.toLowerCase().endsWith('.deb')) {
+      log.error('Linux installer is not a .deb, refusing in-app update: %s', installer.file);
+      return undefined;
+    }
+    return installer;
+  }
+  return manifest.app.hotfix;
+}
+
 // ── Core check logic ───────────────────────────────────────────────────────
 
 export type CheckForUpdateResult =
@@ -973,12 +998,6 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     return 'idle';
   }
 
-  if (process.platform === 'linux') {
-    log.info('Linux first-release guard: skipping in-app update flow');
-    currentStatus = 'idle';
-    return 'manual_download';
-  }
-
   // wasReady 路径:本地已经下好了 a 版本,正在等用户点重启。这次轮询要继续做版本对比,
   // 发现 b > a 时进入 superseding 状态去下 b,而不是像旧实现那样直接短路返回。
   // previousReadyVersion/Path 用于失败时静默回退到 a。
@@ -1000,9 +1019,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     return 'manifest_failed';
   }
 
-  const asset = manifest.app.hotfix;
+  const asset = resolveUpdateAsset(manifest);
   if (!asset) {
-    log.info('No hotfix in manifest');
+    log.info(process.platform === 'linux' ? 'No installer in Linux manifest' : 'No hotfix in manifest');
     if (!wasReady) currentStatus = 'idle';
     return 'idle';
   }
@@ -1163,6 +1182,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     readyVersion = latestVersion;
     readyFilePath = result.path;
     readyChannelEpoch = updateChannelEpoch;
+    // 信任锚:manifest 里的 installer 摘要与大小,进本进程内存,不落用户可写盘。
+    linuxStagedDebSha256 = normalizeLinuxDebSha256(asset.sha256 ?? '');
+    linuxStagedDebSize = typeof asset.size === 'number' && asset.size > 0 ? asset.size : null;
     setStatus('ready', { version: latestVersion });
     return 'ready';
   } catch (err) {
@@ -1514,6 +1536,138 @@ async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
  * has the same shape: a patch file that disappears between the readiness check
  * and the spawn.
  */
+/**
+ * Linux 安装包的信任锚:本进程从 CDN manifest 拿到的 installer 摘要。
+ * patch-info.json 与暂存 .deb 都是用户可写文件,不能当可信来源——同一用户
+ * 进程可以把两者一起换掉。只有本进程内存里的 manifest 摘要不可伪造;
+ * 冷启动拿到旧补丁却没有 manifest 时(断网回落路径)宁可不装。
+ */
+let linuxStagedDebSha256: string | null = null;
+let linuxStagedDebSize: number | null = null;
+
+function readStagedLinuxDebSha256(debPath: string): string | null {
+  if (!linuxStagedDebSha256 || linuxStagedDebSize === null) {
+    log.error('no trusted Linux installer digest/size in process state — refusing to install');
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(path.join(getUpdatesDir(), PATCH_INFO_FILE), 'utf-8');
+    const info = JSON.parse(raw) as PatchInfo;
+    if (info.fileName && path.basename(debPath) !== info.fileName) return null;
+  } catch {
+    return null;
+  }
+  return linuxStagedDebSha256;
+}
+
+function executeUpdateLinux(debPath: string): void {
+  const exePath = app.getPath('exe');
+  const lockFilePath = getUpdateLockPath();
+  const logDir = path.join(app.getPath('userData'), 'logs');
+  fs.mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(logDir, 'cindy-update.log');
+  const pid = process.pid;
+
+  if (!debPath.toLowerCase().endsWith('.deb') || !fs.existsSync(debPath)) {
+    log.error('Linux update file is missing or not a .deb: %s', maskPath(debPath));
+    handleApplyFailure('linux_deb_missing');
+    return;
+  }
+
+  const sha256 = readStagedLinuxDebSha256(debPath);
+  if (!sha256) {
+    log.error('Linux staged .deb is missing a trusted sha256: %s', maskPath(debPath));
+    handleApplyFailure('linux_deb_unverified');
+    return;
+  }
+
+  log.info('Linux relaunch: exe=%s, deb=%s, pid=%d', maskPath(exePath), maskPath(debPath), pid);
+  try {
+    const exeStat = fs.statSync(exePath);
+    const debStat = fs.statSync(debPath);
+    log.info(
+      'pre-update stat: exe size=%d mtime=%s, deb size=%d',
+      exeStat.size, exeStat.mtime.toISOString(), debStat.size,
+    );
+  } catch (err) {
+    log.error('pre-update stat failed:', err);
+  }
+
+  const sizeBytes = linuxStagedDebSize;
+  if (sizeBytes === null) {
+    log.error('Linux staged .deb is missing a trusted size: %s', maskPath(debPath));
+    handleApplyFailure('linux_deb_unverified');
+    return;
+  }
+
+  let script: string;
+  try {
+    script = buildLinuxUpdateScript({
+      pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
+    });
+  } catch (err) {
+    log.error('failed to build Linux update script:', err);
+    handleApplyFailure('linux_script_build_failed');
+    return;
+  }
+
+  // 主进程在 spawn 之前先把锁建立起来(持有者 = 本进程 PID),再从 spawn
+  // 事件退出。这样「点击更新 → 脚本写入锁」之间不存在没有锁的窗口:
+  // 万一用户在 spawn 前重启 Cindy,bootstrap 至少能看到一把新鲜的心跳锁
+  // 而继续等;脚本启动后第一件事就是把锁换成自己的 PID 继续心跳。
+  // bootstrap 只按心跳新鲜度判断,因此交接窗口同样安全。
+  try {
+    fs.writeFileSync(lockFilePath, `updating ${process.pid}\n`);
+  } catch (err) {
+    log.error('failed to pre-create Linux update lock:', err);
+    handleApplyFailure('linux_lock_create_failed');
+    return;
+  }
+
+  // 脚本不落盘:内容经 argv 传给 bash -c,同一用户进程没有可替换的
+  // 目录项,也就不能借 pkexec 授权执行自己的内容。
+  const child = spawn('/bin/bash', ['-c', script, 'cindy-linux-update'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+
+  // 三个终态里只有第一个赢。超时 / error 之后再收到迟到的 spawn 事件,
+  // 不能再 forceQuit()——更新已经按失败处理,退出去连旧进程都没人拉起。
+  let settled = false;
+  const clearPrecreatedLock = (): void => {
+    try { fs.unlinkSync(lockFilePath); } catch { /* ignore */ }
+  };
+  const spawnTimeout = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    log.error('Linux update script spawn timed out after 5 s');
+    // detached spawn 是进程组组长:负 PID 杀整组,心跳子 shell / pkexec
+    // 不会变成孤儿继续装。
+    if (child.pid !== undefined) {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* ignore */ }
+    }
+    clearPrecreatedLock();
+    handleApplyFailure('spawn_timeout');
+  }, 5_000);
+
+  child.on('spawn', () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(spawnTimeout);
+    child.unref();
+    forceQuit();
+  });
+
+  child.on('error', (err: NodeJS.ErrnoException) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(spawnTimeout);
+    log.error('Linux update script spawn failed: %s (code=%s)', err.message, err.code);
+    clearPrecreatedLock();
+    handleApplyFailure(err.code ?? 'unknown');
+  });
+}
+
 async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
   try {
     await executeRelaunchUnguarded(theme);
@@ -1612,8 +1766,7 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
-      log.error('Linux in-app update is intentionally disabled in first release');
-      handleApplyFailure('linux_update_disabled');
+      executeUpdateLinux(readyFilePath);
       break;
     default:
       log.error(`Unsupported platform: ${process.platform}`);
@@ -1629,7 +1782,11 @@ export function initUpdateService(): void {
   // user stays on the latest version and never triggers another updater run.
   sweepStaleUpdateTempDirs();
 
-  ipcMain.on('update-relaunch', (_event, theme: 'light' | 'dark') => {
+  ipcMain.on('update-relaunch', (event, theme: 'light' | 'dark') => {
+    // Linux 分支会退出应用并触发 pkexec 系统授权,属于特权操作;
+    // 按仓库规则先校验 sender 是 Cindy 顶层 frame,不给未来可能拿到
+    // 该 channel 的副窗口 renderer 留强制退出/弹授权的口子。
+    assertTrustedAppRendererEvent(event);
     // Defensive default: if an old preload is somehow loaded (or theme is
     // missing), fall back to dark — matches the renderer's getStoredTheme()
     // default and the .env'd-out look most users have.
@@ -1698,6 +1855,9 @@ export function initUpdateService(): void {
 
   ipcMain.handle('update-channel-settings-set', async (event, payload: unknown) => {
     assertTrustedAppRendererEvent(event);
+    if (process.platform === 'linux') {
+      throwIpcError('INVALID_PARAMS', 'Linux does not support the beta update channel');
+    }
     if (!payload || typeof payload !== 'object') {
       throwIpcError('INVALID_PARAMS', 'update channel settings payload required');
     }
@@ -1831,9 +1991,15 @@ export function initUpdateService(): void {
         // Network unavailable — fall back to local patch.
         log.info('Manifest fetch failed, falling back to local patch');
         const patchResult = checkExistingPatch();
-        if (patchResult.action === 'relaunch') {
+        if (patchResult.action === 'relaunch' && process.platform !== 'linux') {
           currentStatus = 'ready';
           return await buildStartupReadyReply(patchResult.version);
+        }
+        if (patchResult.action === 'relaunch' && process.platform === 'linux') {
+          // Linux 安装的信任锚是 manifest 里的 installer 摘要;断网拿不到
+          // manifest 时旧补丁没有可信摘要,宁可重下也不装。
+          log.info('Linux: manifest unavailable — refusing to stage local patch without a trusted digest');
+          discardStagedPatchFiles();
         }
         return { hasUpdate: false, action: 'none' as const, error: 'manifest_failed' as const };
       }
@@ -1852,6 +2018,22 @@ export function initUpdateService(): void {
       const patchResult = checkExistingPatch();
       if (patchResult.action === 'relaunch' && patchResult.version === latestVersion) {
         log.info('Local patch v%s matches latest, requesting relaunch', patchResult.version);
+        if (process.platform === 'linux') {
+          // 冷启动匹配旧补丁:把这份 CDN manifest 的 installer 摘要与大小
+          // 重新锚进进程内存,让后续 apply 有可信锚可用。
+          const installer = manifest.app.installer;
+          linuxStagedDebSha256 = installer?.sha256
+            ? normalizeLinuxDebSha256(installer.sha256)
+            : null;
+          linuxStagedDebSize = typeof installer?.size === 'number' && installer.size > 0
+            ? installer.size
+            : null;
+          if (!linuxStagedDebSha256 || linuxStagedDebSize === null) {
+            log.info('Linux: manifest has no installer digest/size — discarding local patch');
+            discardStagedPatchFiles();
+            return { hasUpdate: false, action: 'none' as const };
+          }
+        }
         currentStatus = 'ready';
         return await buildStartupReadyReply(patchResult.version);
       }
@@ -1865,6 +2047,8 @@ export function initUpdateService(): void {
         readyVersion = undefined;
         readyFilePath = undefined;
         readyChannelEpoch = undefined;
+        linuxStagedDebSha256 = null;
+        linuxStagedDebSize = null;
       }
 
       // Step 3: download (re-using the manifest we already have). Route through
@@ -1941,6 +2125,8 @@ export function initUpdateService(): void {
 export async function enableUncustomizedBetaChannel(
   shouldWrite: () => boolean = () => true,
 ): Promise<boolean> {
+  // Linux 没有 beta 清单,组织默认打开只会把客户端钉在不可达渠道。
+  if (process.platform === 'linux') return false;
   const wasBeta = readUpdateChannelSettings().enableBeta;
   // 先拦住 apply 再等落盘。身份守卫拒绝或写入失败时,旧补丁还得能用。
   if (!wasBeta) {

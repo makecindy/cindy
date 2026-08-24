@@ -718,6 +718,13 @@
         "item2": "Break large tasks into multiple turns: understand first, edit second, verify third.",
         "item3": "Create a new session for independent problems instead of mixing everything into one thread."
       },
+      "linuxUpdates": {
+        "title": "Linux install and updates",
+        "description": "Linux currently ships as a .deb for Ubuntu 22.04 / 24.04. When a newer build is available, the app downloads it and asks for your system password to install.",
+        "item1": "First install with sudo apt install ./cindy-<version>-<arch>.deb (amd64 on x64, arm64 on arm64).",
+        "item2": "In-app updates download the .deb. After you choose Update, a system prompt installs it over the current package.",
+        "item3": "Linux does not offer the beta channel or idle auto-install, because installing requires your password."
+      },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
       "qnaPlaceholder": "For example: how do I import a Codex session?",
@@ -776,6 +783,7 @@
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
+      "linuxUpdateDescription": "When a newer build is available, Cindy downloads the .deb in the app. Installing it asks for your system password, so updates are not applied while idle.",
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
@@ -1784,15 +1792,23 @@
         "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
         "advancedExactName": "Advanced: exact library name",
         "models": {
-          "qwen38-27b": { "blurb": "The strongest dense model you can run locally. Best for coding and long tasks." },
+          "qwen38-27b": {
+            "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
+          },
           "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
           "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
           "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
           "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
           "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
-          "gemma4-26b": { "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines." },
-          "ornith15-35b": { "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup." },
-          "glm-47-flash": { "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents." }
+          "gemma4-26b": {
+            "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
+          },
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup."
+          },
+          "glm-47-flash": {
+            "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents."
+          }
         },
         "onboardingTitle": "Install the Ollama runtime",
         "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
@@ -4372,6 +4388,8 @@
         "command": "Chat command ${{command}}",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
         "panelTab": "Panel \"{{title}}\" · opens inside the Plugins page",
+        "mainView": "Can add a “{{title}}” entry to Cindy's sidebar",
+        "mainViewDetail": "Opening it displays the main view in the plugin sandbox and does not grant file, network, or credential access.",
         "code": "Executable code",
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
@@ -4526,6 +4544,9 @@
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "oauthScopeStale": "This authorization does not include newly added permissions. Reconnect to grant them.",
         "configurationTitle": "Configuration",
+        "sidebarEntryTitle": "Sidebar entry",
+        "showInSidebar": "Show in sidebar",
+        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar. Hiding it does not disable the plugin.",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
         "viewAllTools": "See All",
@@ -4535,6 +4556,7 @@
         "closeDialog": "Close Dialog"
       },
       "contents": {
+        "mainView": "Main view",
         "panel": "Panel",
         "settingsUi": "Custom settings UI",
         "code": "Executable code",
@@ -5440,7 +5462,7 @@
       "ready": "New version ready — click the sidebar to apply",
       "manifestFailed": "Update check failed, please check your network",
       "downloadFailed": "New version download failed, try again later",
-      "manualDownload": "Linux first release uses manual downloads only. Download the latest installer from the download page."
+      "manualDownload": "Download the update in the app. Installing it requires your system password."
     },
     "closeConfirm": {
       "title": "Confirm exit?",
@@ -6372,7 +6394,7 @@
       "myDevices": "My Devices",
       "deviceOffline": "Offline",
       "allowControl": "Allow same-account devices to control this machine",
-      "deviceId": "This device · {{id}}",
+      "deviceName": "This device · {{name}}",
       "remoteAction": {
         "checking": "Checking…",
         "unavailable": "Unavailable",

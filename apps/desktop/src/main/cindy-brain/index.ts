@@ -7941,7 +7941,7 @@ export function handleGhostExternalLinkNavigation(
  * 意识 webview 附加验证(webview-security 的意识分区白名单口子):
  * renderer 声明了意识分区的 <webview> 想要附加时,这里验明正身——
  * 分区 id 合法、意识已装且唤醒、src 指向它自己协议下的自绘入口白名单
- * (面板 panel.html 或设置区 settingsHtml,声明哪个放行哪个;白名单真身
+ * (面板 panel.html、主视图 mainView.html 或设置区 settingsHtml，声明哪个放行哪个；白名单真身
  * 是 shared 的 ghostWebviewEntryPaths,纯函数已单测)。全过才放行,顺手
  * 把协议 handler 挂好(必须先于 webview 首次加载)。任何一条不满足返回
  * null(闸口拒附加)。

@@ -227,8 +227,7 @@ export interface ForgeScaffoldWriteRequest {
 }
 
 export type ForgeScaffoldWriteResult =
-  | { ok: true }
-  | { ok: false; errorCode: 'TARGET_EXISTS' | 'INTERNAL'; message: string };
+  { ok: true } | { ok: false; errorCode: 'TARGET_EXISTS' | 'INTERNAL'; message: string };
 
 export type ForgeScaffoldWriter = (
   request: ForgeScaffoldWriteRequest,
@@ -574,7 +573,11 @@ export async function scaffoldGhostDir(
   const resolved = path.resolve(input.dir);
   const workdir = options?.sessionWorkdir;
   if (!workdir) {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: '没有会话工作目录,无法确定骨架输出位置' };
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '没有会话工作目录,无法确定骨架输出位置',
+    };
   }
   // 字面 startsWith 不设防软链:工作目录里若有 out -> /tmp/out 之类的软链祖先,
   // 字面在内、实际在外。两边都按 realpath 对账——目标还不存在,就取「已存在的最深
@@ -583,13 +586,21 @@ export async function scaffoldGhostDir(
   try {
     realWorkdir = await realpathNative(path.resolve(workdir));
   } catch {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: '会话工作目录不存在,无法确定骨架输出位置' };
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '会话工作目录不存在,无法确定骨架输出位置',
+    };
   }
   let realTarget: string;
   try {
     realTarget = await resolveThroughExistingAncestor(resolved);
   } catch (err) {
-    return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
   if (!realTarget.startsWith(`${realWorkdir}${path.sep}`) && realTarget !== realWorkdir) {
     return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
@@ -599,7 +610,11 @@ export async function scaffoldGhostDir(
     try {
       resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
     } catch (err) {
-      return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        errorCode: 'INTERNAL',
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
     // 与打包侧同形的双向判定:骨架目标既不能落进受管根(已装插件 / 状态根 / seed 根),
     // 也不能是它们的祖先。祖先方向此处是纵深防御(该目录必已存在,最终 rename 会
@@ -624,7 +639,11 @@ export async function scaffoldGhostDir(
   }
   const validation = validateGhostManifest(JSON.parse(manifestRaw));
   if (!validation.ok) {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: `插件信息不合格:${validation.reason}` };
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: `插件信息不合格:${validation.reason}`,
+    };
   }
   const brokerPortIssue = brokerRedirectPortDeclarationIssue(validation.manifest);
   if (brokerPortIssue) {
@@ -633,10 +652,18 @@ export async function scaffoldGhostDir(
 
   try {
     await fs.promises.lstat(targetDir);
-    return { ok: false, errorCode: 'TARGET_EXISTS', message: `目标已经存在，不会覆盖:${targetDir}` };
+    return {
+      ok: false,
+      errorCode: 'TARGET_EXISTS',
+      message: `目标已经存在，不会覆盖:${targetDir}`,
+    };
   } catch (err) {
     if (!hasFsErrorCode(err, 'ENOENT')) {
-      return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        errorCode: 'INTERNAL',
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -646,13 +673,14 @@ export async function scaffoldGhostDir(
   try {
     parentStat = await fs.promises.lstat(parentDir, { bigint: true });
     if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
-      return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 的父目录必须是工作目录内已存在的普通目录' };
+      return {
+        ok: false,
+        errorCode: 'INVALID_INPUT',
+        message: 'dir 的父目录必须是工作目录内已存在的普通目录',
+      };
     }
     parentRealPath = await realpathNative(parentDir);
-    if (
-      (await pathHasLinkSegment(parentDir)) ||
-      !isPathInsideDir(realWorkdir, parentRealPath)
-    ) {
+    if ((await pathHasLinkSegment(parentDir)) || !isPathInsideDir(realWorkdir, parentRealPath)) {
       return {
         ok: false,
         errorCode: 'INVALID_INPUT',
@@ -667,7 +695,11 @@ export async function scaffoldGhostDir(
         message: 'dir 的父目录必须先创建，并且必须位于当前工作目录内',
       };
     }
-    return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
 
   // 实际落盘委托给隔离的稳定父目录写入器(C-4):forge.ts 只生成内容,不直接写盘。
@@ -684,7 +716,9 @@ export async function scaffoldGhostDir(
     expectedParent: { realPath: parentRealPath, dev: parentStat.dev, ino: parentStat.ino },
     files: Object.entries(files).map(([rel, content]) => ({
       path: rel,
-      base64: (typeof content === 'string' ? Buffer.from(content, 'utf8') : content).toString('base64'),
+      base64: (typeof content === 'string' ? Buffer.from(content, 'utf8') : content).toString(
+        'base64',
+      ),
     })),
   });
   if (!writeResult.ok) {
@@ -838,6 +872,7 @@ async function buildGhostPackage(
       mustExist.push(manifest.node.entry, ...(manifest.node.entries ?? []));
     }
     if (manifest.panel?.html) mustExist.push(manifest.panel.html);
+    if (manifest.mainView?.html) mustExist.push(manifest.mainView.html);
     if (manifest.settingsHtml) mustExist.push(manifest.settingsHtml);
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
     if (iconPng === undefined && manifest.icon) mustExist.push(manifest.icon);
@@ -891,10 +926,7 @@ async function buildGhostPackage(
     // Markdown 文件；逐文件限量、严格 UTF-8，并拒绝并发截短与二进制内容。
     // 缓存本次校验过的字节，生成 zip 时直接使用同一份快照，避免“预检一份、
     // 入包时又读到另一份”的竞态。嵌套单元共享缓存，同一物理文件只校验一次。
-    const manualFileSnapshots = new Map<
-      string,
-      { bytes: Buffer; unixPermissions: number }
-    >();
+    const manualFileSnapshots = new Map<string, { bytes: Buffer; unixPermissions: number }>();
     for (const item of manifest.manual?.items ?? []) {
       const unitRoot = path.join(dir, ...item.dir.split('/'));
       const validateManualDir = async (
@@ -950,14 +982,10 @@ async function buildGhostPackage(
           if (manualFileSnapshots.has(logicalPath)) continue;
           let read;
           try {
-            read = await readBoundedFileNoFollowWithStat(
-              absolutePath,
-              GHOST_MANUAL_MD_MAX_BYTES,
-              {
-                containWithin: realDir,
-                verifyContentStability: true,
-              },
-            );
+            read = await readBoundedFileNoFollowWithStat(absolutePath, GHOST_MANUAL_MD_MAX_BYTES, {
+              containWithin: realDir,
+              verifyContentStability: true,
+            });
           } catch {
             return {
               ok: false,
@@ -1048,7 +1076,11 @@ async function buildGhostPackage(
         } catch {
           // 分类时条目已消失(并发删除):声明入口 → ENTRY_MISSING,其它跳过。
           if (requiredPackPaths.has(foldedRel)) {
-            return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
+            return {
+              ok: false,
+              errorCode: 'ENTRY_MISSING',
+              message: `清单声明的文件不存在:${rel}`,
+            };
           }
           continue;
         }
@@ -1098,7 +1130,11 @@ async function buildGhostPackage(
           }
         } else if (requiredPackPaths.has(foldedRel)) {
           // 声明入口是块/字符设备、FIFO 等非常规条目 → 视为缺失。
-          return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不是普通文件:${rel}` };
+          return {
+            ok: false,
+            errorCode: 'ENTRY_MISSING',
+            message: `清单声明的文件不是普通文件:${rel}`,
+          };
         }
       }
       return null;
@@ -1269,20 +1305,32 @@ async function buildGhostPackage(
  */
 export async function packGhostDir(
   dir: string,
-  options?: { sessionWorkdir?: string | null; forbiddenRootDirs?: readonly string[]; iconPng?: Buffer },
+  options?: {
+    sessionWorkdir?: string | null;
+    forbiddenRootDirs?: readonly string[];
+    iconPng?: Buffer;
+  },
 ): Promise<ForgePackResult> {
   // Forge 打包出口专属安全门(C-4 + #7):source 必须在会话 workdir 内、且不得是受管根
   //(已装插件 / 批准状态根 / seed 根,双向判定)。算出的 realSourceDir 作为
   // buildGhostPackage 的 expectedRealDir 上游锚点——正是它要求"由上游校验后传入"的那份。
   const workdir = options?.sessionWorkdir;
   if (!workdir) {
-    return { ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR', message: 'Forge pack requires an active session workdir' };
+    return {
+      ok: false,
+      errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+      message: 'Forge pack requires an active session workdir',
+    };
   }
   let realWorkdir: string;
   try {
     realWorkdir = await realpathNative(path.resolve(workdir));
   } catch {
-    return { ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR', message: 'The current session workdir does not exist' };
+    return {
+      ok: false,
+      errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+      message: 'The current session workdir does not exist',
+    };
   }
   let realSourceDir: string;
   try {
@@ -1291,7 +1339,11 @@ export async function packGhostDir(
     return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `目录不存在:${dir}` };
   }
   if (!isPathInsideDir(realWorkdir, realSourceDir)) {
-    return { ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR', message: 'Forge source must be inside the current session workdir' };
+    return {
+      ok: false,
+      errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+      message: 'Forge source must be inside the current session workdir',
+    };
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
@@ -1310,7 +1362,11 @@ export async function packGhostDir(
       };
     }
   }
-  const built = await buildGhostPackage(dir, realSourceDir, options ? { iconPng: options.iconPng } : undefined);
+  const built = await buildGhostPackage(
+    dir,
+    realSourceDir,
+    options ? { iconPng: options.iconPng } : undefined,
+  );
   if (!built.ok) return built;
   const authoringIssue = firstGhostAuthoringIssue(built.manifestRaw);
   if (authoringIssue) {
@@ -1320,7 +1376,10 @@ export async function packGhostDir(
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
   // 落地到**规范源码目录**(realpath 产物)而非可能是符号链接/别名的入参 `dir`:
   // 产物必须写进真实目录,别名只是通往它的一条路径。
-  const cindyPath = path.join(realSourceDir, `${built.manifest.id}-${built.manifest.version}.cindy`);
+  const cindyPath = path.join(
+    realSourceDir,
+    `${built.manifest.id}-${built.manifest.version}.cindy`,
+  );
   try {
     await fs.promises.writeFile(cindyPath, built.buf);
   } catch (err) {
@@ -1418,8 +1477,9 @@ ghost_forge_pack 打包 → 用户在弹窗上确认装入；需要发布时改�
 
 值得主动摆出来让用户选的"隐藏"设计选项(详见对应章节):
 
-- **界面形态**:无界面(纯工具)/ 聊天卡片(card 槽,§4.5)/ 停靠面板(panel.position
-  left,§5)/ 插件页内独占面板(position "tab",从插件页「使用」打开、离开即关,§5)。
+- **界面形态**:无界面(纯工具)/ 聊天卡片(card 槽,§4.5)/ Cindy 一级主视图
+  (main-view 槽,§4.20)/ 停靠面板(panel.position left,§5)/ 插件页内独占面板
+  (position "tab",从插件页「使用」打开、离开即关,§5)。
 - **唤起方式**:只靠 AI 按 whenToUse 自动想起,还是同时声明 \`command\` 点名词让用户
   显式点名(推荐,§2)。
 - **启动模式**:on-demand 按需拉起(缺省,推荐)/ resident 常驻(仅订阅型、要秒响应
@@ -1457,6 +1517,7 @@ my-ghost/
 ├── panel.html    ← 面板界面(声明了 panel.html 时必须)
 ├── panel.css
 ├── panel.js
+├── main-view.html ← 一级主视图(声明了 mainView.html 时必须,见 §4.20)
 └── settings.html ← 自定义设置区(声明了 settingsHtml 时必须,见 §4.8)
 \`\`\`
 
@@ -1517,6 +1578,9 @@ my-ghost/
   // 窗口中打开)、minimize(最小化面板;恢复入口由用户偏好决定为浮动气泡或
   // 左侧栏)。标题条本体恒由主机绘制、
   // 关不掉;未知键拒装;position:"tab" 时声明本字段拒装
+  // 一级主视图是独立能力，见 §4.20。使用时在 slots 加 "main-view"，并声明：
+  // "mainView": { "title": "工作台", "icon": "puzzle", "html": "main-view.html" }
+  // 声明 main-view 时 minCindyVersion 必填。
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
@@ -1583,6 +1647,7 @@ tool name 对齐，协议键、工具名和参数名不翻译：
     }
   },
   "panel": { "title": "Plugin panel" },
+  "mainView": { "title": "Workspace" },
   "network": {
     "secrets": {
       "api_key": { "label": "API key", "hint": "Create one in account settings." }
@@ -1605,7 +1670,7 @@ tool name 对齐，协议键、工具名和参数名不翻译：
 \`\`\`
 
 可翻译字段：\`name\`、\`description\`、\`whenToUse\`、\`tools\`(工具 description 与参数
-文案)、\`panel.title\`、\`network.secrets / connections\`、\`node.secretBindings\`、
+文案)、\`panel.title\`、\`mainView.title\`、\`network.secrets / connections\`、\`node.secretBindings\`、
 \`setup\` 的 kv 标签；凭证、连接、Node 凭证和 kv 项按稳定 key 对齐(提供某个 key 的
 条目时 label 必填,hint 可选)。工具参数 schema 中已有的 \`title / description\` 用
 JSON Pointer 对齐（如 \`/properties/query\`；根节点用空字符串 \`""\`），参数名、类型、
@@ -1618,10 +1683,11 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
 \`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
 
-十八个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
+二十个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
 见 §4 与 §4.0.2)、\`agent\`(让
-当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
-面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
+当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、
+\`main-view\`(Cindy 一级侧边栏入口与完整页面,见 §4.20)、\`panel\`(常驻面板)、
+\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
 见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`badge\`
 (在插件入口留一颗持久的未读绿点,与 notify 并列、互不为前置,见 §4.9.1)、\`confirm\`(弹主机
@@ -3937,7 +4003,7 @@ SKILL.md 硬规则(打包与装入双侧强制,任一不满足直接拒):
 信任与作用域(如实告知用户,也请作者自重):
 
 - 技能指令由**主 Agent 以用户全部权限执行**,对所有项目、所有会话生效,
-  **不受插件沙箱约束**——这是十八个卡槽里信任面最高的能力,装入确认框会把
+  **不受插件沙箱约束**——这是二十个卡槽里信任面最高的能力,装入确认框会把
   每个技能置顶逐条列出;
 - 技能跟随插件的**全局**启用状态:仅在某个工作目录停用插件**不会**隐藏技能,
   只有全局停用或卸载才撤链(本期只有全局作用域);
@@ -4091,6 +4157,41 @@ const opened = await cindy.iosSimulator.request({
   slot 时会把包识别为“需要更新 Cindy”,而不是误报插件非法。已发布的旧 Host 无法追改;
   Skill 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
   可以继续使用正常的外部工具链,否则再引导用户升级 Cindy。
+
+## 4.20 一级主视图(main-view 槽)
+
+插件需要一个从 Cindy 一级侧边栏进入的完整页面时，声明独立的 \`main-view\` 槽。下例
+\`1.2.3\` 只演示 SemVer 格式，不代表 main-view 的首发版本已经裁决：
+
+\`\`\`json
+{
+  "minCindyVersion": "1.2.3",
+  "slots": ["main-view"],
+  "mainView": {
+    "title": "工作台",
+    "icon": "puzzle",
+    "html": "main-view.html"
+  }
+}
+\`\`\`
+
+- \`mainView.html\` 必须是包内安全相对路径且文件真实存在；\`title\` 可省略，省略时
+  回退插件 \`name\`。声明过基础 title 后，locale 文件可用
+  \`"mainView": { "title": "Workspace" }\` 翻译；没有基础 title 时不要声明该翻译；
+- \`mainView.icon\` 可省略，省略时使用 \`puzzle\`。它只控制主视图的侧边栏入口，不会
+  替代或修改根级 \`icon\` 品牌图片。可用值与 Cindy 系统图标名完全一致：
+  \`puzzle\`、\`globe\`、\`code\`、\`folder\`、\`database\`、\`chart-column\`、
+  \`image\`、\`message-circle\`、\`calendar-days\`；不接受别名、任意图标名或图片路径；
+- \`main-view\` 与 \`panel\` 是两种独立权限。可以让两者指向同一 HTML，但必须分别
+  申请 slot；主视图不接受 position、宽度或 systemButtons；
+- 声明该槽必须同时声明 \`minCindyVersion\`，填写首个正式提供 main-view Host 能力的
+  Cindy 版本。不要填写当前 \`0.0.0\` 开发版本，也不要在正式发布版本尚未裁决时猜测；
+- 插件批准并启用后，入口默认显示。用户可以在插件详情关闭“显示在侧边栏”；这只隐藏
+  导航入口，不停用插件，也不关闭 tool、network、panel 或后台能力；
+- 主视图与 panel 共用同一 Ghost WebView 沙箱：零 Node、零通用 preload、每插件专属
+  partition、CSP 和导航守门不变。\`main-view\` 本身不附赠联网、文件、凭证或其它能力；
+- 页面需要电子脑逻辑时仍先 \`fetch('/wake')\`，通信和媒体协议与 §5 完全相同。插件停用、
+  卸载或失去批准后，Host 会卸载页面并退出该路由。
 
 ## 5. 面板(panel.html/css/js)
 
@@ -4282,6 +4383,8 @@ const opened = await cindy.iosSimulator.request({
   · **未声明 command**:不拒装,但插件页"使用"按钮禁用,用户无法通过插件页一键启用
     或用 $command 点名;AI 工具调用不受影响(见 §2 说明)
 - 声明了 tool 槽但缺 tools(或反之)· panel.html 声明了但 slots 没有 "panel"
+- mainView 与 main-view 槽没有成对、mainView.html 文件缺失/路径不安全、icon 不在系统
+  图标白名单、含未知字段，或声明 main-view 时漏了 minCindyVersion
 - settingsHtml 路径不合法/文件不在包里 · settingsHeight 越界(160–800)或没配 settingsHtml 单独声明
 - panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——插件页内面板没有标准头)
 - keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 2

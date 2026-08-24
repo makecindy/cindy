@@ -1542,6 +1542,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/process-monitor/windowsProcessScanWorker.ts',
+          config: 'vite.process-scan-worker.config.ts',
+          // Windows PowerShell 的进程管道偶发 ENOTCONN；一次性 worker 隔离后
+          // 只降级资源用量快照，不能再变成 Electron main 的 uncaughtException。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/mcp-integrations/forgeIconConversionProcess.ts',
           config: 'vite.forge-icon-conversion-process.config.ts',
           // Sharp/libvips 转换在一次性 utility process 中执行；超时可 kill，

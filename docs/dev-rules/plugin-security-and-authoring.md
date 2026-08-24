@@ -27,7 +27,8 @@
 | 内容                                                  | 权威来源                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 编写手册（作者唯一教材，现拿现读）                    | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `FORGE_GUIDE`，经 `ghost_forge_guide` 工具下发                                                                                                                                                                                                                                                                                                                                                                                           |
-| 身份卡字段与校验、管子协议类型                        | `apps/desktop/src/shared/ghost.ts`（`validateGhostManifest`、`cindy.send` / `cindy.onHostMessage` 类型）                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ghost.json` 身份卡字段与校验                        | `packages/plugin-protocol/src/manifest.ts` 是跨消费者协议正本；`apps/desktop/src/shared/ghost.ts` 是 Desktop 运行时 validator。除下文登记的 Desktop-only 能力外，两端必须同步维护                                                                                                                                                                                                                                                                                                        |
+| 管子协议类型                                          | `apps/desktop/src/shared/ghost.ts`（`cindy.send` / `cindy.onHostMessage` 类型）                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 打包限制                                              | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir`                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 运行时、沙箱进程与生命周期                            | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 安装批准事实(receipt / 技能快照 / revision)           | `apps/desktop/src/main/cindy-brain/ghostInstallReceipt.ts`，批准态投影见 `shared/ghost.ts` 的 `GhostInstallApproval`                                                                                                                                                                                                                                                                                                                                                                      |
@@ -318,6 +319,23 @@
 - (c) 模型能力 slot 的 kind／参数／模型白名单；
 - (d) 面板供片协议与注入的主题 token（`cindy-ghost://` 分支、`ghostPanelTheme.ts` 白名单）；
 - (e) 打包限制（`forge.ts` 的 `packGhostDir`）。
+
+其中 `ghost.json` 属于 Ghost manifest 协议。新增或修改字段、slot 或枚举时，至少同步：
+
+1. 协议正本 `packages/plugin-protocol/src/manifest.ts` 及其测试；
+2. Desktop 完整镜像 `apps/desktop/src/shared/ghost.ts` 及其测试；
+3. 作者文档 `FORGE_GUIDE` 的对应章节及 Forge 测试。
+
+当前 `GHOST_SLOTS` 槽位集合中唯一登记的 Desktop-only 例外，是尚未进入跨消费者发布契约
+的 `library` 槽；在其首个正式支持版本确定并完成分发端兼容设计前，不得仅为同步数组而把
+它加入 `packages/plugin-protocol`。这里的「唯一」只描述槽位集合，不表示两套 validator 的
+其它历史字段语义已经完全同构；`main-view` 不属于该槽位例外，两端必须保持一致。
+
+`main-view` 的现行协议在 `FORGE_GUIDE` §4.20：`mainView.icon` 只接受 Cindy 系统线性图标
+`puzzle`、`globe`、`code`、`folder`、`database`、`chart-column`、`image`、
+`message-circle`、`calendar-days`，缺省回退 `puzzle`。枚举值直接等于图标名，不设别名；
+该字段只控制主视图侧边栏入口，不替代或修改根级 `icon` 品牌图片协议。后续扩展该枚举时也
+必须遵守第 5 节的存量兼容红线，并核对第 7 节的旧客户端降级缺口。
 
 反向同样成立：改校验必须同步手册；改手册宣称的新能力必须真有实现。`forge.test.ts` 的
 关键章节存在性测试只是最低闸，不替代逐条人工核对。
