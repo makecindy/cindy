@@ -407,6 +407,7 @@ export async function markdownToDocxBuffer(
 
   const doc = new Document({
     ...(title.length > 0 ? { title } : {}),
+    background: { color: theme.background },
     styles: docxDocumentStyles(theme),
     numbering: {
       config: [

@@ -16,7 +16,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
 import { columnPercents } from '../cindy-docs/docxStyles.js';
 import { inferNumberFormat, isSummaryRow } from '../cindy-docs/make_xlsx.js';
-import { PPTX_LAYOUT_IDS, PPTX_THEMES } from '../cindy-docs/make_pptx.js';
+import {
+  PPTX_LAYOUT_IDS,
+  PPTX_MAX_IMAGE_BYTES,
+  PPTX_MAX_TOTAL_IMAGE_BYTES,
+  PPTX_THEMES,
+} from '../cindy-docs/make_pptx.js';
 import { layoutSlots, SLIDE_H, SLIDE_W } from '../cindy-docs/pptxMasters.js';
 import { applyReportTemplate, htmlLooksUnstyled } from '../cindy-docs/pdfTemplate.js';
 import { DOCS_THEMES, formatDocsDate, themeToArgb } from '../cindy-docs/themes.js';
@@ -207,6 +212,33 @@ describe('PPT 母版版式', () => {
     );
     expect(layouts).not.toMatch(/type="slidenum"/);
   });
+
+  it('图片在交给 pptxgenjs 前受单文件和累计字节上限约束', async () => {
+    const client = await connect();
+    const tooLarge = path.join(workdir, 'too-large.png');
+    const handle = await fs.open(tooLarge, 'w');
+    await handle.truncate(PPTX_MAX_IMAGE_BYTES + 1);
+    await handle.close();
+
+    const single = await callTool(client, 'make_pptx', {
+      slides: [{ title: '超大图片', imagePath: 'too-large.png' }],
+      outPath: 'single-limit.pptx',
+    });
+    expect(single.errorCode).toBe('FILE_TOO_LARGE');
+    await expect(fs.stat(path.join(workdir, 'single-limit.pptx'))).rejects.toThrow();
+
+    const repeated = path.join(workdir, 'repeated.jpg');
+    const repeatedBytes = Math.floor(PPTX_MAX_TOTAL_IMAGE_BYTES / 3) + 1;
+    const repeatedHandle = await fs.open(repeated, 'w');
+    await repeatedHandle.truncate(repeatedBytes);
+    await repeatedHandle.close();
+    const aggregate = await callTool(client, 'make_pptx', {
+      slides: [1, 2, 3, 4].map((n) => ({ title: `重复 ${n}`, imagePath: 'repeated.jpg' })),
+      outPath: 'aggregate-limit.pptx',
+    });
+    expect(aggregate.errorCode).toBe('FILE_TOO_LARGE');
+    await expect(fs.stat(path.join(workdir, 'aggregate-limit.pptx'))).rejects.toThrow();
+  });
 });
 
 describe('Word 封面 / 标题层级 / 表格', () => {
@@ -279,6 +311,22 @@ describe('Word 封面 / 标题层级 / 表格', () => {
     expect(documentXml).toContain('无封面');
     expect(documentXml.match(/<w:sectPr[\s>]/g)?.length ?? 0).toBe(1);
   });
+
+  it('dark 主题把页面底色写进 Word 文档,与浅色正文配套', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      theme: 'dark',
+      title: '深色报告',
+      markdown: '# 结论\n\n正文。',
+      outPath: 'dark.docx',
+    });
+    expect(result.ok).toBe(true);
+    const documentXml = await unzip(result.path as string, 'word/document.xml');
+    expect(documentXml).toContain(`<w:background w:color="${DOCS_THEMES.dark.background}"`);
+    const stylesXml = await unzip(result.path as string, 'word/styles.xml');
+    expect(stylesXml).toContain(DOCS_THEMES.dark.body);
+    expect(stylesXml).toContain(DOCS_THEMES.dark.title);
+  });
 });
 
 describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
@@ -332,6 +380,29 @@ describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
       | { fgColor?: { argb?: string } }
       | undefined;
     expect(fill?.fgColor?.argb ?? '').not.toBe(themeToArgb(DOCS_THEMES.light.zebra));
+  });
+
+  it('dark 主题为全部正文格设置深色底与浅色字,斑马行只覆盖底色', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_xlsx', {
+      theme: 'dark',
+      sheets: [{ name: 'Dark', header: ['项目', '值'], rows: [['A', 1], ['B', 2]] }],
+      outPath: 'dark.xlsx',
+    });
+    expect(result.ok).toBe(true);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(result.path as string);
+    const ws = wb.getWorksheet('Dark')!;
+    const row2 = ws.getCell('A2');
+    const row3 = ws.getCell('A3');
+    expect((row2.fill as { fgColor?: { argb?: string } }).fgColor?.argb).toBe(
+      themeToArgb(DOCS_THEMES.dark.background),
+    );
+    expect((row3.fill as { fgColor?: { argb?: string } }).fgColor?.argb).toBe(
+      themeToArgb(DOCS_THEMES.dark.zebra),
+    );
+    expect(row2.font.color?.argb).toBe(themeToArgb(DOCS_THEMES.dark.body));
+    expect(row3.font.color?.argb).toBe(themeToArgb(DOCS_THEMES.dark.body));
   });
 });
 

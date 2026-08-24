@@ -348,6 +348,11 @@ export function registerMakeXlsxTool(
 
           for (const [rowIndex, row] of sheet.rows.entries()) {
             const excelRow = ws.addRow(row.map(toExcelValue));
+            // 先给每个正文格落完整主题底色和前景色，再叠斑马/汇总样式。
+            // 不能只给 dark 的斑马行涂深底：那会形成白底黑字/深底黑字交替。
+            paintRow(excelRow, themeToArgb(palette.background), {
+              color: { argb: themeToArgb(palette.body) },
+            });
             if (rowIndex === summaryIndex) {
               /*
                 汇总行必须一眼能和数据行分开。原来它混在斑马纹里,和普通一行长得

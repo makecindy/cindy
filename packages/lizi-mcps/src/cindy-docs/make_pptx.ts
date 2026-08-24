@@ -19,6 +19,7 @@ import {
   DocsPathError,
   prepareInputPath,
   prepareOutputPath,
+  readInputFileWithinLimit,
   resolveSessionRoot,
   writeOutputFile,
 } from './_paths.js';
@@ -55,8 +56,21 @@ export const PPTX_SUPPORTED_IMAGE_EXT: ReadonlySet<string> = new Set([
   '.gif',
 ]);
 
+/**
+ * 图片会被 base64 编码并写进 zip；原始字节的单文件与整份 deck 上限同时约束
+ * main 进程峰值。总量按「每次使用」累计，重复引用同一张大图也不能绕过。
+ */
+export const PPTX_MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+export const PPTX_MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024;
+
 export function isSupportedPptxImage(filePath: string): boolean {
   return PPTX_SUPPORTED_IMAGE_EXT.has(path.extname(filePath).toLowerCase());
+}
+
+function pptxImageDataUri(filePath: string, bytes: Buffer): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const mime = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+  return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
 type PptxGenConstructor = new () => pptxgen;
@@ -86,6 +100,7 @@ const DESCRIPTION = [
   '【每页可给】title(标题,必填)、layout(cover 封面 / section 分节 / content 内容 / comparison 双栏对比 / metrics 数据强调 / image 大图,默认 content)、',
   'subtitle(封面副题或分节导语)、bullets(要点数组)、body(整段正文)、',
   'notes(演讲者备注,只在演讲者视图可见)、imagePath(工作目录内的 png / jpg / gif)。',
+  '单张图片最大 12 MB,整份演示文稿按每次使用累计最多 32 MB;超限时先压缩图片或减少重复大图。',
   'comparison 必须给 columns(恰好两栏,每栏含 title + bullets/body);metrics 必须给 metrics(2–4 个 value + label + 可选 detail);image 必须给 imagePath,图片会自动裁切铺满主体区,body 可作题注。',
   '',
   '【主题】theme: "light"(浅色,默认,适合打印和明亮会议室)、"dark"(深色,适合投影)、',
@@ -193,9 +208,11 @@ export function registerMakePptxTool(
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const palette = resolveDocsTheme(theme as DocsThemeName);
 
-        // 图片路径先全部过边界闸再开始生成:与其出到第三页才失败留下半成品,
-        // 不如一次性告诉模型哪张图不行。
-        const imageAbsByIndex = new Map<number, string>();
+        // 图片先全部过边界闸和字节上限、再转成内存 data URI。后续 pptxgenjs 不再
+        // 按路径二次读取，既封住 stat/read 的竞态，也让 main 的图片峰值有硬上界。
+        const imageDataByIndex = new Map<number, string>();
+        const loadedImages = new Map<string, { bytes: number; data: string }>();
+        let totalImageBytes = 0;
         for (const [index, slide] of slides.entries()) {
           if (!slide.imagePath) continue;
           const imageAbs = await prepareInputPath(root, slide.imagePath);
@@ -208,7 +225,30 @@ export function registerMakePptxTool(
               { slide: index + 1, imagePath: imageAbs },
             );
           }
-          imageAbsByIndex.set(index, imageAbs);
+          let loaded = loadedImages.get(imageAbs);
+          if (!loaded) {
+            const bytes = await readInputFileWithinLimit(
+              imageAbs,
+              PPTX_MAX_IMAGE_BYTES,
+              (size) =>
+                new DocsPathError(
+                  'FILE_TOO_LARGE',
+                  `第 ${index + 1} 页的图片过大: ${size} 字节`,
+                  `图片 "${slide.imagePath}" 有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单张图片上限(12 MB)。请先压缩或缩小图片。`,
+                ),
+            );
+            loaded = { bytes: bytes.byteLength, data: pptxImageDataUri(imageAbs, bytes) };
+            loadedImages.set(imageAbs, loaded);
+          }
+          totalImageBytes += loaded.bytes;
+          if (totalImageBytes > PPTX_MAX_TOTAL_IMAGE_BYTES) {
+            throw new DocsPathError(
+              'FILE_TOO_LARGE',
+              `演示文稿图片累计过大: ${totalImageBytes} 字节`,
+              `这份演示文稿引用的图片累计 ${(totalImageBytes / 1024 / 1024).toFixed(1)} MB,超过 32 MB 上限(重复引用也累计)。请压缩图片或减少重复大图。`,
+            );
+          }
+          imageDataByIndex.set(index, loaded.data);
         }
 
         const PptxGen = resolvePptxGenConstructor(pptxgenModule);
@@ -236,10 +276,10 @@ export function registerMakePptxTool(
           // 时也能直接看到主题色,两边不一致就说明登记错了。
           page.background = { color: palette.background };
 
-          const imageAbs = imageAbsByIndex.get(index);
+          const imageData = imageDataByIndex.get(index);
           const subtitle = slide.subtitle?.trim() ?? '';
           const slots = layoutSlots(layout, {
-            hasImage: Boolean(imageAbs),
+            hasImage: Boolean(imageData),
             hasSubtitle: subtitle.length > 0,
           });
 
@@ -399,7 +439,7 @@ export function registerMakePptxTool(
               }
             }
           } else if (layout === 'image') {
-            if (imageAbs && slots.image) {
+            if (imageData && slots.image) {
               page.addShape('rect', {
                 x: slots.image.x,
                 y: slots.image.y,
@@ -409,7 +449,7 @@ export function registerMakePptxTool(
                 line: { color: palette.line, width: 1 },
               });
               page.addImage({
-                path: imageAbs,
+                data: imageData,
                 x: slots.image.x,
                 y: slots.image.y,
                 w: slots.image.w,
@@ -485,9 +525,9 @@ export function registerMakePptxTool(
             }
           }
 
-          if (layout !== 'image' && imageAbs && slots.image) {
+          if (layout !== 'image' && imageData && slots.image) {
             page.addImage({
-              path: imageAbs,
+              data: imageData,
               x: slots.image.x,
               y: slots.image.y,
               w: slots.image.w,
