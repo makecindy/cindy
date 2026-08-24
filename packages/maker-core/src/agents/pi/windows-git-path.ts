@@ -163,6 +163,40 @@ export function partitionWindowsProbeCandidates(
   return { local, network };
 }
 
+function windowsGitInstallRootForProbeCandidate(candidate: string): string | undefined {
+  const normalized = path.win32.normalize(candidate);
+  const executableRoot = gitInstallRootFromPath(normalized);
+  if (executableRoot) return executableRoot;
+  const name = path.win32.basename(normalized).toLowerCase();
+  if (name === 'cmd') return path.win32.dirname(normalized);
+  if (name !== 'bin') return undefined;
+  const parent = path.win32.dirname(normalized);
+  const parentName = path.win32.basename(parent).toLowerCase();
+  return parentName === 'usr' || parentName.startsWith('mingw')
+    ? path.win32.dirname(parent)
+    : parent;
+}
+
+function windowsPathProbeBatches(candidates: readonly string[]): string[][] {
+  const installRoots = uniqueWindowsPaths(candidates.flatMap((candidate) => (
+    windowsGitInstallRootForProbeCandidate(candidate) ?? []
+  )))
+    .map(normalizedWindowsPath)
+    .sort((left, right) => right.length - left.length);
+  const batches = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const normalized = normalizedWindowsPath(candidate);
+    const installRoot = installRoots.find((root) => (
+      normalized === root || normalized.startsWith(`${root}\\`)
+    ));
+    const key = installRoot ?? normalizedWindowsPath(path.win32.parse(candidate).root) ?? normalized;
+    const batch = batches.get(key);
+    if (batch) batch.push(candidate);
+    else batches.set(key, [candidate]);
+  }
+  return [...batches.values()];
+}
+
 function defaultNetworkDriveLetters(powershell: string, logger?: WindowsGitPathLogger): ReadonlySet<string> {
   const script = buildWindowsNetworkDriveProbeScript();
   try {
@@ -193,7 +227,7 @@ export function probePartitionedWindowsPathKinds(
   const kinds = new Map<string, WindowsPathKind>();
   for (const phase of [local, network]) {
     if (phase.length === 0) continue;
-    for (const [candidate, kind] of probeBatches(phase.map((candidate) => [candidate]))) {
+    for (const [candidate, kind] of probeBatches(windowsPathProbeBatches(phase))) {
       kinds.set(candidate, kind);
     }
   }
@@ -208,8 +242,14 @@ function defaultProbeWindowsPathKindBatches(
   const nonEmptyBatches = batches.filter((batch) => batch.length > 0);
   if (nonEmptyBatches.length === 0) return new Map();
   const candidates = nonEmptyBatches.flat();
-  const script = buildWindowsPathKindProbeScript(candidates.length, WINDOWS_PATH_PROBE_TIMEOUT_MS);
-  const input = candidates.length === 1 ? candidates[0] : candidates;
+  const script = buildWindowsPathKindProbeScript(
+    candidates.length,
+    WINDOWS_PATH_PROBE_TIMEOUT_MS,
+    nonEmptyBatches.length,
+  );
+  const input = candidates.length === 1
+    ? candidates[0]
+    : nonEmptyBatches.map((paths) => ({ paths }));
   try {
     const output = execFileSync(
       powershell,

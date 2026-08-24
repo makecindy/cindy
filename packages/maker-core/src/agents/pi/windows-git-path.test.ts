@@ -89,7 +89,7 @@ describe('Windows Git/PATH helpers', () => {
       },
     );
 
-    expect(phases).toEqual([[[localCmd], [localGit]], [[offlineGit]]]);
+    expect(phases).toEqual([[[localCmd, localGit]], [[offlineGit]]]);
     expect(kinds).toEqual(new Map([
       [localCmd, 'directory'],
       [localGit, 'file'],
@@ -114,7 +114,7 @@ describe('Windows Git/PATH helpers', () => {
       },
     );
 
-    expect(phases).toEqual([[[offlineMappedGit], [localCmd], [localGit]]]);
+    expect(phases).toEqual([[[offlineMappedGit], [localCmd, localGit]]]);
     expect(kinds).toEqual(new Map([
       [localCmd, 'directory'],
       [localGit, 'file'],
@@ -196,6 +196,41 @@ describe('Windows Git/PATH helpers', () => {
 
     expect(phases).toEqual([[[firstOfflineGit], [secondOfflineGit], [localGit]]]);
     expect(kinds).toEqual(new Map([[localGit, 'file']]));
+  });
+
+  it('keeps one stale install root from consuming every local probe slot', () => {
+    const offlineRoot = 'Y:\\OldGit';
+    const localRoot = 'C:\\PortableGit';
+    const offlineCandidates = [
+      `${offlineRoot}\\cmd\\git.exe`,
+      `${offlineRoot}\\cmd`,
+      `${offlineRoot}\\cmd\\git.cmd`,
+      `${offlineRoot}\\cmd\\git.bat`,
+      `${offlineRoot}\\bin`,
+      `${offlineRoot}\\bin\\git.exe`,
+      `${offlineRoot}\\bin\\git.cmd`,
+      `${offlineRoot}\\bin\\git.bat`,
+      `${offlineRoot}\\usr\\bin`,
+      `${offlineRoot}\\usr\\bin\\git.exe`,
+      `${offlineRoot}\\usr\\bin\\git.cmd`,
+      `${offlineRoot}\\usr\\bin\\git.bat`,
+      `${offlineRoot}\\usr\\bin\\ls.exe`,
+    ];
+    const localCmd = `${localRoot}\\cmd`;
+    const localGit = `${localCmd}\\git.exe`;
+    const phases: string[][][] = [];
+
+    const kinds = probePartitionedWindowsPathKinds(
+      [...offlineCandidates, localGit, localCmd],
+      new Set(),
+      (batches) => {
+        phases.push(batches.map((batch) => [...batch]));
+        return new Map([[localGit, 'file'], [localCmd, 'directory']]);
+      },
+    );
+
+    expect(phases).toEqual([[offlineCandidates, [localGit, localCmd]]]);
+    expect(kinds).toEqual(new Map([[localGit, 'file'], [localCmd, 'directory']]));
   });
 
   it('keeps a valid HKLM Git root after an earlier offline HKCU root', () => {
