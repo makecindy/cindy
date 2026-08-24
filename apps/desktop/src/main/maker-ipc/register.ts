@@ -763,6 +763,7 @@ import {
 } from '../maker-host/createDesktopProviderService.js';
 import { readOrcaWorkerProviderRoutingContext } from './orcaProviderRoutingContext.js';
 import {
+  clearSessionProvider,
   getSessionProvider,
   hasSessionProvider,
   hydrateSessionProvider,
@@ -863,6 +864,7 @@ import {
   isLocalSessionBusy,
 } from '../maker-host/codex-credential-switch.js';
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
+import { applyRuntimeSelectionAxesWithRecovery } from './runtimeSelectionAxes.js';
 import {
   acceptSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
@@ -14686,6 +14688,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             normalizeSessionProviderId(effectiveProviderId) ?? null,
         };
       }
+      const previousAtomicRuntime = atomicSelection
+        ? {
+            hadProviderRoute: hasSessionProvider(sessionId),
+            providerId: getSessionProvider(sessionId),
+            effort: getSessionEffort(sessionId) as SessionRuntimeProfile['effort'],
+            fastMode: getSessionFastMode(sessionId),
+          }
+        : null;
       try {
         const result = await applySetModelThenCancelAgentSwitchIntent(
           agentSwitchPending,
@@ -14737,33 +14747,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return { deferred: false, superseded: true };
         }
         if (atomicSelection) {
+          const selectionToCommit = atomicSelection;
           // model/provider/effort/fast 是一次选择快照，必须在同一把 session 锁内收敛。
           // applyRuntimeSetModelChange 可能 close + wake；若 effort/fast 留给 renderer
           // 后续独立调用，queue drain 会用新 model + 旧偏好重建，跨控制端时还会发生
           // 旧请求尾写覆盖新选择。
-          setSessionEffort(sessionId, atomicSelection.effort);
-          setSessionFastMode(sessionId, atomicSelection.fastMode);
+          const commitControlStores = () => {
+            setSessionEffort(sessionId, selectionToCommit.effort);
+            setSessionFastMode(sessionId, selectionToCommit.fastMode);
+          };
+          const restoreControlStores = () => {
+            if (previousAtomicRuntime?.hadProviderRoute) {
+              setSessionProvider(sessionId, previousAtomicRuntime.providerId);
+            } else {
+              clearSessionProvider(sessionId);
+            }
+            setSessionEffort(sessionId, previousAtomicRuntime?.effort);
+            setSessionFastMode(sessionId, previousAtomicRuntime?.fastMode ?? false);
+          };
           const sess = maker.getSession(sessionId);
           if (
             sess &&
             result.status !== 'deferred' &&
             !pendingCredentialSwitchHolder?.has(sessionId)
           ) {
-            if (atomicSelection.effort) {
-              await sess.setEffort(
-                atomicSelection.effort as
-                  | 'minimal'
-                  | 'low'
-                  | 'medium'
-                  | 'high'
-                  | 'xhigh'
-                  | 'max'
-                  | 'ultra',
-              );
-            }
-            if (sess.agentKind === 'codex') {
-              await sess.setFastMode(atomicSelection.fastMode);
-            }
+            await applyRuntimeSelectionAxesWithRecovery({
+              session: sess,
+              effort: selectionToCommit.effort,
+              fastMode: selectionToCommit.fastMode,
+              commitControlStores,
+              restoreControlStores,
+              terminateSession: () =>
+                withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId)),
+            });
+          } else {
+            commitControlStores();
           }
         }
         if (

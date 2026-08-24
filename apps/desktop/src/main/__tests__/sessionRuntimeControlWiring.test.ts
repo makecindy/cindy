@@ -110,7 +110,7 @@ describe('session runtime control wiring', () => {
   it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {
     expect(registerSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
     expect(registerSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
-    expect(registerSource).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
+    expect(registerSource).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
   });
 
   it('keeps explicit provider null and fixed-effort null through runtime settlement', () => {

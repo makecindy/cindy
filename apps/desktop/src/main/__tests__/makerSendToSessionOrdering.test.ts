@@ -488,10 +488,11 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
     expect(setModelBlock).toContain('if (atomicSelection) {');
     expect(setModelBlock).toContain('effort: atomicSelection.effort as');
-    expect(setModelBlock).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
-    expect(setModelBlock).toContain('setSessionFastMode(sessionId, atomicSelection.fastMode);');
-    expect(setModelBlock).toContain('await sess.setEffort(');
-    expect(setModelBlock).toContain('await sess.setFastMode(atomicSelection.fastMode);');
+    expect(setModelBlock).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
+    expect(setModelBlock).toContain('setSessionFastMode(sessionId, selectionToCommit.fastMode);');
+    expect(setModelBlock).toContain('applyRuntimeSelectionAxesWithRecovery({');
+    expect(setModelBlock).toContain('restoreControlStores,');
+    expect(setModelBlock).toContain('withRehydrateCloseSuppressed(sessionId');
     expect(setModelBlock).toMatch(
       /internalOptions\.source === 'user'\s*&&\s*\(isDeviceLinkInvoke\(\) \|\| atomicSelection\)/,
     );
@@ -502,16 +503,16 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'applySetModelThenCancelAgentSwitchIntent(',
-      'setSessionEffort(sessionId, atomicSelection.effort);',
+      'const commitControlStores',
     );
     expectOrder(
       setModelBlock,
-      'effort: atomicSelection.effort as',
-      'setSessionEffort(sessionId, atomicSelection.effort);',
+      'applyRuntimeSelectionAxesWithRecovery({',
+      'await persistSessionFields',
     );
     expectOrder(
       setModelBlock,
-      'setSessionFastMode(sessionId, atomicSelection.fastMode);',
+      'setSessionFastMode(sessionId, selectionToCommit.fastMode);',
       'await persistSessionFields(sessionId, patch);',
     );
     expectOrder(
