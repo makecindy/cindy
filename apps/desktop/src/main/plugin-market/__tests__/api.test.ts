@@ -198,6 +198,26 @@ describe('PluginMarketApi', () => {
     });
   });
 
+  it('omits active-session credentials when draining a local-owner receipt', async () => {
+    const eventId = '123e4567-e89b-42d3-a456-426614174000';
+    const fetcher = vi.fn().mockResolvedValue({
+      accepted: true,
+      duplicate: false,
+      eventId,
+    });
+    const api = new PluginMarketApi(fetcher, () => '1.2.3');
+
+    await api.recordInstallReceipt(PLUGIN_A, 'release-1', eventId, 'none');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      `/api/plugins/${PLUGIN_A}/install-events`,
+      expect.objectContaining({
+        suppressAuthSideEffects: true,
+        token: null,
+      }),
+    );
+  });
+
   it('accepts the idempotent duplicate response and rejects response drift', async () => {
     const eventId = '123e4567-e89b-42d3-a456-426614174000';
     const duplicate = new PluginMarketApi(

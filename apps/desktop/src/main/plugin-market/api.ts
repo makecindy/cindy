@@ -123,6 +123,7 @@ export class PluginMarketApi {
     pluginId: string,
     releaseId: string,
     eventId: string,
+    authentication: 'active-session' | 'none' = 'active-session',
   ): Promise<PluginInstallReceiptResponse> {
     let response: unknown;
     try {
@@ -136,6 +137,8 @@ export class PluginMarketApi {
           timeoutMs: 5_000,
           // 指标端点故障不能 refresh token 或使当前用户退登。
           suppressAuthSideEffects: true,
+          // local owner 的回执即使在用户随后登录后补发，也不能借用新账号凭证。
+          ...(authentication === 'none' ? { token: null } : {}),
         },
       );
     } catch (error) {

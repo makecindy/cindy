@@ -225,6 +225,26 @@ describe('serverApiFetch', () => {
     },
   );
 
+  it('explicit token null omits the active session Authorization header', async () => {
+    mocks.getAccessToken.mockReturnValue('token-a');
+    mocks.netFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    });
+
+    await expect(
+      serverApiFetch('/api/resource', {
+        baseUrl: 'https://resource.example.com',
+        token: null,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(mocks.getAccessToken).not.toHaveBeenCalled();
+    const headers = mocks.netFetch.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+  });
+
   it.each([
     { name: '403', response: { ok: false, status: 403, json: async () => ({}) } },
     { name: 'network failure', response: new Error('offline') },

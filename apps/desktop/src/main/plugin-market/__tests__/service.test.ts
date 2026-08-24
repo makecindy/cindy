@@ -52,8 +52,10 @@ vi.mock('../../authManager.js', () => ({
   ),
 }));
 vi.mock('../../appSessionState.js', () => ({
+  dataOwnerStorageKey: vi.fn((ownerId: string) => ownerId),
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
   isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
+  LOCAL_DATA_OWNER_ID: 'local-v1',
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
     path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
   ),
@@ -93,6 +95,7 @@ import type {
   VisiblePluginDetail,
   VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
+import { app } from 'electron';
 
 import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
 import { GhostPackagePermissionReviewRequiredError } from '../../cindy-brain/packagePermissionReview';
@@ -101,7 +104,7 @@ import {
   ghostManifestDigest,
   type PluginMarketInstallationRecord,
 } from '../ledger';
-import type { PluginInstallReceiptOutbox } from '../installReceiptOutbox';
+import { PluginInstallReceiptOutbox } from '../installReceiptOutbox';
 import { PluginMarketService } from '../service';
 import type { PluginMarketApi } from '../api';
 import { createOrganizationPrefixStore } from '../organizationPrefixStore';
@@ -138,6 +141,7 @@ afterEach(() => {
     dataOwnerId: 'user-1',
     generation: 1,
   };
+  vi.mocked(app.getPath).mockImplementation(() => os.tmpdir());
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -2644,6 +2648,77 @@ describe('PluginMarketService migration and defaultInstall', () => {
       installed: true,
     });
     expect(h.receiptOutbox.enqueue).toHaveBeenCalledWith(item.id, item.currentRelease.id);
+  });
+
+  it('drains a retained local receipt anonymously after login and a service restart', async () => {
+    const item = summary();
+    const userDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-local-receipt-login-'));
+    roots.push(userDataRoot);
+    vi.mocked(app.getPath).mockReturnValue(userDataRoot);
+    const localDirectory = path.join(
+      userDataRoot,
+      'owners',
+      'local-v1',
+      'plugin-market',
+      'install-receipts.v1',
+    );
+    const eventId = '123e4567-e89b-42d3-a456-426614174000';
+    const offlineSender = vi.fn().mockRejectedValue(new Error('offline'));
+    const localOutbox = new PluginInstallReceiptOutbox(localDirectory, offlineSender, {
+      randomUUID: () => eventId,
+      retryDelaysMs: [0],
+    });
+    localOutbox.enqueue(item.id, item.currentRelease.id);
+    await localOutbox.flush();
+    expect(localOutbox.pending()).toHaveLength(1);
+
+    // 模拟应用只在登录完成后创建新的 service：它没有进程内 local outbox 缓存，
+    // 必须从固定 local owner 目录重新发现积压。
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 3 };
+    const h = harness([item]);
+    const restartedService = new PluginMarketService(h.api as unknown as PluginMarketApi, h.ledger);
+    const firstDeliveryGate = deferred();
+    const firstDeliveryReturned = deferred();
+    h.api.recordInstallReceipt.mockImplementationOnce(async () => {
+      try {
+        await firstDeliveryGate.promise;
+        throw new Error('offline after login');
+      } finally {
+        firstDeliveryReturned.resolve();
+      }
+    });
+
+    runtime.boundaryPending = true;
+    await expect(restartedService.snapshot()).resolves.toMatchObject({
+      unavailableReason: 'session-switching',
+    });
+    expect(h.api.recordInstallReceipt).not.toHaveBeenCalled();
+    expect(localOutbox.pending()).toHaveLength(1);
+
+    runtime.boundaryPending = false;
+    await restartedService.snapshot();
+    await vi.waitFor(() => expect(h.api.recordInstallReceipt).toHaveBeenCalledTimes(1));
+
+    // 第一次匿名补发仍在进行时切到另一 cloud owner；失败返回后，旧 delivery
+    // owner 的 drainer 必须在下一次重试前停止，不能跨 generation 发送或删文件。
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 4 };
+    firstDeliveryGate.resolve();
+    await firstDeliveryReturned.promise;
+    await Promise.resolve();
+    expect(h.api.recordInstallReceipt).toHaveBeenCalledTimes(1);
+    expect(localOutbox.pending()).toHaveLength(1);
+
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 5 };
+    await restartedService.snapshot();
+    await vi.waitFor(() => {
+      expect(h.api.recordInstallReceipt).toHaveBeenCalledWith(
+        item.id,
+        item.currentRelease.id,
+        eventId,
+        'none',
+      );
+      expect(localOutbox.pending()).toHaveLength(0);
+    });
   });
 
   it('returns a successful install after the ledger write without waiting for a hanging receipt', async () => {

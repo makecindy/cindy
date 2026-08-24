@@ -54,8 +54,10 @@ vi.mock('../../authManager.js', () => ({
   ),
 }));
 vi.mock('../../appSessionState.js', () => ({
+  dataOwnerStorageKey: vi.fn((ownerId: string) => ownerId),
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
   isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
+  LOCAL_DATA_OWNER_ID: 'local-v1',
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
     path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
   ),
@@ -104,6 +106,7 @@ import {
   ghostManifestDigest,
   type PluginMarketInstallationRecord,
 } from '../ledger';
+import type { PluginInstallReceiptOutbox } from '../installReceiptOutbox';
 import { PluginMarketService } from '../service';
 import { MarketSourceManager } from '../sources';
 import { MarketSourceStore } from '../sources/store';
@@ -247,11 +250,20 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
     }),
     download: vi.fn(),
   };
+  const receiptOutbox = {
+    enqueue: vi.fn(() => null),
+    flush: vi.fn(async () => undefined),
+  };
   return {
     api,
     ledger,
     sourceStore,
-    service: new PluginMarketService(api as unknown as PluginMarketApi, ledger, sourceStore),
+    service: new PluginMarketService(
+      api as unknown as PluginMarketApi,
+      ledger,
+      sourceStore,
+      () => receiptOutbox as unknown as PluginInstallReceiptOutbox,
+    ),
   };
 }
 
