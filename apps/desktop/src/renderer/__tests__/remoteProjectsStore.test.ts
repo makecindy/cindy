@@ -263,6 +263,28 @@ describe('remoteProjectsStore', () => {
       });
     });
 
+    it('固定强度运行时模型显式清除旧 effort', () => {
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1', { effort: 'high' })]);
+      remoteProjectsStore.applyPatch('dev-B', 's1', {
+        model: 'fixed-strength-model',
+        providerId: 'openai',
+        effort: '',
+        runtimeEffective: {
+          agentKind: 'codex',
+          model: 'fixed-strength-model',
+          providerId: 'openai',
+          effort: null,
+          fastMode: false,
+        },
+      });
+
+      expect(remoteProjectsStore.getMergedRemoteSessions()[0]).toMatchObject({
+        model: 'fixed-strength-model',
+        effort: '',
+        runtimeEffective: { effort: null },
+      });
+    });
+
     it('status=deleted 移出分片，archived 保留完整行供归档筛选展示', () => {
       remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1'), mk('s2')]);
       remoteProjectsStore.applyPatch('dev-B', 's1', { status: 'deleted' });

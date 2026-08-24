@@ -146,6 +146,39 @@ describe('sessionToCamel runtime projection', () => {
     });
   });
 
+  it('clears the baseline effort when the effective runtime model has fixed strength', () => {
+    setSessionRuntimeProjector((session) => ({
+      model: 'fixed-strength-model',
+      providerId: 'openai',
+      effort: '',
+      fastMode: false,
+      runtimeGeneration: 5,
+      runtimeBaseline: {
+        agentKind: 'codex',
+        model: session.model,
+        providerId: session.providerId ?? null,
+        effort: session.effort,
+        fastMode: session.fastMode,
+      },
+      runtimeEffective: {
+        agentKind: 'codex',
+        model: 'fixed-strength-model',
+        providerId: 'openai',
+        effort: null,
+        fastMode: false,
+      },
+      runtimePending: null,
+    }));
+
+    const session = sessionToCamel(
+      sessionRow({ model: 'gpt-baseline', effort: 'high', providerId: 'xd' }),
+    );
+
+    expect(session.model).toBe('fixed-strength-model');
+    expect(session.effort).toBe('');
+    expect(session.runtimeEffective?.effort).toBeNull();
+  });
+
   it('removes the injected runtime projection when the composition root is reset', () => {
     setSessionRuntimeProjector(() => ({ model: 'temporary-model' }));
     setSessionRuntimeProjector(null);

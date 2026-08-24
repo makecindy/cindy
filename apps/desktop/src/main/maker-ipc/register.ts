@@ -1058,7 +1058,9 @@ function projectSessionRuntimeControl(
   return {
     model: effective.model,
     providerId: effective.providerId,
-    ...(effective.effort !== null ? { effort: effective.effort } : {}),
+    // Keep the legacy top-level wire axis string-compatible while explicitly
+    // clearing stale effort; runtimeEffective retains the semantic null.
+    effort: effective.effort ?? '',
     fastMode: effective.fastMode,
     runtimeGeneration: control.generation,
     runtimeBaseline: baseline,
@@ -12507,7 +12509,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (attempt) => {
           return (async () => {
             try {
-              await maybeApplySessionRuntimeFallback(sessionId, decision.attempt);
+              await maybeApplySessionRuntimeFallback(sessionId, decision.episodeAttempt);
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
               // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
               // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚

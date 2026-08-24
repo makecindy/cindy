@@ -58,7 +58,7 @@ describe('session runtime control wiring', () => {
     const effort = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
-      'ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE',
+      'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
       registerSource,
@@ -116,5 +116,12 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('broadcastSessionRuntimeProjection(sessionId');
     expect(registerSource).toContain('runtimeEffective: effective');
     expect(registerSource).toContain('runtimePending: control.pending');
+    expect(registerSource).toContain("effort: effective.effort ?? '',");
+  });
+
+  it('counts fallback eligibility across the whole interrupted-turn episode', () => {
+    expect(registerSource).toContain(
+      'maybeApplySessionRuntimeFallback(sessionId, decision.episodeAttempt)',
+    );
   });
 });

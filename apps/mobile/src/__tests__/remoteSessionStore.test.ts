@@ -495,6 +495,28 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('clears stale effort for a fixed-strength runtime model', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { effort: 'high' })]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', {
+      model: 'fixed-strength-model',
+      providerId: 'openai',
+      effort: '',
+      runtimeEffective: {
+        agentKind: 'codex',
+        model: 'fixed-strength-model',
+        providerId: 'openai',
+        effort: null,
+        fastMode: false,
+      },
+    });
+
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      model: 'fixed-strength-model',
+      effort: '',
+      runtimeEffective: { effort: null },
+    });
+  });
+
   it('does not let a draft sentinel snapshot replace an optimistic first-message title', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
       session('s1', { title: '帮我排查登录失败' }),
