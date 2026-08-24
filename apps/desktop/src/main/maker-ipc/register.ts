@@ -6210,6 +6210,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 已设间隔算出 now+null 立即触发,mobile 必须据此回退旧 wire 形态(省略
       // key,由旧引擎的隐式清空承担等价语义)。
       supportsScheduleIntervalNullClear: true,
+      // device-link 控制端只有看到此位才保留 `/name` + receipt；旧 desktop
+      // 缺省该位，控制端在单次 wire 副本中回退为它能执行的 `/skill:name`。
+      supportsPiSkillInvocationReceipt: true,
     };
   });
 
