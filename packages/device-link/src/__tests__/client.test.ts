@@ -3151,6 +3151,58 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('路由账本按 peer 限流且不淘汰仍未决的旧代归属', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const internals = h.client as unknown as {
+      markPeerRouteOnline(deviceId: string): number;
+    };
+    const oldGeneration = internals.markPeerRouteOnline('dev-a');
+    let oldestRouteId = '';
+    for (let index = 0; index < 1_024; index += 1) {
+      h.client.sendPush('dev-a', 'maker:event', { index });
+      if (index === 0) oldestRouteId = h.current().sent.at(-1)?.id ?? '';
+    }
+    expect(oldestRouteId).toBeTruthy();
+
+    expect(() => {
+      h.client.sendPush('dev-a', 'maker:event', { overflow: true });
+    }).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(() => {
+      h.client.sendPush('dev-b', 'maker:event', { independent: true });
+    }).not.toThrow();
+
+    const currentGeneration = internals.markPeerRouteOnline('dev-a');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldestRouteId,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'delayed oldest route error after per-peer capacity is reached',
+        dst: 'dev-a',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-a',
+      state: 'offline',
+      linkGeneration: oldGeneration,
+    });
+    h.client.stop();
+  });
+
   it('新代重放已 ACK 后迟到的旧代 DEVICE_OFFLINE 仍不拆当前 link', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     const routeChanges: Array<{

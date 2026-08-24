@@ -5,23 +5,42 @@ export interface RemoteSyncRunner {
   isRunning(): boolean;
 }
 
+export interface RemoteSyncReopenCoordinator {
+  captureVersion(): number;
+  reopenAfter(failedAtVersion: number): Promise<void>;
+}
+
 /**
- * 同一轮 session sync 的订阅与并行 snapshot 共用一次 peer 重开。
- * 成功结果保留到本轮结束，避免错峰失败连续推进 link generation；失败清除，
- * 让该轮后续瞬态重试仍有一次真正自愈机会。
+ * 同一轮 session sync 按「故障发生时看到的恢复版本」合并 peer 重开。
+ * 同一旧代上错峰返回的失败共用一次 reopen；reopen 后真正发出的请求若再次失败，
+ * 会携带新版本触发下一次 reopen。失败的 reopen 不推进版本，允许后续继续自愈。
  */
-export function createRemoteSyncReopenOnce(
+export function createRemoteSyncReopenCoordinator(
   reopen: () => Promise<void>,
-): () => Promise<void> {
-  let inFlightOrSucceeded: Promise<void> | null = null;
-  return (): Promise<void> => {
-    if (inFlightOrSucceeded) return inFlightOrSucceeded;
-    const attempt = Promise.resolve().then(reopen);
-    inFlightOrSucceeded = attempt;
-    void attempt.catch(() => {
-      if (inFlightOrSucceeded === attempt) inFlightOrSucceeded = null;
-    });
-    return attempt;
+): RemoteSyncReopenCoordinator {
+  let successfulVersion = 0;
+  let recovery: {
+    coveredFailureVersion: number;
+    promise: Promise<void>;
+  } | null = null;
+
+  return {
+    captureVersion: () => successfulVersion,
+    reopenAfter(failedAtVersion): Promise<void> {
+      if (recovery && recovery.coveredFailureVersion >= failedAtVersion) {
+        return recovery.promise;
+      }
+      const nextVersion = successfulVersion + 1;
+      const attempt = Promise.resolve().then(reopen).then(() => {
+        successfulVersion = nextVersion;
+      });
+      const entry = { coveredFailureVersion: failedAtVersion, promise: attempt };
+      recovery = entry;
+      void attempt.catch(() => {
+        if (recovery === entry) recovery = null;
+      });
+      return attempt;
+    },
   };
 }
 

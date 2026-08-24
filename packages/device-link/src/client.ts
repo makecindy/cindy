@@ -78,8 +78,12 @@ const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
-/** 单个逻辑帧只保留近期物理发送代次，避免断续重连时路由账本无限增长。 */
-const MAX_OUTBOUND_ROUTE_GENERATIONS_PER_ID = 256;
+/** 单个 peer 的路由账本上限；满时拒绝新发送，绝不淘汰仍可能收到错误的旧记录。 */
+const MAX_OUTBOUND_ROUTE_IDS_PER_PEER = 1_024;
+/** 全 client 的硬上限；达到后同样以背压停发，不用别的 peer 的记录换空间。 */
+const MAX_OUTBOUND_ROUTE_IDS_TOTAL = 16_384;
+/** 同一逻辑帧跨 link generation 的记录上限；同代重发用计数压缩。 */
+const MAX_OUTBOUND_ROUTE_GENERATION_RUNS_PER_ID = 256;
 
 /**
  * 该 push channel 是否属于可驱逐档(latest-wins 腾位的唯一判据入口)。
@@ -650,9 +654,9 @@ export class DeviceLinkClient {
    * 可能晚于新代重放 ACK 到达；跨 socket 时由 resetLinkStateForReconnect 清空。
    * 本账本不进入 wire protocol，也不跨 client 生命周期。
    */
-  private outboundRouteGenerationById = new Map<
+  private outboundRouteGenerationByPeer = new Map<
     string,
-    { deviceId: string; linkGenerations: number[] }
+    Map<string, Array<{ linkGeneration: number; count: number }>>
   >();
 
   constructor(opts: DeviceLinkClientOptions) {
@@ -1522,7 +1526,7 @@ export class DeviceLinkClient {
     this.clearPendingPresence();
     // 旧 socket 的 relay-error 已被 connection epoch 守卫隔离，不可能再合法到达；
     // 保留它的物理发送记录只会让新连接重放产生的错误先消费旧代次，误判为 stale。
-    this.outboundRouteGenerationById.clear();
+    this.outboundRouteGenerationByPeer.clear();
     for (const peer of this.peerTransport.values()) {
       this.markPeerLinkDown(peer);
       peer.recoveryNeedsAck = true;
@@ -2696,34 +2700,64 @@ export class DeviceLinkClient {
     deviceId: string,
     linkGeneration: number,
   ): void {
-    const existing = this.outboundRouteGenerationById.get(id);
-    const linkGenerations = existing?.deviceId === deviceId
-      ? existing.linkGenerations
-      : [];
-    linkGenerations.push(linkGeneration);
-    if (linkGenerations.length > MAX_OUTBOUND_ROUTE_GENERATIONS_PER_ID) {
-      linkGenerations.splice(
+    let peerAttempts = this.outboundRouteGenerationByPeer.get(deviceId);
+    const generationRuns = peerAttempts?.get(id);
+    if (!generationRuns) {
+      const totalIds = Array.from(this.outboundRouteGenerationByPeer.values()).reduce(
+        (sum, attempts) => sum + attempts.size,
         0,
-        linkGenerations.length - MAX_OUTBOUND_ROUTE_GENERATIONS_PER_ID,
+      );
+      if (
+        (peerAttempts?.size ?? 0) >= MAX_OUTBOUND_ROUTE_IDS_PER_PEER
+        || totalIds >= MAX_OUTBOUND_ROUTE_IDS_TOTAL
+      ) {
+        throw new DeviceLinkError(
+          'BACKPRESSURE',
+          `route attempt history is full for peer ${deviceId.slice(0, 8)}`,
+        );
+      }
+      if (!peerAttempts) {
+        peerAttempts = new Map();
+        this.outboundRouteGenerationByPeer.set(deviceId, peerAttempts);
+      }
+      peerAttempts.set(id, [{ linkGeneration, count: 1 }]);
+      return;
+    }
+    const latest = generationRuns.at(-1);
+    if (latest?.linkGeneration === linkGeneration) {
+      latest.count += 1;
+      return;
+    }
+    if (generationRuns.length >= MAX_OUTBOUND_ROUTE_GENERATION_RUNS_PER_ID) {
+      throw new DeviceLinkError(
+        'BACKPRESSURE',
+        `route generation history is full for peer ${deviceId.slice(0, 8)}`,
       );
     }
-    // 刷新插入顺序，让全局上限优先淘汰长期未再发送的逻辑帧。
-    this.outboundRouteGenerationById.delete(id);
-    this.outboundRouteGenerationById.set(id, { deviceId, linkGenerations });
-    while (this.outboundRouteGenerationById.size > 1_024) {
-      const oldest = this.outboundRouteGenerationById.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.outboundRouteGenerationById.delete(oldest);
-    }
+    generationRuns.push({ linkGeneration, count: 1 });
   }
 
   private consumeOutboundRouteGeneration(id: string, deviceId?: string): number | undefined {
-    const attempt = this.outboundRouteGenerationById.get(id);
-    if (!attempt || (deviceId && attempt.deviceId !== deviceId)) return undefined;
-    const linkGeneration = attempt.linkGenerations.shift();
-    if (attempt.linkGenerations.length === 0) {
-      this.outboundRouteGenerationById.delete(id);
+    let resolvedDeviceId = deviceId;
+    let peerAttempts = resolvedDeviceId
+      ? this.outboundRouteGenerationByPeer.get(resolvedDeviceId)
+      : undefined;
+    if (!peerAttempts) {
+      for (const [candidateDeviceId, candidateAttempts] of this.outboundRouteGenerationByPeer) {
+        if (!candidateAttempts.has(id)) continue;
+        resolvedDeviceId = candidateDeviceId;
+        peerAttempts = candidateAttempts;
+        break;
+      }
     }
+    const generationRuns = peerAttempts?.get(id);
+    const first = generationRuns?.[0];
+    if (!peerAttempts || !generationRuns || !first || !resolvedDeviceId) return undefined;
+    const linkGeneration = first.linkGeneration;
+    first.count -= 1;
+    if (first.count === 0) generationRuns.shift();
+    if (generationRuns.length === 0) peerAttempts.delete(id);
+    if (peerAttempts.size === 0) this.outboundRouteGenerationByPeer.delete(resolvedDeviceId);
     return linkGeneration;
   }
 
@@ -2731,17 +2765,19 @@ export class DeviceLinkClient {
     deviceId: string,
     minimumGeneration: number,
   ): void {
-    for (const [id, attempt] of this.outboundRouteGenerationById) {
-      if (attempt.deviceId !== deviceId) continue;
-      const retained = attempt.linkGenerations.filter(
-        (linkGeneration) => linkGeneration >= minimumGeneration,
+    const peerAttempts = this.outboundRouteGenerationByPeer.get(deviceId);
+    if (!peerAttempts) return;
+    for (const [id, generationRuns] of peerAttempts) {
+      const retained = generationRuns.filter(
+        (run) => run.linkGeneration >= minimumGeneration,
       );
       if (retained.length === 0) {
-        this.outboundRouteGenerationById.delete(id);
-      } else if (retained.length !== attempt.linkGenerations.length) {
-        attempt.linkGenerations = retained;
+        peerAttempts.delete(id);
+      } else if (retained.length !== generationRuns.length) {
+        peerAttempts.set(id, retained);
       }
     }
+    if (peerAttempts.size === 0) this.outboundRouteGenerationByPeer.delete(deviceId);
   }
 
   private rollbackOutboundRouteGeneration(
@@ -2749,16 +2785,14 @@ export class DeviceLinkClient {
     deviceId: string,
     linkGeneration: number,
   ): void {
-    const attempt = this.outboundRouteGenerationById.get(id);
-    if (
-      !attempt
-      || attempt.deviceId !== deviceId
-      || attempt.linkGenerations.at(-1) !== linkGeneration
-    ) return;
-    attempt.linkGenerations.pop();
-    if (attempt.linkGenerations.length === 0) {
-      this.outboundRouteGenerationById.delete(id);
-    }
+    const peerAttempts = this.outboundRouteGenerationByPeer.get(deviceId);
+    const generationRuns = peerAttempts?.get(id);
+    const latest = generationRuns?.at(-1);
+    if (!peerAttempts || !generationRuns || latest?.linkGeneration !== linkGeneration) return;
+    latest.count -= 1;
+    if (latest.count === 0) generationRuns.pop();
+    if (generationRuns.length === 0) peerAttempts.delete(id);
+    if (peerAttempts.size === 0) this.outboundRouteGenerationByPeer.delete(deviceId);
   }
 
   private assertWebSocketCapacity(additionalBytes: number): void {
@@ -3740,7 +3774,7 @@ export class DeviceLinkClient {
     }
     this.peerTransport.clear();
     this.peerOfflineNotifiedGeneration.clear();
-    this.outboundRouteGenerationById.clear();
+    this.outboundRouteGenerationByPeer.clear();
     for (const timer of this.timeoutCloseNotifyTimers.values()) clearTimeout(timer);
     this.timeoutCloseNotifyTimers.clear();
   }

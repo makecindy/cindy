@@ -89,7 +89,7 @@ import {
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import {
-  createRemoteSyncReopenOnce,
+  createRemoteSyncReopenCoordinator,
   useRemoteSyncCoordinator,
   type RemoteSyncRun,
 } from '@/device-link/remoteSyncTask';
@@ -3672,7 +3672,7 @@ export default function SessionScreen() {
       syncRun.isStale()
       || sessionSubscriptionIdentityRef.current !== subscriptionIdentityAtStart
     );
-    const reopenForSyncRecovery = createRemoteSyncReopenOnce(async () => {
+    const syncReopenCoordinator = createRemoteSyncReopenCoordinator(async () => {
       await reopenLink(deviceId);
     });
     // 门槛代号同理在开始时捕获:切会话 / attention 上升沿会递增代号,启动更早的
@@ -3689,23 +3689,33 @@ export default function SessionScreen() {
     const prepareLinkAndSubscription = async () => {
       await withTransientRemoteRetry(() => openLink(deviceId));
       if (subscriptionRetryIsStale()) return;
+      let subscriptionAttemptVersion = syncReopenCoordinator.captureVersion();
       // sessions topic 只负责之后的实时推送,不挡快照读。自己在后台
       // 处理瞬时 route / ACK 失败;重试前重开 peer link,不再等未来 rehydrate 碰运气。
       void sessionsSubscriptionCoordinatorRef.current?.start({
         identity: subscriptionIdentityAtStart,
         isStale: subscriptionRetryIsStale,
-        reopenLink: reopenForSyncRecovery,
-        subscribe: () => subscribe(`session:${sessionId}`, deviceId, ['sessions']),
+        reopenLink: () => syncReopenCoordinator.reopenAfter(subscriptionAttemptVersion),
+        subscribe: () => {
+          subscriptionAttemptVersion = syncReopenCoordinator.captureVersion();
+          return subscribe(`session:${sessionId}`, deviceId, ['sessions']);
+        },
       });
     };
     const retryRead = <T,>(read: () => Promise<T>): Promise<T> => {
-      let attempt = 0;
+      let failedAtVersion: number | null = null;
       return withTransientRemoteRetry(async () => {
         // 首轮复用上面统一完成的 link-open。只有本项真的因瞬态错误重试时才
-        // 重开 peer link，避免一个失败把其它已成功读取和 subscribe 一起重放。
-        if (attempt > 0) await reopenForSyncRecovery();
-        attempt += 1;
-        return read();
+        // 按失败请求开始时的恢复版本重开：同一旧代的错峰失败会合并；重开后
+        // 发出的请求若再次断链，则以新版本触发下一次真正 reopen。
+        if (failedAtVersion !== null) {
+          await syncReopenCoordinator.reopenAfter(failedAtVersion);
+        }
+        const attemptVersion = syncReopenCoordinator.captureVersion();
+        return read().catch((err) => {
+          failedAtVersion = attemptVersion;
+          throw err;
+        });
       });
     };
     const snapshotScope = {
