@@ -1062,6 +1062,9 @@ importers:
       google-auth-library:
         specifier: ^10.6.2
         version: 10.9.0
+      jszip:
+        specifier: ^3.10.1
+        version: 3.10.1
       marked:
         specifier: ^16.4.2
         version: 16.4.2
@@ -1078,9 +1081,6 @@ importers:
       '@types/node':
         specifier: ^25.6.0
         version: 25.9.5
-      jszip:
-        specifier: ^3.10.1
-        version: 3.10.1
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

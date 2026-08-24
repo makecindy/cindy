@@ -8,7 +8,6 @@
  * 模型据此决定是分批再读还是换个思路(例如让 Excel 自己算而不是把全表读进上下文)。
  */
 
-import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -69,17 +68,15 @@ interface ZipEntryData {
   _data?: { compressedSize?: number; uncompressedSize?: number };
 }
 
-async function assertSafeXlsxArchive(absPath: string): Promise<void> {
-  const stat = await fs.stat(absPath);
-  if (stat.size > MAX_XLSX_BYTES) {
-    throw new DocsPathError(
-      'FILE_TOO_LARGE',
-      `工作簿过大: ${stat.size} 字节`,
-      `这个 .xlsx 文件有 ${(stat.size / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先拆分工作簿,或改用命令行工具处理。`,
-    );
-  }
+function xlsxTooLarge(bytes: number): DocsPathError {
+  return new DocsPathError(
+    'FILE_TOO_LARGE',
+    `工作簿过大: ${bytes} 字节`,
+    `这个 .xlsx 文件有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先拆分工作簿,或改用命令行工具处理。`,
+  );
+}
 
-  const archive = await fs.readFile(absPath);
+async function assertSafeXlsxArchive(archive: Uint8Array): Promise<void> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(archive, { createFolders: false });
@@ -133,7 +130,9 @@ function normalizeCell(value) {
 
 (async () => {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(workerData.absPath);
+  // 主线程通过受限文件句柄只读取一次；worker 解析同一份已经过大小与 ZIP
+  // 边界校验的字节，不能再按路径重开一个可能已被替换的文件。
+  await workbook.xlsx.load(Buffer.from(workerData.archive));
   const sheetNames = workbook.worksheets.map((ws) => ws.name);
   if (sheetNames.length === 0) return parentPort.postMessage({ rows: [], totalRows: 0, sheetNames });
   let worksheet = workbook.worksheets[0];
@@ -167,21 +166,30 @@ function normalizeCell(value) {
 `;
 
 function readXlsxInWorker(
-  absPath: string,
+  archive: Buffer,
   sheetSelector: string | number | undefined,
   startRow: number,
   maxRows: number,
 ): Promise<SheetRead> {
   return new Promise((resolve, reject) => {
-const worker = new Worker(XLSX_WORKER_SOURCE, {
+    // readInputFileWithinLimit 使用独占 ArrayBuffer；转移所有权可避免在主进程
+    // 与 worker 间再复制一份最多 32 MB 的工作簿。
+    const archiveBuffer = archive.buffer as ArrayBuffer;
+    const archiveView = new Uint8Array(
+      archiveBuffer,
+      archive.byteOffset,
+      archive.byteLength,
+    );
+    const worker = new Worker(XLSX_WORKER_SOURCE, {
       eval: true,
       workerData: {
-        absPath,
+        archive: archiveView,
         sheetSelector,
         startRow,
         maxRows,
         exceljsPath: createRequire(import.meta.url).resolve('exceljs'),
       },
+      transferList: [archiveBuffer],
       resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 },
     });
     let settled = false;
@@ -228,8 +236,9 @@ async function readXlsx(
   startRow: number,
   maxRows: number,
 ): Promise<SheetRead> {
-  await assertSafeXlsxArchive(absPath);
-  return readXlsxInWorker(absPath, sheetSelector, startRow, maxRows);
+  const archive = await readInputFileWithinLimit(absPath, MAX_XLSX_BYTES, xlsxTooLarge);
+  await assertSafeXlsxArchive(archive);
+  return readXlsxInWorker(archive, sheetSelector, startRow, maxRows);
 }
 
 async function readTextTable(

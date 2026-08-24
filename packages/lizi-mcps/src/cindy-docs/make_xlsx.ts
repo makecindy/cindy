@@ -416,6 +416,7 @@ export function registerMakeXlsxTool(
 
         const arrayBuffer = await workbook.xlsx.writeBuffer();
         await writeOutputFile(
+          root,
           abs,
           Buffer.from(arrayBuffer as ArrayBuffer),
           overwrite,

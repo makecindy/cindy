@@ -31,7 +31,7 @@ import {
   PPTX_THEMES,
   resolvePptxGenConstructor,
 } from '../cindy-docs/make_pptx.js';
-import { writeOutputFile } from '../cindy-docs/_paths.js';
+import { prepareOutputPath, writeOutputFile } from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
 import type {
   DocsMcpDeps,
@@ -50,6 +50,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (created.length > 0) {
     const dir = created.pop()!;
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -662,13 +663,65 @@ describe('路径边界与覆盖语义', () => {
   it('并发写同一路径时默认模式由最终 wx 落盘闸门保证只成功一次', async () => {
     const target = path.join(workdir, 'race.bin');
     const results = await Promise.allSettled([
-      writeOutputFile(target, Buffer.from('one'), false),
-      writeOutputFile(target, Buffer.from('two'), false),
+      writeOutputFile(workdir, target, Buffer.from('one'), false),
+      writeOutputFile(workdir, target, Buffer.from('two'), false),
     ]);
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     const rejected = results.find((result) => result.status === 'rejected');
     expect(rejected?.status === 'rejected' && rejected.reason?.code).toBe('FILE_EXISTS');
     expect(['one', 'two']).toContain(await fs.readFile(target, 'utf8'));
+  });
+
+  it('最终写入前重新检查父目录 symlink，阻止 prepare 后的目录替换越界', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));
+    created.push(outside);
+    const safeDir = path.join(workdir, 'safe');
+    const movedDir = path.join(workdir, 'safe-original');
+    const target = await prepareOutputPath(workdir, 'safe/report.bin', false);
+
+    await fs.rename(safeDir, movedDir);
+    await fs.symlink(outside, safeDir, 'dir');
+
+    await expect(
+      writeOutputFile(workdir, target, Buffer.from('blocked'), false),
+    ).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+    await expect(fs.stat(path.join(outside, 'report.bin'))).rejects.toThrow();
+  });
+
+  it('覆盖 rename 遇到 Windows EEXIST/EPERM 时保留旧文件直到新文件提交', async () => {
+    const target = path.join(workdir, 'replace.bin');
+    await fs.writeFile(target, 'old');
+    const rename = vi.spyOn(fs, 'rename');
+    rename.mockRejectedValueOnce(Object.assign(new Error('Windows replace denied'), {
+      code: 'EPERM',
+    }));
+
+    await writeOutputFile(workdir, target, Buffer.from('new'), true);
+
+    expect(await fs.readFile(target, 'utf8')).toBe('new');
+    expect((await fs.readdir(workdir)).some((name) => name.includes('.cindy-docs-backup-'))).toBe(
+      false,
+    );
+  });
+
+  it('Windows 覆盖降级提交失败时恢复原文件', async () => {
+    const target = path.join(workdir, 'replace-rollback.bin');
+    await fs.writeFile(target, 'old');
+    const originalRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename');
+    rename
+      .mockRejectedValueOnce(Object.assign(new Error('replace denied'), { code: 'EEXIST' }))
+      .mockImplementationOnce(originalRename)
+      .mockRejectedValueOnce(Object.assign(new Error('commit failed'), { code: 'EACCES' }));
+
+    await expect(
+      writeOutputFile(workdir, target, Buffer.from('new'), true),
+    ).rejects.toMatchObject({ code: 'EACCES' });
+
+    expect(await fs.readFile(target, 'utf8')).toBe('old');
+    expect((await fs.readdir(workdir)).some((name) => name.includes('.cindy-docs-backup-'))).toBe(
+      false,
+    );
   });
 
   it('无 workingDir 时 fail closed', async () => {
@@ -918,6 +971,15 @@ describe('inspect_pdf', () => {
     await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from('%PDF-1.7 body'));
     await callTool(client, 'inspect_pdf', { path: 'out.pdf', pages: [1, 5], maxPages: 3 });
     expect(seen[0]).toMatchObject({ pages: [1, 5], maxPages: 3, timeoutMs: 15_000 });
+  });
+
+  it('指定页码全部越界时不把零页检查误报为 ok', async () => {
+    const client = await withPdf({ numPages: 3, pagesInspected: 0, pages: [] });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf', pages: [99] });
+
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('NO_PAGES_INSPECTED');
+    expect((result.data as Record<string, unknown>).numPages).toBe(3);
   });
 
   it('0 字节的 PDF 直接判定生成失败', async () => {

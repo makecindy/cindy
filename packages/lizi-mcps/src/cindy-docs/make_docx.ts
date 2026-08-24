@@ -102,7 +102,7 @@ export function registerMakeDocxTool(
           ...(trimmedTitle.length > 0 ? { title: trimmedTitle } : {}),
           ...(subtitle ? { subtitle } : {}),
         });
-        await writeOutputFile(abs, buffer, overwrite);
+        await writeOutputFile(root, abs, buffer, overwrite);
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'docx',

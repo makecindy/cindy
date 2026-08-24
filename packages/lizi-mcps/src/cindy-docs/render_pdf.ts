@@ -246,7 +246,7 @@ export function registerRenderPdfTool(
             {},
           );
         }
-        await writeOutputFile(abs, buffer, overwrite);
+        await writeOutputFile(root, abs, buffer, overwrite);
 
         const described = await describeOutput(root, abs);
         const warnings: string[] = [];

@@ -143,6 +143,19 @@ export function registerInspectPdfTool(
           ...page,
           paper: describePaper(page.width, page.height),
         }));
+        if (inspection.pagesInspected === 0 || decorated.length === 0) {
+          return errorPayload(
+            'NO_PAGES_INSPECTED',
+            inspection.numPages > 0
+              ? '没有检查到任何页面。指定页码可能全部超出 PDF 的实际页数，请改用 1 到总页数之间的页码后重试。'
+              : '这份 PDF 没有可检查的页面，不能把它当作检查通过的成品。请重新生成后再检查。',
+            {
+              path: abs,
+              numPages: inspection.numPages,
+              requestedPages: pages ?? [],
+            },
+          );
+        }
         const blankPages = decorated.filter((p) => p.blank).map((p) => p.page);
         const allInspectedBlank = decorated.length > 0 && blankPages.length === decorated.length;
 

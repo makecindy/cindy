@@ -541,7 +541,7 @@ export function registerMakePptxTool(
         const buffer = (await pptx.write({
           outputType: 'nodebuffer',
         })) as Buffer;
-        await writeOutputFile(abs, buffer, overwrite);
+        await writeOutputFile(root, abs, buffer, overwrite);
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'pptx',

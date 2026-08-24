@@ -11,6 +11,7 @@
  * 模型重跑一次就静默盖掉是不可接受的。覆盖必须由模型显式 overwrite:true 表态。
  */
 
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -114,13 +115,80 @@ export async function prepareOutputPath(
 /**
  * 在最终落盘处再次执行防覆盖判定，避免 prepareOutputPath 的 stat/write 竞态：
  * - 默认模式用 wx，目标在两次调用之间出现时也只会失败，不会截断它；
- * - 覆盖模式先写同目录临时文件，再用 rename 原子替换，读者不会看到半个产物。
+ * - 覆盖模式先写同目录临时文件，再用 rename 原子替换；Windows 不支持直接
+ *   覆盖的文件系统走「旧文件备份 → 新文件提交 → 失败恢复」降级。
  */
+async function revalidateOutputBoundary(root: string, abs: string): Promise<void> {
+  try {
+    await resolvePathInsideRoot(root, abs);
+  } catch (err) {
+    toPathError(err, abs);
+  }
+}
+
+async function replaceOutputFile(
+  root: string,
+  stagingPath: string,
+  abs: string,
+): Promise<void> {
+  await revalidateOutputBoundary(root, abs);
+  try {
+    await fs.rename(stagingPath, abs);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'EEXIST' && code !== 'EPERM') throw err;
+  }
+
+  // Windows 的 exFAT / 共享盘可能不支持 rename 覆盖已存在目标。先把旧文件
+  // 搬到同目录唯一备份，再提交新文件；提交失败就恢复旧文件，绝不先 unlink。
+  const backupPath = path.join(
+    path.dirname(abs),
+    `.cindy-docs-backup-${randomUUID()}-${path.basename(abs)}`,
+  );
+  let movedExisting = false;
+  try {
+    try {
+      await fs.rename(abs, backupPath);
+      movedExisting = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+    }
+
+    await revalidateOutputBoundary(root, abs);
+    await fs.rename(stagingPath, abs);
+    if (movedExisting) {
+      // 新文件已经提交，备份清理失败不能把一次成功覆盖误报为失败；残留的唯一
+      // 隐藏备份仍比删除用户旧文件安全，并可由用户手工恢复。
+      movedExisting = false;
+      await fs.rm(backupPath, { force: true }).catch(() => undefined);
+    }
+  } catch (err) {
+    if (movedExisting) {
+      try {
+        await revalidateOutputBoundary(root, abs);
+        await fs.rename(backupPath, abs);
+        movedExisting = false;
+      } catch (restoreError) {
+        throw new AggregateError(
+          [err, restoreError],
+          `替换目标失败，旧文件保留在可恢复备份: ${backupPath}`,
+        );
+      }
+    }
+    throw err;
+  }
+}
+
 export async function writeOutputFile(
+  root: string,
   abs: string,
   data: Uint8Array | string,
   overwrite: boolean,
 ): Promise<void> {
+  // prepareOutputPath 与真正落盘之间可能隔着一次耗时的文档构建。最终写入前
+  // 必须重新解析 symlink 边界，防止父目录在这段时间被替换到工作目录外。
+  await revalidateOutputBoundary(root, abs);
   if (!overwrite) {
     try {
       await fs.writeFile(abs, data, { flag: 'wx' });
@@ -142,7 +210,7 @@ export async function writeOutputFile(
   const stagingPath = path.join(stagingDir, path.basename(abs));
   try {
     await fs.writeFile(stagingPath, data, { flag: 'wx' });
-    await fs.rename(stagingPath, abs);
+    await replaceOutputFile(root, stagingPath, abs);
   } finally {
     await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {
       /* 临时 staging 清理尽力而为 */
@@ -190,7 +258,9 @@ export async function readInputFileWithinLimit(
     const stat = await handle.stat();
     if (stat.size > maxBytes) throw tooLarge(stat.size);
 
-    const data = Buffer.allocUnsafe(stat.size);
+    // allocUnsafeSlow 保证底层 ArrayBuffer 只属于这一次读取；调用方可安全地把
+    // 它 transfer 给受限 worker，而不会连带转移 Node Buffer pool。
+    const data = Buffer.allocUnsafeSlow(stat.size);
     let offset = 0;
     while (offset < data.length) {
       const { bytesRead } = await handle.read(data, offset, data.length - offset, offset);
