@@ -14508,6 +14508,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (supersededByOwnerBoundary()) {
         return { deferred: false, superseded: true };
       }
+      // 归档/删除写入与本 handler 共用同一把 session route lock。拿锁后重读持久
+      // 状态可封住两种次序：本请求先拿锁时终态写等待并在之后清理 override；终态
+      // 先拿锁时旧请求看到非 active，不能在 cleanup 后重新建立 pending/override。
+      const [runtimeStatus] = await getDbClient()
+        .drizzle.select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!runtimeStatus) {
+        return { deferred: false, superseded: true };
+      }
+      if (runtimeStatus.status !== 'active') {
+        if (internalOptions.source === 'user') {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'archived or deleted task cannot change runtime selection',
+          );
+        }
+        return { deferred: false, superseded: true };
+      }
       if (
         internalOptions.source !== 'user' &&
         !sessionRuntimeGenerationMatches(

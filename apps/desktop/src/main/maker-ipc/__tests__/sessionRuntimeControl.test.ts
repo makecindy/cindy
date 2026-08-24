@@ -37,12 +37,15 @@ function provider(
     defaults?: boolean;
     efforts?: SessionRuntimeProfile['effort'][];
     fast?: boolean;
+    group?: string;
+    mode?: string;
   }>,
+  source: 'builtin' | 'user' = 'builtin',
 ): ProviderView {
   return {
     id,
     name: id,
-    source: 'builtin',
+    source,
     connected: true,
     agents: ['codex'],
     auth: { method: 'none' },
@@ -55,6 +58,8 @@ function provider(
         efforts: (model.efforts ?? ['medium']) as never,
         defaultEffort: (model.efforts?.[0] ?? 'medium') as never,
         supportsFastMode: model.fast,
+        ...(model.group ? { group: model.group } : {}),
+        ...(model.mode ? { mode: model.mode } : {}),
         ...(model.defaults ? { newSessionDefault: ['codex'] } : {}),
       })),
     },
@@ -291,6 +296,57 @@ describe('session runtime fallback selection', () => {
         maxHops: 2,
       }),
     ).toMatchObject({ providerId: 'xd', model: 'recommended' });
+  });
+
+  it('skips non-chat exact-name and default candidates before later usable routes', () => {
+    expect(
+      pickSessionRuntimeFallback({
+        providers: [
+          provider('openai', [{ id: 'gpt-main' }]),
+          provider('image-copy', [{ id: 'gpt-main', mode: 'image_generation' }]),
+          provider('chat-copy', [{ id: 'gpt-main' }]),
+        ],
+        current,
+        visitedRoutes: [],
+        currentHop: 0,
+        maxHops: 2,
+      }),
+    ).toMatchObject({ providerId: 'chat-copy', model: 'gpt-main' });
+
+    expect(
+      pickSessionRuntimeFallback({
+        providers: [
+          provider('openai', [{ id: 'gpt-main' }]),
+          provider('image-default', [
+            { id: 'image-recommended', defaults: true, mode: 'image_generation' },
+          ]),
+          provider('chat-default', [{ id: 'chat-recommended', defaults: true }]),
+        ],
+        current: { ...current, model: 'missing-model' },
+        visitedRoutes: [],
+        currentHop: 0,
+        maxHops: 2,
+      }),
+    ).toMatchObject({ providerId: 'chat-default', model: 'chat-recommended' });
+  });
+
+  it('keeps custom-group models selectable for a user provider', () => {
+    expect(
+      pickSessionRuntimeFallback({
+        providers: [
+          provider('openai', [{ id: 'gpt-main' }]),
+          provider(
+            'custom',
+            [{ id: 'gpt-image-custom', defaults: true, group: 'custom:custom' }],
+            'user',
+          ),
+        ],
+        current: { ...current, model: 'missing-model' },
+        visitedRoutes: [],
+        currentHop: 0,
+        maxHops: 2,
+      }),
+    ).toMatchObject({ providerId: 'custom', model: 'gpt-image-custom' });
   });
 
   it('stops at the hop limit and never revisits a route', () => {

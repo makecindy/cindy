@@ -102,6 +102,19 @@ describe('session runtime control wiring', () => {
     );
   });
 
+  it('rejects terminal tasks inside the shared route lock before runtime mutations', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel);',
+    );
+    const terminalGuard = setModel.indexOf("runtimeStatus.status !== 'active'");
+    expect(terminalGuard).toBeGreaterThan(setModel.indexOf('const applyLocked = async () => {'));
+    expect(terminalGuard).toBeLessThan(setModel.indexOf('acceptSessionRuntimeMutation({'));
+    expect(terminalGuard).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
+    expect(setModel).toContain('return withSendToSessionLock(sessionId, applyLocked);');
+  });
+
   it('retains runtime state across process closes and clears it at task lifecycle boundaries', () => {
     const closeBoundary = handlerBody(
       registerSource,

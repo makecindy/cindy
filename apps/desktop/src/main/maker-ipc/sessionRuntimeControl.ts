@@ -1,6 +1,7 @@
 import type { AgentKind, Effort } from '@cindy/maker-core';
 import {
   connectedProvidersForAgent,
+  isModelSelectableForNewRoute,
   type CatalogModel,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -261,7 +262,13 @@ export function pickSessionRuntimeFallback(params: {
 
   for (const provider of rail) {
     for (const model of provider.models[params.current.agentKind] ?? []) {
-      if (model.disabled || model.status === 'retired') continue;
+      if (
+        !isModelSelectableForNewRoute(model, {
+          userProvider: provider.source === 'user',
+        })
+      ) {
+        continue;
+      }
       if (model.id === params.current.model && provider.id !== params.current.providerId) {
         candidates.push({ providerId: provider.id, model });
       }
@@ -269,7 +276,13 @@ export function pickSessionRuntimeFallback(params: {
   }
   for (const provider of rail) {
     for (const model of provider.models[params.current.agentKind] ?? []) {
-      if (model.disabled || model.status === 'retired') continue;
+      if (
+        !isModelSelectableForNewRoute(model, {
+          userProvider: provider.source === 'user',
+        })
+      ) {
+        continue;
+      }
       if (!model.newSessionDefault?.includes(params.current.agentKind)) continue;
       candidates.push({ providerId: provider.id, model });
     }
