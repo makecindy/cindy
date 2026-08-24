@@ -99,6 +99,24 @@ describe('collectGeneratedFiles', () => {
     });
   });
 
+  it('does not attach artwork metadata to an explicit failed or malformed tool result', () => {
+    const input = {
+      outPath: 'documents/report.docx',
+      title: '季度报告',
+      theme: 'light',
+    };
+    expect(
+      extractDocumentArtifactMetadata(
+        'make_docx',
+        input,
+        JSON.stringify({ ok: false, errorCode: 'FILE_EXISTS' }),
+      ),
+    ).toBeUndefined();
+    expect(extractDocumentArtifactMetadata('make_docx', input, 'not-json')).toBeUndefined();
+    // 历史消息没有保存 tool_result 时仍保留兼容重建。
+    expect(extractDocumentArtifactMetadata('make_docx', input)).toBeDefined();
+  });
+
   it('collects Write (claude) and write (pi) created files', () => {
     const files = collectGeneratedFiles(
       [

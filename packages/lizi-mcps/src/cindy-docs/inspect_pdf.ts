@@ -115,6 +115,7 @@ export function registerInspectPdfTool(
         }
 
         const data = await readInputFileWithinLimit(
+          root,
           abs,
           MAX_INPUT_BYTES,
           (bytes) =>

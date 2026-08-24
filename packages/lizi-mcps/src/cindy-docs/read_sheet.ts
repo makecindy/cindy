@@ -231,17 +231,19 @@ function readXlsxInWorker(
 }
 
 async function readXlsx(
+  root: string,
   absPath: string,
   sheetSelector: string | number | undefined,
   startRow: number,
   maxRows: number,
 ): Promise<SheetRead> {
-  const archive = await readInputFileWithinLimit(absPath, MAX_XLSX_BYTES, xlsxTooLarge);
+  const archive = await readInputFileWithinLimit(root, absPath, MAX_XLSX_BYTES, xlsxTooLarge);
   await assertSafeXlsxArchive(archive);
   return readXlsxInWorker(archive, sheetSelector, startRow, maxRows);
 }
 
 async function readTextTable(
+  root: string,
   absPath: string,
   ext: string,
   startRow: number,
@@ -249,6 +251,7 @@ async function readTextTable(
 ): Promise<SheetRead> {
   const text = (
     await readInputFileWithinLimit(
+      root,
       absPath,
       MAX_TEXT_BYTES,
       (bytes) =>
@@ -306,9 +309,9 @@ export function registerReadSheetTool(
 
         let result: SheetRead;
         if (ext === '.xlsx' || ext === '.xlsm') {
-          result = await readXlsx(abs, sheet, startRow, maxRows);
+          result = await readXlsx(root, abs, sheet, startRow, maxRows);
         } else if (ext === '.csv' || ext === '.tsv' || ext === '.tab' || ext === '.txt') {
-          result = await readTextTable(abs, ext, startRow, maxRows);
+          result = await readTextTable(root, abs, ext, startRow, maxRows);
         } else if (ext === '.xls') {
           return errorPayload(
             'UNSUPPORTED_FORMAT',

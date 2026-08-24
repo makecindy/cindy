@@ -27,11 +27,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
 import {
+  detectPptxImageMime,
   isSupportedPptxImage,
   PPTX_THEMES,
   resolvePptxGenConstructor,
 } from '../cindy-docs/make_pptx.js';
-import { prepareOutputPath, writeOutputFile } from '../cindy-docs/_paths.js';
+import {
+  DocsPathError,
+  prepareOutputPath,
+  readInputFileWithinLimit,
+  writeOutputFile,
+} from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
 import type {
   DocsMcpDeps,
@@ -453,6 +459,23 @@ describe('make_pptx', () => {
     expect(isSupportedPptxImage('/a/b.PNG')).toBe(true);
     expect(isSupportedPptxImage('/a/b.svg')).toBe(false);
   });
+
+  it('支持的图片后缀也必须有真实图片字节,MIME 按内容而不是后缀决定', async () => {
+    await fs.writeFile(path.join(workdir, 'fake.png'), 'plain text');
+    const client = await connect();
+    const invalid = await callTool(client, 'make_pptx', {
+      slides: [{ title: '伪图片', imagePath: 'fake.png' }],
+      outPath: 'fake-image.pptx',
+    });
+    expect(invalid.errorCode).toBe('INVALID_IMAGE');
+    await expect(fs.stat(path.join(workdir, 'fake-image.pptx'))).rejects.toThrow();
+
+    const jpegNamedPng = Buffer.from([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01,
+      0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+    ]);
+    expect(detectPptxImageMime(jpegNamedPng)).toBe('image/jpeg');
+  });
 });
 
 describe('read_sheet', () => {
@@ -617,6 +640,21 @@ describe('read_sheet', () => {
 });
 
 describe('路径边界与覆盖语义', () => {
+  it('四种生成工具拒绝缺失或错误的输出扩展名', async () => {
+    const client = await connect({
+      renderHtmlToPdf: async () => ({ buffer: Buffer.from('%PDF-1.7'), fontsReady: true }),
+    });
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['make_docx', { markdown: '# x', outPath: 'wrong.pdf' }],
+      ['make_pptx', { slides: [{ title: 'x' }], outPath: 'wrong.docx' }],
+      ['make_xlsx', { sheets: [{ name: 'S', rows: [[1]] }], outPath: 'wrong' }],
+      ['render_pdf', { html: '<p>x</p>', outPath: 'wrong.pptx' }],
+    ];
+    for (const [tool, args] of cases) {
+      expect((await callTool(client, tool, args)).errorCode).toBe('INVALID_EXTENSION');
+    }
+  });
+
   it('.. 穿越与工作目录外的绝对路径都被拒', async () => {
     const client = await connect();
     for (const outPath of ['../escape.docx', path.join(os.tmpdir(), 'escape.docx'), '/etc/x.docx']) {
@@ -686,6 +724,26 @@ describe('路径边界与覆盖语义', () => {
       writeOutputFile(workdir, target, Buffer.from('blocked'), false),
     ).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
     await expect(fs.stat(path.join(outside, 'report.bin'))).rejects.toThrow();
+  });
+
+  it('输入读取只接受与边界校验相同的已打开文件身份', async () => {
+    const inside = path.join(workdir, 'inside.txt');
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));
+    created.push(outsideDir);
+    const outside = path.join(outsideDir, 'outside.txt');
+    await fs.writeFile(inside, 'inside');
+    await fs.writeFile(outside, 'outside');
+
+    const originalOpen = fs.open.bind(fs);
+    vi.spyOn(fs, 'open').mockImplementationOnce(async () => originalOpen(outside, 'r'));
+    await expect(
+      readInputFileWithinLimit(
+        workdir,
+        inside,
+        1024,
+        (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      ),
+    ).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
   });
 
   it('覆盖 rename 遇到 Windows EEXIST/EPERM 时保留旧文件直到新文件提交', async () => {

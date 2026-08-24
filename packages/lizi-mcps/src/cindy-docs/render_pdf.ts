@@ -13,6 +13,7 @@ import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
+  assertOutputExtension,
   describeOutput,
   DocsPathError,
   prepareInputPath,
@@ -177,6 +178,7 @@ export function registerRenderPdfTool(
 
       try {
         const root = resolveSessionRoot(sessionCtx);
+        assertOutputExtension(outPath, '.pdf');
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const sourcePath = hasPath
           ? await prepareInputPath(root, htmlPath!)
@@ -184,6 +186,7 @@ export function registerRenderPdfTool(
         const sourceHtml = sourcePath
           ? (
               await readInputFileWithinLimit(
+                root,
                 sourcePath,
                 RENDER_PDF_MAX_HTML_BYTES,
                 (bytes) =>

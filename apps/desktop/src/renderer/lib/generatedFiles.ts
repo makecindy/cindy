@@ -139,6 +139,10 @@ export function extractDocumentArtifactMetadata(
   if (!name) return undefined;
   const inputRecord = asRecord(input);
   const result = parseToolResult(resultContent);
+  // 旧消息可能没有保存 tool_result，仍允许只按输入重建轻量卡片；但只要当前
+  // 消息明确带了结果，就必须由 ok:true 证明生成成功。解析失败和 ok:false 都
+  // 不能把同轮预先存在的同名文件冒充成这次成功交付的作品。
+  if (resultContent !== undefined && result?.ok !== true) return undefined;
   const resultArtifact = asRecord(result?.artifact);
   const format =
     name === 'make_docx'

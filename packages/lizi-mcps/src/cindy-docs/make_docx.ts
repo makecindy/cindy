@@ -9,6 +9,7 @@ import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
+  assertOutputExtension,
   describeOutput,
   DocsPathError,
   prepareOutputPath,
@@ -93,6 +94,7 @@ export function registerMakeDocxTool(
     }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
+        assertOutputExtension(outPath, '.docx');
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const trimmedTitle = title?.trim() ?? '';
         const useCover = trimmedTitle.length > 0 && (cover ?? true);

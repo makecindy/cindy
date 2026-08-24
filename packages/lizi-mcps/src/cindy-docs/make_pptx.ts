@@ -15,6 +15,7 @@ import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
+  assertOutputExtension,
   describeOutput,
   DocsPathError,
   prepareInputPath,
@@ -67,9 +68,124 @@ export function isSupportedPptxImage(filePath: string): boolean {
   return PPTX_SUPPORTED_IMAGE_EXT.has(path.extname(filePath).toLowerCase());
 }
 
-function pptxImageDataUri(filePath: string, bytes: Buffer): string {
-  const ext = path.extname(filePath).toLowerCase();
-  const mime = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+export type PptxImageMime = 'image/png' | 'image/jpeg' | 'image/gif';
+
+/** 按真实字节识别并做结构校验，不能相信模型给的扩展名。 */
+export function detectPptxImageMime(bytes: Buffer): PptxImageMime | null {
+  if (
+    bytes.length >= 45 &&
+    bytes.subarray(0, 8).equals(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    ) &&
+    bytes.subarray(12, 16).toString('ascii') === 'IHDR'
+  ) {
+    let offset = 8;
+    let sawHeader = false;
+    let sawImageData = false;
+    while (offset + 12 <= bytes.length) {
+      const chunkLength = bytes.readUInt32BE(offset);
+      const type = bytes.subarray(offset + 4, offset + 8).toString('ascii');
+      const chunkEnd = offset + 12 + chunkLength;
+      if (chunkEnd > bytes.length) break;
+      if (type === 'IHDR') {
+        if (
+          sawHeader ||
+          chunkLength !== 13 ||
+          bytes.readUInt32BE(offset + 8) === 0 ||
+          bytes.readUInt32BE(offset + 12) === 0
+        ) return null;
+        sawHeader = true;
+      } else if (type === 'IDAT') {
+        sawImageData = true;
+      } else if (type === 'IEND') {
+        return sawHeader && sawImageData && chunkLength === 0 ? 'image/png' : null;
+      }
+      offset = chunkEnd;
+    }
+    return null;
+  }
+
+  if (
+    bytes.length >= 14 &&
+    (bytes.subarray(0, 6).toString('ascii') === 'GIF87a' ||
+      bytes.subarray(0, 6).toString('ascii') === 'GIF89a') &&
+    bytes.readUInt16LE(6) > 0 &&
+    bytes.readUInt16LE(8) > 0
+  ) {
+    let offset = 13;
+    const logicalPacked = bytes[10]!;
+    if ((logicalPacked & 0x80) !== 0) offset += 3 * 2 ** ((logicalPacked & 0x07) + 1);
+    let sawImage = false;
+    const skipSubBlocks = (): boolean => {
+      while (offset < bytes.length) {
+        const size = bytes[offset++]!;
+        if (size === 0) return true;
+        if (offset + size > bytes.length) return false;
+        offset += size;
+      }
+      return false;
+    };
+    while (offset < bytes.length) {
+      const block = bytes[offset++]!;
+      if (block === 0x3b) return sawImage && offset === bytes.length ? 'image/gif' : null;
+      if (block === 0x21) {
+        if (offset >= bytes.length) return null;
+        offset += 1; // extension label
+        if (!skipSubBlocks()) return null;
+        continue;
+      }
+      if (block !== 0x2c || offset + 9 > bytes.length) return null;
+      const imageWidth = bytes.readUInt16LE(offset + 4);
+      const imageHeight = bytes.readUInt16LE(offset + 6);
+      const imagePacked = bytes[offset + 8]!;
+      offset += 9;
+      if (imageWidth === 0 || imageHeight === 0) return null;
+      if ((imagePacked & 0x80) !== 0) offset += 3 * 2 ** ((imagePacked & 0x07) + 1);
+      if (offset >= bytes.length) return null;
+      offset += 1; // LZW minimum code size
+      if (!skipSubBlocks()) return null;
+      sawImage = true;
+    }
+    return null;
+  }
+
+  if (
+    bytes.length >= 11 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[bytes.length - 2] === 0xff &&
+    bytes[bytes.length - 1] === 0xd9
+  ) {
+    let offset = 2;
+    while (offset + 3 < bytes.length) {
+      while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+      if (offset >= bytes.length) break;
+      const marker = bytes[offset]!;
+      offset += 1;
+      if (marker === 0xd9 || marker === 0xda) break;
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+      if (offset + 2 > bytes.length) break;
+      const segmentLength = bytes.readUInt16BE(offset);
+      if (segmentLength < 2 || offset + segmentLength > bytes.length) break;
+      const isStartOfFrame =
+        (marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf);
+      if (isStartOfFrame) {
+        return segmentLength >= 7 &&
+          bytes.readUInt16BE(offset + 3) > 0 &&
+          bytes.readUInt16BE(offset + 5) > 0
+          ? 'image/jpeg'
+          : null;
+      }
+      offset += segmentLength;
+    }
+  }
+  return null;
+}
+
+function pptxImageDataUri(mime: PptxImageMime, bytes: Buffer): string {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
@@ -205,6 +321,7 @@ export function registerMakePptxTool(
     handler: async ({ slides, outPath, title, theme, footer, overwrite }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
+        assertOutputExtension(outPath, '.pptx');
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const palette = resolveDocsTheme(theme as DocsThemeName);
 
@@ -228,6 +345,7 @@ export function registerMakePptxTool(
           let loaded = loadedImages.get(imageAbs);
           if (!loaded) {
             const bytes = await readInputFileWithinLimit(
+              root,
               imageAbs,
               PPTX_MAX_IMAGE_BYTES,
               (size) =>
@@ -237,7 +355,15 @@ export function registerMakePptxTool(
                   `图片 "${slide.imagePath}" 有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单张图片上限(12 MB)。请先压缩或缩小图片。`,
                 ),
             );
-            loaded = { bytes: bytes.byteLength, data: pptxImageDataUri(imageAbs, bytes) };
+            const mime = detectPptxImageMime(bytes);
+            if (!mime) {
+              return errorPayload(
+                'INVALID_IMAGE',
+                `第 ${index + 1} 页的图片内容不是有效的 PNG / JPEG / GIF。请重新导出或更换图片。`,
+                { slide: index + 1, imagePath: imageAbs },
+              );
+            }
+            loaded = { bytes: bytes.byteLength, data: pptxImageDataUri(mime, bytes) };
             loadedImages.set(imageAbs, loaded);
           }
           totalImageBytes += loaded.bytes;

@@ -143,8 +143,32 @@ const IMAGE_OPS: readonly number[] = [
   pdfjs.OPS.paintImageXObject,
   pdfjs.OPS.paintInlineImageXObject,
   pdfjs.OPS.paintImageMaskXObject,
+  pdfjs.OPS.paintImageMaskXObjectGroup,
+  pdfjs.OPS.paintInlineImageXObjectGroup,
   pdfjs.OPS.paintImageXObjectRepeat,
   pdfjs.OPS.paintImageMaskXObjectRepeat,
+  pdfjs.OPS.paintSolidColorImageMask,
+].filter((op): op is number => typeof op === 'number');
+
+/**
+ * 真正会留下可见像素的算子。save/restore、transform、clip、构造但未描边的
+ * path 等控制算子不能算“画过”，否则合法的 `q Q` 空白页会被误报为非空。
+ */
+const VISIBLE_PAINT_OPS: readonly number[] = [
+  pdfjs.OPS.stroke,
+  pdfjs.OPS.closeStroke,
+  pdfjs.OPS.fill,
+  pdfjs.OPS.eoFill,
+  pdfjs.OPS.fillStroke,
+  pdfjs.OPS.eoFillStroke,
+  pdfjs.OPS.closeFillStroke,
+  pdfjs.OPS.closeEOFillStroke,
+  pdfjs.OPS.shadingFill,
+  pdfjs.OPS.showText,
+  pdfjs.OPS.showSpacedText,
+  pdfjs.OPS.nextLineShowText,
+  pdfjs.OPS.nextLineSetSpacingShowText,
+  ...IMAGE_OPS,
 ].filter((op): op is number => typeof op === 'number');
 
 /**
@@ -212,10 +236,12 @@ export async function inspectPdfPages(
         const operatorList = await page.getOperatorList();
         const fnArray = operatorList.fnArray;
         let images = 0;
+        let visiblePaints = 0;
         for (const fn of fnArray) {
           if (IMAGE_OPS.includes(fn)) images += 1;
+          if (VISIBLE_PAINT_OPS.includes(fn)) visiblePaints += 1;
         }
-        drawOps = fnArray.length;
+        drawOps = visiblePaints;
         imageOps = images;
       } catch {
         drawOps = null;

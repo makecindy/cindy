@@ -15,7 +15,10 @@ import { inspectPdfPages } from '../reviewPdfUtilityProcess.js';
  * 生成一份合法的最小 PDF。
  * pageSpecs 里每项要么是一段文字(该页画这段文字),要么 null(完全空白页)。
  */
-function buildPdf(pageSpecs: Array<string | null>, mediaBox = '[0 0 595.28 841.89]'): Uint8Array {
+function buildPdf(
+  pageSpecs: Array<string | null | { raw: string }>,
+  mediaBox = '[0 0 595.28 841.89]',
+): Uint8Array {
   const objs: string[] = [];
   const push = (body: string): number => {
     objs.push(body);
@@ -36,7 +39,7 @@ function buildPdf(pageSpecs: Array<string | null>, mediaBox = '[0 0 595.28 841.8
       );
       continue;
     }
-    const stream = `BT /F1 24 Tf 72 760 Td (${spec}) Tj ET`;
+    const stream = typeof spec === 'string' ? `BT /F1 24 Tf 72 760 Td (${spec}) Tj ET` : spec.raw;
     const contentNum = push(
       `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
     );
@@ -99,6 +102,12 @@ describe('inspectPdfPages', () => {
     // 去重 + 升序,越界的 99 被丢弃
     expect(result.pages.map((p) => p.page)).toEqual([1, 3]);
     expect(result.pages[1]!.textPreview).toContain('three');
+  });
+
+  it('只含图形状态与变换控制算子的页面仍判为空白', async () => {
+    const pdf = buildPdf([{ raw: 'q 1 0 0 1 0 0 cm Q' }]);
+    const result = await inspectPdfPages(pdf, [], 10, 100);
+    expect(result.pages[0]).toMatchObject({ textChars: 0, drawOps: 0, imageOps: 0, blank: true });
   });
 
   it('maxPages 卡住检查页数,不会把整份文档读完', async () => {

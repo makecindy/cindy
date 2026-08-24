@@ -10,6 +10,7 @@ import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
+  assertOutputExtension,
   describeOutput,
   DocsPathError,
   prepareOutputPath,
@@ -205,15 +206,21 @@ function paintRow(
   row: ExcelJS.Row,
   fillArgb: string,
   font?: Partial<ExcelJS.Font>,
+  columnCount?: number,
 ): void {
-  row.eachCell({ includeEmpty: true }, (cell) => {
+  const paint = (cell: ExcelJS.Cell): void => {
     cell.fill = {
       type: 'pattern',
       pattern: 'solid',
       fgColor: { argb: fillArgb },
     };
     if (font) cell.font = { ...(cell.font ?? {}), ...font };
-  });
+  };
+  if (columnCount !== undefined) {
+    for (let column = 1; column <= columnCount; column += 1) paint(row.getCell(column));
+    return;
+  }
+  row.eachCell({ includeEmpty: true }, paint);
 }
 
 function applyThinBorder(
@@ -302,6 +309,7 @@ export function registerMakeXlsxTool(
     handler: async ({ sheets, outPath, theme, zebra, overwrite }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
+        assertOutputExtension(outPath, '.xlsx');
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const palette = resolveDocsTheme(
           (theme ?? DEFAULT_DOCS_THEME) as DocsThemeName,
@@ -326,16 +334,23 @@ export function registerMakeXlsxTool(
           usedNames.add(unique);
 
           const ws = workbook.addWorksheet(unique);
+          const columnCount = Math.max(
+            sheet.header?.length ?? 0,
+            ...sheet.rows.map((row) => row.length),
+            1,
+          );
           if (sheet.header && sheet.header.length > 0) {
             const headerRow = ws.addRow(sheet.header);
             headerRow.font = {
               bold: true,
               color: { argb: themeToArgb(palette.accentOn) },
             };
-            paintRow(headerRow, themeToArgb(palette.accent), {
-              bold: true,
-              color: { argb: themeToArgb(palette.accentOn) },
-            });
+            paintRow(
+              headerRow,
+              themeToArgb(palette.accent),
+              { bold: true, color: { argb: themeToArgb(palette.accentOn) } },
+              columnCount,
+            );
             headerRow.alignment = { vertical: 'middle' };
             ws.views = [{ state: 'frozen', ySplit: 1 }];
           }
@@ -350,9 +365,12 @@ export function registerMakeXlsxTool(
             const excelRow = ws.addRow(row.map(toExcelValue));
             // 先给每个正文格落完整主题底色和前景色，再叠斑马/汇总样式。
             // 不能只给 dark 的斑马行涂深底：那会形成白底黑字/深底黑字交替。
-            paintRow(excelRow, themeToArgb(palette.background), {
-              color: { argb: themeToArgb(palette.body) },
-            });
+            paintRow(
+              excelRow,
+              themeToArgb(palette.background),
+              { color: { argb: themeToArgb(palette.body) } },
+              columnCount,
+            );
             if (rowIndex === summaryIndex) {
               /*
                 汇总行必须一眼能和数据行分开。原来它混在斑马纹里,和普通一行长得
@@ -360,7 +378,7 @@ export function registerMakeXlsxTool(
                 上边框(会计里表示「以上求和」的那条线)+ 一层浅底,不换字色,
                 免得在三套主题下有一套对比度翻车。
               */
-              paintRow(excelRow, themeToArgb(palette.surface), { bold: true });
+              paintRow(excelRow, themeToArgb(palette.surface), { bold: true }, columnCount);
               excelRow.eachCell({ includeEmpty: true }, (cell) => {
                 cell.border = {
                   ...(cell.border ?? {}),
@@ -371,15 +389,9 @@ export function registerMakeXlsxTool(
                 };
               });
             } else if (zebra && rowIndex % 2 === 1) {
-              paintRow(excelRow, themeToArgb(palette.zebra));
+              paintRow(excelRow, themeToArgb(palette.zebra), undefined, columnCount);
             }
           }
-
-          const columnCount = Math.max(
-            sheet.header?.length ?? 0,
-            ...sheet.rows.map((row) => row.length),
-            1,
-          );
           for (let col = 0; col < columnCount; col += 1) {
             // 先定数字格式,再按**格式化后的样子**量宽 —— 反过来会让千分位金额列
             // 偏窄,用户打开看到一整格 `#####`(见 formattedWidthSample)。

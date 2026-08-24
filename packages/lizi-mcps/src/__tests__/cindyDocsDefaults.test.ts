@@ -227,13 +227,18 @@ describe('PPT 母版版式', () => {
     expect(single.errorCode).toBe('FILE_TOO_LARGE');
     await expect(fs.stat(path.join(workdir, 'single-limit.pptx'))).rejects.toThrow();
 
-    const repeated = path.join(workdir, 'repeated.jpg');
+    const repeated = path.join(workdir, 'repeated.png');
     const repeatedBytes = Math.floor(PPTX_MAX_TOTAL_IMAGE_BYTES / 3) + 1;
     const repeatedHandle = await fs.open(repeated, 'w');
+    const validPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+    await repeatedHandle.write(validPng, 0, validPng.length, 0);
     await repeatedHandle.truncate(repeatedBytes);
     await repeatedHandle.close();
     const aggregate = await callTool(client, 'make_pptx', {
-      slides: [1, 2, 3, 4].map((n) => ({ title: `重复 ${n}`, imagePath: 'repeated.jpg' })),
+      slides: [1, 2, 3, 4].map((n) => ({ title: `重复 ${n}`, imagePath: 'repeated.png' })),
       outPath: 'aggregate-limit.pptx',
     });
     expect(aggregate.errorCode).toBe('FILE_TOO_LARGE');
@@ -386,7 +391,7 @@ describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
     const client = await connect();
     const result = await callTool(client, 'make_xlsx', {
       theme: 'dark',
-      sheets: [{ name: 'Dark', header: ['项目', '值'], rows: [['A', 1], ['B', 2]] }],
+      sheets: [{ name: 'Dark', header: ['项目', '值', '备注'], rows: [['A', 1], ['B']] }],
       outPath: 'dark.xlsx',
     });
     expect(result.ok).toBe(true);
@@ -403,6 +408,16 @@ describe('Excel 表头色带 / 斑马纹 / 数字格式', () => {
     );
     expect(row2.font.color?.argb).toBe(themeToArgb(DOCS_THEMES.dark.body));
     expect(row3.font.color?.argb).toBe(themeToArgb(DOCS_THEMES.dark.body));
+    const row2Tail = ws.getCell('C2');
+    const row3Tail = ws.getCell('C3');
+    expect((row2Tail.fill as { fgColor?: { argb?: string } }).fgColor?.argb).toBe(
+      themeToArgb(DOCS_THEMES.dark.background),
+    );
+    expect((row3Tail.fill as { fgColor?: { argb?: string } }).fgColor?.argb).toBe(
+      themeToArgb(DOCS_THEMES.dark.zebra),
+    );
+    expect(row2Tail.font.color?.argb).toBe(themeToArgb(DOCS_THEMES.dark.body));
+    expect(row3Tail.font.color?.argb).toBe(themeToArgb(DOCS_THEMES.dark.body));
   });
 });
 

@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 
 import { resolveLiziMcpSessionContext } from '../session-context.js';
@@ -27,6 +27,7 @@ export class DocsPathError extends Error {
       | 'REMOTE_SESSION_UNSUPPORTED'
       | 'PATH_NOT_ALLOWED'
       | 'FILE_EXISTS'
+      | 'INVALID_EXTENSION'
       | 'NOT_A_FILE'
       | 'SHEET_NOT_FOUND'
       | 'FILE_TOO_LARGE'
@@ -110,6 +111,18 @@ export async function prepareOutputPath(
   // 先手工 mkdir 一次)。recursive 对已存在目录是 no-op。
   await fs.mkdir(path.dirname(abs), { recursive: true });
   return abs;
+}
+
+/** 生成器只允许与实际字节格式一致的后缀，避免产出“内容是 Word、名字却是 PDF”的文件。 */
+export function assertOutputExtension(outPath: string, expectedExtension: string): void {
+  const expected = expectedExtension.toLowerCase();
+  const actual = path.extname(outPath).toLowerCase();
+  if (actual === expected) return;
+  throw new DocsPathError(
+    'INVALID_EXTENSION',
+    `输出文件必须使用 ${expected} 扩展名，当前是 "${actual || '(无扩展名)'}"`,
+    `请把 outPath 改成以 ${expected} 结尾的文件名。`,
+  );
 }
 
 /**
@@ -248,19 +261,91 @@ export async function prepareInputPath(root: string, inPath: string): Promise<st
  * 看到的字节数。这样即使文件很大，或在 stat 后继续增长，也不会让 readFile
  * 在主进程里无上限分配内存。
  */
+function sameFileIdentity(a: BigIntStats, b: BigIntStats): boolean {
+  return (
+    a.dev !== 0n &&
+    a.ino !== 0n &&
+    b.dev !== 0n &&
+    b.ino !== 0n &&
+    a.dev === b.dev &&
+    a.ino === b.ino
+  );
+}
+
+function sameFileVersion(a: BigIntStats, b: BigIntStats): boolean {
+  return (
+    sameFileIdentity(a, b) &&
+    a.mode === b.mode &&
+    a.size === b.size &&
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs
+  );
+}
+
+function changedInputPath(abs: string): DocsPathError {
+  return new DocsPathError(
+    'PATH_NOT_ALLOWED',
+    `输入文件在校验与读取之间发生变化: ${abs}`,
+    '文件路径在读取时发生了变化，已为安全起见停止。请确认文件仍在本任务工作目录内后重试。',
+  );
+}
+
+function isInsideRealRoot(realRoot: string, candidate: string): boolean {
+  if (realRoot === candidate) return true;
+  const relative = path.relative(realRoot, candidate);
+  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+async function verifyOpenedInputStillInsideRoot(
+  realRoot: string,
+  canonicalPath: string,
+  openedStat: BigIntStats,
+): Promise<void> {
+  try {
+    const rebound = await fs.realpath(canonicalPath);
+    if (!isInsideRealRoot(realRoot, rebound)) throw changedInputPath(canonicalPath);
+    const reboundStat = await fs.stat(rebound, { bigint: true });
+    if (!sameFileIdentity(openedStat, reboundStat)) throw changedInputPath(canonicalPath);
+  } catch (err) {
+    if (err instanceof DocsPathError) throw err;
+    if (err instanceof PathBoundaryError) toPathError(err, canonicalPath);
+    throw changedInputPath(canonicalPath);
+  }
+}
+
 export async function readInputFileWithinLimit(
+  root: string,
   abs: string,
   maxBytes: number,
   tooLarge: (bytes: number) => DocsPathError,
 ): Promise<Buffer> {
-  const handle = await fs.open(abs, 'r');
+  // 校验与读取绑定到同一个已打开文件身份，封住路径检查后父目录被换成根外
+  // symlink 的窗口；身份不可用的网络盘 fail closed，不拿 0 === 0 放行。
+  let canonicalPath: string;
+  let realRoot: string;
   try {
-    const stat = await handle.stat();
-    if (stat.size > maxBytes) throw tooLarge(stat.size);
+    [canonicalPath, realRoot] = await Promise.all([fs.realpath(abs), fs.realpath(root)]);
+    if (!isInsideRealRoot(realRoot, canonicalPath)) throw changedInputPath(abs);
+  } catch (err) {
+    if (err instanceof DocsPathError) throw err;
+    if (err instanceof PathBoundaryError) toPathError(err, abs);
+    throw changedInputPath(abs);
+  }
+  const expectedStat = await fs.stat(canonicalPath, { bigint: true });
+  const handle = await fs.open(
+    canonicalPath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile() || !sameFileIdentity(expectedStat, stat)) {
+      throw changedInputPath(canonicalPath);
+    }
+    await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, stat);
+    if (stat.size > BigInt(maxBytes)) throw tooLarge(Number(stat.size));
+    const size = Number(stat.size);
 
-    // allocUnsafeSlow 保证底层 ArrayBuffer 只属于这一次读取；调用方可安全地把
-    // 它 transfer 给受限 worker，而不会连带转移 Node Buffer pool。
-    const data = Buffer.allocUnsafeSlow(stat.size);
+    const data = Buffer.allocUnsafeSlow(size);
     let offset = 0;
     while (offset < data.length) {
       const { bytesRead } = await handle.read(data, offset, data.length - offset, offset);
@@ -268,11 +353,15 @@ export async function readInputFileWithinLimit(
       offset += bytesRead;
     }
 
-    // 文件在 stat 后增长时也 fail closed，避免把被截断的输入交给解析器。
     const probe = Buffer.allocUnsafe(1);
     const { bytesRead: extraBytes } = await handle.read(probe, 0, 1, offset);
-    if (extraBytes > 0) throw tooLarge(Math.max(stat.size + extraBytes, maxBytes + 1));
-    return offset === data.length ? data : data.subarray(0, offset);
+    if (extraBytes > 0) throw tooLarge(Math.max(size + extraBytes, maxBytes + 1));
+    const after = await handle.stat({ bigint: true });
+    if (offset !== data.length || !sameFileVersion(stat, after)) {
+      throw changedInputPath(canonicalPath);
+    }
+    await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, after);
+    return data;
   } finally {
     await handle.close();
   }
