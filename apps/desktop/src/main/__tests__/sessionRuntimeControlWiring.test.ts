@@ -3,8 +3,14 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const mainRoot = resolve(__dirname, '..');
-const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8');
-const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 'utf8');
+const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
+  /\r\n?/g,
+  '\n',
+);
+const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 'utf8').replace(
+  /\r\n?/g,
+  '\n',
+);
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -74,6 +80,26 @@ describe('session runtime control wiring', () => {
         body.indexOf(applyCall),
       );
     }
+  });
+
+  it('commits user effort and Fast state only after the live runtime call succeeds', () => {
+    const effort = handlerBody(
+      registerSource,
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+      'MAKER_INVOKE.SET_PERMISSION_MODE',
+    );
+    const fast = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_FAST_MODE',
+      'MAKER_INVOKE.SET_THINKING_ENABLED',
+    );
+
+    expect(effort.lastIndexOf('commitEffort();')).toBeGreaterThan(
+      effort.indexOf('await applyRuntimeEffortWithRecovery({'),
+    );
+    expect(fast.lastIndexOf('commitFastMode();')).toBeGreaterThan(
+      fast.indexOf('await sess.setFastMode(enabled);'),
+    );
   });
 
   it('retains runtime state across process closes and clears it at task lifecycle boundaries', () => {

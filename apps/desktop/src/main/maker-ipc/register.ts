@@ -14949,14 +14949,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
     }
     const applyEffort = async () => {
-      recordUserSessionRuntimeAxisMutation(sessionId, {
-        effort: effort as SessionRuntimeProfile['effort'],
-      });
-      // 记下会话 effort:responses-bridge 模型(chatgpt/ / xai/)的 effort 无法经请求体流到 bridge,
-      // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(不影响 session 是否在跑)。
-      setSessionEffort(sessionId, effort);
+      const commitEffort = () => {
+        recordUserSessionRuntimeAxisMutation(sessionId, {
+          effort: effort as SessionRuntimeProfile['effort'],
+        });
+        // 记下会话 effort:responses-bridge 模型(chatgpt/ / xai/)的 effort 无法经请求体流到 bridge,
+        // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(不影响 session 是否在跑)。
+        setSessionEffort(sessionId, effort);
+      };
       const sess = maker.getSession(sessionId);
       if (!sess) {
+        commitEffort();
         log.debug('set-effort: session not found, no-op', { sessionId });
         return;
       }
@@ -14966,6 +14969,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 持久化不受影响:本地由 renderer sessionService.update 落盘,远程由 device-link
       // dispatch 的 persistRemoteSetting 按请求值落被控端 DB,重建时生效。
       if (pendingCredentialSwitchHolder?.has(sessionId)) {
+        commitEffort();
         log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
         return;
       }
@@ -14982,6 +14986,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             sessionId,
           });
         }
+        commitEffort();
       } catch (error) {
         log.warn('set-effort runtime update failed', {
           sessionId,
@@ -15308,12 +15313,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
       const applyFastMode = async () => {
-        recordUserSessionRuntimeAxisMutation(sessionId, { fastMode: enabled });
-        // 记下会话 Fast 态:responses-bridge 模型(chatgpt/ 前缀)的 fast 无法经请求体流到 bridge,
-        // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(与 SET_EFFORT 的 effort 同机制)。
-        setSessionFastMode(sessionId, enabled);
+        const commitFastMode = () => {
+          recordUserSessionRuntimeAxisMutation(sessionId, { fastMode: enabled });
+          // 记下会话 Fast 态:responses-bridge 模型(chatgpt/ 前缀)的 fast 无法经请求体流到 bridge,
+          // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(与 SET_EFFORT 的 effort 同机制)。
+          setSessionFastMode(sessionId, enabled);
+        };
         const sess = maker.getSession(sessionId);
         if (!sess) {
+          commitFastMode();
           log.debug('set-fast-mode: session not found, no-op', { sessionId });
           return;
         }
@@ -15321,10 +15329,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // Pi 的 ChatGPT 请求不从 pi 请求体携带 Fast，而是由上面的 session store
           // 在 compat-proxy 决策点闭包进 responses bridge prefs。到这里已经即时生效，
           // 无需向 pi RPC 再发一份不存在的 set_fast_mode 控制命令。
+          commitFastMode();
           log.debug('set-fast-mode: pi responses bridge state updated', { sessionId, enabled });
           return;
         }
         if (sess.agentKind !== 'codex') {
+          commitFastMode();
           log.debug('set-fast-mode: agent does not implement fast mode, no-op', {
             sessionId,
             agentKind: sess.agentKind,
@@ -15333,10 +15343,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         // 同 set-effort:pending 凭证切换期间不触碰仍在跑的旧 turn,持久化走各自 DB 路径。
         if (pendingCredentialSwitchHolder?.has(sessionId)) {
+          commitFastMode();
           log.debug('set-fast-mode: skipped live push (pending credential switch)', { sessionId });
           return;
         }
         await sess.setFastMode(enabled);
+        commitFastMode();
       };
       return withSendToSessionLock(sessionId, async () => {
         await assertReviewSettingsUnlocked(sessionId);
