@@ -1148,11 +1148,11 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
-/* 流式正文逐词淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
-   每个新词以 --motion-fast 从透明「浮现」,delay 由 rehypeStreamWordFade 按词序
-   写进 --wf-delay(上限 24ms/词,按排程预算自适应压缩)。不是逐字打字机 ——
-   词整体已就位,只有 opacity 渐变;pure-opacity 一次性动画,compositor-only。
-   `both`:delay 未到时停在 0% 帧(透明),避免先闪现再淡入。
+/* 流式正文分段淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
+   每个新词与 inline-code 原子以 --motion-fast 从透明「浮现」。普通聊天不做
+   跨词 stagger,新段的 --wf-delay 为 0ms;已见段 remount 时可用负 delay 恢复
+   原动画进度。不是逐字打字机 —— 段整体已就位,只有 opacity 渐变;
+   pure-opacity 一次性动画,compositor-only。`both` 保证负 delay / remount 续播。
    reduced-motion 双保险:JS 侧短路(插件不挂载,span 不进 DOM)+ 下方 reduce
    块的 animation: none(摘掉动画连同 both 填充,span 落回自然 opacity 1,
    不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
