@@ -203,11 +203,11 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   const showSourceView = showSource || (svg == null && error != null);
 
   return (
-    <div ref={blockRef} className="group relative my-3">
+    <div ref={blockRef} className="group relative my-3 flex flex-col">
       {showSourceView ? (
         <pre
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            '-mt-9 overflow-x-auto rounded-[12px]',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
@@ -230,7 +230,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           aria-label={t('chat.mermaid.clickToZoom')}
           title={t('chat.mermaid.clickToZoom')}
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            '-mt-9 overflow-x-auto rounded-[12px]',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 flex justify-center cursor-zoom-in',
@@ -247,7 +247,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
         // matching the code-block frame so layout doesn't jump.
         <pre
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            '-mt-9 overflow-x-auto rounded-[12px]',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
@@ -272,7 +272,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
 
       <div
         className={cn(
-          'absolute right-2 top-2 flex gap-1',
+          'pointer-events-none order-first sticky top-0 z-10 flex h-9 items-end justify-end gap-1 pr-2 select-none',
           'opacity-0 transition-opacity duration-150',
           'group-hover:opacity-100 focus-within:opacity-100',
         )}
@@ -287,7 +287,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             aria-label={t('chat.mermaid.zoom')}
             title={t('chat.mermaid.zoom')}
             className={cn(
-              'inline-flex h-7 w-7 items-center justify-center',
+              'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
               'rounded-md border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -306,7 +306,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             aria-label={t('chat.mermaid.annotate')}
             title={t('chat.mermaid.annotate')}
             className={cn(
-              'inline-flex h-7 w-7 items-center justify-center',
+              'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
               'rounded-md border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -325,7 +325,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             aria-label={showSourceView ? t('chat.mermaid.viewDiagram') : t('chat.mermaid.viewSource')}
             title={showSourceView ? t('chat.mermaid.viewDiagram') : t('chat.mermaid.viewSource')}
             className={cn(
-              'inline-flex h-7 w-7 items-center justify-center',
+              'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
               'rounded-md border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -346,7 +346,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           aria-label={copied || copiedImage ? t('chat.mermaid.copied') : t('chat.mermaid.copy')}
           title={copied || copiedImage ? t('chat.mermaid.copied') : t('chat.mermaid.copy')}
           className={cn(
-            'inline-flex h-7 w-7 items-center justify-center',
+            'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
             'rounded-md border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
             'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',

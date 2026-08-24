@@ -4,8 +4,8 @@
  * 与 CodeBlockPre / MarkdownMermaidBlock 同一套 hover 工具栏配方(右上角
  * `h-7 w-7` 图标按钮、group-hover 显隐、Check 1.5s 反馈)。内容经
  * `domToPngBlob`(html-to-image foreignObject 序列化)光栅化:
- *   - 外层 `group relative` 只承载定位,内层才是 overflow 容器——工具栏挂在
- *     overflow 容器内会被裁剪并随横向滚动漂移;
+ *   - 外层 `group relative` 承载完整高度的 sticky 工具栏,内层内容用负上边距回叠;
+ *     工具栏挂在 overflow 容器内会被裁剪并随横向滚动漂移;
  *   - 光栅化目标是内层内容节点,`scrollWidth` 取完整内容宽,宽表格不被可视
  *     口截断;
  *   - 标注入口仅在聊天会话上下文出现(useCopyAsImage.canAnnotate)。
@@ -88,13 +88,13 @@ export function CopyAsImageBlock({
   );
 
   return (
-    <div className={cn('group relative', className)}>
-      <div ref={contentRef} className={contentClassName}>
+    <div className={cn('group relative flex flex-col', className)}>
+      <div ref={contentRef} className={cn('-mt-9', contentClassName)}>
         {children}
       </div>
       <div
         className={cn(
-          'absolute right-2 top-2 flex gap-1 select-none',
+          'pointer-events-none order-first sticky top-0 z-10 flex h-9 items-end justify-end gap-1 pr-2 select-none',
           'opacity-0 transition-opacity duration-150',
           'group-hover:opacity-100 focus-within:opacity-100',
         )}
@@ -112,7 +112,7 @@ export function CopyAsImageBlock({
               ? t('chat.markdownRenderer.blockCopied')
               : t('chat.markdownRenderer.copy')
           }
-          className={buttonClass}
+          className={cn(buttonClass, 'pointer-events-auto')}
         >
           {copiedImage ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         </button>
@@ -122,7 +122,7 @@ export function CopyAsImageBlock({
             onClick={openAnnotate}
             aria-label={t('chat.markdownRenderer.annotateImage')}
             title={t('chat.markdownRenderer.annotateImage')}
-            className={buttonClass}
+            className={cn(buttonClass, 'pointer-events-auto')}
           >
             <Pen className="h-3.5 w-3.5" />
           </button>

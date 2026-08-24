@@ -433,10 +433,12 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
 }
 
 /**
- * CodeBlockPre — fenced code block with a hover-revealed copy button at the
- * top-right corner. The button reads `innerText` from the live <pre>, so it
- * always copies the latest text even mid-stream. We use group-hover to keep
- * the chrome out of the way until the user reaches for it.
+ * CodeBlockPre — fenced code block with a hover-revealed copy button that
+ * sticks to the visible top-right corner while the message scrolls. The
+ * button reads `innerText` from the live <pre>, so it always copies the latest
+ * text even mid-stream. The content's negative top margin overlaps the full
+ * height sticky row, keeping the button inside the block's bottom edge without
+ * adding layout space. Group-hover keeps it out of the way until needed.
  */
 function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
   const { t } = useTranslation();
@@ -468,10 +470,32 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
 
   return (
     <div className="group relative my-3">
+      <div
+        className={cn(
+          'pointer-events-none sticky top-0 z-10 flex h-9 items-end justify-end pr-2 select-none',
+          'opacity-0 transition-opacity duration-150',
+          'group-hover:opacity-100 focus-within:opacity-100',
+        )}
+      >
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
+          title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
+          className={cn(
+            'pointer-events-auto inline-flex h-7 w-7 items-center justify-center',
+            'rounded-md border border-[var(--msg-code-block-border)]',
+            'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+            'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+          )}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </div>
       <pre
         ref={preRef}
         className={cn(
-          'rounded-[12px]',
+          '-mt-9 rounded-[12px]',
           'border border-[var(--msg-code-block-border)]',
           'bg-[var(--msg-code-block-bg)]',
           'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
@@ -483,22 +507,6 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       >
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
-        title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
-        className={cn(
-          'absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center',
-          'rounded-md border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-          'opacity-0 transition-opacity duration-150',
-          'group-hover:opacity-100 focus-visible:opacity-100',
-          'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-        )}
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
     </div>
   );
 }
