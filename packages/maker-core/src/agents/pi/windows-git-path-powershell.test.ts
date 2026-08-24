@@ -1,3 +1,8 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -84,6 +89,40 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).toContain('$maxConcurrency = 4');
     expect(script).toContain('$operationTimeoutMs = 833');
     expect(script).toContain('$nextGroupIndex += 1');
+  });
+
+  it.runIf(process.platform === 'win32')('executes grouped path probes in Windows PowerShell', () => {
+    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+    if (!systemRoot) throw new Error('Windows system root is unavailable');
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'cindy-git-path-'));
+    try {
+      const staleRoot = path.join(tempRoot, 'stale-git');
+      const validRoot = path.join(tempRoot, '有效 Git');
+      const validCmd = path.join(validRoot, 'cmd');
+      const validGit = path.join(validCmd, 'git.exe');
+      mkdirSync(validCmd, { recursive: true });
+      writeFileSync(validGit, '');
+      const groups = [
+        { paths: [path.join(staleRoot, 'cmd'), path.join(staleRoot, 'cmd', 'git.exe')] },
+        { paths: [validCmd, validGit] },
+      ];
+      const output = execFileSync(
+        path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', buildWindowsPathKindProbeScript(4, 3_000, 2)],
+        {
+          encoding: 'utf8',
+          input: Buffer.from(JSON.stringify(groups), 'utf8'),
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 5_000,
+          windowsHide: true,
+        },
+      );
+
+      expect(output).toContain(`D\t${Buffer.from(validCmd, 'utf16le').toString('base64')}`);
+      expect(output).toContain(`F\t${Buffer.from(validGit, 'utf16le').toString('base64')}`);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('reports recoverable script failures only when a logger is supplied', () => {
