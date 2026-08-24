@@ -6,7 +6,10 @@ import { utilityProcess } from 'electron';
 
 import { DocsPathError, type WriteDocsOutputFn } from '@cindy/mcps';
 
-import type { DocsOutputWriteRequest, DocsOutputWriteResult } from './docsOutputWriterProtocol.js';
+import type {
+  DocsOutputWriteRequest,
+  DocsOutputWriteResult,
+} from './docsOutputWriterProtocol.js';
 
 interface DocsOutputWriterChildLike {
   postMessage(message: unknown): void;
@@ -23,7 +26,7 @@ function isInside(parent: string, candidate: string): boolean {
   return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
-function forkDocsOutputWriter(parentDir: string): DocsOutputWriterChildLike {
+function forkDocsOutputWriter(rootDir: string): DocsOutputWriterChildLike {
   const env: NodeJS.ProcessEnv = {};
   for (const key of [
     'PATH',
@@ -38,7 +41,7 @@ function forkDocsOutputWriter(parentDir: string): DocsOutputWriterChildLike {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
   return utilityProcess.fork(path.join(__dirname, 'docsOutputWriterUtilityProcess.js'), [], {
-    cwd: parentDir,
+    cwd: rootDir,
     env,
     stdio: ['ignore', 'ignore', 'pipe'],
     serviceName: 'cindy-docs-output-writer',
@@ -95,7 +98,17 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
       '请改用任务工作目录内的输出路径。',
     );
   }
-  const parentStat = await fs.lstat(realParent, { bigint: true });
+  const [rootStat, parentStat] = await Promise.all([
+    fs.lstat(realRoot, { bigint: true }),
+    fs.lstat(realParent, { bigint: true }),
+  ]);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      `任务工作目录不是可用的真实目录: ${realRoot}`,
+      '请改用任务工作目录内的输出路径。',
+    );
+  }
   if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
     throw new DocsPathError(
       'PATH_NOT_ALLOWED',
@@ -103,18 +116,35 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
       '请改用任务工作目录内的普通目录。',
     );
   }
+  const parentRelativePath = path.relative(realRoot, realParent);
+  if (parentRelativePath.startsWith('..') || path.isAbsolute(parentRelativePath)) {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      `输出目录不在任务工作目录内: ${realParent}`,
+      '请改用任务工作目录内的输出路径。',
+    );
+  }
 
   const request: DocsOutputWriteRequest = {
+    expectedRoot: {
+      realPath: realRoot,
+      dev: rootStat.dev,
+      ino: rootStat.ino,
+    },
     expectedParent: {
       realPath: realParent,
       dev: parentStat.dev,
       ino: parentStat.ino,
     },
+    parentRelativePath,
     targetName: path.basename(input.path),
     data: new Uint8Array(input.data),
     overwrite: input.overwrite,
   };
-  const child = forkDocsOutputWriter(realParent);
+  // Anchor the utility process at the session root, not at the output parent.
+  // If a parent directory is moved out of the session after validation, the
+  // same relative path from this cwd no longer resolves to that outside inode.
+  const child = forkDocsOutputWriter(realRoot);
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;

@@ -319,6 +319,7 @@ export function registerMakeXlsxTool(
         workbook.creator = 'Cindy';
         workbook.created = new Date();
 
+        // Excel 的工作表名比较大小写不敏感,但展示名仍保留用户原始大小写。
         const usedNames = new Set<string>();
         for (const sheet of sheets) {
           // Excel 的非法工作表字符会让文件直接打不开,静默换成下划线比报错更有用。
@@ -326,12 +327,12 @@ export function registerMakeXlsxTool(
           if (name.trim().length === 0) name = 'Sheet';
           let unique = name;
           let n = 2;
-          while (usedNames.has(unique)) {
+          while (usedNames.has(unique.toLowerCase())) {
             const suffix = `_${n}`;
             unique = `${name.slice(0, 31 - suffix.length)}${suffix}`;
             n += 1;
           }
-          usedNames.add(unique);
+          usedNames.add(unique.toLowerCase());
 
           const ws = workbook.addWorksheet(unique);
           const columnCount = Math.max(

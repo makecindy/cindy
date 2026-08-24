@@ -102,7 +102,10 @@ async function snapshotAllowedFileRoot(root: string): Promise<AllowedFileRoot> {
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error(`HTML resource root is not a directory: ${root}`);
   }
-  return { path: realPath, realPath, dev: stat.dev, ino: stat.ino };
+  // Keep the caller's literal root for component-wise symlink checks. On macOS
+  // /var is a symlink to /private/var; replacing it with realPath here would
+  // make every ordinary resource look outside the root before Chromium loads it.
+  return { path: path.resolve(root), realPath, dev: stat.dev, ino: stat.ino };
 }
 
 async function prepareSource(input: DocsPdfRenderInput): Promise<PreparedSource> {
@@ -186,6 +189,27 @@ function isSamePath(left: string, right: string): boolean {
 }
 
 /**
+ * Chromium 会在请求获准后重新按 file:// 路径打开资源,所以不能把「此刻
+ * realpath 在根目录内」当成足够的授权:请求之间若把某一级目录或文件换成
+ * symlink,Chromium 仍会跟随新目标。对不可信 HTML 的本地资源直接拒绝任何
+ * symlink 路径,让这条竞态 fail closed;普通文件仍按根目录身份逐请求复核。
+ */
+async function hasSymlinkComponent(filePath: string, rootPath: string): Promise<boolean> {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(filePath));
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return true;
+  let current = path.resolve(rootPath);
+  for (const segment of relative ? relative.split(path.sep) : []) {
+    current = path.join(current, segment);
+    try {
+      if ((await fs.lstat(current)).isSymbolicLink()) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * PDF 排版窗只允许读取当前 HTML 目录里的本地资源、data/blob URL 与 about:blank。
  * 外部网络请求一律取消:即便不读取响应,图片/字体/iframe 也能借用户网络身份探测
  * localhost/内网或触发第三方跟踪副作用。需要远程资源时由模型先转成 data URI。
@@ -209,6 +233,7 @@ async function isAllowedResourceUrl(
     const fileReal = await fs.realpath(filePath);
     for (const allowedFileRoot of allowedFileRoots) {
       try {
+        if (await hasSymlinkComponent(filePath, allowedFileRoot.path)) continue;
         const rebound = await fs.realpath(allowedFileRoot.path);
         const stat = await fs.lstat(rebound, { bigint: true });
         if (

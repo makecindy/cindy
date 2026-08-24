@@ -29,12 +29,21 @@ async function request(
   parent = root,
 ): Promise<DocsOutputWriteRequest> {
   const stat = await fs.promises.lstat(parent, { bigint: true });
+  const rootStat = await fs.promises.lstat(root, { bigint: true });
+  const rootRealPath = await fs.promises.realpath(root);
+  const parentRealPath = await fs.promises.realpath(parent);
   return {
+    expectedRoot: {
+      realPath: rootRealPath,
+      dev: rootStat.dev,
+      ino: rootStat.ino,
+    },
     expectedParent: {
-      realPath: await fs.promises.realpath(parent),
+      realPath: parentRealPath,
       dev: stat.dev,
       ino: stat.ino,
     },
+    parentRelativePath: path.relative(rootRealPath, parentRealPath),
     targetName,
     data: Buffer.from(data),
     overwrite,
@@ -84,9 +93,22 @@ describe('docs output cwd-bound writer', () => {
     await fs.promises.rename(safe, moved);
     await fs.promises.symlink(outside, safe, process.platform === 'win32' ? 'junction' : 'dir');
 
-    await expect(runDocsOutputWrite(pending, safe)).rejects.toMatchObject({
+    await expect(runDocsOutputWrite(pending, root)).rejects.toMatchObject({
       code: 'PATH_NOT_ALLOWED',
     });
     await expect(fs.promises.stat(path.join(outside, 'report.bin'))).rejects.toThrow();
+  });
+
+  it('anchors the final write at the session root when the parent inode moves away', async () => {
+    const safe = path.join(root, 'safe');
+    const moved = path.join(root, 'safe-original');
+    await fs.promises.mkdir(safe);
+    const pending = await request('report.bin', 'blocked', false, safe);
+    await fs.promises.rename(safe, moved);
+
+    await expect(runDocsOutputWrite(pending, root)).rejects.toMatchObject({
+      code: 'PATH_NOT_ALLOWED',
+    });
+    await expect(fs.promises.stat(path.join(moved, 'report.bin'))).rejects.toThrow();
   });
 });

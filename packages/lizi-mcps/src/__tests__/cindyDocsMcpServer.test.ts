@@ -337,6 +337,21 @@ describe('make_xlsx', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual(['a_b_c', 'a_b_c_2']);
   });
 
+  it('工作表名按 Excel 的大小写不敏感语义去重,保留展示名称', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_xlsx', {
+      sheets: [
+        { name: 'Data', rows: [['one']] },
+        { name: 'data', rows: [['two']] },
+      ],
+      outPath: 'case-insensitive.xlsx',
+    });
+    expect(result.ok).toBe(true);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(result.path as string);
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Data', 'data_2']);
+  });
+
   // 公式纪律:xlsx 只存公式文本,不存值。缓存值(result)必须一起写进去,否则
   // Excel 重算之前那格是空的,而 read_sheet / 预览 / Numbers 直接读到 null。
   // 这是「不引入 LibreOffice 重算」这条裁决的零依赖等价物,必须被测试钉死。

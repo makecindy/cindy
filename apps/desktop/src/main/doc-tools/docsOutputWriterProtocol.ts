@@ -4,8 +4,16 @@ export interface DocsOutputParentIdentity {
   ino: bigint;
 }
 
+export interface DocsOutputRootIdentity {
+  realPath: string;
+  dev: bigint;
+  ino: bigint;
+}
+
 export interface DocsOutputWriteRequest {
+  expectedRoot: DocsOutputRootIdentity;
   expectedParent: DocsOutputParentIdentity;
+  parentRelativePath: string;
   targetName: string;
   data: Uint8Array;
   overwrite: boolean;

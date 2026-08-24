@@ -201,6 +201,28 @@ describe('渲染窗的安全配置', () => {
     expect(response.cancel).toBe(true);
   });
 
+  it('本地资源路径含 symlink 时 fail closed,不把 file URL 交给 Chromium', async () => {
+    const sourceDir = path.join(tempRoot, 'source');
+    const outsideDir = path.join(tempRoot, 'outside');
+    await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
+    await fs.writeFile(path.join(outsideDir, 'secret.png'), 'secret');
+    const link = path.join(sourceDir, 'secret.png');
+    await fs.symlink(
+      path.join(outsideDir, 'secret.png'),
+      link,
+      process.platform === 'win32' ? 'file' : undefined,
+    );
+    await renderHtmlToPdf({
+      ...BASE_INPUT,
+      htmlPath: path.join(sourceDir, 'src.html'),
+    }).catch(() => undefined);
+    const handler = FakeBrowserWindow.instances[0]!.webContents.session.beforeRequestHandler!;
+    const response = await new Promise<{ cancel: boolean }>((resolve) =>
+      handler({ url: pathToFileURL(link).href }, resolve),
+    );
+    expect(response.cancel).toBe(true);
+  });
+
   it('请求级 URL 策略只放行本地同目录资源与内联 URL,阻断网络和越界 file URL', async () => {
     const localAsset = path.join(tempRoot, 'asset.txt');
     await fs.writeFile(localAsset, 'asset', 'utf8');

@@ -31,15 +31,37 @@ function samePath(left: string, right: string): boolean {
 }
 
 async function verifyParent(request: DocsOutputWriteRequest, workingDir: string): Promise<void> {
-  const stat = await fs.promises.lstat(workingDir, { bigint: true });
-  if (
-    !stat.isDirectory() ||
-    stat.isSymbolicLink() ||
-    stat.dev !== request.expectedParent.dev ||
-    stat.ino !== request.expectedParent.ino ||
-    !samePath(await fs.promises.realpath(workingDir), request.expectedParent.realPath)
-  ) {
-    throw new OutputWriteError('PATH_NOT_ALLOWED', '输出目录身份在最终落盘前发生变化');
+  try {
+    const rootStat = await fs.promises.lstat(request.expectedRoot.realPath, { bigint: true });
+    if (
+      !rootStat.isDirectory() ||
+      rootStat.isSymbolicLink() ||
+      rootStat.dev !== request.expectedRoot.dev ||
+      rootStat.ino !== request.expectedRoot.ino
+    ) {
+      throw new OutputWriteError('PATH_NOT_ALLOWED', '任务工作目录身份在最终落盘前发生变化');
+    }
+    const stat = await fs.promises.lstat(workingDir, { bigint: true });
+    const realParent = await fs.promises.realpath(workingDir);
+    const relative = path.relative(request.expectedRoot.realPath, realParent);
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      stat.dev !== request.expectedParent.dev ||
+      stat.ino !== request.expectedParent.ino ||
+      !samePath(realParent, request.expectedParent.realPath) ||
+      relative !== request.parentRelativePath ||
+      relative.startsWith('..') ||
+      path.isAbsolute(relative)
+    ) {
+      throw new OutputWriteError(
+        'PATH_NOT_ALLOWED',
+        '输出目录与任务工作目录的从属关系在最终落盘前发生变化',
+      );
+    }
+  } catch (error) {
+    if (error instanceof OutputWriteError) throw error;
+    throw new OutputWriteError('PATH_NOT_ALLOWED', '任务工作目录或输出目录在最终落盘前不可用');
   }
 }
 
@@ -93,7 +115,7 @@ async function replaceFile(
 
   // Windows exFAT / network shares may reject rename-over-existing. Keep the
   // previous file recoverable until the new file has been committed.
-  const backup = `.cindy-docs-backup-${randomUUID()}-${request.targetName}`;
+  const backup = path.join(workingDir, `.cindy-docs-backup-${randomUUID()}-${request.targetName}`);
   let movedExisting = false;
   try {
     await assertReplaceableTarget(target);
@@ -128,7 +150,7 @@ async function replaceFile(
 
 export async function runDocsOutputWrite(
   request: DocsOutputWriteRequest,
-  workingDir?: string,
+  rootDir?: string,
 ): Promise<void> {
   if (
     !request ||
@@ -144,12 +166,12 @@ export async function runDocsOutputWrite(
     throw new OutputWriteError('INTERNAL', '文档落盘请求不合法');
   }
   // Production deliberately uses `.`: the utility process cwd is the OS-held
-  // directory capability. Tests may pass an explicit directory without
-  // changing the test runner's process-global cwd.
-  const anchoredWorkingDir = workingDir ?? '.';
+  // session-root capability. The output parent is resolved relative to it for
+  // every operation, so a moved parent cannot keep an outside inode alive.
+  const anchoredRootDir = rootDir ?? '.';
+  const anchoredWorkingDir = path.join(anchoredRootDir, request.parentRelativePath);
   await verifyParent(request, anchoredWorkingDir);
-  const outputPath = (name: string): string =>
-    workingDir === undefined ? name : path.join(workingDir, name);
+  const outputPath = (name: string): string => path.join(anchoredWorkingDir, name);
   const target = outputPath(request.targetName);
 
   if (!request.overwrite) {
