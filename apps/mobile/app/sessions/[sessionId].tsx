@@ -88,7 +88,11 @@ import {
 } from '@/device-link/remoteStatus';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { useRemoteSyncCoordinator, type RemoteSyncRun } from '@/device-link/remoteSyncTask';
+import {
+  createRemoteSyncReopenOnce,
+  useRemoteSyncCoordinator,
+  type RemoteSyncRun,
+} from '@/device-link/remoteSyncTask';
 import {
   runIndependentSnapshotReads,
   runSessionMessagesSnapshotSingleFlight,
@@ -3668,6 +3672,9 @@ export default function SessionScreen() {
       syncRun.isStale()
       || sessionSubscriptionIdentityRef.current !== subscriptionIdentityAtStart
     );
+    const reopenForSyncRecovery = createRemoteSyncReopenOnce(async () => {
+      await reopenLink(deviceId);
+    });
     // 门槛代号同理在开始时捕获:切会话 / attention 上升沿会递增代号,启动更早的
     // in-flight load 在尾部发现代号已变,放弃落 key(它的数据不含触发点之后的内容)。
     const readAckGateGenAtStart = readAckGateGenRef.current;
@@ -3687,9 +3694,7 @@ export default function SessionScreen() {
       void sessionsSubscriptionCoordinatorRef.current?.start({
         identity: subscriptionIdentityAtStart,
         isStale: subscriptionRetryIsStale,
-        reopenLink: async () => {
-          await reopenLink(deviceId);
-        },
+        reopenLink: reopenForSyncRecovery,
         subscribe: () => subscribe(`session:${sessionId}`, deviceId, ['sessions']),
       });
     };
@@ -3698,7 +3703,7 @@ export default function SessionScreen() {
       return withTransientRemoteRetry(async () => {
         // 首轮复用上面统一完成的 link-open。只有本项真的因瞬态错误重试时才
         // 重开 peer link，避免一个失败把其它已成功读取和 subscribe 一起重放。
-        if (attempt > 0) await reopenLink(deviceId);
+        if (attempt > 0) await reopenForSyncRecovery();
         attempt += 1;
         return read();
       });

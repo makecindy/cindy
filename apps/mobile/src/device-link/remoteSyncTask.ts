@@ -6,6 +6,26 @@ export interface RemoteSyncRunner {
 }
 
 /**
+ * 同一轮 session sync 的订阅与并行 snapshot 共用一次 peer 重开。
+ * 成功结果保留到本轮结束，避免错峰失败连续推进 link generation；失败清除，
+ * 让该轮后续瞬态重试仍有一次真正自愈机会。
+ */
+export function createRemoteSyncReopenOnce(
+  reopen: () => Promise<void>,
+): () => Promise<void> {
+  let inFlightOrSucceeded: Promise<void> | null = null;
+  return (): Promise<void> => {
+    if (inFlightOrSucceeded) return inFlightOrSucceeded;
+    const attempt = Promise.resolve().then(reopen);
+    inFlightOrSucceeded = attempt;
+    void attempt.catch(() => {
+      if (inFlightOrSucceeded === attempt) inFlightOrSucceeded = null;
+    });
+    return attempt;
+  };
+}
+
+/**
  * Coalesces repeated resync triggers into one in-flight run plus at most one
  * follow-up run. This matches mobile foreground/reconnect behavior where
  * pull-to-refresh, status changes, and push reseed can fire close together.

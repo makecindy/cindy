@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { createRemoteSyncCoordinator, createRemoteSyncRunner } from '@/device-link/remoteSyncTask';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createRemoteSyncCoordinator,
+  createRemoteSyncReopenOnce,
+  createRemoteSyncRunner,
+} from '@/device-link/remoteSyncTask';
 
 function deferred() {
   let resolve!: () => void;
@@ -20,6 +24,30 @@ function readSessionScreenSource(): string {
 }
 
 describe('remote sync task runner', () => {
+  it('shares one successful peer reopen across staggered retries in the same sync run', async () => {
+    const reopen = vi.fn(async () => undefined);
+    const reopenOnce = createRemoteSyncReopenOnce(reopen);
+
+    const first = reopenOnce();
+    await first;
+    const later = reopenOnce();
+
+    expect(later).toBe(first);
+    await later;
+    expect(reopen).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows the same sync run to retry after a failed peer reopen', async () => {
+    const reopen = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+    const reopenOnce = createRemoteSyncReopenOnce(reopen);
+
+    await expect(reopenOnce()).rejects.toThrow('offline');
+    await expect(reopenOnce()).resolves.toBeUndefined();
+    expect(reopen).toHaveBeenCalledTimes(2);
+  });
+
   it('coalesces repeated triggers into one in-flight run and one follow-up run', async () => {
     const gates = [deferred(), deferred()];
     const starts: number[] = [];
@@ -181,10 +209,9 @@ describe('remote sync coordinator', () => {
 
   it('uses the force-reopen callback for subscription and snapshot retries', () => {
     const source = readSessionScreenSource();
-    expect(source).toContain(
-      'reopenLink: async () => {\n          await reopenLink(deviceId);\n        }',
-    );
-    expect(source).toContain('if (attempt > 0) await reopenLink(deviceId);');
+    expect(source).toContain('reopenLink: reopenForSyncRecovery');
+    expect(source).toContain('if (attempt > 0) await reopenForSyncRecovery();');
+    expect(source).toContain('const reopenForSyncRecovery = createRemoteSyncReopenOnce(');
     expect(source).not.toContain(
       'reopenLink: async () => {\n          await openLink(deviceId);\n        }',
     );

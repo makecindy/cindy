@@ -1951,8 +1951,8 @@ export class DeviceLinkClient {
             // 来源连接严格按发送顺序处理，因此任何更早物理发送若会产生 route error，
             // 错误必然排在这次 accept 之前；走到这里仍无错误的旧代记录就是已成功路由
             // 但未收到 transport ACK 的尝试。重放前清掉它们，避免当前代真实错误被
-            // FIFO 错归给旧代。入站 link-open 的 sendLinkAccept 路径不做此清理——它
-            // 来自另一条来源连接，不具备这个因果屏障。
+            // FIFO 错归给旧代。入站 link-open 的 sendLinkAccept 当下来自另一条来源
+            // 连接、尚不具备此屏障；仅新版 confirmation ACK 到达后再做同类清理。
             this.discardOutboundRouteAttemptsBeforeGeneration(
               env.src,
               acceptedLinkGeneration,
@@ -3086,6 +3086,11 @@ export class DeviceLinkClient {
         + ` stream=${peer.streamId.slice(0, 8)} request=${confirmation.requestId.slice(0, 8)}`
         + ` ack=${ackSeq} conn=${this.connEpoch}`,
       );
+      // 新版入站重建的带 request id ACK 是 local → remote 的因果屏障：对端已经
+      // 收到本代 link-accept，旧代成功路由却未 ACK 的尝试不会再产生 relay-error。
+      // 必须在重放前淘汰旧代记录，否则当前重放真实失败会 FIFO 消费旧代并被当
+      // stale。旧端没有 confirmation 能力时没有这个证据，继续保留原兼容路径。
+      this.discardOutboundRouteAttemptsBeforeGeneration(src, peer.linkGeneration);
       this.commitReliableSendResume(src, peer, confirmation.resume);
     }
     if (!this.isPeerSendReady(peer)) return;

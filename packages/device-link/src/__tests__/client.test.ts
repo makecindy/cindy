@@ -4,7 +4,12 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
-import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js';
+import {
+  PROTOCOL_VERSION,
+  DeviceLinkError,
+  type Envelope,
+  type LinkAcceptPayload,
+} from '../protocol.js';
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
@@ -3269,6 +3274,98 @@ describe('DeviceLinkClient', () => {
       h.client.stop();
     },
   );
+
+  it('入站 link confirmation 屏障清掉旧代成功尝试，当前重放错误按当前代收口', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 1_000,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const establishConfirmedInboundLink = async (streamId: string): Promise<void> => {
+      const sentBefore = h.current().sent.length;
+      await establishInboundReliableLink(h, streamId, 1, 'dev-b', [
+        DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+        DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+      ]);
+      const accept = h.current().sent.slice(sentBefore).find(
+        (env) => env.kind === 'link-accept',
+      );
+      expect(accept?.id).toBeTruthy();
+      const accepted = accept!.payload as LinkAcceptPayload;
+      expect(accepted.transportStreamId).toBeTruthy();
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: {
+            streamId: accepted.transportStreamId!,
+            ackSeq: (accepted.transportBaseSeq ?? 1) - 1,
+            linkRequestId: accept!.id,
+          },
+        },
+      });
+      await tick();
+      expect(h.client.isLinkReady('dev-b')).toBe(true);
+    };
+
+    await establishConfirmedInboundLink('confirmed-inbound-old');
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    h.client.sendInvokeResult('dev-b', 'confirmed-inbound-replay', {
+      ok: true,
+      result: 'pending',
+    });
+    const originalFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.id === 'confirmed-inbound-replay'
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+
+    const sentBeforeReopen = h.current().sent.length;
+    await establishConfirmedInboundLink('confirmed-inbound-new');
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = h.current().sent.slice(sentBeforeReopen).find((env) => (
+      env.kind === 'invoke-result'
+      && env.id === originalFrame.id
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: originalFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current replay route error after confirmed inbound reopen',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
 
   it('出站 link-accept 屏障清掉旧代成功尝试，当前重放的 DEVICE_OFFLINE 按当前代收口', async () => {
     const h = makeHarness({
