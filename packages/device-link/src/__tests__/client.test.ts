@@ -3270,6 +3270,113 @@ describe('DeviceLinkClient', () => {
     },
   );
 
+  it('出站 link-accept 屏障清掉旧代成功尝试，当前重放的 DEVICE_OFFLINE 按当前代收口', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 1_000,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'outbound-route-old',
+      },
+    });
+    await open;
+
+    const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+    const invoke = h.client.invoke('dev-b', { channel: 'maker:current-route-error', args: [] });
+    const originalFrame = h.current().sent.filter((env) => (
+      env.kind === 'invoke'
+      && parseTransportPayload(env.payload) !== null
+    )).at(-1)!;
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+
+    const sentBeforeReopen = h.current().sent.length;
+    const reopen = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const reopenFrame = h.current().sent.slice(sentBeforeReopen).find(
+      (env) => env.kind === 'link-open',
+    )!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: reopenFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'outbound-route-old',
+      },
+    });
+    await reopen;
+
+    const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(currentGeneration).toBeGreaterThan(oldGeneration);
+    const replayedFrame = h.current().sent.slice(sentBeforeReopen).find((env) => (
+      env.kind === 'invoke'
+      && env.id === originalFrame.id
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: originalFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current replay route error',
+        dst: 'dev-b',
+      },
+    });
+
+    await expect(invoke).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
+
   it('link down 时排队的可靠帧按首次物理发送代次处理 DEVICE_OFFLINE', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     const routeChanges: Array<{

@@ -1946,7 +1946,17 @@ export class DeviceLinkClient {
               'outbound-accept',
             );
             const peer = this.getPeerTransport(env.src);
-            this.markPeerRouteOnline(env.src);
+            const acceptedLinkGeneration = this.markPeerRouteOnline(env.src);
+            // 这是本机先发送 link-open、对端收到后才可能返回的 accept。relay 对同一
+            // 来源连接严格按发送顺序处理，因此任何更早物理发送若会产生 route error，
+            // 错误必然排在这次 accept 之前；走到这里仍无错误的旧代记录就是已成功路由
+            // 但未收到 transport ACK 的尝试。重放前清掉它们，避免当前代真实错误被
+            // FIFO 错归给旧代。入站 link-open 的 sendLinkAccept 路径不做此清理——它
+            // 来自另一条来源连接，不具备这个因果屏障。
+            this.discardOutboundRouteAttemptsBeforeGeneration(
+              env.src,
+              acceptedLinkGeneration,
+            );
             peer.outboundExplicitlyClosed = false;
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
@@ -2715,6 +2725,23 @@ export class DeviceLinkClient {
       this.outboundRouteGenerationById.delete(id);
     }
     return linkGeneration;
+  }
+
+  private discardOutboundRouteAttemptsBeforeGeneration(
+    deviceId: string,
+    minimumGeneration: number,
+  ): void {
+    for (const [id, attempt] of this.outboundRouteGenerationById) {
+      if (attempt.deviceId !== deviceId) continue;
+      const retained = attempt.linkGenerations.filter(
+        (linkGeneration) => linkGeneration >= minimumGeneration,
+      );
+      if (retained.length === 0) {
+        this.outboundRouteGenerationById.delete(id);
+      } else if (retained.length !== attempt.linkGenerations.length) {
+        attempt.linkGenerations = retained;
+      }
+    }
   }
 
   private rollbackOutboundRouteGeneration(
