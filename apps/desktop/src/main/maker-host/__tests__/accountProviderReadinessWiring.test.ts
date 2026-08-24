@@ -232,6 +232,7 @@ describe('account provider readiness wiring', () => {
   it('resets the goal controller before the outgoing Maker is shut down', () => {
     const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
     const resetGoal = bootstrapSource.indexOf('resetGoalController();', teardown);
+    const drainRecreatedGoal = bootstrapSource.indexOf('await resetGoalController();', resetGoal + 1);
     const makerShutdown = bootstrapSource.indexOf(
       "await maker.shutdown({ reason: 'account-boundary' })",
       teardown,
@@ -239,6 +240,8 @@ describe('account provider readiness wiring', () => {
 
     expect(teardown).toBeGreaterThanOrEqual(0);
     expect(resetGoal).toBeGreaterThan(teardown);
+    expect(drainRecreatedGoal).toBeGreaterThan(resetGoal);
+    expect(drainRecreatedGoal).toBeLessThan(makerShutdown);
     expect(resetGoal).toBeLessThan(makerShutdown);
   });
 

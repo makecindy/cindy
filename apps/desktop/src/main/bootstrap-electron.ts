@@ -1591,7 +1591,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       // Dispose it before replacing the Maker so a relogin cannot dispatch
       // goals through a shutting-down runtime from the previous account.
       try {
-        resetGoalController();
+        await resetGoalController();
       } catch (err) {
         authBoundaryLog.error(`resetGoalController on ${reason} failed (non-fatal):`, err);
       }
