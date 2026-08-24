@@ -3092,9 +3092,14 @@ describe('DeviceLinkClient', () => {
 
     await establishInboundReliableLink(h, 'controller-stream-old');
     const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
-    h.client.sendPush('dev-b', 'maker:event', { stale: true });
+    h.client.sendInvokeResult('dev-b', 'route-generation-replay', {
+      ok: true,
+      result: 'stale',
+    });
     const oldFrame = h.current().sent.filter((env) => (
-      env.kind === 'push' && parseTransportPayload(env.payload) !== null
+      env.kind === 'invoke-result'
+      && env.id === 'route-generation-replay'
+      && parseTransportPayload(env.payload) !== null
     )).at(-1)!;
     expect(oldFrame.id).toBeTruthy();
 
@@ -3120,6 +3125,83 @@ describe('DeviceLinkClient', () => {
       linkGeneration: oldGeneration,
     });
     expect(h.client.isLinkReady('dev-b')).toBe(true);
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: oldFrame.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'current replay route error',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: currentGeneration,
+    });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+    h.client.stop();
+  });
+
+  it('link down 时排队的可靠帧按首次物理发送代次处理 DEVICE_OFFLINE', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const routeChanges: Array<{
+      deviceId: string;
+      state: 'offline';
+      connectionEpoch: number;
+      linkGeneration: number;
+    }> = [];
+    h.client.onPeerRouteStateChanged((change) => routeChanges.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'controller-stream-before-queue');
+    const queuedGeneration = h.client.getPeerLinkGeneration('dev-b');
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string; receiveReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.sendPhase = 'down';
+    internals.peerTransport.get('dev-b')!.receiveReady = false;
+
+    const sentBeforeQueue = h.current().sent.length;
+    const queuedInvoke = h.client.invoke(
+      'dev-b',
+      { channel: 'maker:queued-before-reopen', args: [] },
+      1_000,
+    );
+    expect(h.current().sent.slice(sentBeforeQueue).some((env) => env.kind === 'invoke')).toBe(false);
+
+    await establishInboundReliableLink(h, 'controller-stream-after-queue');
+    const sentGeneration = h.client.getPeerLinkGeneration('dev-b');
+    expect(sentGeneration).toBeGreaterThan(queuedGeneration);
+    const replayedFrame = h.current().sent.slice(sentBeforeQueue).find((env) => (
+      env.kind === 'invoke'
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(replayedFrame).toBeTruthy();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'relay-error',
+      id: replayedFrame!.id,
+      payload: {
+        code: 'DEVICE_OFFLINE',
+        message: 'first physical send failed',
+        dst: 'dev-b',
+      },
+    });
+
+    expect(routeChanges.at(-1)).toMatchObject({
+      deviceId: 'dev-b',
+      state: 'offline',
+      linkGeneration: sentGeneration,
+    });
+    await expect(queuedInvoke).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
   });
 

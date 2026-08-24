@@ -78,6 +78,8 @@ const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
+/** 单个逻辑帧只保留近期物理发送代次，避免断续重连时路由账本无限增长。 */
+const MAX_OUTBOUND_ROUTE_GENERATIONS_PER_ID = 256;
 
 /**
  * 该 push channel 是否属于可驱逐档(latest-wins 腾位的唯一判据入口)。
@@ -437,8 +439,6 @@ interface PendingReliableMessage {
   sent: boolean;
   /** 入队时刻（monotonicNow 单调时钟）；push 帧按 TRANSPORT_PENDING_PUSH_MAX_AGE_MS 判定过期。 */
   enqueuedAt: number;
-  /** 逻辑消息首次发出时所属的 peer link 代次。 */
-  linkGeneration: number;
 }
 
 type ReliableSendPhase = 'down' | 'awaiting-confirm' | 'ready';
@@ -650,7 +650,7 @@ export class DeviceLinkClient {
    */
   private outboundRouteGenerationById = new Map<
     string,
-    { deviceId: string; linkGeneration: number }
+    { deviceId: string; linkGenerations: number[] }
   >();
 
   constructor(opts: DeviceLinkClientOptions) {
@@ -1974,17 +1974,11 @@ export class DeviceLinkClient {
         );
         const pending = env.id ? this.pending.get(env.id) : undefined;
         const routeDeviceId = payload.dst ?? pending?.dst;
-        const reliableGeneration = (
-          env.id && routeDeviceId
-            ? this.findReliableRouteGeneration(routeDeviceId, env.id)
-            : undefined
-        );
         const rememberedGeneration = env.id
           ? this.consumeOutboundRouteGeneration(env.id, routeDeviceId)
           : undefined;
-        const routeLinkGeneration = pending?.linkGeneration
-          ?? reliableGeneration
-          ?? rememberedGeneration
+        const routeLinkGeneration = rememberedGeneration
+          ?? (pending?.reliableDst ? undefined : pending?.linkGeneration)
           ?? (routeDeviceId ? this.getPeerLinkGeneration(routeDeviceId) : 0);
         const stalePeerRouteError = !!routeDeviceId
           && routeLinkGeneration < this.getPeerLinkGeneration(routeDeviceId);
@@ -2554,7 +2548,6 @@ export class DeviceLinkClient {
       lastSentAt: 0,
       sent: false,
       enqueuedAt: this.monotonicNow(),
-      linkGeneration: peer.linkGeneration,
     };
     peer.pending.set(seq, pending);
     peer.pendingBytes += reservedBytes;
@@ -2594,7 +2587,9 @@ export class DeviceLinkClient {
     let sent = 0;
     try {
       for (const frame of frames) {
-        this.sendRoutedEnvelope(frame, pending.linkGeneration);
+        // pending 可在 link down 时入队，并在后续 link generation 才首次上网；
+        // 路由错误必须归属每次真实物理发送，而不是逻辑消息的入队代次。
+        this.sendRoutedEnvelope(frame, peer.linkGeneration);
         pending.sent = true;
         sent += 1;
       }
@@ -2666,7 +2661,12 @@ export class DeviceLinkClient {
     const routed: Envelope = env.id ? env : { ...env, id: createRequestId() };
     const generation = linkGeneration ?? this.getPeerLinkGeneration(env.dst);
     this.rememberOutboundRouteGeneration(routed.id!, env.dst, generation);
-    this.sendEnvelope(routed);
+    try {
+      this.sendEnvelope(routed);
+    } catch (err) {
+      this.rollbackOutboundRouteGeneration(routed.id!, env.dst, generation);
+      throw err;
+    }
   }
 
   private rememberOutboundRouteGeneration(
@@ -2674,8 +2674,20 @@ export class DeviceLinkClient {
     deviceId: string,
     linkGeneration: number,
   ): void {
+    const existing = this.outboundRouteGenerationById.get(id);
+    const linkGenerations = existing?.deviceId === deviceId
+      ? existing.linkGenerations
+      : [];
+    linkGenerations.push(linkGeneration);
+    if (linkGenerations.length > MAX_OUTBOUND_ROUTE_GENERATIONS_PER_ID) {
+      linkGenerations.splice(
+        0,
+        linkGenerations.length - MAX_OUTBOUND_ROUTE_GENERATIONS_PER_ID,
+      );
+    }
+    // 刷新插入顺序，让全局上限优先淘汰长期未再发送的逻辑帧。
     this.outboundRouteGenerationById.delete(id);
-    this.outboundRouteGenerationById.set(id, { deviceId, linkGeneration });
+    this.outboundRouteGenerationById.set(id, { deviceId, linkGenerations });
     while (this.outboundRouteGenerationById.size > 1_024) {
       const oldest = this.outboundRouteGenerationById.keys().next().value as string | undefined;
       if (!oldest) break;
@@ -2686,17 +2698,35 @@ export class DeviceLinkClient {
   private consumeOutboundRouteGeneration(id: string, deviceId?: string): number | undefined {
     const attempt = this.outboundRouteGenerationById.get(id);
     if (!attempt || (deviceId && attempt.deviceId !== deviceId)) return undefined;
-    this.outboundRouteGenerationById.delete(id);
-    return attempt.linkGeneration;
+    const linkGeneration = attempt.linkGenerations.shift();
+    if (attempt.linkGenerations.length === 0) {
+      this.outboundRouteGenerationById.delete(id);
+    }
+    return linkGeneration;
   }
 
-  private findReliableRouteGeneration(deviceId: string, id: string): number | undefined {
-    const peer = this.peerTransport.get(deviceId);
-    if (!peer) return undefined;
-    for (const pending of peer.pending.values()) {
-      if (pending.envelope.id === id) return pending.linkGeneration;
+  private rollbackOutboundRouteGeneration(
+    id: string,
+    deviceId: string,
+    linkGeneration: number,
+  ): void {
+    const attempt = this.outboundRouteGenerationById.get(id);
+    if (
+      !attempt
+      || attempt.deviceId !== deviceId
+      || attempt.linkGenerations.at(-1) !== linkGeneration
+    ) return;
+    attempt.linkGenerations.pop();
+    if (attempt.linkGenerations.length === 0) {
+      this.outboundRouteGenerationById.delete(id);
     }
-    return undefined;
+  }
+
+  private clearOutboundRouteGeneration(id: string | undefined, deviceId?: string): void {
+    if (!id) return;
+    const attempt = this.outboundRouteGenerationById.get(id);
+    if (!attempt || (deviceId && attempt.deviceId !== deviceId)) return;
+    this.outboundRouteGenerationById.delete(id);
   }
 
   private assertWebSocketCapacity(additionalBytes: number): void {
@@ -3034,6 +3064,7 @@ export class DeviceLinkClient {
     peer.highestAckSeq = ackSeq;
     for (const [seq, pending] of peer.pending) {
       if (seq > ackSeq) break;
+      this.clearOutboundRouteGeneration(pending.envelope.id, src);
       peer.pending.delete(seq);
       peer.pendingBytes -= pending.bytes;
     }
