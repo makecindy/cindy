@@ -12,7 +12,6 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 
-import JSZip from 'jszip';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
@@ -34,8 +33,7 @@ const HARD_MAX_COLUMNS = 256;
 const MAX_TEXT_BYTES = 32 * 1024 * 1024;
 /** xlsx 在 ExcelJS 中会展开 ZIP,压缩包与展开后都设硬上限。 */
 const MAX_XLSX_BYTES = 32 * 1024 * 1024;
-const MAX_XLSX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
-const MAX_XLSX_COMPRESSION_RATIO = 100;
+export const MAX_XLSX_ZIP_ENTRIES = 4096;
 const XLSX_READ_TIMEOUT_MS = 15_000;
 
 const DESCRIPTION = [
@@ -70,10 +68,6 @@ interface SheetRead {
   sheetNames?: string[];
 }
 
-interface ZipEntryData {
-  _data?: { compressedSize?: number; uncompressedSize?: number };
-}
-
 function xlsxTooLarge(bytes: number): DocsPathError {
   return new DocsPathError(
     'FILE_TOO_LARGE',
@@ -82,8 +76,64 @@ function xlsxTooLarge(bytes: number): DocsPathError {
   );
 }
 
-async function assertSafeXlsxArchive(archive: Uint8Array): Promise<void> {
-  let zip: JSZip;
+const XLSX_WORKER_SOURCE = String.raw`
+const { parentPort, workerData } = require('node:worker_threads');
+const JSZip = require(workerData.jszipPath);
+const ExcelJS = require(workerData.exceljsPath);
+
+const MAX_XLSX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
+const MAX_XLSX_COMPRESSION_RATIO = 100;
+const MAX_XLSX_ZIP_ENTRIES = 4096;
+
+function findSignature(bytes, signature, start, end) {
+  for (let i = end - 4; i >= start; i -= 1) {
+    if (
+      bytes[i] === (signature & 0xff) &&
+      bytes[i + 1] === ((signature >>> 8) & 0xff) &&
+      bytes[i + 2] === ((signature >>> 16) & 0xff) &&
+      bytes[i + 3] === ((signature >>> 24) & 0xff)
+    ) return i;
+  }
+  return -1;
+}
+
+function centralDirectoryEntryCount(archive) {
+  const bytes = new Uint8Array(archive.buffer, archive.byteOffset, archive.byteLength);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const eocd = findSignature(bytes, 0x06054b50, Math.max(0, bytes.length - 0xffff - 22), bytes.length);
+  if (eocd < 0) return null;
+  const declared = view.getUint16(eocd + 10, true);
+  const directorySize = view.getUint32(eocd + 12, true);
+  const directoryOffset = view.getUint32(eocd + 16, true);
+  if (declared === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) {
+    return MAX_XLSX_ZIP_ENTRIES + 1;
+  }
+  if (declared > MAX_XLSX_ZIP_ENTRIES) return declared;
+  const end = directoryOffset + directorySize;
+  if (!Number.isSafeInteger(end) || end > bytes.length) return null;
+  let offset = directoryOffset;
+  let count = 0;
+  while (offset < end) {
+    if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50) return null;
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    offset += 46 + nameLength + extraLength + commentLength;
+    count += 1;
+    if (count > MAX_XLSX_ZIP_ENTRIES) return count;
+  }
+  return offset === end ? count : null;
+}
+
+async function assertSafeXlsxArchive(archive) {
+  const entryCount = centralDirectoryEntryCount(archive);
+  if (entryCount !== null && entryCount > MAX_XLSX_ZIP_ENTRIES) {
+    const error = new Error('工作簿 ZIP 条目过多');
+    error.code = 'FILE_TOO_LARGE';
+    error.hint = '这个工作簿包含过多 ZIP 条目,为保护 Cindy 已拒绝读取。请拆分工作簿或重新保存为普通 .xlsx。';
+    throw error;
+  }
+  let zip;
   try {
     zip = await JSZip.loadAsync(archive, { createFolders: false });
   } catch {
@@ -92,32 +142,26 @@ async function assertSafeXlsxArchive(archive: Uint8Array): Promise<void> {
   }
   let compressed = 0;
   let uncompressed = 0;
-  for (const entry of Object.values(zip.files) as ZipEntryData[]) {
+  for (const entry of Object.values(zip.files)) {
     const data = entry._data;
     if (!data) continue;
-    compressed += data.compressedSize ?? 0;
-    uncompressed += data.uncompressedSize ?? 0;
+    compressed += data.compressedSize || 0;
+    uncompressed += data.uncompressedSize || 0;
     if (uncompressed > MAX_XLSX_UNCOMPRESSED_BYTES) {
-      throw new DocsPathError(
-        'FILE_TOO_LARGE',
-        `工作簿解压后过大: ${uncompressed} 字节`,
-        '这个工作簿的解压体积超过 128 MB,为保护 Cindy 主进程已拒绝读取。请先拆分或重新保存文件。',
-      );
+      const error = new Error('工作簿解压后过大');
+      error.code = 'FILE_TOO_LARGE';
+      error.hint = '这个工作簿的解压体积超过 128 MB,为保护 Cindy 已拒绝读取。请先拆分或重新保存文件。';
+      throw error;
     }
   }
   const ratio = compressed > 0 ? uncompressed / compressed : Number.POSITIVE_INFINITY;
   if (ratio > MAX_XLSX_COMPRESSION_RATIO) {
-    throw new DocsPathError(
-      'FILE_TOO_LARGE',
-      `工作簿压缩比异常: ${ratio.toFixed(1)}:1`,
-      '这个工作簿疑似是异常压缩包,为保护 Cindy 主进程已拒绝读取。请用 Excel/WPS 重新另存为 .xlsx 后再试。',
-    );
+    const error = new Error('工作簿压缩比异常');
+    error.code = 'FILE_TOO_LARGE';
+    error.hint = '这个工作簿疑似是异常压缩包,为保护 Cindy 已拒绝读取。请用 Excel/WPS 重新另存为 .xlsx 后再试。';
+    throw error;
   }
 }
-
-const XLSX_WORKER_SOURCE = String.raw`
-const { parentPort, workerData } = require('node:worker_threads');
-const ExcelJS = require(workerData.exceljsPath);
 
 function normalizeCell(value) {
   if (value === null || value === undefined) return null;
@@ -135,6 +179,7 @@ function normalizeCell(value) {
 }
 
 (async () => {
+  await assertSafeXlsxArchive(workerData.archive);
   const workbook = new ExcelJS.Workbook();
   // 主线程通过受限文件句柄只读取一次；worker 解析同一份已经过大小与 ZIP
   // 边界校验的字节，不能再按路径重开一个可能已被替换的文件。
@@ -186,6 +231,7 @@ function normalizeCell(value) {
 })().catch((error) => parentPort.postMessage({ error: {
   code: error.code,
   message: String(error.message || error),
+  hint: error.hint,
   available: error.available,
 } }));
 `;
@@ -216,6 +262,7 @@ function readXlsxInWorker(
         maxRows,
         startColumn,
         maxColumns,
+        jszipPath: createRequire(import.meta.url).resolve('jszip'),
         exceljsPath: createRequire(import.meta.url).resolve('exceljs'),
       },
       transferList: [archiveBuffer],
@@ -237,13 +284,19 @@ function readXlsxInWorker(
         '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
       )));
     }, XLSX_READ_TIMEOUT_MS);
-    worker.once('message', (message: { error?: { code?: string; message?: string; available?: string[] } } & SheetRead) => {
+    worker.once('message', (message: { error?: { code?: string; message?: string; hint?: string; available?: string[] } } & SheetRead) => {
       if (message.error) {
         if (message.error.code === 'SHEET_NOT_FOUND') {
           finish(() => reject(new DocsPathError(
             'SHEET_NOT_FOUND',
             `找不到工作表: ${String(sheetSelector)}`,
             `这个文件里的工作表是:${message.error?.available?.join(' / ') || '未知'}。请换一个名称或序号。`,
+          )));
+        } else if (message.error.code === 'FILE_TOO_LARGE') {
+          finish(() => reject(new DocsPathError(
+            'FILE_TOO_LARGE',
+            message.error?.message || '工作簿资源边界超限',
+            message.error?.hint || '这个工作簿触发了安全边界,请拆分或重新保存为普通 .xlsx 后再试。',
           )));
         } else {
           finish(() => reject(Object.assign(new Error(message.error?.message || '读取工作簿失败'), { code: message.error?.code })));
@@ -269,7 +322,6 @@ async function readXlsx(
   maxColumns: number,
 ): Promise<SheetRead> {
   const archive = await readInputFileWithinLimit(root, absPath, MAX_XLSX_BYTES, xlsxTooLarge);
-  await assertSafeXlsxArchive(archive);
   return readXlsxInWorker(archive, sheetSelector, startRow, maxRows, startColumn, maxColumns);
 }
 

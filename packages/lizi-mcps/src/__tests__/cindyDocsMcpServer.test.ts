@@ -37,6 +37,7 @@ import {
   readInputFileWithinLimit,
 } from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
+import { MAX_XLSX_ZIP_ENTRIES } from '../cindy-docs/read_sheet.js';
 import type {
   DocsMcpDeps,
   DocsMcpSessionCtx,
@@ -685,6 +686,18 @@ describe('read_sheet', () => {
     const bomb = await callTool(client, 'read_sheet', { path: 'bomb.xlsx' });
     expect(bomb.errorCode).toBe('FILE_TOO_LARGE');
     expect((bomb.data as Record<string, string>).hint).toContain('压缩');
+
+    const manyEntries = new JSZip();
+    for (let i = 0; i <= MAX_XLSX_ZIP_ENTRIES; i += 1) {
+      manyEntries.file(`xl/comments/empty-${i}.xml`, '');
+    }
+    await fs.writeFile(
+      path.join(workdir, 'many-entries.xlsx'),
+      await manyEntries.generateAsync({ type: 'nodebuffer', compression: 'STORE' }),
+    );
+    const entries = await callTool(client, 'read_sheet', { path: 'many-entries.xlsx' });
+    expect(entries.errorCode).toBe('FILE_TOO_LARGE');
+    expect((entries.data as Record<string, string>).hint).toContain('ZIP 条目');
   });
 
   it('.xls 与未知扩展名给出可执行的降级指引', async () => {
@@ -843,7 +856,7 @@ describe('render_pdf', () => {
     });
   });
 
-  it('htmlPath 走边界校验后交给 host 的是绝对路径', async () => {
+  it('htmlPath 走边界校验后把已验证字节交给 host,不再传可变路径', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'src.html'), '<p>x</p>', 'utf-8');
     const client = await connect({
@@ -858,7 +871,9 @@ describe('render_pdf', () => {
       template: 'none',
     });
     expect(result.ok).toBe(true);
-    expect(seen[0]!.htmlPath).toBe(path.join(workdir, 'src.html'));
+    expect(seen[0]!.html).toBeUndefined();
+    expect(seen[0]!.htmlBytes).toBeDefined();
+    expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toBe('<p>x</p>');
   });
 
   it('htmlPath 与 html 必须二选一', async () => {

@@ -25,17 +25,17 @@ export interface DocsPdfMargins {
 }
 
 /**
- * host 渲染回调的入参。`htmlPath` 与 `html` 二选一,由工具层保证:
- *  - htmlPath 已经过 workingDir 边界校验,是可直接 loadFile 的绝对路径;
+ * host 渲染回调的入参。工具层把已验证的 HTML 内容以 `htmlBytes` 或 `html` 传入:
+ *  - htmlBytes 来自工作目录内已打开句柄的受限读取,host 不得按原路径重新打开;
  *  - html 是内联源码,由 host 落到自己的临时目录再加载(临时文件生命周期归 host,
  *    见 docs/dev-rules/credentials-and-local-storage.md:可丢弃临时数据放
  *    app.getPath('temp') / os.tmpdir() 下的任务专属目录)。
  */
 export interface DocsPdfRenderInput {
-  htmlPath?: string;
+  htmlBytes?: Uint8Array;
   html?: string;
   /**
-   * Base directory for relative file resources when htmlPath content was
+   * Base directory for relative file resources when source content was
    * wrapped in memory. The host injects a file:// base URL and allows only
    * this directory plus its own temporary source directory.
    */

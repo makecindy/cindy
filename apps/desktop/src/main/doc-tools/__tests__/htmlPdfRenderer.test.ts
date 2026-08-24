@@ -191,7 +191,11 @@ describe('渲染窗的安全配置', () => {
     const outsideDir = path.join(tempRoot, 'outside');
     await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
     await fs.writeFile(path.join(sourceDir, 'src.html'), '<p>x</p>');
-    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: path.join(sourceDir, 'src.html') });
+    await renderHtmlToPdf({
+      ...BASE_INPUT,
+      htmlBytes: await fs.readFile(path.join(sourceDir, 'src.html')),
+      htmlBaseDir: sourceDir,
+    });
     await fs.rename(sourceDir, movedSourceDir);
     await fs.symlink(outsideDir, sourceDir, process.platform === 'win32' ? 'junction' : 'dir');
     const outsideAsset = path.join(sourceDir, 'secret.png');
@@ -218,7 +222,8 @@ describe('渲染窗的安全配置', () => {
     );
     await renderHtmlToPdf({
       ...BASE_INPUT,
-      htmlPath: path.join(sourceDir, 'src.html'),
+      htmlBytes: await fs.readFile(path.join(sourceDir, 'src.html')),
+      htmlBaseDir: sourceDir,
     }).catch(() => undefined);
     const handler = FakeBrowserWindow.instances[0]!.webContents.session.beforeRequestHandler!;
     const response = await new Promise<{ cancel: boolean }>((resolve) =>
@@ -231,7 +236,11 @@ describe('渲染窗的安全配置', () => {
     const localAsset = path.join(tempRoot, 'asset.txt');
     await fs.writeFile(localAsset, 'asset', 'utf8');
     await fs.writeFile(path.join(tempRoot, 'src.html'), '<p>x</p>');
-    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: path.join(tempRoot, 'src.html') }).catch(() => undefined);
+    await renderHtmlToPdf({
+      ...BASE_INPUT,
+      htmlBytes: await fs.readFile(path.join(tempRoot, 'src.html')),
+      htmlBaseDir: tempRoot,
+    }).catch(() => undefined);
     const win = FakeBrowserWindow.instances[0]!;
     const handler = win.webContents.session.beforeRequestHandler!;
     const decide = async (url: string): Promise<boolean> => {
@@ -318,12 +327,11 @@ describe('渲染主流程', () => {
     expect(response.cancel).toBe(true);
   });
 
-  it('htmlPath 先复制到渲染器临时目录,不让源路径竞态影响主文档', async () => {
+  it('只加载传入的 HTML 快照,不按调用方路径重新打开源文件', async () => {
     const source = path.join(tempRoot, 'src.html');
     await fs.writeFile(source, '<p>x</p>', 'utf-8');
-    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: source });
+    await renderHtmlToPdf({ ...BASE_INPUT, htmlBytes: await fs.readFile(source) });
     expect(FakeBrowserWindow.instances[0]!.loadedFile).not.toBe(source);
-    // 源文件不属于渲染器,绝不能被清理掉
     await expect(fs.stat(source)).resolves.toBeTruthy();
   });
 
@@ -333,14 +341,15 @@ describe('渲染主流程', () => {
     const moved = path.join(tempRoot, 'src-original.html');
     await fs.writeFile(source, '<p>safe</p>', 'utf-8');
     await fs.writeFile(outside, '<p>outside</p>', 'utf-8');
+    const snapshot = await fs.readFile(source);
+    await fs.rename(source, moved);
+    await fs.symlink(outside, source, process.platform === 'win32' ? 'file' : undefined);
     let loadedContent = '';
     FakeBrowserWindow.loadBehavior = async (_win, file) => {
-      await fs.rename(source, moved);
-      await fs.symlink(outside, source, process.platform === 'win32' ? 'file' : undefined);
       loadedContent = await fs.readFile(file, 'utf-8');
     };
 
-    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: source });
+    await renderHtmlToPdf({ ...BASE_INPUT, htmlBytes: snapshot });
 
     expect(loadedContent).toBe('<p>safe</p>');
   });

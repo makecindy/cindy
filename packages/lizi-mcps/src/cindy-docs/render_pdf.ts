@@ -185,21 +185,20 @@ export function registerRenderPdfTool(
         const sourcePath = hasPath
           ? await prepareInputPath(root, htmlPath!)
           : undefined;
-        const sourceHtml = sourcePath
-          ? (
-              await readInputFileWithinLimit(
-                root,
-                sourcePath,
-                RENDER_PDF_MAX_HTML_BYTES,
-                (bytes) =>
-                  new DocsPathError(
-                    'FILE_TOO_LARGE',
-                    `HTML 过大: ${bytes} 字节`,
-                    `这份 HTML 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出 PDF 渲染上限(16 MB)。请压缩内联图片/字体或拆分文档后重试。`,
-                  ),
-              )
-            ).toString('utf8')
-          : html!;
+        const sourceBytes = sourcePath
+          ? await readInputFileWithinLimit(
+              root,
+              sourcePath,
+              RENDER_PDF_MAX_HTML_BYTES,
+              (bytes) =>
+                new DocsPathError(
+                  'FILE_TOO_LARGE',
+                  `HTML 过大: ${bytes} 字节`,
+                  `这份 HTML 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出 PDF 渲染上限(16 MB)。请压缩内联图片/字体或拆分文档后重试。`,
+                ),
+            )
+          : undefined;
+        const sourceHtml = sourceBytes ? sourceBytes.toString('utf8') : html!;
         if (!sourcePath) {
           const inlineBytes = Buffer.byteLength(sourceHtml, 'utf8');
           if (inlineBytes > RENDER_PDF_MAX_HTML_BYTES) {
@@ -231,15 +230,21 @@ export function registerRenderPdfTool(
                 right: DEFAULT_MARGIN_INCHES,
               };
 
+        const renderInput = wrapped.applied || !sourcePath
+          ? {
+              html: wrapped.html,
+              ...(sourcePath ? { htmlBaseDir: path.dirname(sourcePath) } : {}),
+            }
+          : {
+              // The host must consume the exact bytes already checked above;
+              // passing sourcePath here would reopen a mutable path.
+              htmlBytes: sourceBytes!,
+              htmlBaseDir: path.dirname(sourcePath),
+            };
         const { buffer, fontsReady } = await renderHtmlToPdf({
           // 套模板后走内联 html，host 会注入原文件目录的受限 base URL，既不改
           // 用户源文件，也能继续加载同目录相对资源。
-          ...(wrapped.applied || !sourcePath
-            ? {
-                html: wrapped.html,
-                ...(sourcePath ? { htmlBaseDir: path.dirname(sourcePath) } : {}),
-              }
-            : { htmlPath: sourcePath }),
+          ...renderInput,
           pageSize,
           landscape,
           printBackground,
