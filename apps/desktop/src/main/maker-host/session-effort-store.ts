@@ -18,9 +18,11 @@
 const bySession = new Map<string, string>();
 const fastBySession = new Set<string>();
 
-/** 记下某会话当前 effort(SET_EFFORT / hydrate 时调用)。 */
-export function setSessionEffort(sessionId: string, effort: string): void {
-  if (effort && effort.trim()) bySession.set(sessionId, effort.trim());
+/** 记下某会话当前 effort(SET_EFFORT / hydrate 时调用); nullish/空值显式清除。 */
+export function setSessionEffort(sessionId: string, effort: string | null | undefined): void {
+  const normalized = effort?.trim();
+  if (normalized) bySession.set(sessionId, normalized);
+  else bySession.delete(sessionId);
 }
 
 /** 读取某会话 effort;未记录返回 null(bridge 走默认档)。 */

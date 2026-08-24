@@ -1046,7 +1046,6 @@ const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
 });
 let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
   null;
-const runtimeSelectionInFlightSessionIds = new Set<string>();
 let broadcastSessionRuntimeProjectionHolder:
   ((sessionId: string, baselineOverride?: SessionRuntimeProfile) => Promise<void>) | null = null;
 
@@ -1200,6 +1199,7 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
  * a replacement Session can otherwise inherit a late close callback.
  */
 const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();
+const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();
 
 /**
  * 用户明确停止会话时统一撤销两类自动续跑与它们的退避簿记。
@@ -2789,6 +2789,27 @@ function shouldPreserveCodexReconnectStalledAutoResume(
   if (!coordinator || !coordinator.isAutoResumePending(session.id)) return false;
   if (coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken) return false;
   return autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken);
+}
+
+/**
+ * Runtime fallback runs inside the already-fired retry callback. A route change
+ * may synchronously close the old process before autoRetryLastError can reuse
+ * its recovery record, so preserve only that exact callback token across the
+ * requested close/rebuild handoff.
+ */
+function shouldPreserveSessionRuntimeFallbackAutoResume(
+  session: WiredSession,
+  closeReason: ReturnType<typeof getWiredSessionCloseReason>,
+): boolean {
+  const attemptToken = pendingSessionRuntimeFallbackRebuilds.get(session);
+  if (attemptToken === undefined) return false;
+  if (closeReason !== 'requested') return false;
+  if (!interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)) return false;
+  if (!autoResumeBookkeeping.isCurrentAttempt(session.id, attemptToken)) return false;
+  const coordinator = agentInputCoordinatorHolder;
+  if (!coordinator || !coordinator.isAutoResumePending(session.id)) return false;
+  if (coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken) return false;
+  return autoResumeBookkeeping.hasSchedule(session.id);
 }
 
 /**
@@ -5654,26 +5675,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       }
       if (status === 'closed') {
         const closeReason = getWiredSessionCloseReason(session);
-        if (
-          closeReason !== 'requested' ||
-          !runtimeSelectionInFlightSessionIds.has(session.id)
-        ) {
-          clearSessionRuntimeControlState(session.id);
-          void broadcastSessionRuntimeProjectionHolder?.(session.id).catch((error) => {
-            log.debug('closed session runtime projection cleanup failed', {
-              sessionId: session.id,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-        }
         const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(
           session.id,
           session,
         );
-        const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(
-          session,
-          closeReason,
-        );
+        const preserveAutoResumeIntent =
+          shouldPreserveCodexReconnectStalledAutoResume(session, closeReason) ||
+          shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason);
         pendingCodexReconnectStalledRebuilds.delete(session);
         try {
           cleanupPendingInteractionsForSession(session.id, 'session_closed');
@@ -7456,7 +7464,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
       o.model = runtimeOverride.model;
       o.providerId = runtimeOverride.providerId;
-      if (runtimeOverride.effort) o.effort = runtimeOverride.effort;
+      o.effort = runtimeOverride.effort ?? undefined;
       o.fastMode = runtimeOverride.fastMode;
     }
     await applyPersistedReviewMode(o);
@@ -7549,10 +7557,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .where(eq(sessions.id, session.id))
         .limit(1);
       if (runtimeOverride) {
-        if (runtimeOverride.effort) setSessionEffort(session.id, runtimeOverride.effort);
+        setSessionEffort(session.id, runtimeOverride.effort);
         setSessionFastMode(session.id, runtimeOverride.fastMode);
       } else {
-        if (efRow?.effort) setSessionEffort(session.id, efRow.effort);
+        setSessionEffort(session.id, efRow?.effort);
         setSessionFastMode(session.id, !!efRow?.fastMode);
       }
     } catch (err) {
@@ -10941,15 +10949,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const maybeApplySessionRuntimeFallback = async (
     sessionId: string,
-    attempt: number,
-  ): Promise<void> => {
-    if (!readSessionRuntimeFallbackSettings().enabled || attempt < 2) return;
+    episodeAttempt: number,
+    attemptToken: number,
+  ): Promise<Session | null> => {
+    if (!readSessionRuntimeFallbackSettings().enabled || episodeAttempt < 2) return null;
+    let runtimeSession: Session | null = null;
     try {
       const profiles = await readSessionRuntimeProfiles(sessionId);
-      if (!profiles) return;
+      if (!profiles) return null;
       // A previously accepted Agent/fallback mutation owns the next boundary.
       // Do not let a later infrastructure retry replace that pending intent.
-      if (profiles.control.pending) return;
+      if (profiles.control.pending) return null;
       const providers = await getDesktopProviderService().listProviders({
         allowSideEffects: false,
         catalog: getActiveCatalog(),
@@ -10973,7 +10983,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         currentHop: profiles.control.fallbackHop,
         maxHops: 2,
       });
-      if (!candidate) return;
+      if (!candidate) return null;
+      runtimeSession = maker.getSession(sessionId) ?? null;
+      if (runtimeSession) {
+        pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);
+      }
       const result = await applySessionRuntimeSelection(
         sessionId,
         candidate.model,
@@ -10989,19 +11003,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
       log.info('automatic session runtime fallback evaluated', {
         sessionId,
-        attempt,
+        episodeAttempt,
+        attemptToken,
         fromProviderId: currentForFallback.providerId,
         fromModel: currentForFallback.model,
         toProviderId: candidate.providerId,
         toModel: candidate.model,
         applied: !result.superseded,
       });
+      return runtimeSession;
     } catch (error) {
       log.warn('automatic session runtime fallback skipped after switch failure', {
         sessionId,
-        attempt,
+        episodeAttempt,
+        attemptToken,
         error: error instanceof Error ? error.message : String(error),
       });
+      return runtimeSession;
     }
   };
 
@@ -12504,8 +12522,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         decision.delayMs,
         (attempt) => {
           return (async () => {
+            let fallbackRebuildSession: Session | null = null;
             try {
-              await maybeApplySessionRuntimeFallback(sessionId, decision.episodeAttempt);
+              fallbackRebuildSession = await maybeApplySessionRuntimeFallback(
+                sessionId,
+                decision.episodeAttempt,
+                decision.attemptToken,
+              );
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
               // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
               // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚
@@ -12553,6 +12576,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 sessionId,
                 error: err instanceof Error ? err.message : String(err),
               });
+            } finally {
+              if (fallbackRebuildSession) {
+                pendingSessionRuntimeFallbackRebuilds.delete(fallbackRebuildSession);
+              }
             }
           })();
         },
@@ -14664,7 +14691,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentSwitchPending,
           sessionId,
           () => {
-            runtimeSelectionInFlightSessionIds.add(sessionId);
             return applyRuntimeSetModelChange({
               maker,
               sessionId,
@@ -14693,8 +14719,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
               codexAuthInjection: getCodexProxyAuthInjectionState(),
               logger: log,
-            }).finally(() => {
-              runtimeSelectionInFlightSessionIds.delete(sessionId);
             });
           },
           (id) =>
@@ -14717,8 +14741,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // applyRuntimeSetModelChange 可能 close + wake；若 effort/fast 留给 renderer
           // 后续独立调用，queue drain 会用新 model + 旧偏好重建，跨控制端时还会发生
           // 旧请求尾写覆盖新选择。
-          if (atomicSelection.effort)
-            setSessionEffort(sessionId, atomicSelection.effort);
+          setSessionEffort(sessionId, atomicSelection.effort);
           setSessionFastMode(sessionId, atomicSelection.fastMode);
           const sess = maker.getSession(sessionId);
           if (

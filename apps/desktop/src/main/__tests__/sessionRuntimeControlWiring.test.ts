@@ -76,29 +76,41 @@ describe('session runtime control wiring', () => {
     }
   });
 
-  it('preserves runtime state only across the close emitted by an in-flight model rebuild', () => {
+  it('retains runtime state across process closes and clears it at task lifecycle boundaries', () => {
     const closeBoundary = handlerBody(
       registerSource,
       "if (status === 'closed') {",
       'const closedDirectAbortBoundary',
     );
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
-    );
 
-    expect(closeBoundary).toContain("closeReason !== 'requested'");
-    expect(closeBoundary).toContain('!runtimeSelectionInFlightSessionIds.has(session.id)');
-    expect(closeBoundary).toContain('clearSessionRuntimeControlState(session.id);');
-    expect(setModel).toContain('runtimeSelectionInFlightSessionIds.add(sessionId);');
-    expect(setModel).toContain('runtimeSelectionInFlightSessionIds.delete(sessionId);');
-    expect(setModel.indexOf('runtimeSelectionInFlightSessionIds.add(sessionId);')).toBeLessThan(
-      setModel.indexOf('return applyRuntimeSetModelChange({'),
+    expect(closeBoundary).not.toContain('clearSessionRuntimeControlState(session.id);');
+    expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) => {');
+    expect(registerSource).toContain('clearSessionRuntimeControlState(sessionId);');
+  });
+
+  it('preserves the exact auto-resume attempt across a fallback route rebuild', () => {
+    expect(registerSource).toContain(
+      'const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();',
     );
-    expect(setModel.indexOf('return applyRuntimeSetModelChange({')).toBeLessThan(
-      setModel.indexOf('runtimeSelectionInFlightSessionIds.delete(sessionId);'),
+    expect(registerSource).toContain(
+      'pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);',
     );
+    expect(registerSource).toContain(
+      'pendingSessionRuntimeFallbackRebuilds.delete(fallbackRebuildSession);',
+    );
+    expect(registerSource).toContain(
+      'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
+    );
+    expect(registerSource).toContain('autoResumeBookkeeping.hasSchedule(session.id)');
+    expect(registerSource).toContain(
+      'decision.episodeAttempt,\n                decision.attemptToken,',
+    );
+  });
+
+  it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {
+    expect(registerSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
+    expect(registerSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
+    expect(registerSource).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
   });
 
   it('keeps explicit provider null and fixed-effort null through runtime settlement', () => {
@@ -121,7 +133,7 @@ describe('session runtime control wiring', () => {
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
     expect(registerSource).toContain(
-      'maybeApplySessionRuntimeFallback(sessionId, decision.episodeAttempt)',
+      'decision.episodeAttempt,\n                decision.attemptToken,',
     );
   });
 
