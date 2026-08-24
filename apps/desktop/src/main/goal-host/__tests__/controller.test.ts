@@ -240,6 +240,10 @@ class FakeSession implements SessionLike {
     };
   }
 
+  hasListener(): boolean {
+    return this.listener !== null;
+  }
+
   isTurnRunning(): boolean {
     return this.running;
   }
@@ -3239,6 +3243,47 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.status).toBe('paused');
     expect(h.updates.at(-1)?.goal?.status).toBe('paused');
     expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('does not let a startup resume scan repopulate runtime state after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseList!: (states: GoalState[]) => void;
+    const blockedList = new Promise<GoalState[]>((resolve) => {
+      releaseList = resolve;
+    });
+    vi.spyOn(local.storage, 'listActive').mockReturnValueOnce(blockedList);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    local.controller.dispose();
+    releaseList([active]);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
+  });
+
+  it('does not let a per-goal startup lookup attach after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    vi.spyOn(local.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    await vi.waitFor(() => expect(local.storage.get).toHaveBeenCalledWith('s1'));
+    local.controller.dispose();
+    releaseGet(active);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
   });
 
   it('resumeOnOpen 在释放 route 锁前挂 listener，并在会话随即关闭后迁移到重建会话', async () => {
