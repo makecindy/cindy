@@ -1993,6 +1993,13 @@ export class DeviceLinkClient {
         if (payload.code === 'DEVICE_OFFLINE' && routeDeviceId) {
           this.notifyPeerRouteOffline(routeDeviceId, routeLinkGeneration);
         }
+        // 同一个可靠 invoke 会在 peer link 重开后用原 request id 重放。旧代物理发送的
+        // terminal route error 可能晚于新代重放到达；它只负责消费上面的路由代次记录，
+        // 不能 reject 当前逻辑请求或把当前重放帧改成 skip，否则调用方会先看到失败、
+        // 而对端稍后仍可能执行成功。当前代错误仍走下方既有 fail-closed 收口。
+        if (pending?.reliableDst && terminalRouteFailure && stalePeerRouteError) {
+          return true;
+        }
         if (env.id && pending) {
           const p = pending;
           this.pending.delete(env.id);

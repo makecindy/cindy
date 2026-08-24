@@ -3215,6 +3215,61 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it.each(['DEVICE_OFFLINE', 'REMOTE_DISABLED'] as const)(
+    '旧代 %s 不终止新代正在重放的可靠 invoke',
+    async (code) => {
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 1_000 } });
+      h.client.start();
+      await tick();
+      h.current().ack();
+
+      await establishInboundReliableLink(h, 'invoke-route-generation-old');
+      const oldGeneration = h.client.getPeerLinkGeneration('dev-b');
+      const invoke = h.client.invoke('dev-b', { channel: 'maker:write-once', args: ['value'] });
+      let settled = false;
+      void invoke.finally(() => { settled = true; });
+      const oldFrame = h.current().sent.filter((env) => (
+        env.kind === 'invoke'
+        && parseTransportPayload(env.payload) !== null
+      )).at(-1)!;
+
+      await establishInboundReliableLink(h, 'invoke-route-generation-new');
+      const currentGeneration = h.client.getPeerLinkGeneration('dev-b');
+      expect(currentGeneration).toBeGreaterThan(oldGeneration);
+      expect(h.current().sent.filter((env) => (
+        env.kind === 'invoke'
+        && env.id === oldFrame.id
+        && parseTransportPayload(env.payload) !== null
+      )).length).toBeGreaterThanOrEqual(2);
+
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'relay-error',
+        id: oldFrame.id,
+        payload: {
+          code,
+          message: 'delayed old invoke route error',
+          dst: 'dev-b',
+        },
+      });
+      await tick();
+
+      expect(settled).toBe(false);
+      expect(h.client.isLinkReady('dev-b')).toBe(true);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(1);
+
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'invoke-result',
+        id: oldFrame.id,
+        src: 'dev-b',
+        payload: { ok: true, result: 'applied-once' },
+      });
+      await expect(invoke).resolves.toMatchObject({ ok: true, result: 'applied-once' });
+      h.client.stop();
+    },
+  );
+
   it('link down 时排队的可靠帧按首次物理发送代次处理 DEVICE_OFFLINE', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     const routeChanges: Array<{
