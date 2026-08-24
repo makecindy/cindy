@@ -387,7 +387,10 @@ describe('Windows Git/PATH helpers', () => {
   });
 
   it('discovers a Git install root from a PATH executable', () => {
-    const fs = fakeFs(['C:\\Tools\\Git\\bin\\git.exe']);
+    const fs = fakeFs([
+      'C:\\Tools\\Git\\bin\\git.exe',
+      'C:\\Tools\\Git\\cmd\\git.exe',
+    ]);
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: '',
@@ -397,7 +400,7 @@ describe('Windows Git/PATH helpers', () => {
         ...fs,
       },
     });
-    expect(result).toBe('C:\\Tools\\Git\\bin');
+    expect(result).toBe('C:\\Tools\\Git\\cmd;C:\\Tools\\Git\\bin');
   });
 
   it.each([
@@ -412,6 +415,17 @@ describe('Windows Git/PATH helpers', () => {
 
   it('rejects a package-manager shim as a Git install root', () => {
     expect(gitInstallRootFromPath('C:\\Users\\alice\\scoop\\shims\\git.exe')).toBeUndefined();
+  });
+
+  it('does not let a generic bin shim prove its own Git for Windows root', () => {
+    const shim = 'C:\\ProgramData\\chocolatey\\bin\\git.exe';
+    const fs = fakeFs([shim]);
+
+    expect(resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: 'C:\\Windows',
+      probes: { readRegistryInstallPaths: () => [], findGitExecutablesOnPath: () => [shim], ...fs },
+    })).toBe('C:\\Windows');
   });
 
   it.each([

@@ -377,6 +377,24 @@ function hasGitCommand(directory: string, probes: WindowsGitFileProbes): boolean
   return ['git.exe', 'git.cmd', 'git.bat'].some((name) => probes.isFile(path.win32.join(directory, name)));
 }
 
+function pathExecutableValidatesInstallRoot(
+  gitPath: string,
+  installRoot: string,
+  probes: WindowsGitFileProbes,
+): boolean {
+  const normalized = path.win32.normalize(gitPath);
+  const parent = path.win32.dirname(normalized);
+  if (path.win32.basename(parent).toLowerCase() !== 'bin') return true;
+  const grandparentName = path.win32.basename(path.win32.dirname(parent)).toLowerCase();
+  if (grandparentName === 'usr' || grandparentName.startsWith('mingw')) return true;
+  const root = path.win32.normalize(installRoot);
+  const cmd = path.win32.join(root, 'cmd');
+  const usrBin = path.win32.join(root, 'usr', 'bin');
+  return hasGitCommand(cmd, probes)
+    || hasGitCommand(usrBin, probes)
+    || probes.isFile(path.win32.join(usrBin, 'ls.exe'));
+}
+
 export function gitPathsForInstallRoot(
   installRoot: string,
   probes: Pick<WindowsGitPathProbes, 'isDirectory' | 'isFile'>,
@@ -491,7 +509,12 @@ export function resolveWindowsGitPath({
     ...registryRoots,
     ...gitExecutableCandidates
       .filter(fileProbes.isFile)
-      .flatMap((gitPath) => gitInstallRootFromPath(gitPath) ?? []),
+      .flatMap((gitPath) => {
+        const installRoot = gitInstallRootFromPath(gitPath);
+        return installRoot && pathExecutableValidatesInstallRoot(gitPath, installRoot, fileProbes)
+          ? [installRoot]
+          : [];
+      }),
   ]);
   const roots = rootCandidates.filter((root) => gitPathsForInstallRoot(root, fileProbes).length > 0);
   const added = roots.flatMap((root) => gitPathsForInstallRoot(root, fileProbes));
