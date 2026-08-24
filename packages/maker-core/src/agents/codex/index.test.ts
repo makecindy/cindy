@@ -16469,7 +16469,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.requestUserInput || !handlers.descendantThreadStarted) {
+    if (!handlers?.requestUserInput || !handlers.descendantThreadStarted || !handlers.serverRequestResolved) {
       throw new Error('expected requestUserInput and descendant thread handlers');
     }
     handlers.descendantThreadStarted({
@@ -16478,7 +16478,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     const resolveInteraction = vi.fn();
     handle.setInteractionResolver(resolveInteraction);
 
-    const result = await handlers.requestUserInput({
+    const resultPromise = handlers.requestUserInput({
       threadId: 'child-thread-native-user-input',
       turnId: 'turn-native-descendant',
       itemId: 'native-input-descendant',
@@ -16491,6 +16491,14 @@ describe('CodexAgent MCP thread context hooks', () => {
         options: [],
       }],
     }, { requestId: 'req-native-descendant' });
+
+    // Without item provenance, keep the descendant request fail-closed until
+    // the server resolves it instead of guessing that it is a user question.
+    handlers.serverRequestResolved({
+      threadId: 'child-thread-native-user-input',
+      requestId: 'req-native-descendant',
+    });
+    const result = await resultPromise;
 
     expect(result).toEqual({ answers: {} });
     expect(resolveInteraction).not.toHaveBeenCalled();
@@ -16589,6 +16597,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       }],
     }, { requestId: 'req-permission-descendant-late' });
 
+    await new Promise((resolve) => setTimeout(resolve, 600));
     handlers.descendantNotification('child-thread-permission-input-late', 'item/updated', {
       threadId: 'child-thread-permission-input-late',
       turnId: 'turn-permission-descendant-late',
@@ -19835,6 +19844,7 @@ describe('CodexAgent turn lifecycle', () => {
       || !handlers.mcpServerElicitation
       || !handlers.permissionsApproval
       || !handlers.requestUserInput
+      || !handlers.serverRequestResolved
       || !handlers.dynamicToolCall
     ) {
       throw new Error('expected all descendant server request handlers');
@@ -19899,7 +19909,7 @@ describe('CodexAgent turn lifecycle', () => {
       itemId: 'child-permissions',
       permissions: { network: true },
     })).resolves.toEqual({ permissions: { network: true }, scope: 'turn' });
-    await expect(handlers.requestUserInput({
+    const childInputPromise = handlers.requestUserInput({
       ...child,
       itemId: 'child-input',
       questions: [{
@@ -19910,7 +19920,12 @@ describe('CodexAgent turn lifecycle', () => {
         isSecret: false,
         options: [],
       }],
-    }, { requestId: 'child-input-request' })).resolves.toEqual({
+    }, { requestId: 'child-input-request' });
+    handlers.serverRequestResolved({
+      threadId: child.threadId,
+      requestId: 'child-input-request',
+    });
+    await expect(childInputPromise).resolves.toEqual({
       answers: {},
     });
     await expect(handlers.dynamicToolCall({

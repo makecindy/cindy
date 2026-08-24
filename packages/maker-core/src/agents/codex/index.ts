@@ -660,10 +660,6 @@ const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
   `${ASK_USER_DYNAMIC_TOOL_NAMESPACE}__${ASK_USER_DYNAMIC_TOOL_NAME}`;
 const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
   'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
-// Codex may deliver a server request before the matching item notification.
-// Keep the classification race bounded while preserving fail-closed behavior
-// for a descendant whose tool provenance never arrives.
-const CODEX_TOOL_CONTEXT_WAIT_TIMEOUT_MS = 500;
 const MAX_REQUEST_USER_INPUT_QUESTIONS = 3;
 const MAX_REQUEST_USER_INPUT_OPTIONS = 10;
 const MAX_REQUEST_USER_INPUT_TEXT_CHARS = 1_000;
@@ -740,6 +736,13 @@ interface ActiveToolContext {
   pluginId?: string | null;
   namespace?: string | null;
   tool?: string | null;
+}
+
+type ActiveToolContextWaiter = (context: ActiveToolContext | undefined) => void;
+
+interface UserInputClassification {
+  kind: 'ask_user_question' | 'permission';
+  cancelled: boolean;
 }
 
 function isAskUserDynamicTool(params: Pick<DynamicToolCallParams, 'namespace' | 'tool'>): boolean {
@@ -4645,6 +4648,7 @@ export class CodexAgent extends BaseAgent {
       unregisterDescendantCodexMcpContexts();
       activeToolContexts.clear();
       completedActiveToolTurns.clear();
+      completedActiveToolContexts.clear();
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();
@@ -5518,8 +5522,9 @@ export class CodexAgent extends BaseAgent {
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
-    const activeToolContextWaiters = new Map<string, Set<() => void>>();
+    const activeToolContextWaiters = new Map<string, Set<ActiveToolContextWaiter>>();
     const completedActiveToolTurns = new Map<string, string | null | undefined>();
+    const completedActiveToolContexts = new Map<string, ActiveToolContext>();
     // A single model turn can surface the same visible question through both
     // the native requestUserInput request and the dynamic-tool compatibility
     // path. Join an in-flight interaction, then replay its submitted answers
@@ -5537,6 +5542,11 @@ export class CodexAgent extends BaseAgent {
       fingerprint: string;
       pendingForTurn: Map<string, PendingUserInputInteraction>;
       pendingInteraction: PendingUserInputInteraction;
+    }>();
+    const pendingUserInputClassifications = new Map<string, {
+      turnId: string | null | undefined;
+      cancelled: boolean;
+      cancel: () => void;
     }>();
     const liveAskUserByRequestId = new Map<string, LiveAskUserRequest>();
     registerRootCodexMcpContext();
@@ -6044,6 +6054,7 @@ export class CodexAgent extends BaseAgent {
 
     function dismissAllPendingUserInput(reason: string): void {
       dismissPendingUserInput(reason, (meta) => meta.threadId === threadId);
+      for (const pending of [...pendingUserInputClassifications.values()]) pending.cancel();
     }
 
     /**
@@ -7197,10 +7208,11 @@ export class CodexAgent extends BaseAgent {
         && completedActiveToolTurns.get(active.id) === turnId
       ) return;
       activeToolContexts.set(active.id, active.ctx);
+      completedActiveToolContexts.delete(active.id);
       const waiters = activeToolContextWaiters.get(active.id);
       if (!waiters) return;
       activeToolContextWaiters.delete(active.id);
-      for (const resolve of [...waiters]) resolve();
+      for (const resolve of [...waiters]) resolve(active.ctx);
     }
 
     function completeActiveToolContext(item: unknown, turnId?: string | null): void {
@@ -7209,35 +7221,66 @@ export class CodexAgent extends BaseAgent {
         ? (item as Record<string, unknown>).id as string
         : '';
       if (!itemId) return;
+      const context = activeToolContextFromItem(item, turnId)?.ctx
+        ?? activeToolContexts.get(itemId);
       activeToolContexts.delete(itemId);
       completedActiveToolTurns.set(itemId, turnId);
+      if (context) completedActiveToolContexts.set(itemId, context);
       const waiters = activeToolContextWaiters.get(itemId);
       if (!waiters) return;
       activeToolContextWaiters.delete(itemId);
-      for (const resolve of [...waiters]) resolve();
+      for (const resolve of [...waiters]) resolve(context);
     }
 
-    function waitForActiveToolContext(itemId: string): Promise<void> {
-      if (activeToolContexts.has(itemId) || completedActiveToolTurns.has(itemId)) {
-        return Promise.resolve();
+    function toolContextForItem(itemId: string): ActiveToolContext | undefined {
+      return activeToolContexts.get(itemId) ?? completedActiveToolContexts.get(itemId);
+    }
+
+    function waitForActiveToolContext(
+      itemId: string,
+      requestId: string,
+      turnId: string | null | undefined,
+    ): Promise<{ context: ActiveToolContext | undefined; cancelled: boolean }> {
+      // Item notifications may be delayed well beyond a wall-clock threshold;
+      // resolve from provenance or lifecycle cancellation instead of guessing
+      // that an unknown descendant request is a user question.
+      const existing = toolContextForItem(itemId);
+      if (existing) {
+        return Promise.resolve({ context: existing, cancelled: false });
+      }
+      if (completedActiveToolTurns.has(itemId)) {
+        return Promise.resolve({ context: undefined, cancelled: false });
       }
       return new Promise((resolve) => {
         let settled = false;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const finish = (): void => {
+        let cancel!: () => void;
+        const pending = {
+          turnId,
+          cancelled: false,
+          cancel: (): void => undefined,
+        };
+        const finish = (context: ActiveToolContext | undefined): void => {
           if (settled) return;
           settled = true;
-          if (timer) clearTimeout(timer);
           const waiters = activeToolContextWaiters.get(itemId);
           waiters?.delete(finish);
           if (waiters?.size === 0) activeToolContextWaiters.delete(itemId);
-          resolve();
+          resolve({ context, cancelled: false });
         };
-        timer = setTimeout(finish, CODEX_TOOL_CONTEXT_WAIT_TIMEOUT_MS);
-        timer.unref?.();
-        const waiters = activeToolContextWaiters.get(itemId) ?? new Set<() => void>();
+        cancel = (): void => {
+          pending.cancelled = true;
+          if (settled) return;
+          settled = true;
+          const waiters = activeToolContextWaiters.get(itemId);
+          waiters?.delete(finish);
+          if (waiters?.size === 0) activeToolContextWaiters.delete(itemId);
+          resolve({ context: undefined, cancelled: true });
+        };
+        pending.cancel = cancel;
+        const waiters = activeToolContextWaiters.get(itemId) ?? new Set<ActiveToolContextWaiter>();
         waiters.add(finish);
         activeToolContextWaiters.set(itemId, waiters);
+        pendingUserInputClassifications.set(requestId, pending);
       });
     }
 
@@ -7254,11 +7297,17 @@ export class CodexAgent extends BaseAgent {
     }
 
     function clearActiveToolContextsForTurn(turnId: string): void {
+      for (const pending of pendingUserInputClassifications.values()) {
+        if (pending.turnId === turnId) pending.cancel();
+      }
       for (const [itemId, ctx] of activeToolContexts) {
         if (ctx.turnId === turnId) activeToolContexts.delete(itemId);
       }
       for (const [itemId, completedTurnId] of completedActiveToolTurns) {
         if (completedTurnId === turnId) completedActiveToolTurns.delete(itemId);
+      }
+      for (const [itemId, ctx] of completedActiveToolContexts) {
+        if (ctx.turnId === turnId) completedActiveToolContexts.delete(itemId);
       }
       // Lifecycle callers dismiss the broker entries first. Wake joined waiters
       // before dropping the lookup maps so they can observe that their request
@@ -7277,6 +7326,7 @@ export class CodexAgent extends BaseAgent {
     }
 
     function clearAllPendingUserInputInteractions(): void {
+      for (const pending of [...pendingUserInputClassifications.values()]) pending.cancel();
       // Keep the same broker-dismiss-before-wake ordering as the per-turn path.
       for (const pendingForTurn of pendingUserInputByTurn.values()) {
         for (const pendingInteraction of pendingForTurn.values()) {
@@ -7315,11 +7365,16 @@ export class CodexAgent extends BaseAgent {
 
     function classifyUserInputRequest(
       params: ToolRequestUserInputParams,
-    ): 'ask_user_question' | 'permission' | Promise<'ask_user_question' | 'permission'> {
-      const ctx = activeToolContexts.get(params.itemId);
-      if (ctx || params.threadId === threadId) return classifyToolContext(ctx);
-      return waitForActiveToolContext(params.itemId).then(() =>
-        classifyToolContext(activeToolContexts.get(params.itemId)));
+      requestId: string,
+    ): UserInputClassification | Promise<UserInputClassification> {
+      const ctx = toolContextForItem(params.itemId);
+      if (ctx || params.threadId === threadId) {
+        return { kind: classifyToolContext(ctx), cancelled: false };
+      }
+      return waitForActiveToolContext(params.itemId, requestId, params.turnId).then(({ context, cancelled }) => ({
+        kind: classifyToolContext(context),
+        cancelled,
+      }));
     }
 
     async function askUserViaInteraction(
@@ -7540,8 +7595,21 @@ export class CodexAgent extends BaseAgent {
       if (resolvedWhileBufferedRequestIds.delete(requestId)) return { answers: {} };
       const questions = normalizeRequestUserInputQuestions(params.questions);
       if (questions.length === 0) return { answers: {} };
-      const classifiedKind = classifyUserInputRequest(params);
-      const kind = typeof classifiedKind === 'string' ? classifiedKind : await classifiedKind;
+      const classifiedKind = classifyUserInputRequest(params, requestId);
+      const classification = classifiedKind instanceof Promise
+        ? await classifiedKind
+        : classifiedKind;
+      const pendingClassification = pendingUserInputClassifications.get(requestId);
+      if (
+        classification.cancelled
+        || pendingClassification?.cancelled === true
+        || resolvedWhileBufferedRequestIds.delete(requestId)
+      ) {
+        pendingUserInputClassifications.delete(requestId);
+        return { answers: {} };
+      }
+      pendingUserInputClassifications.delete(requestId);
+      const kind = classification.kind;
       if (kind === 'ask_user_question' && params.threadId !== threadId) {
         log.warn('native requestUserInput rejected for descendant user question', {
           requestId,
@@ -7552,7 +7620,7 @@ export class CodexAgent extends BaseAgent {
         });
         return { answers: {} };
       }
-      const activeToolContext = activeToolContexts.get(params.itemId);
+      const activeToolContext = toolContextForItem(params.itemId);
       const hasToolGenerationBoundary =
         activeToolContext?.type === 'mcpToolCall'
         || activeToolContext?.type === 'dynamicToolCall';
@@ -7766,6 +7834,8 @@ export class CodexAgent extends BaseAgent {
       const brokerKey = { connectionId, requestId: params.requestId };
       const userInputPending = userInputBroker.has(brokerKey);
       const dynamicPending = dynamicToolBroker.has(brokerKey);
+      const classificationPending = pendingUserInputClassifications.get(requestId);
+      if (classificationPending) classificationPending.cancel();
       if (userInputPending || dynamicPending) {
         // Wake joined duplicates before settling the owner's outer broker
         // response. This keeps them on the cancellation/reassignment path even
@@ -7789,7 +7859,7 @@ export class CodexAgent extends BaseAgent {
           data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
           source: 'codex',
         });
-      } else if (bufferedOrphanTurnIds.size > 0) {
+      } else if (!classificationPending && bufferedOrphanTurnIds.size > 0) {
         // cancel 未命中且有 buffered turn: 可能是挂起中的请求 (尚未注册到
         // broker) 被服务端取消 (greptile R13 P1) — 记下 requestId, 对账放行
         // 后 handler 自查回空响应, 不上 UI。requestId 是一次性的 (消费即删),
@@ -9540,6 +9610,7 @@ export class CodexAgent extends BaseAgent {
         dismissAllPendingUserInput('transport_error');
         activeToolContexts.clear();
         completedActiveToolTurns.clear();
+        completedActiveToolContexts.clear();
         capabilitySelectionTextByTurnId.clear();
         capabilitySelectionTextByThreadId.clear();
         descendantParentThreadByThreadId.clear();
@@ -10233,6 +10304,7 @@ export class CodexAgent extends BaseAgent {
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
           completedActiveToolTurns.clear();
+          completedActiveToolContexts.clear();
           capabilitySelectionTextByTurnId.clear();
           capabilitySelectionTextByThreadId.clear();
           descendantParentThreadByThreadId.clear();
@@ -10522,6 +10594,7 @@ export class CodexAgent extends BaseAgent {
       unregisterDescendantCodexMcpContexts();
       activeToolContexts.clear();
       completedActiveToolTurns.clear();
+      completedActiveToolContexts.clear();
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();
