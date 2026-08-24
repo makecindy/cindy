@@ -431,6 +431,50 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     expect(broker.stateOf('node-ghost')).toBe('off');
   });
 
+  it('空闲回收等待旧进程真实退出后才允许同 key 重启', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    ghost.manifest.node!.idleTimeoutSeconds = 1;
+    const first = makeAutoReplyProcess();
+    const second = makeAutoReplyProcess();
+    const kill = vi.spyOn(first, 'kill').mockImplementation(() => {
+      first.killed = true;
+      return true;
+    });
+    const children = [first, second];
+    const spawnProcess = vi.fn(() => children.shift() as FakeNodeProcess);
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: spawnProcess as never,
+    });
+
+    await expect(broker.handleRequest('node-ghost', rpcRequest('first'))).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+
+    const restart = broker.handleRequest('node-ghost', rpcRequest('second'));
+    await vi.runAllTicks();
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+
+    first.emit('exit', null, 'SIGTERM');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.runAllTicks();
+    second.emit('spawn');
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(restart).resolves.toMatchObject({
+      ok: true,
+      result: { method: 'second' },
+    });
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+  });
+
   it('resident 档可提前启动且不会设置空闲关闭', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost({ lifecycle: 'resident' });

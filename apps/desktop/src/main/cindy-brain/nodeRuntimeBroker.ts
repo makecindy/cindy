@@ -1052,6 +1052,7 @@ export class GhostNodeRuntimeBroker {
   private stopWorker(key: string, entry: WorkerEntry): void {
     entry.stopping = true;
     this.workers.delete(key);
+    this.registerStoppingWorker(key, entry);
     this.exitGen.set(key, (this.exitGen.get(key) ?? 0) + 1);
     this.clearIdleTimer(entry);
     // 级联:先收孩子再收本体,不留孤儿进程。
@@ -1089,6 +1090,26 @@ export class GhostNodeRuntimeBroker {
   private readonly startingWorkers = new Map<string, Promise<WorkerEntry>>();
   private readonly startingWorkerScopes = new Map<string, unknown>();
 
+  /**
+   * Idle stop removes the worker from `workers` before the OS process has
+   * emitted `exit`. Keep a per-key barrier so the next request cannot fork a
+   * replacement while the old utility process still owns resources.
+   */
+  private readonly stoppingWorkers = new Map<string, Promise<void>>();
+
+  private registerStoppingWorker(key: string, entry: WorkerEntry): void {
+    if (this.stoppingWorkers.has(key)) return;
+    const barrier = this.waitForProcessExit(entry.child, entry.ghost.manifest.id);
+    // A worker may be stopped without an immediate replacement request. Keep
+    // a rejection from becoming an unhandled promise while retaining it for
+    // the next request to surface as a bounded start failure.
+    void barrier.catch(() => undefined);
+    this.stoppingWorkers.set(key, barrier);
+    entry.child.once('exit', () => {
+      if (this.stoppingWorkers.get(key) === barrier) this.stoppingWorkers.delete(key);
+    });
+  }
+
   /** stop(ghostId) 置入:在途重试检测到后立即中止,不继续拉新进程。 */
   private readonly stoppedGhosts = new Set<string>();
 
@@ -1104,6 +1125,17 @@ export class GhostNodeRuntimeBroker {
     ownerScopeSnapshot: unknown,
   ): Promise<WorkerEntry> {
     const key = GhostNodeRuntimeBroker.keyOf(ghost.manifest.id, entryRel);
+    const stopping = this.stoppingWorkers.get(key);
+    if (stopping) {
+      try {
+        await stopping;
+      } catch (error) {
+        throw new WorkerStartError(
+          error instanceof Error ? error.message : `Node 工作进程停止失败(${ghost.manifest.id})`,
+          false,
+        );
+      }
+    }
     const inflight = this.startingWorkers.get(key);
     if (inflight) {
       const entry = await inflight;
