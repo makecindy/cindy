@@ -1956,6 +1956,7 @@
     },
     "betaChannel": {
       "title": "Beta channel",
+      "badge": "Beta",
       "description": "Join the beta channel to receive upcoming client updates early. Takes effect after restart.",
       "toggleAria": "Beta channel toggle",
       "restartTitle": "Restart Cindy",
@@ -3165,6 +3166,18 @@
         "toggleFailed": "Failed to switch silent encrypted-content retry"
       }
     },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "Automatic task model fallback",
+        "description": "After repeated connection or capacity failures, try another connected source for the same model, then a model explicitly recommended for the current agent. It never switches agents or changes your saved selection. Off by default."
+      },
+      "toggleAria": "Toggle automatic task model fallback",
+      "toast": {
+        "enabled": "Automatic task model fallback is on.",
+        "disabled": "Automatic task model fallback is off.",
+        "toggleFailed": "Failed to change automatic task model fallback"
+      }
+    },
     "remoteControl": {
       "title": "Remote Connection",
       "description": "Control your other signed-in devices remotely, or connect to a remote host over SSH.",
@@ -4336,6 +4349,16 @@
         "manualCount": "Bundled manuals: {{count}}",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
+      },
+      "forgeOidcInstallConfirm": {
+        "title": "Confirm organization identity testing",
+        "description": "After installation, this plugin can use your current organization identity to request Connection JWTs for the hosts below. Confirm that this is the plugin you just built.",
+        "pluginNameLabel": "Plugin",
+        "pluginIdLabel": "Plugin id",
+        "hostsLabel": "Organization identity request hosts",
+        "typedIdLabel": "Enter the plugin id <strong>{{id}}</strong> to confirm",
+        "confirm": "Install and allow testing",
+        "cancel": "Cancel"
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -6365,6 +6388,7 @@
     },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
+      "settingsLinkBeta": "Settings, current user: {{name}}, Beta channel enabled",
       "canaryBadge": "Canary user",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

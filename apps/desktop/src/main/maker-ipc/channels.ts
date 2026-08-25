@@ -367,6 +367,9 @@ export const MAKER_INVOKE = {
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
+  SESSION_RUNTIME_FALLBACK_GET: 'maker:session-runtime-fallback:get',
+  SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
+  SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
   /**
    * Claude Code 与 Pi 共用的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
    * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。

@@ -1480,6 +1480,10 @@ export class Session {
     return this.handle.getFastMode?.() ?? null;
   }
 
+  getEffort(): Effort | null {
+    return this.handle.getEffort?.() ?? null;
+  }
+
   /**
    * 运行时合并 vendorOptions (浅合并到内部 closure)。
    * 用于 host 中途切换 session-specific 配置(典型场景:Orca 协同模式 toggle,

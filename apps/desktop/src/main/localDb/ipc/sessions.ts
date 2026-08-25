@@ -62,7 +62,10 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
+import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
+
+export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -1462,7 +1465,10 @@ export function registerSessionIpc(
     await withStatusWriteLock(
       sid,
       p.status,
-      () => writeSessionPatch(db, sid, setObj, p.status),
+      async () => {
+        await writeSessionPatch(db, sid, setObj, p.status);
+        cleanupSessionRuntimeForTerminalStatus(sid, p.status);
+      },
       p.workingDir !== undefined,
     );
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
@@ -1675,6 +1681,7 @@ export async function patchSessionMetaInDb(
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
       row.summary = null;
     }
+    cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
     return sessionToCamel(row);
   });
   notifyAgentIslandSessionPatch(updated.id, {
@@ -1827,16 +1834,20 @@ export async function setSessionsStatusInDb(
   if (sessionIds.length === 0) return [];
   const ownerScope = captureOwnerScope();
   const dbClient = getDbClient();
-  const applied = await withSessionRouteLocks(sessionIds, () =>
-    dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
+  const applied = await withSessionRouteLocks(sessionIds, async () => {
+    const rows = await dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : String(err);
       if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS' || code === 'PRECONDITION_FAILED') {
         throwIpcError(code, message);
       }
       throw err;
-    }),
-  );
+    });
+    for (const item of rows) {
+      cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
+    }
+    return rows;
+  });
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
       sessionId: item.sessionId,

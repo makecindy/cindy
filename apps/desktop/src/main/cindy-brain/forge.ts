@@ -1461,7 +1461,8 @@ ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish i
 
 **安装与更新契约**：用户导入本地 \`.cindy\`、点击市场安装，或插件命中
 服务端 \`defaultInstall\`，都是明确的安装依据；
-Cindy 校验真实包后直接安装并启用，不再追加能力确认弹窗。市场安装会绑定所选来源，
+Cindy 校验真实包后直接安装并启用，不再追加整张能力确认弹窗。唯一的窄确认是：企业作者
+用 \`ghost_forge_install\` 安装声明了 \`oidc-token\` 的包时，需核对 id 与注入域名。市场安装会绑定所选来源，
 此后的新版本由 Cindy 静默更新并保留当前启用状态；本地 \`.cindy\` 不自动猜测更新来源，
 需要用户再次导入新版包。插件自主 Host 能力仍必须完整声明，插件详情会如实展示，Host 运行时按声明
 强制守门；市场下载包若超出该版本市场清单声明的能力，会作为包内容不一致被拒绝。
@@ -1835,7 +1836,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "extraAuthorizeParams": { "access_type": "offline", "prompt": "consent" },  // 可选 ≤8 条:服务商特有授权参数(协议保留参数禁写)
       "identity": { "url": "https://api.example.com/userinfo", "labelPath": "email", "displayTemplate": "{team} · {user}", "avatarPath": "data.avatar_thumb" },  // 可选:授权后拉一次身份端点给账号打标签(设置页"已连接为 xxx";url 域名须命中 hosts)。labelPath 应指向**唯一且稳定**字段(如邮箱 / user_id)——它是重复授权时的同身份合并判定键,选 name 这类可重名可改名字段会误合并。displayTemplate 可选:人类可读展示名模板,\`{点分路径}\` 占位符从同一份身份响应取值(至少一个占位符,≤200 字符),任一占位符取不到值整体降级为空、回落显示 labelPath 的值——labelPath 的稳定字段不可读(如 Slack 的 user_id)时声明它,设置页与账号工具展示的就是渲染后的名字(邮箱这类本身可读的服务商不需要)。avatarPath 可选:头像 URL 在身份响应里的点分路径(如飞书的 "data.avatar_thumb")——主机取 https 地址后**不带凭证**下载小图(仅 png/jpeg/webp/gif、≤256KB)转 data URL 存库,\`/oauth\` 回查里以 account.avatarDataUrl 给你的 settingsHtml 展示(<img> 直接用)。**下载仅对第一方官方意识生效**(头像地址不受 hosts 白名单约束,第三方声明合法但恒降级 null)——所以页面必须能没头像也好看(如回落姓名首字圆片)
       "redirectPort": 53682,                        // 可选:loopback 回调固定端口(1024–65535);声明 tokenBroker 时必填。服务商要求回调 URI 与注册值精确匹配(如 Atlassian)时声明,回调恒为 http://127.0.0.1:<端口>/callback;非 broker 模式缺省 = 随机端口(Google 等允许任意 loopback 端口的服务商不用声明)
-      "tokenBroker": "jira",                        // 可选:两路资格:静态官方前缀照旧放行;或当前组织的服务端 organization market 包已安装、source 为 market、organizationId 与当前组织一致、id 命中本组织已登记前缀且 release sha256 与批准 receipt 的 packageSha256 相等。组织市场基座不接受本地装入、个人身份或别的组织前缀,且只给 Broker 与 oidc-token,不给宿主原语。声明时必须同时声明 redirectPort;code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
+      "tokenBroker": "jira",                        // 可选:三路资格:静态官方前缀照旧放行;当前组织的服务端 organization market 包满足来源/组织/前缀/整包 sha256 绑定;或企业作者用 ghost_forge_install 明确安装且 id 命中本组织已登记前缀。后两路只给 Broker 与 oidc-token,不给宿主原语;手动导入与个人身份不放行。声明时必须同时声明 redirectPort;code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
       "brokerBounce": { "path": "/example/bounce", "callbackPath": "/example/callback" }  // 可选:双地址弹跳回调(服务商后台只收 https redirect、不收 http loopback 时用)。必须与 tokenBroker、redirectPort 同时声明;报给服务商的 redirect_uri = broker 服务基地址 + path(主机运行时拼,清单不落域名),浏览器授权后由弹跳路由 302 回 http://127.0.0.1:<redirectPort><callbackPath>
     }
   }],
@@ -2971,12 +2972,15 @@ PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能�
 \`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
 **Cindy 企业身份断言(source:"oidc-token",可选)**:适用于接入 Cindy Connection
-Auth 的企业服务。主机只在当前登录账号属于组织 Membership、且该插件拥有当前组织的
-Plugin Market organization 安装记录(source 必须是服务端 \`market\`)、安装 manifest
-digest 未被篡改并声明了目标服务域名时,按需向 auth-server 换取短时 Connection JWT。
+Auth 的企业服务。主机只在当前登录账号属于组织 Membership，且满足以下任一安装基座时
+按需向 auth-server 换取短时 Connection JWT：①当前组织的 Plugin Market organization
+安装记录(source 必须是服务端 \`market\`)，且安装 manifest digest 与记录一致；②企业作者
+显式调用 \`ghost_forge_install\` 安装，插件 id 命中当前组织已登记前缀，且批准 receipt
+保有本次包的完整 sha256。两路都要求清单声明目标服务域名。
 audience 与组织身份由主机推导,插件清单和运行时代码都不能选择、读取或保存
 audience/token；audience 固定为 \`\${orgSlug}:\${ghostId}\`,总长不得超过 64 字符。
-该组织市场基座不适用于个人身份或本地装入，只给 Broker 与 oidc-token、不给宿主原语。
+个人身份与手动导入不签发；企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
+确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
 该凭证必须固定声明
 \`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,
 且 \`hosts\` 必须是非空的显式子集,只允许把断言发给列出的企业服务域名。
@@ -3059,11 +3063,12 @@ identity.displayTemplate 时,\`/oauth\` 回查与连接结果里 account.label �
   即可;第一方官方内置意识会先自动结束占用进程并重试,第三方意识不享受此回收
   ——请选一个不易撞车的端口)。声明 \`tokenBroker\` 时必须提供；非 broker 模式下，
   Google 这类允许任意 loopback 端口的服务商不用声明。
-- \`tokenBroker\`:资格有两路:①静态官方前缀命中,照旧放行；②当前组织的服务端
+- \`tokenBroker\`:资格有三路:①静态官方前缀命中,照旧放行；②当前组织的服务端
   organization market 包已安装、source 为 \`market\`、organizationId 与当前组织一致,
   id 命中本组织已登记前缀,且 release sha256 与批准 receipt 的 packageSha256 相等。
-  组织市场基座不接受本地装入、个人身份或别的组织前缀,且只给 Broker 与
-  oidc-token,不给宿主原语。
+  ③企业作者通过 \`ghost_forge_install\` 明确安装，且 id 命中当前组织已登记前缀；是否已有
+  同 id 市场记录不影响这条自测路径。后两路不接受个人身份或别的组织前缀，且只给 Broker
+  与 oidc-token，不给宿主原语；手动导入不属于 Forge 路径。
   code/refresh 交换改经 Cindy 服务端 broker 完成,client secret 由服务端持有、不随包
   分发,且要求用户已登录 Cindy。声明它时必须同时声明 redirectPort,并与 clientSecret
   互斥;PKCE 缺省开(verifier
@@ -4373,7 +4378,9 @@ const opened = await cindy.iosSimulator.request({
    \`ghost_forge_install({ dir: '<绝对路径>' })\`。它会重新校验并打包当前源码，再把这次
    产生的确切包直接安装；首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
    数据与面板位置，同版本也可覆盖。不要因为 scaffold 或 pack 成功就自动调用本工具。
-   用户也可以自己导入上一步的 \`.cindy\`，两种入口走同一安装／更新事务；
+   企业身份下若清单声明 \`source:"oidc-token"\`，提交安装前会展示插件名、id 与精确请求
+   域名，并要求用户手输相同 id；取消不会安装。只有确认后的企业作者自测才会取得 Forge
+   作者资格并可签发 Connection JWT；个人身份下的 Forge 安装和手动导入都不会取得这项资格；
 4. 安装后再让用户 \`$<command> <内容>\` 试一单，看聊天图卡/面板是否符合预期。
 
 企业组织成员需要发布时，调用 \`ghost_forge_pack({ dir: '<绝对路径>', intent: 'publish' })\`。

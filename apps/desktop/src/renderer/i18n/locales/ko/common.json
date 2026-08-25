@@ -1955,6 +1955,7 @@
     },
     "betaChannel": {
       "title": "베타 채널",
+      "badge": "Beta",
       "description": "베타 채널에 참여하면 출시 예정인 클라이언트 업데이트를 먼저 받을 수 있습니다. 재시작 후 적용됩니다.",
       "toggleAria": "베타 채널 토글",
       "restartTitle": "클라이언트 재시작",
@@ -3164,6 +3165,18 @@
         "toggleFailed": "암호화 콘텐츠 자동 재시도 전환에 실패했습니다"
       }
     },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "작업 모델 자동 대체",
+        "description": "연결 또는 용량 오류가 반복되면 같은 모델의 다른 연결된 제공자를 먼저 시도하고, 이어서 현재 Agent에 명시적으로 추천된 모델을 시도합니다. Agent나 저장된 선택은 바꾸지 않습니다. 기본값은 꺼짐입니다."
+      },
+      "toggleAria": "작업 모델 자동 대체 전환",
+      "toast": {
+        "enabled": "작업 모델 자동 대체가 켜졌습니다.",
+        "disabled": "작업 모델 자동 대체가 꺼졌습니다.",
+        "toggleFailed": "작업 모델 자동 대체 전환에 실패했습니다"
+      }
+    },
     "remoteControl": {
       "title": "원격 연결",
       "description": "같은 계정의 기기를 서로 원격으로 제어하거나 SSH로 원격 호스트에 연결합니다.",
@@ -4335,6 +4348,16 @@
         "manualCount": "번들 매뉴얼 {{count}}개",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
+      },
+      "forgeOidcInstallConfirm": {
+        "title": "조직 ID 자체 테스트 확인",
+        "description": "설치 후 이 플러그인은 현재 조직 ID를 사용하여 아래 호스트용 Connection JWT를 요청할 수 있습니다. 방금 빌드한 플러그인이 맞는지 확인하세요.",
+        "pluginNameLabel": "플러그인",
+        "pluginIdLabel": "플러그인 id",
+        "hostsLabel": "조직 ID 요청 호스트",
+        "typedIdLabel": "확인하려면 플러그인 id <strong>{{id}}</strong> 입력",
+        "confirm": "설치 및 테스트 허용",
+        "cancel": "취소"
       },
       "trust": {
         "official": "Cindy 공식 플러그인",
@@ -6363,6 +6386,7 @@
     },
     "user": {
       "settingsLink": "설정, 현재 사용자: {{name}}",
+      "settingsLinkBeta": "설정, 현재 사용자: {{name}}, 베타 채널 활성화됨",
       "canaryBadge": "Canary 사용자",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

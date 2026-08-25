@@ -12186,6 +12186,10 @@ export class CodexAgent extends BaseAgent {
         await pushThreadSettings({ effort: clamped });
       },
 
+      getEffort() {
+        return mutableEffort;
+      },
+
       async setPermissionMode(newMode: PermissionMode) {
         if (reviewMode) {
           log.debug('setPermissionMode ignored for hard read-only Review session', {

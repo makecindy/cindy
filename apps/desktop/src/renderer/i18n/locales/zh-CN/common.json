@@ -1947,6 +1947,7 @@
     },
     "betaChannel": {
       "title": "Beta 测试渠道",
+      "badge": "Beta",
       "description": "加入 Beta 测试渠道，提前接收即将发布的客户端更新。开启后需重启客户端生效。",
       "toggleAria": "Beta 测试渠道开关",
       "restartTitle": "重启客户端",
@@ -3156,6 +3157,18 @@
         "toggleFailed": "切换静默加密内容重试失败"
       }
     },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "任务模型自动降级",
+        "description": "连接或容量故障连续发生时，先切换到同名模型的其他已连接来源，再尝试当前 Agent 明确推荐的模型；不会切换 Agent，也不会改掉你保存的选择。默认关闭。"
+      },
+      "toggleAria": "切换任务模型自动降级",
+      "toast": {
+        "enabled": "已开启任务模型自动降级。",
+        "disabled": "已关闭任务模型自动降级。",
+        "toggleFailed": "切换任务模型自动降级失败"
+      }
+    },
     "remoteControl": {
       "title": "远程连接",
       "description": "在同账号的设备之间互相远程操控，或通过 SSH 连接远端主机。",
@@ -4327,6 +4340,16 @@
         "manualCount": "随包手册 {{count}} 篇",
         "expandDescription": "展开完整介绍",
         "collapseDescription": "收起介绍"
+      },
+      "forgeOidcInstallConfirm": {
+        "title": "确认企业身份自测",
+        "description": "安装后，这个插件可以使用你当前的企业身份，向下列域名请求 Connection JWT。请确认这是你刚刚构建的插件。",
+        "pluginNameLabel": "插件",
+        "pluginIdLabel": "插件 id",
+        "hostsLabel": "企业身份请求域名",
+        "typedIdLabel": "输入插件 id <strong>{{id}}</strong> 以确认",
+        "confirm": "安装并允许自测",
+        "cancel": "取消"
       },
       "trust": {
         "official": "Cindy 官方插件",
@@ -6355,6 +6378,7 @@
     },
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
+      "settingsLinkBeta": "设置，当前用户：{{name}}，Beta 测试渠道已开启",
       "canaryBadge": "灰度用户",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

@@ -49,6 +49,7 @@ const h = vi.hoisted(() => ({
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
+  runtimeCleanup: vi.fn(),
   userDataDir: null as string | null,
 }));
 
@@ -116,7 +117,12 @@ vi.mock('../../../cindy-brain/index.js', () => ({
   notifyGhostSessionEvent: vi.fn(),
 }));
 
-import { registerSessionIpc, resumeDeletedPiSubagentCleanup } from '../sessions';
+import {
+  patchSessionMetaInDb,
+  registerSessionIpc,
+  resumeDeletedPiSubagentCleanup,
+  setSessionRuntimeCleanup,
+} from '../sessions';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
@@ -234,10 +240,12 @@ beforeEach(() => {
   h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
+  setSessionRuntimeCleanup(h.runtimeCleanup);
   registerSessionIpc(undefined, { closeIdleSessionForMove: h.closeIdleSessionForMove });
 });
 
 afterEach(async () => {
+  setSessionRuntimeCleanup(null);
   setSessionRouteLockImplementation(null);
   const dir = h.userDataDir;
   if (dir) {
@@ -540,6 +548,38 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { status: 'archived', pinnedAt: null, summary: null },
     });
+  });
+
+  it('cleans runtime state before releasing the local terminal status lock', async () => {
+    const order: string[] = [];
+    h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      order.push('lock-released');
+      h.sqlite!.prepare("UPDATE sessions SET status = 'active' WHERE id = ?").run('codex-local');
+      return result;
+    });
+
+    await invokeUpdate('codex-local', { status: 'archived' });
+
+    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+  });
+
+  it('cleans runtime state before releasing the remote terminal status lock', async () => {
+    const order: string[] = [];
+    h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      order.push('lock-released');
+      h.sqlite!.prepare("UPDATE sessions SET status = 'active' WHERE id = ?").run('codex-local');
+      return result;
+    });
+
+    await patchSessionMetaInDb('codex-local', { status: 'archived' });
+
+    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(h.runtimeCleanup).toHaveBeenCalledOnce();
   });
 
   // 竞态收敛(review on #3225):写入与查询不在同一串行区间,归档写入后、查询前

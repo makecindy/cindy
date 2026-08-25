@@ -1,9 +1,15 @@
 import type {
   AgentKind,
+  Effort,
   SessionGracefulStopResult,
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
+
+import type {
+  PendingSessionRuntimeMutation,
+  SessionRuntimeProfile,
+} from './sessionRuntimeControl.js';
 
 import {
   updateQueuedMessageText,
@@ -36,8 +42,26 @@ export type SessionStopResult =
     }
   | Failure<'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY'>;
 
+export interface SessionRuntimeDetails extends SessionActivitySnapshot {
+  runtimeGeneration: number;
+  baselineProfile: SessionRuntimeProfile;
+  effectiveProfile: SessionRuntimeProfile;
+  pendingMutation: PendingSessionRuntimeMutation | null;
+  fallbackEnabled: boolean;
+}
+
 export type SessionRuntimeResult =
-  { ok: true; runtime: SessionActivitySnapshot } | Failure<'NOT_FOUND'>;
+  { ok: true; runtime: SessionRuntimeDetails } | Failure<'NOT_FOUND'>;
+
+export type SessionRuntimeSetResult =
+  | {
+      ok: true;
+      status: 'applied' | 'deferred';
+      generation: number;
+      effectiveProfile: SessionRuntimeProfile;
+      pendingMutation: PendingSessionRuntimeMutation | null;
+    }
+  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'>;
 
 export interface SessionControlLiveSession {
   agentKind: AgentKind;
@@ -57,6 +81,17 @@ export interface SessionControlServiceDeps {
   sessionExists(sessionId: string): Promise<boolean>;
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
   getSessionActivitySnapshot(sessionId: string): Promise<SessionActivitySnapshot>;
+  getSessionRuntimeDetails(sessionId: string): Promise<SessionRuntimeDetails>;
+  setSessionRuntime(params: {
+    targetSessionId: string;
+    expectedGeneration?: number;
+    patch: {
+      model?: string;
+      providerId?: string | null;
+      effort?: Effort;
+      fastMode?: boolean;
+    };
+  }): Promise<SessionRuntimeSetResult>;
   assertExternalInputAllowed(sessionId: string): Promise<void>;
   createQueuedMessage(params: {
     targetSessionId: string;
@@ -223,16 +258,35 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     async getSessionRuntime(params: { targetSessionId: string }): Promise<SessionRuntimeResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
-      const activity = await deps.getSessionActivitySnapshot(params.targetSessionId);
+      const [activity, details] = await Promise.all([
+        deps.getSessionActivitySnapshot(params.targetSessionId),
+        deps.getSessionRuntimeDetails(params.targetSessionId),
+      ]);
       const control = deps.getLiveSession(params.targetSessionId)?.getTurnControlSnapshot();
       return {
         ok: true,
         runtime: {
+          ...details,
           ...activity,
           turnGeneration: control?.turnGeneration ?? null,
           gracefulStopState: control?.gracefulStopState ?? 'none',
         },
       };
+    },
+
+    async setSessionRuntime(params: {
+      targetSessionId: string;
+      expectedGeneration?: number;
+      patch: {
+        model?: string;
+        providerId?: string | null;
+        effort?: Effort;
+        fastMode?: boolean;
+      };
+    }): Promise<SessionRuntimeSetResult> {
+      const missing = await ensureTarget(params.targetSessionId);
+      if (missing) return missing;
+      return deps.setSessionRuntime(params);
     },
   };
 }

@@ -637,6 +637,14 @@ import {
   writeSilentEncryptedRetryEnabled,
 } from './maker-host/silent-encrypted-retry-store.js';
 import {
+  readSessionRuntimeFallbackSettingsState,
+  resetSessionRuntimeFallbackSettings,
+  writeSessionRuntimeFallbackEnabled,
+} from './maker-host/session-runtime-fallback-store.js';
+import { clearAllSessionProviders } from './maker-host/session-provider-store.js';
+import { clearAllSessionRuntimeAxes } from './maker-host/session-effort-store.js';
+import { clearAllSessionRuntimeControlStates } from './maker-ipc/sessionRuntimeControl.js';
+import {
   resolveOwnerScopedSecretStorageKey,
   getProviderSecretStore,
 } from './secrets/providerSecretStore.js';
@@ -826,6 +834,7 @@ import {
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
+  setAppSessionCommitBoundaryHook,
 } from './appSessionState.js';
 import {
   resolveNewMakerMenuCommand,
@@ -2293,6 +2302,11 @@ setCodexImageAuthBinding({
 registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
+setAppSessionCommitBoundaryHook(() => {
+  clearAllSessionProviders();
+  clearAllSessionRuntimeAxes();
+  clearAllSessionRuntimeControlStates();
+});
 authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {
   const builtinOutcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
   if (builtinOutcome === 'deferred') return builtinOutcome;
@@ -4232,6 +4246,23 @@ const registerIpcHandlers = () => {
       ...silentEncryptedRetryWire(),
       effective: 'immediate' as const,
     };
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return sessionRuntimeFallbackWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_SET, async (event, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'session runtime fallback enabled required (boolean)');
+    }
+    writeSessionRuntimeFallbackEnabled(enabled);
+    return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    resetSessionRuntimeFallbackSettings();
+    return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
   });
 
   ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async () => {
@@ -8800,6 +8831,15 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
 
 function silentEncryptedRetryWire() {
   const state = readSilentEncryptedRetrySettingsState();
+  return {
+    enabled: state.value.enabled,
+    isCustomized: state.isCustomized,
+    defaultEnabled: state.defaults.enabled,
+  };
+}
+
+function sessionRuntimeFallbackWire() {
+  const state = readSessionRuntimeFallbackSettingsState();
   return {
     enabled: state.value.enabled,
     isCustomized: state.isCustomized,
