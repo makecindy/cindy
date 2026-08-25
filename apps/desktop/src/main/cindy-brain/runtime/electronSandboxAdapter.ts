@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { createLogger } from '../../logger.js';
 import {
   GHOST_SCHEME,
-  ghostPartition,
   type GhostAppContextResult,
   type GhostMediaModelsResult,
   type GhostMediaModelType,
   type InstalledGhost,
 } from '../../../shared/ghost.js';
+import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
+import { ownerScopedGhostPartition } from '../ghostWebviewPartition.js';
 import { GHOST_BOOT_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -230,8 +231,13 @@ const partitionGhost = new Map<string, { dir: string; entry: string }>();
  * 两个调用方:离屏沙箱窗口(create)与面板 webview 附加闸(webview-security
  * 放行前调用——handler 必须先于 webview 首次加载挂好)。
  */
-export function ensureGhostProtocolRegistered(ghost: InstalledGhost): void {
-  registerGhostProtocol(ghostPartition(ghost.manifest.id), ghost);
+export function ensureGhostProtocolRegistered(
+  ghost: InstalledGhost,
+  owner: ActiveAppSession = getActiveAppSession(),
+): void {
+  const partition = ownerScopedGhostPartition(ghost.manifest.id, owner);
+  if (!partition) throw new Error('ghost protocol requires an active data owner');
+  registerGhostProtocol(partition, ghost);
 }
 
 /**
@@ -253,6 +259,11 @@ function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
   // 实际无 handler,面板与电子脑一起哑火(review P0 的中毒模式)。
   const ses = session.fromPartition(partition);
   const ghostId = ghost.manifest.id;
+  // 每个 owner 都会得到新的内存 session；权限与下载必须显式拒绝，不能
+  // 因为分区是新建的就依赖 Electron 默认行为。
+  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  ses.setPermissionCheckHandler(() => false);
+  ses.on('will-download', (event) => event.preventDefault());
   // 分区级断网(docs/dev-rules/plugin-security-and-authoring.md 的"网络永远不直连"):本分区发出的一切
   // 请求,只放行自己协议同 id 下的资源;http(s) / ws / 其它协议一律掐断。
   // 进程沙箱不管网络,这里才是"零网络"承诺的真正闸门;外部数据未来走
@@ -615,7 +626,8 @@ class ElectronSandboxHandle implements SandboxHandle {
   private destroyed = false;
 
   constructor(private readonly ghost: InstalledGhost) {
-    const partition = ghostPartition(ghost.manifest.id);
+    const partition = ownerScopedGhostPartition(ghost.manifest.id, getActiveAppSession());
+    if (!partition) throw new Error('ghost sandbox requires an active data owner');
     registerGhostProtocol(partition, ghost);
     this.win = new BrowserWindow({
       show: false,
