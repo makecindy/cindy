@@ -65,6 +65,13 @@ export const PPTX_MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 export const PPTX_MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024;
 /** Keep decode work bounded before handing bytes to pptxgenjs. */
 export const PPTX_MAX_IMAGE_PIXELS = 12_000_000;
+export const PPTX_MAX_SLIDES = 100;
+export const PPTX_MAX_BULLETS_PER_SLIDE = 20;
+export const PPTX_MAX_TOTAL_TEXT_BYTES = 4 * 1024 * 1024;
+const PPTX_MAX_TITLE_CHARS = 1_000;
+const PPTX_MAX_BODY_CHARS = 32_000;
+const PPTX_MAX_NOTES_CHARS = 64_000;
+const PPTX_MAX_BULLET_CHARS = 4_000;
 
 export function isSupportedPptxImage(filePath: string): boolean {
   return PPTX_SUPPORTED_IMAGE_EXT.has(path.extname(filePath).toLowerCase());
@@ -283,6 +290,7 @@ const DESCRIPTION = [
   'subtitle(封面副题或分节导语)、bullets(要点数组)、body(整段正文)、',
   'notes(演讲者备注,只在演讲者视图可见)、imagePath(工作目录内的 png / jpg / gif)。',
   '单张图片最大 12 MB,整份演示文稿按每次使用累计最多 32 MB;超限时先压缩图片或减少重复大图。',
+  '整份最多 100 页、每页最多 20 条普通要点、全部文字合计最大 4 MB;超限时请拆分演示文稿。',
   'comparison 必须给 columns(恰好两栏,每栏含 title + bullets/body);metrics 必须给 metrics(2–4 个 value + label + 可选 detail);image 必须给 imagePath,图片会自动裁切铺满主体区,body 可作题注。',
   '',
   '【主题】theme: "light"(浅色,默认,适合打印和明亮会议室)、"dark"(深色,适合投影)、',
@@ -297,30 +305,48 @@ const DESCRIPTION = [
 ].join('\n');
 
 const ComparisonColumnSchema = z.object({
-  title: z.string().min(1).describe('这一栏的短标题。'),
-  bullets: z.array(z.string().min(1)).max(5).optional().describe('这一栏的 1–5 条要点。'),
-  body: z.string().optional().describe('这一栏的补充正文。'),
+  title: z.string().min(1).max(PPTX_MAX_TITLE_CHARS).describe('这一栏的短标题。'),
+  bullets: z
+    .array(z.string().min(1).max(PPTX_MAX_BULLET_CHARS))
+    .max(5)
+    .optional()
+    .describe('这一栏的 1–5 条要点。'),
+  body: z.string().max(PPTX_MAX_BODY_CHARS).optional().describe('这一栏的补充正文。'),
 });
 
 const MetricSchema = z.object({
-  value: z.union([z.string(), z.number()]).describe('醒目的指标值,如 98% 或 4。'),
-  label: z.string().min(1).describe('指标名称。'),
-  detail: z.string().optional().describe('一句口径或解释。'),
+  value: z
+    .union([z.string().max(PPTX_MAX_TITLE_CHARS), z.number()])
+    .describe('醒目的指标值,如 98% 或 4。'),
+  label: z.string().min(1).max(PPTX_MAX_TITLE_CHARS).describe('指标名称。'),
+  detail: z.string().max(PPTX_MAX_BODY_CHARS).optional().describe('一句口径或解释。'),
 });
 
 const SlideSchema = z
   .object({
-    title: z.string().min(1).describe('本页标题。'),
+    title: z.string().min(1).max(PPTX_MAX_TITLE_CHARS).describe('本页标题。'),
     layout: z
       .enum(PPTX_LAYOUT_NAMES)
       .default(DEFAULT_PPTX_LAYOUT)
       .describe(
         '版式:cover 封面 / section 分节 / content 内容 / comparison 双栏对比 / metrics 数据强调 / image 大图。默认 content。',
       ),
-    subtitle: z.string().optional().describe('封面副题、分节导语或内容页标题下的一行说明。'),
-    bullets: z.array(z.string()).optional().describe('要点数组,建议 3-5 条。'),
-    body: z.string().optional().describe('整段正文。与 bullets 可并存(正文排在要点之后)。'),
-    notes: z.string().optional().describe('演讲者备注。'),
+    subtitle: z
+      .string()
+      .max(PPTX_MAX_BODY_CHARS)
+      .optional()
+      .describe('封面副题、分节导语或内容页标题下的一行说明。'),
+    bullets: z
+      .array(z.string().max(PPTX_MAX_BULLET_CHARS))
+      .max(PPTX_MAX_BULLETS_PER_SLIDE)
+      .optional()
+      .describe('要点数组,建议 3-5 条。'),
+    body: z
+      .string()
+      .max(PPTX_MAX_BODY_CHARS)
+      .optional()
+      .describe('整段正文。与 bullets 可并存(正文排在要点之后)。'),
+    notes: z.string().max(PPTX_MAX_NOTES_CHARS).optional().describe('演讲者备注。'),
     imagePath: z.string().optional().describe('工作目录内的图片路径(png/jpg/gif)。content 放右半区,image 放通栏主体。'),
     columns: z
       .array(ComparisonColumnSchema)
@@ -353,6 +379,41 @@ const SlideSchema = z
     }
   });
 
+function slideTextBytes(slide: z.infer<typeof SlideSchema>): number {
+  const parts: string[] = [slide.title];
+  if (slide.subtitle) parts.push(slide.subtitle);
+  if (slide.body) parts.push(slide.body);
+  if (slide.notes) parts.push(slide.notes);
+  parts.push(...(slide.bullets ?? []));
+  for (const column of slide.columns ?? []) {
+    parts.push(column.title, ...(column.bullets ?? []));
+    if (column.body) parts.push(column.body);
+  }
+  for (const metric of slide.metrics ?? []) {
+    parts.push(String(metric.value), metric.label);
+    if (metric.detail) parts.push(metric.detail);
+  }
+  return parts.reduce((total, part) => total + Buffer.byteLength(part, 'utf8'), 0);
+}
+
+const SlidesSchema = z
+  .array(SlideSchema)
+  .min(1)
+  .max(PPTX_MAX_SLIDES)
+  .superRefine((slides, ctx) => {
+    let totalBytes = 0;
+    for (const slide of slides) {
+      totalBytes += slideTextBytes(slide);
+      if (totalBytes > PPTX_MAX_TOTAL_TEXT_BYTES) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '演示文稿全部文字超过 4 MB 上限，请拆分后再生成。',
+        });
+        return;
+      }
+    }
+  });
+
 export function registerMakePptxTool(
   registry: DocsToolRegistry,
   sessionCtx: DocsMcpSessionCtx,
@@ -363,13 +424,14 @@ export function registerMakePptxTool(
     category: 'author',
     description: DESCRIPTION,
     inputShape: {
-      slides: z.array(SlideSchema).min(1).describe('幻灯片列表,至少一页。'),
+      slides: SlidesSchema.describe('幻灯片列表,至少一页、最多 100 页。'),
       outPath: z
         .string()
         .min(1)
         .describe('输出 .pptx 路径,工作目录内的相对路径或绝对路径。'),
       title: z
         .string()
+        .max(PPTX_MAX_TITLE_CHARS)
         .optional()
         .describe('可选演示文稿标题,写进文件属性,并作为页脚标签。'),
       theme: z

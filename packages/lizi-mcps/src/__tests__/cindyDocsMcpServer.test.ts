@@ -27,8 +27,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
 import {
+  DOCX_MAX_MARKDOWN_BYTES,
+  DOCX_MAX_SUBTITLE_BYTES,
+  DOCX_MAX_TITLE_BYTES,
+} from '../cindy-docs/make_docx.js';
+import {
   detectPptxImageMime,
   isSupportedPptxImage,
+  PPTX_MAX_BULLETS_PER_SLIDE,
+  PPTX_MAX_SLIDES,
+  PPTX_MAX_TOTAL_TEXT_BYTES,
   PPTX_THEMES,
   resolvePptxGenConstructor,
   validateDecodablePptxImage,
@@ -210,6 +218,31 @@ describe('cindy_docs 入口工具', () => {
 });
 
 describe('make_docx', () => {
+  it('在解析 Markdown 前限制正文、标题和副题规模', async () => {
+    const client = await connect();
+    const cases = [
+      {
+        markdown: 'x'.repeat(DOCX_MAX_MARKDOWN_BYTES + 1),
+        outPath: 'too-large-markdown.docx',
+      },
+      {
+        markdown: 'ok',
+        title: 'x'.repeat(DOCX_MAX_TITLE_BYTES + 1),
+        outPath: 'too-large-title.docx',
+      },
+      {
+        markdown: 'ok',
+        subtitle: 'x'.repeat(DOCX_MAX_SUBTITLE_BYTES + 1),
+        outPath: 'too-large-subtitle.docx',
+      },
+    ];
+    for (const args of cases) {
+      const result = await client.callTool({ name: 'make_docx', arguments: args });
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      await expect(fs.stat(path.join(workdir, args.outPath))).rejects.toThrow();
+    }
+  });
+
   it('生成真 Word 文件,标题/粗体/列表/表格/代码块/分页符都落到 XML', async () => {
     const client = await connect();
     const markdown = [
@@ -526,6 +559,52 @@ describe('make_xlsx', () => {
 });
 
 describe('make_pptx', () => {
+  it('在进入 PptxGenJS 前限制页数、要点数和整份文字量', async () => {
+    const client = await connect();
+    const tooManySlides = await client.callTool({
+      name: 'make_pptx',
+      arguments: {
+        slides: Array.from({ length: PPTX_MAX_SLIDES + 1 }, (_, index) => ({
+          title: `第 ${index + 1} 页`,
+        })),
+        outPath: 'too-many-slides.pptx',
+      },
+    });
+    expect((tooManySlides as { isError?: boolean }).isError).toBe(true);
+
+    const tooManyBullets = await client.callTool({
+      name: 'make_pptx',
+      arguments: {
+        slides: [
+          {
+            title: '要点过多',
+            bullets: Array.from({ length: PPTX_MAX_BULLETS_PER_SLIDE + 1 }, () => 'x'),
+          },
+        ],
+        outPath: 'too-many-bullets.pptx',
+      },
+    });
+    expect((tooManyBullets as { isError?: boolean }).isError).toBe(true);
+
+    const textPerSlide = 64_000 + 32_000;
+    const slideCount = Math.floor(PPTX_MAX_TOTAL_TEXT_BYTES / textPerSlide) + 1;
+    const tooMuchText = await client.callTool({
+      name: 'make_pptx',
+      arguments: {
+        slides: Array.from({ length: slideCount }, (_, index) => ({
+          title: `第 ${index + 1} 页`,
+          notes: 'n'.repeat(64_000),
+          body: 'b'.repeat(32_000),
+        })),
+        outPath: 'too-much-text.pptx',
+      },
+    });
+    expect((tooMuchText as { isError?: boolean }).isError).toBe(true);
+    for (const file of ['too-many-slides.pptx', 'too-many-bullets.pptx', 'too-much-text.pptx']) {
+      await expect(fs.stat(path.join(workdir, file))).rejects.toThrow();
+    }
+  });
+
   it('accepts direct and wrapped pptxgenjs constructors', () => {
     class FakePptx {}
     expect(resolvePptxGenConstructor(FakePptx)).toBe(FakePptx);

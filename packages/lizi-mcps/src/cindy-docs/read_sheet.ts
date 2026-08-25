@@ -23,6 +23,7 @@ import {
 } from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
 import { delimiterForExtension, parseDelimitedWindow } from './csv.js';
+import { READ_SHEET_RUNTIME_PACKAGES } from './readSheetRuntimeDeps.js';
 import type { DocsMcpSessionCtx } from './types.js';
 
 const DEFAULT_MAX_ROWS = 200;
@@ -262,8 +263,8 @@ function readXlsxInWorker(
         maxRows,
         startColumn,
         maxColumns,
-        jszipPath: createRequire(import.meta.url).resolve('jszip'),
-        exceljsPath: createRequire(import.meta.url).resolve('exceljs'),
+        jszipPath: createRequire(import.meta.url).resolve(READ_SHEET_RUNTIME_PACKAGES[0]),
+        exceljsPath: createRequire(import.meta.url).resolve(READ_SHEET_RUNTIME_PACKAGES[1]),
       },
       transferList: [archiveBuffer],
       resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 },

@@ -21,6 +21,7 @@ import {
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { READ_SHEET_RUNTIME_PACKAGES } from '../../packages/lizi-mcps/src/cindy-docs/readSheetRuntimeDeps';
 import { reviewPdfRuntimePackages } from './src/main/reviewer/reviewPdfRuntimeDeps';
 
 const _require = createRequire(__filename);
@@ -254,8 +255,12 @@ function resolveOptions(fromDirs?: string[]): { paths: string[] } | undefined {
 }
 
 function copyDiscordRuntimeDeps(destModules: string): void {
+  copyRuntimeDependencyTrees(DISCORD_RUNTIME_DEPS, destModules);
+}
+
+function copyRuntimeDependencyTrees(deps: readonly string[], destModules: string): void {
   const seen = new Set<string>();
-  for (const dep of DISCORD_RUNTIME_DEPS) {
+  for (const dep of deps) {
     copyDependencyTree(dep, destModules, undefined, seen);
   }
 }
@@ -349,6 +354,7 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     console.log(`[forge:afterCopy] bundled native dep: ${dep} <- ${src}`);
   }
   copyDiscordRuntimeDeps(destModules);
+  copyRuntimeDependencyTrees(READ_SHEET_RUNTIME_PACKAGES, destModules);
 }
 
 // 针对 packaged buildPath 的 node_modules 强制重建 better-sqlite3 —— force:true 确保

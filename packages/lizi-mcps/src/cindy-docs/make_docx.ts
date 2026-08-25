@@ -19,6 +19,16 @@ import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import { markdownToDocxBuffer } from './markdownToDocx.js';
 import type { DocsMcpSessionCtx, WriteDocsOutputFn } from './types.js';
 
+export const DOCX_MAX_MARKDOWN_BYTES = 4 * 1024 * 1024;
+export const DOCX_MAX_TITLE_BYTES = 4 * 1024;
+export const DOCX_MAX_SUBTITLE_BYTES = 16 * 1024;
+
+function utf8BoundedString(maxBytes: number, label: string): z.ZodString {
+  return z.string().refine((value) => Buffer.byteLength(value, 'utf8') <= maxBytes, {
+    message: `${label}超过 ${(maxBytes / 1024).toFixed(0)} KiB 上限`,
+  });
+}
+
 const DESCRIPTION = [
   '把 Markdown 正文生成为真正的 Word 文档(.docx)。',
   '',
@@ -37,6 +47,7 @@ const DESCRIPTION = [
   '',
   '【输出】outPath 必须在本任务的工作目录内(建议 documents/ 子目录,文件名带日期)。',
   '目录不存在会自动创建;同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
+  'Markdown 正文最大 4 MB；超限时请拆成多份文档。',
 ].join('\n');
 
 export function registerMakeDocxTool(
@@ -49,15 +60,21 @@ export function registerMakeDocxTool(
     category: 'author',
     description: DESCRIPTION,
     inputShape: {
-      markdown: z.string().min(1).describe('文档正文(Markdown)。'),
+      markdown: utf8BoundedString(DOCX_MAX_MARKDOWN_BYTES, 'Markdown 正文')
+        .min(1)
+        .describe('文档正文(Markdown),UTF-8 最大 4 MB。'),
       outPath: z
         .string()
         .min(1)
         .describe(
           '输出 .docx 路径,工作目录内的相对路径或绝对路径,如 documents/报告-2026-08-19.docx。',
         ),
-      title: z.string().optional().describe('可选文档标题:写进 Word 文档属性;默认再生成一页封面。'),
-      subtitle: z.string().optional().describe('封面副题 / 密级 / 来源一行。没给 title 时无效。'),
+      title: utf8BoundedString(DOCX_MAX_TITLE_BYTES, '文档标题')
+        .optional()
+        .describe('可选文档标题:写进 Word 文档属性;默认再生成一页封面。'),
+      subtitle: utf8BoundedString(DOCX_MAX_SUBTITLE_BYTES, '文档副题')
+        .optional()
+        .describe('封面副题 / 密级 / 来源一行。没给 title 时无效。'),
       cover: z
         .boolean()
         .optional()

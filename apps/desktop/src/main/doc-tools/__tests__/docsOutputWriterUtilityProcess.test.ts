@@ -1,6 +1,9 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,10 +11,17 @@ import {
   relativeOutputParentPath,
   type DocsOutputWriteRequest,
 } from '../docsOutputWriterProtocol.js';
-import { runDocsOutputWrite, sameRelativePath } from '../docsOutputWriterUtilityProcess.js';
+import {
+  runDocsOutputWriteForTest,
+  sameRelativePath,
+} from '../docsOutputWriterUtilityProcess.js';
 
 let root: string;
 const cleanup: string[] = [];
+const utilityModuleUrl = pathToFileURL(
+  path.resolve(process.cwd(), 'src/main/doc-tools/docsOutputWriterUtilityProcess.ts'),
+).href;
+const tsxLoader = createRequire(import.meta.url).resolve('tsx');
 
 beforeEach(async () => {
   root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-writer-'));
@@ -85,15 +95,15 @@ describe('docs output cwd-bound writer', () => {
 
   it('creates exclusively and never truncates an existing file by default', async () => {
     const first = await request('report.bin', 'one', false);
-    await runDocsOutputWrite(first, root);
+    await runDocsOutputWriteForTest(first, root);
     await expect(
-      runDocsOutputWrite(await request('report.bin', 'two', false), root),
+      runDocsOutputWriteForTest(await request('report.bin', 'two', false), root),
     ).rejects.toMatchObject({ code: 'FILE_EXISTS' });
     expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('one');
   });
 
   it('creates missing parents inside the anchored session root', async () => {
-    await runDocsOutputWrite(await missingParentRequest('report.bin', 'nested'), root);
+    await runDocsOutputWriteForTest(await missingParentRequest('report.bin', 'nested'), root);
     expect(await fs.promises.readFile(path.join(root, 'nested/reports/report.bin'), 'utf8')).toBe(
       'nested',
     );
@@ -101,7 +111,7 @@ describe('docs output cwd-bound writer', () => {
 
   it('atomically replaces an existing regular file', async () => {
     await fs.promises.writeFile(path.join(root, 'report.bin'), 'old');
-    await runDocsOutputWrite(await request('report.bin', 'new', true), root);
+    await runDocsOutputWriteForTest(await request('report.bin', 'new', true), root);
     expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('new');
     expect((await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-'))).toBe(
       false,
@@ -115,7 +125,7 @@ describe('docs output cwd-bound writer', () => {
       .mockRejectedValueOnce(Object.assign(new Error('replace denied'), { code: 'EPERM' }))
       .mockImplementation(originalRename);
 
-    await runDocsOutputWrite(await request('report.bin', 'new', true), root);
+    await runDocsOutputWriteForTest(await request('report.bin', 'new', true), root);
     expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('new');
     expect(
       (await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-backup-')),
@@ -132,11 +142,83 @@ describe('docs output cwd-bound writer', () => {
     await fs.promises.rename(safe, moved);
     await fs.promises.symlink(outside, safe, process.platform === 'win32' ? 'junction' : 'dir');
 
-    await expect(runDocsOutputWrite(pending, root)).rejects.toMatchObject({
+    await expect(runDocsOutputWriteForTest(pending, root)).rejects.toMatchObject({
       code: 'PATH_NOT_ALLOWED',
     });
     await expect(fs.promises.stat(path.join(outside, 'report.bin'))).rejects.toThrow();
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'binds create and overwrite operations to the verified parent inode in the utility process',
+    async () => {
+      for (const overwrite of [false, true]) {
+        const safe = path.join(root, overwrite ? 'overwrite-safe' : 'create-safe');
+        const moved = `${safe}-original`;
+        const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));
+        cleanup.push(outside);
+        await fs.promises.mkdir(safe);
+        if (overwrite) await fs.promises.writeFile(path.join(safe, 'report.bin'), 'old');
+
+        const probe = spawnSync(
+          process.execPath,
+          ['--import', tsxLoader, '-e', `
+const fs = (await import('node:fs')).default;
+const path = (await import('node:path')).default;
+const { runDocsOutputWrite } = await import(process.env.CINDY_WRITER_MODULE);
+const root = process.env.CINDY_WRITER_ROOT;
+const safe = process.env.CINDY_WRITER_SAFE;
+const moved = process.env.CINDY_WRITER_MOVED;
+const outside = process.env.CINDY_WRITER_OUTSIDE;
+const overwrite = process.env.CINDY_WRITER_OVERWRITE === 'true';
+const rootStat = await fs.promises.lstat(root, { bigint: true });
+const parentStat = await fs.promises.lstat(safe, { bigint: true });
+const request = {
+  expectedRoot: { realPath: await fs.promises.realpath(root), dev: rootStat.dev, ino: rootStat.ino },
+  expectedParent: { realPath: await fs.promises.realpath(safe), dev: parentStat.dev, ino: parentStat.ino },
+  parentRelativePath: path.relative(root, safe),
+  targetName: 'report.bin',
+  data: Buffer.from(overwrite ? 'new' : 'bound'),
+  overwrite,
+};
+const originalOpen = fs.promises.open.bind(fs.promises);
+fs.promises.open = async (...args) => {
+  fs.promises.open = originalOpen;
+  await fs.promises.rename(safe, moved);
+  await fs.promises.symlink(outside, safe, 'dir');
+  return originalOpen(...args);
+};
+process.chdir(root);
+let code = 'NO_ERROR';
+try { await runDocsOutputWrite(request); } catch (error) { code = error?.code || String(error); }
+const outsideExists = fs.existsSync(path.join(outside, 'report.bin'));
+const movedValue = fs.existsSync(path.join(moved, 'report.bin'))
+  ? await fs.promises.readFile(path.join(moved, 'report.bin'), 'utf8')
+  : null;
+process.stdout.write(JSON.stringify({ code, outsideExists, movedValue }));
+`],
+          {
+            cwd: root,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              CINDY_WRITER_MODULE: utilityModuleUrl,
+              CINDY_WRITER_ROOT: root,
+              CINDY_WRITER_SAFE: safe,
+              CINDY_WRITER_MOVED: moved,
+              CINDY_WRITER_OUTSIDE: outside,
+              CINDY_WRITER_OVERWRITE: String(overwrite),
+            },
+          },
+        );
+        expect(probe.status, probe.stderr || String(probe.error ?? '')).toBe(0);
+        expect(JSON.parse(probe.stdout)).toEqual({
+          code: 'PATH_NOT_ALLOWED',
+          outsideExists: false,
+          movedValue: overwrite ? 'old' : 'bound',
+        });
+      }
+    },
+  );
 
   it('anchors the final write at the session root when the parent inode moves away', async () => {
     const safe = path.join(root, 'safe');
@@ -145,7 +227,7 @@ describe('docs output cwd-bound writer', () => {
     const pending = await request('report.bin', 'blocked', false, safe);
     await fs.promises.rename(safe, moved);
 
-    await expect(runDocsOutputWrite(pending, root)).rejects.toMatchObject({
+    await expect(runDocsOutputWriteForTest(pending, root)).rejects.toMatchObject({
       code: 'PATH_NOT_ALLOWED',
     });
     await expect(fs.promises.stat(path.join(moved, 'report.bin'))).rejects.toThrow();

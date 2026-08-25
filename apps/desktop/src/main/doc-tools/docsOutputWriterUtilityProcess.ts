@@ -198,10 +198,36 @@ async function replaceFile(
   }
 }
 
-export async function runDocsOutputWrite(
+async function writeWithinVerifiedParent(
   request: DocsOutputWriteRequest,
-  rootDir?: string,
+  workingDir: string,
+  outputPath: (name: string) => string,
 ): Promise<void> {
+  const target = outputPath(request.targetName);
+  if (!request.overwrite) {
+    await writeExclusive(target, request.data);
+    await verifyParent(request, workingDir);
+    return;
+  }
+
+  const staging = outputPath(`.cindy-docs-staging-${randomUUID()}-${request.targetName}`);
+  try {
+    await writeExclusive(staging, request.data);
+    await replaceFile(request, workingDir, staging, target);
+    await verifyParent(request, workingDir);
+  } finally {
+    try {
+      const stat = await fs.promises.lstat(staging);
+      if (stat.isFile() && !stat.isSymbolicLink()) {
+        await fs.promises.rm(staging, { force: true });
+      }
+    } catch {
+      // Unknown/replaced staging paths are deliberately left untouched.
+    }
+  }
+}
+
+function assertValidRequest(request: DocsOutputWriteRequest): void {
   if (
     !request ||
     typeof request.targetName !== 'string' ||
@@ -214,35 +240,43 @@ export async function runDocsOutputWrite(
   ) {
     throw new OutputWriteError('INTERNAL', '文档落盘请求不合法');
   }
-  // Production deliberately uses `.`: the utility process cwd is the OS-held
-  // session-root capability. The output parent is resolved relative to it for
-  // every operation, so a moved parent cannot keep an outside inode alive.
-  const anchoredRootDir = rootDir ?? '.';
-  const anchoredWorkingDir = path.join(anchoredRootDir, request.parentRelativePath);
+}
+
+/** Direct-unit-test entry: Vitest runs in worker threads where chdir is unavailable. */
+export async function runDocsOutputWriteForTest(
+  request: DocsOutputWriteRequest,
+  rootDir: string,
+): Promise<void> {
+  assertValidRequest(request);
+  const workingDir = path.join(rootDir, request.parentRelativePath);
+  await ensureParent(request, workingDir);
+  await writeWithinVerifiedParent(request, workingDir, (name) => path.join(workingDir, name));
+}
+
+export async function runDocsOutputWrite(request: DocsOutputWriteRequest): Promise<void> {
+  assertValidRequest(request);
+  // Production starts with `.` bound to the session root. Resolve and verify
+  // the parent from that capability, then chdir into the verified directory so
+  // final file operations no longer re-resolve its mutable lexical path.
+  const anchoredWorkingDir = path.join('.', request.parentRelativePath);
   await ensureParent(request, anchoredWorkingDir);
-  const outputPath = (name: string): string => path.join(anchoredWorkingDir, name);
-  const target = outputPath(request.targetName);
-
-  if (!request.overwrite) {
-    await writeExclusive(target, request.data);
-    await verifyParent(request, anchoredWorkingDir);
-    return;
-  }
-
-  const stagingName = `.cindy-docs-staging-${randomUUID()}-${request.targetName}`;
-  const staging = outputPath(stagingName);
+  const previousCwd = process.cwd();
   try {
-    await writeExclusive(staging, request.data);
-    await replaceFile(request, anchoredWorkingDir, staging, target);
-    await verifyParent(request, anchoredWorkingDir);
+    // chdir binds subsequent relative path operations to the directory inode
+    // selected above. If the lexical parent is rebound before chdir, the
+    // immediate identity check rejects it before any bytes are written; if it
+    // is rebound afterwards, open/rename continue through the verified inode
+    // instead of following the replacement symlink.
+    process.chdir(anchoredWorkingDir);
+    await verifyParent(request, '.');
+    await writeWithinVerifiedParent(request, '.', (name) => name);
   } finally {
     try {
-      const stat = await fs.promises.lstat(staging);
-      if (stat.isFile() && !stat.isSymbolicLink()) {
-        await fs.promises.rm(staging, { force: true });
-      }
+      process.chdir(previousCwd);
     } catch {
-      // Unknown/replaced staging paths are deliberately left untouched.
+      // The production utility handles one request and never reuses cwd. A
+      // vanished caller cwd must not turn a safely completed write into an
+      // unrelated failure.
     }
   }
 }
