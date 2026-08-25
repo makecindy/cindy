@@ -234,6 +234,24 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     );
   });
 
+  it('snapshots the source restore payload instead of a reused destination editor', () => {
+    const snapshotBlock = extractBetween(
+      chatInputSource,
+      'const editorOwnsSourceAtStart = editorOwnsSourceDraft({',
+      'const dataOwnerAtOptimisticClear = getDataOwnerGeneration();',
+    );
+
+    expect(snapshotBlock).toContain(
+      'optimisticallyClearRemoteComposer && editorOwnsSourceAtStart',
+    );
+    expect(snapshotBlock).toContain('getComposerDraft(sourceStorageKey)');
+    expect(snapshotBlock).toContain('frozenVoiceSendRef.current?.sourceStorageKey === sourceStorageKey');
+    expect(snapshotBlock).toContain('editorOwnsSourceAtStart\n        ? editor.getJSON()');
+    expect(snapshotBlock.indexOf('editorOwnsSourceAtStart')).toBeLessThan(
+      snapshotBlock.indexOf('editor.getJSON()'),
+    );
+  });
+
   it('refreshes the local restore snapshot only while the editor still owns the source draft', () => {
     const refreshBlock = extractBetween(
       chatInputSource,

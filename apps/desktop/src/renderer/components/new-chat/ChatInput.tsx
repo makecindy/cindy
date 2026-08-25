@@ -4877,12 +4877,36 @@ export function ChatInput({
       // Local/SSH still serialize after live reference hydration, but they
       // keep the same click-time restore snapshot so a rejected send can put
       // the original draft back without waiting for enqueue to settle.
-      const serializedAtClick = optimisticallyClearRemoteComposer
-        ? serializeEditorContent(editor)
-        : null;
-      let documentBeforeOptimisticClear = editor.getJSON();
-      let attachmentsBeforeOptimisticClear = [...latestAttachmentsRef.current];
-      let commentsBeforeOptimisticClear = [...browserCommentsRef.current];
+      const editorOwnsSourceAtStart = editorOwnsSourceDraft({
+        editorDestroyed: editor.isDestroyed,
+        editorStorageKey: storageKeyForDraftRef.current,
+        sourceStorageKey,
+      });
+      // Delayed voice stop-and-send can fire after the reused editor already
+      // shows the next task. Never snapshot that live document as the source
+      // restore payload; use the frozen extras or the source draft slot.
+      const serializedAtClick =
+        optimisticallyClearRemoteComposer && editorOwnsSourceAtStart
+          ? serializeEditorContent(editor)
+          : null;
+      const sourceDraftAtStart =
+        !editorOwnsSourceAtStart && sourceStorageKey
+          ? getComposerDraft(sourceStorageKey)
+          : undefined;
+      const frozenSourceAtStart =
+        !editorOwnsSourceAtStart &&
+        frozenVoiceSendRef.current?.sourceStorageKey === sourceStorageKey
+          ? frozenVoiceSendRef.current
+          : null;
+      let documentBeforeOptimisticClear = editorOwnsSourceAtStart
+        ? editor.getJSON()
+        : (sourceDraftAtStart?.text ?? { type: 'doc', content: [{ type: 'paragraph' }] });
+      let attachmentsBeforeOptimisticClear = editorOwnsSourceAtStart
+        ? [...latestAttachmentsRef.current]
+        : [...(frozenSourceAtStart?.attachments ?? sourceDraftAtStart?.attachments ?? [])];
+      let commentsBeforeOptimisticClear = editorOwnsSourceAtStart
+        ? [...browserCommentsRef.current]
+        : [...(frozenSourceAtStart?.comments ?? sourceDraftAtStart?.browserComments ?? [])];
       const dataOwnerAtOptimisticClear = getDataOwnerGeneration();
       const finishAgentSendDispatch = sourceSessionId
         ? tryBeginAgentSendDispatch(sourceSessionId)
