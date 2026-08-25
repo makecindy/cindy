@@ -140,6 +140,8 @@ describe('isInterruptedTurnError', () => {
       'socket hang up',
       'Request timed out',
       'API Error: The operation timed out.',
+      'The operation timed out.',
+      'OpenAI Responses stream ended before a terminal response event',
       'Connection error',
       'upstream unreachable',
       '502 Bad Gateway',

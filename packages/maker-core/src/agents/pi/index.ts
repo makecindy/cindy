@@ -1335,7 +1335,17 @@ export class PiAgent extends BaseAgent {
     // The native ChatGPT adapter prefers WebSocket in auto mode. Cindy's
     // authenticated loopback proxy is an HTTP/SSE boundary, so pin SSE for the
     // isolated embedded runtime. Other PI providers ignore this transport knob.
-    const settingsJsonContent = JSON.stringify({ transport: 'sse' }, null, 2) + '\n';
+    // Agent-level retries stay with Pi (provider maxRetries stays 0 — Pi docs:
+    // SDK retries can swallow quota errors before the agent sees them).
+    const settingsJsonContent = JSON.stringify({
+      transport: 'sse',
+      retry: {
+        enabled: true,
+        maxRetries: 6,
+        baseDelayMs: 2000,
+        provider: { maxRetries: 0 },
+      },
+    }, null, 2) + '\n';
     if (!opts.preview) {
       // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
       // 执行、endpoint 是否有值、路径形态。

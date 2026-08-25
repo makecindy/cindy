@@ -414,7 +414,15 @@ describe('Pi provider-aware model routing', () => {
     ]);
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty('api');
     expect(JSON.parse(readFileSync(path.join(configHome, 'settings.json'), 'utf8')))
-      .toEqual({ transport: 'sse' });
+      .toEqual({
+        transport: 'sse',
+        retry: {
+          enabled: true,
+          maxRetries: 6,
+          baseDelayMs: 2000,
+          provider: { maxRetries: 0 },
+        },
+      });
     const runtimeText = readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8');
     expect(runtimeText).not.toContain('proxySessionToken');
     expect(proxyRegistrations.filter((registration) => registration.scope === 'subagent-route'))
