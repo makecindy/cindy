@@ -673,6 +673,13 @@
       "when": 1787644558248,
       "tag": "0095_scope_messages_fts_update_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "6",
+      "when": 1787721235534,
+      "tag": "0096_stabilize_messages_fts_rows",
+      "breakpoints": true
     }
   ]
 }
