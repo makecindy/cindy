@@ -676,6 +676,7 @@ import {
   isChatEmbeddingOwnerStampCurrent,
   parseChatEmbeddingOwnerStamp,
 } from './maker-host/chat-embedding-owner-stamp.js';
+import { rethrowChatEmbeddingPersistError } from './maker-host/chat-embedding-persist-error.js';
 import { createChatEmbeddingSettingsWatcher } from './maker-host/chat-embedding-settings-watcher.js';
 import {
   readGitSafetySettingsState,
@@ -4335,7 +4336,13 @@ const registerIpcHandlers = () => {
         // 写入可能在跨进程锁或 owner boundary 上失败；无论如何按磁盘最新真值 reconcile，
         // 避免 UI 收到错误时 runtime 仍沿用旧开关。
         await scheduleChatEmbeddingRuntimeReconcile();
-        throw error;
+        if (!isIpcError(error)) {
+          createSchedulerLogger('chat-embedding-settings').error(
+            'Failed to save chat embedding settings',
+            { error: error instanceof Error ? error.message : String(error) },
+          );
+        }
+        rethrowChatEmbeddingPersistError(error, 'Failed to save chat embedding settings');
       }
       // 运行时 reconcile 总是重读最新账号。即使写入完成后立刻切号，旧请求也不会直接控制新账号。
       await scheduleChatEmbeddingRuntimeReconcile();
@@ -4346,7 +4353,18 @@ const registerIpcHandlers = () => {
     MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET,
     async (_e, owner: unknown) => {
       assertChatEmbeddingMutationOwner(owner);
-      await resetChatEmbeddingSettings(chatEmbeddingDefaultContext());
+      try {
+        await resetChatEmbeddingSettings(chatEmbeddingDefaultContext());
+      } catch (error) {
+        await scheduleChatEmbeddingRuntimeReconcile();
+        if (!isIpcError(error)) {
+          createSchedulerLogger('chat-embedding-settings').error(
+            'Failed to reset chat embedding settings',
+            { error: error instanceof Error ? error.message : String(error) },
+          );
+        }
+        rethrowChatEmbeddingPersistError(error, 'Failed to reset chat embedding settings');
+      }
       await scheduleChatEmbeddingRuntimeReconcile();
       return chatEmbeddingWire();
     },

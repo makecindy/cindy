@@ -364,4 +364,32 @@ describe('chat embedding availability wiring', () => {
     expect(resetWrite).toBeGreaterThan(resetGuard);
     expect(bootstrapSource).toMatch(/throwIpcError\(\s*'PRECONDITION_FAILED'/);
   });
+
+  it('converts persist failures to a stable IPC error after runtime reconcile', () => {
+    expect(bootstrapSource).toContain(
+      "import { rethrowChatEmbeddingPersistError } from './maker-host/chat-embedding-persist-error.js';",
+    );
+
+    const setStart = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET');
+    const resetStart = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET', setStart);
+    const resetEnd = bootstrapSource.indexOf('MAKER_IPC_INVOKE.GIT_SAFETY_GET', resetStart);
+    const setHandler = bootstrapSource.slice(setStart, resetStart);
+    const resetHandler = bootstrapSource.slice(resetStart, resetEnd);
+
+    const setReconcile = setHandler.indexOf('await scheduleChatEmbeddingRuntimeReconcile();');
+    const setRethrow = setHandler.indexOf(
+      "rethrowChatEmbeddingPersistError(error, 'Failed to save chat embedding settings')",
+    );
+    expect(setReconcile).toBeGreaterThanOrEqual(0);
+    expect(setRethrow).toBeGreaterThan(setReconcile);
+    expect(setHandler).not.toMatch(/throw error;?/);
+
+    const resetReconcile = resetHandler.indexOf('await scheduleChatEmbeddingRuntimeReconcile();');
+    const resetRethrow = resetHandler.indexOf(
+      "rethrowChatEmbeddingPersistError(error, 'Failed to reset chat embedding settings')",
+    );
+    expect(resetReconcile).toBeGreaterThanOrEqual(0);
+    expect(resetRethrow).toBeGreaterThan(resetReconcile);
+    expect(resetHandler).not.toMatch(/throw error;?/);
+  });
 });
