@@ -373,6 +373,18 @@ function isCssWhitespace(value: string | undefined): boolean {
   return value === ' ' || value === '\t' || value === '\r' || value === '\n' || value === '\f';
 }
 
+function isCssIdentifierContinuation(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const codePoint = value.codePointAt(0)!;
+  return (
+    value === '-' ||
+    value === '_' ||
+    value === '\\' ||
+    /^[a-z\d]$/i.test(value) ||
+    codePoint >= 0x80
+  );
+}
+
 function cssEscapeEnd(value: string, start: number): number {
   const next = value[start + 1];
   if (next === undefined) return start + 1;
@@ -427,6 +439,7 @@ function parseCssUrlToken(
   css: string,
   index: number,
 ): { reference: string; end: number } | null {
+  if (isCssIdentifierContinuation(css[index - 1])) return null;
   if (!/^url\s*\(/i.test(css.slice(index))) return null;
   const open = css.indexOf('(', index);
   let cursor = open + 1;

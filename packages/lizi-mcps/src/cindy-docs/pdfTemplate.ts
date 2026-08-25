@@ -27,6 +27,21 @@ const HTML_RAW_TEXT_TAGS = new Set([
   'title',
   'xmp',
 ]);
+const HTML_HEAD_CONTENT_TAGS = new Set([
+  'base',
+  'basefont',
+  'bgsound',
+  'head',
+  'html',
+  'link',
+  'meta',
+  'noframes',
+  'noscript',
+  'script',
+  'style',
+  'template',
+  'title',
+]);
 const HTML_ATTRIBUTE_PATTERN =
   /(\s+)([A-Za-z_:][\w:.-]*)(\s*=\s*)(?:(['"])([\s\S]*?)\4|([^\s"'=<>`]+))/gi;
 
@@ -109,7 +124,33 @@ function findHtmlElementRange(html: string, wantedName: string): HtmlElementRang
   let index = 0;
   while (index < html.length) {
     const tagStart = html.indexOf('<', index);
-    if (tagStart < 0) break;
+    if (tagStart < 0) {
+      if (wanted === 'head' && opening && templateDepth === 0) {
+        const trailingText = html.slice(index).search(/[^\t\n\f\r ]/);
+        if (trailingText >= 0) {
+          const implicitEnd = index + trailingText;
+          return {
+            start: opening.start,
+            contentStart: opening.contentStart,
+            contentEnd: implicitEnd,
+            end: implicitEnd,
+          };
+        }
+      }
+      break;
+    }
+    if (wanted === 'head' && opening && templateDepth === 0) {
+      const textBeforeTag = html.slice(index, tagStart).search(/[^\t\n\f\r ]/);
+      if (textBeforeTag >= 0) {
+        const implicitEnd = index + textBeforeTag;
+        return {
+          start: opening.start,
+          contentStart: opening.contentStart,
+          contentEnd: implicitEnd,
+          end: implicitEnd,
+        };
+      }
+    }
     if (html.startsWith('<!--', tagStart)) {
       const commentEnd = html.indexOf('-->', tagStart + 4);
       index = commentEnd < 0 ? html.length : commentEnd + 3;
@@ -132,10 +173,32 @@ function findHtmlElementRange(html: string, wantedName: string): HtmlElementRang
         end: tagEnd + 1,
       };
     }
+    if (
+      wanted === 'head' &&
+      opening &&
+      templateDepth === 0 &&
+      closingName &&
+      (closingName === 'body' || closingName === 'html' || closingName === 'br')
+    ) {
+      return {
+        start: opening.start,
+        contentStart: opening.contentStart,
+        contentEnd: tagStart,
+        end: tagStart,
+      };
+    }
     const name = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/)?.[1]?.toLowerCase();
     if (!name) {
       index = tagEnd + 1;
       continue;
+    }
+    if (wanted === 'head' && opening && templateDepth === 0 && !HTML_HEAD_CONTENT_TAGS.has(name)) {
+      return {
+        start: opening.start,
+        contentStart: opening.contentStart,
+        contentEnd: tagStart,
+        end: tagStart,
+      };
     }
     if (name === 'template' && !/\/\s*>$/.test(tag)) {
       templateDepth += 1;

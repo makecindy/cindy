@@ -1345,6 +1345,31 @@ describe('render_pdf', () => {
     expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toContain('./missing.png');
   });
 
+  it('只在 CSS 标识符边界识别 url 函数', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'css-url-boundary.html'),
+      '<style>:root { --example: myurl("./missing.png"); } .real { background: url("./chart.png"); }</style>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'css-url-boundary.html',
+      outPath: 'css-url-boundary.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('myurl("./missing.png")');
+    expect(rendered).toContain('data:image/png;base64,');
+  });
+
   it('按 CSS token 语义解码本地资源 URL 的转义', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'my image.png'), 'escaped-space', 'utf8');

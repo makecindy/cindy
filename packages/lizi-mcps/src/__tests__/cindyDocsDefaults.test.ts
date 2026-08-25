@@ -538,6 +538,16 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(wrapped.html).not.toContain('const sample =');
   });
 
+  it('省略 head 结束标签与 body 时在正文元素前隐式结束 head', () => {
+    const wrapped = applyReportTemplate(
+      '<!doctype html><head><title>报告</title><h1>正文</h1>',
+      DOCS_THEMES.light,
+    );
+    expect(wrapped.applied).toBe(true);
+    expect(wrapped.html).toContain('<h1>正文</h1>');
+    expect(wrapped.html).not.toContain('<p></p>');
+  });
+
   it('省略 body 时不改写 raw-text 中的 html 包装标签形状文本', () => {
     const wrapped = applyReportTemplate(
       `<!doctype html><html><script>const marker = '<html>'; const closing = '</html>';</script><h1>真实正文</h1></html>`,
