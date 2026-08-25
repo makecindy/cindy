@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const log = createLogger('UseCompactionSettings');
 
@@ -11,11 +12,23 @@ const WRITE_DEBOUNCE_MS = 300;
 
 export type CompactionAgent = 'claude' | 'pi';
 
+type CompactionOwnerStamp = { dataOwnerId: string | null; ownerGeneration: number };
+
 type CompactionApi = {
   getState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
-  setPct: (pct: number) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
-  resetPct: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+  setPct: (
+    pct: number,
+    owner: CompactionOwnerStamp,
+  ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+  resetPct: (
+    owner: CompactionOwnerStamp,
+  ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
 };
+
+function currentOwnerStamp(): CompactionOwnerStamp {
+  const owner = getDataOwnerGeneration();
+  return { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
+}
 
 export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
   pct: number | null;
@@ -45,6 +58,7 @@ export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
   const [defaultPct, setDefaultPct] = useState(DEFAULT_PCT);
   const mountedRef = useRef(false);
   const pendingPctRef = useRef<number | null>(null);
+  const pendingOwnerRef = useRef<CompactionOwnerStamp | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const reloadPct = useCallback(async () => {
@@ -62,9 +76,9 @@ export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
   }, [api]);
 
   const commitPct = useCallback(
-    async (next: number) => {
+    async (next: number, owner: CompactionOwnerStamp) => {
       try {
-        const state = await api.setPct(next);
+        const state = await api.setPct(next, owner);
         if (mountedRef.current) {
           setPctState(state.pct);
           setIsCustomized(state.isCustomized);
@@ -82,11 +96,14 @@ export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
     (next: number) => {
       setPctState(next);
       pendingPctRef.current = next;
+      pendingOwnerRef.current = currentOwnerStamp();
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         timerRef.current = null;
+        const owner = pendingOwnerRef.current ?? currentOwnerStamp();
         pendingPctRef.current = null;
-        void commitPct(next);
+        pendingOwnerRef.current = null;
+        void commitPct(next, owner);
       }, WRITE_DEBOUNCE_MS);
     },
     [commitPct],
@@ -98,7 +115,8 @@ export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
       timerRef.current = null;
     }
     pendingPctRef.current = null;
-    const next = await api.resetPct();
+    pendingOwnerRef.current = null;
+    const next = await api.resetPct(currentOwnerStamp());
     if (mountedRef.current) {
       setPctState(next.pct);
       setIsCustomized(next.isCustomized);
@@ -117,9 +135,11 @@ export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
         timerRef.current = null;
       }
       const pending = pendingPctRef.current;
+      const owner = pendingOwnerRef.current;
       pendingPctRef.current = null;
-      if (pending !== null) {
-        void api.setPct(pending);
+      pendingOwnerRef.current = null;
+      if (pending !== null && owner) {
+        void api.setPct(pending, owner);
       }
     };
   }, [api, reloadPct]);
