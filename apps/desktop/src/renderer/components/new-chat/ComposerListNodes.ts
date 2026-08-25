@@ -7,9 +7,10 @@
  * widths with decorations.
  */
 import { InputRule, Node, mergeAttributes, wrappingInputRule, type NodeConfig } from '@tiptap/core';
-import { Fragment, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
-import { liftListItem, sinkListItem, splitListItem } from '@tiptap/pm/schema-list';
+import { Fragment, Slice, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
+import { liftListItem, splitListItem } from '@tiptap/pm/schema-list';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
+import { ReplaceAroundStep } from '@tiptap/pm/transform';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 
 const BULLET_MARKER_RE = /^([-+*•])([ \t]+)$/;
@@ -615,6 +616,54 @@ export function handleStructuredListBackspace(view: EditorView): boolean {
 }
 
 /**
+ * Sink the selected list item(s) while preserving attributes on a newly
+ * created nested list. ProseMirror's standard command creates that wrapper
+ * with null attrs, which resets composer marker and separator metadata.
+ */
+function sinkStructuredListItem(view: EditorView, itemType: NodeType): boolean {
+  const { state } = view;
+  const { $from, $to } = state.selection;
+  const range = $from.blockRange(
+    $to,
+    (node) => node.childCount > 0 && node.firstChild?.type === itemType,
+  );
+  if (!range || range.startIndex === 0) return false;
+
+  const parent = range.parent;
+  const nodeBefore = parent.child(range.startIndex - 1);
+  if (nodeBefore.type !== itemType) return false;
+
+  const nestedBefore = nodeBefore.lastChild?.type === parent.type;
+  const inner = Fragment.from(nestedBefore ? itemType.create() : null);
+  const nestedList = parent.type.create(nestedBefore ? null : parent.attrs, inner);
+  const openStart = nestedBefore ? 3 : 1;
+  const slice = new Slice(
+    Fragment.from(itemType.create(null, Fragment.from(nestedList))),
+    openStart,
+    0,
+  );
+  const before = range.start;
+  const after = range.end;
+
+  view.dispatch(
+    state.tr
+      .step(
+        new ReplaceAroundStep(
+          before - openStart,
+          after,
+          before,
+          after,
+          slice,
+          1,
+          true,
+        ),
+      )
+      .scrollIntoView(),
+  );
+  return true;
+}
+
+/**
  * Indent or outdent the selected structured list item(s).
  *
  * The schema-list commands already preserve mixed inline content and multi-item
@@ -624,8 +673,8 @@ export function handleStructuredListBackspace(view: EditorView): boolean {
 export function handleStructuredListIndent(view: EditorView, outdent = false): boolean {
   const itemType = view.state.schema.nodes.listItem;
   if (!itemType || selectedListItemDepth(view) === null) return false;
-  const command = outdent ? liftListItem(itemType) : sinkListItem(itemType);
-  return command(view.state, view.dispatch);
+  if (outdent) return liftListItem(itemType)(view.state, view.dispatch);
+  return sinkStructuredListItem(view, itemType);
 }
 
 /**

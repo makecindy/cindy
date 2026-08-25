@@ -623,6 +623,47 @@ describe('composer structured list input rules', () => {
 });
 
 describe('composer structured list keyboard commands', () => {
+  it.each([
+    { marker: ')' as const, separator: ' ', start: 4 },
+    { marker: '、' as const, separator: '', start: 7 },
+  ])(
+    'preserves ordered-list $marker attrs when Tab creates a nested list',
+    ({ marker, separator, start }) => {
+      const editor = makeEditor({
+        type: 'doc',
+        content: [
+          {
+            type: 'orderedList',
+            attrs: { start, marker, separator },
+            content: ['parent', 'child'].map((text) => ({
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+            })),
+          },
+        ],
+      });
+      selectText(editor, 'child');
+
+      expect(handleStructuredListIndent(editor.view)).toBe(true);
+
+      const parentList = editor.state.doc.firstChild;
+      const nestedList = parentList?.firstChild?.lastChild;
+      expect(parentList?.attrs).toMatchObject({ start, marker, separator });
+      expect(nestedList?.type.name).toBe('orderedList');
+      expect(nestedList?.attrs).toMatchObject({ start, marker, separator });
+
+      const renderedLists = Array.from(editor.view.dom.querySelectorAll('ol'));
+      expect(renderedLists).toHaveLength(2);
+      expect(renderedLists[1].getAttribute('data-marker')).toBe(marker);
+
+      const expectedSeparator = separator === '' ? '' : ' ';
+      const expectedIndent = ' '.repeat(`${start}${marker}${expectedSeparator}`.length);
+      expect(serializeEditorContent(editor).text).toBe(
+        `${start}${marker}${expectedSeparator}parent\n${expectedIndent}${start}${marker}${expectedSeparator}child`,
+      );
+    },
+  );
+
   it('indents and outdents a list item under its previous sibling', () => {
     const editor = makeEditor({
       type: 'doc',
