@@ -459,13 +459,32 @@ function decodeCssResourceReference(value: string): string {
   return decoded;
 }
 
+function parseCssIdentifier(css: string, index: number): { value: string; end: number } | null {
+  let value = '';
+  let cursor = index;
+  while (isCssIdentifierContinuation(css[cursor])) {
+    if (css[cursor] === '\\') {
+      const end = cssEscapeEnd(css, cursor);
+      value += decodeCssResourceReference(css.slice(cursor, end));
+      cursor = end;
+    } else {
+      value += css[cursor]!;
+      cursor += 1;
+    }
+  }
+  return cursor > index ? { value, end: cursor } : null;
+}
+
 function parseCssUrlToken(
   css: string,
   index: number,
 ): { reference: string; end: number } | null {
   if (isCssIdentifierContinuation(css[index - 1])) return null;
-  if (!/^url\s*\(/i.test(css.slice(index))) return null;
-  const open = css.indexOf('(', index);
+  const identifier = parseCssIdentifier(css, index);
+  if (identifier?.value.toLowerCase() !== 'url') return null;
+  let open = identifier.end;
+  while (isCssWhitespace(css[open])) open += 1;
+  if (css[open] !== '(') return null;
   let cursor = open + 1;
   while (isCssWhitespace(css[cursor])) cursor += 1;
   let reference = '';

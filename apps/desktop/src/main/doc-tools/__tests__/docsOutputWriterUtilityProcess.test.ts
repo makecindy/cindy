@@ -187,19 +187,23 @@ describe('docs output cwd-bound writer', () => {
     );
   });
 
-  it('uses the recoverable Windows replace fallback for EPERM', async () => {
-    await fs.promises.writeFile(path.join(root, 'report.bin'), 'old');
-    const originalRename = fs.promises.rename.bind(fs.promises);
-    vi.spyOn(fs.promises, 'rename')
-      .mockRejectedValueOnce(Object.assign(new Error('replace denied'), { code: 'EPERM' }))
-      .mockImplementation(originalRename);
+  it.each(['EEXIST', 'EPERM'])(
+    'fails closed without moving the original target when atomic replace returns %s',
+    async (code) => {
+      await fs.promises.writeFile(path.join(root, 'report.bin'), 'old');
+      vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(
+        Object.assign(new Error('replace denied'), { code }),
+      );
 
-    await runDocsOutputWriteForTest(await request('report.bin', 'new', true), root);
-    expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('new');
-    expect(
-      (await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-backup-')),
-    ).toBe(false);
-  });
+      await expect(
+        runDocsOutputWriteForTest(await request('report.bin', 'new', true), root),
+      ).rejects.toMatchObject({ code: 'ATOMIC_PUBLISH_UNSUPPORTED' });
+      expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('old');
+      expect((await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-'))).toBe(
+        false,
+      );
+    },
+  );
 
   it('rejects a parent path rebound to an outside symlink before the final operation', async () => {
     const safe = path.join(root, 'safe');

@@ -204,40 +204,15 @@ async function replaceFile(
   } catch (error) {
     if (!hasCode(error, 'EEXIST') && !hasCode(error, 'EPERM')) throw error;
   }
-
-  // Windows exFAT / network shares may reject rename-over-existing. Keep the
-  // previous file recoverable until the new file has been committed.
-  const backup = path.join(workingDir, `.cindy-docs-backup-${randomUUID()}-${request.targetName}`);
-  let movedExisting = false;
-  try {
-    await assertReplaceableTarget(target);
-    try {
-      await fs.promises.rename(target, backup);
-      movedExisting = true;
-    } catch (error) {
-      if (!hasCode(error, 'ENOENT')) throw error;
-    }
-    await verifyParent(request, workingDir);
-    await fs.promises.rename(staging, target);
-    if (movedExisting) {
-      movedExisting = false;
-      await fs.promises.rm(backup, { force: true }).catch(() => undefined);
-    }
-  } catch (error) {
-    if (movedExisting) {
-      try {
-        await verifyParent(request, workingDir);
-        await fs.promises.rename(backup, target);
-        movedExisting = false;
-      } catch (restoreError) {
-        throw new AggregateError(
-          [error, restoreError],
-          `替换目标失败，旧文件保留在可恢复备份: ${backup}`,
-        );
-      }
-    }
-    throw error;
-  }
+  // Some Windows, exFAT, and network filesystems reject rename-over-existing.
+  // Moving the old target aside before publishing creates an interruptible
+  // window where a killed utility process makes the user's file disappear.
+  // Fail closed instead: the synced staging file is cleaned by the caller and
+  // the original target remains at its stable name.
+  throw new OutputWriteError(
+    'ATOMIC_PUBLISH_UNSUPPORTED',
+    '当前输出位置不支持安全的原子覆盖，原文件未移动',
+  );
 }
 
 async function writeWithinVerifiedParent(

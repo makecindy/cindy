@@ -1395,7 +1395,7 @@ describe('render_pdf', () => {
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
     await fs.writeFile(
       path.join(workdir, 'css-url-boundary.html'),
-      '<style>:root { --example: myurl("./missing.png"); } .real { background: url("./chart.png"); }</style>',
+      '<style>:root { --example: myurl("./missing.png"); } .escaped { background: u\\72l("./chart.png"); } .real { background: url("./chart.png"); }</style>',
       'utf8',
     );
     const client = await connect({
@@ -1412,7 +1412,8 @@ describe('render_pdf', () => {
     expect(result.ok).toBe(true);
     const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
     expect(rendered).toContain('myurl("./missing.png")');
-    expect(rendered).toContain('data:image/png;base64,');
+    expect(rendered.match(/data:image\/png;base64,/g)).toHaveLength(2);
+    expect(rendered).not.toContain('u\\72l("./chart.png")');
   });
 
   it('按 CSS token 语义解码本地资源 URL 的转义', async () => {
