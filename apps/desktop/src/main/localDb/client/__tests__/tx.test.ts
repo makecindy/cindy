@@ -2055,11 +2055,16 @@ describe('db worker tx handlers', () => {
         }
 
         await expect(
-          client.tx('orca.archiveWorkersByTeam', { teamId: 'active-team', now: 100 }),
+          client.tx('orca.archiveWorkersByTeam', {
+            teamId: 'active-team',
+            sessionIds: ['active-worker'],
+            now: 100,
+          }),
         ).resolves.toEqual(['active-worker']);
         await expect(
           client.tx('orca.reconcileInactiveTeamWorkersForLead', {
             leadSessionId: 'lead',
+            sessionIds: ['orphan-worker'],
             now: 200,
           }),
         ).resolves.toEqual(['orphan-worker']);

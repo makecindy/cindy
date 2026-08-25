@@ -12,8 +12,12 @@ export function resolveRetainedRuntimeEffort(input: {
   liveEffort: Effort | null;
   previousEffort: Effort | null | undefined;
 }): Effort | null {
-  if (input.liveEffort !== null) return input.liveEffort;
+  // Catalog capability is the request contract. A close failure leaves the old
+  // handle in Session status=error, and the next send rebuilds it instead of
+  // reusing its stale mutable effort, so never project that stale value onto a
+  // fixed-effort model.
   if (input.targetModelHasFixedEffort || input.requestedEffort === null) return null;
+  if (input.liveEffort !== null) return input.liveEffort;
   return input.previousEffort ?? null;
 }
 

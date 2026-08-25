@@ -17,7 +17,7 @@ describe('isSupportedRuntimeEffort', () => {
 });
 
 describe('resolveRetainedRuntimeEffort', () => {
-  it('preserves the live transport effort while a fixed-effort target session remains alive', () => {
+  it('clears stale live effort for a fixed-effort target', () => {
     expect(
       resolveRetainedRuntimeEffort({
         targetModelHasFixedEffort: true,
@@ -25,7 +25,7 @@ describe('resolveRetainedRuntimeEffort', () => {
         liveEffort: 'ultra',
         previousEffort: 'high',
       }),
-    ).toBe('ultra');
+    ).toBeNull();
     expect(
       resolveRetainedRuntimeEffort({
         targetModelHasFixedEffort: true,

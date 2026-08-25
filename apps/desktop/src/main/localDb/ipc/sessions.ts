@@ -62,7 +62,10 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
+import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
+
+export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -83,7 +86,6 @@ export interface RegisterSessionIpcOpts {
 
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
-let sessionRuntimeCleanup: ((sessionId: string) => void) | null = null;
 
 /** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
 export function setSessionRemovalCancelOperations(
@@ -97,10 +99,6 @@ export function setSessionRemovalCleanup(
   cleanupRemovedSession: SessionRemovalCleanup | null,
 ): void {
   sessionRemovalCleanup = cleanupRemovedSession;
-}
-
-export function setSessionRuntimeCleanup(cleanup: ((sessionId: string) => void) | null): void {
-  sessionRuntimeCleanup = cleanup;
 }
 
 function captureOwnerScope(): OwnerScope {
@@ -131,11 +129,6 @@ async function withStatusWriteLock<T>(
 ): Promise<T> {
   if (status === undefined || alreadyLocked) return task();
   return withSessionRouteLock(sessionId, task);
-}
-
-function cleanupSessionRuntimeForTerminalStatus(sessionId: string, status: unknown): void {
-  if (status !== 'deleted' && status !== 'archived') return;
-  sessionRuntimeCleanup?.(sessionId);
 }
 
 async function writeSessionPatch(
