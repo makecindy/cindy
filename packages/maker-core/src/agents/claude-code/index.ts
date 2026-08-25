@@ -6311,6 +6311,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         mutableFastMode = enabled;
       },
 
+      getEffort() {
+        return mutableEffort;
+      },
+
       getFastMode() {
         return mutableFastMode;
       },

@@ -104,6 +104,7 @@ export async function applyRuntimeSelectionAxesWithRecovery(
       await input.terminateSession();
     } catch (terminationError) {
       input.assertCanCommit?.();
+      await input.recoverLiveProfileAfterTerminationFailure?.();
       throw new AggregateError(
         [axisError, terminationError],
         'runtime selection axis update and session recovery both failed',

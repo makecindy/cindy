@@ -298,6 +298,7 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
   it('reports both failures when the partially-mutated session cannot be retired', async () => {
     const axisError = new Error('effort rejected');
     const terminationError = new Error('close rejected');
+    const recoverLiveProfileAfterTerminationFailure = vi.fn();
     const result = applyRuntimeSelectionAxesWithRecovery({
       session: {
         agentKind: 'claude-code',
@@ -310,6 +311,7 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
       fastMode: false,
       commitControlStores: vi.fn(),
       restoreControlStores: vi.fn(),
+      recoverLiveProfileAfterTerminationFailure,
       terminateSession: vi.fn(async () => {
         throw terminationError;
       }),
@@ -319,5 +321,6 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
       name: 'AggregateError',
       errors: [axisError, terminationError],
     });
+    expect(recoverLiveProfileAfterTerminationFailure).toHaveBeenCalledOnce();
   });
 });

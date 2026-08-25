@@ -14790,10 +14790,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setSessionEffort(sessionId, previousRuntime.effort);
         setSessionFastMode(sessionId, previousRuntime.fastMode);
       };
-      const reconcileRetainedLiveProfile = async (
-        effort: SessionRuntimeProfile['effort'],
-        fastMode: boolean,
-      ): Promise<void> => {
+      const reconcileRetainedLiveProfile = async (): Promise<void> => {
         const retainedSession = maker.getSession(sessionId);
         if (!retainedSession || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
           return;
@@ -14805,8 +14802,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             effectiveProviderId === undefined
               ? (previousRuntime.providerId ?? null)
               : (normalizeSessionProviderId(effectiveProviderId) ?? null),
-          effort,
-          fastMode,
+          effort: retainedSession.getEffort() ?? previousRuntime.effort ?? null,
+          fastMode: retainedSession.getFastMode() ?? previousRuntime.fastMode,
         };
         if (effectiveProviderId !== undefined) {
           setSessionProvider(sessionId, retainedProfile.providerId);
@@ -14902,11 +14899,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               restoreControlStores,
               terminateSession: () =>
                 withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId)),
-              recoverLiveProfileAfterTerminationFailure: () =>
-                reconcileRetainedLiveProfile(
-                  previousRuntime.effort ?? null,
-                  previousRuntime.fastMode,
-                ),
+              recoverLiveProfileAfterTerminationFailure: reconcileRetainedLiveProfile,
             });
           } else {
             commitControlStores();
@@ -14961,10 +14954,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               wakeSessionInputAfterCredentialSwitch(sessionId);
             }
             if (recoveryError) {
-              await reconcileRetainedLiveProfile(
-                atomicSelection ? atomicSelection.effort : (previousRuntime.effort ?? null),
-                atomicSelection?.fastMode ?? previousRuntime.fastMode,
-              );
+              await reconcileRetainedLiveProfile();
               throw new AggregateError(
                 [persistenceError, recoveryError],
                 'runtime selection persistence and session recovery both failed',
@@ -15128,7 +15118,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     previousProfile: SessionRuntimeProfile,
     patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,
-    runtimeOwnerEpoch: number,
+    runtimeOwnerEpoch: string,
   ): Promise<void> => {
     if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
     try {

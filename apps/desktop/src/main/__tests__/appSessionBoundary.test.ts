@@ -25,8 +25,15 @@ vi.mock('../authBoundaryQuarantine.js', () => ({
 
 import {
   beginAppSessionBoundary,
+  commitActiveAppSession,
+  getActiveAppSession,
   isAppSessionBoundaryPending,
+  setAppSessionCommitBoundaryHook,
 } from '../appSessionState.js';
+import {
+  captureSessionRuntimeControlOwnerEpoch,
+  sessionRuntimeControlOwnerEpochMatches,
+} from '../maker-ipc/sessionRuntimeControl.js';
 
 describe('application session boundary isolation', () => {
   it('does not treat a different durable Ghost projection owner as an App transition', () => {
@@ -39,5 +46,22 @@ describe('application session boundary isolation', () => {
     expect(isAppSessionBoundaryPending()).toBe(true);
     release();
     expect(isAppSessionBoundaryPending()).toBe(false);
+  });
+
+  it('invalidates in-flight runtime mutations synchronously with the owner commit', () => {
+    const captured = captureSessionRuntimeControlOwnerEpoch();
+    const observedModes: string[] = [];
+    setAppSessionCommitBoundaryHook(() => {
+      observedModes.push(getActiveAppSession().mode);
+    });
+
+    try {
+      commitActiveAppSession('local');
+    } finally {
+      setAppSessionCommitBoundaryHook(null);
+    }
+
+    expect(observedModes).toEqual(['signed-out']);
+    expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(false);
   });
 });

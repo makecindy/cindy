@@ -49,13 +49,12 @@ describe('session runtime control wiring', () => {
     }
   });
 
-  it('clears runtime overrides once per committed owner scope before post-commit work', () => {
+  it('clears runtime overrides synchronously at the owner commit boundary', () => {
     const body = handlerBody(
       bootstrapSource,
-      'let runtimeControlOwnerScopeKey',
+      'setAppSessionCommitBoundaryHook(() => {',
       '// ── Custom protocol registration',
     );
-    expect(body).toContain('if (runtimeControlOwnerScopeKey !== scopeKey) {');
     expect(body).toContain('clearAllSessionProviders();');
     expect(body).toContain('clearAllSessionRuntimeAxes();');
     expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(
@@ -65,10 +64,13 @@ describe('session runtime control wiring', () => {
       body.indexOf('clearAllSessionRuntimeControlStates();'),
     );
     expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
-      body.indexOf('runStableOwnerPostCommitTask('),
+      body.indexOf('authManager.setStableOwnerPostCommitTask('),
     );
-    expect(body.indexOf('runtimeControlOwnerScopeKey = scopeKey;')).toBeLessThan(
-      body.indexOf('runStableOwnerPostCommitTask('),
+    expect(registerSource).toContain(
+      'effort: retainedSession.getEffort() ?? previousRuntime.effort ?? null',
+    );
+    expect(registerSource).toContain(
+      'fastMode: retainedSession.getFastMode() ?? previousRuntime.fastMode',
     );
   });
 
