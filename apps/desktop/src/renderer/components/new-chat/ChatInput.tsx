@@ -1986,10 +1986,11 @@ export function ChatInput({
 
   const folderOpen = folderPickerOpen ?? internalFolderOpen;
   const setFolderOpen = onFolderPickerOpenChange ?? setInternalFolderOpen;
-  // `dispatchSend` 在取发送快照后可能等待 effort runtime 同步。此窗口内继续编辑会让
-  // 成功发送后的清理误删尚未发送的文字或附件，因此 composer 必须作为一个整体短暂只读。
-  // 正常路径没有等待；只有设置同步中的会话最多锁 5 秒（见 dispatchSend 的 preflight）。
+  // `dispatchSend` 在取发送快照后可能等待 effort / enqueue。清空前 composer 必须只读，
+  // 避免快照后的编辑被成功清理误删。乐观清空后只放开打字；发送按钮和设置控件仍由
+  // sendDispatchInFlight 锁到 onSend 结算，避免按钮亮着点了却被 in-flight guard 静默丢掉。
   const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
+  const [allowTypeDuringSend, setAllowTypeDuringSend] = useState(false);
   const composerEditorLocked = disabled || sendDispatchInFlight;
   const composerMutationLockedRef = useRef(composerEditorLocked);
   composerMutationLockedRef.current = composerEditorLocked;
@@ -3034,10 +3035,12 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
-  composerMutationLockedRef.current = composerMutationLocked;
+  const composerTypingLocked =
+    disabled || (sendDispatchInFlight && !allowTypeDuringSend) || voiceBusyOnCurrentComposer;
+  composerMutationLockedRef.current = composerTypingLocked;
   useEffect(() => {
-    editor?.setEditable(!composerMutationLocked);
-  }, [composerMutationLocked, editor]);
+    editor?.setEditable(!composerTypingLocked);
+  }, [composerTypingLocked, editor]);
 
   // 附件/浏览器评论/语音/锁定保持原有「失效」语义（不同于普通文字输入的暂时隐藏）。
   // 同步清 ref，避免稳定闭包里的 Tab 在 React 重渲染前填入已隐藏推荐。
@@ -3686,6 +3689,7 @@ export function ChatInput({
     // The reused composer now shows the destination draft. Drop the source
     // send lock so the next task is immediately editable.
     setSendDispatchInFlight(false);
+    setAllowTypeDuringSend(false);
     if (wasBusyWithoutSend && prevEditorKey && prevEditorKey === voiceOwnerKey) {
       const sourceKey = prevEditorKey;
       const persistDetachedVoice = (previousVoiceText: string, nextVoiceText: string) => {
@@ -5505,7 +5509,7 @@ export function ChatInput({
           throw error;
         }
         if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
-          setSendDispatchInFlight(false);
+          setAllowTypeDuringSend(true);
         }
         if (
           optimisticallyClearRemoteComposer &&
@@ -5609,6 +5613,7 @@ export function ChatInput({
         if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
           setSendDispatchInFlight(false);
         }
+        setAllowTypeDuringSend(false);
         finishAgentSendDispatch();
       }
     },

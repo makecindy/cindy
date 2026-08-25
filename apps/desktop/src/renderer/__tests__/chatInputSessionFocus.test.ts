@@ -234,6 +234,20 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     );
   });
 
+  it('keeps send and settings locked after optimistic clear while allowing typing', () => {
+    const unlockAfterClear = extractBetween(
+      chatInputSource,
+      '// Click-time composer must disappear before any await that can surface',
+      'result = await onSend(',
+    );
+    expect(unlockAfterClear).toContain('setAllowTypeDuringSend(true);');
+    expect(unlockAfterClear).not.toContain('setSendDispatchInFlight(false);');
+    expect(chatInputSource).toContain(
+      'disabled || (sendDispatchInFlight && !allowTypeDuringSend)',
+    );
+    expect(chatInputSource).toContain('sendDispatchInFlight ||');
+  });
+
   it('snapshots the source restore payload instead of a reused destination editor', () => {
     const snapshotBlock = extractBetween(
       chatInputSource,
