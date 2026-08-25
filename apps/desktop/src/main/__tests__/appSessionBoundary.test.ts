@@ -66,6 +66,27 @@ describe('application session boundary isolation', () => {
     expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(false);
   });
 
+  it('bumps a same-owner generation without clearing live runtime state', () => {
+    const current = getActiveAppSession();
+    const captured = captureSessionRuntimeControlOwnerEpoch();
+    const hook = vi.fn();
+    setAppSessionCommitBoundaryHook(hook);
+
+    try {
+      const bumped = commitActiveAppSession(
+        current.mode,
+        current.dataOwnerId ?? undefined,
+        true,
+      );
+
+      expect(bumped.generation).toBe(current.generation + 1);
+      expect(hook).not.toHaveBeenCalled();
+      expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(false);
+    } finally {
+      setAppSessionCommitBoundaryHook(null);
+    }
+  });
+
   it('does not create a boundary for a repeated volatile commit to the same owner', () => {
     const current = getActiveAppSession();
     const targetMode = current.mode === 'signed-out' ? 'local' : 'signed-out';

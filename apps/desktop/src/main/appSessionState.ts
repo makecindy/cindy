@@ -178,17 +178,14 @@ export function commitActiveAppSession(
     if (!normalized) throw new Error('cloud app session requires a verified data owner');
     dataOwnerId = normalized;
   }
+  const ownerChanged = previous.mode !== mode || previous.dataOwnerId !== dataOwnerId;
 
-  if (
-    previous.mode === mode
-    && previous.dataOwnerId === dataOwnerId
-    && !forceBumpGeneration
-  ) {
+  if (!ownerChanged && !forceBumpGeneration) {
     return { ...previous };
   }
 
   store.writePatch({ activeMode: mode });
-  appSessionCommitBoundaryHook?.();
+  if (ownerChanged) appSessionCommitBoundaryHook?.();
   active = {
     mode,
     dataOwnerId,
