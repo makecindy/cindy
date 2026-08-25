@@ -29,6 +29,7 @@ function toVendor(agent: RuntimeAgentKind): MakerVendor {
 
 interface MakerApiShape {
   listAvailableAgents: () => Promise<RuntimeAgentKind[]>;
+  onAgentsChanged: (cb: () => void) => () => void;
 }
 interface DeviceLinkShape {
   invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
@@ -89,7 +90,7 @@ function loadAvailableAgents(deviceId?: string | null): Promise<ReadonlySet<Make
       return vendors;
     })
     .finally(() => {
-      inFlight.delete(key);
+      if (inFlight.get(key) === promise) inFlight.delete(key);
     });
   inFlight.set(key, promise);
   return promise;
@@ -143,10 +144,23 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
       if (fresh && Date.now() - fresh.fetchedAt < REFETCH_MIN_INTERVAL_MS) return;
       run();
     };
+    const onAgentsChanged = (): void => {
+      // Main has completed a runtime registration; bypass focus throttling so
+      // the picker reflects the new agent in the same process immediately.
+      const key = cacheKeyOf(deviceId);
+      agentsCache.delete(key);
+      inFlight.delete(key);
+      run();
+    };
     window.addEventListener('focus', onFocus);
+    const makerApi = !deviceId ? getMakerApi() : null;
+    const offAgentsChanged = makerApi && typeof makerApi.onAgentsChanged === 'function'
+      ? makerApi.onAgentsChanged(onAgentsChanged)
+      : undefined;
     return () => {
       cancelled = true;
       window.removeEventListener('focus', onFocus);
+      offAgentsChanged?.();
     };
   }, [deviceId]);
 
