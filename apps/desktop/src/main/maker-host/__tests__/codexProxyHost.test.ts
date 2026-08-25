@@ -622,6 +622,14 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   it.each([
+    ['https://api.kimi.com/coding/v1', 'k3'],
+    ['https://api.kimi.com/coding/v1/', 'k3-256k'],
+  ])('enables image_url for Kimi Code coding-plan route: %s / %s (#2732)', async (upstream, model) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it.each([
     ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-1-pro-260628'],
     ['https://ark.ap-southeast-1.volces.com/api/v3/', 'doubao-seed-1-6-vision-260615'],
   ])('enables image_url for Doubao Seed on official Volcengine Ark host: %s (#771)', async (upstream, model) => {
@@ -642,6 +650,12 @@ describe('chatBridgeCapabilitiesForRoute', () => {
 
   it.each([
     ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
+    // Kimi Code: non-HTTPS, spoofed subdomain, and models without verified image support stay closed.
+    ['http://api.kimi.com/coding/v1', 'k3'],
+    ['https://api.kimi.com.evil.example/coding/v1', 'k3'],
+    ['https://api.kimi.com/coding/v1', 'kimi-k3'],
+    ['https://api.kimi.com/coding/v1', 'kimi-for-coding'],
+    ['https://api.moonshot.cn/v1', 'k3'],
     ['https://api.deepseek.com/v1', 'kimi-k3'],
     ['https://api.moonshot.cn.evil.example/v1', 'kimi-k3'],
     ['http://api.moonshot.cn/v1', 'kimi-k3'],
