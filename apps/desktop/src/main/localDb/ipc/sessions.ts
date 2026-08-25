@@ -1040,7 +1040,7 @@ export function registerSessionIpc(
           }),
         );
       };
-      // key 用同一快照上的 userId + 归一化参数 + 写代次，避免切账号或写后 refresh 接到旧 flight。
+      // key 用同一快照上的 userId + 归一化参数，避免切账号接到旧库那次查询。
       const result = userId
         ? await runSessionListSingleFlight(
             buildSessionListFlightKey({ userId, cap, statusFilter, includePinned }),

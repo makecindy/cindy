@@ -2,22 +2,14 @@
  * sessions:list 单飞：相同账号 + 归一化参数的并发请求共用一次查询。
  *
  * 只合并 in-flight Promise，查完即删，不加 TTL。
- * key 必须用归一化后的 cap / status / includePinned，并带上当前 userId 和写代次。
- * 写代次由 DbClient 写路径与当前库生命周期推进，见 sessionListWriteGeneration。
+ * key 必须用归一化后的 cap / status / includePinned，并带上当前 userId，
+ * 否则切账号时新请求会接到旧库那次查询。options 以后若加字段，同步扩 key。
+ *
+ * 不跟踪写代次：写后 refresh 可能并入写前那次查询，这是单飞的取舍。
+ * 下一次独立 list 会再打到 SQLite。
  */
 
-import {
-  bumpSessionListWriteGeneration,
-  readSessionListWriteGeneration,
-  resetSessionListWriteGenerationForTests,
-} from '../client/sessionListWriteGeneration';
-
 export type SessionListStatusFilter = 'active' | 'archived' | null;
-
-export {
-  bumpSessionListWriteGeneration,
-  readSessionListWriteGeneration,
-};
 
 const inflight = new Map<string, Promise<unknown>>();
 
@@ -28,7 +20,7 @@ export function buildSessionListFlightKey(input: {
   includePinned: boolean;
 }): string {
   const status = input.statusFilter ?? 'all';
-  return `${input.userId}|${status}|${input.cap}|${input.includePinned ? 'pinned' : 'plain'}|g${readSessionListWriteGeneration()}`;
+  return `${input.userId}|${status}|${input.cap}|${input.includePinned ? 'pinned' : 'plain'}`;
 }
 
 export function runSessionListSingleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
@@ -50,5 +42,4 @@ export function runSessionListSingleFlight<T>(key: string, run: () => Promise<T>
 /** 测试用：清空残留 flight，避免用例互相污染。 */
 export function resetSessionListSingleFlightForTests(): void {
   inflight.clear();
-  resetSessionListWriteGenerationForTests();
 }
