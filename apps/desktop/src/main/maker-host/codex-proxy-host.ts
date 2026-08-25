@@ -322,8 +322,9 @@ function subagentRouteFromHeaders(
  * Resolve only the independent Subagent route carried by this WS upgrade.
  *
  * A registered child already owns a frozen route snapshot. Its first
- * collab_spawn upgrade can race thread/started, so fall back to the explicit
- * parent header without mutating thread ownership from the handshake path.
+ * collab_spawn upgrade can race thread/started; when the handshake already
+ * carries a real child thread id, bind it before returning 426 so Codex's HTTP
+ * fallback can still resolve the frozen route if it omits parent metadata.
  */
 function subagentRouteForWebSocketUpgrade(
   headers: Readonly<Record<string, string>>,
@@ -334,8 +335,16 @@ function subagentRouteForWebSocketUpgrade(
 
   const parentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
   if (!parentThreadId) return undefined;
-  return subagentRouteByThread.get(parentThreadId)
+  const inheritedRoute = subagentRouteByThread.get(parentThreadId)
     ?? subagentRouteByParentThread.get(parentThreadId);
+  if (!inheritedRoute) return undefined;
+
+  const childThreadId = headerValue(headers, 'thread-id');
+  if (childThreadId) {
+    registerChildThread(parentThreadId, childThreadId);
+    return subagentRouteByThread.get(childThreadId) ?? inheritedRoute;
+  }
+  return inheritedRoute;
 }
 
 interface ProviderRequestContext {

@@ -2532,6 +2532,7 @@ describe('codex proxy host', () => {
     });
     await host.ensureCodexProxyReady();
     host.setCodexProxyAuthInjection('oauth-bearer');
+    host.setCodexProxyGatewayKeyReader(() => 'gateway-subagent-key');
     host.registerComposed(
       'session-ws-parent',
       'thread-ws-parent',
@@ -2580,6 +2581,20 @@ describe('codex proxy host', () => {
         'session-ws-child-2',
         'thread-ws-parent',
       ))).toBeNull();
+      // Codex's HTTP fallback may only carry the child thread id. The WS
+      // handshake must have bound the child route before returning 426, or this
+      // request falls through as a normal ChatGPT OAuth request.
+      await expect(Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'gpt-5.6-sol', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-ws-child-2' },
+        },
+      ))).resolves.toEqual({
+        headerOverride: { authorization: 'Bearer gateway-subagent-key' },
+      });
       // 未配置独立 route 的 collab child 不应被全局降级。
       expect(proxyOpts.resolveWebSocketUpstream(ctxForCodex145ChildPrewarm(
         'thread-openai-child',
@@ -2590,6 +2605,7 @@ describe('codex proxy host', () => {
       );
     } finally {
       host.unregister('session-ws-parent');
+      host.setCodexProxyGatewayKeyReader(() => null);
       host.clearCodexProxyAuthInjection();
     }
   });
