@@ -35,7 +35,8 @@ export function sameRelativePath(
   right: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const normalize = (value: string) => path.normalize(value.replace(/[\\/]+/g, path.sep));
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const normalize = (value: string) => pathApi.normalize(value);
   const normalizedLeft = normalize(left);
   const normalizedRight = normalize(right);
   return platform === 'win32'
@@ -91,7 +92,9 @@ async function ensureParent(request: DocsOutputWriteRequest, workingDir: string)
     await verifyParent(request, workingDir);
     return;
   }
-  const segments = relative.split(/[\\/]+/).filter(Boolean);
+  // parentRelativePath comes from the current platform's path.relative(). On
+  // POSIX a backslash is a legal filename character, not a path separator.
+  const segments = relative.split(path.sep).filter(Boolean);
   if (segments.some((segment) => segment === '.' || segment === '..' || segment.includes('\0'))) {
     throw new OutputWriteError('PATH_NOT_ALLOWED', '输出目录相对路径不合法');
   }

@@ -93,6 +93,28 @@ describe('docs output cwd-bound writer', () => {
     expect(sameRelativePath('Documents/Reports', 'documents\\reports', 'darwin')).toBe(false);
   });
 
+  it.runIf(process.platform !== 'win32')(
+    'keeps backslashes as literal output-directory characters on POSIX',
+    async () => {
+      const rootStat = await fs.promises.lstat(root, { bigint: true });
+      const rootRealPath = await fs.promises.realpath(root);
+      const pending: DocsOutputWriteRequest = {
+        expectedRoot: { realPath: rootRealPath, dev: rootStat.dev, ino: rootStat.ino },
+        expectedParent: null,
+        parentRelativePath: 'reports\\2026',
+        targetName: 'report.bin',
+        data: Buffer.from('literal-backslash'),
+        overwrite: false,
+      };
+
+      await runDocsOutputWriteForTest(pending, root);
+      expect(
+        await fs.promises.readFile(path.join(root, 'reports\\2026', 'report.bin'), 'utf8'),
+      ).toBe('literal-backslash');
+      await expect(fs.promises.stat(path.join(root, 'reports'))).rejects.toThrow();
+    },
+  );
+
   it('creates exclusively and never truncates an existing file by default', async () => {
     const first = await request('report.bin', 'one', false);
     await runDocsOutputWriteForTest(first, root);

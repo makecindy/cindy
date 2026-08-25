@@ -668,6 +668,7 @@ export function registerMakePptxTool(
                 y: y + 0.36,
                 w: cardW - 0.6,
                 h: Math.min(0.95, cardH * 0.4),
+                fit: 'shrink',
                 fontSize: metrics.length <= 3 ? 32 : 27,
                 bold: true,
                 color: palette.accent,
