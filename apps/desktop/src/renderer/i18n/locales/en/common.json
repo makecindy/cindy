@@ -1792,15 +1792,23 @@
         "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
         "advancedExactName": "Advanced: exact library name",
         "models": {
-          "qwen38-27b": { "blurb": "The strongest dense model you can run locally. Best for coding and long tasks." },
+          "qwen38-27b": {
+            "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
+          },
           "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
           "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
           "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
           "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
           "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
-          "gemma4-26b": { "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines." },
-          "ornith15-35b": { "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup." },
-          "glm-47-flash": { "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents." }
+          "gemma4-26b": {
+            "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
+          },
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup."
+          },
+          "glm-47-flash": {
+            "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents."
+          }
         },
         "onboardingTitle": "Install the Ollama runtime",
         "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
@@ -4376,6 +4384,8 @@
         "command": "Chat command ${{command}}",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
         "panelTab": "Panel \"{{title}}\" · opens inside the Plugins page",
+        "mainView": "Can add a “{{title}}” entry to Cindy's sidebar",
+        "mainViewDetail": "Opening it displays the main view in the plugin sandbox and does not grant file, network, or credential access.",
         "code": "Executable code",
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
@@ -4530,6 +4540,9 @@
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "oauthScopeStale": "This authorization does not include newly added permissions. Reconnect to grant them.",
         "configurationTitle": "Configuration",
+        "sidebarEntryTitle": "Sidebar entry",
+        "showInSidebar": "Show in sidebar",
+        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar. Hiding it does not disable the plugin.",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
         "viewAllTools": "See All",
@@ -4539,6 +4552,7 @@
         "closeDialog": "Close Dialog"
       },
       "contents": {
+        "mainView": "Main view",
         "panel": "Panel",
         "settingsUi": "Custom settings UI",
         "code": "Executable code",

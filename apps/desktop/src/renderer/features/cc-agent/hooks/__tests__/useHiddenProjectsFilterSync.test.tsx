@@ -47,6 +47,7 @@ beforeEach(() => {
         pinnedOrderIsAuthoritative: false,
         pinnedOrder: [],
         hiddenProjectKeys: initialHiddenProjectKeys,
+        hiddenMainViewGhostIds: [],
       }),
       onHiddenProjectKeysChanged: (listener: HiddenProjectsListener) => {
         if (hiddenProjectKeysBeforeListenerRegistration !== null) {
@@ -178,6 +179,7 @@ describe('hidden-project filter synchronization', () => {
       pinnedOrderIsAuthoritative: true,
       pinnedOrder: ['owner-b-session'],
       hiddenProjectKeys: [PROJECT_A],
+      hiddenMainViewGhostIds: [],
     });
 
     const view = renderHook(() => useHiddenProjects());
@@ -188,6 +190,7 @@ describe('hidden-project filter synchronization', () => {
       pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     });
   });
 });

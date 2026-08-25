@@ -2938,6 +2938,26 @@ describe('GhostManager · install', () => {
     await expectRejection(await manager.install(cindy), 'file-invalid');
   });
 
+  it('main-view 清单声明的 HTML 不在包内 → inspect/install 都拒绝', async () => {
+    const manifest = {
+      ...goodManifest(),
+      minCindyVersion: '1.2.3',
+      slots: ['tool', 'main-view'],
+      mainView: { html: 'ui/main-view.html' },
+    };
+    const cindy = await makeCindy('missing-main-view.cindy', manifest, {
+      'main.js': '// browser entry',
+    });
+
+    expect(await manager.inspect(cindy)).toMatchObject({
+      rejection: {
+        code: 'file-invalid',
+        reason: expect.stringContaining('ui/main-view.html'),
+      },
+    });
+    await expectRejection(await manager.install(cindy), 'file-invalid');
+  });
+
   it.each(['.disabled', '.cindy-trust.json', '.CINDY-TRUST.JSON'])(
     '包不能自带主机保留文件 %s',
     async (reservedFile) => {

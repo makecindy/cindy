@@ -14,6 +14,18 @@
   ],
   "terms": [
     {
+      "id": "plugin-main-view",
+      "status": "proposed",
+      "en": "Main view",
+      "translations": {
+        "zh-CN": "主视图",
+        "zh-TW": "主視圖",
+        "ja": "メインビュー",
+        "ko": "메인 보기"
+      },
+      "note": "Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。"
+    },
+    {
       "id": "active",
       "status": "decided",
       "en": "Active",

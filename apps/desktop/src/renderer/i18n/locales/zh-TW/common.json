@@ -4375,6 +4375,8 @@
         "command": "對話指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 停靠主對話區左側",
         "panelTab": "面板「{{title}}」· 插件頁內開啟",
+        "mainView": "可在 Cindy 側邊欄新增「{{title}}」入口",
+        "mainViewDetail": "點擊後將在插件沙箱中開啟主視圖，不會因此取得檔案、網路或憑證存取權限。",
         "code": "可執行程式碼",
         "codeDetail": "在獨立沙箱中執行，無法訪問你的檔案與網路。",
         "resident": "常駐執行(生效後即啟動，不呼叫也保持後臺處理程序)",
@@ -4529,6 +4531,9 @@
         "settingsUnavailableUntilRestore": "恢復插件後可繼續使用這項配置。",
         "oauthScopeStale": "當前授權未包含插件新增權限，請重新連線補齊授權。",
         "configurationTitle": "配置",
+        "sidebarEntryTitle": "側邊欄入口",
+        "showInSidebar": "顯示在側邊欄",
+        "sidebarEntryDescription": "開啟後，側邊欄會顯示「{{title}}」。隱藏入口不會停用插件。",
         "openTool": "檢視 Tool {{name}} 的詳情",
         "noToolDescription": "該 Tool 暫無描述。",
         "viewAllTools": "檢視更多",
@@ -4538,6 +4543,7 @@
         "closeDialog": "關閉彈窗"
       },
       "contents": {
+        "mainView": "主視圖",
         "panel": "面板",
         "settingsUi": "自定義設定介面",
         "code": "可執行程式碼",

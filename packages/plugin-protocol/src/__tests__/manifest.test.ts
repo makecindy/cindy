@@ -6,7 +6,9 @@ import {
   GHOST_MANUAL_MD_MAX_BYTES,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
+  GHOST_MAIN_VIEW_ICONS,
   GHOST_OAUTH_SCOPES_MAX,
+  GHOST_SLOTS,
   compareCindyVersions,
   ghostManifestUsesOidcToken,
   isSafeGhostRelativePath,
@@ -29,6 +31,21 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  it('keeps host-owned application slots in the public contract', () => {
+    expect(GHOST_SLOTS).toContain('main-view');
+    expect(GHOST_MAIN_VIEW_ICONS).toEqual([
+      'puzzle',
+      'globe',
+      'code',
+      'folder',
+      'database',
+      'chart-column',
+      'image',
+      'message-circle',
+      'calendar-days',
+    ]);
+  });
+
   it('exports the manual authoring limits', () => {
     expect(GHOST_MANUAL_MAX_ITEMS).toBe(8);
     expect(GHOST_MANUAL_ENTRY_FILE).toBe('MANUAL.md');
@@ -42,7 +59,10 @@ describe('Ghost manifest contract', () => {
   });
 
   it('keeps minCindyVersion optional for old plugins and validates declared versions', () => {
-    expect(validateGhostManifest(validManifest)).toEqual({ ok: true, manifest: validManifest });
+    expect(validateGhostManifest(validManifest)).toEqual({
+      ok: true,
+      manifest: validManifest,
+    });
     expect(validateGhostManifest({ ...validManifest, minCindyVersion: '1.2.3' })).toEqual({
       ok: true,
       manifest: { ...validManifest, minCindyVersion: '1.2.3' },
@@ -177,34 +197,54 @@ describe('Ghost manifest contract', () => {
     expect(
       validateGhostManifest(
         secret({
-          inject: { header: 'X-Identity', format: 'Bearer {value}', hosts: ['api.example.com'] },
+          inject: {
+            header: 'X-Identity',
+            format: 'Bearer {value}',
+            hosts: ['api.example.com'],
+          },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('Authorization: Bearer'),
+    });
     expect(
       validateGhostManifest(
         secret({
           inject: { header: 'Authorization', format: 'Basic {value}' },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('Authorization: Bearer'),
+    });
     expect(
       validateGhostManifest(
         secret(
           {
-            inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['*.example.com'] },
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['*.example.com'],
+            },
           },
           ['*.example.com'],
         ),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许通配') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许通配'),
+    });
     expect(
       validateGhostManifest(
         secret({
           inject: { header: 'Authorization', format: 'Bearer {value}' },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('显式声明非空 inject.hosts') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('显式声明非空 inject.hosts'),
+    });
     expect(validateGhostManifest(secret({ url: 'https://api.example.com/keys' }))).toMatchObject({
       ok: false,
       reason: expect.stringContaining('不允许声明 url'),
@@ -223,7 +263,10 @@ describe('Ghost manifest contract', () => {
           input: 'ghost',
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许标注 input') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许标注 input'),
+    });
   });
 
   it('accepts a gh-cli secret with a settings-managed fallback token', () => {
@@ -319,7 +362,10 @@ describe('Ghost manifest contract', () => {
           },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('Authorization: Bearer'),
+    });
     expect(
       validateGhostManifest(
         secret({
@@ -330,14 +376,20 @@ describe('Ghost manifest contract', () => {
           },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('只能是 api.github.com') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('只能是 api.github.com'),
+    });
     expect(
       validateGhostManifest(
         secret({
           inject: { header: 'Authorization', format: 'Bearer {value}' },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('只能是 api.github.com') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('只能是 api.github.com'),
+    });
     expect(validateGhostManifest(secret({ exchange: {} }))).toMatchObject({
       ok: false,
       reason: expect.stringContaining('不允许声明 exchange'),
@@ -812,6 +864,83 @@ describe('Ghost manifest contract', () => {
     });
   });
 
+  it('round-trips a strict main-view declaration and requires a Cindy version floor', () => {
+    const manifest = {
+      ...validManifest,
+      minCindyVersion: '1.2.3',
+      slots: ['main-view'],
+      tools: undefined,
+      mainView: {
+        title: 'Workspace',
+        icon: 'globe',
+        html: 'ui/main-view.html',
+      },
+    } as const;
+
+    expect(validateGhostManifest(JSON.parse(JSON.stringify(manifest)))).toEqual({
+      ok: true,
+      manifest,
+    });
+
+    const withoutMin = { ...manifest } as Record<string, unknown>;
+    delete withoutMin.minCindyVersion;
+    expect(validateGhostManifest(withoutMin)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('minCindyVersion'),
+    });
+  });
+
+  it('keeps main-view slot/detail paired and rejects unsafe or unknown fields', () => {
+    const base = {
+      ...validManifest,
+      minCindyVersion: '1.2.3',
+      slots: ['main-view'],
+      tools: undefined,
+    };
+    expect(validateGhostManifest(base)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('mainView'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        minCindyVersion: '1.2.3',
+        mainView: { html: 'main-view.html' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('main-view'),
+    });
+    expect(validateGhostManifest({ ...base, mainView: { html: '../escape.html' } }).ok).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        mainView: { html: 'main-view.html', icon: 'plugin' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('mainView.icon'),
+    });
+    expect(
+      validateGhostManifest({
+        ...base,
+        mainView: { html: 'main-view.html', icon: 'globe-2' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('puzzle / globe / code'),
+    });
+    expect(
+      validateGhostManifest({
+        ...base,
+        mainView: { html: 'main-view.html', position: 'left' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许的字段'),
+    });
+  });
+
   it('enforces node slot / detail pairing and entry discipline', () => {
     const base = {
       ...validManifest,
@@ -833,16 +962,30 @@ describe('Ghost manifest contract', () => {
     });
     expect(withNode({ entry: 'node/a.cjs', protocol: 'bash' }).ok).toBe(false);
     expect(
-      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', entries: ['node/a.cjs'] }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不能重复主入口') });
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        entries: ['node/a.cjs'],
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能重复主入口'),
+    });
     // 大小写不敏感文件系统上的同名变体必须按同一个文件拒绝。
     expect(withNode({ entry: 'Index.js', protocol: 'mcp-stdio' })).toMatchObject({
       ok: false,
       reason: expect.stringContaining('不能与浏览器沙箱 entry'),
     });
     expect(
-      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', entries: ['node/A.cjs'] }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不能重复主入口') });
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        entries: ['node/A.cjs'],
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能重复主入口'),
+    });
     expect(
       withNode({
         entry: 'node/a.cjs',
@@ -858,8 +1001,15 @@ describe('Ghost manifest contract', () => {
       }),
     ).toMatchObject({ ok: false, reason: expect.stringContaining('重复入口') });
     expect(
-      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', childSpawn: 'yes' }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('childSpawn 必须是布尔值') });
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        childSpawn: 'yes',
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('childSpawn 必须是布尔值'),
+    });
     expect(
       withNode({
         entry: 'node/a.cjs',
@@ -867,7 +1017,10 @@ describe('Ghost manifest contract', () => {
         lifecycle: 'resident',
         idleTimeoutSeconds: 60,
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('resident 时不能再声明') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('resident 时不能再声明'),
+    });
   });
 
   it('accepts and normalizes method-scoped Node secret bindings', () => {
@@ -929,13 +1082,22 @@ describe('Ghost manifest contract', () => {
         settingsHtml: undefined,
         node: { ...base.node, secretBindings: [binding] },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('需要 settingsHtml') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('需要 settingsHtml'),
+    });
     expect(
       validateGhostManifest({
         ...base,
-        node: { ...base.node, secretBindings: [{ ...binding, methods: ['bad method'] }] },
+        node: {
+          ...base.node,
+          secretBindings: [{ ...binding, methods: ['bad method'] }],
+        },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('安全方法名') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('安全方法名'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -945,7 +1107,10 @@ describe('Ghost manifest contract', () => {
           secretBindings: [{ ...binding, methods: ['initialize'] }],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('宿主保留的 MCP 方法') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('宿主保留的 MCP 方法'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -987,7 +1152,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('与 node.secretBindings 撞名') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与 node.secretBindings 撞名'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -1004,7 +1172,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('与 node.secretBindings') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与 node.secretBindings'),
+    });
 
     for (const invalidBinding of [
       { ...binding, key: 'Bad-Key' },
@@ -1051,7 +1222,10 @@ describe('Ghost manifest contract', () => {
     });
     expect(validateGhostManifest({ ...base, preview: { hosts: [] } }).ok).toBe(false);
     expect(
-      validateGhostManifest({ ...base, preview: { hosts: ['https://x.example.com'] } }).ok,
+      validateGhostManifest({
+        ...base,
+        preview: { hosts: ['https://x.example.com'] },
+      }).ok,
     ).toBe(false);
     expect(
       validateGhostManifest({
@@ -1060,8 +1234,14 @@ describe('Ghost manifest contract', () => {
       }),
     ).toMatchObject({ ok: false, reason: expect.stringContaining('重复域名') });
     expect(
-      validateGhostManifest({ ...validManifest, preview: { hosts: ['maker.taptap.cn'] } }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('未包含 "preview"') });
+      validateGhostManifest({
+        ...validManifest,
+        preview: { hosts: ['maker.taptap.cn'] },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('未包含 "preview"'),
+    });
     const loopback = validateGhostManifest({
       ...base,
       preview: { hosts: ['localhost', '*.taptap.cn'] },
@@ -1082,8 +1262,14 @@ describe('Ghost manifest contract', () => {
       reason: expect.stringContaining('未包含 "skill"'),
     });
     // 合法声明原样收录
-    const good = validateGhostManifest({ ...base, skill: { items: goodItems } });
-    expect(good).toMatchObject({ ok: true, manifest: { skill: { items: goodItems } } });
+    const good = validateGhostManifest({
+      ...base,
+      skill: { items: goodItems },
+    });
+    expect(good).toMatchObject({
+      ok: true,
+      manifest: { skill: { items: goodItems } },
+    });
     // items 形状:空/超限/非对象/自造字段一律拒
     expect(validateGhostManifest({ ...base, skill: { items: [] } }).ok).toBe(false);
     expect(validateGhostManifest({ ...base, skill: {} }).ok).toBe(false);
@@ -1113,7 +1299,9 @@ describe('Ghost manifest contract', () => {
     const item = (patch: Record<string, unknown>) =>
       validateGhostManifest({
         ...base,
-        skill: { items: [{ dir: 'skills/foo', name: 'foo', description: 'x', ...patch }] },
+        skill: {
+          items: [{ dir: 'skills/foo', name: 'foo', description: 'x', ...patch }],
+        },
       });
     // dir:必须是包内安全相对路径
     expect(item({ dir: '../evil' }).ok).toBe(false);
@@ -1147,7 +1335,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复 name') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('重复 name'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -1169,7 +1360,10 @@ describe('Ghost manifest contract', () => {
         description: '按需读取的入门工作流',
       },
     ];
-    const result = validateGhostManifest({ ...validManifest, manual: { items } });
+    const result = validateGhostManifest({
+      ...validManifest,
+      manual: { items },
+    });
     expect(result).toMatchObject({
       ok: true,
       manifest: {
@@ -1197,9 +1391,12 @@ describe('Ghost manifest contract', () => {
 
     expect(validateGhostManifest({ ...validManifest, manual: { items: [] } }).ok).toBe(false);
     expect(validateGhostManifest({ ...validManifest, manual: {} }).ok).toBe(false);
-    expect(validateGhostManifest({ ...validManifest, manual: { items: [], extra: true } }).ok).toBe(
-      false,
-    );
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        manual: { items: [], extra: true },
+      }).ok,
+    ).toBe(false);
     expect(item({ extra: true }).ok).toBe(false);
     const nine = Array.from({ length: 9 }, (_, index) => ({
       dir: `manual/unit-${index}`,
@@ -1232,7 +1429,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复 name') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('重复 name'),
+    });
     expect(
       validateGhostManifest({
         ...validManifest,
@@ -1249,7 +1449,11 @@ describe('Ghost manifest contract', () => {
   it('intentionally allows nested manual item directories with distinct logical names', () => {
     const items = [
       { dir: 'manual', name: 'overview', description: 'Overview.' },
-      { dir: 'manual/advanced', name: 'advanced', description: 'Advanced topics.' },
+      {
+        dir: 'manual/advanced',
+        name: 'advanced',
+        description: 'Advanced topics.',
+      },
     ];
 
     expect(validateGhostManifest({ ...validManifest, manual: { items } })).toMatchObject({
@@ -1262,14 +1466,20 @@ describe('Ghost manifest contract', () => {
     const withManual = (manifest: Record<string, unknown>, dir: string) =>
       validateGhostManifest({
         ...manifest,
-        manual: { items: [{ dir, name: 'guide', description: 'Manual guide.' }] },
+        manual: {
+          items: [{ dir, name: 'guide', description: 'Manual guide.' }],
+        },
       });
     const declaredFileCases: Array<{
       label: string;
       manifest: Record<string, unknown>;
       dir: string;
     }> = [
-      { label: 'ghost.json', manifest: { ...validManifest }, dir: 'ghost.json' },
+      {
+        label: 'ghost.json',
+        manifest: { ...validManifest },
+        dir: 'ghost.json',
+      },
       {
         label: 'entry',
         manifest: { ...validManifest, entry: 'manual/entry/main.js' },
@@ -1282,7 +1492,10 @@ describe('Ghost manifest contract', () => {
       },
       {
         label: 'settingsHtml',
-        manifest: { ...validManifest, settingsHtml: 'manual/settings/settings.html' },
+        manifest: {
+          ...validManifest,
+          settingsHtml: 'manual/settings/settings.html',
+        },
         dir: 'manual/settings',
       },
       {
@@ -1341,7 +1554,13 @@ describe('Ghost manifest contract', () => {
       ok: true,
       manifest: expect.objectContaining({
         manual: {
-          items: [{ dir: 'manual/guide', name: 'guide', description: 'Manual guide.' }],
+          items: [
+            {
+              dir: 'manual/guide',
+              name: 'guide',
+              description: 'Manual guide.',
+            },
+          ],
         },
       }),
     });
@@ -1356,8 +1575,14 @@ describe('Ghost manifest contract', () => {
       }).ok,
     ).toBe(false);
     expect(
-      validateGhostManifest({ ...validManifest, card: { externalLinks: true } }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('未包含 "card"') });
+      validateGhostManifest({
+        ...validManifest,
+        card: { externalLinks: true },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('未包含 "card"'),
+    });
     const normalizedCard = validateGhostManifest({
       ...validManifest,
       slots: ['tool', 'card'],
@@ -1372,7 +1597,10 @@ describe('Ghost manifest contract', () => {
         slots: ['tool', 'agent'],
         agent: { background: false },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('background: true') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('background: true'),
+    });
     const backgroundAgent = validateGhostManifest({
       ...validManifest,
       slots: ['tool', 'agent'],
@@ -1437,7 +1665,11 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
     });
     expect(r.ok, r.ok ? '' : String(r.reason)).toBe(true);
     if (!r.ok) return;
-    expect(r.manifest.cindy).toEqual({ media: ['deposit'], text: ['oneshot'], embed: ['text'] });
+    expect(r.manifest.cindy).toEqual({
+      media: ['deposit'],
+      text: ['oneshot'],
+      embed: ['text'],
+    });
   });
 
   it('text 与 embed 的动作集各归各(不接受串用)', () => {
@@ -1471,7 +1703,10 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
     });
     expect(ok.ok, ok.ok ? '' : String(ok.reason)).toBe(true);
     if (ok.ok)
-      expect(ok.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
+      expect(ok.manifest.cindy).toEqual({
+        text: ['oneshot'],
+        oneshotModel: 'codex/gpt-5.5',
+      });
 
     for (const bad of [
       { text: ['oneshot'], oneshotModel: '' },

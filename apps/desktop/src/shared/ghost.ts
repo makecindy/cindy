@@ -100,6 +100,9 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * plan/只读拒)、save 票据目录(主 agent 过户,复用 saveDeposit 预算)。
  * 字节永远由主机落盘,沙箱本身仍无 fs——本槽是"申请主机代写"的资格,
  * 不是文件系统访问权。
+ * 'main-view' = 应用级插件主视图：宿主从已批准 manifest 解析包内
+ * HTML 入口，并提供 Cindy 一级侧边栏与路由。它与会话内 panel
+ * 独立授权，本身不附赠网络、文件或凭证能力。
  * 'library' = 持久作品库(2026-08-20):用户作品级存储(画布/素材/数据库),
  * 与 'fs' 私有储物柜(配额封顶、卸载回收)语义不同:不受 ghost-fs 配额约束,
  * 卸载插件**不删**(标 orphaned,删除必须走设置页独立确认)。字节与 SQL
@@ -141,6 +144,7 @@ export const GHOST_SLOTS = [
   'tool',
   'card',
   'panel',
+  'main-view',
   'cindy',
   'agent',
   'node',
@@ -418,6 +422,30 @@ export interface GhostPanelDecl {
    * 未知键按规则 9 收词明确拒绝,新按钮上线时在这里扩键。
    */
   systemButtons?: { maximize?: boolean; detach?: boolean; minimize?: boolean };
+}
+
+/** 应用级插件主视图可用的 Cindy 系统线性图标。枚举值与图标名保持一致。 */
+export const GHOST_MAIN_VIEW_ICONS = [
+  'puzzle',
+  'globe',
+  'code',
+  'folder',
+  'database',
+  'chart-column',
+  'image',
+  'message-circle',
+  'calendar-days',
+] as const;
+export type GhostMainViewIcon = (typeof GHOST_MAIN_VIEW_ICONS)[number];
+
+/** 应用级插件主视图；与会话内 panel 分开声明和批准。 */
+export interface GhostMainViewDecl {
+  /** 侧边栏与页面标题；缺省回退插件 name。 */
+  title?: string;
+  /** 侧边栏使用的 Cindy 系统线性图标；缺省为 puzzle。 */
+  icon?: GhostMainViewIcon;
+  /** 主视图界面入口（安装目录内安全相对路径）。 */
+  html: string;
 }
 
 /**
@@ -1452,6 +1480,8 @@ export interface GhostManifest {
   keywords?: string[];
   /** 面板声明;没有面板的意识(如纯工具意识)可省略。 */
   panel?: GhostPanelDecl;
+  /** 应用级主视图声明；须与 slots 中的 `main-view` 成对。 */
+  mainView?: GhostMainViewDecl;
 }
 
 /**
@@ -1472,6 +1502,7 @@ export interface GhostManifestLocaleResource {
     }
   >;
   panel?: { title: string };
+  mainView?: { title: string };
   network?: {
     secrets?: Record<string, { label: string; hint?: string }>;
     connections?: Record<string, { label: string; hint?: string }>;
@@ -1494,9 +1525,7 @@ export const GHOST_LOCALE_MAX_BYTES = 64 * 1024;
  * 都不构成运行授权，更新 UI 必须把目标包的全部权限按新增项重新展示。
  */
 export type GhostInstallApproval =
-  | { state: 'approved'; revision: string }
-  | { state: 'legacy-unapproved' }
-  | { state: 'invalid' };
+  { state: 'approved'; revision: string } | { state: 'legacy-unapproved' } | { state: 'invalid' };
 
 /** 把批准态投影成跨进程更新事务使用的稳定 token。 */
 export function ghostInstallApprovalToken(approval: GhostInstallApproval | undefined): string {
@@ -1510,9 +1539,7 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
     value === 'legacy-unapproved' ||
     value === 'invalid' ||
     (typeof value === 'string' &&
-      /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-        value,
-      ))
+      /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value))
   );
 }
 
@@ -1587,6 +1614,7 @@ export function ghostPanelKind(id: string): `ghost:${string}` {
  */
 export function ghostContentKeys(manifest: GhostManifest): string[] {
   const keys: string[] = [];
+  if (manifest.mainView) keys.push('mainView');
   if (manifest.panel) keys.push('panel');
   if (manifest.settingsHtml) keys.push('settingsUi');
   keys.push('code');
@@ -1703,6 +1731,7 @@ export interface GhostPermissionItem {
     | 'tool'
     | 'command'
     | 'panel'
+    | 'main-view'
     | 'code'
     | 'subscribe'
     | 'card'
@@ -2112,6 +2141,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       labelArgs: { title: manifest.panel.title ?? manifest.name },
     });
   }
+  if (manifest.mainView) {
+    items.push({
+      key: 'main-view',
+      kind: 'main-view',
+      labelKey: 'mainView',
+      labelArgs: { title: manifest.mainView.title ?? manifest.name },
+      detailKey: 'mainViewDetail',
+    });
+  }
   for (const slot of manifest.slots) {
     if (slot === 'subscribe') {
       // 订阅两档分列:旁听(元数据)常规位;拦截是全部槽里权限最重的一档,
@@ -2444,14 +2482,34 @@ export function isSafeGhostRelativePath(p: unknown): p is string {
   return segments.every((seg) => GHOST_PATH_SEGMENT_RE.test(seg) && seg !== '.' && seg !== '..');
 }
 
+const WINDOWS_RESERVED_GHOST_PATH_SEGMENT_RE =
+  /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
+/**
+ * New cross-platform manifest paths must also be creatable on Windows.
+ * Keep the legacy helper above unchanged so an upgrade does not invalidate
+ * already-installed plugins that were previously accepted on macOS.
+ */
+function isPortableGhostRelativePath(p: unknown): p is string {
+  return (
+    isSafeGhostRelativePath(p) &&
+    p.split('/').every((segment) => !WINDOWS_RESERVED_GHOST_PATH_SEGMENT_RE.test(segment))
+  );
+}
+
 /**
  * 意识 webview 允许附加的入口 pathname 白名单(attach 闸的可测真身):
- * 面板 panel.html 与设置区 settingsHtml,声明哪个放行哪个;两者指向同一
+ * 面板 panel.html、主视图 mainView.html 与设置区 settingsHtml，声明哪个放行哪个；
+ * 多个能力指向同一
  * 文件时去重。空数组 = 该意识没有任何可附加的自绘界面,闸口一律拒。
  */
 export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
   const paths: string[] = [];
   if (manifest.panel?.html) paths.push(`/${manifest.panel.html}`);
+  if (manifest.mainView?.html) {
+    const p = `/${manifest.mainView.html}`;
+    if (!paths.includes(p)) paths.push(p);
+  }
   if (manifest.settingsHtml) {
     const p = `/${manifest.settingsHtml}`;
     if (!paths.includes(p)) paths.push(p);
@@ -2676,6 +2734,7 @@ export function validateGhostManifestLocaleResource(
     'whenToUse',
     'tools',
     'panel',
+    'mainView',
     'network',
     'node',
     'setup',
@@ -2860,6 +2919,37 @@ export function validateGhostManifestLocaleResource(
     panel = { title: raw.panel.title };
   }
 
+  let mainView: GhostManifestLocaleResource['mainView'];
+  if (raw.mainView !== undefined) {
+    if (manifest.mainView?.title === undefined) {
+      return {
+        ok: false,
+        reason: 'locale.mainView 不应存在：原 manifest 未声明 mainView.title',
+      };
+    }
+    if (!isPlainObject(raw.mainView)) {
+      return { ok: false, reason: 'locale.mainView 必须是含 title 的对象' };
+    }
+    const unknownMainViewField = Object.keys(raw.mainView).find((field) => field !== 'title');
+    if (unknownMainViewField) {
+      return {
+        ok: false,
+        reason: `locale.mainView 含未知字段 ${JSON.stringify(unknownMainViewField)}`,
+      };
+    }
+    if (
+      typeof raw.mainView.title !== 'string' ||
+      raw.mainView.title.trim().length === 0 ||
+      raw.mainView.title.length > 64
+    ) {
+      return {
+        ok: false,
+        reason: 'locale.mainView.title 必须是 1–64 字符的非空字符串',
+      };
+    }
+    mainView = { title: raw.mainView.title };
+  }
+
   const validateLocalizedLabels = (
     rawValue: unknown,
     fieldPath: string,
@@ -3022,6 +3112,7 @@ export function validateGhostManifestLocaleResource(
       ...(typeof whenToUse === 'string' ? { whenToUse } : {}),
       ...(tools !== undefined ? { tools } : {}),
       ...(panel !== undefined ? { panel } : {}),
+      ...(mainView !== undefined ? { mainView } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(node !== undefined ? { node } : {}),
       ...(setup !== undefined ? { setup } : {}),
@@ -3059,6 +3150,9 @@ export function resolveGhostManifestLocale(
       : {}),
     ...(manifest.panel !== undefined && resource.panel !== undefined
       ? { panel: { ...manifest.panel, title: resource.panel.title } }
+      : {}),
+    ...(manifest.mainView !== undefined && resource.mainView !== undefined
+      ? { mainView: { ...manifest.mainView, title: resource.mainView.title } }
       : {}),
     ...(manifest.network !== undefined && resource.network !== undefined
       ? {
@@ -3160,6 +3254,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     raw.icon,
     raw.settingsHtml,
     isPlainObject(raw.panel) ? raw.panel.html : undefined,
+    isPlainObject(raw.mainView) ? raw.mainView.html : undefined,
     isPlainObject(raw.node) ? raw.node.entry : undefined,
     ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
   ]
@@ -3365,6 +3460,50 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     };
   }
 
+  let mainView: GhostMainViewDecl | undefined;
+  if (raw.mainView !== undefined) {
+    if (!isPlainObject(raw.mainView)) {
+      return { ok: false, reason: 'mainView 必须是对象' };
+    }
+    const unknownMainViewField = Object.keys(raw.mainView).find(
+      (field) => field !== 'html' && field !== 'title' && field !== 'icon',
+    );
+    if (unknownMainViewField) {
+      return {
+        ok: false,
+        reason: `mainView 含不允许的字段 ${JSON.stringify(unknownMainViewField)}`,
+      };
+    }
+    if (
+      raw.mainView.title !== undefined &&
+      (typeof raw.mainView.title !== 'string' ||
+        raw.mainView.title.trim().length === 0 ||
+        raw.mainView.title.length > 64)
+    ) {
+      return { ok: false, reason: 'mainView.title 必须是 1–64 字符的非空字符串' };
+    }
+    if (
+      raw.mainView.icon !== undefined &&
+      !(GHOST_MAIN_VIEW_ICONS as readonly unknown[]).includes(raw.mainView.icon)
+    ) {
+      return {
+        ok: false,
+        reason: `mainView.icon 必须是以下系统图标之一:${GHOST_MAIN_VIEW_ICONS.join(' / ')}`,
+      };
+    }
+    if (!isPortableGhostRelativePath(raw.mainView.html)) {
+      return {
+        ok: false,
+        reason: 'mainView.html 必填，且必须是安装目录内的安全相对路径',
+      };
+    }
+    mainView = {
+      ...(raw.mainView.title !== undefined ? { title: raw.mainView.title } : {}),
+      ...(raw.mainView.icon !== undefined ? { icon: raw.mainView.icon as GhostMainViewIcon } : {}),
+      html: raw.mainView.html,
+    };
+  }
+
   if (!isSafeGhostRelativePath(raw.entry)) {
     return { ok: false, reason: '必须提供 entry(安装目录内的安全相对路径,电子脑逻辑入口)' };
   }
@@ -3413,10 +3552,14 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   // Host-native capabilities cannot be safely ignored by an older Cindy.
   // Require an explicit installation/enablement floor for deterministic UX.
-  if (slots.includes('ios-simulator') && raw.minCindyVersion === undefined) {
+  if (
+    (slots.includes('ios-simulator') || slots.includes('main-view')) &&
+    raw.minCindyVersion === undefined
+  ) {
+    const slot = slots.includes('main-view') ? 'main-view' : 'ios-simulator';
     return {
       ok: false,
-      reason: 'slots 声明了 "ios-simulator" 时必须同时声明 minCindyVersion',
+      reason: `slots 声明了 ${JSON.stringify(slot)} 时必须同时声明 minCindyVersion`,
     };
   }
   // 声明了面板却没申请 panel 槽(或反之有槽无面板)都是清单自相矛盾。
@@ -3425,6 +3568,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (slots.includes('panel') && panel === undefined) {
     return { ok: false, reason: 'slots 声明了 "panel" 但缺少 panel(面板由意识自绘,html 必填)' };
+  }
+  if (mainView !== undefined && !slots.includes('main-view')) {
+    return { ok: false, reason: '声明了 mainView 但 slots 未包含 "main-view"' };
+  }
+  if (slots.includes('main-view') && mainView === undefined) {
+    return {
+      ok: false,
+      reason: 'slots 声明了 "main-view" 但缺少 mainView(html 必填)',
+    };
   }
 
   // card 槽详单:有详单必有槽;有槽无详单 = 纯渲染卡片(默认行为,向后兼容)。
@@ -5354,6 +5506,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),
       ...(panel !== undefined ? { panel } : {}),
+      ...(mainView !== undefined ? { mainView } : {}),
     },
   };
 }
@@ -7518,11 +7671,26 @@ export type GhostPipeFsResult =
  * 宿主管理;首词白名单外的语句(ATTACH/PRAGMA/VACUUM/事务语句)一律拒。
  */
 export const GHOST_LIBRARY_OPS = [
-  'open', 'status',
-  'read', 'write',
-  'writeBegin', 'writeChunk', 'writeCommit', 'writeAbort',
-  'list', 'stat', 'mkdir', 'delete', 'rename',
-  'db.open', 'db.exec', 'db.batch', 'db.migrate', 'db.backup', 'db.check', 'db.userVersion',
+  'open',
+  'status',
+  'read',
+  'write',
+  'writeBegin',
+  'writeChunk',
+  'writeCommit',
+  'writeAbort',
+  'list',
+  'stat',
+  'mkdir',
+  'delete',
+  'rename',
+  'db.open',
+  'db.exec',
+  'db.batch',
+  'db.migrate',
+  'db.backup',
+  'db.check',
+  'db.userVersion',
 ] as const;
 export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 
@@ -7570,19 +7738,50 @@ export interface GhostPipeLibraryRequest {
  * 修掉 fs 槽无错误码的缺口),对沙箱永不 reject。
  */
 export type GhostPipeLibraryResult =
-  | { ok: true; op: 'open' | 'status'; state: 'ready' | 'readonly' | 'unavailable'; reason?: string; usedBytes: number; fileCount: number; diskFreeBytes?: number | null; softLimitBytes?: number; softLimitExceeded?: boolean; location?: 'default' | 'custom' }
-  | { ok: true; op: 'read'; path: string; content: string; encoding: 'utf8' | 'base64'; bytes: number; sha256: string }
+  | {
+      ok: true;
+      op: 'open' | 'status';
+      state: 'ready' | 'readonly' | 'unavailable';
+      reason?: string;
+      usedBytes: number;
+      fileCount: number;
+      diskFreeBytes?: number | null;
+      softLimitBytes?: number;
+      softLimitExceeded?: boolean;
+      location?: 'default' | 'custom';
+    }
+  | {
+      ok: true;
+      op: 'read';
+      path: string;
+      content: string;
+      encoding: 'utf8' | 'base64';
+      bytes: number;
+      sha256: string;
+    }
   | { ok: true; op: 'write' | 'writeCommit'; path: string; bytes: number; sha256: string }
   | { ok: true; op: 'writeBegin'; streamId: string }
   | { ok: true; op: 'writeChunk'; accepted: number }
   | { ok: true; op: 'writeAbort'; aborted: boolean }
-  | { ok: true; op: 'list'; entries: Array<{ path: string; kind: 'file' | 'dir'; bytes: number; mtime: number }>; hasMore: boolean; nextCursor: string | null }
+  | {
+      ok: true;
+      op: 'list';
+      entries: Array<{ path: string; kind: 'file' | 'dir'; bytes: number; mtime: number }>;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }
   | { ok: true; op: 'stat'; path: string; kind: 'file' | 'dir'; bytes: number; mtime: number }
   | { ok: true; op: 'mkdir'; path: string; existed: boolean }
   | { ok: true; op: 'delete'; path: string; existed: boolean }
   | { ok: true; op: 'rename'; from: string; to: string }
   | { ok: true; op: 'db.open'; opened: boolean }
-  | { ok: true; op: 'db.exec'; rows?: unknown[]; changes?: number; lastInsertRowid?: string | number }
+  | {
+      ok: true;
+      op: 'db.exec';
+      rows?: unknown[];
+      changes?: number;
+      lastInsertRowid?: string | number;
+    }
   | { ok: true; op: 'db.batch'; applied: number }
   | { ok: true; op: 'db.migrate'; fromVersion: number; toVersion: number }
   | { ok: true; op: 'db.backup'; backedUp: boolean }

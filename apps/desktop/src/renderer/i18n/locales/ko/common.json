@@ -1791,13 +1791,21 @@
         "invalidLibraryName": "Ollama 라이브러리 이름을 입력하거나 huggingface.co 모델 페이지 URL을 붙여넣으세요",
         "advancedExactName": "고급: 정확한 라이브러리 이름",
         "models": {
-          "qwen38-27b": { "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다." },
+          "qwen38-27b": {
+            "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다."
+          },
           "gpt-oss-20b": { "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택." },
-          "gemma4-e2b": { "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다." },
+          "gemma4-e2b": {
+            "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다."
+          },
           "gemma4-e4b": { "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다." },
           "gemma4-12b": { "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다." },
-          "gemma4-31b": { "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다." },
-          "gemma4-26b": { "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다." },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다."
+          },
+          "gemma4-26b": {
+            "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다."
+          },
           "ornith15-35b": { "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안." },
           "glm-47-flash": { "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음." }
         },
@@ -4375,6 +4383,8 @@
         "command": "채팅 명령 ${{command}}",
         "panelLeft": "패널 \"{{title}}\" · 채팅 왼쪽에 도킹",
         "panelTab": "패널 \"{{title}}\" · 플러그인 페이지에서 열기",
+        "mainView": "Cindy 사이드바에 “{{title}}” 항목을 추가할 수 있음",
+        "mainViewDetail": "클릭하면 플러그인 샌드박스에서 메인 보기가 열리며 파일, 네트워크 또는 자격 증명 접근 권한이 추가로 부여되지 않습니다.",
         "code": "실행 코드",
         "codeDetail": "격리된 샌드박스에서 실행되며 파일과 네트워크에 접근할 수 없습니다.",
         "resident": "상주 실행(활성화하면 시작되며 호출이 없어도 백그라운드 프로세스 유지)",
@@ -4529,6 +4539,9 @@
         "settingsUnavailableUntilRestore": "이 설정을 다시 사용하려면 플러그인을 복원하세요.",
         "oauthScopeStale": "현재 인증에 새로 추가된 권한이 포함되어 있지 않습니다. 다시 연결해 권한을 받으세요.",
         "configurationTitle": "설정",
+        "sidebarEntryTitle": "사이드바 항목",
+        "showInSidebar": "사이드바에 표시",
+        "sidebarEntryDescription": "켜면 사이드바에 “{{title}}” 항목이 표시됩니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
         "viewAllTools": "더 보기",
@@ -4538,6 +4551,7 @@
         "closeDialog": "대화 상자 닫기"
       },
       "contents": {
+        "mainView": "메인 보기",
         "panel": "패널",
         "settingsUi": "사용자 정의 설정 화면",
         "code": "실행 코드",

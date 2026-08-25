@@ -1791,15 +1791,23 @@
         "invalidLibraryName": "Ollama のライブラリ名を入力するか、huggingface.co のモデルページ URL を貼り付けてください",
         "advancedExactName": "上級：正確なライブラリ名",
         "models": {
-          "qwen38-27b": { "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。" },
+          "qwen38-27b": {
+            "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。"
+          },
           "gpt-oss-20b": { "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。" },
           "gemma4-e2b": { "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。" },
           "gemma4-e4b": { "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。" },
           "gemma4-12b": { "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。" },
-          "gemma4-31b": { "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。" },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。"
+          },
           "gemma4-26b": { "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。" },
-          "ornith15-35b": { "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。" },
-          "glm-47-flash": { "blurb": "智譜の新しいコーディングモデル。30B MoE で、コードと Agent 向き。" }
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。"
+          },
+          "glm-47-flash": {
+            "blurb": "智譜の新しいコーディングモデル。30B MoE で、コードと Agent 向き。"
+          }
         },
         "onboardingTitle": "先に Ollama ランタイムをインストール",
         "onboardingBody": "Ollama をインストールすれば、Ollama アプリを開かなくても Cindy 内でローカルモデルをダウンロードして使えます。Ollama は無料のオープンソース製サードパーティランタイムです。",
@@ -4375,6 +4383,8 @@
         "command": "チャット指令 ${{command}}",
         "panelLeft": "パネル「{{title}}」· チャットの左側にドッキング",
         "panelTab": "パネル「{{title}}」· プラグインページ内で開く",
+        "mainView": "Cindy のサイドバーに「{{title}}」への入口を追加できます",
+        "mainViewDetail": "クリックするとプラグインのサンドボックス内でメインビューが開き、ファイル、ネットワーク、認証情報へのアクセスが追加で付与されることはありません。",
         "code": "実行コード",
         "codeDetail": "独立したサンドボックスで実行され、ファイルやネットワークにはアクセスできません。",
         "resident": "常駐実行(有効化すると起動し、呼び出されなくてもバックグラウンドプロセスを維持)",
@@ -4529,6 +4539,9 @@
         "settingsUnavailableUntilRestore": "この設定を再び使用するには、プラグインを復元してください。",
         "oauthScopeStale": "現在の認証には新しく追加された権限が含まれていません。再接続して権限を取得してください。",
         "configurationTitle": "設定",
+        "sidebarEntryTitle": "サイドバー項目",
+        "showInSidebar": "サイドバーに表示",
+        "sidebarEntryDescription": "オンにすると、サイドバーに「{{title}}」が表示されます。非表示にしてもプラグインは無効になりません。",
         "openTool": "Tool {{name}} の詳細を表示",
         "noToolDescription": "この Tool には説明がありません。",
         "viewAllTools": "さらに表示",
@@ -4538,6 +4551,7 @@
         "closeDialog": "ダイアログを閉じる"
       },
       "contents": {
+        "mainView": "メインビュー",
         "panel": "パネル",
         "settingsUi": "カスタム設定画面",
         "code": "実行コード",

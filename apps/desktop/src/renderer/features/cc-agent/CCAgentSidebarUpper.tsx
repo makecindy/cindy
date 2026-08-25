@@ -97,6 +97,7 @@ import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
+import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -3947,6 +3948,7 @@ function CollapsedView({
         onClick={handleNavScheduled}
         onContextMenu={onAutomationsContextMenu}
       />
+      <GhostMainViewNavEntries variant="rail" />
       {/* 插件 rail 入口 —— 未读绿点与展开态 SidebarTopNav 对称(同一聚合语义:
           任一插件有未读就点亮,静态不呼吸)。 */}
       <SidebarIconButton

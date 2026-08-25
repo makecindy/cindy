@@ -5,6 +5,7 @@ import {
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   GHOST_CINDY_EMBED_MAX_TEXTS,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
+  GHOST_MAIN_VIEW_ICONS,
   GHOST_SLOTS,
   changedBuiltinOauthClientSecretKeys,
   deriveGhostSessionContext,
@@ -343,10 +344,12 @@ describe('ghost · 清单校验', () => {
         locales: { en: 'GHOST.JSON' },
       }).ok,
     ).toBe(false);
-    expect(validateGhostManifest({
-      ...goodManifest(),
-      locales: { en: 'locales/en.json', 'zh-TW': 'locales/zh-TW.json' },
-    }).ok).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...goodManifest(),
+        locales: { en: 'locales/en.json', 'zh-TW': 'locales/zh-TW.json' },
+      }).ok,
+    ).toBe(false);
   });
 
   it('无 manual 时保持 origin/main 的 locale 路径兼容语义', () => {
@@ -757,10 +760,12 @@ describe('ghost · 清单校验', () => {
       id: 'localized-labels',
       name: 'Base',
       version: '1.0.0',
+      minCindyVersion: '1.2.3',
       entry: 'main.js',
       settingsHtml: 'settings.html',
-      slots: ['panel', 'network', 'node'],
+      slots: ['panel', 'main-view', 'network', 'node'],
       panel: { title: 'Base panel', html: 'panel.html' },
+      mainView: { title: 'Base workspace', html: 'main-view.html' },
       network: {
         hosts: ['api.example.com'],
         secrets: [
@@ -802,6 +807,7 @@ describe('ghost · 清单校验', () => {
       {
         name: 'Localized',
         panel: { title: 'Localized panel' },
+        mainView: { title: 'Localized workspace' },
         network: {
           secrets: {
             api_key: { label: 'Localized API key', hint: 'Localized secret hint' },
@@ -827,6 +833,7 @@ describe('ghost · 清单校验', () => {
     if (!resource.ok) return;
     expect(resolveGhostManifestLocale(parsed.manifest, resource.resource)).toMatchObject({
       panel: { title: 'Localized panel' },
+      mainView: { title: 'Localized workspace', html: 'main-view.html' },
       network: {
         secrets: [
           {
@@ -872,6 +879,7 @@ describe('ghost · 清单校验', () => {
     if (!panelOnly.ok) return;
     expect(resolveGhostManifestLocale(parsed.manifest, panelOnly.resource)).toMatchObject({
       panel: { title: 'Localized panel' },
+      mainView: { title: 'Base workspace', html: 'main-view.html' },
       network: {
         secrets: [{ key: 'api_key', label: 'Base API key', hint: 'Base secret hint' }],
         connections: [{ key: 'instance', label: 'Base instance' }],
@@ -881,6 +889,12 @@ describe('ghost · 清单校验', () => {
         requires: [{ anyOf: [{ kind: 'kv', key: 'default_repo', label: 'Base repository' }] }],
       },
     });
+    expect(
+      validateGhostManifestLocaleResource(
+        { mainView: { title: 'Unexpected' } },
+        { ...parsed.manifest, mainView: { html: 'main-view.html' } },
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('mainView.title') });
     // 提供的标签条目 label 必填、hint 可省(缺 hint 回退原文);未知 key 仍拒。
     const labelNoHint = validateGhostManifestLocaleResource(
       {
@@ -1597,6 +1611,95 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     (noHtml.panel as Record<string, unknown>).html = undefined;
     delete (noHtml.panel as Record<string, unknown>).html;
     expect(validateGhostManifest(noHtml).ok).toBe(false);
+  });
+
+  it('mainView 与 main-view 槽严格成对，并强制最低 Cindy 版本', () => {
+    expect(GHOST_MAIN_VIEW_ICONS).toEqual([
+      'puzzle',
+      'globe',
+      'code',
+      'folder',
+      'database',
+      'chart-column',
+      'image',
+      'message-circle',
+      'calendar-days',
+    ]);
+    const valid = validateGhostManifest({
+      ...goodChipManifest(),
+      minCindyVersion: '1.2.3',
+      slots: ['panel', 'main-view'],
+      mainView: { title: '工作台', icon: 'globe', html: 'ui/main-view.html' },
+    });
+    expect(valid.ok).toBe(true);
+    if (valid.ok)
+      expect(valid.manifest.mainView).toEqual({
+        title: '工作台',
+        icon: 'globe',
+        html: 'ui/main-view.html',
+      });
+
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'main-view'],
+        mainView: { html: 'main-view.html' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('minCindyVersion') });
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        mainView: { html: 'main-view.html' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('main-view') });
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        slots: ['panel', 'main-view'],
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('mainView') });
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        slots: ['panel', 'main-view'],
+        mainView: { html: '../escape.html' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        slots: ['panel', 'main-view'],
+        mainView: { html: 'assets/AUX.html' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        slots: ['panel', 'main-view'],
+        mainView: { html: 'main-view.html', position: 'left' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许的字段') });
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        slots: ['panel', 'main-view'],
+        mainView: { html: 'main-view.html', icon: 'plugin' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('mainView.icon') });
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        slots: ['panel', 'main-view'],
+        mainView: { html: 'main-view.html', icon: 'globe-2' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('puzzle / globe / code') });
   });
 
   it('显式指令 command:字符规则 + 必须有工具可干活', () => {
@@ -2390,6 +2493,23 @@ describe('ghost · 逐项权限清单', () => {
     expect(d.removed).toEqual([]);
     expect(d.unchanged.length).toBe(7);
     expect(d.builtinOauthClientChanged).toBe(false);
+  });
+
+  it('diff:新增 main-view 作为独立权限进入更新确认', () => {
+    const previous = fullChip();
+    const next: GhostManifest = {
+      ...previous,
+      version: '2.0.0',
+      minCindyVersion: '1.2.3',
+      slots: [...previous.slots, 'main-view'],
+      mainView: { title: '工作台', html: 'main-view.html' },
+    };
+
+    const diff = diffGhostPermissionItems(previous, next);
+    expect(diff.added).toEqual([
+      expect.objectContaining({ key: 'main-view', kind: 'main-view', labelKey: 'mainView' }),
+    ]);
+    expect(diff.removed).toEqual([]);
   });
 
   it('diff:同一凭证槽的内置直连 OAuth clientId 变化会标记授权失效风险', () => {
@@ -3543,7 +3663,7 @@ describe('ghost · settingsHtml 自绘设置区 + settingsHeight', () => {
     expect(r.ok && 'settingsHeight' in r.manifest).toBe(false);
   });
 
-  it('ghostWebviewEntryPaths:只 panel / 只 settings / 双声明 / 都无 / 同文件去重', () => {
+  it('ghostWebviewEntryPaths:panel / mainView / settings 只放行声明入口并去重', () => {
     const both = validateGhostManifest({ ...goodManifest(), settingsHtml: 'settings.html' });
     expect(both.ok && ghostWebviewEntryPaths(both.manifest)).toEqual([
       '/panel.html',
@@ -3574,6 +3694,28 @@ describe('ghost · settingsHtml 自绘设置区 + settingsHeight', () => {
 
     const same = validateGhostManifest({ ...goodManifest(), settingsHtml: 'panel.html' });
     expect(same.ok && ghostWebviewEntryPaths(same.manifest)).toEqual(['/panel.html']);
+
+    const mainView = validateGhostManifest({
+      ...goodManifest(),
+      minCindyVersion: '1.2.3',
+      slots: ['panel', 'main-view'],
+      mainView: { html: 'main-view.html' },
+      settingsHtml: 'settings.html',
+    });
+    expect(mainView.ok && ghostWebviewEntryPaths(mainView.manifest)).toEqual([
+      '/panel.html',
+      '/main-view.html',
+      '/settings.html',
+    ]);
+
+    const sharedEntry = validateGhostManifest({
+      ...goodManifest(),
+      minCindyVersion: '1.2.3',
+      slots: ['panel', 'main-view'],
+      mainView: { html: 'panel.html' },
+      settingsHtml: 'panel.html',
+    });
+    expect(sharedEntry.ok && ghostWebviewEntryPaths(sharedEntry.manifest)).toEqual(['/panel.html']);
   });
 
   it('内容清单:声明 settingsHtml 的意识含 settingsUi,排在 panel 后 code 前', () => {
@@ -3727,11 +3869,20 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
     expect(withPreview({ hosts: ['a.example.com'], extra: 1 }).ok).toBe(false);
   });
 
-  it('session-context / pick / workspace / ios-simulator 槽可装入并生成权限项', () => {
+  it('main-view / session-context / pick / workspace / ios-simulator 槽可装入并生成权限项', () => {
     const r = validateGhostManifest({
       ...goodChipManifest(),
       minCindyVersion: '1.2.3',
-      slots: ['panel', 'session-context', 'pick', 'preview', 'workspace', 'ios-simulator'],
+      slots: [
+        'panel',
+        'main-view',
+        'session-context',
+        'pick',
+        'preview',
+        'workspace',
+        'ios-simulator',
+      ],
+      mainView: { title: '工作台', html: 'main-view.html' },
       preview: { hosts: ['example.com'] },
     });
     expect(r.ok).toBe(true);
@@ -3739,10 +3890,17 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
     expect(r.manifest.minCindyVersion).toBe('1.2.3');
     expect(ghostContentKeys(r.manifest)).toContain('slotWorkspace');
     expect(ghostContentKeys(r.manifest)).toContain('slotIOSSimulator');
+    expect(ghostContentKeys(r.manifest)).toContain('mainView');
     const items = ghostPermissionItems(r.manifest);
     expect(items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'pick', kind: 'pick', labelKey: 'pick' }),
+        expect.objectContaining({
+          key: 'main-view',
+          kind: 'main-view',
+          labelKey: 'mainView',
+          detailKey: 'mainViewDetail',
+        }),
         expect.objectContaining({
           key: 'session-context',
           kind: 'session-context',
@@ -4135,9 +4293,9 @@ describe('ghostPermissionProjectionFingerprint', () => {
       expect.objectContaining({ key: expect.stringMatching(/^panel:/) }),
     ]);
     expect(diff.unchanged.some((item) => item.key.startsWith('panel:'))).toBe(false);
-    expect(
-      unreviewedGhostPermissionItems(reviewed.manifest, undefined, actual.manifest),
-    ).toEqual([expect.objectContaining({ key: expect.stringMatching(/^panel:/) })]);
+    expect(unreviewedGhostPermissionItems(reviewed.manifest, undefined, actual.manifest)).toEqual([
+      expect.objectContaining({ key: expect.stringMatching(/^panel:/) }),
+    ]);
   });
 
   it('same-key/different-detail 必须判不同(preview hosts / 工具描述都在 detail 侧)', () => {
@@ -4155,8 +4313,12 @@ describe('ghostPermissionProjectionFingerprint', () => {
     });
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
-    const keysA = ghostPermissionItems(a.manifest).map((i) => i.key).sort();
-    const keysB = ghostPermissionItems(b.manifest).map((i) => i.key).sort();
+    const keysA = ghostPermissionItems(a.manifest)
+      .map((i) => i.key)
+      .sort();
+    const keysB = ghostPermissionItems(b.manifest)
+      .map((i) => i.key)
+      .sort();
     expect(keysA).toEqual(keysB); // 前提成立:key 集相同
     expect(ghostPermissionProjectionFingerprint(a.manifest)).not.toBe(
       ghostPermissionProjectionFingerprint(b.manifest),
