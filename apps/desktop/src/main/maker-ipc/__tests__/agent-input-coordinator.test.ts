@@ -173,7 +173,9 @@ function createHarness(opts?: {
   let liveRunningOverride: boolean | null | 'unknown' = null;
   let liveSessionPresentOverride: boolean | null | 'unknown' = null;
   let turnGeneration = 0;
-  let observedCurrentTurnTerminal: boolean | undefined = false;
+  let observedCurrentTurnTerminal:
+    | { kind: 'none' | 'done' | 'error'; message?: string }
+    | undefined = { kind: 'none' };
   let turnSessionIdentity: object = { instanceId: 'harness-session' };
   let pendingInteraction = false;
   let agentKind: AgentInputCreateOpts['agentKind'] | null = 'claude-code';
@@ -308,7 +310,7 @@ function createHarness(opts?: {
       return true;
     },
     getTurnGeneration: () => turnGeneration,
-    hasObservedCurrentTurnTerminal: () => observedCurrentTurnTerminal,
+    getObservedCurrentTurnTerminal: () => observedCurrentTurnTerminal,
     getTurnSessionIdentity: () => turnSessionIdentity,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
@@ -395,7 +397,9 @@ function createHarness(opts?: {
     setTurnGeneration(value: number) {
       turnGeneration = value;
     },
-    setHasObservedCurrentTurnTerminal(value: boolean | undefined) {
+    setObservedCurrentTurnTerminal(
+      value: { kind: 'none' | 'done' | 'error'; message?: string } | undefined,
+    ) {
       observedCurrentTurnTerminal = value;
     },
     getTurnSessionIdentity() {
@@ -6232,7 +6236,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       h.setLiveRunning(false);
       h.setLiveSessionPresent(true);
       h.setRunning(false);
-      h.setHasObservedCurrentTurnTerminal(true);
+      h.setObservedCurrentTurnTerminal({ kind: 'done' });
       h.reconcileTurnIdle.mockImplementation(() => true);
       h.coordinator.enqueue(sid, second);
       await flush();
@@ -6267,7 +6271,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       h.setLiveRunning(false);
       h.setLiveSessionPresent(true);
       h.setRunning(false);
-      h.setHasObservedCurrentTurnTerminal(undefined);
+      h.setObservedCurrentTurnTerminal(undefined);
       h.coordinator.enqueue(sid, second);
       await flush();
 
@@ -6276,6 +6280,85 @@ describe('AgentInputCoordinator steer transaction', () => {
 
       expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not treat an observed terminal error as a successful leftover settlement', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-error';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-error');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({ kind: 'error', message: 'provider failed' });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, second);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toBe('provider failed');
+      expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({ kind: 'none' });
+      h.coordinator.retryLastError(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'first' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('routes a leftover terminal error through recovery even when the tracker stays busy', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-error-tracker-busy';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.setObservedCurrentTurnTerminal({ kind: 'error', message: 'provider failed' });
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-error'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
       expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
     } finally {
       vi.useRealTimers();

@@ -12183,11 +12183,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
-    hasObservedCurrentTurnTerminal: (sessionId) => {
+    getObservedCurrentTurnTerminal: (sessionId) => {
       const lookup = lookupStableSessionForTurnBoundary(sessionId);
       if (lookup.status !== 'found') return undefined;
       try {
-        return lookup.session.hasObservedTerminalForCurrentTurn();
+        return lookup.session.getObservedCurrentTurnTerminal();
       } catch {
         return undefined;
       }

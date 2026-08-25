@@ -420,6 +420,9 @@ export class Session {
    * 开始等待、下一轮 dispatch 后才返回旧事件，不能用一个 bool 判断是否已收口。
    */
   private terminalEventObservedGeneration: number | null = null;
+  /** 与 terminalEventObservedGeneration 成对；同 generation 的 error 不被后续 done 尾巴改写。 */
+  private terminalEventObservedKind: 'done' | 'error' | null = null;
+  private terminalEventObservedErrorMessage: string | null = null;
   /** 终态 error 后等待 provider 尾部 done；避免旧尾事件冒领下一轮。 */
   private terminalErrorDrainGeneration: number | null = null;
   private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
@@ -523,16 +526,28 @@ export class Session {
   }
 
   /**
-   * 当前 turn generation 是否已经 fan-out 过产品终态。
-   * 只读事实：PI prompt accepted → agent_start 空窗、以及 continuation claim
-   * 挡住的 SDK done，这里都是 false。Host 回收残留 activeTurn 只能认这个，
-   * 不能靠 live idle + tracker idle 的超时猜测。
+   * 当前 turn generation 已 fan-out 的产品终态类型。
+   * none：PI prompt accepted → agent_start 空窗、continuation claim 挡住的 SDK done、
+   * 或尚无当前 generation 终态。Host 回收残留 activeTurn 必须认类型：done 才能当
+   * 成功结算，error 必须走 recovery，不能靠 live idle + tracker idle 的超时猜测。
    */
-  hasObservedTerminalForCurrentTurn(): boolean {
-    return (
-      this.turnGeneration > 0 &&
-      this.terminalEventObservedGeneration === this.turnGeneration
-    );
+  getObservedCurrentTurnTerminal(): {
+    kind: 'none' | 'done' | 'error';
+    message?: string;
+  } {
+    if (
+      this.turnGeneration <= 0 ||
+      this.terminalEventObservedGeneration !== this.turnGeneration ||
+      this.terminalEventObservedKind == null
+    ) {
+      return { kind: 'none' };
+    }
+    if (this.terminalEventObservedKind === 'error') {
+      return this.terminalEventObservedErrorMessage
+        ? { kind: 'error', message: this.terminalEventObservedErrorMessage }
+        : { kind: 'error' };
+    }
+    return { kind: 'done' };
   }
 
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
@@ -674,6 +689,8 @@ export class Session {
       this.currentTurnOrigin = handleOpts.origin ?? null;
       if (this.terminalErrorDrainGeneration === null) {
         this.terminalEventObservedGeneration = null;
+        this.terminalEventObservedKind = null;
+        this.terminalEventObservedErrorMessage = null;
       }
       previousTurnAttemptToken = this.currentTurnAttemptToken;
       this.currentTurnAttemptToken =
@@ -1968,10 +1985,20 @@ export class Session {
     const terminalBoundaryObserved = isCurrentGeneration && isTerminal;
     if (terminalBoundaryObserved) {
       this.terminalEventObservedGeneration = this.turnGeneration;
-      if (event.type === 'done') {
-        this.clearTerminalErrorDrain();
-      } else if (event.type === 'error') {
+      if (event.type === 'error') {
+        this.terminalEventObservedKind = 'error';
+        const errorMessage = (event.data as { message?: unknown } | null | undefined)?.message;
+        this.terminalEventObservedErrorMessage =
+          typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null;
         this.armTerminalErrorDrain(this.turnGeneration);
+      } else {
+        // Codex 失败收尾是 terminal error 后再补 done。同 generation 的成功尾巴
+        // 不得把已记录的 error 改写成 done，否则 Host 会把失败当成功结算。
+        if (this.terminalEventObservedKind !== 'error') {
+          this.terminalEventObservedKind = 'done';
+          this.terminalEventObservedErrorMessage = null;
+        }
+        this.clearTerminalErrorDrain();
       }
     } else if (
       this.agentKind === 'codex' &&

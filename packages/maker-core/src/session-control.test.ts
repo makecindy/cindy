@@ -541,19 +541,32 @@ describe('Session graceful-stop control state', () => {
 });
 
 describe('Session current-generation terminal observation', () => {
-  it('is false until the current generation fans out a product terminal, and resets on the next reservation', async () => {
+  it('reports done until the next reservation, and keeps error ahead of a paired done tail', async () => {
     const stub = createHandle();
     const session = createSession(stub);
-    expect(session.hasObservedTerminalForCurrentTurn()).toBe(false);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
 
     const firstDone = waitForSessionEvent(session, 'done');
     await expect(session.send('first')).resolves.toEqual({ accepted: true });
     stub.push({ type: 'done', data: {} });
     await firstDone;
-    expect(session.hasObservedTerminalForCurrentTurn()).toBe(true);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done' });
 
     const secondSend = session.send('second');
-    expect(session.hasObservedTerminalForCurrentTurn()).toBe(false);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
     await expect(secondSend).resolves.toEqual({ accepted: true });
+    const secondError = waitForSessionEvent(session, 'error');
+    stub.push({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+    await secondError;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      message: 'provider failed',
+    });
+    stub.push({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      message: 'provider failed',
+    });
   });
 });

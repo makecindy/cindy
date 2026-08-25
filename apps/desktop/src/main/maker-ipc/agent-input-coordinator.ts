@@ -279,10 +279,12 @@ export interface AgentInputCoordinatorDeps {
   /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
   getTurnGeneration?: (sessionId: string) => number | null;
   /**
-   * Live Session 是否已为当前 generation fan-out 过产品终态。
-   * undefined / false = 无此证据（含 probe 不可用、PI agent_start 空窗）。
+   * 当前 generation 已 fan-out 的产品终态类型。
+   * undefined = probe 不可用；kind=none = 无当前 generation 终态（含 PI agent_start 空窗）。
    */
-  hasObservedCurrentTurnTerminal?: (sessionId: string) => boolean | undefined;
+  getObservedCurrentTurnTerminal?: (
+    sessionId: string,
+  ) => { kind: 'none' | 'done' | 'error'; message?: string } | undefined;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
   /**
@@ -3474,23 +3476,42 @@ export class AgentInputCoordinator {
    * Do not call this while a send is in flight, a permission card is up, or
    * abort/steer already owns the boundary.
    *
-   * Leftover `activeTurn` is reclaimed only when it is already dispatched and
-   * we can prove the vendor turn is gone: the Session object is missing; the
-   * live Session is idle while the desktop tracker is still latched; or the
-   * live Session is idle, the tracker is idle, and the current generation has
-   * already observed a product-terminal event. A present Session with an idle
-   * tracker and no terminal proof may still be in the Pi gap after handle.send
-   * (reservation released, agent_start not yet observed). Pre-dispatch owners
-   * and unavailable probes stay fail-closed.
+   * Leftover `activeTurn` is reclaimed as a successful settlement only when it
+   * is already dispatched and we can prove the vendor turn ended successfully:
+   * the Session object is missing; the live Session is idle while the desktop
+   * tracker is still latched and no error terminal is known; or the current
+   * generation has already observed a product `done`. A present Session with an
+   * idle tracker and no terminal proof may still be in the Pi gap after
+   * handle.send (reservation released, agent_start not yet observed). Known
+   * error terminals never take this path. Pre-dispatch owners and unavailable
+   * probes stay fail-closed.
    */
+  private readObservedCurrentTurnTerminal(
+    sessionId: string,
+  ): { kind: 'none' | 'done' | 'error'; message?: string } | undefined {
+    return this.deps.getObservedCurrentTurnTerminal?.(sessionId);
+  }
+
   private canReclaimLeftoverActiveTurn(sessionId: string, state: SessionInputState): boolean {
     const active = state.activeTurn;
     if (!active || !isActiveTurnDispatched(active)) return false;
     const present = this.deps.isLiveSessionPresent?.(sessionId);
     if (present === false) return true;
     if (present !== true) return false;
-    if (this.deps.isTurnRunning(sessionId) === true) return true;
-    return this.deps.hasObservedCurrentTurnTerminal?.(sessionId) === true;
+    const observed = this.readObservedCurrentTurnTerminal(sessionId);
+    if (observed?.kind === 'error') return false;
+    if (observed?.kind === 'done') return true;
+    return this.deps.isTurnRunning(sessionId) === true;
+  }
+
+  private canRecoverLeftoverActiveTurnError(
+    sessionId: string,
+    state: SessionInputState,
+  ): boolean {
+    const active = state.activeTurn;
+    if (!active || !isActiveTurnDispatched(active)) return false;
+    if (this.deps.isLiveSessionPresent?.(sessionId) !== true) return false;
+    return this.readObservedCurrentTurnTerminal(sessionId)?.kind === 'error';
   }
 
   private tryReconcileStaleDispatchBoundary(
@@ -3517,11 +3538,13 @@ export class AgentInputCoordinator {
     const leftoverActiveTurn = state.activeTurn !== null;
     const trackerBusy = this.deps.isTurnRunning(sessionId);
     const reclaimLeftover = leftoverActiveTurn && this.canReclaimLeftoverActiveTurn(sessionId, state);
-    if (leftoverActiveTurn && !reclaimLeftover) {
+    const recoverLeftoverError =
+      leftoverActiveTurn && this.canRecoverLeftoverActiveTurnError(sessionId, state);
+    if (leftoverActiveTurn && !reclaimLeftover && !recoverLeftoverError) {
       state.staleLiveIdleSinceMs = null;
       return false;
     }
-    if (!trackerBusy && !reclaimLeftover) {
+    if (!trackerBusy && !reclaimLeftover && !recoverLeftoverError) {
       state.staleLiveIdleSinceMs = null;
       return false;
     }
@@ -3534,9 +3557,28 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    if (trackerBusy || reclaimLeftover) {
+    if (trackerBusy || reclaimLeftover || recoverLeftoverError) {
       const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
       if (!reconciled) return false;
+    }
+    if (recoverLeftoverError) {
+      const observed = this.readObservedCurrentTurnTerminal(sessionId);
+      const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
+      const instanceId = readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
+      log.warn('reconciling leftover dispatched activeTurn after vendor error', {
+        sessionId,
+        clientId: state.activeTurn?.item?.clientId ?? null,
+        dispatchLifecycle: state.activeTurn?.dispatchLifecycle ?? null,
+      });
+      state.staleLiveIdleSinceMs = null;
+      // Apply recovery before fencing. A same-generation meta would make
+      // onTurnEvent treat this synthesized error as the leftover we just fenced.
+      this.onTurnEvent(sessionId, 'error', observed?.message ?? 'Turn ended with an error');
+      if (typeof vendorGeneration === 'number' && instanceId) {
+        const latest = this.getState(sessionId);
+        latest.fencedStaleTerminal = { instanceId, generation: vendorGeneration };
+      }
+      return true;
     }
     if (reclaimLeftover) {
       const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
