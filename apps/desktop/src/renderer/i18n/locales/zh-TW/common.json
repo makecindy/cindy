@@ -131,6 +131,7 @@
       "chipMetrics": "用量指示器",
       "memory": "記憶",
       "subagentModels": "Subagent",
+      "auxiliaryModels": "輔助模型",
       "visionBridge": "視覺橋",
       "compaction": "上下文壓縮",
       "terminalShell": "預設終端 shell",
@@ -821,6 +822,11 @@
         "usageValue": "{{size}}({{count}} 個檔案，含快取 {{cacheSize}})",
         "statsFailed": "統計暫不可用",
         "legacyUsage": "舊版本資料(只讀，不參與清理)：{{size}}",
+        "legacyImagesLabel": "圖片快取目錄",
+        "legacyImagesDescription": "Cindy 不會自動掃描或清理此目錄。刪除檔案後，歷史訊息中的圖片可能無法顯示，請自行確認後操作。",
+        "legacyImagesOpenButton": "開啟目錄",
+        "legacyImagesDirectoryMissing": "找不到圖片快取目錄",
+        "legacyImagesOpenFailed": "無法開啟圖片快取目錄，請重試",
         "cleanupLabel": "磁碟清理",
         "cleanupDescription": "掃描沒有被任何任務引用的媒體檔案、超限快取與廢棄目錄。先報數，確認後才刪除；輸入框草稿和排隊訊息裡的圖片會被自動保護。",
         "scanButton": "掃描",
@@ -1941,6 +1947,7 @@
     },
     "betaChannel": {
       "title": "Beta 測試管道",
+      "badge": "Beta",
       "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。開啟後需重新啟動客戶端生效。",
       "toggleAria": "Beta 測試管道開關",
       "restartTitle": "重新啟動客戶端",
@@ -2542,6 +2549,31 @@
         "deferredSuffix": " — 執行中的 Codex 任務將在當前執行結束後應用"
       }
     },
+    "auxiliaryModels": {
+      "title": "輔助模型",
+      "description": "為任務自動命名與輸入框推薦指令分別指定一組 Agent 和模型。",
+      "sessionTitle": {
+        "label": "任務自動命名",
+        "description": "適用於 Claude Code、Codex、Pi 任務，以及手動 AI 重新命名。",
+        "ariaLabel": "選擇任務自動命名模型",
+        "automatic": "自動選擇（跟隨目前任務）"
+      },
+      "promptRecommendation": {
+        "label": "輸入框推薦指令",
+        "description": "僅在「小技巧」中啟用輸入框推薦後呼叫。",
+        "ariaLabel": "選擇輸入框推薦指令模型",
+        "automatic": "自動選擇（維持目前規則）"
+      },
+      "chooseAgent": "選擇 Agent",
+      "backToAgents": "返回選擇 Agent",
+      "explicitRouteHint": "明確指定後只使用該 Agent 和模型；無法使用時不會自動切換。",
+      "searchPlaceholder": "搜尋模型或供應商",
+      "noResults": "沒有可用模型",
+      "unavailable": "目前無法使用",
+      "budget": "折扣",
+      "subscription": "訂閱",
+      "saveFailed": "儲存輔助模型設定失敗"
+    },
     "compaction": {
       "title": "上下文壓縮",
       "description": "控制 Claude Code 和 Pi 何時自動壓縮上下文。此設定不影響 Codex；Codex 單獨管理上下文壓縮。",
@@ -2661,7 +2693,7 @@
     "chatEmbedding": {
       "cell": {
         "label": "啟用對話記錄語義索引",
-        "description": "新訊息嵌入到本地向量庫 (voyage-4) 供未來語義搜尋，僅本機訪問，不外傳。開啟時機起的訊息才被索引，歷史不補。"
+        "description": "新訊息和語義搜尋查詢會傳送給向量模型（voyage-4）產生向量；訊息向量儲存在本機索引中。僅索引啟用後的訊息，不會為既有對話記錄補建索引。"
       },
       "toggleAria": "切換對話記錄語義索引",
       "toast": {
@@ -3123,6 +3155,18 @@
         "enabled": "已開啟靜默加密內容重試。",
         "disabled": "已關閉靜默加密內容重試。",
         "toggleFailed": "切換靜默加密內容重試失敗"
+      }
+    },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "任務模型自動降級",
+        "description": "連線或容量故障連續發生時，先切換到同名模型的其他已連線來源，再嘗試目前 Agent 明確推薦的模型；不會切換 Agent，也不會改掉你儲存的選擇。預設關閉。"
+      },
+      "toggleAria": "切換任務模型自動降級",
+      "toast": {
+        "enabled": "已開啟任務模型自動降級。",
+        "disabled": "已關閉任務模型自動降級。",
+        "toggleFailed": "切換任務模型自動降級失敗"
       }
     },
     "remoteControl": {
@@ -4084,7 +4128,7 @@
         "updateTo": "更新到 v{{version}}",
         "updateAria": "將 {{name}} 更新到 v{{version}}",
         "createWithCindy": "使用 Cindy 建立",
-        "createPrompt": "我要建立一個 Cindy 插件。請先呼叫 ghost_forge_guide 獲取手冊目錄，先讀第 0 章「設計對齊」，再用 section 引數讀透相關章節（動手前至少讀完第 2 章卡槽總覽、沙箱紅線與打包流程三章），不要直接開始實現。先從提問開始：優先用帶選項的提問卡片，每張卡片聚焦一個關鍵決策並標註你的推薦項，把我可能不知道的設計選項主動擺出來讓我選——比如介面形態（停靠面板、插件頁內面板、對話卡片還是無介面）、$ 點名詞、啟動模式、後台能力（旁聽事件、應用內輕提示、未讀角標、確認彈窗）、是否聯網、是否需要設定頁、要不要隨包 Node 行程跑重活、要不要圖片影片等媒體能力；並逐步確認插件要解決的問題、目標使用者、互動流程、所需工具與連線、權限邊界和驗收標準。設計確認後，再按規範實現並自檢；最後呼叫 ghost_forge_pack 打包並安裝插件。",
+        "createPrompt": "我要建立一個 Cindy 插件。請先呼叫 ghost_forge_guide 獲取手冊目錄，先讀第 0 章「設計對齊」，再用 section 引數讀透相關章節（動手前至少讀完能力總覽、沙箱紅線與打包流程），不要直接開始實現。先從提問開始：優先用帶選項的提問卡片，每張卡片聚焦一個關鍵決策並標註你的推薦項，把我可能不知道的設計選項主動擺出來讓我選——比如介面形態（停靠面板、插件頁內面板、對話卡片還是無介面）、$ 點名詞、啟動模式、後台能力（旁聽事件、應用內輕提示、未讀角標、確認彈窗）、是否聯網、是否需要設定頁、要不要隨包 Node 行程跑重活、要不要圖片影片等媒體能力；並逐步確認插件要解決的問題、目標使用者、互動流程、所需工具與連線、權限邊界和驗收標準。設計確認後，再按規範實現並自檢；最後呼叫 ghost_forge_pack 校驗並產生 .cindy 產物，不要聲稱已安裝。",
         "filterAll": "全部",
         "filtersAria": "按來源篩選插件",
         "origin": {
@@ -4127,14 +4171,6 @@
         "unavailable": "插件市場暫時不可用；已安裝插件仍可正常管理和使用。",
         "authenticationRequired": "登入 Cindy 後才能檢視插件市場。",
         "notConfigured": "當前環境未配置插件市場；已安裝插件仍可正常管理和使用。",
-        "upgradeNotice": {
-          "single": "已自動更新企業插件「{{name}}」",
-          "multiple_one": "已自動更新 {{count}} 個企業插件",
-          "multiple_other": "已自動更新 {{count}} 個企業插件",
-          "singleWithPermissions": "已自動更新企業插件「{{name}}」，新增權限：{{permissions}}",
-          "multipleWithPermissions_one": "已自動更新 {{count}} 個企業插件，其中有插件新增了權限",
-          "multipleWithPermissions_other": "已自動更新 {{count}} 個企業插件，其中有插件新增了權限"
-        },
         "removalNotice": {
           "single": "插件“{{name}}”已被組織移除，本機副本與資料已清理",
           "multiple_one": "{{count}} 個插件已被組織移除，本機副本與資料已清理",
@@ -4155,10 +4191,6 @@
         "securityDescription": "安裝包會在主處理程序中校驗大小與 SHA-256，再經 Cindy 插件清單校驗後原子安裝。首次安裝完成後即自動開啟，可隨時在插件頁停用；更新會保留當前生效狀態。",
         "customSecurityDescription": "該插件來自你新增的自定義市場，未經 Cindy 服務端完整性校驗。安裝前會在主處理程序校驗插件清單；首次安裝完成後即自動開啟，可隨時在插件頁停用。",
         "noPermissions": "此插件未宣告額外能力。",
-        "installConfirmTitle": "安裝「{{name}}」？",
-        "installConfirmDescription": "安裝包將經過完整性與清單校驗。安裝完成後插件將自動開啟，你可以隨時在插件頁停用或調整配置。",
-        "customInstallConfirmDescription": "插件來自自定義市場，未經服務端完整性校驗，安裝前將校驗插件清單。安裝完成後插件將自動開啟，你可以隨時在插件頁停用或調整配置。",
-        "updateConfirmDescription": "安裝包將經過完整性與清單校驗，並替換現有版本。當前生效狀態保持不變。",
         "sources": {
           "addMarketplace": "新增插件市場…",
           "dialogTitle": "新增插件市場",
@@ -4216,7 +4248,7 @@
             "authTitle": "私有倉庫",
             "authBody": "認證完全依賴系統的 Git 配置，Cindy 不儲存任何 Git 憑證。SSH 方式：本機已配置可用的 key；若組織開啟了 SAML SSO，還需在 GitHub 的 SSH key 設定裡為該組織點 Configure SSO 授權。HTTPS 方式：使用 Personal Access Token，並由系統 credential helper 儲存。",
             "rulesTitle": "安裝規則",
-            "rulesBody": "插件 id 全域性唯一、先裝先得——與已安裝插件衝突時會明確提示。id 使用官方保留字首（{{reservedGhostIdPrefixes}}）的插件，無法透過拖入、選取檔案、ghost_forge_pack 轉交或自訂插件市場安裝。安裝前會逐項展示插件宣告的權限，確認後即完成安裝並自動開啟。",
+            "rulesBody": "插件 id 全域性唯一、先裝先得——與已安裝插件衝突時會明確提示。id 使用官方保留字首（{{reservedGhostIdPrefixes}}）的插件，無法透過拖入、選取檔案或自訂插件市場安裝。插件宣告的權限會在詳情頁展示；點擊安裝後直接完成安裝並自動開啟，不再額外彈窗確認權限。",
             "copy": "複製指南",
             "copied": "指南已複製到剪貼簿。",
             "copyFailed": "複製失敗，請重試。"
@@ -4231,13 +4263,13 @@
       "empty": "還沒有安裝任何插件",
       "emptyHint": "可從插件市場安裝，或點選右上角匯入 .cindy 檔案",
       "reapproval": {
-        "badge": "需要重新確認權限",
-        "action": "重新確認權限",
-        "actionAria": "重新確認插件「{{name}}」的權限",
-        "noticeTitle": "需要重新確認權限",
-        "bodyLegacy": "Cindy 沒有這個插件的權限確認記錄，所以先將它停用。點「重新確認權限」重新檢視它要求的權限，確認後即可繼續使用。",
-        "bodyInvalid": "這個插件的權限確認記錄已損壞，所以先將它停用。點「重新確認權限」重新檢視它要求的權限，確認後即可繼續使用。",
-        "bodyBuiltinRestart": "這個內建插件的權限記錄出了問題。重新啟動 Cindy 即可自動恢復，不需要其他操作。"
+        "badge": "需要恢復安裝",
+        "action": "重新安裝",
+        "actionAria": "重新安裝插件「{{name}}」",
+        "noticeTitle": "需要恢復安裝",
+        "bodyLegacy": "Cindy 無法驗證這個插件的完整安裝記錄，因此已暫停執行。請重新安裝原市場版本，或重新選擇對應的 .cindy 套件。",
+        "bodyInvalid": "這個插件的安裝驗證記錄已損壞，因此已暫停執行。請重新安裝原市場版本，或重新選擇對應的 .cindy 套件。",
+        "bodyBuiltinRestart": "這個內建插件的安裝驗證記錄出了問題。重新啟動 Cindy 即可自動恢復，不需要其他操作。"
       },
       "legacyRecovery": {
         "title": "舊版本插件正在等待恢復",
@@ -4303,26 +4335,11 @@
       },
       "installConfirm": {
         "title": "安裝插件「{{name}}」？",
-        "confirm": "安裝插件",
-        "cancel": "取消",
         "meta": "版本 {{version}}。將安裝到本機，可隨時解除安裝。",
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。將安裝到本機，可隨時解除安裝。",
         "manualCount": "隨包手冊 {{count}} 篇",
         "expandDescription": "展開完整介紹",
-        "collapseDescription": "收起介紹",
-        "typedIdLabel": "輸入插件 id「{{id}}」以確認安裝",
-        "agentBanner": {
-          "title": "這次安裝是 Agent 發起的，不是你點的。",
-          "context": "它在任務「{{title}}」裡打包了 {{path}} 下的插件原始碼。",
-          "contextNoPath": "它在任務「{{title}}」裡打包了一個插件原始碼目錄。",
-          "contextNoTitle": "它打包了 {{path}} 下的插件原始碼。",
-          "contextBare": "它打包了一個插件原始碼目錄。",
-          "advice": "如果你沒在這個任務裡要求做插件，請取消 —— 並回頭看看這個任務剛才讀過哪些外部內容。",
-          "firstInstall": "這個插件 id 此前從未安裝過。",
-          "hazardSkill": "它帶了技能指令，AI 會以你的全部權限執行，不受插件沙箱限制，而且對你所有專案生效。",
-          "hazardNode": "它可以在你的電腦上執行程式，不受瀏覽器沙箱限制。",
-          "hazardCredential": "它會把你在它設定頁填的憑證發給 {{hosts}}。"
-        }
+        "collapseDescription": "收起介紹"
       },
       "trust": {
         "official": "Cindy 官方插件",
@@ -4445,13 +4462,11 @@
       },
       "errors": {
         "fileInvalid": "不是合法的 .cindy 插件檔案",
-        "hostUnsupported": "這個插件需要目前版本尚未提供的 Cindy 能力。請先更新 Cindy，再重新安裝。",
+        "hostUnsupported": "目前 Cindy 無法識別此插件的清單格式。",
         "alreadyInstalled": "這個插件已經安裝",
-        "approvalRequired": "繼續前需要重新確認這個插件的權限",
         "commandConflict": "它的指令和已裝插件撞名了，先解除安裝佔用方或讓作者改名",
-        "idReserved": "{{reservedGhostIdPrefixes}} 是官方插件保留字首，無法透過拖入、選取檔案、ghost_forge_pack 轉交或自訂插件市場安裝；請從 Cindy 插件市場安裝對應的官方插件",
-        "brokerManualInstallNotAuthorized": "手動安裝的 .cindy 無法使用授權 broker；請改從組織插件市場安裝，或請作者以組織身分使用 ghost_forge_pack 建置",
-        "brokerNotAuthorized": "目前的安裝來源或組織身分無權使用授權 broker；請從組織插件市場安裝，或請作者以組織身分使用 ghost_forge_pack 建置",
+        "idReserved": "{{reservedGhostIdPrefixes}} 是官方插件保留字首，無法透過拖入、選取檔案或自訂插件市場安裝；請從 Cindy 插件市場安裝對應的官方插件",
+        "brokerManualInstallNotAuthorized": "本機安裝的 .cindy 無法使用授權 broker；請改從組織插件市場安裝",
         "brokerRedirectPortRequired": "這個插件宣告了授權 broker，但沒有在同一項 OAuth 設定中宣告 redirectPort。請讓作者補上該欄位，確保授權最後一跳能回到本機監聽連接埠。",
         "sourceMissing": "找不到所選檔案",
         "generic": "操作失敗，請稍後重試",
@@ -4611,13 +4626,6 @@
         "bindAfterInstallFailed": "自訂儲存位置設定失敗，已回退預設位置",
         "cancel": "取消"
       },
-      "reapproveConfirm": {
-        "title": "重新確認「{{name}}」的權限？",
-        "body": "按下方清單重新授權這個已安裝的插件，不需要重新提供安裝包檔案。",
-        "confirm": "確認並恢復",
-        "enableNoticeEnabled": "確認後保持目前啟用狀態。",
-        "enableNoticeAsleep": "確認後保持沉睡（不自動啟用）；你可以稍後在這裡手動啟用。"
-      },
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。將替換現有版本；生效狀態與面板位置保持不變。",
@@ -4642,7 +4650,7 @@
       "updateAll": {
         "title": "全部更新 · {{count}} 個插件",
         "collapseDiff": "收起",
-        "description": "權限無變化的更新會自動完成；涉及權限變更的需要你逐項確認。",
+        "description": "更新通常會靜默完成；這裡用於重試因忙碌跳過或執行失敗的更新。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排隊中",
         "statusInstalling": "更新中…",
@@ -5462,6 +5470,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "切換側邊欄",
+    "exitFullscreen": "退出全螢幕",
     "collapseSidebar": "收起側邊欄",
     "expandSidebar": "展開側邊欄",
     "collapsePanel": "收起",
@@ -6359,6 +6368,7 @@
     },
     "user": {
       "settingsLink": "設定，當前使用者：{{name}}",
+      "settingsLinkBeta": "設定，當前使用者：{{name}}，Beta 測試管道已開啟",
       "canaryBadge": "灰度使用者",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -6380,7 +6390,7 @@
       "myDevices": "我的裝置",
       "deviceOffline": "離線",
       "allowControl": "允許同帳號裝置控制本機",
-      "deviceId": "本機 · {{id}}",
+      "deviceName": "本機 · {{name}}",
       "remoteAction": {
         "checking": "正在檢查…",
         "unavailable": "暫不可用",
@@ -7345,6 +7355,11 @@
       "continueTitle": "從中斷處繼續完成任務（不會重複已完成的步驟）",
       "dismissTitle": "關閉此中斷提示"
     },
+    "unreadFailedScheduleBanner": {
+      "text": "這次定時任務沒有完成。",
+      "markAsRead": "標為已讀",
+      "markAsReadTitle": "清除這條失敗未讀"
+    },
     "worktreeRestoreBanner": {
       "text": "該任務的 worktree 已被回收（目錄不存在）。",
       "textPendingSnapshot": "該任務有一份未應用的更改快照。",
@@ -8280,6 +8295,7 @@
         "menu": {
           "runNow": "立即執行",
           "more": "更多操作",
+          "markAllAsRead": "標為已讀",
           "edit": "編輯",
           "pause": "暫停",
           "resume": "恢復",
@@ -10647,6 +10663,11 @@
       "count": "{{count}} 筆",
       "incomplete": "訂單記錄較多，當前僅顯示最近的 {{count}} 筆。",
       "orderId": "NO. {{id}}",
+      "copy": {
+        "action": "複製訂單 ID {{id}}",
+        "success": "訂單 ID 已複製",
+        "failed": "複製訂單 ID 失敗，請再試一次"
+      },
       "states": {
         "completed": "已完成",
         "awaitingPayment": "待支付",

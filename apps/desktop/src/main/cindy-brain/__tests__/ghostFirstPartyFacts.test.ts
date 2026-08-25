@@ -301,14 +301,12 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     expect(authorizeGhostTokenBroker('acme-tool', installLoad('b'.repeat(64)))).toBe(false);
   });
 
-  it('treats a missing receipt as manual so builtin official plugins stay unchanged', () => {
+  it('keeps builtin official plugins unchanged without receipt-origin facts', () => {
     const loaded = loader({
       readInstalledBuiltin: (ghostId) => ghostId === 'xd-feishu',
-      readInstallOrigin: () => 'manual',
     }).load('xd-feishu', 'runtime', PERSONAL);
     expect(loaded.kind).toBe('ready');
     if (loaded.kind !== 'ready') return;
-    expect(loaded.facts.installOrigin).toBe('manual');
     expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
       brokerEligible: true,
       hostPrimitiveEligible: true,
@@ -316,23 +314,23 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     });
   });
 
-  it('copies installOrigin from the receipt reader and treats a read failure as manual', () => {
+  it('copies only the legacy Forge origin and fails closed when it cannot be read', () => {
     const forged = loader({
       readInstallOrigin: () => 'agent-forge',
       lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
-    }).load('acme-feishu', 'runtime', ORG_A);
+    }).load('acme-tool', 'runtime', ORG_A);
     expect(forged).toMatchObject({
       kind: 'ready',
       facts: { installOrigin: 'agent-forge' },
     });
 
-    const unread = loader({
+    const unreadable = loader({
       readInstallOrigin: () => {
         throw new Error('EACCES');
       },
       lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
-    }).load('acme-feishu', 'runtime', ORG_A);
-    expect(unread).toMatchObject({
+    }).load('acme-tool', 'runtime', ORG_A);
+    expect(unreadable).toMatchObject({
       kind: 'ready',
       facts: { installOrigin: 'manual' },
     });

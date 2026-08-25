@@ -105,7 +105,8 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect((source.match(
       /publishPresenceAvailabilityMutation\(deviceId, \(availabilityByDevice\) =>/g,
     ) ?? [])).toHaveLength(5);
-    expect(source).toContain('setConnectionEpoch((n) => n + 1);');
+    expect(source).toContain('connectionEpochRef.current = ++nextDeviceLinkConnectionEpoch;');
+    expect(source).toContain('setConnectionEpoch(connectionEpochRef.current);');
     expect(source).toContain('setPresenceVersion((n) => n + 1);\n      const presence = updatePresenceAvailability(');
   });
 
@@ -274,6 +275,18 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(syncCatch).toContain('latchOutboxTransportHold(formatted);');
     expect(syncCatch).not.toContain('? null : current');
     expect(source).toContain('error={connectionRecoveryError}');
+  });
+
+  it('separates the interrupted metadata fence from the full read-ack sync gate', () => {
+    const source = readSource(SCREEN);
+
+    expect(source).toContain('const [sessionMetadataSyncedKey, setSessionMetadataSyncedKey]');
+    expect(source).toContain('const fetchSessionMetadata = () => runConnectionScopedSessionMetadataRead(');
+    expect(source).toContain('setSessionMetadataSyncedKey(`${sessionId}:${readAckEpochAtStart}`);');
+    expect(source).toContain(
+      'sessionMetadataSyncedForConnection: sessionMetadataSyncedKey === `${sessionId}:${connectionEpoch}`',
+    );
+    expect(source).toContain('setReadAckSyncedKey(`${sessionId}:${readAckEpochAtStart}`);');
   });
 
   it('fences every pre-outbox await against an in-place session switch', () => {

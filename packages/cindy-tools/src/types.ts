@@ -245,10 +245,27 @@ export type CindyForgePackResult =
       version: string;
       /** 仅 intent=publish 返回；一次性、不可解析的 Host 发布票据。 */
       publishToken?: string;
-      /** 下一步说明：install 等用户确认，publish 提示消费一次性票据。 */
+      /** 打包结果说明；成功仅表示产物已生成，不表示已经安装。 */
       note: string;
     }
   | { ok: false; errorCode: CindyForgePackErrorCode; message: string };
+
+/** ghost_forge_install 会先走 Forge 打包校验，再复用 Host 的本地安装/更新事务。 */
+export type CindyForgeInstallResult =
+  | {
+      ok: true;
+      action: 'installed' | 'updated';
+      id: string;
+      name: string;
+      version: string;
+      enabled: boolean;
+      note: string;
+    }
+  | {
+      ok: false;
+      errorCode: CindyForgePackErrorCode | (string & {});
+      message: string;
+    };
 
 /** ghost_forge_publish 立即返回时的失败分类。传输开始后的失败走 status.errorCode。 */
 export type CindyForgePublishErrorCode =
@@ -431,18 +448,23 @@ export interface CindyGhostsMcpDeps {
     description?: string;
   }): Promise<CindyForgeScaffoldResult>;
   /**
-   * 把一个源码目录校验 + 打包成 .cindy。缺省弹出与拖入/双击完全相同的
-   * 装入确认框；publish 意图只签发一次性发布票据，不触发装入。
+   * 把一个源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件；
+   * publish 意图额外签发一次性发布票据。
    */
   forgePack(request: {
     dir: string;
-    intent?: 'install' | 'publish';
+    intent?: 'publish';
     /**
      * 用户明确选择 AI 图标后，由图片工具返回的 cindy-media 地址。Host
      * best-effort 把它嵌入包内；失败保留源码里的默认图标，不阻塞打包。
      */
     iconSource?: string;
   }): Promise<CindyForgePackResult>;
+  /**
+   * 重新校验并打包源码目录，然后把这次产生的确切包安装或原位更新。
+   * 只有显式调用本工具才安装；forgePack 本身始终保持纯打包。
+   */
+  forgeInstall(request: { dir: string; iconSource?: string }): Promise<CindyForgeInstallResult>;
   /**
    * 消费 forgePack(intent=publish) 签发的一次性票据，把该次打包的确切字节
    * 提交到当前组织发布。立即返回 transferId / uploadId,传输在后台跑。

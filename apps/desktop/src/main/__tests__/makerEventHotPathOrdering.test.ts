@@ -205,7 +205,7 @@ describe('maker:event hot path ordering', () => {
     ).toBeGreaterThan(liveIdleStart);
     expectOrder(
       reconcileSource,
-      'flushAssistantBlock(sessionId, null);',
+      'sealAssistantBlockForLateFinal(sessionId, null);',
       'consumeLastAssistantPersistId(sessionId);',
     );
     expectOrder(
@@ -534,7 +534,10 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
     expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
     expect(closedBlock).toContain(
-      'const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(',
+      'shouldPreserveCodexReconnectStalledAutoResume(session, closeReason)',
+    );
+    expect(closedBlock).toContain(
+      'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain('if (preserveAutoResumeIntent) {');
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
@@ -758,7 +761,7 @@ describe('maker:event hot path ordering', () => {
     expect(reconcileSource).toContain('if (!liveSessionIdle) return false;');
     expect(reconcileSource).not.toContain('if (!trackerStale && !hadZombieInteraction) return false;');
     expect(reconcileSource).toContain('confirmed live session idle during turn-boundary reconciliation');
-    expectOrder(reconcileSource, 'flushAssistantBlock(sessionId, null);', 'consumeLastAssistantPersistId(sessionId);');
+    expectOrder(reconcileSource, 'sealAssistantBlockForLateFinal(sessionId, null);', 'consumeLastAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastAssistantPersistId(sessionId);', 'consumeLastTopLevelAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastTopLevelAssistantPersistId(sessionId);', 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)');
     expectOrder(reconcileSource, 'sealLostTerminalPersistState(sessionId);', 'sessionTurnActivityTracker.deleteSession(sessionId);');

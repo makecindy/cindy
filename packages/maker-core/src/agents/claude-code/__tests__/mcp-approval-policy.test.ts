@@ -959,6 +959,32 @@ describe('a custom server cannot take over a builtin name', () => {
     await handle.close();
   });
 
+  it('keeps Claude on direct per-server MCP registration instead of the Pi gateway', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+
+    const agent = new ClaudeCodeAgent(createDeps(() => 'prompt', [
+      'cindy_browser',
+      'cindy_contacts',
+    ]));
+    const handle = await agent.startSession({
+      sessionId: 'session-direct-mcp-contract',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, unknown>
+      | undefined;
+    expect(Object.keys(mcpServers ?? {}).sort()).toEqual(['cindy_browser', 'cindy_contacts']);
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_list_tools');
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_call_tool');
+    await handle.close();
+  });
+
   it('treats an unsafe object-key server name as an ordinary key', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -1377,6 +1403,13 @@ describe('remote sessions share the same permission semantics', () => {
         denialMessage:
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
       },
+      {
+        toolNamePrefix: 'AskUserQuestion',
+        sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
     ]);
     await expect(
       natural.onApprovalRequest({
@@ -1486,7 +1519,7 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       remote.onApprovalRequest({
         requestId: 'r-user-mcp-collision',
@@ -1568,7 +1601,7 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       failed.onApprovalRequest({
         requestId: 'r-failed-settings-mcp-collision',

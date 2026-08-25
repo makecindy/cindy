@@ -17,8 +17,7 @@
  *   [node, entryPath, ...args],让 Maker 这类库以为自己被 node 正常启动。
  *
  * 插件代码拥有当前系统用户级本机权限。这里提供的是进程隔离与通信收口,不是
- * OS 沙箱;授权入口是装入确认卡的权限清单(2026-07-24 起不再有 Main 原生
- * 二次确认弹窗)。
+ * OS 沙箱；能力在插件详情中披露，运行期由 Main 按 manifest 严格守门。
  */
 
 import { EventEmitter } from 'node:events';

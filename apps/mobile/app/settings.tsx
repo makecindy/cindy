@@ -32,6 +32,7 @@ import {
   subscribeAnalyticsConsent,
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
+import { hasPrivacyConsent } from '@/update/updateConsentGate';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -146,6 +147,7 @@ export default function SettingsScreen() {
   // beta 测试渠道(设备级)开关。真相在 betaChannelStore;hydrate 完成前禁用,避免对陈旧值取反。
   const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
   const [betaBusy, setBetaBusy] = useState(false);
+  const showBetaBadge = betaReady && betaEnabled;
   const updateCheckInFlightRef = useRef(false);
   // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。
   const [dictionaryScreenOpen, setDictionaryScreenOpen] = useState(false);
@@ -323,6 +325,10 @@ export default function SettingsScreen() {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
+        // OTA 检查会携带 eas-client-id,须经隐私同意闸门(企业 SSO 豁免协议门,可能未
+        // 同意;且检查进行中登出会撤销同意)。整包 /latest 为匿名请求,不在此列。动态
+        // 判定而非调用瞬间快照,manifest 请求前与资源下载前各问一次。
+        isConsented: hasPrivacyConsent,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
@@ -853,7 +859,14 @@ export default function SettingsScreen() {
             <View key="version" style={styles.versionRow} testID="settings.version">
               <View style={styles.versionTexts}>
                 <Text style={styles.rowLabel}>{t('settings.version.currentLabel')}</Text>
-                <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
+                <View style={styles.versionValueRow}>
+                  <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
+                  {showBetaBadge ? (
+                    <View style={styles.betaChannelBadge} testID="settings.betaChannelBadge">
+                      <Text style={styles.betaChannelBadgeText}>{t('settings.betaChannel.badge')}</Text>
+                    </View>
+                  ) : null}
+                </View>
                 <Text style={styles.rowDetail} numberOfLines={1} testID="settings.otaVersion">{t('settings.version.otaVersion', { version: otaVersion })}</Text>
                 {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x),不是在线电脑的实时版本;仅自建线且已注入时显示 */}
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
@@ -1614,7 +1627,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   versionTexts: { flex: 1, gap: 2, minWidth: 0 },
-  versionValue: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  versionValueRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  versionValue: { color: colors.textPrimary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  betaChannelBadge: {
+    backgroundColor: colors.betaChannelBadgeBackground,
+    borderRadius: radius.pill,
+    flexShrink: 0,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 1,
+  },
+  betaChannelBadgeText: {
+    color: colors.betaChannelBadgeForeground,
+    fontSize: typeScale.micro,
+    fontWeight: fontWeight.semibold,
+  },
   versionButton: { flexShrink: 0, minWidth: 84 },
   // —— 可复制行 ——
   copyRow: {

@@ -3480,8 +3480,10 @@ export async function refresh(): Promise<boolean> {
         // otherwise renderer state could still show account A while API calls use B.
         persistedRefreshTokenNeedsIdentityCheck = true;
         const previousUserId = currentUser?.id ?? null;
+        const previousMembershipKind = currentUser?.membershipKind ?? null;
         const nextUser = mergeMembershipWithExisting(data.membership, currentUser);
         const accountSwitched = previousUserId !== null && previousUserId !== nextUser.id;
+        const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;
         if (accountSwitched) {
           log.warn(
             `runtime replacement refresh switched authenticated user from ${previousUserId} to ${nextUser.id}; reconciling auth state`,
@@ -3544,13 +3546,15 @@ export async function refresh(): Promise<boolean> {
         });
         scheduleRefresh(data.accessToken);
         notifyRenderer();
-        if (previousUserId !== nextUser.id || authRealmChanged) {
+        if (previousUserId !== nextUser.id || authRealmChanged || membershipKindChanged) {
           notifyAuthListeners();
         }
         return true;
       }
 
+      const previousMembershipKind = currentUser?.membershipKind ?? null;
       const nextUser = mergeMembershipWithExisting(data.membership, currentUser);
+      const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;
       await withCloudOwnerCommit({
         previousOwnerId: getActiveAppSession().dataOwnerId,
         nextOwnerId: nextUser.id,
@@ -3576,7 +3580,7 @@ export async function refresh(): Promise<boolean> {
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
       notifyRenderer();
-      if (authRealmChanged) {
+      if (authRealmChanged || membershipKindChanged) {
         notifyAuthListeners();
       }
       return true;

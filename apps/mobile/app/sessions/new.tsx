@@ -130,6 +130,7 @@ import {
   resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
+import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   detectComposerTrigger,
   filterAtResources,
@@ -497,6 +498,7 @@ export default function NewRemoteSessionScreen() {
   // Context 面板(+ 号弹出的可拖动 sheet):open + 子视图(主视图 / 截图列表 / 目标草稿)。
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
   const [contextSheetView, setContextSheetView] = useState<'main' | 'screenshots' | 'goal'>('main');
+  const contextSheetMediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
   // 目标模式(对齐桌面 NewMakerDraftRoute.handleCreateGoal):填完表单直接建会话 + setGoal,
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
   const [goalBusy, setGoalBusy] = useState(false);
@@ -3830,10 +3832,12 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     if (!contextSheetOpen) setPendingMediaAssets([]);
   }, [contextSheetOpen]);
-  // 进页面就静默预取最近照片(仅已授权时),打开 + 面板即刻出图。
+  // iOS 进页面就静默预取最近照片(仅已授权时),打开 + 面板即刻出图;Android 统一走系统选择器。
   useEffect(() => {
-    void prefetchContextSheetMediaAssets('recent');
-  }, []);
+    if (contextSheetMediaLibraryEnabled) {
+      void prefetchContextSheetMediaAssets('recent');
+    }
+  }, [contextSheetMediaLibraryEnabled]);
 
   // Context 面板「计划模式」入口,双路径(#494 迁移):
   //  - 新协议(capabilities.planMode.supported):本地布尔草稿态,创建会话后经
@@ -5755,15 +5759,17 @@ export default function NewRemoteSessionScreen() {
       >
         {contextSheetView === 'main' ? (
           <>
-            <RecentPhotosStrip
-              busyAssetIds={uploadingMediaAssetIds}
-              disabled={creating}
-              enabled={contextSheetOpen}
-              onToggleAsset={toggleMediaAssetAttachment}
-              pendingOrder={pendingMediaOrder}
-              selectedAssetIds={selectedMediaAssetIds}
-              testID="newSession.contextSheetPhotos"
-            />
+            {contextSheetMediaLibraryEnabled ? (
+              <RecentPhotosStrip
+                busyAssetIds={uploadingMediaAssetIds}
+                disabled={creating}
+                enabled={contextSheetOpen}
+                onToggleAsset={toggleMediaAssetAttachment}
+                pendingOrder={pendingMediaOrder}
+                selectedAssetIds={selectedMediaAssetIds}
+                testID="newSession.contextSheetPhotos"
+              />
+            ) : null}
             <ContextSheetGroup label={t('session.common.groupMode')}>
               {planModeSupported ? (
                 // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
@@ -5796,14 +5802,16 @@ export default function NewRemoteSessionScreen() {
                 onPress={() => void addLocalImageAttachments('library')}
                 testID="newSession.contextSheetPhotoRow"
               />
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.screenshot')}
-                onPress={() => setContextSheetView('screenshots')}
-                testID="newSession.contextSheetScreenshotsRow"
-                trailing="chevron"
-              />
+              {contextSheetMediaLibraryEnabled ? (
+                <ContextSheetRow
+                  disabled={creating}
+                  icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.common.screenshot')}
+                  onPress={() => setContextSheetView('screenshots')}
+                  testID="newSession.contextSheetScreenshotsRow"
+                  trailing="chevron"
+                />
+              ) : null}
               <ContextSheetRow
                 disabled={creating}
                 icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
@@ -5825,7 +5833,7 @@ export default function NewRemoteSessionScreen() {
               </Text>
             ) : null}
           </>
-        ) : contextSheetView === 'screenshots' ? (
+        ) : contextSheetView === 'screenshots' && contextSheetMediaLibraryEnabled ? (
           <ScreenshotsGrid
             busyAssetIds={uploadingMediaAssetIds}
             contentWidth={windowDimensions.width - 40}

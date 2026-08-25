@@ -97,7 +97,6 @@ function ghost(id: string, opts: { enabled?: boolean; position?: 'left' | 'tab' 
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['panel'],
     panel: {
       html: 'panel.html',
       ...(opts.position !== undefined ? { position: opts.position } : {}),

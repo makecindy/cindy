@@ -258,8 +258,15 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
-    expect(refreshBody).toContain('previousUserId !== nextUser.id || authRealmChanged');
-    expect(refreshBody).toContain('if (authRealmChanged) {\n        notifyAuthListeners();');
+    expect(refreshBody).toContain(
+      'const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;',
+    );
+    expect(refreshBody).toContain(
+      'previousUserId !== nextUser.id || authRealmChanged || membershipKindChanged',
+    );
+    expect(refreshBody).toContain(
+      'if (authRealmChanged || membershipKindChanged) {\n        notifyAuthListeners();',
+    );
 
     expect(deviceLinkSource).toContain('restartDeviceLinkForAuthRealmChange();');
     expect(deviceLinkSource).toContain('void stopArbitrationAndTeardown()');

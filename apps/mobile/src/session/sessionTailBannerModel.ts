@@ -64,6 +64,8 @@ export interface ResolveSessionTailBannerInput {
    * (review P1 第五轮收敛,model 不再自己扫队列)。
    */
   continuationInFlight: boolean;
+  /** 当前任务元数据已在本 relay 连接代完成权威同步。只门控双时间戳中断推断。 */
+  sessionMetadataSyncedForConnection: boolean;
   /** interrupted 已被本视图操作过(继续/忽略)或本窗口内会话跑起来过 → 熄灭。 */
   interruptAcked: boolean;
   /**
@@ -104,6 +106,10 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
   // 历史中断行优先;无 error-tail 才轮到 session 双时间戳判定(对齐桌面互斥渲染)。
   if (tail) return null;
 
+  // 连接恢复或首次打开时，store 可能先呈现上一代的 activeTurnStartedAt / lastTurnEndedAt。
+  // 在本代 session 元数据完成同步前，这两个时间戳不能证明任务真的中断；持久 error-tail
+  // 已在上面独立处理，不受此门影响。
+  if (!input.sessionMetadataSyncedForConnection) return null;
   if (input.interruptAcked || !input.session) return null;
   const started = input.session.activeTurnStartedAt ?? null;
   if (!started) return null;

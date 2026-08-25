@@ -90,8 +90,8 @@ interface GhostPluginDetailViewProps {
   /** 头部更新 CTA:市场有新版本时走市场更新确认流。 */
   onUpdate: () => void;
   /**
-   * 缺少批准状态时的恢复入口(重新走一次完整权限确认)。可选:仅插件页宿主注入;
-   * 未注入时按钮不出现,门控见下方 `needsReapproval && !detail.builtin && onReapprove`。
+   * 安装记录缺失或损坏时的恢复入口。可选:仅插件页宿主注入；未注入时按钮不出现，
+   * 门控见下方 `needsReapproval && !detail.builtin && onReapprove`。
    */
   onReapprove?: () => void;
   /** ⋮ 菜单的兜底路径:从本地 .cindy 文件更新。 */
@@ -179,8 +179,8 @@ export function GhostPluginDetailView({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
-  // 未批准的安装不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
-  // 看起来只是"被关掉了"),再喂既有 primaryAction/primaryEnabled。
+  // 安装记录不完整时不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
+  // 看起来只是"被关掉了"),再喂 main 改版的 primaryAction/primaryEnabled。
   const needsReapproval = detail.approvalState !== 'approved';
   const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
   const primaryAction = ghostPrimaryAction(detail);
@@ -355,12 +355,13 @@ export function GhostPluginDetailView({
               {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
               <button
                 type="button"
+                role="switch"
                 onClick={() => {
                   // 未批准的安装不可切换启用(点了 Main 也会拒);与 updateBusy 同级门控。
                   if (!toggleDisabled && !needsReapproval) onToggle(!enabled);
                 }}
                 disabled={toggleDisabled || needsReapproval}
-                aria-pressed={enabled}
+                aria-checked={enabled}
                 aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
                 className={cn(
                   'flex shrink-0 items-center gap-2 rounded-full py-1 pl-3 pr-1 transition-colors duration-150',
@@ -380,13 +381,24 @@ export function GhostPluginDetailView({
                       : 'settings.ghosts.detail.disabledLabel',
                   )}
                 </span>
-                <Switch
-                  checked={enabled}
-                  disabled={toggleDisabled || needsReapproval}
+                <span
                   aria-hidden="true"
-                  tabIndex={-1}
-                  className="pointer-events-none"
-                />
+                  className={cn(
+                    'inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors',
+                    enabled
+                      ? 'bg-[var(--switch-track-on)]'
+                      : 'bg-[var(--switch-track-off)]',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'block h-4 w-4 rounded-full ring-0 transition-transform',
+                      enabled
+                        ? 'translate-x-4 bg-background'
+                        : 'translate-x-0 bg-[var(--switch-thumb-off)]',
+                    )}
+                  />
+                </span>
               </button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -567,7 +579,7 @@ export function GhostPluginDetailView({
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
 
-        <GhostLibrarySection ghostId={detail.id} slots={ghost?.manifest.slots ?? []} />
+        <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} />
 
         <DetailsSection detail={detail} panelStatus={panelStatus} />
       </article>

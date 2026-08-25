@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 
 import type { PluginScope } from '@cindy/plugin-protocol';
+import { ghostManifestToLegacyV2DigestFormat } from '../../shared/ghost.js';
 import {
   atomicWriteFileSync,
   readAtomicFileSync,
@@ -56,7 +57,10 @@ function canonicalJson(value: unknown): string {
 
 /** manifest 的稳定摘要:语义相同的 manifest 无论键序/来源如何,摘要一致。 */
 export function ghostManifestDigest(manifest: unknown): string {
-  return crypto.createHash('sha256').update(canonicalJson(manifest)).digest('hex');
+  return crypto
+    .createHash('sha256')
+    .update(canonicalJson(ghostManifestToLegacyV2DigestFormat(manifest)))
+    .digest('hex');
 }
 
 interface PluginMarketLedgerData {

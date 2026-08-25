@@ -5,7 +5,7 @@
  * ipcMain.handle 适配,测试用内存 harness 直接调 handler body。
  *
  * 交互契约(一律先报数后动手):
- *   - stats:占用总览(账面统计 + 历史兼容层只读占用 + 死目录);
+ *   - stats:占用总览(账面统计 + 死目录；不在设置页挂载时遍历历史图片目录);
  *   - scan:清理预检——renderer 随参带草稿附件 URL(§4 暂存区 (1)),这里
  *     叠加内存队列 (2) 与崩溃快照 (3) 组成活引用集,产出各类可清理项报数;
  *   - cleanup:执行清理——只认 scan 返回并经用户确认的指纹/目录清单,执行
@@ -41,6 +41,8 @@ export interface StorageIpcDeps {
   db?: ledger.LedgerDb;
   /** 测试注入死目录根;生产缺省 userData/cc-agent。 */
   legacyRootDir?: string;
+  /** Fixed-purpose directory opener. It returns false when the legacy directory is absent. */
+  openLegacyImagesDir?: () => Promise<boolean>;
 }
 
 export interface StorageStatsResult {
@@ -127,14 +129,29 @@ async function collectLive(deps: StorageIpcDeps, draftUrls: string[]): Promise<S
 
 export function createStorageIpcHandlers(deps: StorageIpcDeps) {
   return {
+    async openLegacyImagesDir(): Promise<{ opened: boolean }> {
+      if (!deps.openLegacyImagesDir) {
+        throwIpcError('INTERNAL', 'legacy image directory opener is unavailable');
+      }
+      try {
+        return { opened: await deps.openLegacyImagesDir() };
+      } catch (err) {
+        log.warn('open legacy image directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to open legacy image directory');
+      }
+    },
+
     async stats(): Promise<StorageStatsResult> {
       try {
-        const [blobs, legacy, deadDirs] = await Promise.all([
+        const [blobs, deadDirs] = await Promise.all([
           ledger.getStorageStats(deps.db),
-          legacyDeadDirs.getLegacyRootUsage(deps.legacyRootDir),
           legacyDeadDirs.scanDeadDirs(deps.legacyRootDir),
         ]);
-        return { success: true, blobs, legacy, deadDirs };
+        // The legacy root can contain many image sidecars. Do not walk it when the
+        // settings page mounts; users manage that fixed directory outside Cindy.
+        return { success: true, blobs, legacy: { bytes: 0, fileCount: 0 }, deadDirs };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn('storage stats failed', { error: message });

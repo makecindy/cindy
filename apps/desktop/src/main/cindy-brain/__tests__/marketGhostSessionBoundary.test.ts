@@ -14,6 +14,70 @@ describe('market Ghost session boundary', () => {
     resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const marketServiceSource = readFileSync(
+    resolve(process.cwd(), 'src/main/plugin-market/service.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  it('keeps automatic custom updates bound to the owner captured by synchronization', () => {
+    const installStart = marketServiceSource.indexOf('  private async customInstall(');
+    const installEnd = marketServiceSource.indexOf(
+      '\n  private async installDetail(',
+      installStart,
+    );
+    const installBody = marketServiceSource.slice(installStart, installEnd);
+    const automaticStart = marketServiceSource.indexOf('  private async applyAutomaticUpgrades(');
+    const automaticEnd = marketServiceSource.indexOf(
+      '\n  private localInstallSnapshot(',
+      automaticStart,
+    );
+    const automaticBody = marketServiceSource.slice(automaticStart, automaticEnd);
+
+    expect(installBody).toContain('owner = captureMarketOwner(),');
+    expect(installBody).toContain('const ledger = this.ledgerForOwner(owner);');
+    expect(installBody).toContain('const manager = this.sourceManagerForOwner(owner);');
+    expect(installBody).toContain('requireSameMarketOwner(owner);');
+    expect(installBody).toContain(
+      'beforePackagePlacement: () => {\n            requireSameMarketOwner(owner);',
+    );
+    expect(installBody).toContain(
+      'afterCommit: async (_installed, packagedManifest) => {',
+    );
+    const afterCommitStart = installBody.indexOf(
+      'afterCommit: async (_installed, packagedManifest) => {',
+    );
+    const afterCommitEnd = installBody.indexOf('\n          },\n        }).catch', afterCommitStart);
+    const afterCommitBody = installBody.slice(afterCommitStart, afterCommitEnd);
+    expect(afterCommitBody).toContain('this.withCapturedLedgerMutation(ledger, () => {');
+    expect(afterCommitBody).not.toContain('requireSameMarketOwner(');
+    expect(automaticBody).toContain('          true,\n          owner,\n        );');
+  });
+
+  it('keeps package placement and market ledger commit in the same owner lease', () => {
+    const installStart = source.indexOf(
+      'async function installOrUpdateMarketGhostPackageLocked(',
+    );
+    const installEnd = source.indexOf('\n}\n\ntype GhostUninstallLedgerCompletion', installStart);
+    const installBody = source.slice(installStart, installEnd);
+    const firstAfterCommit = installBody.indexOf(
+      'await expected.afterCommitInLock?.(installedGhost);',
+    );
+    const updateAfterCommit = installBody.indexOf(
+      'await expected.afterCommitInLock?.(result.ghost);',
+    );
+    const release = installBody.indexOf('releaseMutation?.();');
+
+    expect(firstAfterCommit).toBeGreaterThan(-1);
+    expect(updateAfterCommit).toBeGreaterThan(firstAfterCommit);
+    expect(release).toBeGreaterThan(updateAfterCommit);
+    const serverCommitStart = marketServiceSource.indexOf(
+      'afterCommitInLock: async (committed) => {',
+    );
+    const serverCommitEnd = marketServiceSource.indexOf('\n        },\n      }).catch', serverCommitStart);
+    const serverCommitBody = marketServiceSource.slice(serverCommitStart, serverCommitEnd);
+    expect(serverCommitBody).toContain('this.withCapturedLedgerMutation(ledger, () => {');
+    expect(serverCommitBody).not.toContain('requireSameMarketOwner(');
+  });
 
   it('requires the pre-approval session generation when acquiring the mutation lease', () => {
     const captureStart = source.indexOf(
@@ -81,51 +145,59 @@ describe('market Ghost session boundary', () => {
       "ipcMain.handle('ghosts:pick-file'",
       updateStart,
     );
-    const body = source.slice(updateStart, updateEnd);
+    const updateBody = source.slice(updateStart, updateEnd);
+    const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
+    const helperEnd = source.indexOf(
+      '\n}\n\n/**\n * Forge 的显式安装入口。',
+      helperStart,
+    );
+    const helperBody = source.slice(helperStart, helperEnd);
 
-    const ledgerReadIndex = body.indexOf(
+    const ledgerReadIndex = helperBody.indexOf(
       'marketLedger.installationForGhost(inspected.manifest.id)',
     );
-    const captureIndex = body.indexOf('const mutationOwner = captureGhostMutationOwner();');
-    const ledgerBindIndex = body.indexOf('const marketLedger = getPluginMarketLedger().bind(');
-    const inspectIndex = body.indexOf('await manager.inspect(lizFilePath)');
-    const leaseIndex = body.indexOf('const releaseMutation = beginGhostMutation(mutationOwner);');
-    const detachDecisionIndex = body.indexOf(
+    const captureIndex = updateBody.indexOf('const mutationOwner = captureGhostMutationOwner();');
+    const inspectIndex = updateBody.indexOf('await manager.inspect(lizFilePath)');
+    const leaseIndex = updateBody.indexOf('const releaseMutation = beginGhostMutation(mutationOwner);');
+    const helperCallIndex = updateBody.indexOf('updateLocalGhostPackageLocked(');
+    const ledgerBindIndex = helperBody.indexOf('const marketLedger = getPluginMarketLedger().bind(');
+    const detachDecisionIndex = helperBody.indexOf(
       'const detachMarketRecord = Boolean(marketRecord?.installed)',
     );
-    const runtimeStopIndex = body.indexOf('runtime.stop(inspected.manifest.id)');
-    const stopAndWaitIndex = body.indexOf(
+    const runtimeStopIndex = helperBody.indexOf('runtime.stop(inspected.manifest.id)');
+    const stopAndWaitIndex = helperBody.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
     );
-    const oauthLockIndex = body.indexOf(
+    const oauthLockIndex = helperBody.indexOf(
       'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
     );
-    const managerUpdateIndex = body.indexOf('manager.update(lizFilePath,');
-    const detachIndex = body.indexOf(
+    const managerUpdateIndex = helperBody.indexOf('manager.update(cindyFilePath,');
+    const detachIndex = helperBody.indexOf(
       'marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject)',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
-    expect(ledgerBindIndex).toBeGreaterThan(captureIndex);
-    expect(ledgerBindIndex).toBeLessThan(inspectIndex);
+    expect(captureIndex).toBeLessThan(inspectIndex);
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
-    expect(ledgerReadIndex).toBeGreaterThan(leaseIndex);
+    expect(helperCallIndex).toBeGreaterThan(leaseIndex);
+    expect(ledgerBindIndex).toBeGreaterThan(-1);
+    expect(runtimeStopIndex).toBeGreaterThan(ledgerBindIndex);
+    expect(ledgerReadIndex).toBeGreaterThan(stopAndWaitIndex);
     expect(detachDecisionIndex).toBeGreaterThan(ledgerReadIndex);
-    expect(runtimeStopIndex).toBeGreaterThan(leaseIndex);
     expect(stopAndWaitIndex).toBeGreaterThan(runtimeStopIndex);
     // 只有确认旧进程退出，才切断旧市场的自动更新路由；等待失败时保留原路由，
     // 也不会尝试恢复第二份 resident 进程。
     expect(detachIndex).toBeGreaterThan(stopAndWaitIndex);
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
-    expect(body).toContain('marketLedger.isDefaultInstallSuppressed(');
-    expect(body).toContain('marketLedger.restoreInstallation(');
-    expect(body).toContain('suppressed: marketRecordWasSuppressed');
-    expect(body).toContain('onPackagePlaced: () => {');
-    expect(body).toContain('packagePlaced = true;');
-    expect(body).toContain('if (!packagePlaced) {\n            restoreMarketRecord();');
-    expect(body).toContain('releaseMutation();');
-    expect(body).not.toContain('GHOST_SOURCE_CONFLICT');
+    expect(helperBody).toContain('marketLedger.isDefaultInstallSuppressed(');
+    expect(helperBody).toContain('marketLedger.restoreInstallation(');
+    expect(helperBody).toContain('suppressed: marketRecordWasSuppressed');
+    expect(helperBody).toContain('onPackagePlaced: () => {');
+    expect(helperBody).toContain('packagePlaced = true;');
+    expect(helperBody).toContain('if (!packagePlaced) {\n      restoreMarketRecord();');
+    expect(updateBody).toContain('releaseMutation();');
+    expect(helperBody).not.toContain('GHOST_SOURCE_CONFLICT');
   });
 
   it('runs the final market callback before both initial install and update placement', () => {
@@ -144,7 +216,7 @@ describe('market Ghost session boundary', () => {
 
     expect(initialBranch.indexOf('expected.beforeCommitInLock?.();')).toBeGreaterThan(-1);
     expect(initialBranch.indexOf('expected.beforeCommitInLock?.();')).toBeLessThan(
-      initialBranch.indexOf('return installAndDock('),
+      initialBranch.indexOf('await installAndDock('),
     );
     expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(2);
 
@@ -166,16 +238,22 @@ describe('market Ghost session boundary', () => {
   it('releases the mutation lease for shutdown failures and restores only after confirmed shutdown', () => {
     const updateStart = source.indexOf("ipcMain.handle('ghosts:update'");
     const updateEnd = source.indexOf("ipcMain.handle('ghosts:pick-file'", updateStart);
-    const body = source.slice(updateStart, updateEnd);
+    const updateBody = source.slice(updateStart, updateEnd);
+    const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
+    const helperEnd = source.indexOf(
+      '\n}\n\n/**\n * Forge 的显式安装入口。',
+      helperStart,
+    );
+    const helperBody = source.slice(helperStart, helperEnd);
 
-    const waitIndex = body.indexOf(
+    const waitIndex = helperBody.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
     );
-    const oauthLockIndex = body.indexOf(
+    const oauthLockIndex = helperBody.indexOf(
       'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
     );
-    const updateIndex = body.indexOf('manager.update(lizFilePath');
-    const restoreIndex = body.indexOf(
+    const updateIndex = helperBody.indexOf('manager.update(cindyFilePath');
+    const restoreIndex = helperBody.indexOf(
       'if (previousGhost) spawnIfResident(previousGhost);',
     );
 
@@ -188,13 +266,9 @@ describe('market Ghost session boundary', () => {
     // spawnIfResident is in the market-provenance catch block, after
     // stopAndWait (rollback if provenance check fails).
     expect(restoreIndex).toBeGreaterThan(waitIndex);
-    expect(body).toContain('finally {\n      releaseMutation();');
-    const leaseReleaseIndex = body.indexOf('finally {\n      releaseMutation();');
-    const stagingReleaseIndex = body.indexOf('releaseForgePackStaging(');
-    expect(leaseReleaseIndex).toBeGreaterThan(-1);
-    expect(stagingReleaseIndex).toBeGreaterThan(leaseReleaseIndex);
-    expect(body).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
-    expect(body).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
+    expect(updateBody).toContain('finally {\n      releaseMutation();');
+    expect(helperBody).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
+    expect(helperBody).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });
 
   it('Ghost 媒体在途守卫只依赖当前进程的 AppSession owner 边界', () => {

@@ -6,14 +6,15 @@ import * as MediaLibrary from 'expo-media-library/legacy';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { i18n } from '@/i18n';
 import { MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE } from '@/session/mobileImagePreprocess';
+import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 
 /** Context 面板媒体列表的单个资产(展示 + 附加所需的最小字段)。 */
 export interface ContextSheetMediaAsset {
   id: string;
   filename: string;
-  /** 展示用 URI(iOS ph:// / Android content://);渲染走 expo-image,RN Image 在新架构下不支持 ph://。 */
+  /** 展示用 URI(iOS 通常为 ph://);渲染走 expo-image,RN Image 在新架构下不支持 ph://。 */
   uri: string;
-  /** 列表查询已返回的尺寸;Android full info 权限失败时供上传预处理继续使用。 */
+  /** 列表查询已返回的尺寸;解析完整资产信息失败时供上传预处理继续使用。 */
   width?: number;
   height?: number;
 }
@@ -44,19 +45,13 @@ const DEFAULT_FIRST: Record<ContextSheetMediaKind, number> = { recent: 24, scree
 
 /** 按 kind 拉一页资产(权限已就绪的前提下)。 */
 async function fetchAssets(kind: ContextSheetMediaKind, first: number): Promise<ContextSheetMediaAsset[] | null> {
-  let album: MediaLibrary.Album | null = null;
-  if (kind === 'screenshots' && Platform.OS === 'android') {
-    album = await MediaLibrary.getAlbumAsync('Screenshots');
-    if (!album) return [];
-  }
   const page = await MediaLibrary.getAssetsAsync({
     first,
     mediaType: [MediaLibrary.MediaType.photo],
     sortBy: [[MediaLibrary.SortBy.creationTime, false]],
-    ...(kind === 'screenshots' && Platform.OS === 'ios'
+    ...(kind === 'screenshots'
       ? { mediaSubtypes: ['screenshot' as MediaLibrary.MediaSubtype] }
       : {}),
-    ...(album ? { album } : {}),
   });
   return page.assets.map((asset) => ({
     id: asset.id,
@@ -68,12 +63,12 @@ async function fetchAssets(kind: ContextSheetMediaKind, first: number): Promise<
 }
 
 /**
- * 页面挂载时静默预取(打开面板即刻出图)。只在照片权限已授予、且 iOS 不是受限访问时拉取——
+ * iOS 页面挂载时静默预取(打开面板即刻出图)。只在照片权限已授予、且不是受限访问时拉取——
  * iOS 受限访问虽然 granted=true,首次读取资产仍可能触发系统自动提醒;预取绝不能打断用户。
  * 首次授权和受限资产读取仍由用户打开面板后触发;失败静默,面板打开时照常加载。
  */
 export async function prefetchContextSheetMediaAssets(kind: ContextSheetMediaKind = 'recent'): Promise<void> {
-  if (Platform.OS === 'web' || assetsCache.has(kind)) return;
+  if (!canBrowsePhotoLibraryDirectly(Platform.OS) || assetsCache.has(kind)) return;
   try {
     const permission = await MediaLibrary.getPermissionsAsync(false, ['photo']);
     if (!permission.granted) return;
@@ -86,12 +81,11 @@ export async function prefetchContextSheetMediaAssets(kind: ContextSheetMediaKin
 }
 
 /**
- * Context 面板的相册资产加载 hook(最近照片条 / 截图列表共用)。
+ * Context 面板的 iOS 相册资产加载 hook(最近照片条 / 截图列表共用)。
  *
  * enabled 变 true(面板打开)时才请求权限并加载,面板关闭不清缓存——再次打开先显示
  * 旧列表再后台刷新,遵守规则 7(先有内容再刷新,不闪空白帧)。
- * 截图过滤:iOS 用 mediaSubtypes=['screenshot'];Android 找 Screenshots 相册,
- * 找不到则退化为空列表(UI 显示「没有找到截图」)。
+ * 截图过滤使用 mediaSubtypes=['screenshot'];Android 不挂载此界面,统一走系统照片选择器。
  */
 export function useContextSheetMediaAssets(input: {
   enabled: boolean;
@@ -107,7 +101,7 @@ export function useContextSheetMediaAssets(input: {
 
   const load = useCallback(async (requestIfNeeded: boolean) => {
     const seq = ++loadSeqRef.current;
-    if (Platform.OS === 'web') {
+    if (!canBrowsePhotoLibraryDirectly(Platform.OS)) {
       setStatus('unavailable');
       return;
     }

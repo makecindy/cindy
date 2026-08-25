@@ -1,5 +1,5 @@
 /**
- * librarySlot.ts — library 槽:持久作品库的协议分派层(2026-08-20)。
+ * librarySlot.ts — library 持久作品库的协议分派层(2026-08-20)。
  * ---------------------------------------------------------------------------
  * 与 fsSlot 平级,信任边界同源:
  *   - ghostId 一律 webContents 反查(IPC 层),槽内 getGhost 再核资格
@@ -92,7 +92,7 @@ export class GhostLibrarySlot {
 
   private async dispatch(ghostId: string, payload: unknown): Promise<GhostPipeLibraryResult> {
     if (!this.checkEligibility(ghostId)) {
-      return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 卡槽');
+      return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力');
     }
     const req = (payload ?? {}) as Record<string, unknown>;
     const op = req.op as string;
@@ -147,18 +147,18 @@ export class GhostLibrarySlot {
    * 普通文件的绝对路径,或 null(折叠 404)。经 binding 现解 + vault 路径纪律,
    * 与 read 同源校验——面板与电子脑看到同一个库。
    */
-  /** 资格审:装入 + 启用 + 声明 library 槽(dispatch 与面板投影共用)。 */
+  /** 资格审:装入 + 启用 + 声明 library 能力(dispatch 与面板投影共用)。 */
   private checkEligibility(ghostId: string): boolean {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost) return false;
     if (ghost.enabled === false) return false;
-    return ghost.manifest.slots.includes('library');
+    return ghost.manifest.library === true;
   }
 
   /**
    * 面板投影(cindy-ghost://<id>/library/<relPath>)的宿主侧解析:返回已存在
    * 普通文件的绝对路径,或 null(折叠 404)。资格审与 dispatch 同源——插件
-   * 停用或更新后移除 slot 时投影一并熄灭(review:面板路由不复查授权)。
+   * 停用或更新后移除能力时投影一并熄灭(review:面板路由不复查授权)。
    */
   async resolvePanelFilePath(ghostId: string, relPath: string): Promise<string | null> {
     try {

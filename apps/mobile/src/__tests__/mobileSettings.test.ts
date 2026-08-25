@@ -250,6 +250,11 @@ describe('mobile settings overview', () => {
     expect(source).toContain("testID=\"settings.testFlightUpdateHint\"");
     expect(source).toContain("{t('settings.version.testFlightUpdateManaged')}");
     expect(source).toContain("{t('settings.version.bundleVersion', { version: appVersion })}");
+    expect(source).toContain('const showBetaBadge = betaReady && betaEnabled;');
+    expect(source).toContain('testID="settings.betaChannelBadge"');
+    expect(source).toContain("{t('settings.betaChannel.badge')}");
+    expect(source).toContain('backgroundColor: colors.betaChannelBadgeBackground');
+    expect(source).toContain('color: colors.betaChannelBadgeForeground');
     expect(source).toContain(
       "testID=\"settings.otaVersion\">{t('settings.version.otaVersion', { version: otaVersion })}",
     );

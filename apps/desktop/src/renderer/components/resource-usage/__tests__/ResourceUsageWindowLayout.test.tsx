@@ -86,17 +86,18 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     expect(screen.getByText('titleBar.menuItems.resourceUsage')).toBeTruthy();
   });
 
-  it('mounts hidden prewarm sampling, reports renderer readiness, then follows main visibility', async () => {
+  it('keeps Windows hidden prewarm idle, then samples only after Main activates it', async () => {
     render(<ResourceUsageWindowRoot />);
 
     expect(rendererReady).toHaveBeenCalledOnce();
+    expect(resourceBodyProps).toMatchObject({ active: false, shellVisible: false });
+    expect(presentationReady).not.toHaveBeenCalled();
+
+    await act(async () => samplingListener?.(true));
     expect(resourceBodyProps).toMatchObject({ active: true, shellVisible: true });
 
     await act(async () => samplingListener?.(false));
     expect(resourceBodyProps).toMatchObject({ active: false, shellVisible: false });
-
-    await act(async () => samplingListener?.(true));
-    expect(resourceBodyProps).toMatchObject({ active: true, shellVisible: true });
   });
 
   it('applies locale changes received while the window is prewarmed', async () => {

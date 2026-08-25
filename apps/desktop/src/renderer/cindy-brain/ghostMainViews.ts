@@ -25,7 +25,7 @@ export interface GhostMainViewProjection {
 }
 
 function mainViewDeclared(ghost: InstalledGhost): boolean {
-  return ghost.manifest.slots.includes('main-view') && ghost.manifest.mainView !== undefined;
+  return ghost.manifest.mainView !== undefined;
 }
 
 export function projectGhostMainViews(

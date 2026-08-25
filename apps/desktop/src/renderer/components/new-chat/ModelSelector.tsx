@@ -661,6 +661,11 @@ interface ModelSelectorProps {
   visualVariant?: 'default' | 'create-agent';
   /** 仅普通 composer 显式开启 chip → panel 容器形变；设置页/worker 等维持 Radix。 */
   useMorphPopover?: boolean;
+  /**
+   * 指针关闭后的回焦目标(composer 输入框)。选完模型 / 点空白后立刻送回输入框;
+   * Esc 仍回 pill(§14.2)。设置页等非 composer 入口不传。
+   */
+  restoreFocusTarget?: () => HTMLElement | null;
   /** Popover 弹出方向,默认 "top"（底部工具栏向上弹），dialog 内嵌场景传 "bottom"。 */
   popoverSide?: 'top' | 'bottom';
   /**
@@ -3093,6 +3098,7 @@ export function ModelSelector({
   triggerVariant = 'toolbar',
   visualVariant = 'default',
   useMorphPopover = false,
+  restoreFocusTarget,
   popoverSide = 'top',
   maxVisibleModelRows,
   configurationEnabled = true,
@@ -3529,6 +3535,9 @@ export function ModelSelector({
     <button
       type="button"
       disabled={switching || disabled}
+      // 阻 mousedown 抢焦点 —— 否则点 pill 会先把光标从输入框挪走,选完模型后
+      // 还要再点一次才能接着打字。键盘 Tab 仍可正常 focus。
+      onMouseDown={morphEnabled ? (event) => event.preventDefault() : undefined}
       onClick={morphEnabled ? () => handleOpenChange(!openRef.current) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
@@ -3865,6 +3874,7 @@ export function ModelSelector({
         stickyWidth
         stickyWidthKey={pickerLayout}
         panelAriaLabel={ariaLabel}
+        {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
         trigger={trigger}
       >
         {content}

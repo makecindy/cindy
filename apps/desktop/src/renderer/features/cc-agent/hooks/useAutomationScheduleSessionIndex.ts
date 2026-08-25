@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
@@ -24,11 +24,37 @@ import {
   scheduleClearSilencedRun,
 } from '@/lib/silencedSessionDoneStore';
 import type { AutomationScheduleSessionInfo } from '../lib/automationSidebarGrouping';
-import { isUnreadScheduleRun } from '../../scheduler/lib/runUnread';
+import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '../../scheduler/lib/runUnread';
 import { loadScheduleSidebarIndexSnapshot } from '../../scheduler/lib/scheduleSidebarIndexRuns';
 import { subscribeScheduleRunReadSync } from '../../scheduler/lib/scheduleRunReadSync';
 
 const log = createLogger('AutomationScheduleSessionIndex');
+
+/** 侧栏 hook 写入、会话视图只读。避免每个聊天窗再跑一遍全量 listSidebarIndexRuns。 */
+let publishedIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
+const publishedIndexListeners = new Set<() => void>();
+
+function publishIndex(next: ReadonlyMap<string, AutomationScheduleSessionInfo>): void {
+  publishedIndex = next;
+  for (const listener of publishedIndexListeners) listener();
+}
+
+function subscribePublishedIndex(listener: () => void): () => void {
+  publishedIndexListeners.add(listener);
+  return () => {
+    publishedIndexListeners.delete(listener);
+  };
+}
+
+export function useAutomationScheduleSessionInfo(
+  sessionId: string | undefined,
+): AutomationScheduleSessionInfo | undefined {
+  return useSyncExternalStore(
+    subscribePublishedIndex,
+    () => (sessionId ? publishedIndex.get(sessionId) : undefined),
+    () => (sessionId ? publishedIndex.get(sessionId) : undefined),
+  );
+}
 
 /**
  * refresh 失败后的退避重试节奏。这次拉取同时承担抑制标记的对账(见 refresh 内注释),
@@ -91,18 +117,27 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
       }
 
       const next = new Map<string, AutomationScheduleSessionInfo>();
+      const latestFailedFiredAt = new Map<string, number>();
       for (const run of runs) {
         if (!run.sessionId) continue;
         const existing = next.get(run.sessionId);
         const unreadRunIds = existing?.unreadRunIds ? [...existing.unreadRunIds] : [];
-        // 只对未读 run 累加(与 isUnreadScheduleRun 对齐)。failed/aborted/interrupted
-        // 三种未读 run 视为"未成功",拉高本 session 的 urgency 让侧栏涂红而不是涂绿。
+        const unreadFailedRunIds = existing?.unreadFailedRunIds
+          ? [...existing.unreadFailedRunIds]
+          : [];
+        // 只对未读 run 累加(与 isUnreadScheduleRun 对齐)。failed / interrupted
+        // 未读 run 拉高本 session 的 urgency 让侧栏涂红而不是涂绿。
         const isRunUnread = isUnreadScheduleRun(run);
         if (isRunUnread) unreadRunIds.push(run.runId);
-        const runFailedUnread =
-          isRunUnread &&
-          (run.status === 'failed' || run.status === 'aborted' || run.status === 'interrupted');
-        const hasUnreadFailedRun = (existing?.hasUnreadFailedRun ?? false) || runFailedUnread;
+        let latestUnreadFailedRunId = existing?.latestUnreadFailedRunId;
+        if (isUnreadFailedScheduleRun(run)) {
+          unreadFailedRunIds.push(run.runId);
+          const firedAt = run.firedAt ?? 0;
+          if (firedAt >= (latestFailedFiredAt.get(run.sessionId) ?? Number.NEGATIVE_INFINITY)) {
+            latestFailedFiredAt.set(run.sessionId, firedAt);
+            latestUnreadFailedRunId = run.runId;
+          }
+        }
         next.set(run.sessionId, {
           scheduleId: run.scheduleId,
           scheduleName: run.scheduleName,
@@ -112,11 +147,14 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
           workingDir: run.workingDir,
           projectConfigId: run.projectConfigId,
           unreadRunIds,
+          unreadFailedRunIds,
+          latestUnreadFailedRunId,
           hasUnreadRun: unreadRunIds.length > 0,
-          hasUnreadFailedRun,
+          hasUnreadFailedRun: unreadFailedRunIds.length > 0,
         });
       }
       setIndex(next);
+      publishIndex(next);
       retryAttemptRef.current = 0;
     } catch (error) {
       log.warn('failed to build automation schedule session index', {

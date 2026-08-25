@@ -90,6 +90,39 @@ function setup(opts?: {
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
+    getSessionRuntimeDetails: vi.fn(async () => ({
+      ...activity,
+      runtimeGeneration: 0,
+      baselineProfile: {
+        agentKind: 'codex' as const,
+        model: 'model',
+        providerId: 'openai',
+        effort: 'medium' as const,
+        fastMode: false,
+      },
+      effectiveProfile: {
+        agentKind: 'codex' as const,
+        model: 'model',
+        providerId: 'openai',
+        effort: 'medium' as const,
+        fastMode: false,
+      },
+      pendingMutation: null,
+      fallbackEnabled: false,
+    })),
+    setSessionRuntime: vi.fn(async () => ({
+      ok: true as const,
+      status: 'applied' as const,
+      generation: 1,
+      effectiveProfile: {
+        agentKind: 'codex' as const,
+        model: 'next',
+        providerId: 'openai',
+        effort: 'high' as const,
+        fastMode: false,
+      },
+      pendingMutation: null,
+    })),
     assertExternalInputAllowed: vi.fn(async () => undefined),
     createQueuedMessage: vi.fn(
       async ({
@@ -363,6 +396,32 @@ describe('session control domain service', () => {
         }),
       },
     );
+  });
+
+  it('forwards an atomic runtime patch only after the target is known to exist', async () => {
+    const { deps, service } = setup();
+    await expect(
+      service.setSessionRuntime({
+        targetSessionId: 'target',
+        expectedGeneration: 4,
+        patch: { model: 'next', effort: 'high', fastMode: true },
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 'applied', generation: 1 });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({
+      targetSessionId: 'target',
+      expectedGeneration: 4,
+      patch: { model: 'next', effort: 'high', fastMode: true },
+    });
+
+    const missing = setup({ exists: false, live: false });
+    await expect(
+      missing.service.setSessionRuntime({
+        targetSessionId: 'gone',
+        expectedGeneration: 0,
+        patch: { effort: 'high' },
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+    expect(missing.deps.setSessionRuntime).not.toHaveBeenCalled();
   });
 
   it('prefers an in-memory live session when persisted metadata is unavailable', async () => {

@@ -13,7 +13,7 @@ import { GHOST_FS_WRITE_MAX_BYTES, type InstalledGhost } from '../../../shared/g
 
 const GHOST_ID = 'test-ghost';
 
-function makeGhost(slots: string[]): InstalledGhost {
+function makeGhost(fsCapability: boolean): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -22,7 +22,7 @@ function makeGhost(slots: string[]): InstalledGhost {
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: slots as InstalledGhost['manifest']['slots'],
+      ...(fsCapability ? { fs: true } : {}),
     },
     dir: '/tmp/fake-install-dir',
     enabled: true,
@@ -31,7 +31,7 @@ function makeGhost(slots: string[]): InstalledGhost {
 }
 
 interface HarnessOverrides {
-  slots?: string[];
+  fs?: boolean;
   session?: FsSessionSnapshot | null;
   confirm?: (sessionId: string) => Promise<{ confirmed: boolean }>;
   saveWrite?: FsSlotDeps['writeSaveDeposit'];
@@ -44,7 +44,7 @@ interface HarnessOverrides {
   /** 条目通道;缺省按 callSessionId 推导(null ⇒ script,否则 session)。 */
   callChannel?: 'session' | 'script';
   /** 严格在途查询结果:false = 模拟已交卷/已清扫(返回 null)。缺省 true。 */
-  inFlight?: boolean;
+  inFlight?: boolean | (() => boolean);
 }
 
 function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
@@ -60,10 +60,15 @@ function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
         }
       : null;
   const deps: FsSlotDeps = {
-    getGhost: (id) => (id === GHOST_ID ? makeGhost(overrides.slots ?? ['fs']) : null),
+    getGhost: (id) => (id === GHOST_ID ? makeGhost(overrides.fs ?? true) : null),
     dataRootDir: () => dataRoot,
     callInfo: entryFor,
-    inFlightCallInfo: (callId) => (overrides.inFlight === false ? null : entryFor(callId)),
+    inFlightCallInfo: (callId) => {
+      const isInFlight = typeof overrides.inFlight === 'function'
+        ? overrides.inFlight()
+        : overrides.inFlight !== false;
+      return isInFlight ? entryFor(callId) : null;
+    },
     getSessionSnapshot: async () => (overrides.session === undefined ? null : overrides.session),
     requestWriteConfirm: async (sessionId) => {
       confirmCalls.push(sessionId);
@@ -133,13 +138,93 @@ describe('GhostFsSlot', () => {
     await fs.promises.rm(tmpRoot, { recursive: true, force: true });
   });
 
-  it('未声明 fs 卡槽一律拒', async () => {
-    const { slot } = makeHarness(dataRoot, { slots: ['tool'] });
+  it('未声明 fs 能力一律拒', async () => {
+    const { slot } = makeHarness(dataRoot, { fs: false });
     const r = await slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', op: 'write', root: 'data', path: 'a.txt', content: 'hi',
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('fs');
+  });
+
+  it('未声明 fs 时，Agent 在途调用仍可按会话权限写 workdir', async () => {
+    const { slot } = makeHarness(dataRoot, {
+      fs: false,
+      session: {
+        workingDir: workdir,
+        permissionMode: 'acceptEdits',
+        planModeEnabled: false,
+        remoteHostId: null,
+      },
+    });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request',
+      op: 'write',
+      root: 'workdir',
+      path: 'agent/output.txt',
+      content: 'ok',
+      callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: true, op: 'write' });
+    expect(await fs.promises.readFile(path.join(workdir, 'agent/output.txt'), 'utf8')).toBe('ok');
+  });
+
+  it('未声明 fs 时，确认期间交卷会让 workdir 写盘授权失效且不记住确认', async () => {
+    let inFlight = true;
+    let confirmations = 0;
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      fs: false,
+      inFlight: () => inFlight,
+      session: {
+        workingDir: workdir,
+        permissionMode: 'default',
+        planModeEnabled: false,
+        remoteHostId: null,
+      },
+      confirm: async () => {
+        confirmations += 1;
+        if (confirmations === 1) inFlight = false;
+        return { confirmed: true };
+      },
+    });
+    const request = {
+      type: 'fs-request',
+      op: 'write',
+      root: 'workdir',
+      path: 'agent/late.txt',
+      content: 'blocked',
+      callId: 'call-1',
+    };
+
+    const denied = await slot.handleFsRequest(GHOST_ID, request);
+    expect(denied).toMatchObject({ ok: false });
+    expect((denied as { message: string }).message).toContain('授权已失效');
+    expect(fs.existsSync(path.join(workdir, 'agent', 'late.txt'))).toBe(false);
+
+    inFlight = true;
+    const allowed = await slot.handleFsRequest(GHOST_ID, request);
+    expect(allowed).toMatchObject({ ok: true, op: 'write' });
+    expect(confirmCalls).toHaveLength(2);
+    expect(await fs.promises.readFile(path.join(workdir, 'agent', 'late.txt'), 'utf8')).toBe('blocked');
+  });
+
+  it('未声明 fs 时，脚本通道不能复用 Agent 的 workdir 授权', async () => {
+    const { slot } = makeHarness(dataRoot, {
+      fs: false,
+      callSessionId: null,
+      callScriptWorkdir: workdir,
+      callChannel: 'script',
+    });
+    expect(
+      await slot.handleFsRequest(GHOST_ID, {
+        type: 'fs-request',
+        op: 'write',
+        root: 'workdir',
+        path: 'script/output.txt',
+        content: 'blocked',
+        callId: 'call-1',
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it('未知 op / root 拒', async () => {
