@@ -14672,7 +14672,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
       }
-      if (internalOptions.source !== 'user' && atomicSelection) {
+      if (atomicSelection) {
         const meta = await maker.getSessionMeta(sessionId);
         const runtimeAgentKind =
           maker.getSession(sessionId)?.agentKind ??
@@ -14717,8 +14717,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           model: catalogModel,
           effort: atomicSelection.effort,
           fastMode: atomicSelection.fastMode,
-          effortExplicit: internalOptions.effortExplicit === true,
-          fastExplicit: internalOptions.fastExplicit === true,
+          effortExplicit:
+            internalOptions.source === 'user' || internalOptions.effortExplicit === true,
+          fastExplicit:
+            internalOptions.source === 'user' || internalOptions.fastExplicit === true,
         });
         if (!axes.ok && axes.reason === 'effort-unavailable') {
           throwIpcError(

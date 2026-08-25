@@ -123,6 +123,27 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
+  it('validates atomic user axes against the selected catalog model before side effects', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const axisValidation = setModel.indexOf('if (atomicSelection) {');
+    expect(axisValidation).toBeGreaterThan(-1);
+    expect(setModel).not.toContain(
+      "if (internalOptions.source !== 'user' && atomicSelection)",
+    );
+    expect(setModel).toContain(
+      "internalOptions.source === 'user' || internalOptions.effortExplicit === true",
+    );
+    expect(setModel).toContain(
+      "internalOptions.source === 'user' || internalOptions.fastExplicit === true",
+    );
+    expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
+    expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
+  });
+
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
       registerSource,
