@@ -742,4 +742,42 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getTurnGeneration()).toBe(2);
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
   });
+
+  it('does not treat a late prior-generation error as the next reserved turn terminal', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const firstDone = waitForSessionEvent(session, 'done');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+
+    stub.handle.isTurnRunning = () => false;
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(
+      session.send('second', {
+        afterTurnReserved: async () => {
+          expect(session.getTurnGeneration()).toBe(2);
+          expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+          stub.push({
+            type: 'error',
+            data: {
+              message: 'late prior error',
+              isTerminal: true,
+              reason: 'empty-response',
+            },
+          });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+        },
+      }),
+    ).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
 });

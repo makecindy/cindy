@@ -2129,8 +2129,13 @@ export class Session {
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
     // ownership to the new attempt.
-    const terminalBoundaryObserved = isCurrentGeneration && isTerminal && !isBackgroundEvent;
+    const preDispatchReservation = this.isPreDispatchReservation();
+    const terminalBoundaryObserved =
+      isCurrentGeneration && isTerminal && !isBackgroundEvent && !preDispatchReservation;
     if (terminalBoundaryObserved) {
+      const sameGenerationError =
+        this.terminalEventObservedGeneration === this.turnGeneration &&
+        this.terminalEventObservedKind === 'error';
       this.terminalEventObservedGeneration = this.turnGeneration;
       if (event.type === 'error') {
         this.terminalEventObservedKind = 'error';
@@ -2138,7 +2143,7 @@ export class Session {
       } else {
         // Codex 失败收尾是 terminal error 后再补 done。同 generation 的成功尾巴
         // 不得把已记录的 error 改写成 done，否则 Host 会把失败当成功结算。
-        if (this.terminalEventObservedKind !== 'error') {
+        if (!sameGenerationError) {
           this.terminalEventObservedKind = 'done';
           this.terminalEventObservedErrorMessage = null;
           this.terminalEventObservedErrorSignals = null;
@@ -2165,9 +2170,9 @@ export class Session {
     } else if (
       isTerminal &&
       !isBackgroundEvent &&
-      !isCurrentGeneration &&
       this.sendReservation !== null &&
-      this.sendReservation.generation === this.turnGeneration
+      this.sendReservation.generation === this.turnGeneration &&
+      (!isCurrentGeneration || preDispatchReservation)
     ) {
       // N 的终态在 N+1 reservation / handle.send 窗口到达：先记在窗口快照里，
       // 等拒绝回滚再提升。成功派发的 N+1 不得继承这份证据。
@@ -2500,13 +2505,16 @@ export class Session {
         let observedGeneration = awaitingGeneration;
         if (
           awaitingCanAdoptNextGeneration &&
-          this.turnGeneration === awaitingGeneration + 1
+          this.turnGeneration === awaitingGeneration + 1 &&
+          !this.isPreDispatchReservation()
         ) {
           // Only a next() that started while logically idle may follow the next send.
           // Capturing that fact before awaiting is essential. The terminal drain may
           // already be armed when a watchdog-generated error precedes this pending
           // next(); adopting the exact next generation lets the provider's tail done
           // clear that fence. The fence itself prevents any later generation entering.
+          // Do not adopt while N+1 is still reserved / before provider dispatch:
+          // a late N terminal would otherwise be cached as N+1 evidence.
           observedGeneration = this.turnGeneration;
         }
         if (this.terminationStarted) continue;
@@ -2628,6 +2636,14 @@ export class Session {
     } finally {
       signal.removeEventListener('abort', onAbort);
     }
+  }
+
+  private isPreDispatchReservation(): boolean {
+    return (
+      this.sendReservation !== null &&
+      this.sendReservation.generation === this.turnGeneration &&
+      this.sendReservation.phase === 'accepting'
+    );
   }
 
   private createSessionRunningError(): Error {
