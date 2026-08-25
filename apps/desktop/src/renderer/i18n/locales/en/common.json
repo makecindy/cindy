@@ -1956,6 +1956,7 @@
     },
     "betaChannel": {
       "title": "Beta channel",
+      "badge": "Beta",
       "description": "Join the beta channel to receive upcoming client updates early. Takes effect after restart.",
       "toggleAria": "Beta channel toggle",
       "restartTitle": "Restart Cindy",

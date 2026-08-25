@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
+import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
 import { Tip } from '@/components/ui/tooltip';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { shouldLabelRegion } from '../../../shared/regionCode';
@@ -32,8 +33,10 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   //   (更新历史入口暂时让位,banner 再次出现后关掉才会回到"历史入口"模式)。
   const { status } = useUpdateStatus();
   const { dismissed, restore } = useUpdateBannerDismiss();
+  const { state: betaChannelState } = useBetaChannelSettings();
   const hasPendingUpdate = status === 'ready' || status === 'superseding';
   const isFlameReopen = hasPendingUpdate && dismissed;
+  const showBetaBadge = !betaChannelState.loading && betaChannelState.enableBeta;
 
   // 头像地址变化(设置页改头像 / 服务端资料更新)时重置加载失败标记,
   // 让新地址有机会渲染,而不是永远停在首字母兜底。
@@ -246,10 +249,18 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
             </p>
             {/* 2px gap 与同栏 userNameContainer 保持一致。 */}
             <p
-              className="truncate text-10 leading-[1.3] text-[var(--sidebar-user-card-text)] opacity-80"
+              className="flex min-w-0 items-center gap-1 text-10 leading-[1.3] text-[var(--sidebar-user-card-text)]"
               title={appVersionLabelDetail}
             >
-              {appVersionLabel}
+              <span className="truncate opacity-80">{appVersionLabel}</span>
+              {showBetaBadge ? (
+                <span
+                  className="shrink-0 select-none rounded-full bg-[var(--beta-channel-badge-bg)] px-1 font-medium text-[var(--beta-channel-badge-fg)]"
+                  data-testid="sidebar-beta-channel-badge"
+                >
+                  {t('settings.betaChannel.badge')}
+                </span>
+              ) : null}
             </p>
           </div>
         </button>

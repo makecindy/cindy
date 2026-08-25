@@ -1947,6 +1947,7 @@
     },
     "betaChannel": {
       "title": "Beta 测试渠道",
+      "badge": "Beta",
       "description": "加入 Beta 测试渠道，提前接收即将发布的客户端更新。开启后需重启客户端生效。",
       "toggleAria": "Beta 测试渠道开关",
       "restartTitle": "重启客户端",

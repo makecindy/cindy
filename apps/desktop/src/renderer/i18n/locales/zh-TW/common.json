@@ -1947,6 +1947,7 @@
     },
     "betaChannel": {
       "title": "Beta 測試管道",
+      "badge": "Beta",
       "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。開啟後需重新啟動客戶端生效。",
       "toggleAria": "Beta 測試管道開關",
       "restartTitle": "重新啟動客戶端",

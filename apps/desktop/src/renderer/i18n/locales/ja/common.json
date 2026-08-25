@@ -1955,6 +1955,7 @@
     },
     "betaChannel": {
       "title": "Beta チャンネル",
+      "badge": "Beta",
       "description": "Beta チャンネルに参加すると、今後のクライアント更新を先行して受け取れます。再起動後に反映されます。",
       "toggleAria": "Beta チャンネルの切り替え",
       "restartTitle": "クライアントを再起動",
