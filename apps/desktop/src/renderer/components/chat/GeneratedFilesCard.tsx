@@ -62,18 +62,21 @@ function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']
 const DOCUMENT_COVER_THEME_TOKENS = {
   light: {
     '--doc-cover-surface': 'var(--surface-elevated)',
+    '--doc-cover-tint': 'var(--surface-hover)',
     '--doc-cover-accent': 'var(--accent-cta-bg)',
     '--doc-cover-ink': 'var(--text-primary)',
     '--doc-cover-muted': 'var(--text-tertiary)',
   },
   dark: {
     '--doc-cover-surface': 'var(--surface)',
+    '--doc-cover-tint': 'color-mix(in srgb, var(--surface) 88%, var(--text-primary))',
     '--doc-cover-accent': 'var(--text-primary)',
     '--doc-cover-ink': 'var(--text-primary)',
     '--doc-cover-muted': 'var(--text-secondary)',
   },
   navy: {
     '--doc-cover-surface': 'color-mix(in srgb, var(--surface-elevated) 88%, var(--focus-ring))',
+    '--doc-cover-tint': 'color-mix(in srgb, var(--surface-elevated) 76%, var(--focus-ring))',
     '--doc-cover-accent': 'var(--focus-ring)',
     '--doc-cover-ink': 'var(--text-primary)',
     '--doc-cover-muted': 'var(--text-secondary)',
@@ -134,20 +137,24 @@ function SlidePreview({ artifact, title }: { artifact: DocumentArtifactMetadata;
   const previewSubtitle = preview?.subtitle || artifact.subtitle;
 
   return (
-    <span className="relative flex aspect-[16/9] items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface)] px-8 text-center">
+    <span
+      className="relative flex aspect-[16/9] items-center justify-center border-b border-[var(--border-default)] bg-[var(--doc-cover-surface)] px-8 text-center"
+      style={getDocumentCoverThemeStyle(artifact.theme)}
+      data-document-theme={artifact.theme ?? 'light'}
+    >
       <span className="min-w-0">
-        <span className="mx-auto mb-3 block h-1 w-9 rounded-[9999px] bg-[var(--text-primary)]" />
-        <span className="block line-clamp-2 text-15 font-semibold leading-5 text-[var(--text-primary)]">
+        <span className="mx-auto mb-3 block h-1 w-9 rounded-[9999px] bg-[var(--doc-cover-accent)]" />
+        <span className="block line-clamp-2 text-15 font-semibold leading-5 text-[var(--doc-cover-ink)]">
           {previewTitle}
         </span>
         {previewSubtitle && (
-          <span className="mt-1 block line-clamp-1 text-11 text-[var(--text-tertiary)]">
+          <span className="mt-1 block line-clamp-1 text-11 text-[var(--doc-cover-muted)]">
             {previewSubtitle}
           </span>
         )}
       </span>
       {artifact.summary && (
-        <span className="absolute bottom-2 right-2 rounded-[9999px] border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--text-tertiary)]">
+        <span className="absolute bottom-2 right-2 rounded-[9999px] border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--doc-cover-muted)]">
           {t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
             count: formatArtifactSummaryValue(artifact.summary),
           })}
@@ -166,13 +173,17 @@ function SheetPreview({ artifact, title }: { artifact: DocumentArtifactMetadata;
     columnCount === 3 ? '1fr 1.6fr 1fr' : `repeat(${columnCount}, minmax(0, 1fr))`;
 
   return (
-    <span className="block border-b border-[var(--border-default)] bg-[var(--surface)]">
+    <span
+      className="block border-b border-[var(--border-default)] bg-[var(--doc-cover-surface)]"
+      style={getDocumentCoverThemeStyle(artifact.theme)}
+      data-document-theme={artifact.theme ?? 'light'}
+    >
       {preview.rows.map((row, rowIndex) => (
         <span
           key={rowIndex}
           className={cn(
             'grid min-h-8 border-b border-[var(--border-default)] last:border-b-0',
-            rowIndex === 0 && preview.hasHeader && 'bg-[var(--surface-hover)]',
+            rowIndex === 0 && preview.hasHeader && 'bg-[var(--doc-cover-tint)]',
           )}
           style={{ gridTemplateColumns }}
         >
@@ -180,8 +191,8 @@ function SheetPreview({ artifact, title }: { artifact: DocumentArtifactMetadata;
             <span
               key={columnIndex}
               className={cn(
-                'min-w-0 truncate border-r border-[var(--border-default)] px-2.5 py-1.5 text-12 leading-5 text-[var(--text-secondary)] last:border-r-0',
-                rowIndex === 0 && preview.hasHeader && 'text-11 text-[var(--text-tertiary)]',
+                'min-w-0 truncate border-r border-[var(--border-default)] px-2.5 py-1.5 text-12 leading-5 text-[var(--doc-cover-ink)] last:border-r-0',
+                rowIndex === 0 && preview.hasHeader && 'text-11 text-[var(--doc-cover-muted)]',
               )}
             >
               {row[columnIndex] || '\u00a0'}
@@ -193,7 +204,7 @@ function SheetPreview({ artifact, title }: { artifact: DocumentArtifactMetadata;
   );
 }
 
-function ArtifactPreview({
+export function ArtifactPreview({
   artifact,
   title,
 }: {

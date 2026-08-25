@@ -1300,6 +1300,37 @@ describe('render_pdf', () => {
     expect(rendered).not.toContain('./chart.png');
   });
 
+  it('快照 SVG use 的 href 与 xlink:href 并保留片段', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(
+      path.join(workdir, 'icons.svg'),
+      '<svg><symbol id="check"><path d="M0 0h1v1z"/></symbol></svg>',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(workdir, 'svg-use.html'),
+      '<svg><use href="./icons.svg#check"/><use xlink:href=./icons.svg#check /></svg>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'svg-use.html',
+      outPath: 'svg-use.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered.match(/data:image\/svg\+xml;base64,[^\s"']+#check/g)).toHaveLength(2);
+    expect(rendered).not.toContain('./icons.svg');
+  });
+
   it('快照未加引号的本地资源属性', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');

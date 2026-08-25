@@ -9,7 +9,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { inspectPdfPages, pageVisibilityUnverified } from '../reviewPdfUtilityProcess.js';
+import {
+  inspectPdfPages,
+  pageVisibilityUnverified,
+  selectPdfPageNumbers,
+} from '../reviewPdfUtilityProcess.js';
 
 /**
  * 生成一份合法的最小 PDF。
@@ -72,6 +76,11 @@ function buildPdf(
 }
 
 describe('inspectPdfPages', () => {
+  it('声明极大页数时只构造 maxPages 个默认页码', () => {
+    expect(selectPdfPageNumbers(Number.MAX_SAFE_INTEGER, [], 3)).toEqual([1, 2, 3]);
+    expect(selectPdfPageNumbers(100, [99, 2, 2, 101, 1], 2)).toEqual([1, 2]);
+  });
+
   it('读出页数、尺寸、文本量,并把真正空白的页判成 blank', async () => {
     const pdf = buildPdf(['Hello Cindy Docs', null]);
     const result = await inspectPdfPages(pdf, [], 10, 400);

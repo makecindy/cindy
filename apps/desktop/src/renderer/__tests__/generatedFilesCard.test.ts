@@ -1,10 +1,13 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ArtifactPreview,
   getDocumentCoverThemeStyle,
   isLocalGeneratedFileInTurn,
 } from '../components/chat/GeneratedFilesCard';
-import type { GeneratedFileRef } from '../lib/generatedFiles';
+import type { DocumentArtifactMetadata, GeneratedFileRef } from '../lib/generatedFiles';
 
 const START = Date.parse('2026-08-05T10:00:00.000Z');
 const END = Date.parse('2026-08-05T10:01:00.000Z');
@@ -108,6 +111,31 @@ describe('document cover theme tokens', () => {
     const navy = getDocumentCoverThemeStyle('navy');
     expect(light['--doc-cover-surface']).not.toBe(dark['--doc-cover-surface']);
     expect(navy['--doc-cover-accent']).not.toBe(light['--doc-cover-accent']);
+    expect(light['--doc-cover-tint']).not.toBe(dark['--doc-cover-tint']);
+    expect(navy['--doc-cover-tint']).not.toBe(light['--doc-cover-tint']);
     expect(light['--doc-cover-ink']).toContain('var(--text-primary)');
+  });
+
+  it('applies artifact themes to PPT and Excel previews', () => {
+    const artifacts: DocumentArtifactMetadata[] = [
+      {
+        format: 'pptx',
+        theme: 'dark',
+        preview: { kind: 'slide', title: 'Quarterly review' },
+      },
+      {
+        format: 'xlsx',
+        theme: 'navy',
+        preview: { kind: 'sheet', rows: [['Metric'], ['42']], hasHeader: true },
+      },
+    ];
+
+    const [slide, sheet] = artifacts.map((artifact) =>
+      renderToStaticMarkup(createElement(ArtifactPreview, { artifact, title: 'Document' })),
+    );
+    expect(slide).toContain('data-document-theme="dark"');
+    expect(slide).toContain('--doc-cover-surface:var(--surface)');
+    expect(sheet).toContain('data-document-theme="navy"');
+    expect(sheet).toContain('--doc-cover-tint:color-mix');
   });
 });

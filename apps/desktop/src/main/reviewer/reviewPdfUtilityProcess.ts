@@ -183,6 +183,22 @@ export function pageVisibilityUnverified(
   return drawOps === null || imageOps === null;
 }
 
+export function selectPdfPageNumbers(
+  numPages: number,
+  requestedPages: readonly number[],
+  maxPages: number,
+): number[] {
+  if (requestedPages.length > 0) {
+    return [...new Set(requestedPages)]
+      .filter((page) => page >= 1 && page <= numPages)
+      .sort((left, right) => left - right)
+      .slice(0, maxPages);
+  }
+
+  const count = Math.max(0, Math.min(numPages, maxPages));
+  return Array.from({ length: count }, (_, index) => index + 1);
+}
+
 /**
  * 读 PDF 的结构快照:页数、每页尺寸/旋转、文本量与开头片段、绘图与图像算子数,
  * 并据此判定结构上空白页。这里不做位图渲染,但算子读取成功的页面仍可
@@ -225,11 +241,7 @@ export async function inspectPdfPages(
     const numPages = document.numPages;
 
     // 去重 + 升序 + 丢掉越界页码;不传则从第 1 页顺序取。
-    const wanted =
-      requestedPages.length > 0
-        ? [...new Set(requestedPages)].filter((n) => n >= 1 && n <= numPages).sort((a, b) => a - b)
-        : Array.from({ length: numPages }, (_, i) => i + 1);
-    const selected = wanted.slice(0, maxPages);
+    const selected = selectPdfPageNumbers(numPages, requestedPages, maxPages);
 
     const pages: ReviewPdfPageInspection[] = [];
     for (const pageNumber of selected) {

@@ -543,12 +543,18 @@ async function snapshotLocalResource(
   reference: string,
 ): Promise<string | undefined> {
   if (!isLocalResourceReference(reference)) return undefined;
+  let fragment = '';
+  try {
+    fragment = new URL(reference.trim(), baseUrl).hash;
+  } catch {
+    // resolveLocalResourcePath below returns the user-facing validation error.
+  }
   const absPath = resolveLocalResourcePath(baseUrl, reference);
   if (!absPath) return undefined;
   const preparedPath = await prepareInputPath(context.root, absPath);
   const cacheKey = path.resolve(preparedPath);
   const cached = context.cache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) return `${cached}${fragment}`;
 
   const resourceDirectory = path.dirname(preparedPath);
   const beforeDirectory = await captureDirectorySnapshot(resourceDirectory);
@@ -597,7 +603,7 @@ async function snapshotLocalResource(
   }
   const snapshot = dataUri(mime, snapshotBytes);
   context.cache.set(cacheKey, snapshot);
-  return snapshot;
+  return `${snapshot}${fragment}`;
 }
 
 async function inlineLocalResources(
@@ -659,7 +665,7 @@ async function inlineLocalResources(
   );
   rewritten = await replaceHtmlTagsAsync(
     rewritten,
-    (tag) => /^<(?:img|source|audio|video|track|object|input|image)\b/i.test(tag),
+    (tag) => /^<(?:img|source|audio|video|track|object|input|image|use)\b/i.test(tag),
     async (tag) => {
       const withSources = await rewriteHtmlAttributes(
         tag,
