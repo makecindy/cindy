@@ -508,7 +508,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
     fireSubagentRunnerRequest('runner-launch', 'launch', runId);
     const response = await waitForResponse('runner-launch');
-    expect(JSON.parse(String(response.value))).toEqual({ ok: true });
+    expect(JSON.parse(String(response.value))).toEqual({ ok: true, confirmed: true });
     expect(captured.runnerLaunches).toHaveLength(1);
     expect(captured.runnerLaunches[0]).toMatchObject({
       runId,
@@ -522,7 +522,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
     fireSubagentRunnerRequest('runner-stop', 'terminate', runId);
     const stop = await waitForResponse('runner-stop');
-    expect(JSON.parse(String(stop.value))).toEqual({ ok: true });
+    expect(JSON.parse(String(stop.value))).toEqual({ ok: true, confirmed: true });
     } finally {
       if (previousNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
       else process.env.ELECTRON_RUN_AS_NODE = previousNode;

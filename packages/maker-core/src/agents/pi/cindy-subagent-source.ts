@@ -733,9 +733,16 @@ async function requestRunnerControl(ctx, action, runId) {
   );
   let response;
   try { response = JSON.parse(typeof raw === 'string' ? raw : '{}'); } catch (err) { response = null; }
+  if (response && response.unconfirmed === true) {
+    throw Object.assign(
+      new Error('subagent: Cindy could not ' + action + ' the durable runner.'),
+      { unconfirmed: true },
+    );
+  }
   if (!response || response.ok !== true) {
     throw new Error('subagent: Cindy could not ' + action + ' the durable runner.');
   }
+  return response;
 }
 
 async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, displayTitle, interactiveOwner, timeoutMs, ctx) {
@@ -922,14 +929,16 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     await requestRunnerControl(ctx, 'launch', runId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    persistFailureIfNeeded(message);
+    if (!(err && err.unconfirmed)) persistFailureIfNeeded(message);
     throw err;
   }
 
   const terminateRunner = async function (message) {
+    let unconfirmed = false;
     try {
       await requestRunnerControl(ctx, 'terminate', runId);
     } catch (err) {
+      unconfirmed = Boolean(err && err.unconfirmed);
       /* Host-side account and exit sweeps remain the final cleanup boundary. */
     }
     const hardDeadline = Date.now() + RUNNER_TERMINATE_GRACE_MS;
@@ -942,7 +951,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
       } catch (err) { /* keep waiting within the bounded grace */ }
       await new Promise(function (resolve) { setTimeout(resolve, 50); });
     }
-    persistFailureIfNeeded(message);
+    if (!unconfirmed) persistFailureIfNeeded(message);
   };
   return {
     runId: runId,

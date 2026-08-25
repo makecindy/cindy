@@ -2747,6 +2747,7 @@ export class PiAgent extends BaseAgent {
      * which is exactly what has to be over before the stop sweep runs.
      */
     const piSubagentApprovalWrites = new Set<Promise<void>>();
+    const inFlightSubagentLaunches = new Set<Promise<void>>();
     /**
      * Publish an approval answer, keeping its mailbox-write phase awaitable and
      * refusing the write itself if the account boundary went up in the meantime.
@@ -3577,6 +3578,10 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
         });
       }
+      while (converged && inFlightSubagentLaunches.size > 0) {
+        const launches = Promise.allSettled([...inFlightSubagentLaunches]).then(() => 'done' as const);
+        converged = await Promise.race([launches, budget]) === 'done';
+      }
       try {
         const stopped = await stopPiSubagentRunsForAccountBoundary(subagentRunRoot, {
           runtimeOwnerId: subagentRuntimeOwnerId,
@@ -3934,7 +3939,10 @@ export class PiAgent extends BaseAgent {
                 if (isPiSubagentTerminal(status.state)) {
                   throw new Error('PI Subagent runner request is already terminal');
                 }
-                await this.launchSubagentRunner({
+                if (accountBoundaryTeardown) {
+                  throw new Error('PI Subagent runner request is unavailable');
+                }
+                const launching = this.launchSubagentRunner({
                   runId,
                   runDir,
                   runnerFile: path.join(runDir, 'runner.cjs'),
@@ -3942,6 +3950,16 @@ export class PiAgent extends BaseAgent {
                   cwd: opts.workingDir,
                   env: durableSpawnEnv,
                 });
+                inFlightSubagentLaunches.add(launching);
+                try {
+                  await launching;
+                } finally {
+                  inFlightSubagentLaunches.delete(launching);
+                }
+                if (accountBoundaryTeardown) {
+                  await this.terminateSubagentRunner(runId, runDir);
+                  throw new Error('PI Subagent runner request is unavailable');
+                }
                 return true;
               },
               emitExtensionNotification: (message, event) => {
@@ -6130,7 +6148,11 @@ export class PiAgent extends BaseAgent {
           proc.send({
             type: 'extension_ui_response',
             id,
-            value: JSON.stringify({ ok: accepted }),
+            value: JSON.stringify(
+              accepted
+                ? { ok: true, confirmed: true }
+                : { ok: false, unconfirmed: true },
+            ),
           });
         } catch (error) {
           this.deps.logger.warn('pi Subagent runner control failed', {
@@ -6140,7 +6162,11 @@ export class PiAgent extends BaseAgent {
           proc.send({
             type: 'extension_ui_response',
             id,
-            value: JSON.stringify({ ok: false, error: 'PI Subagent runner control failed' }),
+            value: JSON.stringify(
+              error instanceof PiSubagentRunnerExitUnconfirmedError
+                ? { ok: false, unconfirmed: true }
+                : { ok: false, error: 'PI Subagent runner control failed' },
+            ),
           });
         }
       })();

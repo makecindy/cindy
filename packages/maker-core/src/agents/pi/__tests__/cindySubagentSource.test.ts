@@ -154,6 +154,17 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("runnerInstanceId: 'launch-pending-' + runId");
   });
 
+  it('does not persist failed when the host reports an unconfirmed runner exit', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('response.unconfirmed === true');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('{ unconfirmed: true }');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      'if (!(err && err.unconfirmed)) persistFailureIfNeeded(message)',
+    );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      'if (!unconfirmed) persistFailureIfNeeded(message)',
+    );
+  });
+
   it('never treats the packaged application executable as Node', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('ELECTRON_RUN_AS_NODE');
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('CINDY_PI_SUBAGENT_NODE');
@@ -517,6 +528,18 @@ describe('cindy-subagent extension source', () => {
   it('marks durable terminal snapshots as terminal observations', () => {
     const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../index.ts'), 'utf8');
     expect(source).toContain("kind: terminal ? 'terminal' : 'spawn'");
+  });
+
+  it('rechecks the account boundary before spawning a durable runner', () => {
+    const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../index.ts'), 'utf8');
+    const control = source.indexOf('controlSubagentRunner: async (action, runId)');
+    const launch = source.indexOf('const launching = this.launchSubagentRunner({', control);
+    const recheck = source.lastIndexOf('if (accountBoundaryTeardown)', launch);
+    expect(control).toBeGreaterThan(-1);
+    expect(recheck).toBeGreaterThan(control);
+    expect(launch).toBeGreaterThan(recheck);
+    expect(source).toContain('inFlightSubagentLaunches');
+    expect(source).toContain('ok: false, unconfirmed: true');
   });
 
   it('does not store an English resume prefix as the run title', () => {
