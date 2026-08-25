@@ -681,6 +681,20 @@ describe('make_pptx', () => {
     expect(slide.match(/<a:normAutofit/g)).toHaveLength(2);
   });
 
+  it('最大合法普通要点启用文本框缩放,不静默裁切', async () => {
+    const client = await connect();
+    const longBullet = '点'.repeat(4_000);
+    const result = await callTool(client, 'make_pptx', {
+      slides: [{ title: '长要点', layout: 'content', bullets: [longBullet] }],
+      outPath: 'long-bullet.pptx',
+    });
+
+    expect(result.ok).toBe(true);
+    const slide = await unzip(result.path as string, 'ppt/slides/slide1.xml');
+    expect(slide).toContain(longBullet);
+    expect(slide.match(/<a:normAutofit/g)).toHaveLength(2);
+  });
+
   it('最大合法指标值和标签启用文本框缩放,不静默裁切', async () => {
     const client = await connect();
     const longValue = '9'.repeat(1_000);

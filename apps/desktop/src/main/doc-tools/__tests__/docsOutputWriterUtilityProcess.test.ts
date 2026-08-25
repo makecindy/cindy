@@ -129,6 +129,29 @@ describe('docs output cwd-bound writer', () => {
       runDocsOutputWriteForTest(await request('report.bin', 'two', false), root),
     ).rejects.toMatchObject({ code: 'FILE_EXISTS' });
     expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('one');
+    expect((await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-'))).toBe(
+      false,
+    );
+  });
+
+  it('does not expose a partial target when the first write fails', async () => {
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (file, flags, mode) => {
+      const handle = await originalOpen(file, flags, mode);
+      vi.spyOn(handle, 'writeFile').mockImplementationOnce(async (data) => {
+        await handle.write(Buffer.from(data as Uint8Array).subarray(0, 3));
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      });
+      return handle;
+    });
+
+    await expect(
+      runDocsOutputWriteForTest(await request('report.bin', 'partial-data', false), root),
+    ).rejects.toMatchObject({ code: 'ENOSPC' });
+    await expect(fs.promises.stat(path.join(root, 'report.bin'))).rejects.toThrow();
+    expect((await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-'))).toBe(
+      false,
+    );
   });
 
   it('creates missing parents inside the anchored session root', async () => {
@@ -243,7 +266,7 @@ process.stdout.write(JSON.stringify({ code, outsideExists, movedValue }));
         expect(JSON.parse(probe.stdout)).toEqual({
           code: 'PATH_NOT_ALLOWED',
           outsideExists: false,
-          movedValue: overwrite ? 'old' : 'bound',
+          movedValue: overwrite ? 'old' : null,
         });
       }
     },

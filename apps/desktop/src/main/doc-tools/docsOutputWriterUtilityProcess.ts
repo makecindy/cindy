@@ -148,6 +148,20 @@ async function writeExclusive(target: string, data: Uint8Array): Promise<void> {
   }
 }
 
+async function publishExclusive(staging: string, target: string): Promise<void> {
+  try {
+    // A same-directory hard link publishes the fully synced staging inode in
+    // one step and never replaces an existing destination. If the utility is
+    // terminated while writing, only the hidden staging name can be partial.
+    await fs.promises.link(staging, target);
+  } catch (error) {
+    if (hasCode(error, 'EEXIST')) {
+      throw new OutputWriteError('FILE_EXISTS', `目标文件已存在: ${target}`);
+    }
+    throw error;
+  }
+}
+
 async function assertReplaceableTarget(target: string): Promise<void> {
   try {
     const stat = await fs.promises.lstat(target);
@@ -216,16 +230,15 @@ async function writeWithinVerifiedParent(
   outputPath: (name: string) => string,
 ): Promise<void> {
   const target = outputPath(request.targetName);
-  if (!request.overwrite) {
-    await writeExclusive(target, request.data);
-    await verifyParent(request, workingDir);
-    return;
-  }
-
   const staging = outputPath(`.cindy-docs-staging-${randomUUID()}-${request.targetName}`);
   try {
     await writeExclusive(staging, request.data);
-    await replaceFile(request, workingDir, staging, target);
+    await verifyParent(request, workingDir);
+    if (request.overwrite) {
+      await replaceFile(request, workingDir, staging, target);
+    } else {
+      await publishExclusive(staging, target);
+    }
     await verifyParent(request, workingDir);
   } finally {
     try {
