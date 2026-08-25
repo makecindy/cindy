@@ -49,7 +49,7 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText(raw)).toBeTruthy();
   });
 
-  it('explains Grok image rejections instead of the OpenAI JSON envelope', () => {
+  it('shows the inner upstream message instead of the OpenAI JSON envelope', () => {
     const raw = `OpenAI API error (400): ${JSON.stringify({
       message: `litellm.BadRequestError: XaiException - ${JSON.stringify({
         error: {
@@ -62,7 +62,7 @@ describe('ErrorMessageCard', () => {
       code: '400',
     })}`;
     render(createElement(ErrorMessageCard, { message: raw }));
-    expect(screen.getByText('chat.errorBanner.xaiRequestRejected')).toBeTruthy();
+    expect(screen.getByText('Upstream rejected the request!')).toBeTruthy();
     expect(screen.queryByText(raw)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();

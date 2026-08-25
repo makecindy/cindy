@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
-  isXaiInvalidRequestError,
   unwrapProviderErrorDisplay,
 } from '@/utils/streamInterruptError';
 
@@ -82,20 +81,5 @@ describe('unwrapProviderErrorDisplay', () => {
     expect(
       unwrapProviderErrorDisplay('OpenAI API error (400): {"message":"invalid_prompt"}'),
     ).toBe('OpenAI API error (400): {"message":"invalid_prompt"}');
-  });
-});
-
-describe('isXaiInvalidRequestError', () => {
-  it('recognizes the Grok / xAI upstream-rejected envelope', () => {
-    expect(isXaiInvalidRequestError(xaiRejectedEnvelope())).toBe(true);
-  });
-
-  it('does not treat other XaiException text as this family', () => {
-    expect(
-      isXaiInvalidRequestError(
-        'OpenAI API error (400): {"message":"litellm.BadRequestError: XaiException - too long"}',
-      ),
-    ).toBe(false);
-    expect(isXaiInvalidRequestError('OpenAI API error (400): invalid_prompt')).toBe(false);
   });
 });

@@ -95,8 +95,8 @@ const XAI_REJECTED_RAW = `OpenAI API error (400): ${JSON.stringify({
 })}`;
 
 
-describe('ErrorBanner — Grok / xAI 拒请求', () => {
-  it('用人话替换 OpenAI JSON 外壳，原文仍可展开', () => {
+describe('ErrorBanner — LiteLLM 外壳拆封', () => {
+  it('展示上游内层原文，协议外壳可展开', () => {
     render(
       createElement(ErrorBanner, {
         error: XAI_REJECTED_RAW,
@@ -106,7 +106,7 @@ describe('ErrorBanner — Grok / xAI 拒请求', () => {
       }),
     );
 
-    expect(screen.getByText('chat.errorBanner.xaiRequestRejected')).toBeTruthy();
+    expect(screen.getByText('Upstream rejected the request!')).toBeTruthy();
     expect(screen.queryByText(XAI_REJECTED_RAW)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(XAI_REJECTED_RAW)).toBeTruthy();

@@ -7326,7 +7326,6 @@
       "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
       "streamInterrupted": "The model stream was interrupted. This is usually a temporary upstream issue — click Retry.",
       "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
-      "xaiRequestRejected": "Grok rejected this request. Image input accepts JPEG/PNG only — not GIF, WebP, or video. Send a still image, or switch models.",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in",
