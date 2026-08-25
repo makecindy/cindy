@@ -2378,6 +2378,27 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('可靠 push 被 latest-wins 驱逐后释放路由账本额度', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'route-ledger-eviction-stream');
+
+    // 不发送 transport ACK：队列保持在 64 条，但每次 latest-wins 驱逐的
+    // 可靠帧都必须从 active route ledger 转入 settled history；否则第
+    // 1025 个唯一 ID 会把后续发送永久打成 BACKPRESSURE。
+    expect(() => {
+      for (let index = 0; index < 1_025; index += 1) {
+        h.client.sendPush('dev-b', 'maker:event', { index });
+      }
+    }).not.toThrow();
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(MAX_TRANSPORT_PENDING_MESSAGES);
+    h.client.stop();
+  });
+
   it('push 拥塞腾位不跨 live 帧：队头是 live invoke 时新 push 维持 BACKPRESSURE', async () => {
     const warn = vi.fn();
     const h = makeHarness({

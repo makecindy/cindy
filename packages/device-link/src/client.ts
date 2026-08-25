@@ -3375,6 +3375,13 @@ export class DeviceLinkClient {
     seq: number,
     pending: PendingReliableMessage,
   ): void {
+    // A reliable frame can be evicted without ever receiving a transport ACK
+    // (latest-wins / TTL / skip-prefix cleanup). Keep its physical-send
+    // generations in the bounded settled ledger so a delayed relay error can
+    // still be classified, while releasing the active 1024-ID send budget.
+    if (pending.envelope.dst && pending.envelope.id) {
+      this.settleOutboundRouteAttemptsForId(pending.envelope.dst, pending.envelope.id);
+    }
     peer.pending.delete(seq);
     peer.pendingBytes -= pending.bytes;
     if (peer.pending.size === 0 && peer.retryTimer) {
@@ -3881,6 +3888,11 @@ export class DeviceLinkClient {
       if (peer.retryTimer) {
         clearInterval(peer.retryTimer);
         peer.retryTimer = null;
+      }
+      for (const pending of peer.pending.values()) {
+        if (pending.envelope.id) {
+          this.settleOutboundRouteAttemptsForId(dst, pending.envelope.id);
+        }
       }
       peer.pending.clear();
       peer.pendingBytes = 0;
