@@ -41,3 +41,9 @@ export function setSessionFastMode(sessionId: string, enabled: boolean): void {
 export function getSessionFastMode(sessionId: string): boolean {
   return fastBySession.has(sessionId);
 }
+
+/** 账户 / app-session 边界清理全部 owner-scoped 运行时轴。 */
+export function clearAllSessionRuntimeAxes(): void {
+  bySession.clear();
+  fastBySession.clear();
+}

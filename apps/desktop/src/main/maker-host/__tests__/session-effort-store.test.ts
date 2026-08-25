@@ -14,4 +14,22 @@ describe('session effort store', () => {
     setSessionEffort('fixed-effort', null);
     expect(getSessionEffort('fixed-effort')).toBeNull();
   });
+
+  it('clears every owner-scoped effort and Fast axis at an account boundary', async () => {
+    const {
+      clearAllSessionRuntimeAxes,
+      getSessionEffort,
+      getSessionFastMode,
+      setSessionEffort,
+      setSessionFastMode,
+    } = await import('../session-effort-store');
+
+    setSessionEffort('owner-effort', 'xhigh');
+    setSessionFastMode('owner-fast', true);
+
+    clearAllSessionRuntimeAxes();
+
+    expect(getSessionEffort('owner-effort')).toBeNull();
+    expect(getSessionFastMode('owner-fast')).toBe(false);
+  });
 });

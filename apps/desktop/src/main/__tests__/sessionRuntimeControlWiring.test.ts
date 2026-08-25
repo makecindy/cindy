@@ -56,6 +56,14 @@ describe('session runtime control wiring', () => {
       '// ── Custom protocol registration',
     );
     expect(body).toContain('if (runtimeControlOwnerScopeKey !== scopeKey) {');
+    expect(body).toContain('clearAllSessionProviders();');
+    expect(body).toContain('clearAllSessionRuntimeAxes();');
+    expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(
+      body.indexOf('clearAllSessionRuntimeControlStates();'),
+    );
+    expect(body.indexOf('clearAllSessionRuntimeAxes();')).toBeLessThan(
+      body.indexOf('clearAllSessionRuntimeControlStates();'),
+    );
     expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
       body.indexOf('runStableOwnerPostCommitTask('),
     );
@@ -111,8 +119,34 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('commitRuntimeAxisAfterPersistence({');
       expect(body.indexOf(persist)).toBeLessThan(body.indexOf(commit));
       expect(body).toContain('markRemoteSettingPersistedInsideHandler(remoteResponse);');
-      expect(body).toContain('recoverRemoteRuntimeAxisPersistence(sessionId');
+      expect(body).toContain('recoverRemoteRuntimeAxisPersistence(');
+      expect(body).toContain('assertCanCommit: assertOwnerCurrent');
     }
+  });
+
+  it('drops in-flight effort and Fast mutations after an owner boundary', () => {
+    const effort = handlerBody(
+      registerSource,
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+      'MAKER_INVOKE.SET_PERMISSION_MODE',
+    );
+    const fast = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_FAST_MODE',
+      'MAKER_INVOKE.SET_THINKING_ENABLED',
+    );
+
+    for (const body of [effort, fast]) {
+      expect(body).toContain('const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();');
+      expect(body).toContain('sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)');
+      expect(body).toContain('assertCanCommit: assertOwnerCurrent');
+      expect(body.indexOf('assertOwnerCurrent();')).toBeLessThan(
+        body.indexOf('return await apply'),
+      );
+    }
+    expect(registerSource).toContain(
+      'if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;',
+    );
   });
 
   it('rejects terminal tasks inside the shared route lock before runtime mutations', () => {

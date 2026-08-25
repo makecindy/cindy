@@ -636,6 +636,8 @@ import {
   resetSessionRuntimeFallbackSettings,
   writeSessionRuntimeFallbackEnabled,
 } from './maker-host/session-runtime-fallback-store.js';
+import { clearAllSessionProviders } from './maker-host/session-provider-store.js';
+import { clearAllSessionRuntimeAxes } from './maker-host/session-effort-store.js';
 import { clearAllSessionRuntimeControlStates } from './maker-ipc/sessionRuntimeControl.js';
 import {
   resolveOwnerScopedSecretStorageKey,
@@ -2223,6 +2225,8 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
   // selections belong to the committed owner scope, so clear them once when that
   // scope changes rather than on every retry for the same owner.
   if (runtimeControlOwnerScopeKey !== scopeKey) {
+    clearAllSessionProviders();
+    clearAllSessionRuntimeAxes();
     clearAllSessionRuntimeControlStates();
     runtimeControlOwnerScopeKey = scopeKey;
   }

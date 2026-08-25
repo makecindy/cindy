@@ -19,6 +19,7 @@ export interface ApplyRuntimeSelectionAxesWithRecoveryInput {
 export interface CommitRuntimeAxisAfterPersistenceInput {
   persist: () => Promise<void>;
   commit: () => void;
+  assertCanCommit?: () => void;
   recoverAfterPersistenceFailure?: () => Promise<void>;
 }
 
@@ -33,6 +34,9 @@ export async function commitRuntimeAxisAfterPersistence(
   try {
     await input.persist();
   } catch (persistenceError) {
+    // Owner transitions invalidate both the requested write and any recovery
+    // against the old live Session. Fence that path before touching either.
+    input.assertCanCommit?.();
     if (input.recoverAfterPersistenceFailure) {
       try {
         await input.recoverAfterPersistenceFailure();
@@ -45,6 +49,9 @@ export async function commitRuntimeAxisAfterPersistence(
     }
     throw persistenceError;
   }
+  // Persistence may have yielded across an owner transition. The final store /
+  // generation commit must therefore be fenced independently of the DB write.
+  input.assertCanCommit?.();
   input.commit();
 }
 

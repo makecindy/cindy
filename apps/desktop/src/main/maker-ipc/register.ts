@@ -572,6 +572,7 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import {
   runPiPackageListIpcBoundary,
   runPiPackageMutationIpcBoundary,
@@ -15061,10 +15062,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     previousProfile: SessionRuntimeProfile,
     patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,
+    runtimeOwnerEpoch: number,
   ): Promise<void> => {
+    if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
     try {
       await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
     } catch (recoveryError) {
+      if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
       const retainedSession = maker.getSession(sessionId);
       if (retainedSession) {
         const retainedProfile: SessionRuntimeProfile = {
@@ -15100,6 +15104,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof effort !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
     }
+    const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+    const assertOwnerCurrent = () => {
+      if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'app session changed during runtime effort update; request dropped',
+        );
+      }
+    };
     const remoteInvoke = isDeviceLinkInvoke();
     const remoteResponse = remoteInvoke ? {} : undefined;
     const persistEffort = async () => {
@@ -15133,7 +15146,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       const sess = maker.getSession(sessionId);
       if (!sess) {
-        await commitRuntimeAxisAfterPersistence({ persist: persistEffort, commit: commitEffort });
+        await commitRuntimeAxisAfterPersistence({
+          persist: persistEffort,
+          commit: commitEffort,
+          assertCanCommit: assertOwnerCurrent,
+        });
         log.debug('set-effort: session not found, no-op', { sessionId });
         return remoteResponse;
       }
@@ -15143,7 +15160,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 持久化不受影响:本地由 renderer sessionService.update 落盘,远程由 device-link
       // dispatch 的 persistRemoteSetting 按请求值落被控端 DB,重建时生效。
       if (pendingCredentialSwitchHolder?.has(sessionId)) {
-        await commitRuntimeAxisAfterPersistence({ persist: persistEffort, commit: commitEffort });
+        await commitRuntimeAxisAfterPersistence({
+          persist: persistEffort,
+          commit: commitEffort,
+          assertCanCommit: assertOwnerCurrent,
+        });
         log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
         return remoteResponse;
       }
@@ -15166,17 +15187,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await commitRuntimeAxisAfterPersistence({
           persist: persistEffort,
           commit: commitEffort,
+          assertCanCommit: assertOwnerCurrent,
           ...(remoteInvoke && result === 'applied' && previousProfile
             ? {
                 recoverAfterPersistenceFailure: () =>
-                  recoverRemoteRuntimeAxisPersistence(sessionId, previousProfile, {
-                    effort: effort as SessionRuntimeProfile['effort'],
-                  }),
+                  recoverRemoteRuntimeAxisPersistence(
+                    sessionId,
+                    previousProfile,
+                    { effort: effort as SessionRuntimeProfile['effort'] },
+                    runtimeOwnerEpoch,
+                  ),
               }
             : {}),
         });
         return remoteResponse;
       } catch (error) {
+        if (isIpcError(error)) throw error;
         log.warn('set-effort runtime update failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),
@@ -15186,6 +15212,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
     return withSendToSessionLock(sessionId, async () => {
       await assertReviewSettingsUnlocked(sessionId);
+      assertOwnerCurrent();
       try {
         return await applyEffort();
       } finally {
@@ -15501,6 +15528,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof sessionId !== 'string' || typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
+      const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+      const assertOwnerCurrent = () => {
+        if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'app session changed during runtime Fast mode update; request dropped',
+          );
+        }
+      };
       const remoteInvoke = isDeviceLinkInvoke();
       const remoteResponse = remoteInvoke ? {} : undefined;
       const persistFastMode = async () => {
@@ -15535,6 +15571,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await commitRuntimeAxisAfterPersistence({
             persist: persistFastMode,
             commit: commitFastMode,
+            assertCanCommit: assertOwnerCurrent,
           });
           log.debug('set-fast-mode: session not found, no-op', { sessionId });
           return remoteResponse;
@@ -15546,6 +15583,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await commitRuntimeAxisAfterPersistence({
             persist: persistFastMode,
             commit: commitFastMode,
+            assertCanCommit: assertOwnerCurrent,
           });
           log.debug('set-fast-mode: pi responses bridge state updated', { sessionId, enabled });
           return remoteResponse;
@@ -15554,6 +15592,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await commitRuntimeAxisAfterPersistence({
             persist: persistFastMode,
             commit: commitFastMode,
+            assertCanCommit: assertOwnerCurrent,
           });
           log.debug('set-fast-mode: agent does not implement fast mode, no-op', {
             sessionId,
@@ -15566,6 +15605,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await commitRuntimeAxisAfterPersistence({
             persist: persistFastMode,
             commit: commitFastMode,
+            assertCanCommit: assertOwnerCurrent,
           });
           log.debug('set-fast-mode: skipped live push (pending credential switch)', { sessionId });
           return remoteResponse;
@@ -15577,12 +15617,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await commitRuntimeAxisAfterPersistence({
           persist: persistFastMode,
           commit: commitFastMode,
+          assertCanCommit: assertOwnerCurrent,
           ...(remoteInvoke && previousProfile
             ? {
                 recoverAfterPersistenceFailure: () =>
-                  recoverRemoteRuntimeAxisPersistence(sessionId, previousProfile, {
-                    fastMode: enabled,
-                  }),
+                  recoverRemoteRuntimeAxisPersistence(
+                    sessionId,
+                    previousProfile,
+                    { fastMode: enabled },
+                    runtimeOwnerEpoch,
+                  ),
               }
             : {}),
         });
@@ -15590,6 +15634,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       return withSendToSessionLock(sessionId, async () => {
         await assertReviewSettingsUnlocked(sessionId);
+        assertOwnerCurrent();
         try {
           return await applyFastMode();
         } finally {

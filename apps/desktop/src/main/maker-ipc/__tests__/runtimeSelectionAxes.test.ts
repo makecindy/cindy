@@ -119,6 +119,47 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     expect(order).toEqual(['persist', 'recover']);
   });
 
+  it('does not commit after the owner boundary changes during persistence', async () => {
+    const ownerBoundaryError = new Error('owner changed');
+    let ownerCurrent = true;
+    const commit = vi.fn();
+
+    await expect(
+      commitRuntimeAxisAfterPersistence({
+        persist: async () => {
+          ownerCurrent = false;
+        },
+        assertCanCommit: () => {
+          if (!ownerCurrent) throw ownerBoundaryError;
+        },
+        commit,
+      }),
+    ).rejects.toBe(ownerBoundaryError);
+
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('does not run persistence recovery after the owner boundary changes', async () => {
+    const persistenceError = new Error('sqlite rejected');
+    const ownerBoundaryError = new Error('owner changed');
+    const recoverAfterPersistenceFailure = vi.fn();
+
+    await expect(
+      commitRuntimeAxisAfterPersistence({
+        persist: async () => {
+          throw persistenceError;
+        },
+        assertCanCommit: () => {
+          throw ownerBoundaryError;
+        },
+        commit: vi.fn(),
+        recoverAfterPersistenceFailure,
+      }),
+    ).rejects.toBe(ownerBoundaryError);
+
+    expect(recoverAfterPersistenceFailure).not.toHaveBeenCalled();
+  });
+
   it('restores the old stores and retires a partially-mutated session on axis failure', async () => {
     const order: string[] = [];
     const axisError = new Error('fast transport disconnected');
