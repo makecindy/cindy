@@ -864,13 +864,11 @@ function classifyRunnerCommandLine(
   commandLine: string,
   script: string,
 ): PiSubagentRunnerPresence {
-  if (commandLine.includes(script)) return 'running';
-  // Electron puts Chromium flags first and the staged runner.cjs last. A
-  // truncated listing of *this* entry can still name piSubagentRunnerProcess
-  // without the script; that is not a recycled pid. Other Cindy utility
-  // processes also contain `utility-sub-type` and must not block reclaim.
-  if (commandLine.includes('piSubagentRunnerProcess')) return 'unverifiable';
-  return 'gone';
+  // A readable listing is complete enough to decide. The proof is this run's
+  // generated script path (UUID directory). Another Subagent utility process
+  // at a recycled pid also contains `piSubagentRunnerProcess`, but not *this*
+  // script — that is gone, not unverifiable. Unreadable probes stay unknown.
+  return commandLine.includes(script) ? 'running' : 'gone';
 }
 
 function classifyCommandLineProbe(

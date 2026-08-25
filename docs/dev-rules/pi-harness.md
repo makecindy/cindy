@@ -132,7 +132,8 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
    `process.execPath` 恰好可执行 JavaScript 不构成生产证据。打包契约测试必须同时断言
    `RunAsNode=false`、固定 utility-process 入口在 forge 清单中、Pi host 使用该入口，避免
    两份各自正确的测试再次掩盖跨模块矛盾。身份校验必须读未截断命令行（POSIX `ps -ww`
-   / Linux `/proc/<pid>/cmdline`）；紧急停止先对 runner pid 发 SIGTERM 再 SIGKILL，
+   / Linux `/proc/<pid>/cmdline`）；成功读到的命令行不含本 run 的 `runnerScript` 即
+   视为 gone，只有读失败才 unverifiable。紧急停止先对 runner pid 发 SIGTERM 再 SIGKILL，
    禁止 `kill(-pid)` 把 utility-process 当成独立进程组。
 
 ## 5. 已交付(2026-07 里程碑)

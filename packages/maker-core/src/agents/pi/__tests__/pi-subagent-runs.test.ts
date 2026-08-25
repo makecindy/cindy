@@ -504,18 +504,18 @@ describe('PI durable subagent run store', () => {
       }
     });
 
-    it('does not treat a truncated utility-process listing as a recycled pid', async () => {
+    it('treats another Subagent utility process at a recycled pid as gone', async () => {
       stubAliveRunner();
       childProcess.spawnSync.mockImplementation(() => ({
         status: 0,
-        stdout: '/Applications/Cindy.app/Contents/Frameworks/Cindy Helper.app/Contents/MacOS/Cindy Helper --utility-sub-type=node /app/piSubagentRunnerProcess.js',
+        stdout: '/Applications/Cindy.app/Contents/Frameworks/Cindy Helper.app/Contents/MacOS/Cindy Helper --utility-sub-type=node /app/piSubagentRunnerProcess.js /runs/other-run/runner.cjs',
       }));
       const root = await makeRoot();
       await writeStatus(root, expired());
 
-      await expect(listPiSubagentRuns(root)).resolves.toEqual([
-        expect.objectContaining({ state: 'running' }),
-      ]);
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([]);
+      await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+        .resolves.toBe(true);
     });
 
     it('still treats another Cindy utility process as a recycled pid', async () => {
