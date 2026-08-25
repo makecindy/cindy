@@ -133,6 +133,11 @@ async function withStatusWriteLock<T>(
   return withSessionRouteLock(sessionId, task);
 }
 
+function cleanupSessionRuntimeForTerminalStatus(sessionId: string, status: unknown): void {
+  if (status !== 'deleted' && status !== 'archived') return;
+  sessionRuntimeCleanup?.(sessionId);
+}
+
 async function writeSessionPatch(
   db: DbClient['drizzle'],
   sessionId: string,
@@ -1491,7 +1496,10 @@ export function registerSessionIpc(
     await withStatusWriteLock(
       sid,
       p.status,
-      () => writeSessionPatch(db, sid, setObj, p.status),
+      async () => {
+        await writeSessionPatch(db, sid, setObj, p.status);
+        cleanupSessionRuntimeForTerminalStatus(sid, p.status);
+      },
       p.workingDir !== undefined,
     );
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
@@ -1704,6 +1712,7 @@ export async function patchSessionMetaInDb(
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
       row.summary = null;
     }
+    cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
     return sessionToCamel(row);
   });
   notifyAgentIslandSessionPatch(updated.id, {
@@ -1856,16 +1865,20 @@ export async function setSessionsStatusInDb(
   if (sessionIds.length === 0) return [];
   const ownerScope = captureOwnerScope();
   const dbClient = getDbClient();
-  const applied = await withSessionRouteLocks(sessionIds, () =>
-    dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
+  const applied = await withSessionRouteLocks(sessionIds, async () => {
+    const rows = await dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : String(err);
       if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS' || code === 'PRECONDITION_FAILED') {
         throwIpcError(code, message);
       }
       throw err;
-    }),
-  );
+    });
+    for (const item of rows) {
+      cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
+    }
+    return rows;
+  });
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
       sessionId: item.sessionId,
@@ -2097,7 +2110,6 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
  */
 function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
-  sessionRuntimeCleanup?.(sessionId);
   if (status === 'deleted') {
     void removeTurnChangeSetsForSession(sessionId).catch((err) => {
       log.warn('turn change-set cleanup failed', {

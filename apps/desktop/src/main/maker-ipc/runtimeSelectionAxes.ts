@@ -12,8 +12,9 @@ export function resolveRetainedRuntimeEffort(input: {
   liveEffort: Effort | null;
   previousEffort: Effort | null | undefined;
 }): Effort | null {
+  if (input.liveEffort !== null) return input.liveEffort;
   if (input.targetModelHasFixedEffort || input.requestedEffort === null) return null;
-  return input.liveEffort ?? input.previousEffort ?? null;
+  return input.previousEffort ?? null;
 }
 
 interface RuntimeSelectionAxesSession {
