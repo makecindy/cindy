@@ -16,6 +16,7 @@ export interface ApplyRuntimeSelectionAxesWithRecoveryInput {
   session: RuntimeSelectionAxesSession;
   effort: Effort | null;
   fastMode: boolean;
+  assertCanCommit?: () => void;
   commitControlStores: () => void;
   restoreControlStores: () => void;
   terminateSession: () => Promise<void>;
@@ -80,23 +81,29 @@ export async function applyRuntimeSelectionAxesWithRecovery(
     try {
       await input.terminateSession();
     } catch (terminationError) {
+      input.assertCanCommit?.();
       input.restoreControlStores();
       await input.recoverLiveProfileAfterTerminationFailure?.();
       throw terminationError;
     }
+    input.assertCanCommit?.();
     input.commitControlStores();
     return;
   }
   try {
     await input.session.setEffort(input.effort);
+    input.assertCanCommit?.();
     if (input.session.agentKind === 'codex') {
       await input.session.setFastMode(input.fastMode);
+      input.assertCanCommit?.();
     }
   } catch (axisError) {
+    input.assertCanCommit?.();
     input.restoreControlStores();
     try {
       await input.terminateSession();
     } catch (terminationError) {
+      input.assertCanCommit?.();
       throw new AggregateError(
         [axisError, terminationError],
         'runtime selection axis update and session recovery both failed',
@@ -104,5 +111,6 @@ export async function applyRuntimeSelectionAxesWithRecovery(
     }
     throw axisError;
   }
+  input.assertCanCommit?.();
   input.commitControlStores();
 }

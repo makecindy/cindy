@@ -265,6 +265,24 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
+    expect(registerSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
+    expect(registerSource).toContain(
+      'automatic session runtime fallback rebuilding frozen remote route',
+    );
+    expect(registerSource).toContain(
+      'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
+    );
+    expect(registerSource).toContain('result = await applyCandidate();');
+  });
+
+  it('fences atomic model axis settlement after an owner boundary', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('const assertRuntimeOwnerCurrent = (): void => {');
+    expect(setModel).toContain('assertCanCommit: assertRuntimeOwnerCurrent,');
   });
 
   it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {

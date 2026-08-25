@@ -71,6 +71,100 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     expect(restoreControlStores).not.toHaveBeenCalled();
   });
 
+  it('does not restore or commit axis stores after the owner changes during a live RPC', async () => {
+    const ownerBoundaryError = new Error('owner changed');
+    let ownerCurrent = true;
+    const commitControlStores = vi.fn();
+    const restoreControlStores = vi.fn();
+    const terminateSession = vi.fn();
+
+    await expect(
+      applyRuntimeSelectionAxesWithRecovery({
+        session: {
+          agentKind: 'codex',
+          setEffort: vi.fn(async () => {
+            ownerCurrent = false;
+          }),
+          setFastMode: vi.fn(),
+        },
+        effort: 'high',
+        fastMode: true,
+        assertCanCommit: () => {
+          if (!ownerCurrent) throw ownerBoundaryError;
+        },
+        commitControlStores,
+        restoreControlStores,
+        terminateSession,
+      }),
+    ).rejects.toBe(ownerBoundaryError);
+
+    expect(commitControlStores).not.toHaveBeenCalled();
+    expect(restoreControlStores).not.toHaveBeenCalled();
+    expect(terminateSession).not.toHaveBeenCalled();
+  });
+
+  it('does not commit axis stores after the owner changes during the Fast RPC', async () => {
+    const ownerBoundaryError = new Error('owner changed');
+    let ownerCurrent = true;
+    const commitControlStores = vi.fn();
+    const restoreControlStores = vi.fn();
+    const terminateSession = vi.fn();
+
+    await expect(
+      applyRuntimeSelectionAxesWithRecovery({
+        session: {
+          agentKind: 'codex',
+          setEffort: vi.fn(async () => undefined),
+          setFastMode: vi.fn(async () => {
+            ownerCurrent = false;
+          }),
+        },
+        effort: 'high',
+        fastMode: true,
+        assertCanCommit: () => {
+          if (!ownerCurrent) throw ownerBoundaryError;
+        },
+        commitControlStores,
+        restoreControlStores,
+        terminateSession,
+      }),
+    ).rejects.toBe(ownerBoundaryError);
+
+    expect(commitControlStores).not.toHaveBeenCalled();
+    expect(restoreControlStores).not.toHaveBeenCalled();
+    expect(terminateSession).not.toHaveBeenCalled();
+  });
+
+  it('does not repopulate fixed-effort stores after the owner changes during termination', async () => {
+    const ownerBoundaryError = new Error('owner changed');
+    let ownerCurrent = true;
+    const commitControlStores = vi.fn();
+    const restoreControlStores = vi.fn();
+
+    await expect(
+      applyRuntimeSelectionAxesWithRecovery({
+        session: {
+          agentKind: 'claude-code',
+          setEffort: vi.fn(),
+          setFastMode: vi.fn(),
+        },
+        effort: null,
+        fastMode: false,
+        assertCanCommit: () => {
+          if (!ownerCurrent) throw ownerBoundaryError;
+        },
+        commitControlStores,
+        restoreControlStores,
+        terminateSession: vi.fn(async () => {
+          ownerCurrent = false;
+        }),
+      }),
+    ).rejects.toBe(ownerBoundaryError);
+
+    expect(commitControlStores).not.toHaveBeenCalled();
+    expect(restoreControlStores).not.toHaveBeenCalled();
+  });
+
   it('restores the old stores when a fixed-effort session cannot be retired', async () => {
     const terminationError = new Error('close rejected');
     const commitControlStores = vi.fn();

@@ -5,7 +5,11 @@ import {
   getSessionProvider,
   setSessionProvider,
 } from '../../maker-host/session-provider-store.js';
-import { applyRuntimeSetModelChange, type RuntimeSetModelMaker } from '../runtimeSetModel.js';
+import {
+  applyRuntimeSetModelChange,
+  isRemoteModelSwitchRouteChangeError,
+  type RuntimeSetModelMaker,
+} from '../runtimeSetModel.js';
 
 const sessionProviderWriteObserver = vi.hoisted(() => ({
   current: null as ((sessionId: string, providerId: string | null) => void) | null,
@@ -38,6 +42,22 @@ function rememberSession(sessionId: string): string {
   touchedSessions.add(sessionId);
   return sessionId;
 }
+
+describe('isRemoteModelSwitchRouteChangeError', () => {
+  it('recognizes both IPC codes and remote daemon message markers', () => {
+    expect(
+      isRemoteModelSwitchRouteChangeError({ code: 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' }),
+    ).toBe(true);
+    expect(
+      isRemoteModelSwitchRouteChangeError(
+        new Error('[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] close and recreate'),
+      ),
+    ).toBe(true);
+    expect(isRemoteModelSwitchRouteChangeError(new Error('ordinary set-model failure'))).toBe(
+      false,
+    );
+  });
+});
 
 describe('applyRuntimeSetModelChange', () => {
   it('rolls back provider route when live setModel rejects', async () => {

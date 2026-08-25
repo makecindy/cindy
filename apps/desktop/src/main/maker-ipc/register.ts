@@ -863,7 +863,10 @@ import {
   isCredentialModeSwitchBusyError,
   isLocalSessionBusy,
 } from '../maker-host/codex-credential-switch.js';
-import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
+import {
+  applyRuntimeSetModelChange,
+  isRemoteModelSwitchRouteChangeError,
+} from './runtimeSetModel.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
@@ -11015,19 +11018,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (runtimeSession) {
         pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);
       }
-      const result = await applySessionRuntimeSelection(
-        sessionId,
-        candidate.model,
-        candidate.providerId,
-        { effort: candidate.effort, fastMode: candidate.fastMode },
-        {
-          source: 'fallback',
-          expectedGeneration: profiles.control.generation,
-          previousProfile: currentForFallback,
-          effortExplicit: false,
-          fastExplicit: false,
-        },
-      );
+      const applyCandidate = () =>
+        applySessionRuntimeSelection(
+          sessionId,
+          candidate.model,
+          candidate.providerId,
+          { effort: candidate.effort, fastMode: candidate.fastMode },
+          {
+            source: 'fallback',
+            expectedGeneration: profiles.control.generation,
+            previousProfile: currentForFallback,
+            effortExplicit: false,
+            fastExplicit: false,
+          },
+        );
+      let result: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
+      try {
+        result = await applyCandidate();
+      } catch (error) {
+        if (
+          runtimeSession?.agentKind !== 'claude-code' ||
+          !runtimeSession.remoteHostId ||
+          !isRemoteModelSwitchRouteChangeError(error)
+        ) {
+          throw error;
+        }
+        // SSH Claude daemons freeze endpoint/credential env at spawn. The old
+        // Session is already registered in pendingSessionRuntimeFallbackRebuilds,
+        // so this requested close preserves the exact auto-resume attempt while
+        // lazy bootstrap recreates it from the accepted candidate profile.
+        log.info('automatic session runtime fallback rebuilding frozen remote route', {
+          sessionId,
+          episodeAttempt,
+          attemptToken,
+          remoteHostId: runtimeSession.remoteHostId,
+          toProviderId: candidate.providerId,
+          toModel: candidate.model,
+        });
+        await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+        result = await applyCandidate();
+      }
       log.info('automatic session runtime fallback evaluated', {
         sessionId,
         episodeAttempt,
@@ -14520,13 +14550,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let atomicSelection = selection as
       { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
-    const supersededByOwnerBoundary = (): boolean => {
-      if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return false;
-      if (internalOptions.source === 'user') {
+    const assertRuntimeOwnerCurrent = (): void => {
+      if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
         throwIpcError(
           'PRECONDITION_FAILED',
           'app session changed during runtime selection; request dropped',
         );
+      }
+    };
+    const supersededByOwnerBoundary = (): boolean => {
+      if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return false;
+      if (internalOptions.source === 'user') {
+        assertRuntimeOwnerCurrent();
       }
       return true;
     };
@@ -14862,6 +14897,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               session: sess,
               effort: selectionToCommit.effort,
               fastMode: selectionToCommit.fastMode,
+              assertCanCommit: assertRuntimeOwnerCurrent,
               commitControlStores,
               restoreControlStores,
               terminateSession: () =>

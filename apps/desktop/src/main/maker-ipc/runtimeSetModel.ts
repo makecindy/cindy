@@ -95,6 +95,13 @@ export type ApplyRuntimeSetModelChangeResult =
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
   | { status: 'deferred' };
 
+export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
+  return (
+    (error as { code?: unknown } | null)?.code === 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' ||
+    (error instanceof Error && error.message.includes('[REMOTE_MODEL_SWITCH_ROUTE_CHANGE]'))
+  );
+}
+
 /**
  * 应用本地运行时 model/provider 切换。
  *
