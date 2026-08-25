@@ -60,15 +60,17 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、启动时 RPC
 `set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
-下一次发送前换窗。设置页百分比阈值只控制 Claude Code，不注入 Pi。env:`CINDY_PI_API_KEY`、
+下一次发送前换窗。设置页的 Pi 百分比在新建任务启动时冻结，并写入该任务 `settings.json` 的
+`compaction.reserveTokens`（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
+Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
 放任 pi 默认(未写 settings.json):`retry.*`(agent 级 3 次退避、provider 级 0)、
-`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、`compaction.reserveTokens/keepRecentTokens`、
-`defaultProjectTrust`。这些默认目前合理;**若未来发现某默认值需钉死防 pi 二进制升级漂移,
-在 `index.ts` 加 `writeSettingsJson` 显式写入**(与 models.json 同机制,每次 startSession 覆写)。
+`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、`compaction.keepRecentTokens`、
+`defaultProjectTrust`。Cindy 会在每次 startSession 覆写 `transport` 与 `compaction.reserveTokens`；
+未配置 Pi 百分比时不写 `reserveTokens`，沿用 Pi 默认 16384。
 
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 

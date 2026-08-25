@@ -14,7 +14,7 @@ Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
-Pi 不读取该百分比，启动时显式开启原生 auto-compaction，由 Pi 按
+Pi 读取独立的设置页百分比，在任务启动时冻结并写成原生 `compaction.reserveTokens`，由 Pi 按
 `contextWindow - reserveTokens` 处理 threshold 压缩，并在 provider 报 context overflow 时按原生
 `Agent.continue()` 语义压缩续接。Cindy 只消费 Pi 的 `compaction_start`／`compaction_end` 事件做
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。

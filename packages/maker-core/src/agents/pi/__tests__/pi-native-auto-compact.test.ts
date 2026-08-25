@@ -354,4 +354,25 @@ describe("PiAgent native auto-compaction ownership", () => {
     expect(knobs.rpcCalls.some((call) => call.type === "switch_session")).toBe(true);
     await handle.close();
   });
+
+  it("keeps the startup Pi percentage after the live setting changes", async () => {
+    const runtimeConfig = {
+      endpoint: "http://127.0.0.1:9",
+      autoCompactThresholdPct: 75,
+      piAutoCompactThresholdPct: 75,
+    };
+    const handle = await new PiAgent({
+      ...buildDeps(),
+      runtimeConfig,
+    }).startSession({
+      sessionId: "s1",
+      workingDir: cwd,
+      model: "m",
+    });
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(50_000);
+    runtimeConfig.piAutoCompactThresholdPct = 50;
+    await handle.setModel!("n");
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
+    await handle.close();
+  });
 });

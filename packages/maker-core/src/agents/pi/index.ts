@@ -1194,19 +1194,19 @@ export class PiAgent extends BaseAgent {
     };
   }
 
-  private buildCurrentPiSettingsJson(contextWindow?: number): string {
+  private buildCurrentPiSettingsJson(contextWindow?: number, piCompactionPct?: number): string {
     return buildPiSettingsJsonContent(
       contextWindow && contextWindow > 0 ? contextWindow : 128_000,
-      this.deps.runtimeConfig.piAutoCompactThresholdPct,
+      piCompactionPct,
     );
   }
 
   private async writePiRuntimeSettings(
     agentHome: string,
-    opts: { fileOps?: PiRemoteFileOps; contextWindow?: number } = {},
+    opts: { fileOps?: PiRemoteFileOps; contextWindow?: number; piCompactionPct?: number } = {},
   ): Promise<void> {
     const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
-    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow);
+    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow, opts.piCompactionPct);
     if (opts.fileOps) {
       await opts.fileOps.writeFile(settingsJsonPath, settingsJsonContent);
       return;
@@ -1233,6 +1233,8 @@ export class PiAgent extends BaseAgent {
       offlineValidationOnly?: boolean;
       /** Current model context window used to translate the Pi percentage setting. */
       contextWindow?: number;
+      /** Session-frozen Pi auto-compact percentage. Do not re-read the live getter. */
+      piCompactionPct?: number;
     } = {},
   ): Promise<{
     gatewayImageInputByModel: Map<string, boolean>;
@@ -1373,7 +1375,7 @@ export class PiAgent extends BaseAgent {
     // The native ChatGPT adapter prefers WebSocket in auto mode. Cindy's
     // authenticated loopback proxy is an HTTP/SSE boundary, so pin SSE for the
     // isolated embedded runtime. Other PI providers ignore this transport knob.
-    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow);
+    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow, opts.piCompactionPct);
     if (!opts.preview) {
       // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
       // 执行、endpoint 是否有值、路径形态。
@@ -1441,6 +1443,7 @@ export class PiAgent extends BaseAgent {
     assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
     const remote = Boolean(opts.remoteHostId);
+    const sessionPiAutoCompactPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
     // 缺省 → 空,只有网关 provider `cindy`(现状不变)。失败不致命,降级为无原生 provider。
@@ -1966,6 +1969,7 @@ export class PiAgent extends BaseAgent {
         fileOps,
         preview: true,
         contextWindow: startupContextWindow,
+        piCompactionPct: sessionPiAutoCompactPct,
       });
       configHome = joinRemotePosixPath(
         agentHome,
@@ -1978,7 +1982,7 @@ export class PiAgent extends BaseAgent {
       nativeProviders,
       retainedRuntimeModel,
       authProviderId,
-      { remote, fileOps, contextWindow: startupContextWindow },
+      { remote, fileOps, contextWindow: startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
     );
     const bashPackageHome = joinRemotePosixPath(configHome, 'bash-package-home');
     await mkdirp(bashPackageHome);
@@ -4394,7 +4398,7 @@ export class PiAgent extends BaseAgent {
         previousProviders,
         retainedRuntimeModel,
         authProviderId,
-        { remote, fileOps, contextWindow: startupContextWindow },
+        { remote, fileOps, contextWindow: startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
       );
       nativeProviders = previousProviders;
       nativeProviderById.clear();
@@ -4466,7 +4470,7 @@ export class PiAgent extends BaseAgent {
           nativeProviders,
           retainedRuntimeModel,
           authProviderId,
-          { remote, fileOps, contextWindow: startupContextWindow },
+          { remote, fileOps, contextWindow: startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
         );
         gatewayApiByModel.clear();
         for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
@@ -4783,6 +4787,7 @@ export class PiAgent extends BaseAgent {
           await this.writePiRuntimeSettings(configHome, {
             fileOps,
             contextWindow: nextWindow,
+            piCompactionPct: sessionPiAutoCompactPct,
           });
           if (sdkSessionId) {
             const reloaded = await proc.request({
