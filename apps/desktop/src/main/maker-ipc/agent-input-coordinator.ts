@@ -665,6 +665,12 @@ interface SessionInputState {
   /** Leftover terminal fence: Session incarnation + the generation that was reclaimed. */
   fencedStaleTerminal: { instanceId: string; generation: number } | null;
   /**
+   * Host-intentionally ignored terminal (planned cc-mgr upgrade close).
+   * Session still records the error snapshot; leftover/paired-done must not
+   * re-synthesize it as a user-visible recovery.
+   */
+  suppressedTerminalError: { generation: number; reason: string } | null;
+  /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
    * 消息 —— 队列可拖拽重排,等待态必须跟消息走而不是跟"队首"这个位置走。null = 无等待。
@@ -730,6 +736,7 @@ function createInitialInputState(
     sessionRunningRetryToken: null,
     staleLiveIdleSinceMs: null,
     fencedStaleTerminal,
+    suppressedTerminalError: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -3012,6 +3019,20 @@ export class AgentInputCoordinator {
     return isMatchingFencedStaleTerminal(this.getState(sessionId).fencedStaleTerminal, meta);
   }
 
+  noteSuppressedTerminalError(
+    sessionId: string,
+    meta: { generation?: number; reason?: string },
+  ): void {
+    if (typeof meta.generation !== 'number' || typeof meta.reason !== 'string' || meta.reason.length === 0) {
+      return;
+    }
+    const state = this.getState(sessionId);
+    state.suppressedTerminalError = {
+      generation: meta.generation,
+      reason: meta.reason,
+    };
+  }
+
   onTurnEvent(
     sessionId: string,
     type: 'done' | 'error',
@@ -3191,24 +3212,26 @@ export class AgentInputCoordinator {
       const observed = this.readObservedCurrentTurnTerminal(sessionId);
       if (observed?.kind === 'error') {
         if (this.observedMatchesBoundActiveTurn(active, observed)) {
-          const signals: Omit<InterruptedTurnErrorSignals, 'message'> = {
-            ...(observed.reason ? { reason: observed.reason } : {}),
-            ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
-            ...(typeof observed.errorStatus === 'number'
-              ? { errorStatus: observed.errorStatus }
-              : {}),
-          };
-          // Codex/Claude 失败收尾是 terminal error 后再补 done。漏掉的 error
-          // 回调不能被这道配对 done 先清掉 leftover activeTurn，否则 250ms
-          // reconcile 失去恢复对象，失败输入会被当成成功结算且没有 Retry。
-          this.onTurnEvent(
-            sessionId,
-            'error',
-            redactSensitiveText(observed.message ?? 'Turn ended with an error'),
-            Object.keys(signals).length > 0 ? signals : undefined,
-            meta,
-          );
-          return;
+          if (!this.consumeSuppressedObservedError(sessionId, observed)) {
+            const signals: Omit<InterruptedTurnErrorSignals, 'message'> = {
+              ...(observed.reason ? { reason: observed.reason } : {}),
+              ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
+              ...(typeof observed.errorStatus === 'number'
+                ? { errorStatus: observed.errorStatus }
+                : {}),
+            };
+            // Codex/Claude 失败收尾是 terminal error 后再补 done。漏掉的 error
+            // 回调不能被这道配对 done 先清掉 leftover activeTurn，否则 250ms
+            // reconcile 失去恢复对象，失败输入会被当成成功结算且没有 Retry。
+            this.onTurnEvent(
+              sessionId,
+              'error',
+              redactSensitiveText(observed.message ?? 'Turn ended with an error'),
+              Object.keys(signals).length > 0 ? signals : undefined,
+              meta,
+            );
+            return;
+          }
         }
         log.warn('ignored turn-done while leftover activeTurn does not match observed error', {
           sessionId,
@@ -3552,6 +3575,26 @@ export class AgentInputCoordinator {
     }
   }
 
+  private isSuppressedObservedError(
+    sessionId: string,
+    observed: ReturnType<AgentInputCoordinator['readObservedCurrentTurnTerminal']>,
+  ): boolean {
+    const suppressed = this.getState(sessionId).suppressedTerminalError;
+    if (!suppressed || observed?.kind !== 'error') return false;
+    if (typeof observed.generation !== 'number') return false;
+    if (suppressed.generation !== observed.generation) return false;
+    return observed.reason === suppressed.reason;
+  }
+
+  private consumeSuppressedObservedError(
+    sessionId: string,
+    observed: ReturnType<AgentInputCoordinator['readObservedCurrentTurnTerminal']>,
+  ): boolean {
+    if (!this.isSuppressedObservedError(sessionId, observed)) return false;
+    this.getState(sessionId).suppressedTerminalError = null;
+    return true;
+  }
+
   private bindActiveTurnVendorGeneration(sessionId: string, active: ActiveTurn): void {
     if (typeof active.vendorTurnGeneration === 'number') return;
     const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
@@ -3593,7 +3636,12 @@ export class AgentInputCoordinator {
     // Probe unavailable / throw is not `{ kind: 'none' }`. Falling through would
     // treat tracker latch as a successful leftover settlement.
     if (observed == null) return false;
-    if (observed.kind === 'error') return false;
+    if (observed.kind === 'error') {
+      return (
+        this.isSuppressedObservedError(sessionId, observed) &&
+        this.observedMatchesBoundActiveTurn(active, observed)
+      );
+    }
     if (observed.kind === 'done') return this.observedMatchesBoundActiveTurn(active, observed);
     return this.deps.isTurnRunning(sessionId) === true;
   }
@@ -3606,7 +3654,11 @@ export class AgentInputCoordinator {
     if (!active || !isActiveTurnDispatched(active)) return false;
     if (this.deps.isLiveSessionPresent?.(sessionId) !== true) return false;
     const observed = this.readObservedCurrentTurnTerminal(sessionId);
-    return observed?.kind === 'error' && this.observedMatchesBoundActiveTurn(active, observed);
+    return (
+      observed?.kind === 'error' &&
+      this.observedMatchesBoundActiveTurn(active, observed) &&
+      !this.isSuppressedObservedError(sessionId, observed)
+    );
   }
 
   private tryReconcileStaleDispatchBoundary(
