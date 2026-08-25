@@ -2160,13 +2160,6 @@ export function getMaker(): Maker {
         });
         return false;
       }
-      if (makerMemoryManager.isEnabled()) {
-        void makerMemoryManager.syncNativeAgentsOff(['pi']).catch((error) => {
-          desktopMakerLogger.warn('Pi maker memory sync failed after runtime recovery', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
       return true;
     };
     setVisionBridgeController({

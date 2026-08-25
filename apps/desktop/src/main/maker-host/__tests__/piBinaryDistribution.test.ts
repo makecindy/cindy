@@ -62,4 +62,13 @@ describe('Pi binary distribution contract', () => {
     expect(bootstrap).toContain('piRuntimeRecovery.markUnavailable');
     expect(bootstrap).toContain('registerPiAgentIfAvailable');
   });
+
+  it('does not override Pi memory when the runtime recovers', () => {
+    const host = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/maker-host/index.ts'),
+      'utf8',
+    );
+
+    expect(host).not.toContain("syncNativeAgentsOff(['pi'])");
+  });
 });
