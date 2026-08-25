@@ -426,6 +426,51 @@ describe('closed event', () => {
   });
 });
 
+describe('owner change', () => {
+  it('destroys visible, hidden, and prewarmed windows without clearing detached preferences', () => {
+    const h = makeHarness(new Set(['visible', 'hidden', 'prewarmed']));
+    h.controller.open('visible');
+    markReady(h.controller, h.created[0].win);
+    h.controller.open('hidden');
+    markReady(h.controller, h.created[1].win);
+    h.controller.close('hidden');
+    h.controller.prewarm('prewarmed');
+
+    h.controller.closeForOwnerChange();
+
+    expect(h.created.map(({ win }) => win.isDestroyed())).toEqual([true, true, true]);
+    expect(h.created.every(({ win }) => win.destroy.mock.calls.length === 1)).toBe(true);
+    expect(h.created.every(({ win }) => win.close.mock.calls.length === 0)).toBe(true);
+    expect(h.entries()).toEqual({
+      visible: { detached: true, lastOpen: false },
+      hidden: { detached: true, lastOpen: false },
+    });
+    expect(h.controller.getState()).toEqual({
+      visible: { detached: true, lastOpen: false, open: false },
+      hidden: { detached: true, lastOpen: false, open: false },
+    });
+    expect(h.broadcasts.at(-1)).toEqual(h.controller.getState());
+  });
+
+  it('does not recreate closed windows during reconcile; the next explicit open creates a new slot', () => {
+    const h = makeHarness(new Set(['a']));
+    h.controller.open('a');
+    const ownerAWindow = h.created[0].win;
+
+    h.controller.closeForOwnerChange();
+    h.controller.reconcile([ghost('a')]);
+
+    expect(ownerAWindow.isDestroyed()).toBe(true);
+    expect(h.created).toHaveLength(1);
+    expect(h.entries().a).toEqual({ detached: true, lastOpen: false });
+
+    h.controller.open('a');
+    expect(h.created).toHaveLength(2);
+    expect(h.created[1].win.isDestroyed()).toBe(false);
+    expect(h.entries().a).toEqual({ detached: true, lastOpen: true });
+  });
+});
+
 describe('open guard (non-detachable)', () => {
   it('non-detachable plugin: prunes entry, no window', () => {
     const h = makeHarness(new Set());
