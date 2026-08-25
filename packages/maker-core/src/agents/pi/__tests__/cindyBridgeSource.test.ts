@@ -1055,8 +1055,23 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_call'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('FILE_WRITE_BUILTINS.has(event.toolName)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_result'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("event.toolName !== 'bash'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("captureToolName !== 'bash'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("String(captureToolName ?? '').startsWith('mcp__')");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('captureToolName = gatewayCall?.qualifiedName');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('captureInput = gatewayCall?.args');
+  });
+
+  it('exposes a constant two-tool MCP gateway while preserving the real MCP identity for approval', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.isSchemaDisclosed(resolvedGatewayCall)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Inspect this tool before execution');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionToolName = gatewayCall?.qualifiedName');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionInput = gatewayCall?.args');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("name: qualifiedName,\n        label: server.name + ': ' + tool.name");
   });
 
   it('resolves the bash package home across reloads with a tamper-proof stash and keeps the package token out of globalThis', () => {

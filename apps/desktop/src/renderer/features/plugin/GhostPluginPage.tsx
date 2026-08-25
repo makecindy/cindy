@@ -56,16 +56,7 @@ import {
 } from '@/lib/composerDraftStore';
 import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
-import {
-  confirmAndInstallGhost,
-  pickAndUpdateGhost,
-  reapproveInstalledGhost,
-} from '@/cindy-brain/installFlow';
-import {
-  GhostManualSummary,
-  GhostPermissionList,
-  GhostUpdateReview,
-} from '@/cindy-brain/GhostPermissionList';
+import { installGhostFromFile, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -78,11 +69,8 @@ import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkin
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import { resolveSystemLocale } from '../../../shared/locale';
 import {
-  diffInstalledGhostPermissionItems,
   ghostInstallApprovalToken,
   ghostPanelKind,
-  ghostPermissionBaselineKey,
-  ghostPermissionItems,
   isOfficialGhostId,
   type GhostSetupStatus,
   type InstalledGhost,
@@ -109,11 +97,9 @@ import {
 import { MyPublishesSection } from './MyPublishesSection';
 import { ignoredRoundStorageKey, isBatchFinished, updateRoundKey } from './lib/updateAllModel';
 import {
-  approveUpdateExpansion,
   getUpdateAllBatchState,
   reconcileUpdateAllBatch,
   setUpdateAllBatchHooks,
-  skipUpdateExpansion,
   startUpdateAllBatch,
   subscribeUpdateAllBatch,
 } from './lib/updateAllController';
@@ -137,8 +123,6 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
-  // 受体模型的两条纯推导:reapprove 路由判定 + 「市场复核目标是否命中已装」。
-  // main 的卡片改版不再走 catalogItems 交织,orderPluginCatalogItems 已无引用故不引入。
   canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
@@ -371,25 +355,7 @@ export const __installedPluginLayoutForTests = {
   InstalledPluginDisclosure,
 };
 
-export function diffMarketUpdatePermissionItems(
-  installed: InstalledGhost,
-  next: PluginMarketDetail['manifest'],
-) {
-  return diffInstalledGhostPermissionItems(installed, next);
-}
-
-export function marketUpdateAllowsPermissionExpansion(
-  installed: InstalledGhost,
-  addedPermissionCount: number,
-): boolean {
-  return installed.approval.state !== 'approved' || addedPermissionCount > 0;
-}
-
-/**
- * 市场装入成功后是否打开已装详情(同时收起市场详情)。
- * 首装:装完即开(2026-07-26)。更新/替换:留在当前页——列表就留列表,
- * 市场详情就刷新详情,方便连续更新,也不把替换用户从原详情踢回列表。
- */
+/** 市场首装成功后打开已装详情；更新或来源替换继续停留在当前页面。 */
 export function shouldOpenInstalledDetailAfterMarketSuccess(isUpdate: boolean): boolean {
   return !isUpdate;
 }
@@ -422,14 +388,23 @@ export function GhostPluginPage({
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm } = useConfirmDialog();
+  const showPluginMarketActionError = useCallback(
+    async (error: unknown) => {
+      toast.error(t(pluginMarketErrorKey(error)));
+    },
+    [t],
+  );
   const { user, mode, dataOwnerId } = useAuth();
   const showEnterprise = user?.membershipKind === 'org';
   const ghosts = useInstalledGhosts();
   useMainViewVisibilityRevision();
-  const installedGhostIds = useMemo(() => ghosts.map((ghost) => ghost.manifest.id), [ghosts]);
-  const installedGhostIdsKey = useMemo(
-    () => [...installedGhostIds].sort().join('\0'),
-    [installedGhostIds],
+  const installedGhostMarketKey = useMemo(
+    () =>
+      ghosts
+        .map((ghost) => `${ghost.manifest.id}\0${ghost.manifest.version}`)
+        .sort()
+        .join('\0'),
+    [ghosts],
   );
   const installedGhostLocationsKey = ghosts
     .map((ghost) => `${ghost.manifest.id}\0${ghost.dir}`)
@@ -475,7 +450,7 @@ export function GhostPluginPage({
   const marketRefreshRequestRef = useRef(0);
   const lastMarketRefreshAtRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
-  const installedGhostIdsKeyRef = useRef(installedGhostIdsKey);
+  const installedGhostMarketKeyRef = useRef(installedGhostMarketKey);
   const legacyRecoveryStatusRequestRef = useRef(0);
   const legacyRecoveryRetryRequestRef = useRef(0);
   const [legacyRecoveryStatus, setLegacyRecoveryStatus] =
@@ -521,21 +496,12 @@ export function GhostPluginPage({
   }, [refreshMarket, mode, dataOwnerId]);
   const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
-  useEffect(
-    () =>
-      window.electronAPI.pluginMarket.onUpgradeNoticeAvailable(() => {
-        // 默认插件升级在初始快照返回后异步落位；原位升级不会改变已装 ID，
-        // 复用现有完成通知刷新目录，避免继续展示旧 release 的更新入口。
-        void refreshMarket(true).catch(() => undefined);
-      }),
-    [refreshMarket],
-  );
   useEffect(() => {
-    if (installedGhostIdsKeyRef.current === installedGhostIdsKey) return;
-    installedGhostIdsKeyRef.current = installedGhostIdsKey;
-    // 已装集合变化(装/卸)时刷新市场;排序是反应式的,没有快照需要维护。
+    if (installedGhostMarketKeyRef.current === installedGhostMarketKey) return;
+    installedGhostMarketKeyRef.current = installedGhostMarketKey;
+    // 已装集合或版本变化(装/卸/后台更新)时刷新市场;排序是反应式的。
     void refreshMarket(true).catch(() => undefined);
-  }, [installedGhostIdsKey, refreshMarket]);
+  }, [installedGhostMarketKey, refreshMarket]);
   const activeSessionWorkingDir = useSyncExternalStore(
     subscribeToLastWorkingDir,
     getLastWorkingDir,
@@ -795,7 +761,7 @@ export function GhostPluginPage({
   );
   const hiddenInstalledCount = Math.max(0, displayInstalledItems.length - visibleInstalledCount);
 
-  // ── 更新横幅与批量更新(设计定稿:全部更新;扩权单独确认,绝不静默放行)──
+  // ── 更新横幅与批量更新：作为自动更新失败／忙碌跳过后的手动重试入口 ──
   const updatableInstalledItems = useMemo(
     () => installedItems.filter((item) => item.marketUpdate !== null),
     [installedItems],
@@ -811,7 +777,7 @@ export function GhostPluginPage({
   }, [currentRoundKey, ignoredRoundKey]);
 
   // 批次状态住在模块级控制器里(生命周期长于本页:关弹窗离开 /plugins
-  // 后批次继续跑),页面只订阅快照。权限确认由统一安装事务负责。
+  // 后批次继续跑),页面只订阅快照。真实包校验与落位由统一安装事务负责。
   const updateBatch = useSyncExternalStore(subscribeUpdateAllBatch, getUpdateAllBatchState);
   const updateRows = updateBatch.rows;
   const batchRunning = updateBatch.running;
@@ -927,31 +893,29 @@ export function GhostPluginPage({
     [t],
   );
 
-  /** 下载真实包;权限卡已在页面确认,Host 只在真实包超出已审清单时再弹。 */
-  const installReviewedMarketPackage = useCallback(
+  /** Main 在同一次 install IPC 事务内校验真实包与市场声明的能力上限。 */
+  const installMarketPackage = useCallback(
     async (input: {
       pluginId: string;
       options: PluginMarketInstallOptions;
+      isStillActive: () => boolean;
     }): Promise<InstalledGhost | null> => {
       const result = await window.electronAPI.pluginMarket.install(input.pluginId, input.options);
-      return result.ghost ?? null;
+      if (!input.isStillActive()) return null;
+      return result.ghost;
     },
     [],
   );
 
-  // 市场更新流程由列表卡片和详情页共用:先按市场清单立刻弹出确认,下载发生在
-  // 用户点确认之后。真实包若没有超出已确认的权限,窗口级 Host 不再复弹。
-  //
-  // 同版本的 `installed` 也走这里:缺少批准状态的存量安装靠"用市场包重装同一
-  // release"恢复,此时权限 diff 会把目标包的全部权限当新增项逐条列出。
-  // 原位更新不切换来源(#2043):点击后详情若已不再是 update-available 则如实
-  // 提示状态变化,install 一律 allowSourceReplacement: false。
+  // 目录详情用于发现与能力展示；点击更新后由 Main 下载并校验真实包后直接落位。
   const handleMarketUpdate = useCallback(
     async (ghostId: string) => {
       const marketItem = marketByGhostId.get(ghostId);
-      if (!marketItem) return;
       const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
-      if (!marketReviewTargetsInstalledGhost(marketItem, installedGhost?.approval.state)) {
+      if (
+        !marketItem ||
+        !marketReviewTargetsInstalledGhost(marketItem, installedGhost?.approval.state)
+      ) {
         return;
       }
       if (!installedGhost) {
@@ -965,49 +929,21 @@ export function GhostPluginPage({
       try {
         const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
-        // 来源隔离 + 状态新鲜度(#2043):重取详情后若已不再是可更新/可重审的
-        // 目标(conflict 换源、已装已批准等),如实提示状态变化并刷新,不静默继续。
-        // `installed` 且未批准的同版本恢复仍放行(见 marketReviewTargetsInstalledGhost)。
-        if (
-          next.installState !== 'update-available' &&
-          !marketReviewTargetsInstalledGhost(next, installedGhost?.approval.state)
-        ) {
+        if (!marketReviewTargetsInstalledGhost(next, installedGhost.approval.state)) {
           toast.error(t('settings.ghosts.market.errors.stateChanged'));
           await refreshMarket();
           return;
         }
-        const diff = diffMarketUpdatePermissionItems(installedGhost, next.manifest);
         const options: PluginMarketInstallOptions = {
           expectedReleaseId: next.releaseId,
           expectedManifest: next.manifest,
           expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval),
-          allowPermissionExpansion: marketUpdateAllowsPermissionExpansion(
-            installedGhost,
-            diff.added.length,
-          ),
-          ...(installedGhost
-            ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-            : {}),
-          // 原位更新不切换来源(#2043):只有冲突替换显式走 runMarketInstallFlow。
           allowSourceReplacement: false,
         };
-        const approved = await confirm({
-          title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
-          description: t('settings.ghosts.updateConfirm.body', {
-            from: installedGhost?.manifest.version ?? next.version,
-            to: next.version,
-          }),
-          content: (
-            <GhostUpdateReview diff={diff} manualCount={next.manifest.manual?.items.length ?? 0} />
-          ),
-          maxWidth: 520,
-          confirmText: t('settings.ghosts.updateConfirm.confirm'),
-          cancelText: t('settings.ghosts.updateConfirm.cancel'),
-        });
-        if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        const ghost = await installReviewedMarketPackage({
+        const ghost = await installMarketPackage({
           pluginId: next.pluginId,
           options,
+          isStillActive: () => isMarketBusyLeaseActive(marketBusyLease),
         });
         if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
         toast.success(
@@ -1020,7 +956,7 @@ export function GhostPluginPage({
         await refreshMarket();
       } catch (error) {
         if (isMarketBusyLeaseActive(marketBusyLease)) {
-          toast.error(t(pluginMarketErrorKey(error)));
+          await showPluginMarketActionError(error);
         }
       } finally {
         releaseMarketBusy(marketBusyLease);
@@ -1030,10 +966,11 @@ export function GhostPluginPage({
       acquireMarketBusy,
       ghosts,
       isMarketBusyLeaseActive,
-      installReviewedMarketPackage,
+      installMarketPackage,
       marketByGhostId,
       refreshMarket,
       releaseMarketBusy,
+      showPluginMarketActionError,
       t,
     ],
   );
@@ -1044,37 +981,37 @@ export function GhostPluginPage({
       await handleMarketUpdate(selectedDetail.id);
       return;
     }
-    await pickAndUpdateGhost(selectedDetail.id, { t, confirm });
-  }, [confirm, handleMarketUpdate, selectedDetail, selectedMarketUpdate, t]);
+    await pickAndUpdateGhost(selectedDetail.id, { t });
+  }, [handleMarketUpdate, selectedDetail, selectedMarketUpdate, t]);
 
   /**
-   * 缺少批准状态时的恢复入口。市场自有的包重走市场安装确认(重新下载 + 逐项
-   * 权限确认);本地包让用户重新选一次 `.cindy`。两条路都落到同一套权限确认,
-   * 不存在"点一下就悄悄恢复运行"的分支。
+   * 安装验证记录缺失或损坏时，用户主动选择重新落位同一来源的真实包。
+   * 市场包重装当前 release；本地包重新选择 `.cindy`。两条路都只恢复
+   * 完整安装记录，不新增能力确认。
    */
-  const handleReapprove = useCallback(
+  const handleRecoverInstall = useCallback(
     async (ghostId: string) => {
-      // 随包插件不走人工重新确认(入口已隐藏,这里是防御):批准由启动对账自动补。
-      if (ghosts.find((g) => g.manifest.id === ghostId)?.builtin) return;
+      if (ghosts.find((ghost) => ghost.manifest.id === ghostId)?.builtin) return;
       if (ghostReapprovalRoute(marketByGhostId.get(ghostId)) === 'market') {
         await handleMarketUpdate(ghostId);
         return;
       }
-      // 本地包路线:从已装目录读全量权限清单确认后开 receipt,不用用户翻出原始
-      // .cindy 文件;目录读不出时该流程内部自动回退到"重新选包"。
-      await reapproveInstalledGhost(ghostId, { t, confirm });
+      await pickAndUpdateGhost(ghostId, { t });
     },
-    [confirm, ghosts, handleMarketUpdate, marketByGhostId, t],
+    [ghosts, handleMarketUpdate, marketByGhostId, t],
   );
 
   const handleUpdateFromFile = useCallback(async () => {
     if (!selectedDetail) return;
-    await pickAndUpdateGhost(selectedDetail.id, { t, confirm });
-  }, [confirm, selectedDetail, t]);
+    await pickAndUpdateGhost(selectedDetail.id, { t });
+  }, [selectedDetail, t]);
 
-  // 控制器在挂载期借用本页的市场刷新;卸载后批次继续跑,重新进页全量刷新。
+  // 控制器在挂载期借用本页的市场刷新。
   useEffect(
-    () => setUpdateAllBatchHooks({ refreshMarket: () => refreshMarket() }),
+    () =>
+      setUpdateAllBatchHooks({
+        refreshMarket: () => refreshMarket(),
+      }),
     [refreshMarket],
   );
   const handleUpdateAll = useCallback(() => {
@@ -1111,17 +1048,15 @@ export function GhostPluginPage({
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
     if (!picked || 'canceled' in picked) return;
-    // 设置页选文件是用户亲手操作 → 手动来源(不传 origin),不加横幅、不加重。
-    await confirmAndInstallGhost(picked.filePath, {
+    await installGhostFromFile(picked.filePath, {
       t,
-      confirm,
-      // 已在插件页:tab 型插件装入即生效后原地开面板。
+      // 已在插件页:tab 型插件安装后原地打开面板。
       openPluginPanel: (ghostId) => {
         setSelectedId(null);
         setOpenPanelId(ghostId);
       },
     });
-  }, [confirm, t]);
+  }, [t]);
 
   const handleRetryLegacyRecovery = useCallback(async () => {
     legacyRecoveryStatusRequestRef.current += 1;
@@ -1175,7 +1110,7 @@ export function GhostPluginPage({
     async (id: string, displayName: string) => {
       const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
       if (!ghost) return;
-      const opensIOSSimulator = ghost.manifest.slots.includes('ios-simulator');
+      const opensIOSSimulator = ghost.manifest.iosSimulator === true;
       if (!ghost.manifest.command && !opensIOSSimulator) return;
       const usesHostCapabilityEntry = !ghost.manifest.command && opensIOSSimulator;
       // 使用前置门:点击时现查配置就绪度(main 侧确定性判定),未就绪先
@@ -1391,63 +1326,20 @@ export function GhostPluginPage({
           await refreshMarket();
           return;
         }
-        const diff = isUpdate
-          ? diffMarketUpdatePermissionItems(installedGhost!, marketDetail.manifest)
-          : null;
+        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         const options: PluginMarketInstallOptions = {
           expectedReleaseId: marketDetail.releaseId,
           expectedManifest: marketDetail.manifest,
           ...(isUpdate && installedGhost
             ? { expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval) }
             : {}),
-          ...(isUpdate && (diff!.added.length > 0 || installedGhost?.approval.state !== 'approved')
-            ? {
-                allowPermissionExpansion: true,
-                ...(installedGhost
-                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-                  : {}),
-              }
-            : {}),
           // 来源隔离(#2043):仅用户显式选择的冲突替换允许切换来源;更新与原位安装不切换。
           allowSourceReplacement: marketDetail.installState === 'conflict',
         };
-        const confirmed = await confirm({
-          title: isUpdate
-            ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
-            : t('settings.ghosts.market.installConfirmTitle', {
-                name: marketDetail.name,
-              }),
-          description: isUpdate
-            ? t('settings.ghosts.market.updateConfirmDescription')
-            : t(
-                marketDetail.sourceType === 'server'
-                  ? 'settings.ghosts.market.installConfirmDescription'
-                  : 'settings.ghosts.market.customInstallConfirmDescription',
-              ),
-          content: isUpdate ? (
-            <GhostUpdateReview
-              diff={diff!}
-              manualCount={marketDetail.manifest.manual?.items.length ?? 0}
-            />
-          ) : (
-            <div>
-              <GhostManualSummary count={marketDetail.manifest.manual?.items.length ?? 0} />
-              <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
-            </div>
-          ),
-          maxWidth: 520,
-          confirmText: isUpdate
-            ? t('settings.ghosts.updateConfirm.confirm')
-            : t('settings.ghosts.market.install'),
-          cancelText: isUpdate
-            ? t('settings.ghosts.updateConfirm.cancel')
-            : t('settings.ghosts.installConfirm.cancel'),
-          autoFocusConfirm: true,
-        });
-        if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        const ghost = await installReviewedMarketPackage({
+        const ghost = await installMarketPackage({
           pluginId: marketDetail.pluginId,
           options,
+          isStillActive: () => isMarketBusyLeaseActive(marketBusyLease),
         });
         if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
         // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
@@ -1473,7 +1365,7 @@ export function GhostPluginPage({
         await refreshMarket();
       } catch (error) {
         if (isMarketBusyLeaseActive(marketBusyLease)) {
-          toast.error(t(pluginMarketErrorKey(error)));
+          await showPluginMarketActionError(error);
         }
       } finally {
         releaseMarketBusy(marketBusyLease);
@@ -1483,10 +1375,11 @@ export function GhostPluginPage({
       acquireMarketBusy,
       ghosts,
       isMarketBusyLeaseActive,
-      installReviewedMarketPackage,
+      installMarketPackage,
       refreshMarket,
       refreshVisibleMarketDetail,
       releaseMarketBusy,
+      showPluginMarketActionError,
       t,
     ],
   );
@@ -1573,9 +1466,7 @@ export function GhostPluginPage({
             onMainViewSidebarVisibleChange={handleMainViewSidebarVisibleChange}
             onUpdate={() => void handleUpdate()}
             onUpdateFromFile={() => void handleUpdateFromFile()}
-            // 受体模型的 §5 恢复入口:缺批准的安装在详情页重新确认(市场包重装 /
-            // 本地包读目录权限确认),详情视图据 needsReapproval 门控运行按钮。
-            onReapprove={() => void handleReapprove(selectedDetail.id)}
+            onReapprove={() => void handleRecoverInstall(selectedDetail.id)}
             updateVersion={selectedMarketUpdate?.version}
             updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
             onUninstall={() => void handleUninstall()}
@@ -1956,8 +1847,6 @@ export function GhostPluginPage({
           open={updateDialogOpen}
           rows={updateRows}
           iconByGhostId={new Map(ghosts.map((ghost) => [ghost.manifest.id, ghost.iconDataUrl]))}
-          onApprove={(pluginId) => void approveUpdateExpansion(pluginId)}
-          onSkip={skipUpdateExpansion}
           onClose={() => setUpdateDialogOpen(false)}
         />
       ) : null}

@@ -1,10 +1,9 @@
 /**
  * Forge pack 产物的 Host 侧 staging 与一次性完整 ticket。
  *
- * 被注入的 agent 能在用户确认前改写 workdir 里的 `.cindy`。安装链路因此
- * 绝不能从那条路径回读：必须把内存里的 `built.buf` 直接写进 Host 生成的
- * staging。本模块只负责直写、加固、签发与失效；inspect / install 消费
- * ticket 是下一步，这里不做。
+ * 被注入的 agent 能改写 workdir 里的 `.cindy`。发布链路因此不能从那条
+ * 路径回读：必须把内存里的 `built.buf` 直接写进 Host 生成的 staging。
+ * 本模块只负责直写、加固、签发与失效；发布消费由独立模块完成。
  *
  * 不在 import 时创建目录或写文件。
  */
@@ -18,11 +17,11 @@ export const FORGE_PACK_TICKET_TTL_MS = 10 * 60 * 1000;
 /** Extra grace so a long confirm wait plus clock skew is not swept as stale. */
 export const FORGE_PACK_STAGING_SWEEP_GRACE_MS = 60 * 1000;
 /**
- * Cross-instance sweep threshold: pack TTL + continuation TTL + grace.
- * Another Cindy process sharing OS temp must not delete a live confirm wait.
+ * Cross-instance sweep threshold: pack TTL + grace.
+ * Another Cindy process sharing OS temp must not delete a live publish wait.
  */
 export const FORGE_PACK_STAGING_SWEEP_MAX_AGE_MS =
-  FORGE_PACK_TICKET_TTL_MS + FORGE_PACK_TICKET_TTL_MS + FORGE_PACK_STAGING_SWEEP_GRACE_MS;
+  FORGE_PACK_TICKET_TTL_MS + FORGE_PACK_STAGING_SWEEP_GRACE_MS;
 const FORGE_PACK_LEASE_MARKER = '.cindy-forge-lease';
 
 export type ForgePackOperationKind = 'install' | 'update';
@@ -43,11 +42,7 @@ export interface ForgePackIntegrityTicket {
   stagingPath: string;
   packageSha256: string;
   manifestId: string;
-  /**
-   * Wall-clock pack expiry pinned before the lease marker. Continuation must
-   * inherit `packExpiresAt + ttl` as a hard cap and must not re-base from
-   * issue-time `now()`.
-   */
+  /** Wall-clock pack expiry pinned before the lease marker. */
   packExpiresAt: number;
 }
 
@@ -74,16 +69,6 @@ export interface ForgePackStagingController {
    * cannot be replayed, but install still needs the bytes.
    */
   consume(token: string): ForgePackIntegrityTicket | null;
-  consumeMatchingStagingPath(stagingPath: string): ForgePackIntegrityTicket | null;
-  peekMatchingStagingPath(stagingPath: string): ForgePackIntegrityTicket | null;
-  wasStagingPathConsumed(stagingPath: string): boolean;
-  /**
-   * After inspect consumes the pack ticket, issue a one-shot install continuation.
-   * Returns null (and deletes staging) when `now()` is already past the inherited
-   * hard deadline — never mint a ticket younger than the lease marker.
-   */
-  issueInstallContinuation(ticket: ForgePackIntegrityTicket): string | null;
-  consumeInstallContinuation(token: string): ForgePackIntegrityTicket | null;
   invalidate(token: string): boolean;
   releaseStaging(stagingPath: string): void;
   invalidateMismatchedOwners(current: ActiveAppSession): void;
@@ -211,8 +196,8 @@ function forgePackLeaseAgeMs(taskDir: string, nowMs: number): number | null {
  * Restart / crash recovery: drop leftover Host staging dirs under tempRoot.
  * Only enumerates direct children that match `cindy-forge-<v4 UUID>`. Symlinks
  * and non-directories are skipped; real parent must still be tempRoot.
- * Only dirs older than pack TTL + continuation TTL + grace are removed, so a
- * sibling Cindy process waiting on confirm is not deleted.
+ * Only dirs older than pack TTL + grace are removed, so a sibling Cindy
+ * process waiting to publish is not deleted.
  */
 export function sweepStaleForgePackStagingDirs(
   tempRoot: string,
@@ -273,12 +258,6 @@ export function createForgePackStagingController(
     timeout: { cancel(): void };
   };
   const tickets = new Map<string, Entry>();
-  const installContinuations = new Map<string, Entry>();
-  const consumedStagingPaths = new Set<string>();
-
-  const forgetConsumedPath = (stagingPath: string): void => {
-    consumedStagingPaths.delete(path.resolve(stagingPath));
-  };
 
   const drop = (token: string, removeFiles: boolean): boolean => {
     const entry = tickets.get(token);
@@ -286,7 +265,6 @@ export function createForgePackStagingController(
     tickets.delete(token);
     entry.timeout.cancel();
     if (removeFiles) {
-      forgetConsumedPath(entry.ticket.stagingPath);
       rmTaskDir(path.dirname(entry.ticket.stagingPath));
     }
     return true;
@@ -363,90 +341,11 @@ export function createForgePackStagingController(
       return entry.ticket;
     },
 
-    consumeMatchingStagingPath(stagingPath) {
-      const target = path.resolve(stagingPath);
-      for (const [token, entry] of tickets) {
-        if (path.resolve(entry.ticket.stagingPath) === target) {
-          tickets.delete(token);
-          entry.timeout.cancel();
-          consumedStagingPaths.add(target);
-          if (entry.expiresAt <= now()) {
-            consumedStagingPaths.delete(target);
-            rmTaskDir(path.dirname(entry.ticket.stagingPath));
-            return null;
-          }
-          return entry.ticket;
-        }
-      }
-      return null;
-    },
-
-    peekMatchingStagingPath(stagingPath) {
-      const target = path.resolve(stagingPath);
-      for (const [token, entry] of tickets) {
-        if (path.resolve(entry.ticket.stagingPath) !== target) continue;
-        if (entry.expiresAt <= now()) {
-          drop(token, true);
-          return null;
-        }
-        return entry.ticket;
-      }
-      return null;
-    },
-
-    wasStagingPathConsumed(stagingPath) {
-      return consumedStagingPaths.has(path.resolve(stagingPath));
-    },
-
-    issueInstallContinuation(ticket) {
-      const issueNow = now();
-      const hardDeadline = ticket.packExpiresAt + ttlMs;
-      if (issueNow >= hardDeadline) {
-        forgetConsumedPath(ticket.stagingPath);
-        rmTaskDir(path.dirname(ticket.stagingPath));
-        return null;
-      }
-      const expiresAt = Math.min(issueNow + ttlMs, hardDeadline);
-      const token = randomId();
-      const timeout = scheduleTimeout(Math.max(0, expiresAt - issueNow), () => {
-        const entry = installContinuations.get(token);
-        if (!entry) return;
-        installContinuations.delete(token);
-        entry.timeout.cancel();
-        forgetConsumedPath(ticket.stagingPath);
-        rmTaskDir(path.dirname(ticket.stagingPath));
-      });
-      installContinuations.set(token, { ticket, expiresAt, timeout });
-      return token;
-    },
-
-    consumeInstallContinuation(token) {
-      const entry = installContinuations.get(token);
-      if (!entry) return null;
-      installContinuations.delete(token);
-      entry.timeout.cancel();
-      if (entry.expiresAt <= now()) {
-        forgetConsumedPath(entry.ticket.stagingPath);
-        rmTaskDir(path.dirname(entry.ticket.stagingPath));
-        return null;
-      }
-      return entry.ticket;
-    },
-
     invalidate(token) {
-      const continuation = installContinuations.get(token);
-      if (continuation) {
-        installContinuations.delete(token);
-        continuation.timeout.cancel();
-        forgetConsumedPath(continuation.ticket.stagingPath);
-        rmTaskDir(path.dirname(continuation.ticket.stagingPath));
-        return true;
-      }
       return drop(token, true);
     },
 
     releaseStaging(stagingPath) {
-      forgetConsumedPath(stagingPath);
       rmTaskDir(path.dirname(stagingPath));
     },
 
@@ -454,25 +353,10 @@ export function createForgePackStagingController(
       for (const [token, entry] of [...tickets]) {
         if (!isSameOwner(entry.ticket.owner, current)) drop(token, true);
       }
-      for (const [token, entry] of [...installContinuations]) {
-        if (!isSameOwner(entry.ticket.owner, current)) {
-          installContinuations.delete(token);
-          entry.timeout.cancel();
-          forgetConsumedPath(entry.ticket.stagingPath);
-          rmTaskDir(path.dirname(entry.ticket.stagingPath));
-        }
-      }
     },
 
     invalidateAll() {
       for (const token of [...tickets.keys()]) drop(token, true);
-      for (const [token, entry] of [...installContinuations]) {
-        installContinuations.delete(token);
-        entry.timeout.cancel();
-        forgetConsumedPath(entry.ticket.stagingPath);
-        rmTaskDir(path.dirname(entry.ticket.stagingPath));
-      }
-      consumedStagingPaths.clear();
     },
   };
 }
@@ -566,24 +450,6 @@ export function peekForgePackTicket(token: string): ForgePackIntegrityTicket | n
 
 export function consumeForgePackTicket(token: string): ForgePackIntegrityTicket | null {
   return getController().consume(token);
-}
-
-export function consumeForgePackTicketForStagingPath(
-  stagingPath: string,
-): ForgePackIntegrityTicket | null {
-  return getController().consumeMatchingStagingPath(stagingPath);
-}
-
-export function issueForgePackInstallContinuation(
-  ticket: ForgePackIntegrityTicket,
-): string | null {
-  return getController().issueInstallContinuation(ticket);
-}
-
-export function consumeForgePackInstallContinuation(
-  token: string,
-): ForgePackIntegrityTicket | null {
-  return getController().consumeInstallContinuation(token);
 }
 
 export function invalidateForgePackTicket(token: string): boolean {

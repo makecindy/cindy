@@ -88,6 +88,30 @@ describe('runManualUpdateCheck', () => {
     expect(input.checkOtaUpdate).not.toHaveBeenCalled();
   });
 
+  it('skips OTA when consent is false at manifest time, before any request', async () => {
+    const input = deps({
+      checkBundleUpdate: bundleCheck('up-to-date'),
+      isConsented: () => false,
+    });
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'ota-unavailable' });
+    expect(input.checkOtaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('re-checks consent before downloading after the manifest resolves', async () => {
+    // manifest 请求期间用户登出撤销同意:下载前再问一次,不得继续拉取带标识的 bundle。
+    let consented = true;
+    const input = deps({
+      isConsented: () => consented,
+      checkOtaUpdate: vi.fn(async () => {
+        consented = false;
+        return { isAvailable: true };
+      }),
+    });
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'ota-unavailable' });
+    expect(input.checkOtaUpdate).toHaveBeenCalledOnce();
+    expect(input.fetchOtaUpdate).not.toHaveBeenCalled();
+  });
+
   // emergency launch(没有 launchedUpdate)时 reloadAsync 会被原生层拒绝,但 bundle 已落盘:
   // 这不是一次失败的检查,必须导向"重开 App 生效",否则用户只看到一条无从下手的红字报错。
   it('asks for a manual restart when an emergency launch blocks reloading the downloaded bundle', async () => {

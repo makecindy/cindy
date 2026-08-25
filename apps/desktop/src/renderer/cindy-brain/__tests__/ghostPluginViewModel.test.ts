@@ -33,7 +33,7 @@ function manifest(overrides: Partial<GhostManifest> = {}): GhostManifest {
     whenToUse: 'When the user needs media generation.',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['tool', 'network', 'card'],
+    card: {},
     tools: [
       { name: 'submit_gen_image', description: 'Generate an image.' },
       { name: 'download_file', description: 'Download a file.' },
@@ -238,12 +238,12 @@ describe('ghostPluginViewModel', () => {
     });
   });
 
-  it('projects the iOS Simulator slot as an explicit Host capability action', () => {
+  it('projects the iOS Simulator declaration as an explicit Host capability action', () => {
     const item = toGhostPluginListItem(
       installed({
         manifest: manifest({
           command: undefined,
-          slots: ['skill', 'ios-simulator'],
+          iosSimulator: true,
           tools: undefined,
           network: undefined,
         }),
@@ -371,7 +371,7 @@ describe('ghostPluginViewModel', () => {
   it('derives detail permissions and runtime declarations from the manifest', () => {
     const detail = toGhostPluginDetail(installed());
 
-    expect(detail.contents).toEqual(['code', 'slotTool', 'slotNetwork', 'slotCard']);
+    expect(detail.contents).toEqual(['code', 'slotTool', 'slotCard', 'slotNetwork']);
     expect(detail.tools.map((tool) => tool.name)).toEqual(['submit_gen_image', 'download_file']);
     expect(detail.panelMinWidth).toBeNull();
     expect(detail.installDir).toBe('/tmp/cindy-brain/xd-mivo');
@@ -397,7 +397,7 @@ describe('ghostPluginViewModel', () => {
           tools: undefined,
           network: undefined,
           command: undefined,
-          slots: ['tool'],
+          card: undefined,
         }),
       }),
     );
@@ -413,7 +413,6 @@ describe('ghostPluginViewModel', () => {
     const detail = toGhostPluginDetail(
       installed({
         manifest: manifest({
-          slots: ['panel', 'cindy'],
           panel: { html: 'panel.html', minWidth: 360 },
           cindy: { image: ['generate', 'edit'], video: ['generate'] },
         }),

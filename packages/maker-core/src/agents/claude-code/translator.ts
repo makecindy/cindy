@@ -178,6 +178,8 @@ export interface RuntimeState {
    * 发出可见正文，不能看整轮 `uiEmittedText`，也不能跨 text block 复用。
    */
   streamStopTokenByKey: Map<string, StandaloneStopTokenHold>;
+  /** Current message_start.message.id for each parent stream, used before the full envelope arrives. */
+  streamRequestIdByParent: Map<string, string>;
   /** Per-parent active provider request used to merge message_start + message_delta usage. */
   activeUsageSegmentByParent: Map<string, string>;
   /** Price variant frozen for the active request of each parent stream. */
@@ -202,6 +204,7 @@ export function newRuntimeState(): RuntimeState {
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
     streamStopTokenByKey: new Map(),
+    streamRequestIdByParent: new Map(),
     activeUsageSegmentByParent: new Map(),
     activeUsagePriceVariantByParent: new Map(),
     pendingUsagePriceVariantByParent: new Map(),
@@ -1289,6 +1292,16 @@ function handleAssistant(
   const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
     ? msg.parent_tool_use_id
     : undefined;
+  const parentStreamKey = parentToolUseId ?? '__main__';
+  const assistantRequestId = typeof assistantMeta.requestId === 'string'
+    ? assistantMeta.requestId
+    : undefined;
+  if (
+    assistantRequestId &&
+    ctx.rt.streamRequestIdByParent.get(parentStreamKey) === assistantRequestId
+  ) {
+    ctx.rt.streamRequestIdByParent.delete(parentStreamKey);
+  }
   // 子代理完整 assistant 没有 message_delta 时，result.usage 仍含其子输出，
   // 而父级 Agent 工具区间已从分母排除。与 message_delta 路径同样 fail-closed。
   if (parentToolUseId) markClaudeGenerationUnreliable(ctx.rt.generation);
@@ -1346,7 +1359,6 @@ function handleAssistant(
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
-      const parentStreamKey = parentToolUseId ?? '__main__';
       const prefix = `${parentStreamKey}:`;
       for (const key of ctx.rt.streamStopTokenByKey.keys()) {
         if (key === parentStreamKey || key.startsWith(prefix)) {
@@ -1456,7 +1468,7 @@ function handleStreamEvent(
     index?: number;
     delta?: Record<string, unknown>;
     usage?: Record<string, number>;
-    message?: { model?: string; usage?: Record<string, number> };
+    message?: { id?: string; model?: string; usage?: Record<string, number> };
     content_block?: { type?: string; id?: string; name?: string; input?: unknown };
   } | undefined;
   if (!event) return;
@@ -1494,21 +1506,33 @@ function handleStreamEvent(
   if (typeof eventModel === 'string' && eventModel) {
     ctx.rt.streamModelByParentToolUseId.set(parentStreamKey, eventModel);
   }
+  const eventRequestId = event.message?.id;
+  if (typeof eventRequestId === 'string' && eventRequestId) {
+    ctx.rt.streamRequestIdByParent.set(parentStreamKey, eventRequestId);
+  }
   const streamModel = typeof eventModel === 'string' && eventModel
     ? eventModel
     : ctx.rt.streamModelByParentToolUseId.get(parentStreamKey);
+  const streamRequestId = typeof eventRequestId === 'string' && eventRequestId
+    ? eventRequestId
+    : ctx.rt.streamRequestIdByParent.get(parentStreamKey);
   const fallbackMeta: Record<string, unknown> | undefined = parentToolUseId
     ? {
         parentUuid: parentToolUseId,
         ...(streamModel ? { model: streamModel } : {}),
+        ...(streamRequestId ? { requestId: streamRequestId } : {}),
       }
     : ctx.rt.lastAssistantMeta
       ? {
           ...ctx.rt.lastAssistantMeta,
           ...(streamModel ? { model: streamModel } : {}),
+          ...(streamRequestId ? { requestId: streamRequestId } : {}),
         }
-      : streamModel
-        ? { model: streamModel }
+      : streamModel || streamRequestId
+        ? {
+            ...(streamModel ? { model: streamModel } : {}),
+            ...(streamRequestId ? { requestId: streamRequestId } : {}),
+          }
         : undefined;
 
   if (event.type === 'content_block_delta') {

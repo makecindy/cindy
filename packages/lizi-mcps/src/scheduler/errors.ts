@@ -26,9 +26,6 @@ export interface SchedulerToolError {
   message: string;
 }
 
-const UTILITY_MODEL_SCRIPT_HINT =
-  ' description 模式需要宿主 utility model 生成脚本；可改为传入 script（Node ESM）以跳过模型生成并继续安装。';
-
 /**
  * Map an unknown error thrown by `Scheduler` (or `getScheduler()`) to a
  * structured `{code, message}` payload. Pure — no throw, no logging.
@@ -38,10 +35,21 @@ export function classifySchedulerError(err: unknown): SchedulerToolError {
   const utilityCode = /^\[(UTILITY_MODEL_(?:NO_CANDIDATE|ALL_CANDIDATES_FAILED|EMPTY_RESPONSE|TIMEOUT))\]/
     .exec(message)?.[1];
   if (utilityCode) {
-    return {
-      code: utilityCode as SchedulerToolErrorCode,
-      message: `${message}${UTILITY_MODEL_SCRIPT_HINT}`,
+    // Append actionable hint so the MCP caller (agent) can suggest a workaround
+    // instead of silently retrying the same failing utility-model chain.
+    // See #3317.
+    const hints: Record<string, string> = {
+      UTILITY_MODEL_ALL_CANDIDATES_FAILED:
+        ' All utility-model candidates failed. You can bypass generation by passing the "script" parameter directly with a hand-written check script.',
+      UTILITY_MODEL_NO_CANDIDATE:
+        ' No utility-model candidate is configured. You can bypass generation by passing the "script" parameter directly.',
+      UTILITY_MODEL_TIMEOUT:
+        ' The utility-model call timed out. You can bypass generation by passing the "script" parameter directly.',
+      UTILITY_MODEL_EMPTY_RESPONSE:
+        ' The utility-model returned an empty response. You can bypass generation by passing the "script" parameter directly.',
     };
+    const hint = hints[utilityCode] ?? '';
+    return { code: utilityCode as SchedulerToolErrorCode, message: message + hint };
   }
   if (/scheduler not started/i.test(message)) {
     return { code: 'SCHEDULER_NOT_READY', message };

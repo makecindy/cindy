@@ -88,7 +88,19 @@ import {
 } from '@/device-link/remoteStatus';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { useRemoteSyncCoordinator, type RemoteSyncRun } from '@/device-link/remoteSyncTask';
+import {
+  createRemoteSyncReopenCoordinator,
+  useRemoteSyncCoordinator,
+  type RemoteSyncRun,
+} from '@/device-link/remoteSyncTask';
+import {
+  runConnectionScopedSessionMetadataRead,
+  runIndependentSnapshotReads,
+  runSessionMessagesSnapshotSingleFlight,
+  runSessionPendingInteractionsSnapshotSingleFlight,
+  runSessionProjectionSnapshotSingleFlight,
+} from '@/device-link/sessionSnapshotSingleFlight';
+import { createTransientTopicSubscriptionCoordinator } from '@/device-link/transientTopicSubscription';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -939,6 +951,7 @@ export default function SessionScreen() {
     getPresenceAvailability,
     invoke,
     openLink,
+    reopenLink,
     status,
     subscribe,
     unsubscribe,
@@ -1582,8 +1595,25 @@ export default function SessionScreen() {
   // lastSyncedAt 不会归零,不能用来判断「当前会话本次连接已同步」。epoch 经 ref 读取,
   // 避免把 connectionEpoch 加进 syncSession deps 引发额外整窗重拉。
   const [readAckSyncedKey, setReadAckSyncedKey] = useState<string | null>(null);
+  // interrupted 只依赖 getSession 的权威时间戳；兄弟快照失败不能把这道门永久关住。
+  // 已读回执仍继续使用上面的整窗门槛，避免消息未同步就提前清 attention。
+  const [sessionMetadataSyncedKey, setSessionMetadataSyncedKey] = useState<string | null>(null);
   const readAckEpochRef = useRef(connectionEpoch);
   readAckEpochRef.current = connectionEpoch;
+  // 后台订阅重试不能越过任务/设备/连接代切换，也不能在页面卸载后把已清理的 owner
+  // 重新登记回来。render 阶段先发布最新 identity；旧 effect 的 cleanup 只清自己。
+  const sessionSubscriptionIdentity = JSON.stringify([deviceId, sessionId, connectionEpoch]);
+  const sessionSubscriptionIdentityRef = useRef<string | null>(sessionSubscriptionIdentity);
+  sessionSubscriptionIdentityRef.current = sessionSubscriptionIdentity;
+  useEffect(() => () => {
+    if (sessionSubscriptionIdentityRef.current === sessionSubscriptionIdentity) {
+      sessionSubscriptionIdentityRef.current = null;
+    }
+  }, [sessionSubscriptionIdentity]);
+  const sessionsSubscriptionCoordinatorRef = useRef<ReturnType<
+    typeof createTransientTopicSubscriptionCoordinator
+  > | null>(null);
+  sessionsSubscriptionCoordinatorRef.current ??= createTransientTopicSubscriptionCoordinator();
   // 门槛代号:每次「作废门槛」(原地切 session / liveAttention 上升沿)都递增。
   // sync 尾部只有代号与自己启动时一致才允许落 key——否则 A→B→A 场景下,visit-1
   // 的在途旧 load 会在重置之后用**相同的** `${sessionId}:${connectionEpoch}` 把门槛
@@ -1598,6 +1628,7 @@ export default function SessionScreen() {
   if (prevReadAckSessionId !== sessionId) {
     setPrevReadAckSessionId(sessionId);
     setReadAckSyncedKey(null);
+    setSessionMetadataSyncedKey(null);
     readAckGateGenRef.current += 1;
   }
   // 远程媒体取件队列:屏实例级缓存 + 同 url 去重 + 并发上限(每次取件都让桌面端
@@ -3637,9 +3668,33 @@ export default function SessionScreen() {
     // 旧连接代的 in-flight load 若在尾部读 ref 的最新值,会把旧窗口数据标成新代已同步,
     // 抢在排队的 resync 之前放行回执。开始时捕获则旧 load 落的是旧代 key,门槛不放行。
     const readAckEpochAtStart = readAckEpochRef.current;
+    const subscriptionIdentityAtStart = JSON.stringify([
+      deviceId,
+      sessionId,
+      readAckEpochAtStart,
+    ]);
+    const subscriptionRetryIsStale = () => (
+      syncRun.isStale()
+      || sessionSubscriptionIdentityRef.current !== subscriptionIdentityAtStart
+    );
+    const syncReopenCoordinator = createRemoteSyncReopenCoordinator(async () => {
+      await reopenLink(deviceId);
+    });
     // 门槛代号同理在开始时捕获:切会话 / attention 上升沿会递增代号,启动更早的
     // in-flight load 在尾部发现代号已变,放弃落 key(它的数据不含触发点之后的内容)。
     const readAckGateGenAtStart = readAckGateGenRef.current;
+    const fetchSessionMetadata = () => runConnectionScopedSessionMetadataRead(
+      () => maker.getSession(sessionId),
+      () => (
+        !subscriptionRetryIsStale()
+        && messageAuthorityCurrent()
+        && readAckGateGenRef.current === readAckGateGenAtStart
+      ),
+      (sessionMeta) => {
+        remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
+        setSessionMetadataSyncedKey(`${sessionId}:${readAckEpochAtStart}`);
+      },
+    );
     // 重开判定:store 已有该会话消息 + currentSession(返回再点进,内存没清)→ 走"廉价校验、按
     // updatedAt/_count/消息窗口同步标记决定是否重拉消息";首开(store 无消息)保持 A1 全量并行不回退;
     // replaceMessages(rewind 提交)强制整窗替换。imperative 读 store,避免给 syncSession 加 deps。
@@ -3648,10 +3703,42 @@ export default function SessionScreen() {
     const isReopen = !options.replaceMessages
       && storedMessagesAtStart.length > 0
       && storedSessionAtStart !== null;
-    const openAndSubscribe = async () => {
-      await openLink(deviceId);
-      // subscribe 只负责之后的实时推送,不该挡数据读;失败不影响 open,重连 rehydration 会补订阅。
-      void subscribe(`session:${sessionId}`, deviceId, ['sessions']).catch(() => undefined);
+    const prepareLinkAndSubscription = async () => {
+      await withTransientRemoteRetry(() => openLink(deviceId));
+      if (subscriptionRetryIsStale()) return;
+      let subscriptionAttemptVersion = syncReopenCoordinator.captureVersion();
+      // sessions topic 只负责之后的实时推送,不挡快照读。自己在后台
+      // 处理瞬时 route / ACK 失败;重试前重开 peer link,不再等未来 rehydrate 碰运气。
+      void sessionsSubscriptionCoordinatorRef.current?.start({
+        identity: subscriptionIdentityAtStart,
+        isStale: subscriptionRetryIsStale,
+        reopenLink: () => syncReopenCoordinator.reopenAfter(subscriptionAttemptVersion),
+        subscribe: () => {
+          subscriptionAttemptVersion = syncReopenCoordinator.captureVersion();
+          return subscribe(`session:${sessionId}`, deviceId, ['sessions']);
+        },
+      });
+    };
+    const retryRead = <T,>(read: () => Promise<T>): Promise<T> => {
+      let failedAtVersion: number | null = null;
+      return withTransientRemoteRetry(async () => {
+        // 首轮复用上面统一完成的 link-open。只有本项真的因瞬态错误重试时才
+        // 按失败请求开始时的恢复版本重开：同一旧代的错峰失败会合并；重开后
+        // 发出的请求若再次断链，则以新版本触发下一次真正 reopen。
+        if (failedAtVersion !== null) {
+          await syncReopenCoordinator.reopenAfter(failedAtVersion);
+        }
+        const attemptVersion = syncReopenCoordinator.captureVersion();
+        return read().catch((err) => {
+          failedAtVersion = attemptVersion;
+          throw err;
+        });
+      });
+    };
+    const snapshotScope = {
+      deviceId,
+      sessionId,
+      connectionEpoch: readAckEpochAtStart,
     };
     const fetchActiveSessionSnapshot = async () => {
       // Capture immediately before every request. Because this helper is invoked inside
@@ -3665,27 +3752,39 @@ export default function SessionScreen() {
       // withTransientRemoteRetry, each retry receives a fresh projection authority fence.
       const authorityEpochAtStart =
         remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
-      const projection = await maker.input.getProjection(sessionId);
+      const projection = await runSessionProjectionSnapshotSingleFlight(
+        snapshotScope,
+        authorityEpochAtStart,
+        () => maker.input.getProjection(sessionId),
+      );
       return { projection, authorityEpochAtStart };
     };
+    const fetchPendingInteractions = () => runSessionPendingInteractionsSnapshotSingleFlight(
+      snapshotScope,
+      remoteSessionStore.getPendingInteractions(sessionId),
+      () => maker.getPendingInteractions(sessionId),
+    );
     if (syncRun.isStale()) return;
     setLoading(true);
     setError(null);
     try {
+      await prepareLinkAndSubscription();
       if (!isReopen) {
-        // 首开 / 强制替换:A1 全量并行(含整窗 listMessages),不回退。
-        const [sessionMeta, history, pendingInteractions, projectionResult, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
-          await openAndSubscribe();
-          return Promise.all([
-            maker.getSession(sessionId),
-            listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit })),
-            maker.getPendingInteractions(sessionId),
-            fetchProjection(),
-            fetchActiveSessionSnapshot(),
-          ]);
-        });
+        // 首开 / 强制替换:A1 仍保持并行，但每一项独立重试。一个 ACK timeout
+        // 不再把已经成功的 meta / history / pending / projection / active 全部重发。
+        const [sessionMeta, history, pendingInteractions, projectionResult, activeSessionSnapshot] = await runIndependentSnapshotReads([
+          fetchSessionMetadata,
+          () => listMessagesWithPayloadRetry((limit) => runSessionMessagesSnapshotSingleFlight(
+            snapshotScope,
+            limit,
+            { kind: 'detail', generation: messageAuthority.generation },
+            () => maker.listMessages(sessionId, { limit }),
+          )),
+          fetchPendingInteractions,
+          fetchProjection,
+          () => fetchActiveSessionSnapshot(),
+        ] as const, retryRead);
         if (syncRun.isStale() || !messageAuthorityCurrent()) return;
-        remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setActiveSessionSnapshots(
           deviceId,
           Array.isArray(activeSessionSnapshot.activeSessions)
@@ -3716,15 +3815,12 @@ export default function SessionScreen() {
         );
       } else {
         // 重开:便宜并行(不含整窗 listMessages)拿 meta + pending + projection + active。
-        const [sessionMeta, pendingInteractions, projectionResult, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
-          await openAndSubscribe();
-          return Promise.all([
-            maker.getSession(sessionId),
-            maker.getPendingInteractions(sessionId),
-            fetchProjection(),
-            fetchActiveSessionSnapshot(),
-          ]);
-        });
+        const [sessionMeta, pendingInteractions, projectionResult, activeSessionSnapshot] = await runIndependentSnapshotReads([
+          fetchSessionMetadata,
+          fetchPendingInteractions,
+          fetchProjection,
+          () => fetchActiveSessionSnapshot(),
+        ] as const, retryRead);
         // 廉价对账:updatedAt 主信号(任何消息变化都会 bump),_count 仅在两侧都有时作辅助;
         // 另外要求消息窗口已被详情页同步到当前 meta,避免首页先刷新 session preview 后,
         // 详情页把旧消息缓存误判成最新。任一变化 → 拉取权威最新窗口并对账;
@@ -3744,9 +3840,14 @@ export default function SessionScreen() {
           activeSessionSnapshot.activityEpochAtFetchStart,
         );
         if (metaChanged) {
-          const history = await withTransientRemoteRetry(() =>
+          const history = await retryRead(() =>
             listMessagesWithPayloadRetry(
-              (limit) => maker.listMessages(sessionId, { limit }),
+              (limit) => runSessionMessagesSnapshotSingleFlight(
+                snapshotScope,
+                limit,
+                { kind: 'detail', generation: messageAuthority.generation },
+                () => maker.listMessages(sessionId, { limit }),
+              ),
               REOPEN_MESSAGE_WINDOW_LIMITS,
             ),
           );
@@ -3766,7 +3867,6 @@ export default function SessionScreen() {
           // 真实消息数推断(getSession 没给总数时退化为窗口启发式)。
           setHasOlderMessages(hasOlderMessagesAfterReopen(freshCount, remoteSessionStore.getMessages(sessionId)));
         }
-        remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         remoteSessionStore.setInputProjectionIfCurrent(
           sessionId,
@@ -3799,7 +3899,7 @@ export default function SessionScreen() {
     } finally {
       if (!syncRun.isStale() && messageAuthorityCurrent()) setLoading(false);
     }
-  }, [deviceId, deviceName, latchOutboxTransportHold, maker, openLink, sessionId, subscribe]);
+  }, [deviceId, deviceName, latchOutboxTransportHold, maker, openLink, reopenLink, sessionId, subscribe]);
   // 任一连接恢复身份变化都会让旧读取失去提交资格。否则断线前启动的同步可能在
   // 新 hold 锁存后迟到，并从成功尾误清恢复屏障。
   const remoteSyncContextKey = JSON.stringify([
@@ -4042,6 +4142,7 @@ export default function SessionScreen() {
     const prevSig = prevLiveActivitySigRef.current ?? liveActivitySig;
     if (liveAttention && liveActivitySig !== prevSig) {
       setReadAckSyncedKey(null);
+      setSessionMetadataSyncedKey(null);
       // 代号递增:变化点之前启动的 in-flight load / 在飞重试(数据不含本 turn 终帧)
       // 不得重新落 key / 不得继续发送。
       readAckGateGenRef.current += 1;
@@ -7355,9 +7456,10 @@ export default function SessionScreen() {
     projection: inputProjection,
     isSessionStreaming,
     continuationInFlight: tailContinuationInFlight,
+    sessionMetadataSyncedForConnection: sessionMetadataSyncedKey === `${sessionId}:${connectionEpoch}`,
     interruptAcked: tailInterruptAcked,
     hiddenErrorClientIds: tailHiddenForBanner,
-  }), [messages, currentSession, inputProjection, isSessionStreaming, tailContinuationInFlight, tailInterruptAcked, tailHiddenForBanner]);
+  }), [messages, currentSession, inputProjection, isSessionStreaming, tailContinuationInFlight, sessionMetadataSyncedKey, sessionId, connectionEpoch, tailInterruptAcked, tailHiddenForBanner]);
 
   // 主按钮(重试 / 继续任务):发隐藏续跑指令(带 [UI_ACTION_TRIGGER] 前缀,消息流
   // 不渲染;排队区显示「继续未完成的任务(系统指令)」遮蔽气泡)。planMode 强制 false:

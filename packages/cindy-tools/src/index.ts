@@ -2,6 +2,7 @@ export {
   buildGhostRosterPrompt,
   createCindyGhostsMcpServer,
   handleForgeGuide,
+  handleForgeInstall,
   handleForgePack,
   handleForgePublish,
   handleForgePublishStatus,
@@ -16,6 +17,7 @@ export {
 export type {
   CindyForgePackErrorCode,
   CindyForgePackResult,
+  CindyForgeInstallResult,
   CindyForgePublishErrorCode,
   CindyForgePublishResult,
   CindyForgePublishStatusResult,

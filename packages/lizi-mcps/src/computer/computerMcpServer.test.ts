@@ -79,6 +79,7 @@ describe('createComputerMcpServer', () => {
     expect(payload.tools.map((tool) => tool.name)).toContain('replay_trajectory');
     expect(payload.tools.map((tool) => tool.name)).toContain('type_text');
     const listWindows = payload.tools.find((tool) => tool.name === 'list_windows');
+    const typeText = payload.tools.find((tool) => tool.name === 'type_text');
     expect(listWindows?.inputSchema?.properties).toHaveProperty('query');
     expect(listWindows?.inputSchema?.properties).toHaveProperty('workspace_root');
     expect(listWindows?.inputSchema?.properties).toHaveProperty('process_name');
@@ -95,6 +96,7 @@ describe('createComputerMcpServer', () => {
       .not.toHaveProperty('use_external_simulator');
     expect(payload.tools.find((tool) => tool.name === 'hotkey')?.inputSchema?.properties)
       .not.toHaveProperty('use_external_ios_workflow');
+    expect(typeText?.inputSchema?.properties).toHaveProperty('delivery_mode');
     expect(payload.workflow).toContain('always for coordinates');
     expect(payload.workflow).toContain('{"capture_mode":"vision"}');
     await h.cleanup();
@@ -406,6 +408,30 @@ describe('createComputerMcpServer', () => {
     expect(payload.errorCode).toBe('INVALID_ARGS');
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+  });
+
+  it('forwards an explicit type_text delivery mode to cua-driver', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const h = await makeHarness(deps);
+
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'type_text',
+        args: { pid: 123, text: 'hello', delivery_mode: 'foreground' },
+      },
+    });
+
+    expect(textPayload(result)).toMatchObject({ ok: true });
+    expect(deps.callTool).toHaveBeenCalledWith('type_text', {
+      pid: 123,
+      text: 'hello',
+      delivery_mode: 'foreground',
+    });
     await h.cleanup();
   });
 

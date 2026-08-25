@@ -25,18 +25,22 @@ import {
   GHOST_MEDIA_CAPABILITIES,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
+  ghostInstallApprovalToken,
+  ghostNetworkAuthorizationWithinCap,
+  ghostNodeSecretAuthorizationWithinCap,
+  ghostSetupAuthorizationWithinCap,
+  ghostSettingsUiWithinCap,
+  ghostSubscribeAuthorizationWithinCap,
+  ghostToolParametersWithinCap,
+  ghostUnknownV3FieldsWithinCap,
   isGhostInstallApprovalToken,
-  diffGhostPermissionItems,
   ghostAppContextLocale,
-  ghostPermissionBaselineKey,
   unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isBrokerEligibleGhostId,
   isOfficialGhostId,
   isUserInstallReservedGhostId,
-  ghostPermissionItems,
-  ghostPermissionProjectionFingerprint,
   isValidGhostId,
   layoutWithGhostPanel,
   type GhostHostNoticeKey,
@@ -54,10 +58,6 @@ import {
   type InstalledGhost,
   type GhostLibraryOverview,
 } from '../../shared/ghost.js';
-import type {
-  PluginMarketItemSource,
-  PluginMarketPackageReviewFacts,
-} from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { withGhostSkillProjectionReconcile } from '../authBoundaryQuarantine.js';
 import {
@@ -79,27 +79,12 @@ import {
 } from './GhostManager.js';
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
-import { createOneShotTicketStore } from './oneShotTickets.js';
 import { shouldRejectReservedGhostIds } from './reservedGhostIdGate.js';
 import {
   bindForgePackStagingTempDir,
-  getForgePackStagingControllerIfConfigured,
   invalidateForgePackTicketsForOwner,
-  releaseForgePackStaging,
 } from './forgePackStaging.js';
-import {
-  abandonForgePackInstall,
-  consumeForgePackAtInspect,
-  consumeForgePackAtInstall,
-} from './forgePackConsume.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
-import {
-  GhostPackagePermissionReviewRequiredError,
-  marketPackageHostReviewDiff,
-  marketPackageManualSummaryChanged,
-  marketPackageNeedsHostReview,
-  marketPackageOauthIdentityChanged,
-} from './packagePermissionReview.js';
 import {
   clearBuiltinTombstone,
   listEligibleBuiltinCommands,
@@ -128,7 +113,6 @@ import {
   type GhostRepoRootCacheEntry,
 } from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
-import { MANUAL_GHOST_INSTALL_ORIGIN } from '../../shared/ghostInstallOrigin.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
 import {
   electronSandboxAdapter,
@@ -319,7 +303,7 @@ import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot, getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
-import { readInstalledGhostManifest } from '../installedGhostManifest.js';
+import { readInstalledGhostManifestDigestFormats } from '../installedGhostManifest.js';
 import {
   ghostManifestDigest,
   PluginMarketLedger,
@@ -368,7 +352,7 @@ import {
 } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
@@ -1744,7 +1728,7 @@ export function getGhostCardService(): GhostCardService {
     cardServiceSingleton = new GhostCardService({
       hasCardSlot: (ghostId) => {
         const g = findAvailableGhost(ghostId);
-        return !!g && g.enabled && g.manifest.slots.includes('card');
+        return !!g && g.enabled && g.manifest.card !== undefined;
       },
       sanitize: sanitizeGhostCardHtml,
       persist: (row) => upsertGhostCard(row),
@@ -2564,11 +2548,16 @@ function readInstalledGhostManifestDigest(ghostId: string): string | null {
     .list()
     .find((candidate) => candidate.manifest.id === ghostId);
   if (!ghost) return null;
-  const parsed = readInstalledGhostManifest(ghost.dir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
-  return parsed.ok ? ghostManifestDigest(parsed.manifest) : null;
+  const digests = readInstalledGhostManifestDigestFormats(
+    ghost.dir,
+    GHOST_INSTALL_MANIFEST_MAX_BYTES,
+  ).map(ghostManifestDigest);
+  const expected = getPluginMarketLedger().installationForGhost(ghostId)?.manifestDigest;
+  if (expected !== undefined && digests.includes(expected)) return expected;
+  return digests[0] ?? null;
 }
 
-/** Resolve Connection metadata only from a trusted organization market install. */
+/** Resolve Connection metadata from trusted organization installs or legacy Forge receipts. */
 function getConnectionAudienceResolver(): ConnectionAudienceResolver {
   if (!connectionAudienceResolverSingleton) {
     connectionAudienceResolverSingleton = loadConnectionAudienceResolver({
@@ -3608,7 +3597,7 @@ async function getGhostConfigurableMediaModels(
     return { ok: false, errorCode: 'NOT_AVAILABLE', message: '插件当前不可用' };
   }
   const declared = ghost.manifest.cindy?.[type] ?? [];
-  if (!ghost.manifest.slots?.includes('cindy') || declared.length === 0) {
+  if (declared.length === 0) {
     return {
       ok: false,
       errorCode: 'PERMISSION_DENIED',
@@ -3701,7 +3690,7 @@ function getGhostConfiguredMediaModel(
     return { ok: false, errorCode: 'NOT_AVAILABLE', message: '插件当前不可用' };
   }
   const declared = ghost.manifest.cindy?.[type] ?? [];
-  if (!ghost.manifest.slots?.includes('cindy') || !declared.includes(action)) {
+  if (!declared.includes(action)) {
     return {
       ok: false,
       errorCode: 'PERMISSION_DENIED',
@@ -4848,6 +4837,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
         const ghost = findAvailableGhost(id);
         return ghost ? { ...ghost, manifest: withRuntimeFiloGoogleClient(ghost.manifest) } : null;
       },
+      inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
@@ -4859,6 +4849,11 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       // init 收窄:body 的 Uint8Array 在 lib.dom 的 BodyInit 泛型下对不齐,
       // 运行时 undici 原生支持,按 RequestInit 交给 fetch。
       fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
+      // 未在 manifest / 连接白名单声明的 Agent 在途目标不能复用普通
+      // outboundFetch：它会重新解析 hostname，留下 DNS rebinding 窗口。
+      // 这里每跳都以复核后的 DNS 地址建立 pinned dispatcher。
+      fetchPublicImpl: (url, init, beforeDispatch) =>
+        guardedOutboundFetch(url, init as RequestInit, beforeDispatch),
       // 媒体模式(as:'media'):字节直落总仓 + ghost-gallery 记账(出生=该
       // 意识,与 cindy 槽产物同一记账口径),走统一入库助手 ingestMedia
       // (规则 25)。mime 白名单同一来源(blobStore),槽内归一化后再判。
@@ -5002,7 +4997,7 @@ export function getGhostFsSlot(): GhostFsSlot {
 let librarySlotSingleton: GhostLibrarySlot | null = null;
 
 /**
- * library 槽单例(持久作品库,2026-08-20):与 fs 槽同款懒取现查——根目录经
+ * library 能力单例(持久作品库,2026-08-20):与 fs 能力同款懒取现查——根目录经
  * binding store 解析(默认 = ownerScopedUserDataPath('libraries', id);自定义
  * 位置带漂移判定),owner scope 每请求比对(切换后旧会话作废重解)。SQL 执行
  * 在 per-plugin worker(语句门见 libraryDbCore);本进程只组包与映射结果。
@@ -5122,7 +5117,7 @@ async function relocateGhostLibraryTo(
  */
 export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLibraryOverview> {
   const ghost = findAvailableGhost(ghostId);
-  const supported = ghost?.manifest.slots.includes('library') === true;
+  const supported = ghost?.manifest.library === true;
   const store = getGhostLibraryBindingStore();
   const binding = await store.getBinding(ghostId);
   const resolution = await store.resolveLibraryRoot(ghostId);
@@ -5205,7 +5200,7 @@ export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise
 
 let libraryBindingStoreSingleton: LibraryBindingStore | null = null;
 
-/** library 槽的 binding store(单例:读-改-写互斥要落在同一实例链上)。 */
+/** library 能力的 binding store(单例:读-改-写互斥要落在同一实例链上)。 */
 export function getGhostLibraryBindingStore(): LibraryBindingStore {
   if (!libraryBindingStoreSingleton) {
     libraryBindingStoreSingleton = new LibraryBindingStore({
@@ -5271,7 +5266,7 @@ function rejectUnauthorizedTokenBroker(
   );
   if (!brokered) return;
   if (isGhostTokenBrokerAuthorized(manifest.id, 'install', overrides)) return;
-  const authorizationError = ghostTokenBrokerInstallError(overrides?.installOrigin);
+  const authorizationError = ghostTokenBrokerInstallError();
   throwIpcError(
     authorizationError.code,
     `id "${manifest.id}" 声明了 oauth.tokenBroker——${authorizationError.reason}`,
@@ -5320,14 +5315,6 @@ function throwUninstallError(rejection: UninstallRejection): never {
   }
 }
 
-function assertGhostSupportsCurrentCindy(manifest: GhostManifest): void {
-  if (supportsCindyVersion(app.getVersion(), manifest.minCindyVersion)) return;
-  throwIpcError(
-    'GHOST_FILE_INVALID',
-    `该插件需要 Cindy ${manifest.minCindyVersion} 或更高版本`,
-  );
-}
-
 /**
  * 装入 + 停靠(共享主体):ghosts:install(显式路径)、
  * ghosts:install-via-dialog(系统文件选择框)与双击 .cindy
@@ -5347,7 +5334,6 @@ export async function installAndDock(
     enable?: boolean;
     expectedPackageSha256?: string;
     trustOverride?: GhostHostTrustOverride;
-    installOrigin?: string;
   },
 ): Promise<InstalledGhost> {
   return withGhostInstallLock(opts.ghostId, () => installAndDockLocked(manager, lizFilePath, opts));
@@ -5361,18 +5347,16 @@ async function installAndDockLocked(
     enable?: boolean;
     expectedPackageSha256?: string;
     trustOverride?: GhostHostTrustOverride;
-    installOrigin?: string;
   },
 ): Promise<InstalledGhost> {
-  // 默认沉睡(2026-07-09 Lizi 定案):装入 ≠ 授权运行,用户在确认框显式勾选
-  // "立即开启"才带电;沉睡态面板不渲染、总机不列、沙箱不拉起。
+  // 初始启用态由入口显式传入；当前用户导入与市场首装都传 true，覆盖更新
+  // 则走 manager.update 延续既有状态。保留 false 缺省以兼容内部受控调用方。
   const result = await manager.install(lizFilePath, {
     initiallyEnabled: opts.enable ?? false,
     ...(opts.expectedPackageSha256
       ? { expectedPackageSha256: opts.expectedPackageSha256 }
       : {}),
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
-    ...(opts.installOrigin !== undefined ? { installOrigin: opts.installOrigin } : {}),
   });
   if ('rejection' in result) throwInstallError(result.rejection);
   // 纵深防御:调用方给错 id 意味着刚才那把锁上在了错误的键上(等于没上锁)。
@@ -5405,6 +5389,200 @@ async function installAndDockLocked(
   return result.ghost;
 }
 
+type InspectedGhostPackage = Exclude<
+  Awaited<ReturnType<GhostManager['inspect']>>,
+  { rejection: InstallRejection }
+>;
+
+/**
+ * 本地包原位更新的共享事务。调用方必须已经持有 owner lease 和对应 ghostId
+ * 的安装锁；Renderer 导入与 Forge 显式安装共用，避免两条路径在运行时、OAuth、
+ * 市场来源解绑和失败恢复上产生漂移。
+ */
+async function updateLocalGhostPackageLocked(
+  manager: GhostManager,
+  cindyFilePath: string,
+  inspected: InspectedGhostPackage,
+  expectedPackageSha256: string,
+  expectedInstalledApproval: string,
+  mutationOwner: ActiveAppSession,
+): Promise<InstalledGhost> {
+  const runtime = getGhostRuntime();
+  const marketLedger = getPluginMarketLedger().bind(
+    ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
+  );
+  const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
+  runtime.stop(inspected.manifest.id);
+  // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
+  // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
+  await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
+  let marketRecord: PluginMarketInstallationRecord | null;
+  let marketInstallSubject: string | null = null;
+  let marketRecordWasSuppressed = false;
+  try {
+    marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
+    if (
+      marketRecord?.installed &&
+      (marketRecord.source === 'market' || marketRecord.source === 'legacy-adopted')
+    ) {
+      marketInstallSubject = getCurrentUserId() ?? mutationOwner.dataOwnerId;
+      marketRecordWasSuppressed = marketInstallSubject
+        ? marketLedger.isDefaultInstallSuppressed(marketInstallSubject, marketRecord.pluginId)
+        : false;
+    }
+  } catch (error) {
+    if (previousGhost) spawnIfResident(previousGhost);
+    log.warn('failed to verify Plugin provenance before local update', {
+      ghostId: inspected.manifest.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');
+  }
+  // 用户已明确选择了这份本地真实包：同 id 可以原位替换，市场来源不是永久所有权。
+  // 替换前先切断旧市场更新路由；落位失败再恢复，不清理按 ghostId 保存的用户状态。
+  const detachMarketRecord = Boolean(marketRecord?.installed);
+  const restoreMarketRecord = (): void => {
+    if (!detachMarketRecord || !marketRecord) return;
+    try {
+      marketLedger.restoreInstallation(
+        marketRecord,
+        marketInstallSubject
+          ? {
+              userId: marketInstallSubject,
+              suppressed: marketRecordWasSuppressed,
+            }
+          : undefined,
+      );
+    } catch (error) {
+      // 恢复失败时保持路由失效是安全降级：不能让旧市场自动覆盖用户明确选择的本地包。
+      log.error('failed to restore Plugin market provenance after local update failure', {
+        ghostId: inspected.manifest.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  if (detachMarketRecord) {
+    try {
+      // 先持久化切断自动更新路由，再改真实包。账本不可写时不触碰包。
+      marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
+    } catch (error) {
+      restoreMarketRecord();
+      if (previousGhost) spawnIfResident(previousGhost);
+      log.warn('failed to detach Plugin market provenance before local update', {
+        ghostId: inspected.manifest.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');
+    }
+  }
+  getGhostAgentSlot().clearGhost(inspected.manifest.id);
+  getGhostErrandSlot().clearGhost(inspected.manifest.id);
+  let result: Awaited<ReturnType<typeof manager.update>>;
+  let packagePlaced = false;
+  try {
+    result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id, () =>
+      manager.update(cindyFilePath, {
+        expectedPackageSha256,
+        expectedInstalledApproval,
+        ...(previousGhost
+          ? {
+              beforePackageCommit: () =>
+                getGhostOauthAccountManager().prepareAccountsForChangedClients(
+                  withRuntimeFiloGoogleClient(previousGhost.manifest),
+                  withRuntimeFiloGoogleClient(inspected.canonicalManifest),
+                ),
+            }
+          : {}),
+        onPackagePlaced: () => {
+          packagePlaced = true;
+        },
+      }),
+    );
+  } catch (err) {
+    if (!packagePlaced) {
+      restoreMarketRecord();
+      if (previousGhost) spawnIfResident(previousGhost);
+      throw err;
+    }
+    const placed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
+    if (!placed) throw err;
+    log.warn('local ghost post-placement notification failed', {
+      ghostId: inspected.manifest.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    result = { ghost: placed };
+  }
+  if ('rejection' in result) {
+    // 回滚失败时安装目录可能已是新字节或缺失，不能恢复旧 runtime 或旧市场来源路由。
+    if (!(result.rejection.code === 'io' && result.rejection.rollbackFailed)) {
+      restoreMarketRecord();
+      if (previousGhost) spawnIfResident(previousGhost);
+    }
+    throwInstallError(result.rejection);
+  }
+  runtime.resetFuse(inspected.manifest.id);
+  const store = getLayoutStore();
+  const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
+  if (docked) {
+    const applied = store.setLayout(docked);
+    if ('rejection' in applied) {
+      log.warn('ghost panel dock rejected', {
+        id: result.ghost.manifest.id,
+        reason: applied.rejection,
+      });
+    }
+  }
+  spawnIfResident(result.ghost);
+  return result.ghost;
+}
+
+/**
+ * Forge 的显式安装入口。调用方在打包前已经取得 owner lease，并把它持有到本函数
+ * 返回；这里复核精确包哈希，再与 Renderer 本地导入共用相同安装/更新事务。
+ */
+export async function installOrUpdateLocalGhostPackageFromForge(
+  cindyFilePath: string,
+  expected: { ghostId: string; packageSha256: string },
+): Promise<{ ghost: InstalledGhost; action: 'installed' | 'updated' }> {
+  const manager = getGhostManager();
+  const inspected = await manager.inspect(cindyFilePath);
+  if ('rejection' in inspected) throwInstallError(inspected.rejection);
+  if (
+    inspected.manifest.id !== expected.ghostId ||
+    inspected.packageSha256 !== expected.packageSha256
+  ) {
+    throwIpcError('GHOST_FILE_INVALID', '插件文件在打包后发生了变化，请重新安装');
+  }
+  rejectReservedGhostId(inspected.manifest.id);
+  rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
+  rejectUnauthorizedTokenBroker(inspected.manifest);
+
+  return withGhostInstallLock(inspected.manifest.id, async () => {
+    const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
+    if (!installed) {
+      return {
+        ghost: await installAndDockLocked(manager, cindyFilePath, {
+          ghostId: inspected.manifest.id,
+          enable: true,
+          expectedPackageSha256: expected.packageSha256,
+        }),
+        action: 'installed',
+      };
+    }
+    return {
+      ghost: await updateLocalGhostPackageLocked(
+        manager,
+        cindyFilePath,
+        inspected,
+        expected.packageSha256,
+        ghostInstallApprovalToken(installed.approval),
+        getActiveAppSession(),
+      ),
+      action: 'updated',
+    };
+  });
+}
+
 /**
  * Plugin 市场专用装入入口。市场包已由 plugin-server 绑定到稳定 Plugin ID，
  * 因而允许官方保留前缀；本地文件入口仍继续走 rejectReservedGhostId。
@@ -5418,13 +5596,9 @@ export async function installOrUpdateMarketGhostPackage(
     /** receipt 模型并发护栏:更新分支比对 receipt 派生 token(与 main 硬化叠加,决策 A)。 */
     expectedInstalledApproval?: string;
     /**
-     * 用户已确认的 reviewedManifest 是权限上限:真实包没有超出则不再弹 Host。
-     * 没有这份上限时,手动首装仍确认真实包,同来源更新仅在相对已装基线扩权时确认。
-     * 默认安装(cap)只把目录 manifest 当作 fail-closed 上限,目录本身不记作批准。
+     * 市场发现层已经公开的 Manifest。真实包可以缩小能力，但不能携带发现层
+     * 没有声明的 Host 能力；超出时按包内容不一致拒绝，不转成用户授权弹窗。
      */
-    permissionPolicy?:
-      | { mode: 'manual'; sourceType: PluginMarketItemSource }
-      | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
     /**
      * Organization server-market packages pass this Host-built fact because the
      * ledger row is written after install/update. Official-prefix ids never
@@ -5433,16 +5607,12 @@ export async function installOrUpdateMarketGhostPackage(
      * defaultInstall, and source replacement.
      */
     pendingMarketRecord?: GhostFirstPartyPendingMarketRecord;
-    /** 安装锁内从当前已落位包读取的 canonical 权限基线。 */
-    permissionBaselineManifest?: GhostManifest;
-    /** 用户已在页面确认过的权限清单;真实包未超出则跳过 Host。 */
-    reviewedManifest?: GhostManifest;
-    /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
-    approvedPackageSha256?: string;
-    reviewedBaseline?: string;
+    manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
     onPackagePlacedInLock?: () => void;
+    /** 包与 receipt 已提交，仍持 owner mutation lease；用于原子写入来源账本。 */
+    afterCommitInLock?: (installed: InstalledGhost) => void | Promise<void>;
     /** 仅 server-market 主机路径可传；custom/local 不传。 */
     officialCindyGithub?: boolean;
   },
@@ -5461,18 +5631,14 @@ async function installOrUpdateMarketGhostPackageLocked(
     ghostId: string;
     version: string;
     expectedInstalledApproval?: string;
-    permissionPolicy?:
-      | { mode: 'manual'; sourceType: PluginMarketItemSource }
-      | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
     /** Same Host-built org server-market fact as the exported entry; not first-install only. */
     pendingMarketRecord?: GhostFirstPartyPendingMarketRecord;
-    permissionBaselineManifest?: GhostManifest;
-    reviewedManifest?: GhostManifest;
-    approvedPackageSha256?: string;
-    reviewedBaseline?: string;
+    manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
     onPackagePlacedInLock?: () => void;
+    /** 包与 receipt 已提交，仍持 owner mutation lease；用于原子写入来源账本。 */
+    afterCommitInLock?: (installed: InstalledGhost) => void | Promise<void>;
     officialCindyGithub?: boolean;
   },
 ): Promise<InstalledGhost> {
@@ -5482,7 +5648,6 @@ async function installOrUpdateMarketGhostPackageLocked(
     const manager = getGhostManager();
     const inspected = await manager.inspect(cindyFilePath);
     if ('rejection' in inspected) throwInstallError(inspected.rejection);
-    assertGhostSupportsCurrentCindy(inspected.canonicalManifest);
     // Publisher identity slugs stay reserved even on the market path.
     // Official reserved prefixes from shared/ghost.ts remain exempt here; publisher slugs do not.
     rejectReservedPublisherSlug(inspected.canonicalManifest.id);
@@ -5497,105 +5662,36 @@ async function installOrUpdateMarketGhostPackageLocked(
         ? 'cindy-official'
         : undefined;
     requireGhostAvailableForActiveSession(expected.ghostId);
-    /**
-     * 「审阅过的」与「真要装的」权限必须一致(2026-08-03,codex review P1)。
-     *
-     * 装入确认框渲染的是**来源方给的 manifest**(服务端市场 = release manifest,
-     * 自定义市场 = 抓到的 ghost.json),而真正落地的是 `.cindy` 包里的 ghost.json。
-     * 两者本该同一份,但来源方的投影层可能与客户端的清单契约漂移——`cindy-protocol`
-     * 那份平行校验器就已经缺了 `confirm` 槽;新登记的槽(如 `badge`)在它眼里是
-     * 未知槽名,投影时会被丢掉或整份拒绝。结果:确认框漏列该项权限,包却原样带着
-     * 它装进来,用户**从没审过就多出一个常驻能力面**。
-     *
-     * 这里按权限项逐项比对。包里多出来的权限先暂停落位,由 Renderer 按真实包
-     * 重新展示;用户批准后携带包 SHA 和已装权限基线重试。
-     * 卡点落在 inspect 之后、任何落地动作之前,所以等待复核时磁盘上什么都没动。
-     * (token broker 授权校验由下方 rejectUnauthorizedTokenBroker(canonicalManifest) 统一执行,
-     *  原 receipt 分支在此处的硬中止已被本可恢复复核取代,见约束文档 §11 整合任务①。)
-     */
+    // 市场投影只作为真实包的能力上限，避免分发内容与目录声明漂移；
+    // 安装动作本身不承担能力授权，也不会因此追加权限确认弹窗。
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
-    if (expected.permissionPolicy) {
-      const baselineManifest = expected.permissionBaselineManifest ?? null;
-      const installedBaseline = baselineManifest
-        ? ghostPermissionBaselineKey(baselineManifest)
-        : null;
-      // 批准始终绑定 Main 实际检查过的包 SHA 与本地已装权限基线。
+    if (expected.manifestCap) {
+      const undeclaredCapabilities = unreviewedGhostPermissionItems(
+        expected.manifestCap,
+        undefined,
+        inspected.canonicalManifest,
+      );
       if (
-        expected.approvedPackageSha256 !== undefined &&
-        (expected.approvedPackageSha256 !== inspected.packageSha256 ||
-          (expected.reviewedBaseline ?? null) !== installedBaseline)
+        undeclaredCapabilities.length > 0 ||
+        !ghostNetworkAuthorizationWithinCap(expected.manifestCap, inspected.canonicalManifest) ||
+        !ghostNodeSecretAuthorizationWithinCap(
+          expected.manifestCap,
+          inspected.canonicalManifest,
+        ) ||
+        !ghostSetupAuthorizationWithinCap(expected.manifestCap, inspected.canonicalManifest) ||
+        !ghostSettingsUiWithinCap(expected.manifestCap, inspected.canonicalManifest) ||
+        !ghostSubscribeAuthorizationWithinCap(expected.manifestCap, inspected.canonicalManifest) ||
+        !ghostToolParametersWithinCap(expected.manifestCap, inspected.canonicalManifest) ||
+        !ghostUnknownV3FieldsWithinCap(expected.manifestCap, inspected.canonicalManifest)
       ) {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'Downloaded Plugin package changed after permission review',
-        );
-      }
-      const permissionDiff = baselineManifest
-        ? diffGhostPermissionItems(baselineManifest, inspected.canonicalManifest)
-        : null;
-      const unreviewed =
-        expected.permissionPolicy.mode === 'cap'
-          ? unreviewedGhostPermissionItems(
-              expected.permissionPolicy.manifest,
-              baselineManifest ?? undefined,
-              inspected.canonicalManifest,
-            )
-          : [];
-      const extrasVersusReviewed = expected.reviewedManifest
-        ? unreviewedGhostPermissionItems(
-            expected.reviewedManifest,
-            baselineManifest ?? undefined,
-            inspected.canonicalManifest,
-          )
-        : null;
-      const builtinOauthClientChanged = marketPackageOauthIdentityChanged(
-        expected.reviewedManifest,
-        baselineManifest,
-        inspected.canonicalManifest,
-      );
-      const manualSummaryChanged = marketPackageManualSummaryChanged(
-        expected.reviewedManifest,
-        inspected.canonicalManifest,
-      );
-      const needsReview = marketPackageNeedsHostReview({
-        mode: expected.permissionPolicy.mode,
-        builtinOauthClientChanged,
-        manualSummaryChanged,
-        addedCount: permissionDiff === null ? null : permissionDiff.added.length,
-        unreviewedCount: unreviewed.length,
-        extrasVersusReviewedCount:
-          extrasVersusReviewed === null ? null : extrasVersusReviewed.length,
-      });
-      if (needsReview && expected.approvedPackageSha256 === undefined) {
-        const reviewKeys =
-          extrasVersusReviewed !== null
-            ? extrasVersusReviewed.map((item) => item.key)
-            : expected.permissionPolicy.mode === 'manual'
-              ? (permissionDiff?.added.map((item) => item.key) ?? [])
-              : unreviewed.map((item) => item.key);
-        const reviewDiff = marketPackageHostReviewDiff({
-          permissionDiff,
-          extrasVersusReviewedCount:
-            extrasVersusReviewed === null ? null : extrasVersusReviewed.length,
-          builtinOauthClientChanged,
-          manualSummaryChanged,
-        });
-        const review: PluginMarketPackageReviewFacts = {
-          manifest: inspected.manifest,
-          permissionDiff: reviewDiff,
-          isUpdate: installed !== undefined,
-          packageSha256: inspected.packageSha256,
-          installedBaseline,
-          sourceType: expected.permissionPolicy.sourceType,
-          builtinOauthClientChanged,
-        };
-        log.info('market package requires permission review', {
+        log.warn('market package exceeds catalog manifest capabilities', {
           ghostId: expected.ghostId,
-          mode: expected.permissionPolicy.mode,
-          keys: reviewKeys,
-          builtinOauthClientChanged,
+          keys: undeclaredCapabilities.map((item) => item.key),
         });
-        throw new GhostPackagePermissionReviewRequiredError(review);
+        throwIpcError(
+          'GHOST_FILE_INVALID',
+          'Downloaded Plugin package capabilities exceed the market manifest',
+        );
       }
     }
     rejectUnauthorizedTokenBroker(
@@ -5610,29 +5706,28 @@ async function installOrUpdateMarketGhostPackageLocked(
         : undefined,
     );
 
-    // Node 高风险条目由 renderer 装入确认卡权限清单如实展示;
-    // 2026-07-24 Lizi 定案:不再有 Main 侧原生二次确认弹窗(PR #333,本处为其
-    // 漏删的市场安装路径调用点,一并对齐)。
+    // Manifest 能力只用于 Host 注册、校验和运行时守门。用户点击安装后不再
+    // 经过插件级权限确认；真实包仍必须通过上面的市场声明上限与 Host 校验。
     // Hold the owner-stability lease only for the actual Ghost filesystem
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
     if (!installed) {
-      // 2026-07-26 定案:市场首装一律装完即开(defaultInstall 与手动安装归一),
-      // 用户不必再手动点一次开关。市场包走官方分发链路(服务端校验 + sha256
-      // 校验下载),且确认框如实展示权限清单,确认安装即授权运行;本地 .cindy
-      // 文件装入的初始启用态仍由确认框勾选决定(勾选默认开启,main 侧
-      // installAndDock 缺省不启用,授权判断始终来自 UI 显式值)。
+      // 市场首装一律装完即开(defaultInstall 与手动安装归一)，用户不必再手动
+      // 点一次开关。市场包走服务端校验 + sha256 下载校验，并受目录 manifest
+      // 能力上限约束；本地 .cindy 由明确的文件选择、拖入或双击动作直接装入。
       // expectedPackageSha256 把"检查过的字节"与"落位的字节"钉死为同一份:
       // inspect 与 install 各自重读磁盘,临时 .cindy 在两读之间被替换时,
-      // 所有前置校验(保留前缀/审阅比对/签名/解压上限)都会作用在旧字节上。
+      // 所有前置校验(保留前缀/能力上限/签名/解压上限)都会作用在旧字节上。
       // 本地 .cindy 装入通道已强制此对账,市场通道同一口径。
       expected.beforeCommitInLock?.();
-      return installAndDock(manager, cindyFilePath, {
+      const installedGhost = await installAndDock(manager, cindyFilePath, {
         ghostId: expected.ghostId,
         enable: true,
         expectedPackageSha256: inspected.packageSha256,
         ...(trustOverride ? { trustOverride } : {}),
       });
+      await expected.afterCommitInLock?.(installedGhost);
+      return installedGhost;
     }
 
     expected.beforeCommitInLock?.();
@@ -5708,6 +5803,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       }
     }
     spawnIfResident(result.ghost);
+    await expected.afterCommitInLock?.(result.ghost);
     return result.ghost;
   } finally {
     releaseMutation?.();
@@ -5991,7 +6087,7 @@ export function registerGhostIpc(): void {
       .map((s) => s.key)
       .concat(nodeSecretDecls.map((s) => s.key));
     // login-email 派生身份:GET 状态回查附 identity(= 当前登录邮箱,设置页
-    // 只读展示"用的是哪个身份")。回给意识不算新增泄露面——装入确认框已
+    // 只读展示"用的是哪个身份")。回给意识不算新增泄露面——插件详情已
     // 披露"将使用你的登录邮箱",且注入时它自己的服务端本就可见。写/删 405。
     const identitySecretKeys = networkSecretDecls
       .filter((s) => s.source === 'login-email')
@@ -6439,7 +6535,7 @@ export function registerGhostIpc(): void {
     if (type === 'fs-request') {
       return getGhostFsSlot().handleFsRequest(id, payload);
     }
-    // library-request = library 槽持久作品库(资格审/binding 根解析/owner scope
+    // library-request = library 持久作品库(资格审/binding 根解析/owner scope
     // 复核/SQL 语句门在 librarySlot;结果结构化 errorCode,永不 reject)。
     if (type === 'library-request') {
       return getGhostLibrarySlot().handleLibraryRequest(id, payload);
@@ -6956,13 +7052,13 @@ export function registerGhostIpc(): void {
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
     }
-    const installOpts = opts as {
-      enable?: unknown;
-      expectedPackageSha256?: unknown;
-      packTicket?: unknown;
-    } | undefined;
+    const installOpts = opts as
+      | {
+          enable?: unknown;
+          expectedPackageSha256?: unknown;
+        }
+      | undefined;
     const expectedPackageSha256 = installOpts?.expectedPackageSha256;
-    const packTicket = typeof installOpts?.packTicket === 'string' ? installOpts.packTicket : undefined;
     if (
       typeof expectedPackageSha256 !== 'string' ||
       !/^[a-f0-9]{64}$/.test(expectedPackageSha256)
@@ -6971,57 +7067,27 @@ export function registerGhostIpc(): void {
     }
     const probe = await manager.inspect(lizFilePath);
     if ('rejection' in probe) throwInstallError(probe.rejection);
-    assertGhostSupportsCurrentCindy(probe.canonicalManifest);
     if (probe.packageSha256 !== expectedPackageSha256) {
-      throwIpcError('GHOST_FILE_INVALID', '插件文件在确认后发生了变化，请重新选择并确认');
+      throwIpcError('GHOST_FILE_INVALID', '插件文件在检查后发生了变化，请重新选择');
     }
     rejectReservedGhostId(probe.manifest.id);
-    // Node 高风险提示在 renderer 装入确认卡的权限清单里如实展示;
-    // 2026-07-24 Lizi 定案:不再追加 Main 原生二次确认弹窗。
+    rejectBrokerWithoutDeclaredRedirectPort(probe.manifest);
+    rejectUnauthorizedTokenBroker(probe.manifest);
+    // Node 等高风险能力在插件详情中如实展示；安装事务不追加能力确认弹窗。
     const enable = installOpts?.enable === true;
     // owner 租约在锁外整段持有(防中途 owner 切换把落位写进新 owner);按 ghostId 的
     // 互斥锁由 installAndDock 自动获取(卡点),这里传 id 即可。二者语义不同,叠加保留。
     const releaseMutation = beginGhostMutation(mutationOwner);
-    let forgeInstall: ReturnType<typeof consumeForgePackAtInstall> = { kind: 'manual' };
     try {
-      const forgeController = getForgePackStagingControllerIfConfigured();
-      if (packTicket && !forgeController) {
-        throwIpcError('GHOST_FILE_INVALID', '插件打包凭证已失效，请重新打包并确认');
-      }
-      forgeInstall = forgeController
-        ? consumeForgePackAtInstall(forgeController, {
-            packTicket,
-            packageSha256: probe.packageSha256,
-            manifestId: probe.manifest.id,
-            currentOwner: mutationOwner,
-            boundaryPending: isAppSessionBoundaryPending(),
-          })
-        : ({ kind: 'manual' } as const);
-      if (forgeInstall.kind === 'rejected') {
-        if (forgeInstall.reason === 'session-boundary-pending') {
-          throwIpcError('PRECONDITION_FAILED', '账号切换中，请稍后再试');
-        }
-        throwIpcError('GHOST_FILE_INVALID', '插件打包凭证已失效，请重新打包并确认');
-      }
-      const installOrigin = forgeInstall.kind === 'agent-forge' ? 'agent-forge' : 'manual';
-      rejectUnauthorizedTokenBroker(probe.manifest, { installOrigin });
       return {
         ghost: await installAndDock(manager, lizFilePath, {
           ghostId: probe.manifest.id,
           enable,
           expectedPackageSha256,
-          installOrigin,
         }),
       };
     } finally {
       releaseMutation();
-      if (forgeInstall.kind === 'agent-forge') {
-        try {
-          releaseForgePackStaging(forgeInstall.ticket.stagingPath);
-        } catch {
-          // Staging cleanup must not leak the owner mutation lease.
-        }
-      }
     }
   });
 
@@ -7039,12 +7105,10 @@ export function registerGhostIpc(): void {
       | {
           expectedPackageSha256?: unknown;
           expectedInstalledApproval?: unknown;
-          packTicket?: unknown;
         }
       | undefined;
     const expectedPackageSha256 = updateOptions?.expectedPackageSha256;
     const expectedInstalledApproval = updateOptions?.expectedInstalledApproval;
-    const packTicket = typeof updateOptions?.packTicket === 'string' ? updateOptions.packTicket : undefined;
     if (
       typeof expectedPackageSha256 !== 'string' ||
       !/^[a-f0-9]{64}$/.test(expectedPackageSha256)
@@ -7057,199 +7121,39 @@ export function registerGhostIpc(): void {
         'expectedInstalledApproval must come from ghosts:list',
       );
     }
-    const marketLedger = getPluginMarketLedger().bind(
-      ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
-    );
     const inspected = await manager.inspect(lizFilePath);
     if ('rejection' in inspected) throwInstallError(inspected.rejection);
-    assertGhostSupportsCurrentCindy(inspected.canonicalManifest);
     if (inspected.packageSha256 !== expectedPackageSha256) {
-      throwIpcError('GHOST_FILE_INVALID', '插件文件在确认后发生了变化，请重新选择并确认');
+      throwIpcError('GHOST_FILE_INVALID', '插件文件在检查后发生了变化，请重新选择');
     }
     rejectReservedGhostId(inspected.manifest.id);
+    rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
+    rejectUnauthorizedTokenBroker(inspected.manifest);
     // 从熄灯到换版收尾整段持 owner 租约:熄灯之后每一步都在改"当前 owner"的插件世界,
     // 中途 owner 切换落定会把后半段(update 落盘/停靠/点火)写进新 owner。租约在锁外,
     // 与市场/本地装入/卸载共用的按 ghostId 互斥叠加(二者语义不同,决策 A 都保留)。
     // 锁序不变量(违反即死锁):owner lease → per-id lock。
     const releaseMutation = beginGhostMutation(mutationOwner);
-    let forgeUpdate: ReturnType<typeof consumeForgePackAtInstall> = { kind: 'manual' };
     try {
-      const forgeUpdateController = getForgePackStagingControllerIfConfigured();
-      if (packTicket && !forgeUpdateController) {
-        throwIpcError('GHOST_FILE_INVALID', '插件打包凭证已失效，请重新打包并确认');
-      }
-      forgeUpdate = forgeUpdateController
-        ? consumeForgePackAtInstall(forgeUpdateController, {
-            packTicket,
-            packageSha256: inspected.packageSha256,
-            manifestId: inspected.manifest.id,
-            currentOwner: mutationOwner,
-            boundaryPending: isAppSessionBoundaryPending(),
-          })
-        : ({ kind: 'manual' } as const);
-      if (forgeUpdate.kind === 'rejected') {
-        if (forgeUpdate.reason === 'session-boundary-pending') {
-          throwIpcError('PRECONDITION_FAILED', '账号切换中，请稍后再试');
-        }
-        throwIpcError('GHOST_FILE_INVALID', '插件打包凭证已失效，请重新打包并确认');
-      }
-      const updateOrigin = forgeUpdate.kind === 'agent-forge' ? 'agent-forge' : 'manual';
-      rejectUnauthorizedTokenBroker(inspected.manifest, { installOrigin: updateOrigin });
-      return await withGhostInstallLock(inspected.manifest.id, async () => {
-        const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
-        runtime.stop(inspected.manifest.id);
-        // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
-        // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
-        await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
-        let marketRecord: PluginMarketInstallationRecord | null;
-        let marketInstallSubject: string | null = null;
-        let marketRecordWasSuppressed = false;
-        try {
-          marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
-          if (
-            marketRecord?.installed &&
-            (marketRecord.source === 'market' || marketRecord.source === 'legacy-adopted')
-          ) {
-            marketInstallSubject = getCurrentUserId() ?? mutationOwner.dataOwnerId;
-            marketRecordWasSuppressed = marketInstallSubject
-              ? marketLedger.isDefaultInstallSuppressed(
-                  marketInstallSubject,
-                  marketRecord.pluginId,
-                )
-              : false;
-          }
-        } catch (error) {
-          if (previousGhost) spawnIfResident(previousGhost);
-          log.warn('failed to verify Plugin provenance before local update', {
-            ghostId: inspected.manifest.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');
-        }
-        // 用户已在本地包确认流程中明确选择了这份真实包：同 id 可以原位替换，
-        // 市场来源不是永久所有权。替换前先切断旧市场更新路由；落位失败再恢复，
-        // 全程不清理 Secret、KV、偏好或其它按 ghostId 保存的用户状态。
-        const detachMarketRecord = Boolean(marketRecord?.installed);
-        const restoreMarketRecord = (): void => {
-          if (!detachMarketRecord || !marketRecord) return;
-          try {
-            marketLedger.restoreInstallation(
-              marketRecord,
-              marketInstallSubject
-                ? {
-                    userId: marketInstallSubject,
-                    suppressed: marketRecordWasSuppressed,
-                  }
-                : undefined,
-            );
-          } catch (error) {
-            // 恢复失败时保持路由失效是安全降级：不能让旧市场自动覆盖用户
-            // 明确选择的本地包。用户仍可从任一市场显式替换同 ID 插件。
-            log.error('failed to restore Plugin market provenance after local update failure', {
-              ghostId: inspected.manifest.id,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        };
-        if (detachMarketRecord) {
-          try {
-            // 先持久化切断自动更新路由，再改真实包。账本不可写时不触碰包，
-            // 避免同 manifest 的本地代码被旧市场静默覆盖。
-            marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
-          } catch (error) {
-            restoreMarketRecord();
-            if (previousGhost) spawnIfResident(previousGhost);
-            log.warn('failed to detach Plugin market provenance before local update', {
-              ghostId: inspected.manifest.id,
-              error: error instanceof Error ? error.message : String(error),
-            });
-            throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');
-          }
-        }
-        getGhostAgentSlot().clearGhost(inspected.manifest.id);
-        getGhostErrandSlot().clearGhost(inspected.manifest.id);
-        let result: Awaited<ReturnType<typeof manager.update>>;
-        let packagePlaced = false;
-        try {
-          result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id, () =>
-            manager.update(lizFilePath, {
-              expectedPackageSha256,
-              expectedInstalledApproval,
-              installOrigin: updateOrigin,
-              ...(previousGhost
-                ? {
-                    beforePackageCommit: () =>
-                      getGhostOauthAccountManager().prepareAccountsForChangedClients(
-                        withRuntimeFiloGoogleClient(previousGhost.manifest),
-                        withRuntimeFiloGoogleClient(inspected.canonicalManifest),
-                      ),
-                  }
-                : {}),
-              onPackagePlaced: () => {
-                packagePlaced = true;
-              },
-            }),
-          );
-        } catch (err) {
-          if (!packagePlaced) {
-            restoreMarketRecord();
-            // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
-            if (previousGhost) spawnIfResident(previousGhost);
-            throw err;
-          }
-          const placed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
-          if (!placed) throw err;
-          log.warn('local ghost post-placement notification failed', {
-            ghostId: inspected.manifest.id,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          result = { ghost: placed };
-        }
-        if ('rejection' in result) {
-          // 回滚失败 = 安装目录可能已是新字节或缺失，"旧版本还在"不成立，
-          // 不得按旧 InstalledGhost 重启运行时（P1：那会拿旧批准跑未知字节）。
-          // 同样不得恢复旧市场来源路由——那会把不一致的字节绑定回原来源，
-          // 未来市场版本对账可能按旧 provenance 操作错位插件
-          // （P1, PRRT_kwDOTgdRUs6YcG8r）。
-          if (!(result.rejection.code === 'io' && result.rejection.rollbackFailed)) {
-            restoreMarketRecord();
-          }
-          if (previousGhost &&
-            !(result.rejection.code === 'io' && result.rejection.rollbackFailed)) {
-            spawnIfResident(previousGhost);
-          }
-          throwInstallError(result.rejection);
-        }
-        runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
-        const store = getLayoutStore();
-        const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
-        if (docked) {
-          const applied = store.setLayout(docked);
-          if ('rejection' in applied) {
-            log.warn('ghost panel dock rejected', {
-              id: result.ghost.manifest.id,
-              reason: applied.rejection,
-            });
-          }
-        }
-        spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
-        return { ghost: result.ghost };
-      });
+      return {
+        ghost: await withGhostInstallLock(inspected.manifest.id, () =>
+          updateLocalGhostPackageLocked(
+            manager,
+            lizFilePath,
+            inspected,
+            expectedPackageSha256,
+            expectedInstalledApproval,
+            mutationOwner,
+          ),
+        ),
+      };
     } finally {
       releaseMutation();
-      if (forgeUpdate.kind === 'agent-forge') {
-        try {
-          releaseForgePackStaging(forgeUpdate.ticket.stagingPath);
-        } catch {
-          // Staging cleanup must not leak the owner mutation lease.
-        }
-      }
     }
   });
 
   // 设置页「装入意识…」第一步:系统文件选择框(按 .cindy 过滤),只选不装。
-  // 后续 inspect → 确认弹窗 → install 由 renderer 编排(三个装入入口共用
-  // "先验明正身再确认"的契约)。取消选择返回 { canceled: true },不算错误。
+  // 后续 inspect → install 由 renderer 编排；取消选择返回 { canceled: true },不算错误。
   ipcMain.handle('ghosts:pick-file', async (event) => {
     assertTrustedAppRendererEvent(event);
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -7263,142 +7167,13 @@ export function registerGhostIpc(): void {
   });
 
   // 双击 .cindy 的待装路径:renderer 在 install-requested 信号或挂载时原子
-  // 取走(取即清空),随后走与按钮/拖入完全相同的确认装入编排。
+  // 取走(取即清空),随后走与按钮/拖入完全相同的装入编排。
   ipcMain.handle('ghosts:take-pending-install', (event) => {
     assertTrustedAppRendererEvent(event);
-    // 路径与来源一起返回:来源是确认框加重展示的依据,不能走比路径更易失的
-    // 通道(理由见 openFileInstall.ts 头注释)。
-    const pending = takePendingCindyInstall();
-    return {
-      filePath: pending?.filePath ?? null,
-      origin: pending?.origin ?? MANUAL_GHOST_INSTALL_ORIGIN,
-    };
+    return { filePath: takePendingCindyInstall() };
   });
 
-  // 本地包第三条恢复路径第一步:从**已装目录**读出确认卡事实,零副作用。
-  // 批准丢失(迁移后 receipt 又损坏/被删)时不用用户翻出原始 .cindy —— 字节从安装
-  // 目录读,权限清单全量展示,确认后由 ghosts:reapprove-installed 开 receipt。
-  // inspect 时点的 owner 与事实用一次性票据钉死,confirm 原子消费(P0-2):只回传
-  // manifestSha256 绑不住 owner —— 多账号下确认卡停留期间切号,A 看的确认可以给 B
-  // 的同 id 目录铸批准。票据 Host 进程内持有,renderer 只透传 opaque token。
-  const reapproveTickets = createOneShotTicketStore<{
-    owner: ActiveAppSession;
-    id: string;
-    manifestSha256: string;
-    approvalProjectionSha256: string;
-  }>({ ttlMs: 10 * 60 * 1000, maxEntries: 64 });
-  ipcMain.handle('ghosts:reapprove-inspect', async (event, id: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (typeof id !== 'string' || id.trim().length === 0) {
-      throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    }
-    requireGhostAvailableForActiveSession(id);
-    rejectReservedGhostId(id);
-    // owner 在读事实**之前**捕获(边界期直接抛):票据钉的是"这份事实属于哪个 owner"。
-    const owner = captureGhostMutationOwner();
-    const result = await manager.inspectInstalledReapproval(id);
-    if ('rejection' in result) throwInstallError(result.rejection);
-    rejectUnauthorizedTokenBroker(result.manifest);
-    const inspectTicket = reapproveTickets.issue({
-      owner,
-      id,
-      manifestSha256: result.manifestSha256,
-      approvalProjectionSha256: result.approvalProjectionSha256,
-    });
-    return {
-      manifest: result.manifest,
-      trust: result.trust,
-      manifestSha256: result.manifestSha256,
-      approvalProjectionSha256: result.approvalProjectionSha256,
-      previouslyEnabled: result.previouslyEnabled,
-      inspectTicket,
-    };
-  });
-
-  // 第三条恢复路径第二步:用户点过确认卡后开 receipt。expectedManifestSha256 绑定
-  // 「确认卡展示的」与「此刻批准的」清单字节(与更新流程 expectedPackageSha256 同形),
-  // expectedInstalledApproval 防确认期间批准状态被并发改写。
-  ipcMain.handle('ghosts:reapprove-installed', async (event, id: unknown, opts: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (typeof id !== 'string' || id.trim().length === 0) {
-      throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    }
-    requireGhostAvailableForActiveSession(id);
-    // 与本地装入同一道门:官方保留前缀不走用户通道(真随包 id 已被 manager 的
-    // 种子清单检查拒掉,这里拦的是冒充官方前缀的目录)。
-    rejectReservedGhostId(id);
-    const options = opts as
-      | {
-          enable?: unknown;
-          expectedManifestSha256?: unknown;
-          expectedApprovalProjectionSha256?: unknown;
-          expectedInstalledApproval?: unknown;
-          inspectTicket?: unknown;
-        }
-      | undefined;
-    if (typeof options?.enable !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'enable must be a boolean');
-    }
-    if (
-      typeof options.expectedManifestSha256 !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(options.expectedManifestSha256)
-    ) {
-      throwIpcError('INVALID_PARAMS', 'expectedManifestSha256 must come from ghosts:reapprove-inspect');
-    }
-    if (
-      typeof options.expectedApprovalProjectionSha256 !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(options.expectedApprovalProjectionSha256)
-    ) {
-      throwIpcError(
-        'INVALID_PARAMS',
-        'expectedApprovalProjectionSha256 must come from ghosts:reapprove-inspect',
-      );
-    }
-    if (!isGhostInstallApprovalToken(options.expectedInstalledApproval)) {
-      throwIpcError('INVALID_PARAMS', 'expectedInstalledApproval must come from ghosts:list');
-    }
-    if (typeof options.inspectTicket !== 'string' || options.inspectTicket.length === 0) {
-      throwIpcError('INVALID_PARAMS', 'inspectTicket must come from ghosts:reapprove-inspect');
-    }
-    // 原子消费票据:重放/过期/跨票一律 PRECONDITION_FAILED,让 UI 重开确认卡。
-    const ticket = reapproveTickets.consume(options.inspectTicket);
-    if (
-      !ticket ||
-      ticket.id !== id ||
-      ticket.manifestSha256 !== options.expectedManifestSha256 ||
-      ticket.approvalProjectionSha256 !== options.expectedApprovalProjectionSha256
-    ) {
-      throwIpcError('PRECONDITION_FAILED', '确认卡已过期或与检查时不一致,请重新打开确认');
-    }
-    // 开 receipt 是 owner 绑定的状态根写路径:租约以**票据里 inspect 时点的 owner**
-    // 为期望值 —— 确认卡停留期间切了号,generation 不等直接拒,A 的确认给不了 B。
-    const releaseMutation = beginGhostMutation(ticket.owner);
-    try {
-      const result = await manager.reapproveInstalled(id, {
-          enable: options.enable,
-          expectedManifestSha256: options.expectedManifestSha256,
-          expectedApprovalProjectionSha256: options.expectedApprovalProjectionSha256,
-          expectedInstalledApproval: options.expectedInstalledApproval,
-      });
-      if ('rejection' in result) throwInstallError(result.rejection);
-      // 与装入/更新同款收尾:面板停靠(已有位置则 no-op)+ 常驻点火。
-      // 必须在 owner 租约内执行 —— 否则账号切换后 dock/spawn 会写到新 owner。
-      const store = getLayoutStore();
-      const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
-      if (docked) {
-        const applied = store.setLayout(docked);
-        if ('rejection' in applied) {
-          log.warn('ghost panel dock rejected', { id: result.ghost.manifest.id, reason: applied.rejection });
-        }
-      }
-      spawnIfResident(result.ghost);
-      return { ghost: result.ghost };
-    } finally {
-      releaseMutation();
-    }
-  });
-
-  // 只验不装:读出 .cindy 的清单给确认弹窗展示,零副作用。
+  // 只验不装:读出 .cindy 的真实清单，供兼容性判断与安装摘要使用，零副作用。
   ipcMain.handle('ghosts:inspect', async (event, lizFilePath: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
@@ -7406,49 +7181,17 @@ export function registerGhostIpc(): void {
     }
     const result = await manager.inspect(lizFilePath);
     if ('rejection' in result) throwInstallError(result.rejection);
-    assertGhostSupportsCurrentCindy(result.canonicalManifest);
-    // 官方前缀在 inspect 就拒(确认弹窗都不该弹出来),install/update 双保险再拦。
+    // 官方前缀在 inspect 就拒，install/update 双保险再拦。
     rejectReservedGhostId(result.manifest.id);
-    let packTicket: string | undefined;
-    const inspectController = getForgePackStagingControllerIfConfigured();
-    const peekTicket = inspectController?.peekMatchingStagingPath(lizFilePath) ?? null;
     rejectBrokerWithoutDeclaredRedirectPort(result.manifest);
-    rejectUnauthorizedTokenBroker(result.manifest, {
-      installOrigin: peekTicket ? 'agent-forge' : 'manual',
-    });
-    const forgeInspect = inspectController
-      ? consumeForgePackAtInspect(inspectController, {
-          filePath: lizFilePath,
-          packageSha256: result.packageSha256,
-          manifestId: result.manifest.id,
-          currentOwner: getActiveAppSession(),
-          boundaryPending: isAppSessionBoundaryPending(),
-        })
-      : ({ kind: 'not-forge' } as const);
-    if (forgeInspect.kind === 'rejected') {
-      if (forgeInspect.reason === 'session-boundary-pending') {
-        throwIpcError('PRECONDITION_FAILED', '账号切换中，请稍后再试');
-      }
-      throwIpcError('GHOST_FILE_INVALID', '插件打包凭证已失效，请重新打包并确认');
-    }
-    if (forgeInspect.kind === 'accepted') packTicket = forgeInspect.packTicket;
+    rejectUnauthorizedTokenBroker(result.manifest);
     return {
       manifest: result.manifest,
       trust: result.trust,
       packageSha256: result.packageSha256,
+      unsupportedSlots: result.unsupportedLegacySlots,
       ...(result.iconDataUrl !== undefined ? { iconDataUrl: result.iconDataUrl } : {}),
-      ...(packTicket ? { packTicket } : {}),
     };
-  });
-
-  ipcMain.handle('ghosts:abandon-pack-ticket', async (event, packTicket: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (typeof packTicket !== 'string' || packTicket.length === 0) {
-      throwIpcError('INVALID_PARAMS', 'packTicket must be a non-empty string');
-    }
-    const controller = getForgePackStagingControllerIfConfigured();
-    if (controller) abandonForgePackInstall(controller, packTicket);
-    return { ok: true };
   });
 
   ipcMain.handle('ghosts:uninstall', async (event, id: unknown) => {
@@ -7490,15 +7233,13 @@ export function registerGhostIpc(): void {
         const probe = await manager.inspect(filePath);
         if ('rejection' in probe) return false;
         // tokenBroker 门控(同 rejectUnauthorizedTokenBroker):官方前缀照旧;
-        // 其余问已装 receipt 的装入来源与当前组织身份。
+        // 其余问已装的市场来源与当前组织身份。
         const brokered = (probe.manifest.network?.secrets ?? []).some(
           (s) => s.oauth?.tokenBroker !== undefined,
         );
         if (
           brokered &&
-          !isGhostTokenBrokerAuthorized(probe.manifest.id, 'install', {
-            installOrigin: manager.readEffectiveInstallOrigin(probe.manifest.id),
-          })
+          !isGhostTokenBrokerAuthorized(probe.manifest.id, 'install')
         ) {
           return false;
         }

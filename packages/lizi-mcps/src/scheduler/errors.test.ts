@@ -15,6 +15,7 @@ describe('classifySchedulerError utility model diagnostics', () => {
 
     expect(result.code).toBe(code);
     expect(result.message).toContain(`[${code}] safe diagnostic`);
-    expect(result.message).toContain('可改为传入 script');
+    expect(result.message).toContain('script');
+    expect(result.message).toContain('bypass');
   });
 });

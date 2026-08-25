@@ -89,6 +89,7 @@ import {
   DEDICATED_AUTO_REVIEW_CANDIDATES,
   getUtilityTextCandidates,
   requestDedicatedAutoReviewCandidateText,
+  requestExplicitUtilityText,
   requestUtilityText,
   toAnthropicApiModelId,
 } from '../oneShotCandidates.js';
@@ -420,6 +421,52 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('rejects a retired model pinned to an explicit auxiliary route', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'tapsvc',
+        name: 'Tap Service',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://custom.example/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{
+            id: 'retired-mini',
+            name: 'Retired Mini',
+            contextWindow: 100_000,
+            status: 'retired',
+          }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('custom-secret');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'retired-mini',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [expect.objectContaining({
+        providerId: 'tapsvc',
+        model: 'retired-mini',
+        status: 'skipped',
+        reason: 'model_unavailable',
+      })],
+    });
+    expect(readCustomKey).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('does not read or send a custom-provider key while its route is mutating', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -509,6 +556,135 @@ describe('utility one-shot candidates', () => {
       model: 'chat-model',
       reasoning_effort: 'low',
       messages: [{ role: 'user', content: 'generate' }],
+    });
+  });
+
+  it('keeps system instructions separate on an exact auxiliary chat route', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'chat-only',
+        name: 'Chat Only',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://chat.example/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'chat-model', name: 'Chat Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('chat-secret');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'next prompt' } }],
+      }),
+    } as never);
+
+    const result = await requestExplicitUtilityText('reference material', {
+      providerId: 'chat-only',
+      agentKind: 'codex',
+      model: 'chat-model',
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+      beforeDispatch: async (route) => route.providerId === 'chat-only',
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'next prompt' });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      messages: [
+        { role: 'system', content: 'SYSTEM POLICY\nONE LINE ONLY' },
+        { role: 'user', content: 'reference material' },
+      ],
+    });
+  });
+
+  it('does not dispatch or fall back when the final exact-route guard rejects', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'chat-only',
+        name: 'Chat Only',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://chat.example/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'chat-model', name: 'Chat Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('chat-secret');
+
+    const result = await requestExplicitUtilityText('must stay local', {
+      providerId: 'chat-only',
+      agentKind: 'codex',
+      model: 'chat-model',
+      beforeDispatch: async () => false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [expect.objectContaining({ providerId: 'chat-only', reason: 'request_failed' })],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('passes instructions and the final guard through an exact builtin route', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD Gateway',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'managed' },
+        routing: {
+          'claude-code': { upstream: 'https://ignored.invalid', authStrategy: 'gateway-key' },
+        },
+        models: {
+          'claude-code': [{ id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 1_000_000 }],
+        },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'next prompt' } }] }),
+    } as never);
+    const beforeDispatch = vi.fn(async () => true);
+
+    const result = await requestExplicitUtilityText('reference material', {
+      providerId: 'xd',
+      agentKind: 'claude-code',
+      model: 'gpt-5.5',
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+      disableReasoning: true,
+      reasoningEffort: 'minimal',
+      beforeDispatch,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'next prompt' });
+    expect(beforeDispatch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      thinking: { type: 'disabled' },
+      reasoning_effort: 'minimal',
+      messages: [
+        { role: 'system', content: 'SYSTEM POLICY\nONE LINE ONLY' },
+        { role: 'user', content: 'reference material' },
+      ],
     });
   });
 

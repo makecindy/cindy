@@ -131,6 +131,7 @@
       "chipMetrics": "사용량 표시기",
       "memory": "메모리",
       "subagentModels": "하위 에이전트",
+      "auxiliaryModels": "보조 모델",
       "visionBridge": "비전 브리지",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
@@ -821,6 +822,11 @@
         "usageValue": "{{size}}({{count}}개 파일, 캐시 {{cacheSize}} 포함)",
         "statsFailed": "통계를 일시적으로 사용할 수 없습니다",
         "legacyUsage": "이전 버전 데이터(읽기 전용, 정리 대상 아님): {{size}}",
+        "legacyImagesLabel": "이미지 캐시 디렉터리",
+        "legacyImagesDescription": "Cindy는 이 디렉터리를 자동으로 검사하거나 정리하지 않습니다. 파일을 삭제하면 메시지 기록의 이미지가 표시되지 않을 수 있으므로 확인 후 작업해 주세요.",
+        "legacyImagesOpenButton": "디렉터리 열기",
+        "legacyImagesDirectoryMissing": "이미지 캐시 디렉터리를 찾을 수 없습니다",
+        "legacyImagesOpenFailed": "이미지 캐시 디렉터리를 열 수 없습니다. 다시 시도해 주세요.",
         "cleanupLabel": "디스크 정리",
         "cleanupDescription": "어떤 세션에서도 참조하지 않는 미디어 파일, 한도를 초과한 캐시, 사용하지 않는 폴더를 검사합니다. 먼저 수치를 보여주고 확인 후에만 삭제합니다. 입력창 초안과 대기 중인 메시지의 이미지는 자동으로 보호됩니다.",
         "scanButton": "검사",
@@ -2550,6 +2556,31 @@
         "deferredSuffix": " — 실행 중인 Codex 세션에는 현재 작업이 끝난 후 적용됩니다"
       }
     },
+    "auxiliaryModels": {
+      "title": "보조 모델",
+      "description": "작업 자동 이름 지정과 입력창 추천 프롬프트에 각각 Agent와 모델 조합을 지정합니다.",
+      "sessionTitle": {
+        "label": "작업 자동 이름 지정",
+        "description": "Claude Code, Codex, Pi 작업과 AI 수동 이름 바꾸기에 적용됩니다.",
+        "ariaLabel": "작업 자동 이름 지정 모델 선택",
+        "automatic": "자동 선택(현재 작업 따름)"
+      },
+      "promptRecommendation": {
+        "label": "입력창 추천 프롬프트",
+        "description": "‘팁’에서 입력창 추천을 켠 경우에만 사용합니다.",
+        "ariaLabel": "입력창 추천 프롬프트 모델 선택",
+        "automatic": "자동 선택(현재 라우팅 유지)"
+      },
+      "chooseAgent": "Agent 선택",
+      "backToAgents": "Agent 선택으로 돌아가기",
+      "explicitRouteHint": "명시적으로 지정하면 해당 Agent와 모델만 사용합니다. 사용할 수 없어도 자동으로 전환하지 않습니다.",
+      "searchPlaceholder": "모델 또는 제공자 검색",
+      "noResults": "사용 가능한 모델이 없습니다",
+      "unavailable": "현재 사용할 수 없음",
+      "budget": "할인",
+      "subscription": "구독",
+      "saveFailed": "보조 모델 설정을 저장하지 못했습니다"
+    },
     "compaction": {
       "title": "컨텍스트 압축",
       "description": "Claude Code와 Pi가 언제 컨텍스트를 자동 압축할지 제어합니다. 이 설정은 Codex에 영향을 주지 않습니다. Codex는 컨텍스트 압축을 따로 관리합니다.",
@@ -2669,7 +2700,7 @@
     "chatEmbedding": {
       "cell": {
         "label": "채팅 기록 의미 색인 활성화",
-        "description": "새 메시지를 로컬 벡터 저장소(voyage-4)에 임베딩하여 향후 의미 검색에 사용합니다. 이 기기에만 보관됩니다. 활성화 이후 새 메시지만 색인되며 기존 기록은 채워지지 않습니다."
+        "description": "새 메시지와 의미 검색 쿼리는 벡터 생성을 위해 벡터 모델(voyage-4)로 전송됩니다. 메시지 벡터는 로컬 색인에 저장됩니다. 활성화 후 생성된 메시지만 색인되며 기존 채팅 기록은 소급하여 색인되지 않습니다."
       },
       "toggleAria": "채팅 기록 의미 색인 전환",
       "toast": {
@@ -4092,7 +4123,7 @@
         "updateTo": "v{{version}}(으)로 업데이트",
         "updateAria": "{{name}}을(를) v{{version}}(으)로 업데이트",
         "createWithCindy": "Cindy로 만들기",
-        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 슬롯 총람이 담긴 2장, 샌드박스 금지선, 패키징 세 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 플러그인 페이지 내 패널 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 백그라운드 능력: 이벤트 수신 · 앱 내 토스트 알림 · 읽지 않음 배지 · 확인 대화상자, 네트워크 사용 여부, 설정 페이지 필요 여부, Node 프로세스 동반 여부, 이미지·동영상 등 미디어 능력 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 플러그인을 패키징하고 설치해 주세요.",
+        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 샌드박스 금지선과 패키징 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 플러그인 페이지 내 패널 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 네트워크 사용 여부, 설정 페이지 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 .cindy 패키지를 검증하고 생성하며, 설치된 것으로 안내하지 마세요.",
         "filterAll": "전체",
         "filtersAria": "출처별 플러그인 필터",
         "origin": {
@@ -4136,14 +4167,6 @@
         "customSourcesUnavailable": "다음 사용자 지정 마켓을 일시적으로 사용할 수 없습니다: {{names}}. 다른 마켓에는 영향을 주지 않습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
-        "upgradeNotice": {
-          "single": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다.",
-          "multiple_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
-          "multiple_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
-          "singleWithPermissions": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다. 새 권한: {{permissions}}",
-          "multipleWithPermissions_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 새 권한이 추가되었습니다.",
-          "multipleWithPermissions_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 일부 플러그인에 새 권한이 추가되었습니다."
-        },
         "removalNotice": {
           "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
           "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",
@@ -4164,10 +4187,6 @@
         "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 최초 설치 후 자동으로 활성화되며 플러그인 페이지에서 언제든지 비활성화할 수 있습니다. 업데이트 시 현재 활성화 상태가 유지됩니다.",
         "customSecurityDescription": "이 플러그인은 추가한 사용자 지정 마켓에서 제공되며 Cindy 서버의 무결성 검증을 거치지 않았습니다. 설치 전에 메인 프로세스에서 매니페스트를 검증합니다. 처음 설치하면 자동으로 활성화되며 플러그인 페이지에서 언제든 비활성화할 수 있습니다.",
         "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
-        "installConfirmTitle": "‘{{name}}’을(를) 설치할까요?",
-        "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 설치합니다. 설치가 완료되면 자동으로 활성화되며, 언제든지 비활성화하거나 설정을 변경할 수 있습니다.",
-        "customInstallConfirmDescription": "사용자 지정 마켓의 플러그인으로 서버 무결성 검증을 거치지 않았으며, 설치 전에 매니페스트를 검증합니다. 설치 후 플러그인이 자동으로 활성화되며 언제든 비활성화하거나 설정을 변경할 수 있습니다.",
-        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다.",
         "sources": {
           "addMarketplace": "플러그인 마켓 추가…",
           "dialogTitle": "플러그인 마켓 추가",
@@ -4225,7 +4244,7 @@
             "authTitle": "비공개 리포지토리",
             "authBody": "인증은 전적으로 시스템 Git 구성에 의존하며 Cindy는 Git 자격 증명을 저장하지 않습니다. SSH: 이 머신에 사용 가능한 key가 구성되어 있어야 합니다. 조직이 SAML SSO를 강제하는 경우 GitHub SSH key 설정에서 Configure SSO로 해당 조직에 key를 승인해야 합니다. HTTPS: Personal Access Token을 사용하고 시스템 credential helper에 저장합니다.",
             "rulesTitle": "설치 규칙",
-            "rulesBody": "플러그인 id는 전역적으로 고유하며 선착순입니다. 설치된 플러그인과의 충돌은 명확히 표시됩니다. 공식 예약 접두사 {{reservedGhostIdPrefixes}}를 사용하는 플러그인은 끌어다 놓기, 파일 선택, ghost_forge_pack 전달 또는 사용자 지정 플러그인 마켓으로는 설치할 수 없습니다. 설치 전에 플러그인이 선언한 권한을 모두 보여주며, 확인하면 설치가 완료되고 자동으로 활성화됩니다.",
+            "rulesBody": "플러그인 id는 전역적으로 고유하며 선착순입니다. 설치된 플러그인과의 충돌은 명확히 표시됩니다. id에 공식 예약 접두사({{reservedGhostIdPrefixes}})를 사용하는 플러그인은 끌어다 놓기, 파일 선택 또는 사용자 지정 플러그인 마켓으로 설치할 수 없습니다. 선언된 권한은 상세 페이지에 표시됩니다. 설치를 클릭하면 별도의 권한 확인 대화상자 없이 설치가 완료되고 자동으로 활성화됩니다.",
             "copy": "가이드 복사",
             "copied": "가이드를 클립보드에 복사했습니다.",
             "copyFailed": "복사에 실패했습니다. 다시 시도하세요."
@@ -4236,13 +4255,13 @@
         "conflictDescription": "이 플러그인 식별자는 이미 사용 중이므로 현재 설치할 수 없습니다"
       },
       "reapproval": {
-        "badge": "권한 재확인 필요",
-        "action": "권한 다시 확인",
-        "actionAria": "플러그인 {{name}}의 권한 다시 확인",
-        "noticeTitle": "권한 재확인 필요",
-        "bodyLegacy": "Cindy에 이 플러그인의 권한 확인 기록이 없어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
-        "bodyInvalid": "이 플러그인의 권한 확인 기록이 손상되어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
-        "bodyBuiltinRestart": "이 내장 플러그인의 승인 기록에 문제가 발생했습니다. Cindy를 다시 시작하면 자동으로 복구되며, 다른 조치는 필요하지 않습니다."
+        "badge": "설치 복구 필요",
+        "action": "다시 설치",
+        "actionAria": "플러그인 {{name}} 다시 설치",
+        "noticeTitle": "설치 복구 필요",
+        "bodyLegacy": "Cindy가 이 플러그인의 전체 설치 기록을 확인할 수 없어 실행을 중지했습니다. 원래 마켓 버전을 다시 설치하거나 해당 .cindy 패키지를 다시 선택해 주세요.",
+        "bodyInvalid": "이 플러그인의 설치 확인 기록이 손상되어 실행을 중지했습니다. 원래 마켓 버전을 다시 설치하거나 해당 .cindy 패키지를 다시 선택해 주세요.",
+        "bodyBuiltinRestart": "이 내장 플러그인의 설치 확인 기록에 문제가 발생했습니다. Cindy를 다시 시작하면 자동으로 복구되며 다른 조치는 필요하지 않습니다."
       },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
@@ -4311,26 +4330,11 @@
       },
       "installConfirm": {
         "title": "플러그인 \"{{name}}\"을(를) 설치할까요?",
-        "confirm": "플러그인 설치",
-        "cancel": "취소",
         "meta": "버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "manualCount": "번들 매뉴얼 {{count}}개",
         "expandDescription": "전체 소개 보기",
-        "collapseDescription": "소개 접기",
-        "typedIdLabel": "플러그인 id \"{{id}}\"을(를) 입력하여 설치를 확인하세요",
-        "agentBanner": {
-          "title": "이 설치는 Agent가 시작한 것입니다 — 당신이 누른 것이 아닙니다.",
-          "context": "작업 \"{{title}}\"을(를) 진행하던 중 {{path}} 아래의 플러그인 소스를 패키징했습니다.",
-          "contextNoPath": "작업 \"{{title}}\"을(를) 진행하던 중 플러그인 소스 디렉터리를 패키징했습니다.",
-          "contextNoTitle": "{{path}} 아래의 플러그인 소스를 패키징했습니다.",
-          "contextBare": "플러그인 소스 디렉터리를 패키징했습니다.",
-          "advice": "이 작업에서 플러그인 제작을 요청하지 않았다면 취소하세요 —— 그리고 이 작업이 방금 읽은 외부 콘텐츠를 다시 살펴보세요.",
-          "firstInstall": "이 플러그인 id는 이전에 설치된 적이 없습니다.",
-          "hazardSkill": "스킬 지시가 포함되어 있습니다. AI는 이를 당신의 모든 권한으로, 플러그인 샌드박스 밖에서, 모든 프로젝트에 대해 실행합니다.",
-          "hazardNode": "브라우저 샌드박스 밖에서 당신의 컴퓨터에서 프로그램을 실행할 수 있습니다.",
-          "hazardCredential": "설정 페이지에 입력한 자격 증명을 {{hosts}}(으)로 보냅니다."
-        }
+        "collapseDescription": "소개 접기"
       },
       "trust": {
         "official": "Cindy 공식 플러그인",
@@ -4453,13 +4457,11 @@
       },
       "errors": {
         "fileInvalid": "유효한 .cindy 플러그인 파일이 아닙니다",
-        "hostUnsupported": "이 플러그인에는 현재 버전에서 제공하지 않는 Cindy 기능이 필요합니다. Cindy를 업데이트한 후 다시 설치하세요.",
+        "hostUnsupported": "이 Cindy 버전에서는 플러그인의 매니페스트 형식을 읽을 수 없습니다.",
         "alreadyInstalled": "이 플러그인은 이미 설치되어 있습니다",
-        "approvalRequired": "계속하려면 이 플러그인의 권한을 다시 확인해야 합니다",
         "commandConflict": "명령어가 설치된 플러그인과 충돌합니다. 먼저 상대를 제거하거나 명령어 이름을 변경하세요.",
-        "idReserved": "{{reservedGhostIdPrefixes}}는 공식 플러그인용 예약 접두사입니다. 끌어다 놓기, 파일 선택, ghost_forge_pack 전달 또는 사용자 지정 플러그인 마켓으로는 설치할 수 없습니다. 해당 공식 플러그인은 Cindy 플러그인 마켓에서 설치하세요",
-        "brokerManualInstallNotAuthorized": "수동으로 설치한 .cindy는 인증 broker를 사용할 수 없습니다. 조직 플러그인 마켓에서 설치하거나, 작성자에게 조직 계정으로 ghost_forge_pack을 사용해 빌드하도록 요청하세요.",
-        "brokerNotAuthorized": "현재 설치 출처 또는 조직 계정에는 인증 broker 사용 권한이 없습니다. 조직 플러그인 마켓에서 설치하거나, 작성자에게 조직 계정으로 ghost_forge_pack을 사용해 빌드하도록 요청하세요.",
+        "idReserved": "{{reservedGhostIdPrefixes}}는 공식 플러그인용 예약 접두사입니다. 끌어다 놓기, 파일 선택 또는 사용자 지정 플러그인 마켓으로는 설치할 수 없습니다. 해당 공식 플러그인은 Cindy 플러그인 마켓에서 설치하세요",
+        "brokerManualInstallNotAuthorized": "로컬로 설치한 .cindy는 인증 broker를 사용할 수 없습니다. 조직 플러그인 마켓에서 설치하세요.",
         "brokerRedirectPortRequired": "이 플러그인은 인증 broker를 선언했지만 같은 OAuth 설정에 redirectPort를 선언하지 않았습니다. 인증의 마지막 단계가 로컬 수신 포트로 돌아올 수 있도록 작성자에게 이 필드를 추가해 달라고 요청하세요.",
         "sourceMissing": "선택한 파일을 찾을 수 없습니다",
         "generic": "작업에 실패했습니다. 다시 시도해 주세요",
@@ -4626,13 +4628,6 @@
         "confirm": "업데이트",
         "cancel": "취소"
       },
-      "reapproveConfirm": {
-        "title": "\"{{name}}\" 권한을 다시 확인할까요?",
-        "body": "아래 권한을 확인하면 설치된 플러그인이 다시 승인됩니다. 설치 파일은 필요하지 않습니다.",
-        "confirm": "확인 후 복원",
-        "enableNoticeEnabled": "확인 후 현재 활성화 상태를 유지합니다.",
-        "enableNoticeAsleep": "확인 후 휴면 상태를 유지합니다(자동으로 활성화되지 않음). 나중에 여기에서 수동으로 활성화할 수 있습니다."
-      },
       "pick": {
         "dialogTitle": "폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 폴더 선택을 요청합니다"
@@ -4650,7 +4645,7 @@
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
         "collapseDiff": "접기",
-        "description": "일반 업데이트는 자동으로 완료되며, 검증된 실제 패키지가 새 권한을 요청할 때만 개별 확인합니다.",
+        "description": "업데이트는 보통 알림 없이 실행됩니다. 이 화면에서 건너뛰거나 실패한 업데이트를 다시 시도할 수 있습니다.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "대기 중",
         "statusInstalling": "업데이트 중…",
@@ -7354,6 +7349,11 @@
       "continueTitle": "중단된 지점부터 작업을 계속합니다(완료된 단계는 반복하지 않습니다)",
       "dismissTitle": "이 중단 알림 닫기"
     },
+    "unreadFailedScheduleBanner": {
+      "text": "이 예약 작업이 완료되지 않았습니다.",
+      "markAsRead": "읽음으로 표시",
+      "markAsReadTitle": "이 실패 읽지 않음 표시를 지웁니다"
+    },
     "worktreeRestoreBanner": {
       "text": "이 세션의 워크트리가 정리되었습니다(디렉터리가 존재하지 않음).",
       "textPendingSnapshot": "이 세션에 적용되지 않은 변경 스냅샷이 있습니다.",
@@ -8288,6 +8288,7 @@
         "menu": {
           "runNow": "지금 실행",
           "more": "추가 작업",
+          "markAllAsRead": "읽음으로 표시",
           "edit": "편집",
           "pause": "일시중지",
           "resume": "재개",

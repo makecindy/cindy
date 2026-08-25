@@ -699,30 +699,6 @@ export async function getSessionFsSnapshot(id: string): Promise<{
 }
 
 /**
- * 按 session id 查任务标题(装入确认框的 Agent 来源横幅用:告诉用户"这次装入是
- * 哪个任务里的 Agent 发起的")。纯展示用途,失败 swallow 返 null —— 拿不到标题
- * 只是横幅少一行,不阻断装入编排。
- */
-export async function getSessionTitle(id: string): Promise<string | null> {
-  try {
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select({ title: sessions.title })
-      .from(sessions)
-      .where(eq(sessions.id, id))
-      .limit(1);
-    const title = row?.title?.trim();
-    return title ? title : null;
-  } catch (err) {
-    log.warn('getSessionTitle failed', {
-      sessionId: id,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
-
-/**
  * 内部 API：标记用户显式发送时间。
  *
  * 过去这一步由 renderer 在 sendMessage 里直接调 IPC。队列 / 插话迁到 main 事务

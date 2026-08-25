@@ -27,8 +27,6 @@ const TRUSTED_SENDER_CHANNELS = [
   'ghosts:export',
   'ghosts:set-enabled',
   'ghosts:restore-builtin',
-  'ghosts:reapprove-inspect',
-  'ghosts:reapprove-installed',
 ] as const;
 
 function handlerBlock(source: string, channel: string): string {

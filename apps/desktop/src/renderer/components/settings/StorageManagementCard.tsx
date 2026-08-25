@@ -55,6 +55,15 @@ export function StorageManagementCard() {
     void refreshStats();
   }, []);
 
+  const handleOpenLegacyImagesDir = async () => {
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.openLegacyImagesDir();
+      if (!result.opened) toast.info(t('settings.about.storage.legacyImagesDirectoryMissing'));
+    } catch {
+      toast.error(t('settings.about.storage.legacyImagesOpenFailed'));
+    }
+  };
+
   const handleScan = async () => {
     if (cleanupBusyRef.current) return;
     cleanupBusyRef.current = true;
@@ -159,11 +168,22 @@ export function StorageManagementCard() {
               : ''}
           </span>
         </div>
-        {stats?.success && stats.legacy.bytes > 0 && (
+      </div>
+
+      <Divider />
+
+      <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-13 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.legacyImagesLabel')}
+          </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.storage.legacyUsage', { size: formatBytes(stats.legacy.bytes) })}
+            {t('settings.about.storage.legacyImagesDescription')}
           </p>
-        )}
+        </div>
+        <CardButton onClick={handleOpenLegacyImagesDir}>
+          {t('settings.about.storage.legacyImagesOpenButton')}
+        </CardButton>
       </div>
 
       <Divider />

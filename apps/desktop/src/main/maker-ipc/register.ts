@@ -442,6 +442,7 @@ import {
   onToolResultFullEvent,
   onToolUseEvent,
   preserveTurnPersistStateForBackground,
+  sealAssistantBlockForLateFinal,
   markAutoResumeOutcome,
   onTurnErrorEvent,
   prepareSyntheticToolEventForBroadcast,
@@ -7060,7 +7061,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 自动开启——任何 session 创建都会尝试读 cwd 下 .cindy/project-knowledge/，存在就注入；
    * 不再依赖 renderer 显式开关。tryInjectProjectContext silently fallback——目录缺失 / 文件
    * 读失败都走 injected:false 分支，不抛错也不阻塞 session 创建。
-   * 副作用：mutate o.userPrompt（追加 wrapper）；返回是否真的注入了内容。
+   * 副作用：mutate o.userPrompt（追加按需读取 TOC 的短 wrapper）；返回是否真的注入了入口。
    */
   async function applyProjectContextInjection(o: CreateOpts): Promise<boolean> {
     if (!o.workingDir) return false;
@@ -11631,7 +11632,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const sealLostTerminalPersistState = (sessionId: string): void => {
     // Same persist boundary as a lost-terminal live-idle reconcile. The next
     // turn on this sessionId must not append to a half-open streaming block.
-    flushAssistantBlock(sessionId, null);
+    sealAssistantBlockForLateFinal(sessionId, null);
     const abortedAssistantPersistId = consumeLastAssistantPersistId(sessionId);
     const abortedBoundaryAssistantPersistId = consumeLastTopLevelAssistantPersistId(sessionId);
     flushOrphanToolResults(sessionId, null);
