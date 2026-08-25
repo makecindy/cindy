@@ -1696,10 +1696,18 @@ describe('inspect_pdf', () => {
     const first = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
     expect(first.inspectedThrough).toBe(10);
     expect(first.nextPages).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+    const missingPreviousVerdict = await callTool(client, 'inspect_pdf', {
+      path: 'out.pdf',
+      pages: first.nextPages,
+      inspectedThrough: first.inspectedThrough,
+    });
+    expect(missingPreviousVerdict.ok).toBe(false);
+    expect(missingPreviousVerdict.errorCode).toBe('INVALID_ARGS');
     const second = await callTool(client, 'inspect_pdf', {
       path: 'out.pdf',
       pages: first.nextPages,
       inspectedThrough: first.inspectedThrough,
+      previousVerdict: first.verdict,
     });
     expect(second.inspectedThrough).toBe(20);
     expect(second.nextPages).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
@@ -1707,10 +1715,73 @@ describe('inspect_pdf', () => {
       path: 'out.pdf',
       pages: second.nextPages,
       inspectedThrough: second.inspectedThrough,
+      previousVerdict: second.verdict,
     });
     expect(third.inspectedThrough).toBe(30);
     expect(third.nextPages).toBeUndefined();
     expect(third.verdict).toBe('ok');
+  });
+
+  it('最后一批正常时仍保留此前批次发现的空白页与未验证结论', async () => {
+    const scenarios = [
+      {
+        verdict: 'partial-blank',
+        warning: '此前批次已发现空白页',
+        problemPage: page({ page: 5, textChars: 0, drawOps: 0, imageOps: 0, blank: true }),
+      },
+      {
+        verdict: 'warning',
+        warning: '此前批次存在结构算子解析未完成的页面',
+        problemPage: page({
+          page: 5,
+          textChars: 0,
+          drawOps: null,
+          imageOps: null,
+          blank: false,
+          visibilityUnverified: true,
+        }),
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const client = await connect({
+        inspectPdf: async ({ pages }) => {
+          const selected =
+            pages.length > 0 ? pages : Array.from({ length: 10 }, (_, index) => index + 1);
+          return {
+            numPages: 30,
+            pagesInspected: selected.length,
+            pages: selected.map((pageNumber) =>
+              pageNumber === 5 ? scenario.problemPage : page({ page: pageNumber }),
+            ),
+          };
+        },
+      });
+      await fs.writeFile(
+        path.join(workdir, 'out.pdf'),
+        Buffer.from(`%PDF-1.7\n${'x'.repeat(5000)}`),
+      );
+
+      const first = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+      expect(first.verdict).toBe(scenario.verdict);
+      const second = await callTool(client, 'inspect_pdf', {
+        path: 'out.pdf',
+        pages: first.nextPages,
+        inspectedThrough: first.inspectedThrough,
+        previousVerdict: first.verdict,
+      });
+      const third = await callTool(client, 'inspect_pdf', {
+        path: 'out.pdf',
+        pages: second.nextPages,
+        inspectedThrough: second.inspectedThrough,
+        previousVerdict: second.verdict,
+      });
+
+      expect(third.inspectedThrough).toBe(30);
+      expect(third.verdict).toBe(scenario.verdict);
+      expect(third.warning).toContain(scenario.warning);
+      expect(third.verdict).not.toBe('ok');
+    }
   });
 
   it('算子表未能解析时 verdict 不得误报 ok', async () => {

@@ -78,7 +78,7 @@ const DESCRIPTION = [
   '真实翻车靠上面的字段已经能定死;需要肉眼确认版式细节时,请把文件路径给用户去打开。',
   '',
   '【参数】pages 可指定要看的页码(1 起,如 [1,2,5]);不传就从第 1 页顺序取 maxPages 页。',
-  '分批连续检查时,把上一批响应的 inspectedThrough 原样传回,工具才会累计覆盖并在最后一批结束 incomplete。',
+  '分批连续检查时,把上一批响应的 inspectedThrough 和 verdict 分别作为 inspectedThrough 与 previousVerdict 原样传回,工具才会累计覆盖和已发现的异常。',
 ].join('\n');
 
 export function registerInspectPdfTool(
@@ -102,6 +102,12 @@ export function registerInspectPdfTool(
         .min(0)
         .default(0)
         .describe('此前已连续检查到的页码。分批检查时传上一批响应的同名字段,默认 0。'),
+      previousVerdict: z
+        .enum(['ok', 'blank', 'partial-blank', 'warning', 'incomplete'])
+        .optional()
+        .describe(
+          '上一批响应的 verdict。inspectedThrough > 0 时必须原样传回,避免后续正常页覆盖已发现的异常。',
+        ),
       maxPages: z
         .number()
         .int()
@@ -110,8 +116,16 @@ export function registerInspectPdfTool(
         .default(DEFAULT_MAX_PAGES)
         .describe(`最多检查多少页,默认 ${DEFAULT_MAX_PAGES},上限 ${HARD_MAX_PAGES}。`),
     },
-    handler: async ({ path: inputPath, pages, inspectedThrough, maxPages }) => {
+    handler: async ({ path: inputPath, pages, inspectedThrough, previousVerdict, maxPages }) => {
       try {
+        if (inspectedThrough > 0 && previousVerdict === undefined) {
+          return errorPayload(
+            'INVALID_ARGS',
+            '分批检查已带 inspectedThrough,但缺少上一批的 previousVerdict。请把上一批响应的 verdict 原样传回,避免丢失已发现的空白页或未验证结论。',
+            { inspectedThrough },
+          );
+        }
+        const carriedVerdict = previousVerdict ?? 'incomplete';
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareInputPath(root, inputPath);
         if (path.extname(abs).toLowerCase() !== '.pdf') {
@@ -188,8 +202,36 @@ export function registerInspectPdfTool(
           }
         }
         const coverageWarning = partial
-          ? `当前已连续覆盖 ${accumulatedThrough}/${inspection.numPages} 页，下一批页码为 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}] 并传 inspectedThrough: ${accumulatedThrough} 继续检查。`
+          ? `当前已连续覆盖 ${accumulatedThrough}/${inspection.numPages} 页，下一批页码为 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}]，并传 inspectedThrough: ${accumulatedThrough}，再把本次响应的 verdict 原样作为 previousVerdict 继续检查。`
           : undefined;
+
+        const previousFoundBlank = carriedVerdict === 'blank' || carriedVerdict === 'partial-blank';
+        const previousAllBlank = carriedVerdict === 'blank';
+        const previousVisibilityUnverified = carriedVerdict === 'warning';
+        const accumulatedAllBlank =
+          allInspectedBlank && (inspectedThrough === 0 || previousAllBlank);
+        const accumulatedFoundBlank = previousFoundBlank || blankPages.length > 0;
+        const accumulatedVisibilityUnverified =
+          previousVisibilityUnverified || visibilityUnverifiedPages.length > 0;
+
+        const verdictAndWarning = accumulatedAllBlank
+          ? {
+              verdict: 'blank',
+              warning: `连续检查到的每一页都是空白 —— 这份 PDF 不能交付。回去检查 HTML 是否真有可见内容、外部图片/字体是否加载失败,修好后重新生成再查一次。${coverageWarning ? ` ${coverageWarning}` : ''}`,
+            }
+          : accumulatedFoundBlank
+            ? {
+                verdict: 'partial-blank',
+                warning: `${blankPages.length > 0 ? `第 ${blankPages.join('、')} 页是空白的。` : '此前批次已发现空白页。'}通常是分页把内容挤走了(检查 page-break / break-inside),修好后重新生成。${coverageWarning ? ` ${coverageWarning}` : ''}`,
+              }
+            : accumulatedVisibilityUnverified
+              ? {
+                  verdict: 'warning',
+                  warning: `${visibilityUnverifiedPages.length > 0 ? `第 ${visibilityUnverifiedPages.join('、')} 页的结构算子解析未完成` : '此前批次存在结构算子解析未完成的页面'},未做位图级可见性确认,检查证据不完整。请重试并在必要时打开 PDF 确认。${coverageWarning ? ` ${coverageWarning}` : ''}`,
+                }
+              : partial
+                ? { verdict: 'incomplete', warning: coverageWarning! }
+                : { verdict: 'ok' };
 
         return okPayload({
           path: abs,
@@ -201,24 +243,7 @@ export function registerInspectPdfTool(
           blankPages,
           visibilityUnverifiedPages,
           ...(partial ? { nextPages } : {}),
-          ...(allInspectedBlank
-            ? {
-                verdict: 'blank',
-                warning: `检查到的每一页都是空白 —— 这份 PDF 不能交付。回去检查 HTML 是否真有可见内容、外部图片/字体是否加载失败,修好后重新生成再查一次。${coverageWarning ? ` ${coverageWarning}` : ''}`,
-              }
-            : blankPages.length > 0
-              ? {
-                  verdict: 'partial-blank',
-                  warning: `第 ${blankPages.join('、')} 页是空白的。通常是分页把内容挤走了(检查 page-break / break-inside),修好后重新生成。${coverageWarning ? ` ${coverageWarning}` : ''}`,
-                }
-              : visibilityUnverifiedPages.length > 0
-                ? {
-                    verdict: 'warning',
-                    warning: `第 ${visibilityUnverifiedPages.join('、')} 页的结构算子解析未完成,未做位图级可见性确认,本次检查证据不完整。请重试并在必要时打开 PDF 确认。${coverageWarning ? ` ${coverageWarning}` : ''}`,
-                  }
-                : partial
-                  ? { verdict: 'incomplete', warning: coverageWarning! }
-                  : { verdict: 'ok' }),
+          ...verdictAndWarning,
         });
       } catch (err) {
         if (err instanceof DocsPathError) {
