@@ -255,6 +255,7 @@ import { createChatAttachmentStageHandler } from './chatAttachmentStage';
 import {
   cleanupOwnedUnpersistedStagedChatAttachments,
   getChatAttachmentCacheRoot,
+  getChatAttachmentOwnerCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
 } from './file-browser/remote-file-cache';
@@ -7129,7 +7130,10 @@ const registerIpcHandlers = () => {
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。
   {
-    const openExistingFixedDirectory = async (rootDir: string): Promise<boolean> => {
+    const openExistingFixedDirectory = async (
+      rootDir: string,
+      canOpen: () => boolean = () => true,
+    ): Promise<boolean> => {
       try {
         const stat = await fs.promises.lstat(rootDir);
         if (!stat.isDirectory()) return false;
@@ -7137,6 +7141,7 @@ const registerIpcHandlers = () => {
         if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
         throw err;
       }
+      if (!canOpen()) throw new Error('fixed directory owner changed before open');
       const error = await shell.openPath(rootDir);
       if (error) throw new Error(error);
       return true;
@@ -7144,8 +7149,24 @@ const registerIpcHandlers = () => {
     // These actions intentionally accept no renderer path. Each invocation
     // resolves one fixed userData root in Main and deletes that root only;
     // message history and the media ledger are never consulted.
-    const clearFixedDirectory = async (rootDir: string): Promise<void> => {
+    const clearFixedDirectory = async (
+      rootDir: string,
+      canClear: () => boolean = () => true,
+    ): Promise<void> => {
+      if (!canClear()) throw new Error('fixed directory owner changed before cleanup');
       await fs.promises.rm(rootDir, { recursive: true, force: true });
+    };
+    const withActiveChatAttachmentRoot = <T>(
+      action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
+    ): Promise<T> => {
+      const ownerScopeKey = activeOwnerScopeKey();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId || isAppSessionBoundaryPending()) {
+        throw new Error('chat attachment directory requires a stable data owner');
+      }
+      const isCurrentOwner = () =>
+        activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
+      return action(getChatAttachmentOwnerCacheRoot(ownerId), isCurrentOwner);
     };
 
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
@@ -7160,8 +7181,14 @@ const registerIpcHandlers = () => {
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
       openLegacyImagesDir: () => openExistingFixedDirectory(imageCacheStore.getCacheRoot()),
       clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
-      openChatAttachmentsDir: () => openExistingFixedDirectory(getChatAttachmentCacheRoot()),
-      clearChatAttachmentsDir: () => clearFixedDirectory(getChatAttachmentCacheRoot()),
+      openChatAttachmentsDir: () =>
+        withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
+          openExistingFixedDirectory(rootDir, isCurrentOwner),
+        ),
+      clearChatAttachmentsDir: () =>
+        withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
+          clearFixedDirectory(rootDir, isCurrentOwner),
+        ),
     });
     ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
     ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>

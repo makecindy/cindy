@@ -50,4 +50,20 @@ describe('fixed cache directory settings', () => {
       );
     }
   });
+
+  it('opens and clears only the active owner chat attachment directory', () => {
+    const bootstrap = fs.readFileSync(
+      new URL('../bootstrap-electron.ts', import.meta.url),
+      'utf8',
+    );
+    const storageBlock = bootstrap.slice(
+      bootstrap.indexOf('// ── 存储空间卡片'),
+      bootstrap.indexOf('// F5: SDK send-time temporary base64 read'),
+    );
+
+    expect(storageBlock).toContain('const ownerId = getActiveAppSession().dataOwnerId;');
+    expect(storageBlock).toContain('getChatAttachmentOwnerCacheRoot(ownerId)');
+    expect(storageBlock).toContain('activeOwnerScopeKey() === ownerScopeKey');
+    expect(storageBlock).not.toContain('getChatAttachmentCacheRoot()');
+  });
 });

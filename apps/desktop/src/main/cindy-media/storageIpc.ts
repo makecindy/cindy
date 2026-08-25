@@ -47,9 +47,9 @@ export interface StorageIpcDeps {
   openLegacyImagesDir?: () => Promise<boolean>;
   /** Delete only the fixed legacy image cache directory; no ledger or message lookup. */
   clearLegacyImagesDir?: () => Promise<void>;
-  /** Fixed-purpose directory opener for staged chat attachments. */
+  /** Fixed-purpose directory opener for the active owner's staged chat attachments. */
   openChatAttachmentsDir?: () => Promise<boolean>;
-  /** Delete only the fixed staged chat attachment root; no ledger or message lookup. */
+  /** Delete only the active owner's staged attachment root; no ledger or message lookup. */
   clearChatAttachmentsDir?: () => Promise<void>;
 }
 
