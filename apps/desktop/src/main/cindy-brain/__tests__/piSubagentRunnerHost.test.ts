@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -49,6 +50,32 @@ describe('piSubagentRunnerHost', () => {
     child.emit('exit', 0);
     expect(exited).toHaveBeenCalledWith(0, null);
     expect(closed).toHaveBeenCalledWith(0, null);
+  });
+
+  it('keeps original absolute paths when a parent directory is a symlink', () => {
+    const alias = `${path.sep}alias${path.sep}home`;
+    const real = `${path.sep}real${path.sep}home`;
+    const realpathSync = vi.spyOn(fs, 'realpathSync').mockImplementation((file) => {
+      return String(file).split(alias).join(real);
+    });
+    const fork = vi.fn(() => new FakeUtilityProcess());
+    const runId = '123e4567-e89b-42d3-a456-4266141740aa';
+    const runDir = path.join(alias, runId);
+    const request = {
+      runId,
+      runDir,
+      runnerFile: path.join(runDir, 'runner.cjs'),
+      configFile: path.join(runDir, 'config.json'),
+      cwd: '/tmp',
+      env: {},
+    };
+    spawnPiSubagentRunner(request, fork as never);
+    expect(fork).toHaveBeenCalledWith(
+      expect.stringMatching(/piSubagentRunnerProcess\.js$/),
+      [path.resolve(request.runnerFile), path.resolve(request.configFile)],
+      expect.objectContaining({ cwd: '/tmp' }),
+    );
+    realpathSync.mockRestore();
   });
 
   it('accepts normalized paths inside the run directory', () => {

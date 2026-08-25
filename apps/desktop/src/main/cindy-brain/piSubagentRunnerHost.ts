@@ -18,26 +18,39 @@ function resolveLaunchPath(file: string): string {
   }
 }
 
+function isContainedRunnerLayout(
+  runId: string,
+  runDir: string,
+  runnerFile: string,
+  configFile: string,
+): boolean {
+  return path.basename(runnerFile) === 'runner.cjs'
+    && path.basename(configFile) === 'config.json'
+    && path.dirname(runnerFile) === runDir
+    && path.dirname(configFile) === runDir
+    && path.basename(runDir) === runId;
+}
+
 /** Launch a durable PI Subagent runner through Electron's supported Node service. */
 export function spawnPiSubagentRunner(
   request: PiSubagentRunnerLaunchRequest,
   fork: typeof utilityProcess.fork = utilityProcess.fork,
 ): PiSubagentRunnerProcess {
+  const requestedRunDir = path.resolve(request.runDir);
+  const requestedRunnerFile = path.resolve(request.runnerFile);
+  const requestedConfigFile = path.resolve(request.configFile);
   const runDir = resolveLaunchPath(request.runDir);
   const runnerFile = resolveLaunchPath(request.runnerFile);
   const configFile = resolveLaunchPath(request.configFile);
   if (
-    path.basename(runnerFile) !== 'runner.cjs'
-    || path.basename(configFile) !== 'config.json'
-    || path.dirname(runnerFile) !== runDir
-    || path.dirname(configFile) !== runDir
-    || path.basename(runDir) !== request.runId
+    !isContainedRunnerLayout(request.runId, requestedRunDir, requestedRunnerFile, requestedConfigFile)
+    || !isContainedRunnerLayout(request.runId, runDir, runnerFile, configFile)
   ) {
     throw new Error('PI Subagent runner paths are invalid');
   }
 
   const hostEntry = path.join(__dirname, 'piSubagentRunnerProcess.js');
-  const child = fork(hostEntry, [runnerFile, configFile], {
+  const child = fork(hostEntry, [requestedRunnerFile, requestedConfigFile], {
     cwd: request.cwd,
     env: request.env,
     stdio: 'ignore',

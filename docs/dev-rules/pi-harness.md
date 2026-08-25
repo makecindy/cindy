@@ -136,7 +136,8 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
    视为 gone，只有读失败才 unverifiable。紧急停止和就绪超时都先对 runner pid 发 SIGTERM
    再 SIGKILL，禁止 `kill(-pid)` 把 utility-process 当成独立进程组。未确认退出不得写
    failed 终态（控制协议要带回 unconfirmed），否则 quit / 账号边界 sweep 会跳过仍可能活着的 runner。
-   真正 spawn 前必须再读一次账号边界，并把在途 launch 纳入 teardown 收敛。
+   真正 spawn 前必须再读一次账号边界，并把在途 launch 纳入 teardown 收敛。Host 只用
+   realpath 校验包含关系，传给 runner 的 argv 必须与 `config.runDir` 同一套原始绝对路径。
 
 ## 5. 已交付(2026-07 里程碑)
 
