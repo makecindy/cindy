@@ -522,6 +522,19 @@ export class Session {
     return this.turnGeneration;
   }
 
+  /**
+   * 当前 turn generation 是否已经 fan-out 过产品终态。
+   * 只读事实：PI prompt accepted → agent_start 空窗、以及 continuation claim
+   * 挡住的 SDK done，这里都是 false。Host 回收残留 activeTurn 只能认这个，
+   * 不能靠 live idle + tracker idle 的超时猜测。
+   */
+  hasObservedTerminalForCurrentTurn(): boolean {
+    return (
+      this.turnGeneration > 0 &&
+      this.terminalEventObservedGeneration === this.turnGeneration
+    );
+  }
+
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
     const { afterTurnReserved, beforeProviderStart, onAccepted, onDispatching, ...handleOpts } = opts ?? {};
     const cancelledBeforeReservation = (): SessionSendResult | null =>

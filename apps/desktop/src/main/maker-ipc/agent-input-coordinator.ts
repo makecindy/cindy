@@ -278,6 +278,11 @@ export interface AgentInputCoordinatorDeps {
   isLiveSessionPresent?: (sessionId: string) => boolean | undefined;
   /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
   getTurnGeneration?: (sessionId: string) => number | null;
+  /**
+   * Live Session 是否已为当前 generation fan-out 过产品终态。
+   * undefined / false = 无此证据（含 probe 不可用、PI agent_start 空窗）。
+   */
+  hasObservedCurrentTurnTerminal?: (sessionId: string) => boolean | undefined;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
   /**
@@ -3470,9 +3475,11 @@ export class AgentInputCoordinator {
    * abort/steer already owns the boundary.
    *
    * Leftover `activeTurn` is reclaimed only when it is already dispatched and
-   * we can prove the vendor turn is gone: the Session object is missing, or the
-   * live Session is idle while the desktop tracker is still latched. A present
-   * Session with an idle tracker may still be in the Pi gap after handle.send
+   * we can prove the vendor turn is gone: the Session object is missing; the
+   * live Session is idle while the desktop tracker is still latched; or the
+   * live Session is idle, the tracker is idle, and the current generation has
+   * already observed a product-terminal event. A present Session with an idle
+   * tracker and no terminal proof may still be in the Pi gap after handle.send
    * (reservation released, agent_start not yet observed). Pre-dispatch owners
    * and unavailable probes stay fail-closed.
    */
@@ -3482,7 +3489,8 @@ export class AgentInputCoordinator {
     const present = this.deps.isLiveSessionPresent?.(sessionId);
     if (present === false) return true;
     if (present !== true) return false;
-    return this.deps.isTurnRunning(sessionId) === true;
+    if (this.deps.isTurnRunning(sessionId) === true) return true;
+    return this.deps.hasObservedCurrentTurnTerminal?.(sessionId) === true;
   }
 
   private tryReconcileStaleDispatchBoundary(

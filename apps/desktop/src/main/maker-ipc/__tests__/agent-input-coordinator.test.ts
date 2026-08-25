@@ -173,6 +173,7 @@ function createHarness(opts?: {
   let liveRunningOverride: boolean | null | 'unknown' = null;
   let liveSessionPresentOverride: boolean | null | 'unknown' = null;
   let turnGeneration = 0;
+  let observedCurrentTurnTerminal: boolean | undefined = false;
   let turnSessionIdentity: object = { instanceId: 'harness-session' };
   let pendingInteraction = false;
   let agentKind: AgentInputCreateOpts['agentKind'] | null = 'claude-code';
@@ -307,6 +308,7 @@ function createHarness(opts?: {
       return true;
     },
     getTurnGeneration: () => turnGeneration,
+    hasObservedCurrentTurnTerminal: () => observedCurrentTurnTerminal,
     getTurnSessionIdentity: () => turnSessionIdentity,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
@@ -392,6 +394,9 @@ function createHarness(opts?: {
     },
     setTurnGeneration(value: number) {
       turnGeneration = value;
+    },
+    setHasObservedCurrentTurnTerminal(value: boolean | undefined) {
+      observedCurrentTurnTerminal = value;
     },
     getTurnSessionIdentity() {
       return turnSessionIdentity;
@@ -6209,6 +6214,72 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
+  });
+
+  it('reclaims a leftover activeTurn when the live Session already observed the current terminal', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-coordinator-only';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-idle');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      // Session + tracker both idle; only coordinator leftover activeTurn remains.
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setHasObservedCurrentTurnTerminal(true);
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, second);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-idle',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover activeTurn when the current-generation terminal probe is unavailable', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-terminal-probe-unknown';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-idle');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setHasObservedCurrentTurnTerminal(undefined);
+      h.coordinator.enqueue(sid, second);
+      await flush();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not reclaim leftover activeTurn in the post-send agent_start gap', async () => {

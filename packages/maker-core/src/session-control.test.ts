@@ -539,3 +539,21 @@ describe('Session graceful-stop control state', () => {
     expect(stub.requestGracefulStop).not.toHaveBeenCalled();
   });
 });
+
+describe('Session current-generation terminal observation', () => {
+  it('is false until the current generation fans out a product terminal, and resets on the next reservation', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    expect(session.hasObservedTerminalForCurrentTurn()).toBe(false);
+
+    const firstDone = waitForSessionEvent(session, 'done');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.hasObservedTerminalForCurrentTurn()).toBe(true);
+
+    const secondSend = session.send('second');
+    expect(session.hasObservedTerminalForCurrentTurn()).toBe(false);
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+  });
+});

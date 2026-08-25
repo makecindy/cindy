@@ -12183,6 +12183,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
+    hasObservedCurrentTurnTerminal: (sessionId) => {
+      const lookup = lookupStableSessionForTurnBoundary(sessionId);
+      if (lookup.status !== 'found') return undefined;
+      try {
+        return lookup.session.hasObservedTerminalForCurrentTurn();
+      } catch {
+        return undefined;
+      }
+    },
     getTurnSessionIdentity: (sessionId) => getStableSessionForTurnBoundary(sessionId) ?? null,
     reconcileTurnIdle: (sessionId) => {
       // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止
