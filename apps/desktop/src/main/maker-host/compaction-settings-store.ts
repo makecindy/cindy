@@ -100,6 +100,17 @@ function piSettingsFilePath(rootPath?: string): string {
   return path.join(rootPath ?? ownerScopedUserDataPath(), 'pi-compaction-settings.json');
 }
 
+function piMigrationMarkerPath(rootPath?: string): string {
+  return path.join(rootPath ?? ownerScopedUserDataPath(), 'pi-compaction-migrated.json');
+}
+
+function markPiMigrationDone(ownerRoot: string | null): void {
+  const marker = piMigrationMarkerPath(ownerRoot ?? undefined);
+  if (fs.existsSync(marker)) return;
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, `${JSON.stringify({ version: 1 })}\n`);
+}
+
 function normalizePi(raw: unknown): PiCompactionSettings {
   if (!raw || typeof raw !== 'object') {
     return { piAutoCompactPct: DEFAULT_PCT };
@@ -111,14 +122,19 @@ function normalizePi(raw: unknown): PiCompactionSettings {
 const piStores = new Map<string, ReturnType<typeof createOverrideSettingsFile<PiCompactionSettings>>>();
 
 function migratePiFromLegacyIfNeeded(ownerRoot: string | null): void {
+  const marker = piMigrationMarkerPath(ownerRoot ?? undefined);
+  if (fs.existsSync(marker)) return;
   const piPath = piSettingsFilePath(ownerRoot ?? undefined);
-  if (fs.existsSync(piPath)) return;
-  const claude = currentStore().readState();
-  if (!claude.isCustomized) return;
-  const pct = clampPct(claude.value.claudeCodeAutoCompactPct);
-  fs.mkdirSync(path.dirname(piPath), { recursive: true });
-  fs.writeFileSync(piPath, `${JSON.stringify({ piAutoCompactPct: pct }, null, 2)}\n`);
-  log.info('pi compaction migrated from customized claude setting', { pct });
+  if (!fs.existsSync(piPath)) {
+    const claude = currentStore().readState();
+    if (claude.isCustomized) {
+      const pct = clampPct(claude.value.claudeCodeAutoCompactPct);
+      fs.mkdirSync(path.dirname(piPath), { recursive: true });
+      fs.writeFileSync(piPath, `${JSON.stringify({ piAutoCompactPct: pct }, null, 2)}\n`);
+      log.info('pi compaction migrated from customized claude setting', { pct });
+    }
+  }
+  markPiMigrationDone(ownerRoot);
 }
 
 function currentPiStore() {

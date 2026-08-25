@@ -4789,21 +4789,33 @@ export class PiAgent extends BaseAgent {
             contextWindow: nextWindow,
             piCompactionPct: sessionPiAutoCompactPct,
           });
-          if (sdkSessionId) {
-            const reloaded = await proc.request({
-              type: 'switch_session',
-              sessionPath: sdkSessionId,
-            });
-            if (!reloaded.success) {
-              this.deps.logger.warn('pi: failed to reload settings after context window change', {
-                error: reloaded.error ?? 'unknown',
-              });
-            }
+          if (!sdkSessionId) {
+            throw new Error('pi: missing session path after model switch; cannot reload compaction settings');
+          }
+          const reloaded = await proc.request({
+            type: 'switch_session',
+            sessionPath: sdkSessionId,
+          });
+          if (!reloaded.success) {
+            throw new Error(
+              `pi: failed to reload settings after context window change: ${reloaded.error ?? 'unknown'}`,
+            );
           }
         } catch (err) {
-          this.deps.logger.warn('pi: failed to refresh native compaction reserve after model switch', {
+          this.deps.logger.error('pi: compaction settings reload unconfirmed after model switch', {
             message: err instanceof Error ? err.message : String(err),
           });
+          try {
+            await proc.close();
+          } catch (closeErr) {
+            this.deps.logger.warn(
+              'pi: session termination after compaction settings reload failure also failed',
+              { message: closeErr instanceof Error ? closeErr.message : String(closeErr) },
+            );
+          }
+          throw new Error(
+            'pi: 模型切换后未能重载压缩阈值，已终止本任务以免继续按旧 reserveTokens 压缩。请重新打开任务。',
+          );
         }
       }
     };

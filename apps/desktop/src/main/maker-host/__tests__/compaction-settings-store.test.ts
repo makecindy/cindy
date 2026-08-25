@@ -32,6 +32,7 @@ import {
   readPiCompactionPct,
   readPiCompactionState,
   resetCompactionPct,
+  resetPiCompactionPct,
   writeCompactionPct,
 } from '../compaction-settings-store';
 
@@ -39,7 +40,11 @@ describe('compaction settings store', () => {
   beforeEach(() => {
     fs.mkdirSync(tempRoot, { recursive: true });
     __testing.resetStores();
-    for (const name of ['compaction-settings.json', 'pi-compaction-settings.json']) {
+    for (const name of [
+      'compaction-settings.json',
+      'pi-compaction-settings.json',
+      'pi-compaction-migrated.json',
+    ]) {
       fs.rmSync(path.join(tempRoot, name), { force: true });
     }
   });
@@ -76,5 +81,17 @@ describe('compaction settings store', () => {
     __testing.resetStores();
     expect(readPiCompactionPct()).toBe(80);
     expect(readPiCompactionState().isCustomized).toBe(true);
+  });
+
+  it('does not remigrate Pi after the user restores the Pi default', () => {
+    writeCompactionPct(80);
+    __testing.resetStores();
+    expect(readPiCompactionPct()).toBe(80);
+    expect(resetPiCompactionPct()).toBe(75);
+    __testing.resetStores();
+    expect(readPiCompactionPct()).toBe(75);
+    expect(readPiCompactionState().isCustomized).toBe(false);
+    expect(fs.existsSync(path.join(tempRoot, 'pi-compaction-settings.json'))).toBe(false);
+    expect(fs.existsSync(path.join(tempRoot, 'pi-compaction-migrated.json'))).toBe(true);
   });
 });

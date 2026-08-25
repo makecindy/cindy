@@ -12,6 +12,7 @@ const knobs = vi.hoisted(() => ({
   compactCalls: [] as Array<Record<string, unknown>>,
   compactHold: null as null | Promise<void>,
   rpcCalls: [] as Array<Record<string, unknown>>,
+  switchSessionSuccess: true,
   onEvent: null as
     null | ((event: { type: string; [key: string]: unknown }) => void),
 }));
@@ -65,6 +66,11 @@ vi.mock("../rpc-client.js", () => ({
       if (cmd.type === "set_model") {
         return { success: true, data: { contextWindow: 100_000 } };
       }
+      if (cmd.type === "switch_session") {
+        return knobs.switchSessionSuccess
+          ? { success: true, data: {} }
+          : { success: false, error: "reload denied" };
+      }
       return { success: true, data: { entries: [] } };
     }
     send(): void {}
@@ -114,6 +120,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.compactCalls = [];
     knobs.compactHold = null;
     knobs.rpcCalls = [];
+    knobs.switchSessionSuccess = true;
     knobs.onEvent = null;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-native-ac-home-"));
     cwd = mkdtempSync(path.join(tmpdir(), "pi-native-ac-cwd-"));
@@ -352,6 +359,13 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.setModel!("n");
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
     expect(knobs.rpcCalls.some((call) => call.type === "switch_session")).toBe(true);
+    await handle.close();
+  });
+
+  it("terminates the session when compaction settings reload fails after a window change", async () => {
+    const handle = await start();
+    knobs.switchSessionSuccess = false;
+    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
     await handle.close();
   });
 
