@@ -14,12 +14,23 @@ export const PDF_TEMPLATE_MARK = 'data-cindy-docs-template="report"';
 
 const RELATIVE_RESOURCE_RE =
   /\b(?:src|href)\s*=\s*["'](?!https?:|data:|#|\/\/|file:)[^"']+/i;
+const HTML_RAW_TEXT_TAGS = new Set([
+  'iframe',
+  'noembed',
+  'noframes',
+  'noscript',
+  'script',
+  'style',
+  'textarea',
+  'title',
+  'xmp',
+]);
+const HTML_ATTRIBUTE_PATTERN =
+  /(\s+)([A-Za-z_:][\w:.-]*)(\s*=\s*)(?:(['"])([\s\S]*?)\4|([^\s"'=<>`]+))/gi;
 
 export function htmlLooksUnstyled(html: string): boolean {
   if (html.includes(PDF_TEMPLATE_MARK)) return false;
-  if (/<style[\s>]/i.test(html)) return false;
-  if (/<link\b[^>]*rel\s*=\s*["']?stylesheet/i.test(html)) return false;
-  return true;
+  return !htmlHasStylesheetElement(html);
 }
 
 export function htmlHasRelativeResources(html: string): boolean {
@@ -79,23 +90,77 @@ function findHtmlTagEnd(html: string, start: number): number {
   return -1;
 }
 
+function readHtmlAttribute(tag: string, attributeName: string): string | undefined {
+  const wanted = attributeName.toLowerCase();
+  for (const match of tag.matchAll(HTML_ATTRIBUTE_PATTERN)) {
+    if (match[2]!.toLowerCase() === wanted) return match[4] ? match[5] : match[6];
+  }
+  return undefined;
+}
+
+function htmlHasStylesheetElement(html: string): boolean {
+  let templateDepth = 0;
+  let index = 0;
+  while (index < html.length) {
+    const tagStart = html.indexOf('<', index);
+    if (tagStart < 0) break;
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      index = commentEnd < 0 ? html.length : commentEnd + 3;
+      continue;
+    }
+    const tagEnd = findHtmlTagEnd(html, tagStart);
+    if (tagEnd < 0) break;
+    const tag = html.slice(tagStart, tagEnd + 1);
+    const closing = tag.match(/^<\s*\/\s*([A-Za-z][\w:-]*)\s*>/);
+    if (closing?.[1]?.toLowerCase() === 'template' && templateDepth > 0) {
+      templateDepth -= 1;
+      index = tagEnd + 1;
+      continue;
+    }
+    const opening = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/);
+    const name = opening?.[1]?.toLowerCase();
+    if (!name) {
+      index = tagEnd + 1;
+      continue;
+    }
+    if (name === 'template' && !/\/\s*>$/.test(tag)) {
+      templateDepth += 1;
+      index = tagEnd + 1;
+      continue;
+    }
+    if (templateDepth === 0) {
+      if (name === 'style') return true;
+      if (name === 'link') {
+        const rel = readHtmlAttribute(tag, 'rel');
+        if (
+          rel &&
+          decodeHtmlEntities(rel)
+            .split(/\s+/)
+            .some((token) => token.toLowerCase() === 'stylesheet')
+        ) {
+          return true;
+        }
+      }
+    }
+    if (HTML_RAW_TEXT_TAGS.has(name)) {
+      const rawTextEnd = new RegExp(`<\\/\\s*${name}\\s*>`, 'ig');
+      rawTextEnd.lastIndex = tagEnd + 1;
+      const closingMatch = rawTextEnd.exec(html);
+      index = closingMatch ? closingMatch.index + closingMatch[0].length : html.length;
+      continue;
+    }
+    index = tagEnd + 1;
+  }
+  return false;
+}
+
 /**
  * Locate the real body element without treating tag-shaped text in comments or
  * HTML raw-text elements as markup. A lightweight scanner is enough here: the
  * template only needs the byte range, while Chromium remains the HTML parser.
  */
 function findHtmlBodyRange(html: string): { start: number; end: number } | undefined {
-  const rawTextTags = new Set([
-    'iframe',
-    'noembed',
-    'noframes',
-    'noscript',
-    'script',
-    'style',
-    'textarea',
-    'title',
-    'xmp',
-  ]);
   let bodyStart: number | undefined;
   let templateDepth = 0;
   let index = 0;
@@ -132,7 +197,7 @@ function findHtmlBodyRange(html: string): { start: number; end: number } | undef
       index = tagEnd + 1;
       continue;
     }
-    if (rawTextTags.has(name)) {
+    if (HTML_RAW_TEXT_TAGS.has(name)) {
       const rawTextEnd = new RegExp(`<\\/\\s*${name}\\s*>`, 'ig');
       rawTextEnd.lastIndex = tagEnd + 1;
       const closingMatch = rawTextEnd.exec(html);

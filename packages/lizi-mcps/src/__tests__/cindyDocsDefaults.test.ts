@@ -471,6 +471,13 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(htmlLooksUnstyled('<h1>hi</h1>')).toBe(true);
     expect(htmlLooksUnstyled('<style>h1{color:red}</style><h1>hi</h1>')).toBe(false);
     expect(htmlLooksUnstyled('<link rel="stylesheet" href="a.css"><h1>hi</h1>')).toBe(false);
+    expect(htmlLooksUnstyled('<link rel="alternate StyleSheet" href="a.css"><h1>hi</h1>')).toBe(false);
+    expect(htmlLooksUnstyled('<!-- <style>old rules</style> --><h1>hi</h1>')).toBe(true);
+    expect(
+      htmlLooksUnstyled(
+        `<script>const sample = '<style>old rules</style>';</script><template><link rel="stylesheet" href="old.css"></template><h1>hi</h1>`,
+      ),
+    ).toBe(true);
     const wrapped = applyReportTemplate('<h1>hi</h1>', DOCS_THEMES.light);
     expect(wrapped.applied).toBe(true);
     expect(wrapped.html).toContain('data-cindy-docs-template="report"');
