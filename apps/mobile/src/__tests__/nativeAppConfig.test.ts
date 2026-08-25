@@ -477,6 +477,31 @@ describe('mobile native app config', () => {
     expect(appJson.expo.ios.infoPlist.UIBackgroundModes ?? []).not.toContain('audio');
   });
 
+  it('uses the Android system photo picker without broad media permissions', () => {
+    const appJson = JSON.parse(
+      readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),
+    );
+    const mediaLibraryPlugin = appJson.expo.plugins.find(
+      (plugin: unknown) =>
+        Array.isArray(plugin) && plugin[0] === 'expo-media-library',
+    );
+
+    expect(mediaLibraryPlugin).toEqual([
+      'expo-media-library',
+      expect.objectContaining({ granularPermissions: [] }),
+    ]);
+    expect(appJson.expo.android.blockedPermissions).toEqual(
+      expect.arrayContaining([
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE',
+        'android.permission.READ_MEDIA_AUDIO',
+        'android.permission.READ_MEDIA_IMAGES',
+        'android.permission.READ_MEDIA_VIDEO',
+        'android.permission.READ_MEDIA_VISUAL_USER_SELECTED',
+      ]),
+    );
+  });
+
   it('keeps Metro React resolution on the mobile app dependency', () => {
     const metroConfig = readFileSync(
       resolve(process.cwd(), 'metro.config.js'),
