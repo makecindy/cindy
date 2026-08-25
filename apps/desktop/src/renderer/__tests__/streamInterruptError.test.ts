@@ -3,8 +3,23 @@ import { describe, expect, it } from 'vitest';
 import {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
+  isXaiInvalidRequestError,
   unwrapProviderErrorDisplay,
 } from '@/utils/streamInterruptError';
+
+/** 与 Pi + LiteLLM + xAI 实锤信封同构,避免手写转义把 JSON 写坏。 */
+function xaiRejectedEnvelope(
+  innerMessage = 'Upstream rejected the request!',
+): string {
+  return `OpenAI API error (400): ${JSON.stringify({
+    message: `litellm.BadRequestError: XaiException - ${JSON.stringify({
+      error: { message: innerMessage, type: 'invalid_request_error' },
+    })}`,
+    type: null,
+    param: null,
+    code: '400',
+  })}`;
+}
 
 describe('isStreamInterruptedErrorMessage', () => {
   it('accepts the classified reason even when the message has been rewritten', () => {
@@ -39,6 +54,12 @@ describe('unwrapProviderErrorDisplay', () => {
     ).toBe('XaiException - too long');
   });
 
+  it('peels the nested xAI invalid_request JSON down to the inner message', () => {
+    expect(unwrapProviderErrorDisplay(xaiRejectedEnvelope())).toBe(
+      'Upstream rejected the request!',
+    );
+  });
+
   it('leaves unrelated messages alone', () => {
     expect(unwrapProviderErrorDisplay('Network error: fetch failed')).toBe(
       'Network error: fetch failed',
@@ -61,5 +82,20 @@ describe('unwrapProviderErrorDisplay', () => {
     expect(
       unwrapProviderErrorDisplay('OpenAI API error (400): {"message":"invalid_prompt"}'),
     ).toBe('OpenAI API error (400): {"message":"invalid_prompt"}');
+  });
+});
+
+describe('isXaiInvalidRequestError', () => {
+  it('recognizes the Grok / xAI upstream-rejected envelope', () => {
+    expect(isXaiInvalidRequestError(xaiRejectedEnvelope())).toBe(true);
+  });
+
+  it('does not treat other XaiException text as this family', () => {
+    expect(
+      isXaiInvalidRequestError(
+        'OpenAI API error (400): {"message":"litellm.BadRequestError: XaiException - too long"}',
+      ),
+    ).toBe(false);
+    expect(isXaiInvalidRequestError('OpenAI API error (400): invalid_prompt')).toBe(false);
   });
 });

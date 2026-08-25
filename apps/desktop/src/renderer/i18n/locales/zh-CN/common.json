@@ -7315,6 +7315,7 @@
       "overloadBusyNoRetry": "模型服务繁忙，上游暂时没有可用容量。可稍后重试，或换一个模型。",
       "streamInterrupted": "模型输出中途中断了。通常是上游暂时故障，可点击「重试」。",
       "streamInterruptedNoRetry": "模型输出中途中断了。通常是上游暂时故障，请稍后重试。",
+      "xaiRequestRejected": "Grok 拒绝了这次请求。看图只接受 JPEG/PNG，不支持 GIF、WebP 或视频。请改用静态图再试，或换一个模型",
       "networkShowRaw": "查看原始错误",
       "networkHideRaw": "收起原始错误",
       "gatewayProxyTokenInvalid": "Cindy AI 凭据已失效。请点击「重试」。若仍失败，请退出后重新登录",

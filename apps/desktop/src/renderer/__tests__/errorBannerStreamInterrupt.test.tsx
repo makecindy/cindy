@@ -84,3 +84,31 @@ describe('ErrorBanner — LiteLLM 流中断', () => {
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
   });
 });
+
+const XAI_REJECTED_RAW = `OpenAI API error (400): ${JSON.stringify({
+  message: `litellm.BadRequestError: XaiException - ${JSON.stringify({
+    error: { message: 'Upstream rejected the request!', type: 'invalid_request_error' },
+  })}`,
+  type: null,
+  param: null,
+  code: '400',
+})}`;
+
+
+describe('ErrorBanner — Grok / xAI 拒请求', () => {
+  it('用人话替换 OpenAI JSON 外壳，原文仍可展开', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: XAI_REJECTED_RAW,
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        agentKind: 'pi',
+      }),
+    );
+
+    expect(screen.getByText('chat.errorBanner.xaiRequestRejected')).toBeTruthy();
+    expect(screen.queryByText(XAI_REJECTED_RAW)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(XAI_REJECTED_RAW)).toBeTruthy();
+  });
+});

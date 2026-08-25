@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { isCindyGatewayProxyTokenInvalidError } from '@cindy/maker-shared/error-redaction';
 import {
   isStreamInterruptedErrorMessage,
+  isXaiInvalidRequestError,
   unwrapProviderErrorDisplay,
 } from '@/utils/streamInterruptError';
 import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
@@ -42,6 +43,7 @@ export function ErrorMessageCard({
   const decoded = decodeRemoteErrorMessage(message);
   const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
+  const isXaiInvalidRequest = isXaiInvalidRequestError(decoded);
   const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
     reason,
     message: decoded,
@@ -50,13 +52,16 @@ export function ErrorMessageCard({
   const unwrapped = unwrapProviderErrorDisplay(decoded);
   const text = isStreamInterrupted
     ? t('chat.errorBanner.streamInterruptedNoRetry')
-    : isGatewayProxyTokenInvalid
-      ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-      : i18nKey
-        ? t(i18nKey)
-        : unwrapped;
+    : isXaiInvalidRequest
+      ? t('chat.errorBanner.xaiRequestRejected')
+      : isGatewayProxyTokenInvalid
+        ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
+        : i18nKey
+          ? t(i18nKey)
+          : unwrapped;
   const showRawToggle =
     isStreamInterrupted ||
+    isXaiInvalidRequest ||
     isGatewayProxyTokenInvalid ||
     (!i18nKey && unwrapped !== decoded);
 

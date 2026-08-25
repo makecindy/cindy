@@ -44,6 +44,7 @@ import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import {
   isStreamInterruptedErrorMessage,
+  isXaiInvalidRequestError,
   unwrapProviderErrorDisplay,
 } from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
@@ -267,6 +268,7 @@ export function ErrorBanner({
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted = isStreamInterruptedErrorMessage(error, errorReason);
+  const isXaiInvalidRequest = isXaiInvalidRequestError(error);
   const unwrappedDisplay = unwrapProviderErrorDisplay(error);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
@@ -417,6 +419,10 @@ export function ErrorBanner({
         ? 'chat.errorBanner.streamInterrupted'
         : 'chat.errorBanner.streamInterruptedNoRetry',
     );
+  } else if (isXaiInvalidRequest) {
+    // Grok / xAI 空壳 400。Pi 写成 OpenAI API error,LiteLLM 再套 XaiException。
+    // 常见原因是看图格式(只接受 JPEG/PNG)。只改展示,不自动转码。
+    displayError = t('chat.errorBanner.xaiRequestRejected');
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
@@ -580,6 +586,7 @@ export function ErrorBanner({
         {(isNetworkishError ||
           isOverloadError ||
           isStreamInterrupted ||
+          isXaiInvalidRequest ||
           showUnwrappedRaw ||
           isCodexUsageLimitError ||
           terminalRateLimitRetryProgress ||
