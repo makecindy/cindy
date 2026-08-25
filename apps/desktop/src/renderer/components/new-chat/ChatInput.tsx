@@ -5618,8 +5618,8 @@ export function ChatInput({
         dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);
         if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
           setSendDispatchInFlight(false);
+          setAllowTypeDuringSend(false);
         }
-        setAllowTypeDuringSend(false);
         finishAgentSendDispatch();
       }
     },

@@ -250,6 +250,18 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(chatInputSource).toContain(
       'documentBeforeOptimisticClear = plainTextToComposerDocument(serializedContent.text);',
     );
+    const settleLockBlock = extractBetween(
+      chatInputSource,
+      'dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);',
+      'finishAgentSendDispatch();',
+    );
+    expect(settleLockBlock).toContain(
+      'storageKeyForDraftRef.current === sourceStorageKey',
+    );
+    expect(settleLockBlock).toContain('setAllowTypeDuringSend(false);');
+    expect(settleLockBlock.indexOf('storageKeyForDraftRef.current === sourceStorageKey')).toBeLessThan(
+      settleLockBlock.indexOf('setAllowTypeDuringSend(false);'),
+    );
   });
 
   it('snapshots the source restore payload instead of a reused destination editor', () => {
