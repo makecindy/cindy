@@ -1537,6 +1537,31 @@ describe('render_pdf', () => {
     expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 
+  it('渲染前拒绝会被宿主阻断的公网资源', async () => {
+    const renderHtmlToPdf = vi.fn(async () => ({ buffer: pdfBytes, fontsReady: true }));
+    const cases = [
+      '<img src="https://cdn.example/chart.png">',
+      '<img src="//cdn.example/chart.png">',
+      '<link rel="stylesheet" href="https://cdn.example/theme.css">',
+      '<style>.hero { background: url("https://cdn.example/chart.png"); }</style>',
+      '<base href="https://cdn.example/"><img src="./chart.png">',
+    ];
+    const client = await connect({ renderHtmlToPdf });
+
+    for (const [index, html] of cases.entries()) {
+      const result = await callTool(client, 'render_pdf', {
+        html,
+        outPath: `blocked-remote-${index}.pdf`,
+        template: 'none',
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+      expect((result.data as Record<string, string>).hint).toContain('阻断');
+      await expect(fs.stat(path.join(workdir, `blocked-remote-${index}.pdf`))).rejects.toThrow();
+    }
+    expect(renderHtmlToPdf).not.toHaveBeenCalled();
+  });
+
   it('HTML 读取后源目录被重绑时拒绝混合目录版本的资源', async () => {
     const sourceDir = path.join(workdir, 'source');
     const movedDir = path.join(workdir, 'source-original');
@@ -1614,6 +1639,35 @@ describe('render_pdf', () => {
     });
     expect(result.ok).toBe(true);
     expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toContain('./missing.png');
+  });
+
+  it('按 CSS token 跳过 url 函数名后的注释', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'commented-url-image', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'css-url-comment.html'),
+      '<style>.hero { background: url/* asset */("./chart.png"); }</style>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'css-url-comment.html',
+      outPath: 'css-url-comment.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain(
+      `data:image/png;base64,${Buffer.from('commented-url-image').toString('base64')}`,
+    );
+    expect(rendered).not.toContain('./chart.png');
   });
 
   it('只在 CSS 标识符边界识别 url 函数', async () => {

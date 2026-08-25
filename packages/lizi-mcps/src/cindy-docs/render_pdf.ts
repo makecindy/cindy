@@ -185,7 +185,31 @@ function assertNotExplicitFileUrl(reference: string): void {
   throw new DocsPathError(
     'PATH_NOT_ALLOWED',
     `HTML 不允许显式 file: URL: ${reference}`,
-    '请改用任务工作目录内的相对路径、data URI 或可访问的 http(s) URL。',
+    '请改用任务工作目录内的相对路径或 data URI。',
+  );
+}
+
+function assertNotBlockedRemoteUrl(reference: string): void {
+  const value = reference.trim();
+  if (!value) return;
+  if (value.startsWith('//')) {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      `HTML 不允许公网资源 URL: ${reference}`,
+      '渲染器会阻断 http(s) 请求。请先把图片、字体或样式表放进任务工作目录，或改成 data URI。',
+    );
+  }
+  let protocol = '';
+  try {
+    protocol = new URL(value).protocol;
+  } catch {
+    return;
+  }
+  if (protocol !== 'http:' && protocol !== 'https:') return;
+  throw new DocsPathError(
+    'PATH_NOT_ALLOWED',
+    `HTML 不允许公网资源 URL: ${reference}`,
+    '渲染器会阻断 http(s) 请求。请先把图片、字体或样式表放进任务工作目录，或改成 data URI。',
   );
 }
 
@@ -489,11 +513,10 @@ function parseCssUrlToken(
   if (isCssIdentifierContinuation(css[index - 1])) return null;
   const identifier = parseCssIdentifier(css, index);
   if (identifier?.value.toLowerCase() !== 'url') return null;
-  let open = identifier.end;
-  while (isCssWhitespace(css[open])) open += 1;
+  const open = skipCssWhitespaceAndComments(css, identifier.end);
   if (css[open] !== '(') return null;
   let cursor = open + 1;
-  while (isCssWhitespace(css[cursor])) cursor += 1;
+  cursor = skipCssWhitespaceAndComments(css, cursor);
   let reference = '';
   if (css[cursor] === '"' || css[cursor] === "'") {
     const quote = css[cursor]!;
@@ -760,6 +783,7 @@ async function snapshotLocalResource(
   mimeOverride?: string,
 ): Promise<string | undefined> {
   assertNotExplicitFileUrl(reference);
+  assertNotBlockedRemoteUrl(reference);
   if (!isLocalResourceReference(reference)) return undefined;
   let fragment = '';
   try {
@@ -873,6 +897,7 @@ async function inlineLocalResources(
   const baseHref = rawBaseHref ? decodeHTMLAttribute(rawBaseHref) : undefined;
   if (baseHref) {
     assertNotExplicitFileUrl(baseHref);
+    assertNotBlockedRemoteUrl(baseHref);
     try {
       baseUrl = new URL(baseHref, documentUrl);
     } catch {
@@ -889,6 +914,7 @@ async function inlineLocalResources(
     async (tag) => {
       const href = readHtmlAttribute(tag, 'href');
       if (!href) return tag;
+      assertNotBlockedRemoteUrl(decodeHTMLAttribute(href));
       const rel = decodeHTMLAttribute(readHtmlAttribute(tag, 'rel') ?? '');
       const isStylesheet = rel
         .split(/\s+/)
