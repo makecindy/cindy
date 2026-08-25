@@ -2637,14 +2637,20 @@ async function resumeClaimedPiSubagentRun(
     throw error;
   }
   const configFile = path.join(runDir, 'config.json');
-  await launch.launchRunner({
-    runId,
-    runDir,
-    runnerFile,
-    configFile,
-    cwd: sourceConfig.cwd,
-    env: launch.env,
-  });
+  try {
+    await launch.launchRunner({
+      runId,
+      runDir,
+      runnerFile,
+      configFile,
+      cwd: sourceConfig.cwd,
+      env: launch.env,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await recordPiSubagentRunnerFailure(runDir, message).catch(() => undefined);
+    throw error;
+  }
   return runId;
 }
 

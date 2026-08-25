@@ -297,14 +297,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resolvePiAgentHome: () => agentHome,
       spawnPiSubagentRunner: (request) => {
         captured.runnerLaunches.push(request);
+        const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+        const emit = (event: string, ...args: unknown[]): void => {
+          for (const listener of listeners.get(event) ?? []) listener(...args);
+        };
         const handle = {
           pid: 4321,
           killed: false,
           once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+            const queued = listeners.get(event) ?? [];
+            queued.push(listener);
+            listeners.set(event, queued);
             if (event === 'spawn') queueMicrotask(listener);
             return handle;
           },
-          kill: () => true,
+          kill: () => {
+            handle.killed = true;
+            queueMicrotask(() => emit('exit', 0, 'SIGTERM'));
+            return true;
+          },
         };
         return handle as never;
       },
@@ -508,6 +519,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     expect(captured.runnerLaunches[0]?.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(captured.runnerLaunches[0]?.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+
+    fireSubagentRunnerRequest('runner-stop', 'terminate', runId);
+    const stop = await waitForResponse('runner-stop');
+    expect(JSON.parse(String(stop.value))).toEqual({ ok: true });
     } finally {
       if (previousNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
       else process.env.ELECTRON_RUN_AS_NODE = previousNode;

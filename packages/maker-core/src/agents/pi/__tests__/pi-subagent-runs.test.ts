@@ -287,6 +287,8 @@ describe('PI durable subagent run store', () => {
     );
     expect(publish).toBeGreaterThan(claimed);
     expect(firstTombstone).toBeGreaterThan(publish);
+    expect(source.indexOf('recordPiSubagentRunnerFailure(runDir', spawned))
+      .toBeGreaterThan(spawned);
     expect(lastStaging).toBeGreaterThan(firstTombstone);
     expect(lastTombstone).toBeGreaterThan(lastStaging);
     expect(spawned).toBeGreaterThan(lastTombstone);
@@ -1928,18 +1930,37 @@ describe('PI durable subagent run store', () => {
           expect.objectContaining({ action: 'stop' }),
         ]);
 
-        // And once that record names a runner this host cannot verify, the
-        // second pass refuses to call the quit clean.
-        await writeStatus(root, status(lateRunId, {
-          state: 'running',
-          runnerPid: process.pid,
-          runnerScript: '/runs/never-matches.cjs',
-          updatedAt: Date.now(),
+        // And once that record names a live pid whose command line cannot be
+        // read, the second pass refuses to call the quit clean. Do not use
+        // `process.pid` here: Linux `/proc/<pid>/cmdline` would bypass the
+        // spawnSync stub and treat a non-matching listing as a recycled pid.
+        const unverifiablePid = 424_424;
+        const realKill = process.kill.bind(process);
+        const killSpy = vi.spyOn(process, 'kill').mockImplementation(
+          ((pid: number, signal?: NodeJS.Signals | number) => {
+            if (pid === unverifiablePid && signal === 0) return true;
+            return realKill(pid, signal);
+          }) as typeof process.kill,
+        );
+        childProcess.spawnSync.mockImplementation(() => ({
+          status: null,
+          stdout: '',
+          error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }),
         }));
-        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, {
-          hostPid: process.pid,
-          killUnresponsiveRunners: true,
-        })).resolves.toBe(false);
+        try {
+          await writeStatus(root, status(lateRunId, {
+            state: 'running',
+            runnerPid: unverifiablePid,
+            runnerScript: '/runs/never-matches.cjs',
+            updatedAt: Date.now(),
+          }));
+          await expect(stopAllPiSubagentRunsForExit(agentHome, 0, {
+            hostPid: process.pid,
+            killUnresponsiveRunners: true,
+          })).resolves.toBe(false);
+        } finally {
+          killSpy.mockRestore();
+        }
       });
 
       it('sweeps only the fences whose owner is gone', async () => {

@@ -28,7 +28,7 @@ describe('piSubagentRunnerHost', () => {
 
     expect(fork).toHaveBeenCalledWith(
       expect.stringMatching(/piSubagentRunnerProcess\.js$/),
-      [request.runnerFile, request.configFile],
+      [path.resolve(request.runnerFile), path.resolve(request.configFile)],
       expect.objectContaining({
         cwd: '/tmp',
         env: { TEST_VALUE: '1' },

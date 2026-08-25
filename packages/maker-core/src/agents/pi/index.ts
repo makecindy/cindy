@@ -1022,12 +1022,32 @@ export class PiAgent extends BaseAgent {
 
   private async terminateSubagentRunner(runId: string, runDir: string): Promise<boolean> {
     const runner = this.subagentRunners.get(runId);
-    if (runner) {
-      this.subagentRunners.delete(runId);
-      return runner.kill('SIGTERM');
+    if (!runner) {
+      const status = (await listPiSubagentRuns(path.dirname(runDir))).find((entry) => entry.runId === runId);
+      return status ? killVerifiedPiSubagentRunner(status) : false;
     }
-    const status = (await listPiSubagentRuns(path.dirname(runDir))).find((entry) => entry.runId === runId);
-    return status ? killVerifiedPiSubagentRunner(status) : false;
+    const confirmed = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(termTimer);
+        if (killTimer) clearTimeout(killTimer);
+        resolve(ok);
+      };
+      runner.once('exit', () => finish(true));
+      runner.once('close', () => finish(true));
+      runner.kill('SIGTERM');
+      const termTimer = setTimeout(() => {
+        runner.kill('SIGKILL');
+        killTimer = setTimeout(() => finish(false), 200);
+      }, 1_500);
+    });
+    if (this.subagentRunners.get(runId) === runner) {
+      this.subagentRunners.delete(runId);
+    }
+    return confirmed;
   }
 
   private async retryFailedStartupCleanup(
