@@ -174,7 +174,14 @@ function createHarness(opts?: {
   let liveSessionPresentOverride: boolean | null | 'unknown' = null;
   let turnGeneration = 0;
   let observedCurrentTurnTerminal:
-    | { kind: 'none' | 'done' | 'error'; message?: string }
+    | {
+        kind: 'none' | 'done' | 'error';
+        generation?: number;
+        message?: string;
+        reason?: string;
+        sdkError?: string;
+        errorStatus?: number;
+      }
     | undefined = { kind: 'none' };
   let turnSessionIdentity: object = { instanceId: 'harness-session' };
   let pendingInteraction = false;
@@ -233,8 +240,10 @@ function createHarness(opts?: {
   >(() => resumableTurnErrorTakeover);
   // 纯判定(无副作用):这条 error 有没有可能被接管。host 侧接的是 isInterruptedTurnError,
   // 这里默认认所有带 sdkError='server_error' 的,够表达"候选 / 非候选"两种分支。
-  let resumableTurnErrorCandidate: (signals: { sdkError?: string }) => boolean = (signals) =>
-    signals.sdkError === 'server_error';
+  let resumableTurnErrorCandidate: (signals: {
+    sdkError?: string;
+    reason?: string;
+  }) => boolean = (signals) => signals.sdkError === 'server_error';
   const isResumableTurnErrorCandidate = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['isResumableTurnErrorCandidate']>
   >((signals) => resumableTurnErrorCandidate(signals));
@@ -398,7 +407,16 @@ function createHarness(opts?: {
       turnGeneration = value;
     },
     setObservedCurrentTurnTerminal(
-      value: { kind: 'none' | 'done' | 'error'; message?: string } | undefined,
+      value:
+        | {
+            kind: 'none' | 'done' | 'error';
+            generation?: number;
+            message?: string;
+            reason?: string;
+            sdkError?: string;
+            errorStatus?: number;
+          }
+        | undefined,
     ) {
       observedCurrentTurnTerminal = value;
     },
@@ -434,7 +452,9 @@ function createHarness(opts?: {
       resumableTurnErrorTakeover = value;
     },
     /** 改写"这条 error 有没有可能被接管"的纯判定(决定横幅与落库要不要先按住)。 */
-    setResumableTurnErrorCandidate(fn: (signals: { sdkError?: string }) => boolean) {
+    setResumableTurnErrorCandidate(
+      fn: (signals: { sdkError?: string; reason?: string }) => boolean,
+    ) {
       resumableTurnErrorCandidate = fn;
     },
     persistQueueSnapshot,
@@ -6236,7 +6256,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       h.setLiveRunning(false);
       h.setLiveSessionPresent(true);
       h.setRunning(false);
-      h.setObservedCurrentTurnTerminal({ kind: 'done' });
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 0 });
       h.reconcileTurnIdle.mockImplementation(() => true);
       h.coordinator.enqueue(sid, second);
       await flush();
@@ -6251,6 +6271,86 @@ describe('AgentInputCoordinator steer transaction', () => {
         type: 'user',
         content: 'queued-after-idle',
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover activeTurn from a later generation terminal', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-generation-mismatch';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-later-turn'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forwards structured leftover error signals into resumable recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-empty-response';
+      h.setResumableTurnErrorCandidate((signals) => signals.reason === 'empty-response');
+      h.setResumableTurnErrorTakeover({
+        error: 'empty response',
+        attempt: 1,
+        maxAttempts: 5,
+        sessionTotal: 1,
+      });
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: 'Authorization: Bearer secret-token',
+        reason: 'empty-response',
+        sdkError: 'server_error',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-error'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.autoResumePending?.attempt).toBe(1);
+      expect(projection.error).toBeNull();
+      expect(JSON.stringify(projection)).not.toContain('secret-token');
+      expect(h.onResumableTurnError).toHaveBeenCalledWith(
+        sid,
+        expect.objectContaining({
+          reason: 'empty-response',
+          sdkError: 'server_error',
+          message: 'Authorization: [REDACTED]',
+        }),
+        expect.objectContaining({ clientId: 'q-1' }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -6303,6 +6403,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       h.setRunning(false);
       h.setObservedCurrentTurnTerminal({
         kind: 'error',
+        generation: 0,
         message: 'Authorization: Bearer secret-token',
       });
       h.reconcileTurnIdle.mockImplementation(() => true);
@@ -6351,7 +6452,11 @@ describe('AgentInputCoordinator steer transaction', () => {
       h.setLiveRunning(false);
       h.setLiveSessionPresent(true);
       h.setRunning(true);
-      h.setObservedCurrentTurnTerminal({ kind: 'error', message: 'provider failed' });
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: 'provider failed',
+      });
       h.reconcileTurnIdle.mockImplementation(() => {
         h.setRunning(false);
         return true;

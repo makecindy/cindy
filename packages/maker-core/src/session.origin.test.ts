@@ -1202,6 +1202,7 @@ describe('Session per-turn origin 打标', () => {
     }
     expect(session.getObservedCurrentTurnTerminal()).toEqual({
       kind: 'error',
+      generation: 1,
       message: 'Authorization: [REDACTED]',
     });
   });

@@ -423,6 +423,11 @@ export class Session {
   /** 与 terminalEventObservedGeneration 成对；同 generation 的 error 不被后续 done 尾巴改写。 */
   private terminalEventObservedKind: 'done' | 'error' | null = null;
   private terminalEventObservedErrorMessage: string | null = null;
+  private terminalEventObservedErrorSignals: {
+    reason?: string;
+    sdkError?: string;
+    errorStatus?: number;
+  } | null = null;
   /** 终态 error 后等待 provider 尾部 done；避免旧尾事件冒领下一轮。 */
   private terminalErrorDrainGeneration: number | null = null;
   private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
@@ -533,7 +538,11 @@ export class Session {
    */
   getObservedCurrentTurnTerminal(): {
     kind: 'none' | 'done' | 'error';
+    generation?: number;
     message?: string;
+    reason?: string;
+    sdkError?: string;
+    errorStatus?: number;
   } {
     if (
       this.turnGeneration <= 0 ||
@@ -543,13 +552,24 @@ export class Session {
       return { kind: 'none' };
     }
     if (this.terminalEventObservedKind === 'error') {
-      if (!this.terminalEventObservedErrorMessage) return { kind: 'error' };
       return {
         kind: 'error',
-        message: redactSensitiveText(this.terminalEventObservedErrorMessage),
+        generation: this.turnGeneration,
+        ...(this.terminalEventObservedErrorMessage
+          ? { message: redactSensitiveText(this.terminalEventObservedErrorMessage) }
+          : {}),
+        ...(this.terminalEventObservedErrorSignals?.reason
+          ? { reason: this.terminalEventObservedErrorSignals.reason }
+          : {}),
+        ...(this.terminalEventObservedErrorSignals?.sdkError
+          ? { sdkError: redactSensitiveText(this.terminalEventObservedErrorSignals.sdkError) }
+          : {}),
+        ...(typeof this.terminalEventObservedErrorSignals?.errorStatus === 'number'
+          ? { errorStatus: this.terminalEventObservedErrorSignals.errorStatus }
+          : {}),
       };
     }
-    return { kind: 'done' };
+    return { kind: 'done', generation: this.turnGeneration };
   }
 
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
@@ -693,6 +713,7 @@ export class Session {
         this.terminalEventObservedGeneration = null;
         this.terminalEventObservedKind = null;
         this.terminalEventObservedErrorMessage = null;
+        this.terminalEventObservedErrorSignals = null;
       }
       previousTurnAttemptToken = this.currentTurnAttemptToken;
       this.currentTurnAttemptToken =
@@ -1996,6 +2017,7 @@ export class Session {
         if (this.terminalEventObservedKind !== 'error') {
           this.terminalEventObservedKind = 'done';
           this.terminalEventObservedErrorMessage = null;
+          this.terminalEventObservedErrorSignals = null;
         }
         this.clearTerminalErrorDrain();
       }
@@ -2013,9 +2035,31 @@ export class Session {
     }
     const listenerEvent = redactEventForListeners(event);
     if (terminalBoundaryObserved && event.type === 'error') {
-      const errorMessage = (listenerEvent.data as { message?: unknown } | null | undefined)?.message;
+      const errorData = (listenerEvent.data ?? null) as {
+        message?: unknown;
+        reason?: unknown;
+        sdkError?: unknown;
+        errorStatus?: unknown;
+      } | null;
+      const errorMessage = errorData?.message;
       this.terminalEventObservedErrorMessage =
         typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null;
+      const signals: {
+        reason?: string;
+        sdkError?: string;
+        errorStatus?: number;
+      } = {};
+      if (typeof errorData?.reason === 'string' && errorData.reason.length > 0) {
+        signals.reason = errorData.reason;
+      }
+      if (typeof errorData?.sdkError === 'string' && errorData.sdkError.length > 0) {
+        signals.sdkError = redactSensitiveText(errorData.sdkError);
+      }
+      if (typeof errorData?.errorStatus === 'number' && Number.isFinite(errorData.errorStatus)) {
+        signals.errorStatus = errorData.errorStatus;
+      }
+      this.terminalEventObservedErrorSignals =
+        signals.reason || signals.sdkError || signals.errorStatus !== undefined ? signals : null;
     }
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
       this.clearTurnControl(resolvedGeneration);

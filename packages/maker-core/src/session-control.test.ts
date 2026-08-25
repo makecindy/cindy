@@ -550,7 +550,7 @@ describe('Session current-generation terminal observation', () => {
     await expect(session.send('first')).resolves.toEqual({ accepted: true });
     stub.push({ type: 'done', data: {} });
     await firstDone;
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done' });
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
 
     const secondSend = session.send('second');
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
@@ -558,18 +558,32 @@ describe('Session current-generation terminal observation', () => {
     const secondError = waitForSessionEvent(session, 'error');
     stub.push({
       type: 'error',
-      data: { message: 'Authorization: Bearer secret-token', isTerminal: true },
+      data: {
+        message: 'Authorization: Bearer secret-token',
+        isTerminal: true,
+        reason: 'empty-response',
+        sdkError: 'server_error',
+        errorStatus: 529,
+      },
     });
     await secondError;
     expect(session.getObservedCurrentTurnTerminal()).toEqual({
       kind: 'error',
+      generation: 2,
       message: 'Authorization: [REDACTED]',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
     });
     stub.push({ type: 'done', data: {} });
     await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
     expect(session.getObservedCurrentTurnTerminal()).toEqual({
       kind: 'error',
+      generation: 2,
       message: 'Authorization: [REDACTED]',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
     });
   });
 });

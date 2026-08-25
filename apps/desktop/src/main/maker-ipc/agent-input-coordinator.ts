@@ -285,7 +285,14 @@ export interface AgentInputCoordinatorDeps {
    */
   getObservedCurrentTurnTerminal?: (
     sessionId: string,
-  ) => { kind: 'none' | 'done' | 'error'; message?: string } | undefined;
+  ) => {
+    kind: 'none' | 'done' | 'error';
+    generation?: number;
+    message?: string;
+    reason?: string;
+    sdkError?: string;
+    errorStatus?: number;
+  } | undefined;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
   /**
@@ -545,6 +552,8 @@ interface ActiveTurn {
   /** 当前 vendor turn 由哪条 Continue 合成项发起；同轮 steer 会继承它。 */
   continuationOwnerClientId: string | null;
   controlKind?: 'compact';
+  /** maker-core turn generation captured at vendor dispatch; leftover reclaim must match it. */
+  vendorTurnGeneration: number | null;
 }
 
 interface PendingCompactRequest {
@@ -1681,6 +1690,7 @@ export class AgentInputCoordinator {
       pendingTerminalEvent: null,
       continuationOwnerClientId: null,
       controlKind: 'compact',
+      vendorTurnGeneration: null,
     };
     state.activeTurn = active;
     this.emit(sessionId);
@@ -1726,7 +1736,7 @@ export class AgentInputCoordinator {
         this.scheduleDrain(sessionId, 'compact-not-dispatched');
         return this.getProjection(sessionId);
       }
-      active.dispatchLifecycle = 'dispatched';
+      this.markActiveTurnDispatched(sessionId, active);
       if (active.pendingTerminalEvent) {
         this.settlePendingTerminalEventAfterPersist(sessionId, active);
         return this.getProjection(sessionId);
@@ -2187,7 +2197,9 @@ export class AgentInputCoordinator {
         dispatchLifecycle: 'dispatched',
         pendingTerminalEvent: null,
         continuationOwnerClientId: null,
+        vendorTurnGeneration: null,
       };
+      this.bindActiveTurnVendorGeneration(sessionId, detachedAcceptedTurn);
       const persisted = await this.persistAcceptedUserMessage(sessionId, detachedAcceptedTurn);
       if (opts?.touchUserSend && persisted === 'persisted') this.touchUserSend(sessionId);
       log.info('steer accepted after marker cancellation; persisted without reopening boundary', {
@@ -2240,7 +2252,9 @@ export class AgentInputCoordinator {
         : sameVendorTurn
           ? steerContinuationOwnerClientId
           : null,
+      vendorTurnGeneration: null,
     };
+    this.bindActiveTurnVendorGeneration(sessionId, accepted.activeTurn);
     this.emit(sessionId);
 
     const persisted = await this.persistAcceptedUserMessage(sessionId, accepted.activeTurn);
@@ -3489,8 +3503,33 @@ export class AgentInputCoordinator {
    */
   private readObservedCurrentTurnTerminal(
     sessionId: string,
-  ): { kind: 'none' | 'done' | 'error'; message?: string } | undefined {
+  ): NonNullable<AgentInputCoordinatorDeps['getObservedCurrentTurnTerminal']> extends (
+    sessionId: string,
+  ) => infer R
+    ? R
+    : undefined {
     return this.deps.getObservedCurrentTurnTerminal?.(sessionId);
+  }
+
+  private bindActiveTurnVendorGeneration(sessionId: string, active: ActiveTurn): void {
+    const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
+    active.vendorTurnGeneration =
+      typeof vendorGeneration === 'number' ? vendorGeneration : null;
+  }
+
+  private markActiveTurnDispatched(sessionId: string, active: ActiveTurn): void {
+    active.dispatchLifecycle = 'dispatched';
+    this.bindActiveTurnVendorGeneration(sessionId, active);
+  }
+
+  private observedMatchesBoundActiveTurn(
+    active: ActiveTurn,
+    observed: ReturnType<AgentInputCoordinator['readObservedCurrentTurnTerminal']>,
+  ): boolean {
+    if (!observed || observed.kind === 'none') return false;
+    if (typeof observed.generation !== 'number') return false;
+    if (typeof active.vendorTurnGeneration !== 'number') return false;
+    return observed.generation === active.vendorTurnGeneration;
   }
 
   private canReclaimLeftoverActiveTurn(sessionId: string, state: SessionInputState): boolean {
@@ -3501,7 +3540,7 @@ export class AgentInputCoordinator {
     if (present !== true) return false;
     const observed = this.readObservedCurrentTurnTerminal(sessionId);
     if (observed?.kind === 'error') return false;
-    if (observed?.kind === 'done') return true;
+    if (observed?.kind === 'done') return this.observedMatchesBoundActiveTurn(active, observed);
     return this.deps.isTurnRunning(sessionId) === true;
   }
 
@@ -3512,7 +3551,8 @@ export class AgentInputCoordinator {
     const active = state.activeTurn;
     if (!active || !isActiveTurnDispatched(active)) return false;
     if (this.deps.isLiveSessionPresent?.(sessionId) !== true) return false;
-    return this.readObservedCurrentTurnTerminal(sessionId)?.kind === 'error';
+    const observed = this.readObservedCurrentTurnTerminal(sessionId);
+    return observed?.kind === 'error' && this.observedMatchesBoundActiveTurn(active, observed);
   }
 
   private tryReconcileStaleDispatchBoundary(
@@ -3564,32 +3604,39 @@ export class AgentInputCoordinator {
     }
     if (recoverLeftoverError) {
       const observed = this.readObservedCurrentTurnTerminal(sessionId);
-      const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
+      const boundGeneration = state.activeTurn?.vendorTurnGeneration ?? null;
       const instanceId = readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
       log.warn('reconciling leftover dispatched activeTurn after vendor error', {
         sessionId,
         clientId: state.activeTurn?.item?.clientId ?? null,
         dispatchLifecycle: state.activeTurn?.dispatchLifecycle ?? null,
+        boundGeneration,
       });
       state.staleLiveIdleSinceMs = null;
+      const signals: Omit<InterruptedTurnErrorSignals, 'message'> = {
+        ...(observed?.reason ? { reason: observed.reason } : {}),
+        ...(observed?.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
+        ...(typeof observed?.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
+      };
       // Apply recovery before fencing. A same-generation meta would make
       // onTurnEvent treat this synthesized error as the leftover we just fenced.
       this.onTurnEvent(
         sessionId,
         'error',
         redactSensitiveText(observed?.message ?? 'Turn ended with an error'),
+        Object.keys(signals).length > 0 ? signals : undefined,
       );
-      if (typeof vendorGeneration === 'number' && instanceId) {
+      if (typeof boundGeneration === 'number' && instanceId) {
         const latest = this.getState(sessionId);
-        latest.fencedStaleTerminal = { instanceId, generation: vendorGeneration };
+        latest.fencedStaleTerminal = { instanceId, generation: boundGeneration };
       }
       return true;
     }
     if (reclaimLeftover) {
-      const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
+      const boundGeneration = state.activeTurn?.vendorTurnGeneration ?? null;
       const instanceId = readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
-      if (typeof vendorGeneration === 'number' && instanceId) {
-        state.fencedStaleTerminal = { instanceId, generation: vendorGeneration };
+      if (typeof boundGeneration === 'number' && instanceId) {
+        state.fencedStaleTerminal = { instanceId, generation: boundGeneration };
       }
       log.warn('reconciling leftover dispatched activeTurn after vendor idle', {
         sessionId,
@@ -3758,6 +3805,7 @@ export class AgentInputCoordinator {
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
       continuationOwnerClientId: isUiContinuationItem(head) ? head.clientId : null,
+      vendorTurnGeneration: null,
     };
     state.activeTurn = active;
     this.emit(sessionId);
@@ -3903,7 +3951,7 @@ export class AgentInputCoordinator {
         this.handleSendNotDispatched(sessionId, active, head, result);
         return;
       }
-      active.dispatchLifecycle = 'dispatched';
+      this.markActiveTurnDispatched(sessionId, active);
       // 派发成功 = 凭证切换等待(若有)结束。
       this.clearCredentialSwitchWait(this.getState(sessionId));
       // vendor dispatch 已不可逆：此时再 durable-ack 旧中断。onAccepted 仍可能
