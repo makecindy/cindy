@@ -3,13 +3,10 @@ import { createLogger } from './logger';
 
 const log = createLogger('ChatAttachmentStageCleanup');
 
-function stagedPaths(
-  files: readonly Pick<AttachedFile, 'path' | 'cachePathShared'>[],
-): string[] {
+function stagedPaths(files: readonly Pick<AttachedFile, 'path'>[]): string[] {
   return [
     ...new Set(
       files
-        .filter((file) => !file.cachePathShared)
         .map((file) => file.path)
         .filter((filePath): filePath is string =>
           typeof filePath === 'string' && filePath.toLowerCase().endsWith('.bin'),
@@ -24,7 +21,7 @@ function stagedPaths(
  * to pass through and are simply ignored there.
  */
 export function cleanupStagedChatAttachmentFiles(
-  files: readonly Pick<AttachedFile, 'path' | 'cachePathShared'>[],
+  files: readonly Pick<AttachedFile, 'path'>[],
 ): void {
   const paths = stagedPaths(files);
   if (paths.length === 0) return;

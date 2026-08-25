@@ -61,7 +61,6 @@ function fileAttachmentFromRef(file: FileRef): AttachedFile | null {
     size: 0,
     category,
     mimeType: getMimeType(ext, category),
-    cachePathShared: true,
   };
 }
 

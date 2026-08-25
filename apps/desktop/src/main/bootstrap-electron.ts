@@ -7146,9 +7146,11 @@ const registerIpcHandlers = () => {
       if (error) throw new Error(error);
       return true;
     };
-    // These actions intentionally accept no renderer path. Each invocation
-    // resolves one fixed userData root in Main and deletes that root only;
-    // message history and the media ledger are never consulted.
+    // These actions intentionally accept no renderer path. The frozen xdt-image
+    // cache has no owner metadata, so its confirmed cleanup applies to the whole
+    // profile-level legacy root. Chat attachments remain scoped to the active
+    // owner, but live drafts, message history, and the media ledger are not read:
+    // the explicitly confirmed cache is treated as disposable in full.
     const clearFixedDirectory = async (
       rootDir: string,
       canClear: () => boolean = () => true,
