@@ -546,6 +546,11 @@ describe('cindy-subagent extension source', () => {
       .toBeGreaterThan(postSpawn);
     expect(source).toContain('PI Subagent runner did not confirm exit');
     expect(source).toContain("action: 'launch' | 'terminate' | 'status'");
+    const live = source.indexOf('this.subagentRunners.has(runId)', control);
+    const belong = source.indexOf('PI Subagent runner request does not belong to this task', control);
+    expect(live).toBeGreaterThan(control);
+    expect(belong).toBeGreaterThan(live);
+    expect(source.slice(control, belong)).toContain('if (action === \'terminate\' && live)');
     const runnerControl = source.indexOf('event.title === CINDY_SUBAGENT_RUNNER_CONTROL_TITLE');
     const boundary = source.indexOf('isAccountBoundaryTornDown()', runnerControl);
     const boundaryUnconfirmed = source.indexOf("ok: false, unconfirmed: true", boundary);

@@ -3941,15 +3941,23 @@ export class PiAgent extends BaseAgent {
                 if (!localSubagentSupported || !PI_SUBAGENT_RUN_ID_RE.test(runId)) {
                   throw new Error('PI Subagent runner request is unavailable');
                 }
-                const status = (await listPiSubagentRuns(subagentRunRoot))
-                  .find((candidate) => candidate.runId === runId);
-                if (!status || status.runtimeOwnerId !== subagentRuntimeOwnerId) {
-                  throw new Error('PI Subagent runner request does not belong to this task');
-                }
                 const runDir = path.join(subagentRunRoot, runId);
+                const live = this.subagentRunners.has(runId);
                 if (action === 'status') {
                   const message = this.subagentRunnerExitErrors.get(runId);
                   if (message) throw new PiSubagentRunnerHostExitedError(message);
+                  if (live) return true;
+                }
+                if (action === 'terminate' && live) {
+                  return this.terminateSubagentRunner(runId, runDir);
+                }
+                const status = (await listPiSubagentRuns(subagentRunRoot))
+                  .find((candidate) => candidate.runId === runId);
+                if (!status || status.runtimeOwnerId !== subagentRuntimeOwnerId) {
+                  if (action === 'terminate') return false;
+                  throw new Error('PI Subagent runner request does not belong to this task');
+                }
+                if (action === 'status') {
                   return true;
                 }
                 if (action === 'terminate') {
