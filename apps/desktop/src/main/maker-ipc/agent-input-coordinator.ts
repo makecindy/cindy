@@ -3187,6 +3187,39 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       return;
     }
+    if (active && isActiveTurnDispatched(active)) {
+      const observed = this.readObservedCurrentTurnTerminal(sessionId);
+      if (observed?.kind === 'error') {
+        if (this.observedMatchesBoundActiveTurn(active, observed)) {
+          const signals: Omit<InterruptedTurnErrorSignals, 'message'> = {
+            ...(observed.reason ? { reason: observed.reason } : {}),
+            ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
+            ...(typeof observed.errorStatus === 'number'
+              ? { errorStatus: observed.errorStatus }
+              : {}),
+          };
+          // Codex/Claude 失败收尾是 terminal error 后再补 done。漏掉的 error
+          // 回调不能被这道配对 done 先清掉 leftover activeTurn，否则 250ms
+          // reconcile 失去恢复对象，失败输入会被当成成功结算且没有 Retry。
+          this.onTurnEvent(
+            sessionId,
+            'error',
+            redactSensitiveText(observed.message ?? 'Turn ended with an error'),
+            Object.keys(signals).length > 0 ? signals : undefined,
+            meta,
+          );
+          return;
+        }
+        log.warn('ignored turn-done while leftover activeTurn does not match observed error', {
+          sessionId,
+          clientId: active.item?.clientId,
+          boundGeneration: active.vendorTurnGeneration ?? null,
+          observedGeneration: observed.generation ?? null,
+        });
+        this.emit(sessionId);
+        return;
+      }
+    }
     state.activeTurn = null;
     // 同轮注入的 steer 在飞期间,老 turn 的 done 可能先到(注入前 turn 恰好收尾)。
     // marker 属于 steer 事务而不是老 turn,必须留到 steer() 自己 resolve/reject
