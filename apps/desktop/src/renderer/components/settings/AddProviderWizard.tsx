@@ -63,9 +63,14 @@ import type {
  * 外部直达入口:
  *   - builtin(左栏检测建议 / 引导卡 OAuth 行):直接进入该内置渠道的授权步。
  *   - preset(引导卡「其他供应商」行):presets 异步载入后直达该预设的表单步。
+ *   - manifest(外部供应商 manifest 深链,经确认屏后):直接携带校验过的 preset
+ *     对象进入表单步——它不在目录里,不能按 id 查;id 已被 main 重写为
+ *     `manifest:<host>` 命名空间值,不与目录条目/本机检测特例碰撞。
  */
 export type WizardEntry =
-  { kind: 'builtin'; providerId: string } | { kind: 'preset'; presetId: string };
+  | { kind: 'builtin'; providerId: string }
+  | { kind: 'preset'; presetId: string }
+  | { kind: 'manifest'; preset: ProviderPreset };
 
 interface AddProviderWizardProps {
   providers: ProviderView[];
@@ -662,6 +667,16 @@ export function AddProviderWizard({
     const preset = presets.find((p) => p.id === entry.presetId);
     if (preset) pickPreset(preset);
   }, [entry, presets, pickPreset]);
+
+  // entry(manifest 直达):确认屏已把校验过的 preset 对象交进来,不依赖目录
+  // presets 载入,直接进表单步。按对象身份记录已消费值:同一挂载期内换一份
+  // manifest(二次深链)仍能直达,同一 entry 不重复触发。
+  const manifestEntryConsumedRef = useRef<ProviderPreset | null>(null);
+  useEffect(() => {
+    if (entry?.kind !== 'manifest' || manifestEntryConsumedRef.current === entry.preset) return;
+    manifestEntryConsumedRef.current = entry.preset;
+    pickPreset(entry.preset);
+  }, [entry, pickPreset]);
 
   /**
    * 本向导内是否发起过 OpenAI 登录。codexAuth 反映的是整机 ChatGPT 凭证,不含

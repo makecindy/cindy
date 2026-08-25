@@ -1694,6 +1694,27 @@
         "hintLoggedIn": "{{cli}} is signed in on this device — authorize to connect",
         "hintInstalled": "{{cli}} is installed on this device"
       },
+      "manifest": {
+        "title": "Add provider from external configuration",
+        "loading": "Fetching provider configuration…",
+        "description": "The configuration below is provided by the vendor of “{{name}}”. Continue to open the add-provider form with these endpoints prefilled; you still enter your own API key, and nothing is saved in this step.",
+        "source": "Source: {{origin}}",
+        "modelCount_one": "{{count}} recommended model",
+        "modelCount_other": "{{count}} recommended models",
+        "warning": "This is an external, non-official configuration. Cindy does not verify its service or billing claims. Continue only if you trust this source.",
+        "cancel": "Cancel",
+        "confirm": "Continue",
+        "close": "Close",
+        "error": {
+          "timeout": "Timed out fetching the provider configuration.",
+          "redirect": "The configuration URL redirected and was rejected by policy. Ask the vendor for a direct link.",
+          "http": "Failed to fetch the provider configuration (HTTP {{status}}).",
+          "network": "Network error while fetching the provider configuration.",
+          "oversize": "The configuration file exceeds the size limit and was rejected.",
+          "invalid": "The configuration failed validation and was rejected entirely.",
+          "reasonCode": "Reason code: {{reason}}"
+        }
+      },
       "wizard": {
         "title": "Add provider",
         "titleWith": "Add · {{name}}",

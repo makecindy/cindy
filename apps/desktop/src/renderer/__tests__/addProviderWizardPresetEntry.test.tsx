@@ -5,6 +5,9 @@
  *   1. entry={kind:'preset',presetId}:presets 异步载入后直达表单步(step 2,
  *      名称预填预设名),一次性消费。
  *   2. presetId 在目录里不存在 → 回落目录第一步,不假装直达。
+ *   2b. entry={kind:'manifest',preset}(外部 manifest 深链经确认屏后):携带校验过的
+ *       preset 对象直达表单步,不依赖目录 presets 载入;id 是 manifest:<host>
+ *       命名空间值,不触发目录条目 / 本机检测特例。
  *   3. API Key 输入默认遮罩,但必须能显形核对——粘错 key / 多余空格 / 前缀不对
  *      在遮罩下查不出来。向导曾漏掉这个切换,只有编辑弹窗有(见 SettingsTextInput)。
  */
@@ -291,6 +294,41 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getByDisplayValue('DeepSeek')).not.toBeNull();
     expect(screen.getByPlaceholderText('sk-…')).not.toBeNull();
     // 不在目录步(搜索框只在 step 1)。
+    expect(screen.queryByPlaceholderText('settings.providers.wizard.searchPlaceholder')).toBeNull();
+  });
+
+  it('manifest entry:携带 preset 对象直达表单步,不依赖目录 presets 载入', async () => {
+    // 目录 presets 永不返回——manifest 直达不许等它。
+    (
+      window.electronAPI.maker as unknown as { listProviderPresets: unknown }
+    ).listProviderPresets = vi.fn(() => new Promise(() => undefined));
+    render(
+      React.createElement(AddProviderWizard, {
+        providers: [anthropicProvider],
+        entry: {
+          kind: 'manifest' as const,
+          preset: {
+            id: 'manifest:gateway.example.com',
+            name: 'Acme Gateway',
+            runtimes: {
+              'claude-code': {
+                baseUrl: 'https://gateway.example.com',
+                models: [{ id: 'acme-large', name: 'Acme Large' }],
+              },
+            },
+          },
+        },
+        onOpenCustomForm: vi.fn(),
+        onClose: vi.fn(),
+        onDone: vi.fn(),
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
+    );
+    expect(screen.getByDisplayValue('Acme Gateway')).not.toBeNull();
+    expect(screen.getByPlaceholderText('sk-…')).not.toBeNull();
     expect(screen.queryByPlaceholderText('settings.providers.wizard.searchPlaceholder')).toBeNull();
   });
 

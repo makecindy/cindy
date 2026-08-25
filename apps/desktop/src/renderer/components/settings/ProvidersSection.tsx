@@ -81,6 +81,7 @@ import {
 } from '../../../shared/xaiSubscriptionUsage';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
+import { ProviderManifestConfirmDialog } from './ProviderManifestConfirmDialog';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
   isLocalRuntimeBetaProviderId,
@@ -2112,19 +2113,25 @@ export function ProvidersSection() {
   }, [detections, byId, listProviders]);
 
   /**
-   * 深链定位(?connect=<id> / ?wizard=1,来自「连接供应商」引导卡等):providers
-   * 就绪后一次性消费,消费即从 URL 摘除(replace,防返回/刷新重复触发)。
+   * 深链定位(?connect=<id> / ?wizard=1 / ?manifest=<https-url>,来自「连接供应商」
+   * 引导卡与外部深链):providers 就绪后一次性消费,消费即从 URL 摘除(replace,
+   * 防返回/刷新重复触发)。
    *   - connect 命中左栏占行的供应商(如 xd)→ 直接选中;
    *   - connect 命中目录内置渠道 → 向导直达该渠道授权步;
    *   - 其余 id 视为 preset id → 向导 preset 直达(presets 异步匹配,未命中回落目录页);
-   *   - wizard=1 → 打开向导目录第一步。
+   *   - wizard=1 → 打开向导目录第一步;
+   *   - manifest → 打开确认屏(main 受限拉取 + fail-closed 校验,确认前不弹表单;
+   *     按 seq 换代挂载,新深链到来即卸载旧请求,过期结果不污染新表单)。
    */
   const [searchParams, setSearchParams] = useSearchParams();
+  const [manifestRequest, setManifestRequest] = useState<{ id: number; url: string } | null>(null);
+  const manifestRequestSeqRef = useRef(0);
   useEffect(() => {
     if (loading) return;
     const connect = searchParams.get('connect');
     const wizardFlag = searchParams.get('wizard');
-    if (!connect && !wizardFlag) return;
+    const manifest = searchParams.get('manifest');
+    if (!connect && !wizardFlag && !manifest) return;
     // 不用一次性 ref:消费后立即删参(下方 replace)即防重放;组件常驻期间
     // 再次带参导航(如二次深链)仍应生效(review 反馈)。
     if (connect) {
@@ -2141,12 +2148,16 @@ export function ProvidersSection() {
       } else {
         setWizard({ entry: { kind: 'preset', presetId: connect } });
       }
+    } else if (manifest) {
+      manifestRequestSeqRef.current += 1;
+      setManifestRequest({ id: manifestRequestSeqRef.current, url: manifest });
     } else {
       setWizard({});
     }
     const next = new URLSearchParams(searchParams);
     next.delete('connect');
     next.delete('wizard');
+    next.delete('manifest');
     setSearchParams(next, { replace: true });
   }, [loading, searchParams, setSearchParams, byId, listProviders]);
 
@@ -2663,6 +2674,20 @@ export function ProvidersSection() {
             setWizard(null);
             if (providerId) setSelectedId(providerId);
             refetch();
+          }}
+        />
+      )}
+
+      {/* manifest 深链确认屏:按请求 seq 换 key 挂载——新深链即换代卸载旧请求,
+          过期的拉取结果随卸载丢弃。确认后交给向导的 manifest entry(预设表单步)。 */}
+      {manifestRequest && (
+        <ProviderManifestConfirmDialog
+          key={manifestRequest.id}
+          url={manifestRequest.url}
+          onCancel={() => setManifestRequest(null)}
+          onConfirm={(preset) => {
+            setManifestRequest(null);
+            setWizard({ entry: { kind: 'manifest', preset } });
           }}
         />
       )}

@@ -6,7 +6,10 @@ import {
   readWindowBackdropMaterialFromArgv,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop';
-import { isDeepLinkProviderConnectId } from '../shared/deepLinkSchemes';
+import {
+  isDeepLinkProviderConnectId,
+  isDeepLinkProviderManifestUrl,
+} from '../shared/deepLinkSchemes';
 import {
   parseProjectOrderSnapshot,
   SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
@@ -3432,8 +3435,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   //   - { type: 'project', workingDir }    : 聚焦已有 project 节点
   //   - { type: 'new-session', workingDir }: 新建对话且预填 workingDir (右键 "通过 Cindy 打开")
   //   - { type: 'share-import', filePath } : 打开 .cshare/.xdtshare 会话导入向导
-  //   - { type: 'settings', tab, connect? }: 打开设置页 (connect 为可选 provider / preset id,
-  //     来自 cindy://settings/providers?connect=<providerId> 深链, per-type 白名单再校验)
+  //   - { type: 'settings', tab, connect?, manifest? }: 打开设置页 (connect 为可选 provider /
+  //     preset id, manifest 为可选外部供应商 manifest 的 https URL, 分别来自
+  //     cindy://settings/providers?connect=<providerId> / ?manifest=<https-url> 深链,
+  //     per-type 白名单再校验, 两者互斥)
   onDeepLinkNavigate: (
     callback: (
       payload:
@@ -3441,7 +3446,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
+        | {
+            type: 'settings';
+            tab: 'voice-input' | 'providers';
+            connect?: string;
+            manifest?: string;
+          },
     ) => void,
   ): (() => void) =>
     fanOutDeepLinkNavigate((payload) => {
@@ -3453,6 +3463,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         filePath?: unknown;
         tab?: unknown;
         connect?: unknown;
+        manifest?: unknown;
         messageClientId?: unknown;
       };
       if (p.type === 'session' && typeof p.id === 'string' && p.id.length > 0) {
@@ -3464,17 +3475,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
             : {}),
         });
       } else if (p.type === 'settings' && (p.tab === 'voice-input' || p.tab === 'providers')) {
-        // connect 只对 providers 页有意义;主进程已做 id 白名单,这里按纵深防御
-        // 原样复用同一规则。字段存在但不合法时丢弃整个 payload,不降级成半执行。
+        // connect / manifest 只对 providers 页有意义;主进程已做白名单,这里按纵深防御
+        // 原样复用同一规则。字段存在但不合法时丢弃整个 payload,不降级成半执行;
+        // 两字段同现同样整体丢弃(main 已拒,这里防漂移)。
         if (
           p.connect !== undefined &&
           (p.tab !== 'providers' || !isDeepLinkProviderConnectId(p.connect))
         )
           return;
+        if (
+          p.manifest !== undefined &&
+          (p.tab !== 'providers' || !isDeepLinkProviderManifestUrl(p.manifest))
+        )
+          return;
+        if (p.connect !== undefined && p.manifest !== undefined) return;
         callback({
           type: 'settings',
           tab: p.tab,
           ...(p.tab === 'providers' && p.connect !== undefined ? { connect: p.connect } : {}),
+          ...(p.tab === 'providers' && p.manifest !== undefined ? { manifest: p.manifest } : {}),
         });
       } else if (
         p.type === 'project' &&
@@ -5306,6 +5325,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       status?: number;
       detail?: string;
     }> => ipcRenderer.invoke('maker:provider:models-fetch', input),
+    /**
+     * 外部供应商 manifest 拉取（settings/providers?manifest= 深链确认屏消费）。
+     * main 侧受限下载（https-only / 拒绝重定向 / 64 KiB / 10s）+ fail-closed 校验；
+     * 结构化结果：ok=true 带来源 origin 与逐字段重建的 preset，失败 reason 分类渲染。
+     */
+    fetchProviderManifest: (input: {
+      url: string;
+    }): Promise<
+      | {
+          ok: true;
+          origin: string;
+          preset: import('@cindy/model-providers').ProviderPreset;
+        }
+      | {
+          ok: false;
+          reason: import('../main/maker-host/provider-manifest-fetch')
+            .ProviderManifestFetchFailureReason;
+          status?: number;
+        }
+    > => ipcRenderer.invoke('maker:provider:manifest-fetch', input),
     /**
      * 本机 agent CLI 安装 / 登录态扫描（设置「检测建议」用）。只 stat 不读凭证内容;
      * 失败降级空数组。

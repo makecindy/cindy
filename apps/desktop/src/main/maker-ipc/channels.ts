@@ -541,6 +541,15 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_MODELS_FETCH: 'maker:provider:models-fetch',
   /**
+   * 外部供应商 manifest 拉取（settings/providers?manifest= 深链确认屏消费，见
+   * maker-host/provider-manifest-fetch）。主进程受限下载（https-only / 拒绝重定向 /
+   * 64 KiB / 10s）+ fail-closed 内容校验。返回查询型结构化结果
+   * ProviderManifestFetchResult（{ok, origin?, preset?, reason?, status?}，规则 13
+   * 例外条款：renderer 需要 reason 渲染分类文案）。不带密钥材料，但会向外部地址
+   * 发起请求，限主页面 sender。
+   */
+  PROVIDER_MANIFEST_FETCH: 'maker:provider:manifest-fetch',
+  /**
    * 通用 OAuth 供应商（目录 auth.oauth 描述符驱动、非 bespoke 四家）的登录 / 登出 / 取消。
    * 入参 = providerId；login 走 generic-oauth Runner（PKCE 浏览器流），成功后拉动态模型
    * 发现（若描述符声明）并广播 PROVIDER_CHANGED。bespoke 供应商（anthropic/openai/xai）

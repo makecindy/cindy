@@ -49,6 +49,32 @@ export function isDeepLinkProviderConnectId(value: unknown): value is string {
 }
 
 /**
+ * settings/providers 深链的 manifest URL 边界（`?manifest=<https-url>`）。
+ * 这里只做**链接层**校验：值必须是无凭证的绝对 https URL 且长度有界——
+ * 拉取（超时 / 大小上限 / 拒绝重定向）与内容校验（fail-closed 的
+ * parseProviderManifest）都在主进程后续阶段执行，不在链接解析层。
+ * main 与 preload 复用同一函数，避免两侧规则漂移（同 connect id 的纪律）。
+ */
+export const DEEP_LINK_PROVIDER_MANIFEST_URL_MAX_LENGTH = 2048;
+
+export function isDeepLinkProviderManifestUrl(value: unknown): value is string {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > DEEP_LINK_PROVIDER_MANIFEST_URL_MAX_LENGTH
+  ) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === 'https:' && !url.username && !url.password;
+}
+
+/**
  * 内嵌进匹配正则的 scheme 备选组源(非捕获):`(?:cindy|xdt-maker)`。
  * scheme 里的 `-` 在组内是字面量,其余字符按正则元字符防御性转义
  * (scheme 值来自 brand-identity,理论上永远是 [a-z-],转义只是兜底)。

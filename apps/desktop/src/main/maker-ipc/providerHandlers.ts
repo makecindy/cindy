@@ -74,6 +74,8 @@ import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
 } from '../maker-host/provider-model-fetch.js';
+import type { ProviderManifestFetchResult } from '../maker-host/provider-manifest-fetch.js';
+import { isDeepLinkProviderManifestUrl } from '../../shared/deepLinkSchemes.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -235,6 +237,8 @@ export interface ProviderHandlerDeps {
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** 外部供应商 manifest 拉取（生产 = fetchProviderManifest；单测注入 stub 不联网）。 */
+  fetchManifest(url: string): Promise<ProviderManifestFetchResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
@@ -1557,6 +1561,23 @@ export function registerProviderHandlers(
       }
     }
     return deps.fetchModels(parsed);
+  });
+
+  // 外部供应商 manifest 拉取：查询型结构化返回（同上例外条款）；网络 / 内容失败在
+  // 结果 reason 里，不抛。虽不携带密钥，但会以 main 的网络身份向外部地址发起请求——
+  // 必须先确认调用方是 Cindy 自有顶层页面，避免子 frame / WebView 把 main 当出网代理。
+  // URL 在 main 侧按深链同一条白名单复核（https-only / 无凭证 / 长度有界），来源
+  // （深链 or 未来其它入口）不影响该边界。
+  registry.handle(MAKER_INVOKE.PROVIDER_MANIFEST_FETCH, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const url =
+      input && typeof input === 'object' && !Array.isArray(input)
+        ? (input as { url?: unknown }).url
+        : undefined;
+    if (!isDeepLinkProviderManifestUrl(url)) {
+      throwIpcError('INVALID_PARAMS', 'invalid manifest-fetch input');
+    }
+    return deps.fetchManifest(url);
   });
 
   // 本机 CLI 扫描：查询型；任何失败降级空数组（检测建议是增强,不是功能依赖,

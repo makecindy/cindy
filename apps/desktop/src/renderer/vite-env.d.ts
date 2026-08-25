@@ -2768,7 +2768,12 @@ interface ElectronAPI {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
+        | {
+            type: 'settings';
+            tab: 'voice-input' | 'providers';
+            connect?: string;
+            manifest?: string;
+          },
     ) => void,
   ) => () => void;
 
@@ -4841,6 +4846,23 @@ interface ElectronAPI {
       status?: number;
       detail?: string;
     }>;
+    /**
+     * 外部供应商 manifest 拉取（settings/providers?manifest= 深链确认屏消费）。
+     * main 侧受限下载 + fail-closed 校验；ok=true 带来源 origin 与重建后的 preset。
+     */
+    fetchProviderManifest: (input: { url: string }) => Promise<
+      | {
+          ok: true;
+          origin: string;
+          preset: import('@cindy/model-providers').ProviderPreset;
+        }
+      | {
+          ok: false;
+          reason: import('../main/maker-host/provider-manifest-fetch')
+            .ProviderManifestFetchFailureReason;
+          status?: number;
+        }
+    >;
     /**
      * 本机 agent CLI 安装 / 登录态扫描（设置「检测建议」用）。只 stat 不读凭证内容;
      * 失败降级空数组。
