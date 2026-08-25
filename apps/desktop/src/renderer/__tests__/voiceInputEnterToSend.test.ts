@@ -195,7 +195,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     );
     expect(chatInputSource).toContain('dispatchSendInFlightKeysRef');
     expect(chatInputSource).toContain('lockCurrentComposer');
-    expect(chatInputSource).toContain('lockComposerForEffort');
+    expect(chatInputSource).not.toContain('lockComposerForEffort');
     const planCommandSendBlock = extractBetween(
       chatInputSource,
       'isPlanModeComposerCommandText(',

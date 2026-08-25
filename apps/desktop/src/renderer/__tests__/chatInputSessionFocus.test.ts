@@ -145,7 +145,7 @@ describe('ChatInput session switch focus contract', () => {
   it('wires local send locking through the behavior-tested focus restore hook', () => {
     const localSendLockBlock = extractBetween(
       chatInputSource,
-      '// Local/SSH sends keep the live composer while references and runtime',
+      '// Local/SSH lock the live composer only while the click-time document',
       'try {\n        let serializedContent',
     );
 
@@ -198,7 +198,7 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     const successfulSendBlock = extractBetween(
       chatInputSource,
       'if (result === false) {',
-      'if (!optimisticallyClearRemoteComposer) clearSentComposer();',
+      'finishAgentSendDispatch();',
     );
     const worktreeSendBlock = extractBetween(
       newMakerDraftRouteSource,
@@ -217,11 +217,30 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     );
   });
 
+  it('clears the live composer before awaiting local or remote send', () => {
+    const optimisticClear = chatInputSource.indexOf(
+      '// Click-time composer must disappear before any await that can surface',
+    );
+    const clearCall = chatInputSource.indexOf('clearSentComposer();', optimisticClear);
+    const onSend = chatInputSource.indexOf('result = await onSend(', optimisticClear);
+    const failedRestore = chatInputSource.indexOf('restoreRemoteComposerAndRelease();', onSend);
+
+    expect(optimisticClear).toBeGreaterThanOrEqual(0);
+    expect(clearCall).toBeGreaterThan(optimisticClear);
+    expect(onSend).toBeGreaterThan(clearCall);
+    expect(failedRestore).toBeGreaterThan(onSend);
+    expect(chatInputSource).not.toContain(
+      'if (!optimisticallyClearRemoteComposer) clearSentComposer();',
+    );
+  });
+
   it('optimistically clears device-link composer state before awaiting send and restores without dropping newer input', () => {
     const transitionBegin = chatInputSource.indexOf(
       'makerChatStore.beginRemoteOptimisticComposerTransition(',
     );
-    const optimisticClear = chatInputSource.indexOf('if (optimisticallyClearRemoteComposer) {');
+    const optimisticClear = chatInputSource.indexOf(
+      '// Click-time composer must disappear before any await that can surface',
+    );
     const frozenReferenceHydration = chatInputSource.search(
       /agentReferences\s*=\s*await resolveSerializedSessionMessageReferencesForSend\(agentReferences\);/,
     );
@@ -230,7 +249,7 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     const restoreAndReleaseBlock = extractBetween(
       chatInputSource,
       'const restoreRemoteComposerAndRelease = () => {',
-      'if (optimisticallyClearRemoteComposer) {',
+      '// Click-time composer must disappear before any await that can surface',
     );
 
     expect(chatInputSource).toContain('deviceLinkDeviceId && sourceSessionId');

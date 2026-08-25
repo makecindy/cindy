@@ -4874,21 +4874,16 @@ export function ChatInput({
       // reference hydration happens against this immutable payload after the
       // live composer is cleared, so the user can immediately type the next
       // message without it leaking into or being cleared by this send.
+      // Local/SSH still serialize after live reference hydration, but they
+      // keep the same click-time restore snapshot so a rejected send can put
+      // the original draft back without waiting for enqueue to settle.
       const serializedAtClick = optimisticallyClearRemoteComposer
         ? serializeEditorContent(editor)
         : null;
-      const documentBeforeOptimisticClear = optimisticallyClearRemoteComposer
-        ? editor.getJSON()
-        : null;
-      const attachmentsBeforeOptimisticClear = optimisticallyClearRemoteComposer
-        ? [...latestAttachmentsRef.current]
-        : [];
-      const commentsBeforeOptimisticClear = optimisticallyClearRemoteComposer
-        ? [...browserCommentsRef.current]
-        : [];
-      const dataOwnerAtOptimisticClear = optimisticallyClearRemoteComposer
-        ? getDataOwnerGeneration()
-        : null;
+      let documentBeforeOptimisticClear = editor.getJSON();
+      let attachmentsBeforeOptimisticClear = [...latestAttachmentsRef.current];
+      let commentsBeforeOptimisticClear = [...browserCommentsRef.current];
+      const dataOwnerAtOptimisticClear = getDataOwnerGeneration();
       const finishAgentSendDispatch = sourceSessionId
         ? tryBeginAgentSendDispatch(sourceSessionId)
         : () => {};
@@ -4900,10 +4895,11 @@ export function ChatInput({
       turnGenRef.current += 1;
       showRecommendationRef.current = false;
       if (sourceSessionId) dismissPromptRecommendation(sourceSessionId);
-      // Local/SSH sends keep the live composer while references and runtime
-      // settings settle; remote sends must stay editable after their
-      // click-time snapshot is cleared. A background source send after a
-      // session switch must not lock the newly restored composer.
+      // Local/SSH lock the live composer only while the click-time document
+      // is still on screen (reference hydration / preflight). After the
+      // optimistic clear, the editor must stay editable for the next message.
+      // A background source send after a session switch must not lock the
+      // newly restored composer.
       const lockCurrentComposer =
         !optimisticallyClearRemoteComposer && storageKeyForDraftRef.current === sourceStorageKey;
       if (lockCurrentComposer) {
@@ -5176,6 +5172,14 @@ export function ChatInput({
           latestAttachmentsRef.current,
           browserCommentsRef.current,
         );
+        if (!optimisticallyClearRemoteComposer) {
+          // Local/SSH hydrate mentions on the live editor first. Refresh the
+          // restore snapshot to that post-hydration document so a rejected
+          // send puts back exactly what enqueue would have taken.
+          documentBeforeOptimisticClear = editor.getJSON();
+          attachmentsBeforeOptimisticClear = [...latestAttachmentsRef.current];
+          commentsBeforeOptimisticClear = [...browserCommentsRef.current];
+        }
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked) return;
@@ -5195,12 +5199,13 @@ export function ChatInput({
           });
           const isCurrentComposer =
             latestStorageKeyRef.current === sourceStorageKey && editorOwnsSource;
-          // Local/SSH sends keep the live composer until onSend is accepted.
-          // If the user kept typing on the same session, leave that newer
-          // draft untouched. A route switch is not "newer input": the reused
-          // editor may still hold the source document because restoreNextDraft
-          // was deferred for voice stop/refine/send.
+          // Local/SSH also clear immediately now. If the user kept typing on
+          // the same session after that snapshot, leave the newer draft
+          // untouched. A route switch is not "newer input": the reused editor
+          // may still hold the source document because restoreNextDraft was
+          // deferred for voice stop/refine/send.
           if (
+            !options?.preserveNewerContent &&
             !optimisticallyClearRemoteComposer &&
             isCurrentComposer &&
             !isComposerSendSnapshotCurrent(
@@ -5441,9 +5446,10 @@ export function ChatInput({
             optimisticComposerRestored = false;
             clearSentComposer({ preserveNewerContent: true });
           } else {
-            // Local/SSH never entered the optimistic-clear path. Reuse the normal
-            // snapshot guard so an unchanged accepted draft clears while newer edits survive.
-            clearSentComposer();
+            // Folder-picker / deferred local accept: the first attempt already
+            // restored the click-time draft. Clear it now, but keep any newer
+            // edits the user typed while the picker was open.
+            clearSentComposer({ preserveNewerContent: true });
           }
           markRecentPluginUsage();
         };
@@ -5454,13 +5460,18 @@ export function ChatInput({
             releaseRemoteComposerTransition();
           }
         };
-        if (optimisticallyClearRemoteComposer) {
-          try {
-            clearSentComposer();
-          } catch (error) {
-            restoreRemoteComposerAndRelease();
-            throw error;
-          }
+        // Click-time composer must disappear before any await that can surface
+        // the user bubble. Device-link already did this; local/SSH used to wait
+        // until onSend resolved, so the same text sat in both the transcript
+        // and the composer while enqueue / effort / slash / auth settled.
+        try {
+          clearSentComposer();
+        } catch (error) {
+          restoreRemoteComposerAndRelease();
+          throw error;
+        }
+        if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
+          setSendDispatchInFlight(false);
         }
         if (
           optimisticallyClearRemoteComposer &&
@@ -5495,10 +5506,6 @@ export function ChatInput({
             const coordinator = effortChangeCoordinatorRef.current;
             let runtimeSettled = false;
             let timeoutId: ReturnType<typeof setTimeout> | undefined;
-            const lockComposerForEffort =
-              !optimisticallyClearRemoteComposer &&
-              storageKeyForDraftRef.current === sourceStorageKey;
-            if (lockComposerForEffort) setSendDispatchInFlight(true);
             try {
               await Promise.race([
                 coordinator.awaitRuntimeSettled(sessionId).then(() => {
@@ -5510,16 +5517,13 @@ export function ChatInput({
               ]);
             } finally {
               if (timeoutId !== undefined) clearTimeout(timeoutId);
-              if (lockComposerForEffort && storageKeyForDraftRef.current === sourceStorageKey) {
-                setSendDispatchInFlight(false);
-              }
             }
 
             // 不把 timeout 写成全局 dirty：若迟到的是「持久化失败、runtime 尚未触碰」，旧实现
             // 会永久阻断后续发送。当前这次发送直接失败；下一次会重新等待真实 settle 结果。
             if (!runtimeSettled) {
               toast.error(t('newChat.chatInput.effortRuntimeDirty'));
-              if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+              restoreRemoteComposerAndRelease();
               return;
             }
             // onSend is the click-time closure and still targets the source
@@ -5529,7 +5533,7 @@ export function ChatInput({
             // never wiped.
             if (coordinator.isRuntimeDirty(sessionId)) {
               toast.error(t('newChat.chatInput.effortRuntimeDirty'));
-              if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+              restoreRemoteComposerAndRelease();
               return;
             }
             // 等待 commit 后，闭包里的 activeEffort 可能仍是旧 props；以该 session 已提交的
@@ -5556,17 +5560,16 @@ export function ChatInput({
             },
           );
         } catch (error) {
-          if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+          restoreRemoteComposerAndRelease();
           log.warn('send rejected:', error instanceof Error ? error.message : String(error));
           return;
         }
         if (result === false) {
-          if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+          restoreRemoteComposerAndRelease();
           return;
         }
         releaseRemoteComposerTransition();
         markRecentPluginUsage();
-        if (!optimisticallyClearRemoteComposer) clearSentComposer();
       } finally {
         dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);
         if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
