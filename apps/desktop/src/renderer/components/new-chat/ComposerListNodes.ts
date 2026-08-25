@@ -635,7 +635,9 @@ function sinkStructuredListItem(view: EditorView, itemType: NodeType): boolean {
 
   const nestedBefore = nodeBefore.lastChild?.type === parent.type;
   const inner = Fragment.from(nestedBefore ? itemType.create() : null);
-  const nestedList = parent.type.create(nestedBefore ? null : parent.attrs, inner);
+  const nestedAttrs =
+    parent.type.name === 'orderedList' ? { ...parent.attrs, start: 1 } : parent.attrs;
+  const nestedList = parent.type.create(nestedBefore ? null : nestedAttrs, inner);
   const openStart = nestedBefore ? 3 : 1;
   const slice = new Slice(
     Fragment.from(itemType.create(null, Fragment.from(nestedList))),

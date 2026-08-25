@@ -650,19 +650,112 @@ describe('composer structured list keyboard commands', () => {
       const nestedList = parentList?.firstChild?.lastChild;
       expect(parentList?.attrs).toMatchObject({ start, marker, separator });
       expect(nestedList?.type.name).toBe('orderedList');
-      expect(nestedList?.attrs).toMatchObject({ start, marker, separator });
+      expect(nestedList?.attrs).toMatchObject({ start: 1, marker, separator });
 
       const renderedLists = Array.from(editor.view.dom.querySelectorAll('ol'));
       expect(renderedLists).toHaveLength(2);
       expect(renderedLists[1].getAttribute('data-marker')).toBe(marker);
+      expect(renderedLists[1].getAttribute('start')).toBeNull();
 
       const expectedSeparator = separator === '' ? '' : ' ';
       const expectedIndent = ' '.repeat(`${start}${marker}${expectedSeparator}`.length);
       expect(serializeEditorContent(editor).text).toBe(
-        `${start}${marker}${expectedSeparator}parent\n${expectedIndent}${start}${marker}${expectedSeparator}child`,
+        `${start}${marker}${expectedSeparator}parent\n${expectedIndent}1${marker}${expectedSeparator}child`,
       );
     },
   );
+
+  it.each([
+    { marker: '+' as const, separator: ' ' },
+    { marker: '*' as const, separator: '  ' },
+  ])(
+    'preserves bullet-list $marker attrs when Tab creates a nested list',
+    ({ marker, separator }) => {
+      const editor = makeEditor({
+        type: 'doc',
+        content: [
+          {
+            type: 'bulletList',
+            attrs: { marker, separator },
+            content: ['parent', 'child'].map((text) => ({
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+            })),
+          },
+        ],
+      });
+      selectText(editor, 'child');
+
+      expect(handleStructuredListIndent(editor.view)).toBe(true);
+
+      const parentList = editor.state.doc.firstChild;
+      const nestedList = parentList?.firstChild?.lastChild;
+      expect(parentList?.attrs).toMatchObject({ marker, separator });
+      expect(nestedList?.type.name).toBe('bulletList');
+      expect(nestedList?.attrs).toMatchObject({ marker, separator });
+
+      const renderedLists = Array.from(editor.view.dom.querySelectorAll('ul'));
+      expect(renderedLists).toHaveLength(2);
+      expect(renderedLists[1].getAttribute('data-marker')).toBe(marker);
+
+      const nestedIndent = ' '.repeat(`${marker}${separator}`.length);
+      expect(serializeEditorContent(editor).text).toBe(
+        `${marker}${separator}parent\n${nestedIndent}${marker}${separator}child`,
+      );
+    },
+  );
+
+  it('reuses an existing nested ordered list without overriding its attrs', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'orderedList',
+          attrs: { start: 5, marker: ')', separator: ' ' },
+          content: [
+            {
+              type: 'listItem',
+              content: [
+                { type: 'paragraph', content: [{ type: 'text', text: 'parent' }] },
+                {
+                  type: 'orderedList',
+                  attrs: { start: 9, marker: '、', separator: '' },
+                  content: [
+                    {
+                      type: 'listItem',
+                      content: [
+                        { type: 'paragraph', content: [{ type: 'text', text: 'existing' }] },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'target' }] }],
+            },
+          ],
+        },
+      ],
+    });
+    selectText(editor, 'target');
+
+    expect(handleStructuredListIndent(editor.view)).toBe(true);
+
+    const outerList = editor.state.doc.firstChild;
+    const parentItem = outerList?.firstChild;
+    const nestedLists = parentItem
+      ? Array.from({ length: parentItem.childCount }, (_, index) => parentItem.child(index)).filter(
+          (node) => node.type.name === 'orderedList',
+        )
+      : [];
+    expect(nestedLists).toHaveLength(1);
+    expect(nestedLists[0]?.attrs).toMatchObject({ start: 9, marker: '、', separator: '' });
+    expect(nestedLists[0]?.childCount).toBe(2);
+    expect(nestedLists[0]?.child(1).textContent).toBe('target');
+    expect(serializeEditorContent(editor).text).toBe('5) parent\n   9、existing\n   10、target');
+  });
 
   it('indents and outdents a list item under its previous sibling', () => {
     const editor = makeEditor({
