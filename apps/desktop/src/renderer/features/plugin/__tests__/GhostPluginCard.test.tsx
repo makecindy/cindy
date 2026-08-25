@@ -29,10 +29,8 @@ vi.mock('@/contexts/AuthContext', () => ({
 
 import {
   __installedPluginLayoutForTests,
-  diffMarketUpdatePermissionItems,
   GhostPluginCard,
   LegacyGhostRecoveryNotice,
-  marketUpdateAllowsPermissionExpansion,
   MarketPluginCard,
   MyPublishesSectionVisibilityGate,
   SHOW_MY_PUBLISHES_SECTION,
@@ -43,7 +41,6 @@ import {
   __resetGhostUnreadForTest,
 } from '@/cindy-brain/ghostUnreadStore';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
-import type { InstalledGhost } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 const {
@@ -154,58 +151,6 @@ describe('MyPublishesSectionVisibilityGate', () => {
   });
 });
 
-describe('diffMarketUpdatePermissionItems', () => {
-  it.each(['legacy-unapproved', 'invalid'] as const)(
-    'reviews every target permission for a %s install',
-    (approvalState) => {
-      const manifest = {
-        schemaVersion: 2 as const,
-        id: 'legacy-plugin',
-        name: 'Legacy Plugin',
-        description: 'Legacy approval regression fixture',
-        author: 'Cindy',
-        version: '1.0.0',
-        kind: 'chip' as const,
-        entry: 'main.js',
-        slots: ['notify'] as ['notify'],
-      };
-      const installed = {
-        manifest,
-        dir: 'C:\\plugins\\legacy-plugin',
-        enabled: false,
-        approval: { state: approvalState },
-      };
-      const next = {
-        ...manifest,
-        version: '2.0.0',
-        slots: ['notify', 'fs'] as ['notify', 'fs'],
-      };
-
-      const diff = diffMarketUpdatePermissionItems(installed, next);
-      expect(diff.added.map((item) => item.key)).toEqual(expect.arrayContaining(['notify', 'fs']));
-      expect(diff.removed).toEqual([]);
-      expect(diff.unchanged).toEqual([]);
-    },
-  );
-});
-
-describe('marketUpdateAllowsPermissionExpansion', () => {
-  const installed = (approvalState: 'approved' | 'legacy-unapproved' | 'invalid') =>
-    ({ approval: { state: approvalState } }) as InstalledGhost;
-
-  it.each(['legacy-unapproved', 'invalid'] as const)(
-    'allows the full reapproval of a no-permission %s install',
-    (approvalState) => {
-      expect(marketUpdateAllowsPermissionExpansion(installed(approvalState), 0)).toBe(true);
-    },
-  );
-
-  it('only allows approved installs when the reviewed diff adds permissions', () => {
-    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 0)).toBe(false);
-    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 1)).toBe(true);
-  });
-});
-
 describe('shouldOpenInstalledDetailAfterMarketSuccess', () => {
   it('opens the installed detail after a first-time market install', () => {
     expect(shouldOpenInstalledDetailAfterMarketSuccess(false)).toBe(true);
@@ -226,6 +171,8 @@ const commandPlugin: GhostPluginListItem = {
   approvalState: 'approved',
   builtin: false,
   tabPanel: false,
+  hasMainView: false,
+  mainViewTitle: null,
   hostCapability: null,
   oauthAuthorizationExpired: false,
 };
@@ -249,6 +196,14 @@ const simulatorPlugin: GhostPluginListItem = {
   id: 'ios-simulator',
   name: 'iOS Simulator',
   hostCapability: 'ios-simulator',
+};
+
+const mainViewPlugin: GhostPluginListItem = {
+  ...panelPlugin,
+  id: 'workspace',
+  name: 'Workspace',
+  hasMainView: true,
+  mainViewTitle: 'Workspace',
 };
 
 const marketPlugin: PluginMarketItem = {
@@ -352,6 +307,32 @@ describe('GhostPluginCard', () => {
     expect(onPrimary).toHaveBeenCalledTimes(1);
     expect(onManage).not.toHaveBeenCalled();
     expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
+  });
+
+  it('keeps the tab-panel action when the plugin also declares main-view', () => {
+    const onPrimary = vi.fn();
+    render(<GhostPluginCard item={mainViewPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
+  });
+
+  it('does not add a primary action for a main-view-only tool plugin', () => {
+    render(
+      <GhostPluginCard
+        item={{
+          ...toolPlugin,
+          hasMainView: true,
+          mainViewTitle: 'Workspace',
+        }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.page.agentInvoked')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
   });
 
   it('routes the manage icon to detail without firing the primary action', () => {

@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   parseInstalledGhostManifest,
   readInstalledGhostManifest,
+  readInstalledGhostManifestDigestFormats,
 } from '../installedGhostManifest.js';
+import { ghostManifestDigest } from '../plugin-market/ledger.js';
 
 const roots: string[] = [];
 
@@ -55,7 +57,7 @@ afterEach(() => {
 });
 
 describe('installed ghost manifest compatibility', () => {
-  it('keeps valid Manual manifests strict and does not strip them', () => {
+  it('keeps valid Manual manifests while normalizing legacy slots', () => {
     const raw = {
       ...manifest(),
       manual: {
@@ -65,7 +67,20 @@ describe('installed ghost manifest compatibility', () => {
 
     const parsed = parseInstalledGhostManifest(raw);
 
-    expect(parsed).toEqual({ ok: true, manifest: raw, legacyManualIgnored: false });
+    expect(parsed).toEqual({
+      ok: true,
+      manifest: {
+        schemaVersion: 2,
+        id: 'legacy-plugin',
+        name: 'Legacy plugin',
+        version: '1.0.0',
+        kind: 'chip',
+        entry: 'main.js',
+        tools: [{ name: 'run', description: 'Run the plugin' }],
+        manual: raw.manual,
+      },
+      legacyManualIgnored: false,
+    });
   });
 
   it.each([
@@ -116,5 +131,27 @@ describe('installed ghost manifest compatibility', () => {
     if (!parsed.ok) return;
     expect(parsed.manifest.id).toBe('legacy-plugin');
     expect(parsed.manifest).not.toHaveProperty('manual');
+  });
+
+  it('keeps the upgrade-time v2 digest candidate in the original slot order', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-v2-digest-'));
+    roots.push(root);
+    const raw = {
+      ...legacyBrokerManifest(),
+      slots: ['notify', 'network'],
+    };
+    fs.writeFileSync(path.join(root, 'ghost.json'), JSON.stringify(raw));
+
+    const parsed = parseInstalledGhostManifest(raw);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const legacy = { ...parsed.manifest, slots: ['notify', 'network'] };
+    delete legacy.notify;
+
+    const digestCandidates = readInstalledGhostManifestDigestFormats(root, 64 * 1024).map(
+      ghostManifestDigest,
+    );
+    expect(digestCandidates).toContain(ghostManifestDigest(legacy));
+    expect(parsed.manifest).toMatchObject({ notify: true });
   });
 });

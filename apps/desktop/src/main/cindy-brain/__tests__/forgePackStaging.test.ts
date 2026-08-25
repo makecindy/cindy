@@ -395,60 +395,6 @@ describe('createForgePackStagingController', () => {
     expect(sawLeaseAfterPin).toBe(true);
   });
 
-  it('does not mint a continuation that outlives the pack hard deadline after a freeze', () => {
-    const t1 = 1_700_000_000_000;
-    let clock = t1;
-    const ttlMs = 10 * 60 * 1000;
-    const issued = controller({
-      now: () => clock,
-      ttlMs,
-      randomId: (() => {
-        let n = 0;
-        return () =>
-          ['task-cont-freeze', 'ticket-cont-freeze', 'cont-freeze'][n++] ?? `extra-${n}`;
-      })(),
-    });
-    const staged = issued.stage({
-      buf: Buffer.from('continuation-freeze'),
-      manifestId: 'demo',
-      owner: OWNER_A,
-      operationKind: 'install',
-    });
-    clock = t1 + ttlMs - 1_000;
-    const ticket = issued.consumeMatchingStagingPath(staged.stagingPath);
-    expect(ticket).not.toBeNull();
-    expect(ticket?.packExpiresAt).toBe(t1 + ttlMs);
-    clock = t1 + ttlMs - 1_000 + 30 * 60 * 1000;
-    expect(issued.issueInstallContinuation(ticket!)).toBeNull();
-    expect(fs.existsSync(staged.stagingPath)).toBe(false);
-  });
-
-  it('does not delete staging if the continuation timeout fires before the ticket is registered', () => {
-    const issued = controller({
-      scheduleTimeout: (_ms, callback) => {
-        callback();
-        return { cancel() {} };
-      },
-      randomId: (() => {
-        let n = 0;
-        return () =>
-          ['task-sync-timeout', 'ticket-sync-timeout', 'cont-sync-timeout'][n++] ?? `extra-${n}`;
-      })(),
-    });
-    const staged = issued.stage({
-      buf: Buffer.from('sync-timeout'),
-      manifestId: 'demo',
-      owner: OWNER_A,
-      operationKind: 'install',
-    });
-    const ticket = issued.consumeMatchingStagingPath(staged.stagingPath);
-    expect(ticket).not.toBeNull();
-    const continuation = issued.issueInstallContinuation(ticket!);
-    expect(continuation).toBe('cont-sync-timeout');
-    expect(fs.existsSync(staged.stagingPath)).toBe(true);
-    expect(issued.consumeInstallContinuation(continuation!)).toEqual(ticket);
-  });
-
   it('writes the one-shot lease marker after hashing, not when the package file is created', () => {
     const dir = makeTempDir();
     const originalCreateHash = crypto.createHash;

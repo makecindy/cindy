@@ -27,8 +27,9 @@ function fakeGhost(
       version: '1.2.3',
       kind: 'chip',
       entry: 'main.js',
-      slots: agentSlot ? ['agent'] : ['card'],
-      ...(options.background ? { agent: { background: true } } : {}),
+      ...(agentSlot
+        ? { agent: options.background ? { background: true } : {} }
+        : { card: {} }),
     },
     dir: `/fake/${id}`,
     enabled: options.enabled ?? true,
@@ -74,7 +75,7 @@ function makeSlot(options: {
 }
 
 describe('agentSlot · 清单与模板守门', () => {
-  it('未申请 agent 槽或插件停用时拒绝', async () => {
+  it('未申请 agent 能力或插件停用时拒绝', async () => {
     const runner = acceptedRunner();
     const noSlot = makeSlot({ ghosts: [fakeGhost('alpha', { agentSlot: false })], runner });
     const disabled = makeSlot({ ghosts: [fakeGhost('alpha', { enabled: false })], runner });

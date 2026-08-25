@@ -1377,6 +1377,13 @@ describe('remote sessions share the same permission semantics', () => {
         denialMessage:
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
       },
+      {
+        toolNamePrefix: 'AskUserQuestion',
+        sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
     ]);
     await expect(
       natural.onApprovalRequest({
@@ -1486,7 +1493,7 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       remote.onApprovalRequest({
         requestId: 'r-user-mcp-collision',
@@ -1568,7 +1575,7 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       failed.onApprovalRequest({
         requestId: 'r-failed-settings-mcp-collision',

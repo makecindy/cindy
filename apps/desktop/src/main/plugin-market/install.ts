@@ -15,19 +15,24 @@ import crypto from 'node:crypto';
 import { app } from 'electron';
 
 import {
+  ghostNetworkAuthorizationWithinCap,
+  ghostNodeSecretAuthorizationWithinCap,
+  ghostSetupAuthorizationWithinCap,
+  ghostSettingsUiWithinCap,
+  ghostSubscribeAuthorizationWithinCap,
+  ghostToolParametersWithinCap,
+  ghostUnknownV3FieldsWithinCap,
+  unreviewedGhostPermissionItems,
   validateGhostManifest,
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
-import type {
-  PluginMarketItemSource,
-  PluginMarketPackageReviewFacts,
-} from '../../shared/pluginMarket.js';
 import {
+  getGhostManager,
   installOrUpdateMarketGhostPackage,
   rejectReservedGhostIdForCustomMarket,
 } from '../cindy-brain/index.js';
-import { GhostPackagePermissionReviewRequiredError } from '../cindy-brain/packagePermissionReview.js';
+import type { PluginMarketInstallResult } from '../../shared/pluginMarket.js';
 import { packGhostDirToFile } from '../cindy-brain/forge.js';
 import { createLogger } from '../logger.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
@@ -41,8 +46,8 @@ import {
 /**
  * 把插件目录装成运行中的 Ghost。
  *
- * Renderer 不再批准发现阶段的目录 manifest。这里先安全打包，再让 Main
- * 从实际 `.cindy` 解析 canonical manifest；确认和落位始终绑定同一个临时包。
+ * 这里先安全打包，再让 Main 从实际 `.cindy` 解析 canonical manifest；
+ * 校验和落位始终绑定同一个临时包。
  */
 const log = createLogger('plugin-market-install');
 
@@ -59,19 +64,14 @@ function sanitizeInstallDetail(message: string): string {
 export async function installCustomMarketPlugin(input: {
   pluginDir: string;
   expected?: GhostManifest;
-  /** 更新时把审阅所绑定的 Host receipt token 贯穿到最终安装出口。 */
+  /** 更新时把发起操作时读取的 Host receipt token 贯穿到最终安装出口。 */
   expectedInstalledApproval?: string;
   expectedGhostId: string;
   expectedVersion: string;
-  sourceType: Extract<PluginMarketItemSource, 'git-market' | 'local-market'>;
-  permissionBaselineManifest?: PluginMarketPackageReviewFacts['manifest'];
-  reviewPackagePermissions?: (
-    facts: PluginMarketPackageReviewFacts,
-  ) => Promise<boolean>;
   /**
    * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
-   * 自定义市场按调用方捕获的账户审阅 manifest;打包是异步的,装出前必须
-   * 重新确认会话未漂移,避免把 A 审阅的插件装进当前账户 B 的运行时。
+   * 调用方按当前账户捕获市场 manifest;打包是异步的,装出前必须重新确认
+   * 会话未漂移,避免把账户 A 选择的插件装进当前账户 B 的运行时。
    * 这里同时复核当前账号、所选来源和运行时已安装插件事实。
    */
   beforeCommit?: () => void | Promise<void>;
@@ -89,7 +89,7 @@ export async function installCustomMarketPlugin(input: {
    */
   withCommitLock?: <T>(fn: () => Promise<T>) => Promise<T>;
   /**
-   * 落位成功后、仍在 `withCommitLock` 内执行的溯源写入钩。
+   * 落位成功后、仍在 `withCommitLock` 与 owner mutation lease 内执行的溯源写入钩。
    *
    * 账本写入必须与落位同锁:放在锁外时,另一条路径(本地 .cindy 装入/更新)可以
    * 插在"包已落位"与"写下溯源"之间换掉同 id 的包,账本随后认领一个其实已被替换
@@ -97,9 +97,9 @@ export async function installCustomMarketPlugin(input: {
    */
   afterCommit?: (
     installed: InstalledGhost,
-    packagedManifest: PluginMarketPackageReviewFacts['manifest'],
+    packagedManifest: GhostManifest,
   ) => Promise<void>;
-}): Promise<InstalledGhost | null> {
+}): Promise<PluginMarketInstallResult> {
   // input.pluginDir 是发现层已 realpath、且已校验落在市场根内的规范路径。
   // 发现之后、打包之前,若插件目录或其某个父目录被换成指向市场外的符号链接,
   // 重新 realpath 会解析到别处——只要外部目录留着同样的 ghost.json,清单摘要
@@ -176,27 +176,48 @@ export async function installCustomMarketPlugin(input: {
       );
     }
     // 唯一防篡改防线:比对实际打进包的 manifest,而非打包前磁盘上的 ghost.json。
-    // 堵住"前置比对通过后、打包读取文件前"目录被改(保持 id/version 却新增
-    // 权限声明)的窗口——装的就是 packed.manifest,必须以它为准。
-    // expected 只在校验流程显式提供了用户审阅过的清单时做防篡改比对;
-    // 来源隔离路径(permissionPolicy)由 expectedGhostId/expectedVersion +
-    // permissionBaselineManifest 在装出前复核。
+    // 堵住前置比对通过后目录被改的窗口；expected 存在时还要与调用方选中的
+    // 市场条目完全一致。
     if (
       input.expected !== undefined &&
       JSON.stringify(packed.manifest) !== JSON.stringify(input.expected)
     ) {
       throwIpcError(
         'PRECONDITION_FAILED',
-        'Plugin changed after permission review',
+        'Plugin changed after selection',
       );
     }
-    const permissionPolicy = { mode: 'manual' as const, sourceType: input.sourceType };
-    // 装出前最后防线:打包期间账号、所选来源或运行时插件状态都可能已变化。
-    // 复核与落位必须在同一把锁内完成,否则复核结论会在落位前过期。
-    const commit = async (
-      approval?: Pick<PluginMarketPackageReviewFacts, 'packageSha256' | 'installedBaseline'>,
-    ): Promise<InstalledGhost> => {
-      const run = async (): Promise<InstalledGhost> => {
+    const inspected = await getGhostManager().inspect(tempPath);
+    if (!('rejection' in inspected)) {
+      if (
+        inspected.canonicalManifest.id !== input.expectedGhostId ||
+        inspected.canonicalManifest.version !== input.expectedVersion
+      ) {
+        throwIpcError('GHOST_FILE_INVALID', 'The packaged Plugin identity changed');
+      }
+      const extraCapabilities = unreviewedGhostPermissionItems(
+        validated.manifest,
+        undefined,
+        inspected.canonicalManifest,
+      );
+      if (
+        extraCapabilities.length > 0 ||
+        !ghostNetworkAuthorizationWithinCap(validated.manifest, inspected.canonicalManifest) ||
+        !ghostNodeSecretAuthorizationWithinCap(validated.manifest, inspected.canonicalManifest) ||
+        !ghostSetupAuthorizationWithinCap(validated.manifest, inspected.canonicalManifest) ||
+        !ghostSettingsUiWithinCap(validated.manifest, inspected.canonicalManifest) ||
+        !ghostSubscribeAuthorizationWithinCap(validated.manifest, inspected.canonicalManifest) ||
+        !ghostToolParametersWithinCap(validated.manifest, inspected.canonicalManifest) ||
+        !ghostUnknownV3FieldsWithinCap(validated.manifest, inspected.canonicalManifest)
+      ) {
+        throwIpcError(
+          'GHOST_FILE_INVALID',
+          'The packaged Plugin capabilities exceed the selected market manifest',
+        );
+      }
+    }
+    const commit = async (): Promise<PluginMarketInstallResult> => {
+      const run = async (): Promise<PluginMarketInstallResult> => {
         await input.beforeCommit?.();
         // 自定义来源已经把 Renderer 审阅的本地清单与实际打包清单逐字节绑定，
         // 不再进入官方市场“下载真实包后复核”的分支。
@@ -205,21 +226,11 @@ export async function installCustomMarketPlugin(input: {
           // 打包前活目录里的值，否则目录在打包窗口变化时会把另一个插件装入。
           ghostId: input.expectedGhostId,
           version: input.expectedVersion,
-          permissionPolicy,
-          ...(input.permissionBaselineManifest
-            ? { permissionBaselineManifest: input.permissionBaselineManifest }
-            : {}),
-          ...(input.expected ? { reviewedManifest: input.expected } : {}),
+          // 发现时读到的规范化 Manifest 是这次安装允许的能力上限。打包窗口
+          // 中目录若发生能力扩张，Host 会按真实包不一致直接拒绝。
+          manifestCap: validated.manifest,
           ...(input.expectedInstalledApproval
             ? { expectedInstalledApproval: input.expectedInstalledApproval }
-            : {}),
-          ...(approval
-            ? {
-                approvedPackageSha256: approval.packageSha256,
-                ...(approval.installedBaseline !== null
-                  ? { reviewedBaseline: approval.installedBaseline }
-                  : {}),
-              }
             : {}),
           ...(input.beforePackagePlacement
             ? { beforeCommitInLock: input.beforePackagePlacement }
@@ -227,28 +238,18 @@ export async function installCustomMarketPlugin(input: {
           ...(input.onPackagePlaced
             ? { onPackagePlacedInLock: input.onPackagePlaced }
             : {}),
+          ...(input.afterCommit
+            ? {
+                afterCommitInLock: (committed) =>
+                  input.afterCommit!(committed, packed.manifest),
+              }
+            : {}),
         });
-        // 溯源写入与落位同锁(见 afterCommit 注释)。
-        await input.afterCommit?.(installed, packed.manifest);
-        return installed;
+        return { ghost: installed };
       };
       return input.withCommitLock ? input.withCommitLock(run) : run();
     };
-
-    let review: PluginMarketPackageReviewFacts;
-    try {
-      // 首装或扩权会在任何运行时写入前暂停；无扩权更新则在同一锁内直接落位。
-      return await commit();
-    } catch (error) {
-      if (!(error instanceof GhostPackagePermissionReviewRequiredError)) throw error;
-      review = error.review;
-    }
-    const approved = await input.reviewPackagePermissions?.(review);
-    if (approved !== true) return null;
-
-    // 确认返回后重新取得来源/ghost 锁，复核来源、当前安装基线与真实包 SHA。
-    // 确认期间不持锁，取消或窗口销毁可立即结束并清理临时包。
-    return await commit(review);
+    return await commit();
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
   }

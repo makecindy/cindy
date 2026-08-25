@@ -47,7 +47,7 @@ export type GhostFirstPartyBasis =
   | 'builtin-official'
   | 'market-public'
   | 'market-organization-current'
-  | 'local-current-org-prefix'
+  | 'legacy-forge-current-org-prefix'
   | 'denied-alias'
   | 'denied-foreign-org'
   | 'denied-unknown-origin';
@@ -80,11 +80,7 @@ export interface GhostFirstPartyFacts {
   builtin: boolean;
   marketRecord: GhostFirstPartyMarketRecord | null;
   currentOrganization: GhostFirstPartyCurrentOrganization | null;
-  /**
-   * Authorization-time install origin from `effectiveInstallOrigin(receipt)`.
-   * Missing / unreadable receipts are `manual` (fail-closed, equals today).
-   * Local org-prefix packages only receive Broker when this is `agent-forge`.
-   */
+  /** 仅来自升级前 receipt；新安装恒为 manual。 */
   installOrigin: 'manual' | 'agent-forge';
 }
 
@@ -193,14 +189,11 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
       return allow('market-organization-current', false);
     }
     if (
+      facts.installOrigin === 'agent-forge' &&
       (record.source === 'git-market' || record.source === 'local-market') &&
       matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)
     ) {
-      // Custom-market rows are not a forge install. Granting Broker here would
-      // silently raise privilege for packages that today's install gate rejects.
-      return facts.installOrigin === 'agent-forge'
-        ? allow('local-current-org-prefix', false)
-        : deny('denied-unknown-origin');
+      return allow('legacy-forge-current-org-prefix', false);
     }
     return deny('denied-unknown-origin');
   }
@@ -209,7 +202,7 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
     facts.installOrigin === 'agent-forge' &&
     matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)
   ) {
-    return allow('local-current-org-prefix', false);
+    return allow('legacy-forge-current-org-prefix', false);
   }
 
   return deny('denied-unknown-origin');

@@ -486,7 +486,7 @@ export class GhostNodeRuntimeBroker {
   /** main.js 的 node-request 入口。 */
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeNodeResult> {
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('node') || !ghost.manifest.node) {
+    if (!ghost?.enabled || !ghost.manifest.node) {
       return errorResult('PERMISSION_DENIED', '插件未申请本地 Node 权限，或当前未启用');
     }
     // getGhost 确认插件当前已启用——这是按需插件的"后更新/重启边界",

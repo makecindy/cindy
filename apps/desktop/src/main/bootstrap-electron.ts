@@ -255,7 +255,6 @@ import {
   stageLocalFileToCache,
   sweepStagedChatAttachmentsOnStartup,
 } from './file-browser/remote-file-cache';
-import { sweepStartupDraftImages } from './imageCacheOrphanSweep';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import { legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import * as videoCacheStore from './videoCacheStore';
@@ -379,6 +378,7 @@ import {
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
+import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
@@ -684,6 +684,7 @@ import {
   resetCacheForNewDb as resetChatEmbedderCache,
 } from './embedders/chat-history-embedder.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
+import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
 import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
 import { disposeDesktopContactsManager } from './maker-host/maker-contacts-host.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
@@ -1587,6 +1588,14 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     // 后续 owner 的正常收尾写全部吞掉,中断横幅会在每个正常完成的任务上误弹。
     const releaseEndedSuppression = beginSessionTurnEndedSuppression();
     try {
+      // GoalController captures the Maker and owner DB at construction time.
+      // Dispose it before replacing the Maker so a relogin cannot dispatch
+      // goals through a shutting-down runtime from the previous account.
+      try {
+        await resetGoalController();
+      } catch (err) {
+        authBoundaryLog.error(`resetGoalController on ${reason} failed (non-fatal):`, err);
+      }
     // Same fence, same ordering argument, as quit and the update relaunch: raised
     // before `maker.shutdown` so it covers the shutdown *and* the sweep below.
     // `Maker.shutdown` reports per-session detach failures rather than throwing,
@@ -1920,7 +1929,7 @@ function isIOSSimulatorPluginActive(ghosts = getGhostManager().list()): boolean 
   return ghosts.some(
     (ghost) =>
       ghost.enabled === true &&
-      ghost.manifest.slots.includes('ios-simulator') &&
+      ghost.manifest.iosSimulator === true &&
       isGhostAvailableForActiveSession(ghost.manifest.id),
   );
 }
@@ -3093,6 +3102,7 @@ app.on('browser-window-focus', (_event, win) => {
   const focusedAppContent = isAppContentWindow(win);
   syncAppFocusState(focusedAppContent);
   if (focusedAppContent) {
+    syncPluginMarketForActiveOwner(30_000);
     // OAuth and system settings may complete outside Cindy. Focus is a
     // metadata-only fallback wake-up: each pending plugin is re-assessed, but
     // no stored value crosses the change bus.
@@ -3719,6 +3729,32 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
+let pluginMarketSyncInFlightScope: string | null = null;
+let lastPluginMarketSyncScope: string | null = null;
+let lastPluginMarketSyncAt = 0;
+let pluginMarketPeriodicSyncTimer: ReturnType<typeof setInterval> | null = null;
+const PLUGIN_MARKET_PERIODIC_SYNC_MS = 30 * 60 * 1000;
+
+/** Run market discovery and automatic updates for the current stable owner. */
+function syncPluginMarketForActiveOwner(minIntervalMs = 0): void {
+  const session = getActiveAppSession();
+  if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;
+  const scope = activeOwnerScopeKey();
+  if (scope === pluginMarketSyncInFlightScope) return;
+  const now = Date.now();
+  if (
+    scope === lastPluginMarketSyncScope &&
+    now - lastPluginMarketSyncAt < minIntervalMs
+  ) {
+    return;
+  }
+  pluginMarketSyncInFlightScope = scope;
+  lastPluginMarketSyncScope = scope;
+  lastPluginMarketSyncAt = now;
+  void syncDefaultMarketPlugins().finally(() => {
+    if (pluginMarketSyncInFlightScope === scope) pluginMarketSyncInFlightScope = null;
+  });
+}
 
 function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
@@ -5271,6 +5307,7 @@ const registerIpcHandlers = () => {
         onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+      registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();
       registerMakerPlanWriteIpc();
@@ -5949,6 +5986,11 @@ const registerIpcHandlers = () => {
   // 默认插件同步不能依赖用户先打开插件页。启动时本地 owner 已经稳定则立刻
   // 复用市场快照；云端登录/切号的通知可能早于 owner boundary 释放，因此
   // 延迟到当前调用栈结束后再按已提交的新 owner 补跑一次。
+  pluginMarketPeriodicSyncTimer ??= setInterval(
+    () => syncPluginMarketForActiveOwner(PLUGIN_MARKET_PERIODIC_SYNC_MS),
+    PLUGIN_MARKET_PERIODIC_SYNC_MS,
+  );
+  pluginMarketPeriodicSyncTimer.unref();
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
     'dialog:show-open-directory',
@@ -7006,6 +7048,19 @@ const registerIpcHandlers = () => {
       getQueueScanTexts: collectAgentInputQueueScanTexts,
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
+      openLegacyImagesDir: async () => {
+        const rootDir = imageCacheStore.getCacheRoot();
+        try {
+          const stat = await fs.promises.lstat(rootDir);
+          if (!stat.isDirectory()) return false;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+          throw err;
+        }
+        const error = await shell.openPath(rootDir);
+        if (error) throw new Error(error);
+        return true;
+      },
     });
     ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
     ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>
@@ -7025,6 +7080,10 @@ const registerIpcHandlers = () => {
       ) => storageHandlers.cleanup(params),
     );
     ipcMain.handle('cindy-media:storage-reconcile', () => storageHandlers.reconcile());
+    ipcMain.handle('cindy-media:legacy-images-open-dir', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.openLegacyImagesDir();
+    });
   }
 
   // F5: SDK send-time temporary base64 read (renderer-initiated; main-initiated
@@ -7503,7 +7562,7 @@ app.on('ready', async () => {
       // 必须先 await ensureLifecycleDbClient(内部 await createDbClient → worker
       // spawn + db open + migration scan + smoke,约 1-2s),把 client 经
       // setCurrentDbClient 暴露给全局 getDbClient() 之后,后续 attemptStartScheduler /
-      // attemptStartEmbeddingHost / sweepStartupDraftImages 才能拿到 ready 的 DbClient。
+      // attemptStartEmbeddingHost 等后续启动任务才能拿到 ready 的 DbClient。
       //
       // 历史:MR2.0 时这里是 fire-and-forget,scheduler/embedding 走老 getDrizzle/getRawDb
       // 路径不受影响。MR2.2 把 158 callsite 切到 DbClient 后,fire-and-forget 让后续
@@ -7803,23 +7862,6 @@ app.on('ready', async () => {
                 elapsedMs: Math.round(performance.now() - startedAt),
               });
             }
-            void sweepStartupDraftImages({
-              dbClient: getDbClient(),
-              processStartedAtMs: PROCESS_STARTED_AT_MS,
-            })
-              .then((result) => {
-                if (result.removed === 0 && result.removedDanglingMeta === 0 && result.errors === 0)
-                  return;
-                createLogger('image-cache-orphan-sweep').info(
-                  'startup draft image sweep completed',
-                  result,
-                );
-              })
-              .catch((err) => {
-                createLogger('image-cache-orphan-sweep').warn('startup draft image sweep failed', {
-                  error: err instanceof Error ? err.message : String(err),
-                });
-              });
           },
           (err) => {
             accountSwitchLog.warn('account provider readiness rejected unexpectedly', {
@@ -8055,6 +8097,7 @@ app.on('ready', async () => {
   powerMonitor.on('resume', () => {
     authManager.handleResume();
     handleProviderModelSystemResume();
+    syncPluginMarketForActiveOwner(30_000);
     // device-link:睡醒立即重连 relay,不干等退避计时器 + 心跳判死(最坏合计 ~75s)。
     handleDeviceLinkSystemResume();
   });
@@ -8099,6 +8142,14 @@ app.on('ready', async () => {
 // 的 turn"伪装成正常收尾,重启后中断卡不出现(只剩硬崩溃能触发)。sync 阶段先于
 // async 的 shutdown-maker,顺序有保证。
 onQuit(
+  'plugin-market-periodic-sync',
+  () => {
+    if (pluginMarketPeriodicSyncTimer) clearInterval(pluginMarketPeriodicSyncTimer);
+    pluginMarketPeriodicSyncTimer = null;
+  },
+  'sync',
+);
+onQuit(
   'session-active-turn-freeze',
   () => {
     freezeSessionActiveTurnMarkers();
@@ -8113,6 +8164,7 @@ onQuit(
   'sync',
 );
 onQuit('auth-manager', () => authManager.dispose(), 'sync');
+onQuit('windows-process-scan-workers', disposeWindowsProcessScanWorkers, 'sync');
 onQuit('resource-usage-window', () => resourceUsageWindowController.dispose(), 'sync');
 onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
 onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');

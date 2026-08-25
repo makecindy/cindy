@@ -63,7 +63,7 @@ export interface LoadGhostFirstPartyFactsLoaderOptions {
   /** Missing or legacy package evidence must return null. */
   readApprovedPackageSha256(ghostId: string): string | null;
   lookupOrganizationPrefix(orgId: string): OrganizationPrefixLookup;
-  /** Missing / unreadable receipts must return `manual`. */
+  /** 新安装返回 manual；仅旧 receipt 会返回 agent-forge。 */
   readInstallOrigin(ghostId: string): 'manual' | 'agent-forge';
 }
 

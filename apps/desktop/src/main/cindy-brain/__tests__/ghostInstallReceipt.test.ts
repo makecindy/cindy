@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost';
+import { validateGhostManifest } from '../../../shared/ghost';
 
 import {
   createGhostInstallReceipt,
@@ -20,8 +20,9 @@ describe('GhostInstallReceiptStore cleanup', () => {
 
   beforeEach(async () => {
     workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-receipt-cleanup-'));
-    stateRoot = path.join(workDir, 'state');
-    await fs.promises.mkdir(stateRoot);
+    const rawStateRoot = path.join(workDir, 'state');
+    await fs.promises.mkdir(rawStateRoot);
+    stateRoot = await fs.promises.realpath(rawStateRoot);
     store = new GhostInstallReceiptStore(() => stateRoot, async ({ parentDir, targetName, operation }) => {
       if (operation === 'remove') await fs.promises.rm(path.join(parentDir, targetName), { recursive: true, force: true });
     });
@@ -228,6 +229,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   });
 
+  it('preserves only the legacy Forge origin as an effective authorization fact', async () => {
+    await store.write(
+      createGhostInstallReceipt({
+        ...createSetupReceipt(),
+        installOrigin: 'agent-forge',
+      }),
+    );
+
+    const read = store.read('hello');
+    expect(read.state).toBe('approved');
+    if (read.state !== 'approved') return;
+    expect(effectiveInstallOrigin(read.receipt)).toBe('agent-forge');
+    expect(effectiveInstallOrigin({ installOrigin: 'future-origin' })).toBe('manual');
+  });
+
   it('treats only a missing migration marker as absent', () => {
     expect(store.hasMigrationMarker('hello')).toBe(false);
   });
@@ -297,186 +313,5 @@ describe('GhostInstallReceiptStore cleanup', () => {
       'keep',
     );
     expect(fs.existsSync(path.join(parent, 'stale'))).toBe(true);
-  });
-});
-
-describe('GhostInstallReceipt installOrigin', () => {
-  function input(installOrigin?: string) {
-    const manifest: GhostManifest = {
-      schemaVersion: 2,
-      id: 'hello',
-      name: 'Hello',
-      version: '1.0.0',
-      kind: 'chip',
-      entry: 'main.js',
-      slots: ['tool'],
-      tools: [{ name: 'do_thing', description: 'Do something' }],
-    };
-    return {
-      manifest,
-      localeResources: {},
-      enabled: true,
-      trust: {
-        level: 'unverified' as const,
-        publisherSigned: false,
-        publisherVerified: false,
-        reviewed: false,
-      },
-      skillContentSha256: {},
-      ...(installOrigin !== undefined ? { installOrigin } : {}),
-    };
-  }
-
-  it('treats a v2 receipt without installOrigin as approved manual', () => {
-    const receipt = createGhostInstallReceipt(input());
-    expect(receipt.schemaVersion).toBe(2);
-    expect(receipt.installOrigin).toBeUndefined();
-    expect(effectiveInstallOrigin(receipt)).toBe('manual');
-    expect(JSON.stringify(receipt)).not.toContain('installOrigin');
-  });
-
-  it('keeps an unknown bounded origin and does not use it for authorization', () => {
-    const receipt = createGhostInstallReceipt(input('future-origin'));
-    expect(receipt.installOrigin).toBe('future-origin');
-    expect(effectiveInstallOrigin(receipt)).toBe('manual');
-    const rewritten = createGhostInstallReceipt({
-      ...input(),
-      enabled: false,
-      installOrigin: receipt.installOrigin,
-    });
-    expect(rewritten.installOrigin).toBe('future-origin');
-    expect(rewritten.enabled).toBe(false);
-    expect(effectiveInstallOrigin(rewritten)).toBe('manual');
-  });
-
-  it('writes this-operation origin instead of inheriting the previous receipt', () => {
-    expect(createGhostInstallReceipt(input('manual')).installOrigin).toBe('manual');
-    expect(createGhostInstallReceipt(input('agent-forge')).installOrigin).toBe('agent-forge');
-    expect(createGhostInstallReceipt(input()).installOrigin).toBeUndefined();
-    expect(effectiveInstallOrigin(createGhostInstallReceipt(input()))).toBe('manual');
-  });
-
-  it('reads a v2 disk receipt without installOrigin as approved manual', async () => {
-    const workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-receipt-origin-'));
-    try {
-      const rawState = path.join(workDir, 'state');
-      await fs.promises.mkdir(rawState);
-      const stateRoot = await fs.promises.realpath(rawState);
-      const store = new GhostInstallReceiptStore(() => stateRoot, async ({ parentDir, targetName, operation }) => {
-        if (operation === 'remove') {
-          await fs.promises.rm(path.join(parentDir, targetName), { recursive: true, force: true });
-        }
-      });
-      const legacyV2 = {
-        schemaVersion: 2,
-        id: 'hello',
-        revision: '00000000-0000-4000-8000-000000000001',
-        manifest: {
-          schemaVersion: 2,
-          id: 'hello',
-          name: 'Hello',
-          version: '1.0.0',
-          kind: 'chip',
-          entry: 'main.js',
-          slots: ['tool'],
-          tools: [{ name: 'do_thing', description: 'Do something' }],
-        },
-        localeResources: {},
-        enabled: true,
-        trust: {
-          level: 'unverified',
-          publisherSigned: false,
-          publisherVerified: false,
-          reviewed: false,
-        },
-        skillContentSha256: {},
-      };
-      expect(JSON.stringify(legacyV2)).not.toContain('installOrigin');
-      await fs.promises.writeFile(
-        path.join(stateRoot, 'hello.json'),
-        `${JSON.stringify(legacyV2, null, 2)}\n`,
-        'utf8',
-      );
-      const read = store.read('hello');
-      expect(read.state).toBe('approved');
-      if (read.state !== 'approved') return;
-      expect(read.receipt.schemaVersion).toBe(2);
-      expect(read.receipt.installOrigin).toBeUndefined();
-      expect(effectiveInstallOrigin(read.receipt)).toBe('manual');
-
-      await store.write(createGhostInstallReceipt(input('agent-forge')));
-      const written = store.read('hello');
-      expect(written.state).toBe('approved');
-      if (written.state !== 'approved') return;
-      expect(written.receipt.installOrigin).toBe('agent-forge');
-    } finally {
-      await fs.promises.rm(workDir, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects writer values the parser would not read back', () => {
-    expect(() => createGhostInstallReceipt(input(''))).toThrow('installOrigin');
-    expect(() => createGhostInstallReceipt(input('x'.repeat(65)))).toThrow('installOrigin');
-    expect(() => createGhostInstallReceipt(input('Bad_Origin'))).toThrow('installOrigin');
-    expect(createGhostInstallReceipt(input('future-origin')).installOrigin).toBe('future-origin');
-  });
-
-  it('reads unknown-but-bounded origins as approved manual and malformed origins as invalid', async () => {
-    const workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-receipt-origin-parse-'));
-    try {
-      const rawState = path.join(workDir, 'state');
-      await fs.promises.mkdir(rawState);
-      const stateRoot = await fs.promises.realpath(rawState);
-      const store = new GhostInstallReceiptStore(() => stateRoot, async ({ parentDir, targetName, operation }) => {
-        if (operation === 'remove') {
-          await fs.promises.rm(path.join(parentDir, targetName), { recursive: true, force: true });
-        }
-      });
-      const base = {
-        schemaVersion: 2,
-        id: 'hello',
-        revision: '00000000-0000-4000-8000-000000000001',
-        manifest: {
-          schemaVersion: 2,
-          id: 'hello',
-          name: 'Hello',
-          version: '1.0.0',
-          kind: 'chip',
-          entry: 'main.js',
-          slots: ['tool'],
-          tools: [{ name: 'do_thing', description: 'Do something' }],
-        },
-        localeResources: {},
-        enabled: true,
-        trust: {
-          level: 'unverified',
-          publisherSigned: false,
-          publisherVerified: false,
-          reviewed: false,
-        },
-        skillContentSha256: {},
-      };
-      await fs.promises.writeFile(
-        path.join(stateRoot, 'hello.json'),
-        `${JSON.stringify({ ...base, installOrigin: 'future-origin' }, null, 2)}\n`,
-        'utf8',
-      );
-      const unknown = store.read('hello');
-      expect(unknown.state).toBe('approved');
-      if (unknown.state !== 'approved') return;
-      expect(unknown.receipt.installOrigin).toBe('future-origin');
-      expect(effectiveInstallOrigin(unknown.receipt)).toBe('manual');
-
-      for (const installOrigin of [{ kind: 'agent-forge' }, '', 'x'.repeat(65), 'Bad Origin']) {
-        await fs.promises.writeFile(
-          path.join(stateRoot, 'hello.json'),
-          `${JSON.stringify({ ...base, installOrigin }, null, 2)}\n`,
-          'utf8',
-        );
-        expect(store.read('hello').state, String(installOrigin)).toBe('invalid');
-      }
-    } finally {
-      await fs.promises.rm(workDir, { recursive: true, force: true });
-    }
   });
 });

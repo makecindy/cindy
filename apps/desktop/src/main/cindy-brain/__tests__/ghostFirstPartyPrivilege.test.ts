@@ -294,28 +294,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     });
   });
 
-  it('gives a forge-built local package broker when the id matches the current org prefix, not a manual install', () => {
-    const shared = {
-      ghostId: 'acme-feishu',
-      currentOrganization: CURRENT_ORG,
-    } as const;
-    expect(
-      resolveGhostFirstPartyPrivilege(facts({ ...shared, installOrigin: 'agent-forge' })),
-    ).toEqual({
-      brokerEligible: true,
-      hostPrimitiveEligible: false,
-      basis: 'local-current-org-prefix',
-    });
-    expect(
-      resolveGhostFirstPartyPrivilege(facts({ ...shared, installOrigin: 'manual' })),
-    ).toEqual({
-      brokerEligible: false,
-      hostPrimitiveEligible: false,
-      basis: 'denied-unknown-origin',
-    });
-  });
-
-  it('does not raise a custom-market package to broker unless it was forge-installed', () => {
+  it('does not raise a custom-market package to broker', () => {
     expect(
       resolveGhostFirstPartyPrivilege(
         facts({
@@ -326,7 +305,6 @@ describe('resolveGhostFirstPartyPrivilege', () => {
             source: 'local-market',
           }),
           currentOrganization: CURRENT_ORG,
-          installOrigin: 'manual',
         }),
       ),
     ).toEqual({
@@ -334,6 +312,45 @@ describe('resolveGhostFirstPartyPrivilege', () => {
       hostPrimitiveEligible: false,
       basis: 'denied-unknown-origin',
     });
+  });
+
+  it('keeps Broker only for a legacy Forge receipt under the current organization prefix', () => {
+    expect(
+      resolveGhostFirstPartyPrivilege(
+        facts({
+          ghostId: 'acme-feishu',
+          currentOrganization: CURRENT_ORG,
+          installOrigin: 'agent-forge',
+        }),
+      ),
+    ).toEqual({
+      brokerEligible: true,
+      hostPrimitiveEligible: false,
+      basis: 'legacy-forge-current-org-prefix',
+    });
+    expect(
+      resolveGhostFirstPartyPrivilege(
+        facts({
+          ghostId: 'acme-feishu',
+          marketRecord: market({
+            scope: 'personal',
+            organizationId: null,
+            source: 'local-market',
+          }),
+          currentOrganization: CURRENT_ORG,
+          installOrigin: 'agent-forge',
+        }),
+      ).brokerEligible,
+    ).toBe(true);
+    expect(
+      resolveGhostFirstPartyPrivilege(
+        facts({
+          ghostId: 'other-feishu',
+          currentOrganization: CURRENT_ORG,
+          installOrigin: 'agent-forge',
+        }),
+      ).brokerEligible,
+    ).toBe(false);
   });
 
   // 台账里有这条 id 但 installed 为 false 时,曾经会整段跳过市场分支、落到末尾那条
@@ -358,8 +375,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
         basis: 'denied-unknown-origin',
       });
     }
-    // 作者自测:从未发布过的 id 没有台账行。手动装仍 deny;只有 forge 装入
-    // 才走兜底放 Broker(见「forge-built local package」那条对照用例)。
+    // 作者自测:从未发布过的 id 没有台账行，本地装入仍然 deny。
   });
 
   it('keeps official-prefix broker even when facts are unavailable, and asks the resolver otherwise', () => {
@@ -377,20 +393,6 @@ describe('resolveGhostFirstPartyPrivilege', () => {
           facts: facts({
             ghostId: 'acme-feishu',
             currentOrganization: CURRENT_ORG,
-            installOrigin: 'agent-forge',
-          }),
-        },
-      ),
-    ).toBe(true);
-    expect(
-      authorizeGhostTokenBroker(
-        'acme-feishu',
-        {
-          kind: 'ready',
-          facts: facts({
-            ghostId: 'acme-feishu',
-            currentOrganization: CURRENT_ORG,
-            installOrigin: 'manual',
           }),
         },
       ),
@@ -402,7 +404,6 @@ describe('resolveGhostFirstPartyPrivilege', () => {
       ghostId: 'acme-feishu',
       marketRecord: market({ scope: 'organization', organizationId: 'org-acme' }),
       currentOrganization: CURRENT_ORG,
-      installOrigin: 'manual',
     });
     expect(authorizeGhostTokenBroker('acme-feishu', { kind: 'ready', facts: pendingOrgMarket })).toBe(
       true,
@@ -415,7 +416,6 @@ describe('resolveGhostFirstPartyPrivilege', () => {
           builtin: false,
           marketRecord: null,
           currentOrganization: null,
-          installOrigin: 'manual',
         }),
       }),
     ).toBe(true);

@@ -126,6 +126,9 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
       resolveAgentProcessRegistration: resolveAgentRegistration,
       selfPid,
       log,
+      // Windows 冷启 PowerShell 可达秒级；隐藏窗口预热首帧只等 app.getAppMetrics，
+      // Worker 扫描完成后由下一次 2s tick 补齐 agent 树。
+      deferOsScan: platform === 'win32',
     });
 
   const subscribers = new Set<WebContents>();

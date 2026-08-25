@@ -1,7 +1,7 @@
 /**
  * librarySqlService.ts — 主进程侧的插件 Library SQLite RPC 服务。
  * ---------------------------------------------------------------------------
- * 每个声明 library 槽的插件一个 LibrarySqlService 实例(槽层在 commit 4 装配):
+ * 每个声明 library 能力的插件一个 LibrarySqlService 实例(分派层装配):
  *   - 语句门在**发送前**执行(main 侧第一道,worker 内 core 复读第二道);
  *   - worker 经 worker_threads 拉起(脚本 = 构建产出的 libraryDbWorker.js,
  *     与 main 输出同目录;better-sqlite3 模块路径由调用方注入,解析方式与
