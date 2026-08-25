@@ -104,6 +104,7 @@ import {
   piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
   PiSubagentRunnerExitUnconfirmedError,
+  PiSubagentRunnerHostExitedError,
   recordPiSubagentRunnerFailure,
   resumePiSubagentRun,
   stopPiSubagentRunsForAccountBoundary,
@@ -962,6 +963,7 @@ export class PiAgent extends BaseAgent {
   private readonly failedStartupCleanups = new Map<string, FailedPiStartupCleanup>();
   private readonly inFlightStartups = new Set<Promise<AgentSessionHandle>>();
   private readonly subagentRunners = new Map<string, PiSubagentRunnerProcess>();
+  private readonly subagentRunnerExitErrors = new Map<string, string>();
   private disposeStarted = false;
 
   constructor(deps: AgentDeps) {
@@ -977,6 +979,7 @@ export class PiAgent extends BaseAgent {
     const runner = spawnRunner(request);
     this.subagentRunners.set(request.runId, runner);
     const recordFailure = (message: string): void => {
+      this.subagentRunnerExitErrors.set(request.runId, message);
       if (this.subagentRunners.get(request.runId) === runner) {
         this.subagentRunners.delete(request.runId);
       }
@@ -1102,7 +1105,7 @@ export class PiAgent extends BaseAgent {
   override async dispose(): Promise<void> {
     this.disposeStarted = true;
     const runnerSnapshot = Array.from(this.subagentRunners.entries());
-    await Promise.allSettled(
+    const runnerResults = await Promise.allSettled(
       runnerSnapshot.map(([runId, runner]) => this.requestSubagentRunnerExit(runner, runId)),
     );
     const startupSnapshot = Array.from(this.inFlightStartups);
@@ -1116,9 +1119,20 @@ export class PiAgent extends BaseAgent {
         this.retryFailedStartupCleanup(sessionId, entry),
       ),
     );
-    const errors = results.flatMap((result) =>
-      result.status === 'rejected' ? [result.reason] : [],
-    );
+    const errors = [
+      ...runnerResults.flatMap((result) => {
+        if (result.status === 'rejected') return [result.reason];
+        if (!result.value) {
+          return [new PiSubagentRunnerExitUnconfirmedError(
+            'PI Subagent runner did not confirm exit',
+          )];
+        }
+        return [];
+      }),
+      ...results.flatMap((result) =>
+        result.status === 'rejected' ? [result.reason] : [],
+      ),
+    ];
     if (errors.length > 0) {
       throw new AggregateError(errors, 'Pi startup process cleanup remains unconfirmed');
     }
@@ -3933,6 +3947,11 @@ export class PiAgent extends BaseAgent {
                   throw new Error('PI Subagent runner request does not belong to this task');
                 }
                 const runDir = path.join(subagentRunRoot, runId);
+                if (action === 'status') {
+                  const message = this.subagentRunnerExitErrors.get(runId);
+                  if (message) throw new PiSubagentRunnerHostExitedError(message);
+                  return true;
+                }
                 if (action === 'terminate') {
                   return this.terminateSubagentRunner(runId, runDir);
                 }
@@ -6088,7 +6107,7 @@ export class PiAgent extends BaseAgent {
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
       controlSubagentRunner: (
-        action: 'launch' | 'terminate',
+        action: 'launch' | 'terminate' | 'status',
         runId: string,
       ) => Promise<boolean>;
       emitExtensionNotification: (message: string, event?: PiRpcEvent) => void;
@@ -6142,7 +6161,9 @@ export class PiAgent extends BaseAgent {
             typeof event.placeholder === 'string' ? event.placeholder : '{}',
           ) as { action?: unknown; runId?: unknown };
           if (
-            (payload.action !== 'launch' && payload.action !== 'terminate')
+            (payload.action !== 'launch'
+              && payload.action !== 'terminate'
+              && payload.action !== 'status')
             || typeof payload.runId !== 'string'
             || !PI_SUBAGENT_RUN_ID_RE.test(payload.runId)
           ) {
@@ -6159,6 +6180,14 @@ export class PiAgent extends BaseAgent {
             ),
           });
         } catch (error) {
+          if (error instanceof PiSubagentRunnerHostExitedError) {
+            proc.send({
+              type: 'extension_ui_response',
+              id,
+              value: JSON.stringify({ ok: false, exited: true, error: error.message }),
+            });
+            return;
+          }
           this.deps.logger.warn('pi Subagent runner control failed', {
             sessionId: context.sessionId,
             message: error instanceof Error ? error.message : String(error),

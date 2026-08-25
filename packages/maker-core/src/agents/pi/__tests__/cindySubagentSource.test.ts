@@ -544,6 +544,14 @@ describe('cindy-subagent extension source', () => {
     expect(postSpawn).toBeGreaterThan(launch);
     expect(source.indexOf('PiSubagentRunnerExitUnconfirmedError', postSpawn))
       .toBeGreaterThan(postSpawn);
+    expect(source).toContain('PI Subagent runner did not confirm exit');
+    expect(source).toContain("action: 'launch' | 'terminate' | 'status'");
+  });
+
+  it('lets the foreground waiter observe a host exit when status.json cannot be written', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("await requestRunnerControl(ctx, 'status', launched.runId)");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('err.runnerExited');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('response.exited === true');
   });
 
   it('does not store an English resume prefix as the run title', () => {

@@ -560,9 +560,21 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
   const approvalDecisions = new Map();
   let stopWritten = false;
   let stopDeadline = 0;
+  let nextHostPoll = 0;
   for (;;) {
     let status;
     try { status = JSON.parse(readFileSync(join(launched.runDir, 'status.json'), 'utf8')); } catch (err) { status = null; }
+    if (Date.now() >= nextHostPoll) {
+      nextHostPoll = Date.now() + 1000;
+      try {
+        await requestRunnerControl(ctx, 'status', launched.runId);
+      } catch (err) {
+        if (err && err.runnerExited) {
+          const message = err instanceof Error ? err.message : String(err);
+          return launched.failureStatus(message);
+        }
+      }
+    }
     if (signal && signal.aborted && !stopWritten) {
       stopWritten = true;
       // Abort must be bounded exactly like the run deadline is. Without its own
@@ -733,6 +745,14 @@ async function requestRunnerControl(ctx, action, runId) {
   );
   let response;
   try { response = JSON.parse(typeof raw === 'string' ? raw : '{}'); } catch (err) { response = null; }
+  if (response && response.exited === true) {
+    throw Object.assign(
+      new Error(typeof response.error === 'string' && response.error
+        ? response.error
+        : 'Durable runner exited'),
+      { runnerExited: true },
+    );
+  }
   if (response && response.unconfirmed === true) {
     throw Object.assign(
       new Error('subagent: Cindy could not ' + action + ' the durable runner.'),

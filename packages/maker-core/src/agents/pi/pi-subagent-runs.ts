@@ -2324,6 +2324,15 @@ export class PiSubagentRunnerExitUnconfirmedError extends Error {
   }
 }
 
+/** Host saw the runner exit even if status.json could not be persisted. */
+export class PiSubagentRunnerHostExitedError extends Error {
+  readonly runnerExited = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'PiSubagentRunnerHostExitedError';
+  }
+}
+
 /** Persist a host-observed runner failure without overwriting a real terminal result. */
 export async function recordPiSubagentRunnerFailure(
   runDir: string,

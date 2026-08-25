@@ -110,8 +110,11 @@ function hostInput(f: Awaited<ReturnType<typeof fixture>>, permission = 'allow')
   const runners = new Map<string, ChildProcess>();
   return vi.fn(async (title: string, placeholder: string) => {
     if (title !== 'cindy:pi-subagent-runner') return permission;
-    const request = JSON.parse(placeholder) as { action: 'launch' | 'terminate'; runId: string };
+    const request = JSON.parse(placeholder) as { action: 'launch' | 'terminate' | 'status'; runId: string };
     const runDir = path.join(f.runRoot, request.runId);
+    if (request.action === 'status') {
+      return JSON.stringify({ ok: true });
+    }
     if (request.action === 'terminate') {
       const child = runners.get(request.runId);
       if (child) child.kill('SIGTERM');
