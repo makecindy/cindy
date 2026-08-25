@@ -998,6 +998,7 @@ export class PiAgent extends BaseAgent {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let timedOut = false;
       const finish = (error?: Error): void => {
         if (settled) return;
         settled = true;
@@ -1006,10 +1007,14 @@ export class PiAgent extends BaseAgent {
         else resolve();
       };
       const timer = setTimeout(() => {
-        runner.kill('SIGKILL');
-        finish(new Error('PI Subagent runner did not become ready'));
+        timedOut = true;
+        void this.requestSubagentRunnerExit(runner, request.runId).finally(() => {
+          finish(new Error('PI Subagent runner did not become ready'));
+        });
       }, 5_000);
-      runner.once('spawn', () => finish());
+      runner.once('spawn', () => {
+        if (!timedOut) finish();
+      });
       runner.once('error', (error) => finish(error));
       runner.once('exit', (code, signal) => {
         finish(new Error(
@@ -1020,18 +1025,16 @@ export class PiAgent extends BaseAgent {
     });
   }
 
-  private async terminateSubagentRunner(runId: string, runDir: string): Promise<boolean> {
-    const runner = this.subagentRunners.get(runId);
-    if (!runner) {
-      const status = (await listPiSubagentRuns(path.dirname(runDir))).find((entry) => entry.runId === runId);
-      return status ? killVerifiedPiSubagentRunner(status) : false;
-    }
+  private requestSubagentRunnerExit(
+    runner: PiSubagentRunnerProcess,
+    runId: string,
+  ): Promise<boolean> {
     const dropHandle = (): void => {
       if (this.subagentRunners.get(runId) === runner) {
         this.subagentRunners.delete(runId);
       }
     };
-    const confirmed = await new Promise<boolean>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       let settled = false;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (ok: boolean): void => {
@@ -1052,11 +1055,21 @@ export class PiAgent extends BaseAgent {
         runner.kill('SIGKILL');
         killTimer = setTimeout(() => finish(false), 200);
       }, 1_500);
+    }).then((confirmed) => {
+      // Unconfirmed exit keeps the handle so a later terminate or account-boundary
+      // sweep can still reach the live process. A delayed exit/close still drops it.
+      if (confirmed) dropHandle();
+      return confirmed;
     });
-    // Unconfirmed exit keeps the handle so a later terminate or account-boundary
-    // sweep can still reach the live process. A delayed exit/close still drops it.
-    if (confirmed) dropHandle();
-    return confirmed;
+  }
+
+  private async terminateSubagentRunner(runId: string, runDir: string): Promise<boolean> {
+    const runner = this.subagentRunners.get(runId);
+    if (!runner) {
+      const status = (await listPiSubagentRuns(path.dirname(runDir))).find((entry) => entry.runId === runId);
+      return status ? killVerifiedPiSubagentRunner(status) : false;
+    }
+    return this.requestSubagentRunnerExit(runner, runId);
   }
 
   private async retryFailedStartupCleanup(
