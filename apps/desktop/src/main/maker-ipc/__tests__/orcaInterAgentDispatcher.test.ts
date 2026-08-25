@@ -155,6 +155,116 @@ describe('Orca lead/worker dispatcher', () => {
     );
   });
 
+  it('prepares an unhealthy live session before direct send and does not reuse the closed handle', async () => {
+    const closed = { current: false };
+    const liveSession = createLiveSession(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const prepareUnhealthySession = vi.fn(async () => {
+      closed.current = true;
+      return true;
+    });
+    const h = createHarness({
+      getLiveSession: vi.fn(() => (closed.current ? null : liveSession)),
+      prepareUnhealthySession,
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Continue after compact failure',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'prepare-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
+    expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'target-session',
+      clientId: 'client-1',
+    }));
+    expect(liveSession.send).not.toHaveBeenCalled();
+  });
+
+  it('still sends through the live handle after prepare leaves it open', async () => {
+    const prepareUnhealthySession = vi.fn(async () => false);
+    const h = createHarness({ prepareUnhealthySession });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Healthy live send',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'healthy-prepare-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
+    expect(h.liveSession.send).toHaveBeenCalled();
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent live prepare/send on the per-session lock', async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let lockChain: Promise<unknown> = Promise.resolve();
+    let lockHeld = false;
+    let overlapping = false;
+    const withSendToSessionLock = async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> => {
+      const run = lockChain.then(async () => {
+        if (lockHeld) overlapping = true;
+        lockHeld = true;
+        try {
+          return await task();
+        } finally {
+          lockHeld = false;
+        }
+      });
+      lockChain = run.then(() => undefined, () => undefined);
+      return run;
+    };
+    const prepareUnhealthySession = vi.fn(async () => {
+      if (prepareUnhealthySession.mock.calls.length === 1) await firstGate;
+      return false;
+    });
+    const h = createHarness({
+      createId: vi.fn()
+        .mockReturnValueOnce('client-1')
+        .mockReturnValueOnce('client-2'),
+      withSendToSessionLock,
+      prepareUnhealthySession,
+    });
+
+    const first = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'First',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'lock-first' },
+    });
+    const second = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Second',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'lock-second' },
+    });
+    await vi.waitFor(() => {
+      expect(prepareUnhealthySession).toHaveBeenCalledTimes(1);
+    });
+    releaseFirst();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ ok: true, mode: 'dispatched', clientId: 'client-1' }),
+      expect.objectContaining({ ok: true, mode: 'dispatched', clientId: 'client-2' }),
+    ]);
+    expect(overlapping).toBe(false);
+    expect(prepareUnhealthySession).toHaveBeenCalledTimes(2);
+    expect(h.liveSession.send).toHaveBeenCalledTimes(2);
+  });
+
   it('delays queued accepted side effects until the coordinator accepted hook runs', async () => {
     const accepted = vi.fn();
     const h = createHarness({

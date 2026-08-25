@@ -69,9 +69,13 @@ import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observe
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider } from './session-provider-store.js';
 import {
+  buildRouteDecision,
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  resolveImplicitLocalBridgeRouteResolution,
+  resolveImplicitProviderOAuthRouteDecision,
   resolvePendingSessionRouteDecision,
+  resolveProviderRouteDecision,
   resolveSessionRouteDecision,
 } from './provider-route.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
@@ -103,6 +107,7 @@ import {
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
 
@@ -170,6 +175,28 @@ function refuseExclusiveXaiDefaultGateway(wireModel: string): RoutingDecision {
   };
 }
 
+function refuseAmbiguousImplicitProviderRoute(wireModel: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'provider_route_ambiguous',
+          code: 'provider_route_ambiguous',
+          message:
+            `model '${wireModel}' matches multiple connected Providers; retry after the session Provider is bound`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      res.end(payload);
+    },
+  };
+}
+
 function bridgedSubscriptionModel(wireModel: string): string {
   if (wireModel.startsWith(XAI_MODEL_PREFIX) || !isExclusiveXaiModelId(wireModel)) {
     return wireModel;
@@ -184,6 +211,26 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
     if (k.toLowerCase() === lower && typeof v === 'string' && v.length > 0) return v;
   }
   return null;
+}
+
+function unavailablePiProviderRoute(providerId: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'routing_error',
+          code: 'pi_provider_unavailable',
+          message: `PI provider route is unavailable: ${providerId}`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
 }
 
 /**
@@ -205,11 +252,12 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
 export function createModelRoutingTransform(): RoutingTransform {
   const route: RoutingTransform = (body, ctx) => {
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
+    const claimedPiSessionToken = headerValue(ctx.headers, 'x-cindy-pi-session-token');
     if (
       claimedPiSessionId
       && !authenticatePiProxySession(
         claimedPiSessionId,
-        headerValue(ctx.headers, 'x-cindy-pi-session-token'),
+        claimedPiSessionToken,
       )
     ) {
       // Loopback is not an authentication boundary: another local process can
@@ -238,28 +286,31 @@ export function createModelRoutingTransform(): RoutingTransform {
       ? headerValue(ctx.headers, 'x-cindy-pi-provider-id')
       : null;
     const registeredPiProviderId = piSessionId
-      ? getPiProxySessionProvider(piSessionId)
+      ? getPiProxySessionProvider(piSessionId, claimedPiSessionToken)
       : null;
+    const subagentRoute = piSessionId
+      ? isPiProxySubagentRoute(piSessionId, claimedPiSessionToken)
+      : false;
     const selectedPiProviderId = piSessionId ? getSessionProvider(piSessionId) : null;
     if (
       piSessionId
       && (
         piProviderId !== registeredPiProviderId
-        || (
+        || (!subagentRoute && (
           piProviderId !== null
           && selectedPiProviderId !== null
           && piProviderId !== selectedPiProviderId
-        )
-        || (
+        ))
+        || (!subagentRoute && (
           (selectedPiProviderId === 'openai' || selectedPiProviderId === 'xai')
           && piProviderId !== selectedPiProviderId
-        )
+        ))
       )
     ) {
-      // A valid loopback session token authorizes only the provider that the
-      // host resolved for this exact Pi process. The persisted session choice
-      // remains a second constraint when present. Do not let a child process or
-      // extension swap this header and borrow another subscription credential.
+      // A valid loopback token authorizes only its registered provider. Root
+      // tokens remain additionally pinned to the persisted session choice;
+      // subagent-route tokens are separately generated for one frozen child
+      // provider and therefore may cross that parent-session choice.
       return {
         localHandler: async ({ res }) => {
           const payload = JSON.stringify({
@@ -376,6 +427,16 @@ export function createModelRoutingTransform(): RoutingTransform {
 
     const gatewayKey = _readGatewayKey();
 
+    if (subagentRoute && piProviderId) {
+      // A provider-pinned child token is both the authorization boundary and
+      // the route source. Re-reading the parent session provider here would
+      // authenticate Anthropic but still route through an OpenAI/XD parent,
+      // eventually falling into the proxy's default upstream.
+      return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
+        .then((resolved) => resolved?.decision ?? unavailablePiProviderRoute(piProviderId))
+        .catch(() => unavailablePiProviderRoute(piProviderId));
+    }
+
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
     if (sessionId) {
@@ -401,68 +462,126 @@ export function createModelRoutingTransform(): RoutingTransform {
       if (perSession) return recordSelectedRoute(perSession);
     }
 
-    // ② 未显式选供应商 → 据请求凭证判定 spawn 形态(见上方注释)。
-    // 计费路由旁路只记「未显式选供应商」的会话(registry 声明的语义,消费方也只在
-    // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
-    // 的 claude-* 分类器调用)不该往表里写死记录。
-    const recordDefaultRoute =
-      requestAgent === 'claude-code'
-      && sessionId !== null
-      && getSessionProvider(sessionId) == null;
-    const recordResolvedDefaultRoute = (route: ClaudeSessionBillingRoute): void => {
-      if (!recordDefaultRoute) return;
-      recordClaudeSessionRoute(sessionId, route);
-      recordClaudeRequestRoute(ctx.reqId, sessionId, route);
-    };
-    // provider-oauth spawn 的占位 key **不是可用凭证**:scope 门放下来的辅助请求
-    // (如 openai / xai 来源 cc 会话里 CLI 自发的 claude-* 权限分类器调用)带着它
-    // passthrough 会在网关吃确定性 401 → 误触发 auto→ask 降级(#831)。与 codex
-    // ①.5 段 #890 修复同语义:占位 key 按「无可用凭证」处理,走下方换网关 key 的
-    // 默认路由;真实 key(gateway-spawn)照旧 passthrough。
-    if (isExclusiveXaiModelId(wireModel)) {
-      log.warn('exclusive xAI model escaped subscription routing; refusing default gateway', {
-        wireModel,
-        selectedProviderId,
+    // ①.5 隐式来源(sessionId 未反解出/未绑定供应商,或 ① 段 scope 门放行下来):按模型
+    //     推断路由,必须先于 ② 默认网关 —— 裸 catalog id(如用户智谱来源的 glm-5.3)不是
+    //     网关注册的命名空间 id(z-ai/glm-5.3),直接落默认网关会被 LiteLLM 模型校验层拒:
+    //       400 'anthropic_messages: Invalid model name passed in model=glm-5.3 ...'
+    //     会话启动/切模的首批请求若抢在 session↔provider 绑定之前到达即触发,表现为
+    //     偶发 API Error 400、重试后恢复。与 codex-proxy-host ①.5 段同语义:
+    //       - anthropic-messages wire 来源(智谱/自定义 Anthropic 兼容上游)透明转发;
+    //       - 唯一 provider-oauth 来源(xai/grok-*)注入对应供应商 OAuth。
+    //     刻意排除:显式自定义供应商会话(① 段已裁决,镜像 codex 的 !explicitProviderId
+    //     闸门)、anthropic wire 模型(claude-* 辅助调用保持 #886 的默认路径语义)、xd
+    //     来源(网关即默认上游,② 段处理且带计费路由记账,这里接管会漏记)、PI 会话
+    //     (PI 有自己的 per-model 路由解析 resolvePiModelRoute,不受隐式推断接管)。
+    //     解析复用
+    //     resolveImplicitLocalBridgeRouteResolution —— 与模型选择器共用连接态(providerViewsReader),
+    //     目录无 bridge 候选的模型同步短路,热路径零额外开销。
+    const implicitRouteEligible =
+      !piSessionId
+      && !explicitCustomProvider
+      && wireModel
+      && !isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()));
+    if (implicitRouteEligible) {
+      return resolveImplicitLocalBridgeRouteResolution(wireModel, 'claude-code').then((resolution) => {
+        if (resolution.kind === 'ambiguous') {
+          return refuseAmbiguousImplicitProviderRoute(wireModel);
+        }
+        const bridgeRoute = resolution.kind === 'route' ? resolution.route : null;
+        // wire 缺省推断与 provider-route 的 implicitBridgeWire 同口径:claude-code 的
+        // 用户 Anthropic 兼容上游在目录里省略 wireProtocol(buildUserProvider 约定)。
+        const bridgeWire = bridgeRoute?.routing.wireProtocol ?? 'anthropic-messages';
+        if (bridgeRoute && bridgeRoute.providerId !== 'xd' && bridgeWire === 'anthropic-messages') {
+          const bridged = buildRouteDecision(
+            bridgeRoute.routing,
+            gatewayKey,
+            'claude-code',
+            bridgeRoute.apiKey,
+            bridgeRoute.oauthToken,
+          );
+          const withRequestPath =
+            bridged && bridgeRoute.routing.requestPath
+              ? { ...bridged, pathOverride: bridgeRoute.routing.requestPath }
+              : bridged;
+          if (withRequestPath) return withRequestPath;
+        }
+        const implicitOAuth = resolveImplicitProviderOAuthRouteDecision(
+          wireModel,
+          'claude-code',
+          gatewayKey,
+        );
+        return implicitOAuth instanceof Promise
+          ? implicitOAuth.then((decision) => decision ?? decideDefaultRoute())
+          : (implicitOAuth ?? decideDefaultRoute());
       });
-      return refuseExclusiveXaiDefaultGateway(wireModel);
     }
-    const apiKeyHeader = headerValue(ctx.headers, 'x-api-key');
-    const hasUsableApiKey =
-      apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
-    if (hasUsableApiKey) {
-      // gateway-spawn:自带网关 key,passthrough。
-      if (requestAgent === 'claude-code' && sessionId && selectedProviderId === 'xd') {
-        // 显式 XD 会话在 live gateway key 被清除后,仍可能携带 spawn 时冻结的 x-api-key。
-        // resolveSessionRouteDecision 会因缺 key 返回 null,但这条 passthrough 仍实际进入 XD Gateway。
-        recordClaudeRequestRoute(ctx.reqId, sessionId, 'gateway');
-      } else {
+    return decideDefaultRoute();
+
+    // ② 未显式选供应商 → 据请求凭证判定 spawn 形态(见上方注释)。
+    // 函数声明提升:①.5 的回落分支在自身解析落空时复用本段,行为与引入 ①.5 前一致。
+    function decideDefaultRoute(): RoutingDecision | null {
+      // 计费路由旁路只记「未显式选供应商」的会话(registry 声明的语义,消费方也只在
+      // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
+      // 的 claude-* 分类器调用)不该往表里写死记录。
+      const recordDefaultRoute =
+        requestAgent === 'claude-code'
+        && sessionId !== null
+        && getSessionProvider(sessionId) == null;
+      const recordResolvedDefaultRoute = (route: ClaudeSessionBillingRoute): void => {
+        if (!recordDefaultRoute) return;
+        recordClaudeSessionRoute(sessionId, route);
+        recordClaudeRequestRoute(ctx.reqId, sessionId, route);
+      };
+      // provider-oauth spawn 的占位 key **不是可用凭证**:scope 门放下来的辅助请求
+      // (如 openai / xai 来源 cc 会话里 CLI 自发的 claude-* 权限分类器调用)带着它
+      // passthrough 会在网关吃确定性 401 → 误触发 auto→ask 降级(#831)。与 codex
+      // ①.5 段 #890 修复同语义:占位 key 按「无可用凭证」处理,走下方换网关 key 的
+      // 默认路由;真实 key(gateway-spawn)照旧 passthrough。
+      if (isExclusiveXaiModelId(wireModel)) {
+        log.warn('exclusive xAI model escaped subscription routing; refusing default gateway', {
+          wireModel,
+          selectedProviderId,
+        });
+        return refuseExclusiveXaiDefaultGateway(wireModel);
+      }
+      const apiKeyHeader = headerValue(ctx.headers, 'x-api-key');
+      const hasUsableApiKey =
+        apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+      if (hasUsableApiKey) {
+        // gateway-spawn:自带网关 key,passthrough。
+        if (requestAgent === 'claude-code' && sessionId && selectedProviderId === 'xd') {
+          // 显式 XD 会话在 live gateway key 被清除后,仍可能携带 spawn 时冻结的 x-api-key。
+          // resolveSessionRouteDecision 会因缺 key 返回 null,但这条 passthrough 仍实际进入 XD Gateway。
+          recordClaudeRequestRoute(ctx.reqId, sessionId, 'gateway');
+        } else {
+          recordResolvedDefaultRoute('gateway');
+        }
+        return null;
+      }
+      const decision = gatewayDefaultRouteDecision(requestAgent, gatewayKey);
+      if (decision) {
+        // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
         recordResolvedDefaultRoute('gateway');
+        return decision;
+      }
+      if (apiKeyHeader !== null) {
+        // 占位 key 且无网关 key:保持改动前行为(passthrough,上游 401)——下方的
+        // Anthropic 直连支路是给 oauth-spawn 订阅 token 准备的,占位 key 不适用。
+        log.warn('provider-oauth cc spawn 占位 key 且无网关 key; passthrough (预期 401)', { wireModel });
+        return null;
+      }
+      // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
+      // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
+      if (isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()))) {
+        recordResolvedDefaultRoute('subscription');
+        return { upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM };
+      }
+      if (wireModel) {
+        // 无 key 的非 Anthropic 模型 passthrough 大概率 401 —— 路由归属不明确, 不记录。
+        log.warn('claude oauth-spawn but no gateway key; non-anthropic passthrough (可能 401)', { wireModel });
       }
       return null;
     }
-    const decision = gatewayDefaultRouteDecision(requestAgent, gatewayKey);
-    if (decision) {
-      // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
-      recordResolvedDefaultRoute('gateway');
-      return decision;
-    }
-    if (apiKeyHeader !== null) {
-      // 占位 key 且无网关 key:保持改动前行为(passthrough,上游 401)——下方的
-      // Anthropic 直连支路是给 oauth-spawn 订阅 token 准备的,占位 key 不适用。
-      log.warn('provider-oauth cc spawn 占位 key 且无网关 key; passthrough (预期 401)', { wireModel });
-      return null;
-    }
-    // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
-    // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
-    if (isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()))) {
-      recordResolvedDefaultRoute('subscription');
-      return { upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM };
-    }
-    if (wireModel) {
-      // 无 key 的非 Anthropic 模型 passthrough 大概率 401 —— 路由归属不明确, 不记录。
-      log.warn('claude oauth-spawn but no gateway key; non-anthropic passthrough (可能 401)', { wireModel });
-    }
-    return null;
   };
   return (body, ctx) => {
     const decision = route(body, ctx);

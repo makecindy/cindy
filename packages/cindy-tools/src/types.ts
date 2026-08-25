@@ -235,15 +235,72 @@ export type CindyForgePackErrorCode =
 export type CindyForgePackResult =
   | {
       ok: true;
-      /** 打包产物(.cindy)的绝对路径(临时目录,装入后可弃)。 */
+      /**
+       * 作者副本的文件名提示（如 `demo-1.0.0.cindy`），不可用于访问。
+       * 不是绝对路径，也不是 Host staging 路径；不要拿这个字段去读盘或发布。
+       */
       cindyPath: string;
       id: string;
       name: string;
       version: string;
-      /** 已弹出装入/更新确认框,等用户决定;装不装永远由用户点头。 */
+      /** 仅 intent=publish 返回；一次性、不可解析的 Host 发布票据。 */
+      publishToken?: string;
+      /** 打包结果说明；成功仅表示产物已生成，不表示已经安装。 */
       note: string;
     }
   | { ok: false; errorCode: CindyForgePackErrorCode; message: string };
+
+/** ghost_forge_install 会先走 Forge 打包校验，再复用 Host 的本地安装/更新事务。 */
+export type CindyForgeInstallResult =
+  | {
+      ok: true;
+      action: 'installed' | 'updated';
+      id: string;
+      name: string;
+      version: string;
+      enabled: boolean;
+      note: string;
+    }
+  | {
+      ok: false;
+      errorCode: CindyForgePackErrorCode | (string & {});
+      message: string;
+    };
+
+/** ghost_forge_publish 立即返回时的失败分类。传输开始后的失败走 status.errorCode。 */
+export type CindyForgePublishErrorCode =
+  | 'NOT_ORG_MEMBER'
+  | 'SESSION_BOUNDARY_PENDING'
+  | 'PUBLISH_TOKEN_INVALID'
+  | 'PUBLISH_TOKEN_OWNER_MISMATCH'
+  | 'INTERNAL';
+
+export type CindyForgePublishResult =
+  | {
+      ok: true;
+      transferId: string;
+      uploadId: string | null;
+      note: string;
+    }
+  | { ok: false; errorCode: CindyForgePublishErrorCode; message: string };
+
+export type CindyForgePublishStatusResult =
+  | {
+      ok: true;
+      transferId: string;
+      uploadId: string | null;
+      stage: string;
+      status?: string | null;
+      reviewStatus?: string | null;
+      ghostId?: string | null;
+      version?: string | null;
+      bytesHashed?: number;
+      bytesSent?: number;
+      totalBytes?: number;
+      errorCode?: string | null;
+      message?: string | null;
+    }
+  | { ok: false; errorCode: 'NOT_FOUND' | 'INTERNAL'; message: string };
 
 /** ghost_forge_scaffold 可生成的四种起步模板。 */
 export type CindyForgeScaffoldTemplate =
@@ -391,18 +448,30 @@ export interface CindyGhostsMcpDeps {
     description?: string;
   }): Promise<CindyForgeScaffoldResult>;
   /**
-   * 把一个源码目录校验 + 打包成 .cindy,并弹出与拖入/双击完全相同的
-   * 装入(同 id 已装则更新)确认框——装不装永远由用户决定,agent 只能
-   * 递到用户面前。
+   * 把一个源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件；
+   * publish 意图额外签发一次性发布票据。
    */
   forgePack(request: {
     dir: string;
+    intent?: 'publish';
     /**
      * 用户明确选择 AI 图标后，由图片工具返回的 cindy-media 地址。Host
      * best-effort 把它嵌入包内；失败保留源码里的默认图标，不阻塞打包。
      */
     iconSource?: string;
   }): Promise<CindyForgePackResult>;
+  /**
+   * 重新校验并打包源码目录，然后把这次产生的确切包安装或原位更新。
+   * 只有显式调用本工具才安装；forgePack 本身始终保持纯打包。
+   */
+  forgeInstall(request: { dir: string; iconSource?: string }): Promise<CindyForgeInstallResult>;
+  /**
+   * 消费 forgePack(intent=publish) 签发的一次性票据，把该次打包的确切字节
+   * 提交到当前组织发布。立即返回 transferId / uploadId,传输在后台跑。
+   */
+  forgePublish(request: { token: string }): Promise<CindyForgePublishResult>;
+  /** 查询一次后台发布传输的当前状态。 */
+  forgePublishStatus(request: { transferId: string }): Promise<CindyForgePublishStatusResult>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

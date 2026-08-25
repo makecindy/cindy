@@ -883,6 +883,201 @@ describe('AgentIslandService native publishing', () => {
     );
   });
 
+  it('hides unread completion from the island at TTL while remote attention stays until ack even when island UI is off', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const publish = vi.fn((state: AgentIslandDisplayState) => {
+        void state;
+        return true;
+      });
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
+      });
+
+      service.setEnabled(false);
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+      const sessions = (
+        service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
+      ).state;
+      expect(sessions.sessions.has('s1')).toBe(true);
+      mocks.tapWindowBroadcast.mockClear();
+
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      expect(sessions.sessions.has('s1')).toBe(false);
+      expect(sessions.remoteUnreadTerminals.has('s1')).toBe(true);
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', phase: 'completed', attention: true }),
+      );
+
+      mocks.tapWindowBroadcast.mockClear();
+      mocks.getSessionRowSnapshot.mockClear();
+      service.handleSessionAttentionCleared('s1', 'passive');
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', attention: false }),
+      );
+      expect(mocks.getSessionRowSnapshot).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hides unread completion from the island at TTL while remote attention stays until ack', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const publish = vi.fn((state: AgentIslandDisplayState) => {
+        void state;
+        return true;
+      });
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish, suspend: () => undefined },
+      });
+
+      service.setEnabled(true);
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+      expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
+        totalCount: 1,
+        sessions: [expect.objectContaining({ sessionId: 's1', phase: 'completed' })],
+      });
+      mocks.tapWindowBroadcast.mockClear();
+
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ totalCount: 0 });
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', phase: 'completed', attention: true }),
+      );
+
+      mocks.tapWindowBroadcast.mockClear();
+      mocks.getSessionRowSnapshot.mockClear();
+      service.handleSessionAttentionCleared('s1', 'passive');
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', attention: false }),
+      );
+      expect(mocks.getSessionRowSnapshot).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a stale not-found receipt clear a newer unread completion', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let releaseSnapshot: ((row: { status: string; title: string | null; userSendAt: number | null; workingDir: string | null; workspaceKind: string | null } | null) => void) | undefined;
+    mocks.getSessionRowSnapshot.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseSnapshot = resolve;
+      }),
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+
+    service.handleSessionAttentionCleared('s1', 'passive');
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+    mocks.tapWindowBroadcast.mockClear();
+
+    releaseSnapshot?.({
+      status: 'active',
+      title: 'new',
+      userSendAt: null,
+      workingDir: '/tmp/x',
+      workspaceKind: null,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: 's1', attention: false }),
+    );
+  });
+
+  it('does not let a stale not-found receipt clear a newer unread error', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let releaseSnapshot: ((row: { status: string; title: string | null; userSendAt: number | null; workingDir: string | null; workspaceKind: string | null } | null) => void) | undefined;
+    mocks.getSessionRowSnapshot.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseSnapshot = resolve;
+      }),
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+
+    service.handleSessionAttentionCleared('s1', 'passive');
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, terminalErrorEvent('boom'));
+    mocks.tapWindowBroadcast.mockClear();
+
+    releaseSnapshot?.({
+      status: 'active',
+      title: 'new-err',
+      userSendAt: null,
+      workingDir: '/tmp/x',
+      workspaceKind: null,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: 's1', attention: false }),
+    );
+  });
+
+  it('does not let a retrying error bump generation and drop a stale not-found clear', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let releaseSnapshot: ((row: { status: string; title: string | null; userSendAt: number | null; workingDir: string | null; workspaceKind: string | null } | null) => void) | undefined;
+    mocks.getSessionRowSnapshot.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseSnapshot = resolve;
+      }),
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+
+    service.handleSessionAttentionCleared('s1', 'passive');
+    // 重启后内存空、只有异步 not-found 查询在飞。可恢复 error 会建一条
+    // running:false 的临时条目并立刻被 prune,不得因此 bump generation 把旧收尾包作废。
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, recoverableErrorEvent('retrying'));
+    mocks.tapWindowBroadcast.mockClear();
+
+    releaseSnapshot?.({
+      status: 'active',
+      title: 'stale',
+      userSendAt: null,
+      workingDir: '/tmp/x',
+      workspaceKind: null,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: 's1', attention: false }),
+    );
+  });
+
   it('broadcasts a terminal clear when a read receipt clears unread completion attention', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({
@@ -5550,5 +5745,145 @@ describe('会话关闭原因决定条目去留', () => {
 
     service.handleSessionClosed('plain', { reason: 'process-closed' });
     expect(sessions.has('plain')).toBe(false);
+  });
+
+  it('drops unread generation when a session is discarded without leftover attention', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+    service.handleUserPrompt({ sessionId: 'gone', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 'gone', agentKind: 'codex' }, doneEvent());
+    const generations = (
+      service as unknown as { unreadAttentionGenerationBySession: Map<string, number> }
+    ).unreadAttentionGenerationBySession;
+    expect(generations.has('gone')).toBe(true);
+
+    service.handleSessionClosed('gone');
+    expect(generations.has('gone')).toBe(false);
+  });
+
+  it('TTL prune 后再 Stop 会清账本并立刻给远端发收尾包', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const publish = vi.fn(() => true);
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
+      });
+      service.setEnabled(false);
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      const islandState = (
+        service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
+      ).state;
+      expect(islandState.sessions.has('s1')).toBe(false);
+      expect(islandState.remoteUnreadTerminals.has('s1')).toBe(true);
+
+      mocks.tapWindowBroadcast.mockClear();
+      service.handleSessionStopped('s1');
+      expect(islandState.remoteUnreadTerminals.has('s1')).toBe(false);
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', attention: false }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('TTL prune 后再 process-close 仍保留远程未读,直到真正 ack', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const publish = vi.fn(() => true);
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
+      });
+      service.setEnabled(false);
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      const islandState = (
+        service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
+      ).state;
+      expect(islandState.sessions.has('s1')).toBe(false);
+      expect(islandState.remoteUnreadTerminals.has('s1')).toBe(true);
+
+      mocks.tapWindowBroadcast.mockClear();
+      service.handleSessionClosed('s1', { reason: 'process-closed' });
+      expect(islandState.remoteUnreadTerminals.has('s1')).toBe(true);
+      expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', attention: false }),
+      );
+
+      mocks.tapWindowBroadcast.mockClear();
+      service.handleSessionAttentionCleared('s1', 'passive');
+      expect(islandState.remoteUnreadTerminals.has('s1')).toBe(false);
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', attention: false }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ledger-only error 在新一轮 running 被 App badge 镜像后,passive 仍免疫', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const { markSessionNeedsAttention, clearAllSessionAttention } = await import('../../appBadgeService.js');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const publish = vi.fn(() => true);
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
+      });
+      service.setEnabled(false);
+      service.handleUserPrompt({ sessionId: 's-err', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's-err', agentKind: 'codex' }, terminalErrorEvent('boom'));
+      markSessionNeedsAttention('s-err');
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      const islandState = (
+        service as unknown as { state: { sessions: Map<string, { phase: string; unread: boolean }>; remoteUnreadTerminals: Map<string, { phase: string }> } }
+      ).state;
+      expect(islandState.sessions.has('s-err')).toBe(false);
+      expect(islandState.remoteUnreadTerminals.get('s-err')?.phase).toBe('error');
+
+      service.handleUserPrompt({ sessionId: 's-err', agentKind: 'codex' }, 'retry');
+      expect(islandState.sessions.get('s-err')?.phase).toBe('running');
+      expect(islandState.sessions.get('s-err')?.unread).toBe(true);
+      expect(islandState.remoteUnreadTerminals.get('s-err')?.phase).toBe('error');
+
+      mocks.tapWindowBroadcast.mockClear();
+      service.handleSessionAttentionCleared('s-err', 'passive');
+      expect(islandState.remoteUnreadTerminals.get('s-err')?.phase).toBe('error');
+      expect(islandState.sessions.get('s-err')?.unread).toBe(true);
+      expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's-err', attention: false }),
+      );
+
+      mocks.tapWindowBroadcast.mockClear();
+      service.handleSessionAttentionCleared('s-err', 'explicit');
+      expect(islandState.remoteUnreadTerminals.has('s-err')).toBe(false);
+      expect(islandState.sessions.get('s-err')?.unread).toBe(false);
+    } finally {
+      clearAllSessionAttention();
+      vi.useRealTimers();
+    }
   });
 });

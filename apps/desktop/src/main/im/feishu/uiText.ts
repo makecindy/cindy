@@ -116,6 +116,14 @@ export const ui = {
       title: (header: string) => `❓ ${header}`,
       noOptionsHint: '_（这个问题没有预设选项，直接发文字回我吧）_',
       resolved: (optionLabel: string) => `✅ 已选：${optionLabel}`,
+      // 多题/多选打勾卡: 依赖飞书卡片原地更新(im.v1.message.patch), 提供
+      // 这份文案即启用 buildAskUserCard 的多题分发(见 cardBuilders)。
+      multi: {
+        title: '❓ 需要你确认几件事',
+        multiSelectHint: '（可多选）',
+        submitLabel: '提交答案',
+        selectedMark: '✓ ',
+      },
     },
     plan: {
       title: '📋 我打算这么干',

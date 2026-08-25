@@ -45,9 +45,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   真值仅经 Pi 父进程专用 env 传递，`CINDY_PI_MCP_BRIDGE` 只存 env 引用；这些 env 与描述符
   都会在 bash spawn 边界剥离。bridge 并行执行外部 server 启动探测，每个 server 的
   `initialize + tools/list` 总预算为 10s（低于 Pi RPC 30s ready 门槛）；探测完成后实际工具
-  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。工具注册
-  为 `mcp__<server>__<tool>`。配置新增、修改、禁用或删除对下一新建/重启会话生效；旧活动
-  会话保留启动时 generation 快照至 close。
+  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
+  始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
+  input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
+  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。Host 审批、策略与变更捕获仍使用真实
+  `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
+  Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
+  下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
   时从 `get_entries` 校正。
 

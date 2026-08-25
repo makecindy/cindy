@@ -10,8 +10,8 @@
  *     读不到一律按 ask(fail-closed)。
  *  2. MCP 桥:CINDY_PI_MCP_BRIDGE 指向 host 的 localhost bridge，或用户显式配置的
  *     外部 Streamable HTTP MCP。外部认证只保存 env 引用，真值留在 Pi 父进程 env；
- *     对每个 server 走 initialize → 分页 tools/list,把工具注册成 pi 工具
- *     (mcp__<server>__<tool>),execute 转发 tools/call。
+ *     对每个 server 走 initialize → 分页 tools/list，但模型侧只注册两个稳定网关工具。
+ *     调用时再按 server/tool 路由，并把真实 mcp__<server>__<tool> 身份交给 Host 审批与审计。
  *  3. 会话树:注册 Cindy 私有 command，把 RPC prompt 桥到 ctx.navigateTree。
  *
  * 协议说明(@modelcontextprotocol/sdk StreamableHTTPServerTransport):
@@ -71,9 +71,13 @@ import {
 
 const PERMISSION_TITLE = 'cindy:permission';
 const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
+const PERMISSION_ALLOW = 'allow';
+const PERMISSION_USER_DENY = 'user-deny';
+const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
+const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
@@ -89,6 +93,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
+  SUBAGENT_RUN_DIR_ENV,
   'PI_CODING_AGENT_DIR',
 ]);
 try {
@@ -2152,6 +2157,23 @@ interface McpServerRef {
   };
 }
 
+const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
+const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
+
+interface ConnectedMcpTool {
+  serverName: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  client: McpHttpClient;
+}
+
+interface ResolvedMcpGatewayCall {
+  qualifiedName: string;
+  args: Record<string, unknown>;
+  tool: ConnectedMcpTool;
+}
+
 class McpBridgeError extends Error {}
 
 function safeMcpFailure(error: unknown): string {
@@ -2393,7 +2415,274 @@ function mcpContentToPi(content: unknown): Array<Record<string, unknown>> {
   return out;
 }
 
-async function connectServer(pi: any, server: McpServerRef, token: string): Promise<number> {
+function mcpGatewayKey(serverName: string, toolName: string): string {
+  return serverName + '\u0000' + toolName;
+}
+
+function recordInput(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function schemaHint(schema: Record<string, unknown>): string {
+  let rendered = '{}';
+  try {
+    rendered = JSON.stringify(schema);
+  } catch {
+    rendered = '{}';
+  }
+  return rendered.length <= 16_000 ? rendered : rendered.slice(0, 15_999) + '…';
+}
+
+class CindyMcpGateway {
+  private readonly tools = new Map<string, ConnectedMcpTool>();
+  private readonly unavailableServers = new Map<string, string>();
+  private readonly disclosedSchemas = new Set<string>();
+
+  add(serverName: string, client: McpHttpClient, tools: any[]): void {
+    for (const rawTool of tools) {
+      if (!rawTool || typeof rawTool !== 'object' || typeof rawTool.name !== 'string' || !rawTool.name) {
+        continue;
+      }
+      const inputSchema = rawTool.inputSchema && typeof rawTool.inputSchema === 'object'
+        ? rawTool.inputSchema as Record<string, unknown>
+        : { type: 'object', properties: {}, additionalProperties: true };
+      this.tools.set(mcpGatewayKey(serverName, rawTool.name), {
+        serverName,
+        name: rawTool.name,
+        description: typeof rawTool.description === 'string' && rawTool.description.length > 0
+          ? rawTool.description
+          : 'MCP tool ' + rawTool.name + ' from ' + serverName,
+        inputSchema,
+        client,
+      });
+    }
+  }
+
+  get size(): number {
+    return this.tools.size;
+  }
+
+  markUnavailable(serverName: string, reason: string): void {
+    this.unavailableServers.set(serverName, reason);
+  }
+
+  resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+    const record = recordInput(input);
+    const serverName = typeof record.server === 'string' ? record.server : '';
+    const toolName = typeof record.tool === 'string' ? record.tool : '';
+    if (!serverName || !toolName) return null;
+    const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
+    if (!tool) return null;
+    return {
+      qualifiedName: 'mcp__' + serverName + '__' + toolName,
+      args: recordInput(record.args),
+      tool,
+    };
+  }
+
+  isSchemaDisclosed(call: ResolvedMcpGatewayCall): boolean {
+    return this.disclosedSchemas.has(mcpGatewayKey(call.tool.serverName, call.tool.name));
+  }
+
+  list(serverName?: string): Array<{ server: string; name: string; description: string }> {
+    return [...this.tools.values()]
+      .filter((tool) => !serverName || tool.serverName === serverName)
+      .sort((a, b) => a.serverName.localeCompare(b.serverName) || a.name.localeCompare(b.name))
+      .map((tool) => ({
+        server: tool.serverName,
+        name: tool.name,
+        description: tool.description,
+      }));
+  }
+
+  availableServers(): string[] {
+    return [...new Set([...this.tools.values()].map((tool) => tool.serverName))].sort();
+  }
+
+  unavailable(): Array<{ server: string; reason: string }> {
+    return [...this.unavailableServers.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([server, reason]) => ({ server, reason }));
+  }
+
+  private listResult(params: unknown): { content: Array<Record<string, unknown>>; details: unknown } {
+    const input = recordInput(params);
+    const serverName = typeof input.server === 'string' && input.server.length > 0
+      ? input.server
+      : undefined;
+    const toolName = typeof input.tool === 'string' && input.tool.length > 0
+      ? input.tool
+      : undefined;
+    const tools = this.list(serverName);
+    const unavailableReason = serverName
+      ? this.unavailableServers.get(serverName)
+      : undefined;
+    const unavailableServers = this.unavailable();
+    let payload: unknown;
+    if (toolName && !serverName) {
+      payload = {
+        ok: false,
+        errorCode: 'SERVER_REQUIRED',
+        reason: 'Pass both server and tool to inspect one input schema.',
+        availableServers: this.availableServers(),
+      };
+    } else if (serverName && unavailableReason) {
+      payload = {
+        ok: false,
+        errorCode: 'SERVER_UNAVAILABLE',
+        requested: serverName,
+        reason: unavailableReason,
+        availableServers: this.availableServers(),
+      };
+    } else if (serverName && toolName) {
+      const selected = this.tools.get(mcpGatewayKey(serverName, toolName));
+      if (!selected) {
+        payload = {
+          ok: false,
+          errorCode: 'UNKNOWN_TOOL',
+          requested: { server: serverName, tool: toolName },
+          availableTools: tools.map((tool) => tool.name),
+        };
+      } else {
+        this.disclosedSchemas.add(mcpGatewayKey(serverName, toolName));
+        payload = {
+          ok: true,
+          tools: [{
+            server: selected.serverName,
+            name: selected.name,
+            description: selected.description,
+            inputSchema: selected.inputSchema,
+          }],
+        };
+      }
+    } else if (serverName && tools.length === 0) {
+      payload = {
+        ok: false,
+        errorCode: 'UNKNOWN_SERVER',
+        requested: serverName,
+        availableServers: this.availableServers(),
+        unavailableServers,
+      };
+    } else {
+      payload = {
+        ok: true,
+        tools,
+        ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
+      };
+    }
+    return {
+      content: [{ type: 'text', text: JSON.stringify(payload) }],
+      details: payload,
+    };
+  }
+
+  private unknownCallMessage(params: unknown): string {
+    const input = recordInput(params);
+    const serverName = typeof input.server === 'string' ? input.server : '';
+    const scoped = this.list(serverName || undefined);
+    const available = (scoped.length > 0 ? scoped : this.list()).map((tool) => ({
+      server: tool.server,
+      name: tool.name,
+    }));
+    return 'Unknown Cindy MCP tool. Call cindy_mcp_list_tools first. Available: ' +
+      JSON.stringify(available).slice(0, 12_000) + '. Unavailable servers: ' +
+      JSON.stringify(this.unavailable()).slice(0, 4_000);
+  }
+
+  private async executeCall(params: unknown): Promise<{
+    content: Array<Record<string, unknown>>;
+    details: unknown;
+  }> {
+    const resolved = this.resolveCall(params);
+    if (!resolved) throw new Error(this.unknownCallMessage(params));
+    if (!this.isSchemaDisclosed(resolved)) {
+      throw new Error(
+        'Inspect this tool before execution by calling cindy_mcp_list_tools with ' +
+        JSON.stringify({ server: resolved.tool.serverName, tool: resolved.tool.name }) + '.',
+      );
+    }
+    let result: any;
+    try {
+      result = await resolved.tool.client.request('tools/call', {
+        name: resolved.tool.name,
+        arguments: resolved.args,
+      });
+    } catch (error) {
+      throw new Error(
+        'MCP tool ' + resolved.tool.serverName + '/' + resolved.tool.name + ' failed: ' +
+        safeMcpFailure(error) + '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema),
+      );
+    }
+    const content = mcpContentToPi(result?.content);
+    if (result?.isError) {
+      const message = content
+        .map((item) => (typeof item.text === 'string' ? item.text : ''))
+        .join('\n')
+        .trim();
+      throw new Error(
+        (message.length > 0 ? message : 'MCP tool returned an error') +
+        '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema),
+      );
+    }
+    return { content, details: result?.structuredContent ?? {} };
+  }
+
+  register(pi: any): void {
+    pi.registerTool({
+      name: CINDY_MCP_LIST_TOOLS,
+      label: 'Discover Cindy MCP tools',
+      description:
+        'List every connected Cindy/MCP capability without loading their parameter schemas into startup context. ' +
+        'Omit arguments to discover names and descriptions. Before invoking a tool, pass its exact server and tool ' +
+        'names here once to inspect that single input schema, then use cindy_mcp_call_tool.',
+      parameters: {
+        type: 'object',
+        properties: {
+          server: {
+            type: 'string',
+            description: 'Optional exact server name. Omit to list tools from every connected server.',
+          },
+          tool: {
+            type: 'string',
+            description: 'Optional exact tool name. Requires server and returns that tool\'s input schema.',
+          },
+        },
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId: string, params: unknown) => this.listResult(params),
+    });
+
+    pi.registerTool({
+      name: CINDY_MCP_CALL_TOOL,
+      label: 'Call a Cindy MCP tool',
+      description:
+        'Invoke a tool after inspecting its exact input schema with cindy_mcp_list_tools. Pass the exact server and ' +
+        'tool names plus args as an object. If the server rejects the arguments, the error repeats that schema.',
+      parameters: {
+        type: 'object',
+        properties: {
+          server: { type: 'string', description: 'Exact server name from cindy_mcp_list_tools.' },
+          tool: { type: 'string', description: 'Exact tool name from cindy_mcp_list_tools.' },
+          args: {
+            type: 'object',
+            description: 'Arguments for the selected tool as a JSON object.',
+            additionalProperties: true,
+          },
+        },
+        required: ['server', 'tool', 'args'],
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId: string, params: unknown) => this.executeCall(params),
+    });
+  }
+}
+
+async function connectServer(server: McpServerRef, token: string): Promise<{
+  client: McpHttpClient;
+  tools: any[];
+}> {
   const client = new McpHttpClient(server, token);
   await client.initialize();
   const tools: any[] = [];
@@ -2411,41 +2700,7 @@ async function connectServer(pi: any, server: McpServerRef, token: string): Prom
     cursor = nextCursor;
   }
   client.finishStartup();
-  for (const tool of tools) {
-    const qualifiedName = 'mcp__' + server.name + '__' + tool.name;
-    const parameters =
-      tool.inputSchema && typeof tool.inputSchema === 'object'
-        ? tool.inputSchema
-        : { type: 'object', properties: {}, additionalProperties: true };
-    try {
-      pi.registerTool({
-        name: qualifiedName,
-        label: server.name + ': ' + tool.name,
-        description: typeof tool.description === 'string' && tool.description.length > 0
-          ? tool.description
-          : 'MCP tool ' + tool.name + ' from ' + server.name,
-        parameters,
-        async execute(_toolCallId: string, params: unknown) {
-          const result = await client.request('tools/call', {
-            name: tool.name,
-            arguments: params ?? {},
-          });
-          const content = mcpContentToPi(result?.content);
-          if (result?.isError) {
-            const text = content
-              .map((c) => (typeof c.text === 'string' ? c.text : ''))
-              .join('\n')
-              .trim();
-            throw new Error(text.length > 0 ? text : 'MCP tool ' + tool.name + ' failed');
-          }
-          return { content, details: result?.structuredContent ?? {} };
-        },
-      });
-    } catch (err) {
-      console.error('[cindy-bridge] register ' + qualifiedName + ' failed: ' + String(err));
-    }
-  }
-  return tools.length;
+  return { client, tools };
 }
 
 // Pi 内置 find 依赖 fd；PI_OFFLINE=1 时缺失后不会下载。Cindy 已随 Desktop 校验并
@@ -2520,6 +2775,7 @@ function rgGlob(
 }
 
 export default async function cindyBridge(pi: any) {
+  const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
   // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。
   // 包管理 token 是 bearer 凭证,保持读一次即删、仅闭包持有 —— 不进 globalThis
@@ -2818,6 +3074,7 @@ export default async function cindyBridge(pi: any) {
     // —— 与 permission file 同等级防护(CINDY_PI_PERMISSION_FILE 已在 SECRET_ENV_NAMES
     // 剥离, models.json 走这条统一路径拦截)。
     const agentHomeDir = process.env.PI_CODING_AGENT_DIR;
+    const subagentRunDir = process.env[SUBAGENT_RUN_DIR_ENV];
     // 轮 40-w4-t12 HIGH-2 + 轮 40-w4-t13 HIGH:写目标 symlink 绕过 —— isInsideRoot
     // 只看字面路径。realpathSync(目标) 在文件不存在时抛(null), 只回落字面检查会
     // 漏掉 **symlink 父目录**(agentHome/link/perm.json, link -> /outside)。修:
@@ -2847,10 +3104,15 @@ export default async function cindyBridge(pi: any) {
         isInsideRoot(targetPath, agentHomeDir)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, agentHomeDir))
       );
+    const writeInsideSubagentRun = subagentRunDir
+      && (
+        isInsideRoot(targetPath, subagentRunDir)
+        || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, subagentRunDir))
+      );
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
-      && writeInsideAgentHome
+      && (writeInsideAgentHome || writeInsideSubagentRun)
     ) {
       return { block: true, reason: 'Cindy agent runtime directory is read-only.' };
     }
@@ -2903,34 +3165,71 @@ export default async function cindyBridge(pi: any) {
     // issues a one-shot store grant. Let it reach that boundary in every mode.
     if (event.toolName === 'cindy_pi_extension') return;
     if (permission.mode === 'bypassPermissions') return;
+    // MCP discovery/one-tool schema inspection only returns metadata already
+    // supplied by connected servers. It is the read-only half of the gateway
+    // and never executes a capability, so Ask/Auto should not interrupt the user.
+    if (event.toolName === CINDY_MCP_LIST_TOOLS) return;
     if (READONLY_BUILTINS.has(event.toolName) && !credentialRead) return;
-    let approved = false;
+    // Pi sees one stable gateway schema, while Host policy and approval UI must
+    // continue seeing the real MCP identity and real arguments. That preserves
+    // every existing per-server policy without loading each schema at startup.
+    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
+      ? mcpGateway.resolveCall(event.input)
+      : null;
+    const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
+      ? resolvedGatewayCall
+      : null;
+    // Invalid, unknown, or not-yet-inspected gateway input cannot execute a
+    // capability. Let execute() return its deterministic discovery/schema error
+    // without showing a misleading permission prompt for the wrapper itself.
+    if (event.toolName === CINDY_MCP_CALL_TOOL && !gatewayCall) return;
+    const permissionToolName = gatewayCall?.qualifiedName ?? event.toolName;
+    const permissionInput = gatewayCall?.args ?? event.input ?? {};
+    let decision: string | undefined;
     try {
-      approved = await ctx.ui.confirm(
+      // input() is used as a private request/response envelope rather than a
+      // visible text box. Unlike confirm(), it can return why Cindy denied the
+      // request, so an automatic review block is not misreported as a user click.
+      decision = await ctx.ui.input(
         PERMISSION_TITLE,
         JSON.stringify({
-          toolName: event.toolName,
-          input: event.input ?? {},
+          toolName: permissionToolName,
+          input: permissionInput,
           resolvedCredentialPaths: credentialEvidenceForHost,
         }),
       );
     } catch {
-      approved = false;
+      decision = undefined;
     }
-    if (!approved) {
-      return { block: true, reason: 'User denied this tool call via Cindy.' };
+    if (decision !== PERMISSION_ALLOW) {
+      return {
+        block: true,
+        reason: decision === PERMISSION_USER_DENY
+          ? 'User denied this tool call via Cindy.'
+          : decision === PERMISSION_AUTO_REVIEW_DENY
+            ? 'Cindy Auto-review denied this tool call.'
+            : 'Cindy could not approve this tool call.',
+      };
     }
   });
 
   pi.on('tool_result', async (event: any, ctx: any) => {
-    if (event.toolName !== 'bash' && !String(event.toolName ?? '').startsWith('mcp__')) return;
+    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
+      ? mcpGateway.resolveCall(event.input)
+      : null;
+    const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
+      ? resolvedGatewayCall
+      : null;
+    const captureToolName = gatewayCall?.qualifiedName ?? event.toolName;
+    const captureInput = gatewayCall?.args ?? event.input ?? {};
+    if (captureToolName !== 'bash' && !String(captureToolName ?? '').startsWith('mcp__')) return;
     try {
       await ctx.ui.confirm(
         TURN_CHANGE_CAPTURE_TITLE,
         JSON.stringify({
-          toolName: event.toolName,
+          toolName: captureToolName,
           toolUseId: event.toolCallId,
-          input: event.input ?? {},
+          input: captureInput,
         }),
       );
     } catch {
@@ -3282,15 +3581,29 @@ export default async function cindyBridge(pi: any) {
     return;
   }
   const token = cfg.token ?? '';
+  const servers = Array.isArray(cfg.servers) ? cfg.servers : [];
   // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
   // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
-  await Promise.all((cfg.servers ?? []).map(async (server) => {
+  await Promise.all(servers.map(async (server) => {
     try {
-      const count = await connectServer(pi, server, token);
-      console.error('[cindy-bridge] connected ' + server.name + ' (' + count + ' tools)');
+      const connected = await connectServer(server, token);
+      mcpGateway.add(server.name, connected.client, connected.tools);
+      console.error('[cindy-bridge] connected ' + server.name + ' (' + connected.tools.length + ' tools)');
     } catch (err) {
+      mcpGateway.markUnavailable(server.name, safeMcpFailure(err));
       console.error('[cindy-bridge] connect ' + server.name + ' failed: ' + safeMcpFailure(err));
     }
   }));
+  // Keep the capability surface constant at two schemas. Even when every
+  // configured server failed startup, discovery remains callable and reports an
+  // empty set instead of making MCP capability disappear silently.
+  if (servers.length > 0) {
+    try {
+      mcpGateway.register(pi);
+      console.error('[cindy-bridge] MCP gateway ready (' + mcpGateway.size + ' tools)');
+    } catch (err) {
+      console.error('[cindy-bridge] MCP gateway registration failed: ' + String(err));
+    }
+  }
 }
 `;

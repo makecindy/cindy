@@ -62,6 +62,55 @@ async function collect(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): 
 }
 
 describe('Claude Code assistant text streaming contract', () => {
+  it('attributes pre-envelope text deltas to the current message_start request', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    ctx.rt.lastAssistantMeta = {
+      uuid: 'previous-assistant',
+      requestId: 'msg_previous',
+      sdkSessionId: 'sdk-session',
+    };
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        uuid: 'stream-start',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        event: {
+          type: 'message_start',
+          message: {
+            id: 'msg_current',
+            model: 'claude-opus-4-6',
+            usage: { input_tokens: 1 },
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        uuid: 'stream-delta',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'text_delta', text: 'partial reply' },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const textEvent = (await collect(queue)).find((event) => event.type === 'text');
+    expect(textEvent?.agentMeta).toMatchObject({
+      requestId: 'msg_current',
+      sdkSessionId: 'sdk-session',
+    });
+  });
+
   it('emits live deltas before the final assistant text block', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();

@@ -24,7 +24,7 @@ export interface ConfirmDialogProps {
    */
   content?: ReactNode;
   /**
-   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗(如意识装入确认)
+   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗
    * 用默认宽会折行到累,可适度放宽;普通二选一确认别动它。
    */
   maxWidth?: number;
@@ -38,8 +38,7 @@ export interface ConfirmDialogProps {
   dontShowAgainLabel?: string;
   /**
    * 复选框初始勾选态,缺省 false。"下次不再提示"类弹窗保持缺省;
-   * 业务复选框(confirmWithCheckbox)按调用方语义决定,如装意识的
-   * "立即开启"默认勾选。
+   * 业务复选框(confirmWithCheckbox)按调用方语义决定初始状态。
    */
   checkboxDefaultChecked?: boolean;
   /**
@@ -206,7 +205,7 @@ export function ConfirmDialog({
             {(description || content) && (
               // 富内容 / 长正文可能超过视口高度:包一层限高滚动区,让标题与底部按钮
               // 固定、中间内容纵向滚动,避免整个弹窗被撑出屏幕后无法滚动到被裁掉的内容
-              // (典型:插件更新确认框的权限变更清单)。
+              // (典型:带分组和折叠区的长确认内容)。
               <div
                 ref={scrollRef}
                 id={describeContent && content ? bodyId : undefined}

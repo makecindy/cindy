@@ -1839,6 +1839,64 @@ describe('tokenBroker 模式', () => {
     expect(vault.read(GHOST, `${KEY}-rt-acc-1`)).toBeNull();
     expect(mgr.listAccounts(GHOST, KEY)[0]?.status).toBe('expired');
   });
+
+  it('getFreshAccessToken refuses a cached broker token after eligibility is withdrawn', async () => {
+    const releaseSha256 = 'a'.repeat(64);
+    let approvedPackageSha256 = releaseSha256;
+    const vault = seededVault();
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      broker: {
+        exchange: vi.fn(),
+        refresh: vi.fn(async () => ({
+          ok: true as const,
+          bundle: {
+            accessToken: 'at-cached',
+            refreshToken: 'rt-seed',
+            expiresAt: Date.now() + 60_000,
+            grantedScope: null,
+          },
+        })),
+      },
+      sleep: instantSleep,
+      isTokenBrokerAuthorized: () => approvedPackageSha256 === releaseSha256,
+    });
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
+      ok: true,
+      accessToken: 'at-cached',
+    });
+    // Simulate an unchanged manifest with different approved package bytes.
+    // Authorization is checked before the token cache, so fixing only the
+    // connect path cannot leak the already-cached Broker token.
+    approvedPackageSha256 = 'b'.repeat(64);
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+  });
+
+  it('connectAccount refuses before opening the browser when byte-bound eligibility is false', async () => {
+    const releaseSha256 = 'a'.repeat(64);
+    const approvedPackageSha256 = 'b'.repeat(64);
+    const openExternal = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault: memoryVault(),
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal,
+      broker: { exchange: vi.fn(), refresh: vi.fn() },
+      isTokenBrokerAuthorized: () => approvedPackageSha256 === releaseSha256,
+    });
+
+    await expect(mgr.connectAccount(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+    expect(approvedPackageSha256).not.toBe(releaseSha256);
+    // This kills an implementation that adds the SHA check only to token refresh.
+    expect(openExternal).not.toHaveBeenCalled();
+  });
 });
 
 describe('brokerBounce(双地址弹跳回调)', () => {

@@ -199,7 +199,27 @@ describe('sendToSession ordering', () => {
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
     expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
     expectOrder(dispatchBlock, 'const runAccepted = async (): Promise<void> => {', 'sendPersistedUserMessageToSession(deps, {');
-    expectOrder(dispatchBlock, 'onAccepted: runAccepted,', 'return failureResult(result.dispatchOutcome);');
+    expect(dispatchBlock).toContain('onAccepted: runAccepted,');
+    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
+    expectOrder(
+      dispatchBlock,
+      'await deps.prepareUnhealthySession?.(params.targetSessionId);',
+      'const live = deps.getLiveSession(params.targetSessionId);',
+    );
+    expectOrder(
+      dispatchBlock,
+      'const liveResult = deps.withSendToSessionLock',
+      'return await sendToInternal();',
+    );
+    expect(source).toContain('prepareUnhealthySession: (sessionId) =>');
+    expect(source).toContain('withSendToSessionLock,');
+    const dispatcherWiring = extractBetween(
+      source,
+      'const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({',
+      'dispatchOrEnqueueOrcaInterAgentMessage: OrcaInterAgentDispatcher',
+    );
+    expectOrder(dispatcherWiring, 'hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),', 'withSendToSessionLock,');
+    expectOrder(dispatcherWiring, 'withSendToSessionLock,', 'prepareUnhealthySession: (sessionId) =>');
 
     expect(serviceDispatchBlock).toContain('let acceptedSnapshot: {');
     expect(serviceDispatchBlock).toContain('if (!acceptedSnapshot) return;');
@@ -736,7 +756,7 @@ describe('sendToSession ordering', () => {
   it('marks worker idle and clears auto-bridge state before aborting worker sessions', () => {
     const serviceIdleBlock = extractBetween(
       orcaTeamServiceSource,
-      "async function idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' }): Promise<OrcaOkResult> {",
+      'async function idleWorker(',
       'async function archiveWorker',
     );
     const serviceDepsBlock = extractBetween(
@@ -872,13 +892,13 @@ describe('sendToSession ordering', () => {
     const block = extractDispatchOrEnqueueOrcaInterAgentMessageSource();
     const liveBlock = extractBetween(
       block,
-      'const live = deps.getLiveSession(params.targetSessionId);',
-      'const result = await deps.sendToSessionInternal({',
+      'const dispatchLive = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {',
+      'const liveResult = deps.withSendToSessionLock',
     );
     const fallbackBlock = extractBetween(
       block,
-      'if (result.ok) {',
-      '      }\n      return failureResult({',
+      'const sendToInternal = async (): Promise<DispatchOrcaInterAgentMessageResult> => {',
+      'const dispatchLive = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {',
     );
 
     expect(block).toContain('const dispatchReceipt = {');

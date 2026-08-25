@@ -27,8 +27,12 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
-import { PluginMarketPermissionReviewHost } from '@/features/plugin/PluginMarketPermissionReviewHost';
+import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  initializePromptRecommendationStore,
+  setPromptRecommendationOwner,
+} from '@/lib/promptRecommendationStore';
 import { installSystemNetworkErrorToastListener } from '@/lib/systemNetworkErrorToast';
 import { installSilentInstallToastListener } from '@/lib/silentInstallToast';
 import { installProviderUpstreamErrorToastListener } from '@/lib/providerUpstreamErrorToast';
@@ -90,9 +94,14 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
 }
 
 function MakerBootstrap() {
-  const { isAuthenticated, dataOwnerId } = useAuth();
+  const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
+
+  useEffect(() => {
+    setPromptRecommendationOwner(`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`);
+    initializePromptRecommendationStore();
+  }, [dataOwnerId, dataOwnerRecoveryEpoch]);
 
   useEffect(() => {
     makerChatStore.syncActiveTurnsFromMain();
@@ -363,7 +372,7 @@ export function App() {
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
-                          <PluginMarketPermissionReviewHost />
+                          <PluginPublisherConfirmHost />
                           <OwnerScopedRouter />
                         </EnvCheckGuard>
                       </LoginHandoffHost>

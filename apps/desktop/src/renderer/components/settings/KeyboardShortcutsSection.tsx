@@ -14,11 +14,14 @@
  * override; 生效值与显示通过 appShortcutStore 单例热更新。
  * 录制期间设置 body.dataset.appShortcutRecording 旗标, useAppShortcut 全体
  * 让路, 避免录制 ⌘B 时误触发侧边栏切换。
+ *
+ * 已检测或已启用的硬件设备出现在快捷键这一级。其余不展开,
+ * 收到「配件」入口里。
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pencil, RotateCcw, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import {
@@ -43,11 +46,53 @@ import {
   subscribeAppShortcuts,
 } from '@/lib/appShortcutStore';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
+import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
+import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
-import { WorkLouderCodexEntryContainer, WorkLouderCodexSettings } from './WorkLouderCodexSettings';
+import { WorkLouderCodexEntry, WorkLouderCodexSettings } from './WorkLouderCodexSettings';
+import { XboxGamepadEntry, XboxGamepadSettings } from './XboxGamepadSettings';
 
 const log = createLogger('settings:keyboard-shortcuts');
+
+function shouldShowHardwareOutside(device: {
+  present: boolean | null | undefined;
+  enabled: boolean | undefined;
+}): boolean {
+  return device.present === true || device.enabled === true;
+}
+
+type HardwarePane = 'list' | 'accessories' | 'worklouder' | 'xbox';
+
+function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-testid="settings-shortcuts-accessories"
+      className={cn(
+        'flex w-full items-center gap-3 rounded-xl border p-4 text-left outline-none transition-colors',
+        'border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
+        'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+      )}
+      aria-label={t('settings.shortcuts.accessories.openAria')}
+    >
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+        <Package size={18} aria-hidden="true" />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+          {t('settings.shortcuts.accessories.title')}
+        </span>
+        <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+          {t('settings.shortcuts.accessories.description')}
+        </span>
+      </span>
+      <ChevronRight size={16} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden="true" />
+    </button>
+  );
+}
 
 interface RecordingError {
   id: AppShortcutId;
@@ -66,7 +111,20 @@ export function KeyboardShortcutsSection() {
     Record<AppShortcutId, AppShortcutCombo | null>
   >;
   const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
-  const [workLouderSettingsOpen, setWorkLouderSettingsOpen] = useState(false);
+  const [hardwarePane, setHardwarePane] = useState<HardwarePane>('list');
+  const [hardwareReturnTo, setHardwareReturnTo] = useState<'list' | 'accessories'>('list');
+  const workLouder = useWorkLouderCodex({ watchConnection: true });
+  const xboxGamepad = useXboxGamepad({ watchConnection: true });
+  const workLouderConnected = shouldShowHardwareOutside({
+    present: workLouder.state?.devicePresent,
+    enabled: workLouder.state?.settings.deviceEnabled,
+  });
+  const xboxConnected = shouldShowHardwareOutside({
+    present: xboxGamepad.state?.devicePresent,
+    enabled: xboxGamepad.state?.settings.deviceEnabled,
+  });
+  const hasAccessories = !workLouderConnected || !xboxConnected;
+  const showAccessoriesEntry = hasAccessories;
   const [error, setError] = useState<RecordingError | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const mutationRequestIdRef = useRef(0);
@@ -74,8 +132,24 @@ export function KeyboardShortcutsSection() {
     new URLSearchParams(window.location.search).get('workLouderCodex') === '1';
 
   useEffect(() => {
-    if (workLouderOpenRequested) setWorkLouderSettingsOpen(true);
+    if (workLouderOpenRequested) {
+      setHardwareReturnTo('list');
+      setHardwarePane('worklouder');
+    }
   }, [workLouderOpenRequested]);
+
+  useEffect(() => {
+    if (hardwarePane === 'accessories' && !hasAccessories) setHardwarePane('list');
+  }, [hardwarePane, hasAccessories]);
+
+  const openWorkLouder = (from: 'list' | 'accessories') => {
+    setHardwareReturnTo(from);
+    setHardwarePane('worklouder');
+  };
+  const openXbox = (from: 'list' | 'accessories') => {
+    setHardwareReturnTo(from);
+    setHardwarePane('xbox');
+  };
 
   const mutationErrorMessage = useCallback(
     (err: unknown) => {
@@ -248,8 +322,55 @@ export function KeyboardShortcutsSection() {
   const iconButtonClass =
     'inline-flex h-[26px] w-[26px] items-center justify-center rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors';
 
-  if (workLouderSettingsOpen) {
-    return <WorkLouderCodexSettings onBack={() => setWorkLouderSettingsOpen(false)} />;
+  if (hardwarePane === 'worklouder') {
+    return <WorkLouderCodexSettings onBack={() => setHardwarePane(hardwareReturnTo)} />;
+  }
+  if (hardwarePane === 'xbox') {
+    return <XboxGamepadSettings onBack={() => setHardwarePane(hardwareReturnTo)} />;
+  }
+  if (hardwarePane === 'accessories' && hasAccessories) {
+    return (
+      <div className="flex flex-col gap-[14px]">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHardwarePane('list')}
+            className="flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            aria-label={t('settings.shortcuts.accessories.back')}
+          >
+            <ArrowLeft size={17} />
+          </button>
+          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+            {t('settings.shortcuts.accessories.title')}
+          </h2>
+        </div>
+        <div
+          className={cn(
+            'flex flex-col overflow-hidden rounded-xl',
+            'bg-[var(--settings-theme-card-bg)]',
+            'border border-[var(--settings-theme-card-border)]',
+            '[&>*+*]:border-t [&>*+*]:border-[var(--settings-theme-card-border)]',
+          )}
+        >
+          {!workLouderConnected && (
+            <WorkLouderCodexEntry
+              state={workLouder.state}
+              loading={workLouder.loading}
+              grouped
+              onOpen={() => openWorkLouder('accessories')}
+            />
+          )}
+          {!xboxConnected && (
+            <XboxGamepadEntry
+              state={xboxGamepad.state}
+              loading={xboxGamepad.loading}
+              grouped
+              onOpen={() => openXbox('accessories')}
+            />
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -270,7 +391,21 @@ export function KeyboardShortcutsSection() {
       </div>
       {globalError && <span className="text-12 text-[var(--error-fg)]">{globalError}</span>}
 
-      <WorkLouderCodexEntryContainer onOpen={() => setWorkLouderSettingsOpen(true)} />
+      {workLouderConnected && (
+        <WorkLouderCodexEntry
+          state={workLouder.state}
+          loading={workLouder.loading}
+          onOpen={() => openWorkLouder('list')}
+        />
+      )}
+      {xboxConnected && (
+        <XboxGamepadEntry
+          state={xboxGamepad.state}
+          loading={xboxGamepad.loading}
+          onOpen={() => openXbox('list')}
+        />
+      )}
+      {showAccessoriesEntry && <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />}
 
       <div
         className={cn(

@@ -42,6 +42,7 @@ import { getAppShortcutStore } from './app-shortcuts/index.js';
 import {
   handleGhostExternalLinkNavigation,
   handleGhostPreviewNavigation,
+  noteGhostUserGesture,
   resolveGhostWebviewAttach,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
@@ -794,6 +795,13 @@ export function installGhostGuestNavigationHandlers(
   },
 ): void {
   guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const noteGesture = () => noteGhostUserGesture(ghostId);
+  guestContents.on('before-mouse-event', (_event, mouse) => {
+    if (mouse.type === 'mouseDown') noteGesture();
+  });
+  guestContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown') noteGesture();
+  });
   guestContents.on('will-navigate', (event, url) => {
     const nav = classifyGhostPanelNavigation(url, ghostId);
     if (nav === 'allow') return;

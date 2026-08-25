@@ -287,13 +287,53 @@ export const MOBILE_ANCHOR_VERIFY_TOLERANCE = 2;
 export const MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS = 6;
 
 /**
- * 校验等待上限(独立于补滚预算):mVCP 还开着 / metrics 未就绪时环只等不滚,等待
- * 不消耗补滚额度——否则 mVCP 长开(open-settle cap 2s)会把预算烧光,窗口关闭后
- * 反而没额度补滚,遮挡残留(review P1)。上限按最长 mVCP 窗口取:双帧一轮 ≈ 33ms,
- * 75 轮 ≈ 2.5s > OPEN_SETTLE_CAP_MS(2000ms),窗口自然关闭后环仍活着;再长说明
- * 状态异常(如列表空置),结束环交给常规事件跟随,每轮只是一次纯函数比较,无副作用。
+ * 校验等待上限(独立于补滚预算):mVCP 还在结算 / metrics 未就绪时环只等不滚,等待
+ * 不消耗补滚额度——否则连续的 data / size 调整会先把 6 次补滚预算烧光,布局安静后
+ * 反而没额度补滚,遮挡残留(review P1)。双帧一轮约 33ms,75 轮约 2.5s；超过该
+ * 上限说明布局持续变化或状态异常,结束环交给后续 contentSize 事件继续跟随。
  */
 export const MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS = 75;
+
+/**
+ * LegendList 的 mVCP 没有公开“本轮 native 调整已完成”信号。data / size 变化后保留
+ * 一个短安静窗：期间 verifier 只等待；连续流式测量会延长窗口，但仍受上面的 2.5s
+ * 总等待预算约束。120ms 约 7 帧，覆盖 JS commit、native layout 与滚动回传的常见链路。
+ */
+export const MOBILE_MVCP_SETTLE_QUIET_MS = 120;
+
+export function mobileMvcpSettleDeadline(previousDeadline: number, now: number): number {
+  return Math.max(previousDeadline, now + MOBILE_MVCP_SETTLE_QUIET_MS);
+}
+
+export function isMobileMvcpSettling(now: number, settleAt: number): boolean {
+  return now < settleAt;
+}
+
+/**
+ * 只在行身份变化时续 mVCP 安静窗。流式更新会反复换 `items` 数组引用、但 key 不变；
+ * 若按数组引用续窗，verifier 会在整轮生成期间一直 wait，直到 2.5s 预算耗尽。
+ */
+export function mobileMessageListKeysSignature(keys: readonly string[]): string {
+  return keys.join('\0');
+}
+
+export interface MobileFollowVerifyStartDelayInput {
+  animatedScrollInFlight: boolean;
+  now: number;
+  settleAt: number;
+}
+
+/**
+ * Animated `scrollToEnd` must own the viewport until its bounded settle window closes.
+ * Starting the verifier earlier would read an expected in-flight offset and replace the
+ * smooth animation with an immediate non-animated retry.
+ */
+export function mobileFollowVerifyStartDelayMs(
+  input: MobileFollowVerifyStartDelayInput,
+): number {
+  if (!input.animatedScrollInFlight) return 0;
+  return Math.max(0, input.settleAt - input.now);
+}
 
 export interface MobileAnchorVerifyInput {
   attempts: number;

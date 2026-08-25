@@ -32,6 +32,7 @@ import {
   subscribeAnalyticsConsent,
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
+import { hasPrivacyConsent } from '@/update/updateConsentGate';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -70,6 +71,7 @@ import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   refreshMobileVoiceDictionary,
+  subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import {
   buildMobileVoiceDictionaryEntryViews,
@@ -121,8 +123,7 @@ export default function SettingsScreen() {
   const { locale, setLocale } = useLocale();
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
-  const deviceLink = useDeviceLink();
-  const { lastPresenceSnapshot, status } = deviceLink;
+  const { lastPresenceSnapshot, status, invoke } = useDeviceLink();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
@@ -323,6 +324,10 @@ export default function SettingsScreen() {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
+        // OTA 检查会携带 eas-client-id,须经隐私同意闸门(企业 SSO 豁免协议门,可能未
+        // 同意;且检查进行中登出会撤销同意)。整包 /latest 为匿名请求,不在此列。动态
+        // 判定而非调用瞬间快照,manifest 请求前与资源下载前各问一次。
+        isConsented: hasPrivacyConsent,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
@@ -722,7 +727,7 @@ export default function SettingsScreen() {
     void Promise.all(
       online.map((host) => refreshMobileVoiceDictionary(
         host.deviceId,
-        () => deviceLink.invoke<MobileVoiceDictionarySnapshotResult>(
+        () => invoke<MobileVoiceDictionarySnapshotResult>(
           host.deviceId,
           DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
           [],
@@ -734,16 +739,36 @@ export default function SettingsScreen() {
       // 缓存写在模块里,组件靠这个计数触发重渲染。
       setDictionaryRevision((value) => value + 1);
     });
-  }, [desktopDevices, deviceLink]);
+  }, [desktopDevices, invoke]);
 
+  // 页面打开后再由 effect 读取缓存和刷新。设备清单本身是异步 REST 请求，不能只
+  // 捕获点击瞬间的 desktopDevices=[]，否则清单稍后到达时历史缓存永远不会 hydrate。
   const openVoiceDictionary = useCallback(() => {
     setDictionaryScreenOpen(true);
-    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。
+  }, []);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen || desktopDevices.length === 0) return;
+    let cancelled = false;
+    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。这个 effect
+    // 同时依赖 desktopDevices，因此设备清单在页面打开后才到达时也会走同一条路径。
     void Promise.all(desktopDevices.map((host) => hydrateMobileVoiceDictionary(host.deviceId)))
-      .then(() => setDictionaryRevision((value) => value + 1))
+      .then(() => {
+        if (!cancelled) setDictionaryRevision((value) => value + 1);
+      })
       .catch(() => undefined);
     refreshVoiceDictionary();
-  }, [desktopDevices, refreshVoiceDictionary]);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopDevices, dictionaryScreenOpen, refreshVoiceDictionary]);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen) return;
+    return subscribeMobileVoiceDictionaryCache(() => {
+      setDictionaryRevision((value) => value + 1);
+    });
+  }, [dictionaryScreenOpen]);
 
   // dictionaryRevision 只作为依赖存在:缓存是模块级的,刷新完成后靠它触发重算。
   const dictionaryEntries = useMemo(

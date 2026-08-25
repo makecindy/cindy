@@ -68,34 +68,10 @@ interface RegistryEffortMetadata {
   defaultEffort: Effort | null;
 }
 
-/**
- * 仅在模型能由当前 agent 的 Registry route 唯一识别时复用 effort 元数据。
- * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
- */
-function registryEffortMetadata(
-  registry: ModelRegistry | null | undefined,
-  modelId: string,
+function toRegistryEffortMetadata(
+  entry: { efforts?: readonly Effort[]; defaultEffort?: Effort | null; perAgent?: Partial<Record<string, { efforts?: readonly Effort[]; defaultEffort?: Effort | null }>> },
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  if (agent === "pi" || !registry) return undefined;
-
-  const candidates = new Set([modelId]);
-  if (modelId.startsWith("chatgpt/")) {
-    candidates.add(modelId.slice("chatgpt/".length));
-  }
-  const matches = registry.models.filter((entry) =>
-    entry.routes.some(
-      (route) =>
-        route.agents.includes(agent) &&
-        (candidates.has(entry.id) || candidates.has(route.modelId)),
-    ),
-  );
-  const uniqueEntries = [
-    ...new Map(matches.map((entry) => [entry.id, entry])).values(),
-  ];
-  if (uniqueEntries.length !== 1) return undefined;
-
-  const entry = uniqueEntries[0]!;
   const perAgent = entry.perAgent?.[agent];
   const efforts = perAgent?.efforts ?? entry.efforts;
   if (!efforts) return undefined;
@@ -107,6 +83,75 @@ function registryEffortMetadata(
         ? DEFAULT_CUSTOM_EFFORT
         : (efforts[efforts.length - 1] ?? null);
   return { efforts: [...efforts], defaultEffort };
+}
+
+function consensusRegistryEffortMetadata(
+  entries: readonly ModelRegistry["models"][number][],
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  const uniqueEntries = [
+    ...new Map(entries.map((entry) => [entry.id, entry])).values(),
+  ];
+  const metadata = uniqueEntries.map((entry) =>
+    toRegistryEffortMetadata(entry, agent),
+  );
+  const first = metadata[0];
+  if (
+    !first ||
+    metadata.some(
+      (value) =>
+        !value ||
+        value.defaultEffort !== first.defaultEffort ||
+        value.efforts.length !== first.efforts.length ||
+        value.efforts.some((effort, index) => effort !== first.efforts[index]),
+    )
+  ) {
+    return undefined;
+  }
+  return first;
+}
+
+/**
+ * 仅在模型能由当前 agent 的 Registry route 唯一识别，或所有匹配
+ * 条目的 effort 元数据完全一致时复用该能力。
+ * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
+ */
+function registryEffortMetadata(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  if (agent === "pi" || !registry) return undefined;
+
+  // Stage 1 — exact lookup: only the original modelId.
+  const exactMatches = registry.models.filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (entry.id === modelId || route.modelId === modelId),
+    ),
+  );
+  if (exactMatches.length > 0) {
+    return consensusRegistryEffortMetadata(exactMatches, agent);
+  }
+
+  // Stage 2 — prefix fallback: only when Stage 1 found nothing.
+  // Strip common provider prefixes so third-party custom API models
+  // (e.g. "openai/gpt-5.6-sol") can match registry entries whose
+  // route.modelId is just "gpt-5.6-sol".
+  const stripped = new Set<string>();
+  for (const prefix of ['openai/', 'xd/', 'chatgpt/']) {
+    if (modelId.startsWith(prefix)) stripped.add(modelId.slice(prefix.length));
+  }
+  if (stripped.size === 0) return undefined;
+  const fallbackMatches = registry.models.filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (stripped.has(entry.id) || stripped.has(route.modelId)),
+    ),
+  );
+  return consensusRegistryEffortMetadata(fallbackMatches, agent);
 }
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
@@ -191,6 +236,10 @@ function toRouting(
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
+    ...(agent === 'codex'
+      && (wireProtocol ?? defaultWireProtocol(agent)) === 'openai-responses'
+      ? { supportsResponsesCustomTools: false }
+      : {}),
     ...(strategy === "none" &&
     (!isLoopbackProviderUrl(baseUrl) ||
       (modelsUrl !== undefined && !isLoopbackProviderUrl(modelsUrl)))

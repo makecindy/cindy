@@ -240,6 +240,10 @@ class FakeSession implements SessionLike {
     };
   }
 
+  hasListener(): boolean {
+    return this.listener !== null;
+  }
+
   isTurnRunning(): boolean {
     return this.running;
   }
@@ -2509,6 +2513,67 @@ describe('GoalController', () => {
     expect(local.updates.filter((update) => update.goal === null)).toHaveLength(1);
   });
 
+  it('drains a pending completion commit before controller disposal completes', async () => {
+    let completionCalls = 0;
+    let releaseCompletion!: () => void;
+    const blockedCompletion = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const local = makeController({
+      persistGoalCompletion: async () => {
+        completionCalls += 1;
+        await blockedCompletion;
+      },
+    });
+    const clear = vi.spyOn(local.storage, 'clear');
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(completionCalls).toBe(1));
+
+    const disposing = local.controller.dispose();
+    releaseCompletion();
+    await disposing;
+    await tick();
+
+    expect(clear).toHaveBeenCalledWith('s1');
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(0);
+  });
+
+  it('drains an in-flight completion clear during disposal without publishing stale status', async () => {
+    const local = makeController();
+    const originalClear = local.storage.clear.bind(local.storage);
+    let clearCalls = 0;
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => {
+      releaseClear = resolve;
+    });
+    vi.spyOn(local.storage, 'clear').mockImplementation(async (sessionId) => {
+      clearCalls += 1;
+      await blockedClear;
+      await originalClear(sessionId);
+    });
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(clearCalls).toBe(1));
+
+    const disposing = local.controller.dispose();
+    releaseClear();
+    await disposing;
+    await tick();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(0);
+  });
+
   it('finishes the completion commit if Stop arrives while clearing goal storage', async () => {
     const local = makeController();
     const originalClear = local.storage.clear.bind(local.storage);
@@ -3178,6 +3243,47 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.status).toBe('paused');
     expect(h.updates.at(-1)?.goal?.status).toBe('paused');
     expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('does not let a startup resume scan repopulate runtime state after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseList!: (states: GoalState[]) => void;
+    const blockedList = new Promise<GoalState[]>((resolve) => {
+      releaseList = resolve;
+    });
+    vi.spyOn(local.storage, 'listActive').mockReturnValueOnce(blockedList);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    local.controller.dispose();
+    releaseList([active]);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
+  });
+
+  it('does not let a per-goal startup lookup attach after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    vi.spyOn(local.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    await vi.waitFor(() => expect(local.storage.get).toHaveBeenCalledWith('s1'));
+    local.controller.dispose();
+    releaseGet(active);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
   });
 
   it('resumeOnOpen 在释放 route 锁前挂 listener，并在会话随即关闭后迁移到重建会话', async () => {
@@ -4304,4 +4410,140 @@ describe('GoalController', () => {
     expect(st?.lastReason).toBe('usage limit reached');
   });
 
+});
+
+// ── dispose / GoalControllerDisposedError ───────────────────────────────────
+
+describe('GoalController disposal', () => {
+  it('setGoal rejects after dispose', async () => {
+    const h = makeController();
+    h.controller.dispose();
+    await expect(
+      h.controller.setGoal({ sessionId: 's1', objective: 'x', agentKind: 'claude-code' }),
+    ).rejects.toThrow('GoalController has been disposed');
+  });
+
+  it('resumeGoal is no-op after dispose (auto)', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // resumeGoal with auto:true returns early when turns map is empty (no throw).
+    await expect(h.controller.resumeGoal('s1', { auto: true })).resolves.toBeUndefined();
+  });
+
+  it('clearGoal is no-op after dispose', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // clearGoal does not call assertActive — it is a safe cleanup operation.
+    // After dispose it should not throw; the turns map is already empty.
+    await expect(h.controller.clearGoal('s1')).resolves.toBeUndefined();
+  });
+
+  it('all public lifecycle entry points stay inert after dispose', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused' }));
+    h.controller.dispose();
+
+    await expect(h.controller.updateGoal('s1', { objective: 'later' })).resolves.toBeNull();
+    await expect(h.controller.pauseGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.maybeContinueActiveGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeOnOpen('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeActiveGoals()).resolves.toBeUndefined();
+    await expect(h.controller.getStatus('s1')).resolves.toBeNull();
+    await expect(
+      h.controller.applyClarificationAnswer(
+        's1',
+        { objective: 'later' },
+        [{ options: [{ label: 'task' }] }],
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      objective: 'old objective',
+    });
+    expect(h.session.sends).toHaveLength(0);
+    expect(h.updates).toHaveLength(0);
+  });
+
+  it('dispose clears turns and listeners', async () => {
+    const h = makeController();
+    await startGoal(h);
+    // Start a turn to register listeners.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 100 });
+    await new Promise((r) => setTimeout(r, 0));
+    const updatesBefore = h.updates.length;
+    h.controller.dispose();
+    // After dispose, no more status updates should be emitted.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 200 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.updates.length).toBe(updatesBefore);
+  });
+
+  it('dispose is idempotent', () => {
+    const h = makeController();
+    h.controller.dispose();
+    h.controller.dispose(); // should not throw
+  });
+
+  it('drains a create marker before disposal completes', async () => {
+    const h = makeController();
+    const originalUpsert = h.storage.upsert.bind(h.storage);
+    let markUpsertStarted!: () => void;
+    const upsertStarted = new Promise<void>((resolve) => {
+      markUpsertStarted = resolve;
+    });
+    let releaseUpsert!: () => void;
+    const blockedUpsert = new Promise<void>((resolve) => {
+      releaseUpsert = resolve;
+    });
+    vi.spyOn(h.storage, 'upsert').mockImplementationOnce(async (state) => {
+      markUpsertStarted();
+      await blockedUpsert;
+      return originalUpsert(state);
+    });
+
+    const create = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing objective' });
+    await upsertStarted;
+    const disposing = h.controller.dispose();
+    releaseUpsert();
+    await disposing;
+
+    await expect(create).resolves.toBeNull();
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', objective: 'outgoing objective' });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('drains an edit marker before disposal completes', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused', objective: 'old objective' }));
+    const originalUpdate = h.storage.update.bind(h.storage);
+    let markUpdateStarted!: () => void;
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve;
+    });
+    let releaseUpdate!: () => void;
+    const blockedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(h.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markUpdateStarted();
+      await blockedUpdate;
+      return originalUpdate(sessionId, patch);
+    });
+
+    const edit = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing edit' });
+    await updateStarted;
+    const disposing = h.controller.dispose();
+    releaseUpdate();
+    await disposing;
+
+    await expect(edit).resolves.toBeNull();
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', objective: 'outgoing edit' });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.session.sends).toHaveLength(0);
+  });
 });

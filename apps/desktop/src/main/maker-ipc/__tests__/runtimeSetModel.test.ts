@@ -365,6 +365,42 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('closes an idle OpenAI thread when the provider store was already overwritten with DeepSeek', async () => {
+    const sessionId = rememberSession('runtime-set-model-stale-openai-thread-to-deepseek');
+    setSessionProvider(sessionId, 'deepseek');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_openai',
+        model: 'deepseek/deepseek-v4-pro',
+        setModel,
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => false,
+      }],
+      closeSession,
+    };
+
+    const result = await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'deepseek/deepseek-v4-pro',
+      providerId: 'deepseek',
+    });
+
+    expect(result).toEqual({ status: 'applied' });
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('deepseek');
+  });
+
   it('defers a busy subscription-to-XD Codex switch to the turn boundary (远端压缩身份边界)', async () => {
     const sessionId = rememberSession('runtime-set-model-busy-superset-no-channel');
     setSessionProvider(sessionId, 'openai');

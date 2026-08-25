@@ -1,13 +1,6 @@
 import { registerColor } from './color-registry';
 import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from './effortTierColors';
 
-function createNotAllowedCursor(stroke: string): string {
-  const encodedStroke = stroke.startsWith('#')
-    ? `%23${stroke.slice(1)}`
-    : encodeURIComponent(stroke);
-  return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='${encodedStroke}' stroke-width='2.6'/%3E%3Cpath d='M9.2 22.8 22.8 9.2' fill='none' stroke='${encodedStroke}' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E") 16 16, not-allowed`;
-}
-
 /* === P3.2: Semantic slot tokens === */
 registerColor('surface', {
   light: '#f8f8f6',
@@ -190,10 +183,6 @@ registerColor('text-placeholder', {
   light: '#c4c4c4',
   dark: '#525252',
 }, 'Placeholder 文字 — 必须读着像空(比 tertiary 更淡);统一 slot,各输入面 placeholder alias 均收口于此');
-registerColor('cursor-not-allowed', {
-  light: createNotAllowedCursor('#373737'),
-  dark: createNotAllowedCursor('#d4d4d4'),
-}, 'Windows disabled cursor SVG (完整 cursor 值,可由主题覆盖)');
 registerColor('accent-cta-bg', {
   light: '#262626',
   dark: '#ffffff',

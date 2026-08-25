@@ -270,6 +270,12 @@ export interface AgentInputCoordinatorDeps {
   isTurnRunning: (sessionId: string) => boolean;
   /** Live Session only — must not OR the desktop tracker. undefined = probe unavailable. */
   isLiveTurnRunning?: (sessionId: string) => boolean | undefined;
+  /**
+   * Whether a live Session object exists. Distinct from isLiveTurnRunning:
+   * found+idle is present=true/running=false; process gone is present=false;
+   * owner-boundary lookup failure is undefined and must stay fail-closed.
+   */
+  isLiveSessionPresent?: (sessionId: string) => boolean | undefined;
   /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
   getTurnGeneration?: (sessionId: string) => number | null;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
@@ -637,6 +643,8 @@ interface SessionInputState {
    * flips idle; reconcile only after SESSION_RUNNING_RETRY_DELAY_MS.
    */
   staleLiveIdleSinceMs: number | null;
+  /** Leftover terminal fence: Session incarnation + the generation that was reclaimed. */
+  fencedStaleTerminal: { instanceId: string; generation: number } | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -669,6 +677,7 @@ interface PendingAutoResumeRecovery {
 function createInitialInputState(
   generation = 0,
   clearBoundaryMs: number | null = null,
+  fencedStaleTerminal: { instanceId: string; generation: number } | null = null,
 ): SessionInputState {
   return {
     pendingQueue: [],
@@ -701,6 +710,7 @@ function createInitialInputState(
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
     staleLiveIdleSinceMs: null,
+    fencedStaleTerminal,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -708,6 +718,25 @@ function createInitialInputState(
     generation,
     clearBoundaryMs,
   };
+}
+
+function readSessionInstanceId(identity: object | null | undefined): string | null {
+  if (!identity || typeof identity !== 'object') return null;
+  const id = (identity as { instanceId?: unknown }).instanceId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+export function isMatchingFencedStaleTerminal(
+  fence: { instanceId: string; generation: number } | null | undefined,
+  meta?: { sessionTurnGeneration?: number; sessionInstanceId?: string },
+): boolean {
+  if (!fence) return false;
+  return (
+    typeof meta?.sessionTurnGeneration === 'number' &&
+    typeof meta.sessionInstanceId === 'string' &&
+    meta.sessionInstanceId === fence.instanceId &&
+    meta.sessionTurnGeneration <= fence.generation
+  );
 }
 /**
  * 首次进入 main 队列边界时冻结原始合成指令意图。IPC payload 属不可信输入，
@@ -2936,7 +2965,10 @@ export class AgentInputCoordinator {
     // 显式清上下文:强制开启持久化闸门,让 emit 写出空快照(删行),
     // 即使此前该会话从未触发恢复(否则旧快照残留,下次打开会诈尸)。
     this.restoredQueueSessions.add(sessionId);
-    this.states.set(sessionId, createInitialInputState(prev.generation + 1, clearBoundaryMs));
+    this.states.set(
+      sessionId,
+      createInitialInputState(prev.generation + 1, clearBoundaryMs, prev.fencedStaleTerminal),
+    );
     this.emit(sessionId);
     return this.getProjection(sessionId);
   }
@@ -2947,13 +2979,30 @@ export class AgentInputCoordinator {
    * coordinator 里做那个判断——它是「这条错误是什么」的领域知识，属于 host 侧的
    * interruptedTurnAutoResume；coordinator 只负责回答「有没有可续跑的目标」。
    */
+  isFencedStaleTerminal(
+    sessionId: string,
+    meta?: { sessionTurnGeneration?: number; sessionInstanceId?: string },
+  ): boolean {
+    return isMatchingFencedStaleTerminal(this.getState(sessionId).fencedStaleTerminal, meta);
+  }
+
   onTurnEvent(
     sessionId: string,
     type: 'done' | 'error',
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    meta?: { sessionTurnGeneration?: number; sessionInstanceId?: string },
   ): void {
     const state = this.getState(sessionId);
+    if (this.isFencedStaleTerminal(sessionId, meta)) {
+      log.debug('ignored stale terminal after leftover turn reclaim', {
+        sessionId,
+        type,
+        eventGeneration: meta?.sessionTurnGeneration ?? null,
+        sessionInstanceId: meta?.sessionInstanceId ?? null,
+      });
+      return;
+    }
     const active = state.activeTurn;
     state.staleLiveIdleSinceMs = null;
     this.clearAbortReconcileRetry(state);
@@ -3416,12 +3465,26 @@ export class AgentInputCoordinator {
 
   /**
    * Live Session idle + host tracker still busy is an invariant break.
-   * Reconcile the tracker so queued input can drain without a user Stop / steer.
-   * Do not call this while a send is in flight, an activeTurn still owns the
-   * generation, a permission card is up, or abort/steer already owns the boundary.
-   * Dispatched-but-not-started turns (Pi may accept a prompt before agent_start)
-   * must wait for real lifecycle events — do not synthesize done.
+   * Reconcile so queued input can drain without Stop / steer.
+   * Do not call this while a send is in flight, a permission card is up, or
+   * abort/steer already owns the boundary.
+   *
+   * Leftover `activeTurn` is reclaimed only when it is already dispatched and
+   * we can prove the vendor turn is gone: the Session object is missing, or the
+   * live Session is idle while the desktop tracker is still latched. A present
+   * Session with an idle tracker may still be in the Pi gap after handle.send
+   * (reservation released, agent_start not yet observed). Pre-dispatch owners
+   * and unavailable probes stay fail-closed.
    */
+  private canReclaimLeftoverActiveTurn(sessionId: string, state: SessionInputState): boolean {
+    const active = state.activeTurn;
+    if (!active || !isActiveTurnDispatched(active)) return false;
+    const present = this.deps.isLiveSessionPresent?.(sessionId);
+    if (present === false) return true;
+    if (present !== true) return false;
+    return this.deps.isTurnRunning(sessionId) === true;
+  }
+
   private tryReconcileStaleDispatchBoundary(
     sessionId: string,
     state: SessionInputState,
@@ -3432,8 +3495,7 @@ export class AgentInputCoordinator {
       state.queueInteractionLocks.length > 0 ||
       state.steeringQueueClientIds.length > 0 ||
       state.pendingExternalTerminalDone ||
-      this.deps.hasPendingInteraction(sessionId) ||
-      state.activeTurn !== null
+      this.deps.hasPendingInteraction(sessionId)
     ) {
       state.staleLiveIdleSinceMs = null;
       return false;
@@ -3444,13 +3506,19 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    if (!this.deps.isTurnRunning(sessionId)) {
+    const leftoverActiveTurn = state.activeTurn !== null;
+    const trackerBusy = this.deps.isTurnRunning(sessionId);
+    const reclaimLeftover = leftoverActiveTurn && this.canReclaimLeftoverActiveTurn(sessionId, state);
+    if (leftoverActiveTurn && !reclaimLeftover) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
+    if (!trackerBusy && !reclaimLeftover) {
       state.staleLiveIdleSinceMs = null;
       return false;
     }
 
     // Handle may already be idle while status/done is still queued in Session.
-    // Extra drains in this window must not confirm; wait the existing 250ms retry.
     if (state.staleLiveIdleSinceMs == null) {
       state.staleLiveIdleSinceMs = Date.now();
     }
@@ -3458,8 +3526,24 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
-    if (!reconciled) return false;
+    if (trackerBusy || reclaimLeftover) {
+      const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
+      if (!reconciled) return false;
+    }
+    if (reclaimLeftover) {
+      const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
+      const instanceId = readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
+      if (typeof vendorGeneration === 'number' && instanceId) {
+        state.fencedStaleTerminal = { instanceId, generation: vendorGeneration };
+      }
+      log.warn('reconciling leftover dispatched activeTurn after vendor idle', {
+        sessionId,
+        clientId: state.activeTurn?.item?.clientId ?? null,
+        dispatchLifecycle: state.activeTurn?.dispatchLifecycle ?? null,
+        fencedStaleTerminal: state.fencedStaleTerminal,
+      });
+      state.activeTurn = null;
+    }
     state.staleLiveIdleSinceMs = null;
     return true;
   }

@@ -50,8 +50,11 @@ export function ResourceUsageWindowLayout() {
   const presentationReadyAttemptRef = useRef(0);
   const presentationReadyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const presentationReadyDisposedRef = useRef(false);
-  // 首次隐藏挂载需要采一份数据完成预热；main 在 presentationReady 后会切回 false。
-  const [samplingActive, setSamplingActive] = useState(true);
+  // Windows 隐藏预热只挂载 renderer，不触发 OS 进程扫描；用户显式打开后由 Main
+  // 发送 true。其他平台保留现有首份快照预热行为。
+  const [samplingActive, setSamplingActive] = useState(
+    window.electronAPI.platform !== 'win32',
+  );
   // BrowserWindow hide 后 Chromium 不会继续更新鼠标命中，复用窗口时自绘按钮可能保留
   // 上一次点击留下的 focus / :hover。隐藏时重建一次 chrome，确保下次 show 从干净状态开始。
   const [windowChromeRevision, setWindowChromeRevision] = useState(0);
@@ -120,10 +123,18 @@ export function ResourceUsageWindowLayout() {
     report();
   }, []);
 
-  useAppShortcut('close-tab-or-window', () => {
+  const closeWindow = useCallback(() => {
+    // 走资源窗口专用关闭通道(controller.close → hideWindow + 焦点回归主窗口),
+    // 与快捷键一致;不用通用 windowClose() —— 后者在某些子窗口状态下可能落入主窗口
+    // 关闭流程。#3183:之前鼠标点标题栏 X 与快捷键走两条路径,关闭后焦点回不到主窗口,
+    // 用户感知为"打开用量后无法回去"。
     void window.electronAPI.resourceUsageWindow.close().catch((err) => {
-      log.warn('close window via shortcut failed', err);
+      log.warn('close window failed', err);
     });
+  }, []);
+
+  useAppShortcut('close-tab-or-window', () => {
+    closeWindow();
     return true;
   });
 
@@ -146,7 +157,7 @@ export function ResourceUsageWindowLayout() {
             className="flex h-full shrink-0 items-center"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            <WindowControls key={windowChromeRevision} />
+            <WindowControls key={windowChromeRevision} onClose={closeWindow} />
           </div>
         )}
       </div>

@@ -239,7 +239,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           // renders.
           {...(modelUrl ? { src: modelUrl } : {})}
           {...(poster ? { poster } : {})}
-          alt="3D model preview"
+          alt={t('chat.media.modelPreviewAlt')}
           // 带内嵌动画的 GLB(如 mivo animate_3d_model 绑定动作的产物)自动
           // 播放第一条动画轨;静态模型无动画轨时该属性为 no-op。
           autoplay

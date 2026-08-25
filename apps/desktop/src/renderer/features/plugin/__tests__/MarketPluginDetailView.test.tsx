@@ -23,7 +23,7 @@ const manifest: GhostManifest = {
   version: '1.3.11',
   kind: 'chip',
   entry: 'main.js',
-  slots: ['notify'],
+  notify: true,
 };
 
 const detail: PluginMarketDetail = {

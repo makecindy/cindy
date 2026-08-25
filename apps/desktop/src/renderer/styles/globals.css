@@ -1148,11 +1148,11 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
-/* 流式正文逐词淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
-   每个新词以 --motion-fast 从透明「浮现」,delay 由 rehypeStreamWordFade 按词序
-   写进 --wf-delay(上限 24ms/词,按排程预算自适应压缩)。不是逐字打字机 ——
-   词整体已就位,只有 opacity 渐变;pure-opacity 一次性动画,compositor-only。
-   `both`:delay 未到时停在 0% 帧(透明),避免先闪现再淡入。
+/* 流式正文分段淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
+   每个新词与 inline-code 原子以 --motion-fast 从透明「浮现」。普通聊天不做
+   跨词 stagger,新段的 --wf-delay 为 0ms;已见段 remount 时可用负 delay 恢复
+   原动画进度。不是逐字打字机 —— 段整体已就位,只有 opacity 渐变;
+   pure-opacity 一次性动画,compositor-only。`both` 保证负 delay / remount 续播。
    reduced-motion 双保险:JS 侧短路(插件不挂载,span 不进 DOM)+ 下方 reduce
    块的 animation: none(摘掉动画连同 both 填充,span 落回自然 opacity 1,
    不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
@@ -1989,10 +1989,12 @@ body.resizing-pane [data-ghost-webview] {
     color: var(--sidebar-item-active-foreground);
   }
 
-  html[data-platform='win32'] .cursor-not-allowed,
-  html[data-platform='win32'] .disabled\:cursor-not-allowed:disabled,
-  html[data-platform='win32'] .data-\[disabled\]\:cursor-not-allowed[data-disabled] {
-    cursor: var(--cursor-not-allowed, not-allowed);
+  /* Disabled controls keep the ordinary desktop arrow. Their visual disabled
+     state already comes from opacity/color, so a separate cursor adds noise. */
+  .cursor-not-allowed,
+  .disabled\:cursor-not-allowed:disabled,
+  .data-\[disabled\]\:cursor-not-allowed[data-disabled] {
+    cursor: default;
   }
 }
 
@@ -2146,6 +2148,15 @@ body.resizing-pane [data-ghost-webview] {
 [data-theme='cindy-dark'] aside.bg-sidebar {
   background: var(--surface-translucent-sidebar);
   /* backdrop-filter 移除:CSS blur 采样不到窗外壁纸,且已知会把透明窗背衬渲染成黑;壁纸模糊由原生 vibrancy 材质提供 */
+}
+/* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
+   扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
+   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。 */
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]),
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: transparent;
 }
 /* Sidebar peek 抽屉是 fixed overlay,它覆盖的是应用内容而不是窗外壁纸;这里需要
    单独 blur 被覆盖的应用 UI,避免 hover 预览时正文直接透出来。常规展开态仍交给

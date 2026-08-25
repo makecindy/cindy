@@ -460,7 +460,7 @@ describe('interaction shared model', () => {
     });
 
     expect(buildPendingInteractionQueuePresentation(interactions, { readOnly: true }).hint)
-      .toBe('协作只读模式，仅展示电脑端请求。');
+      .toBe('协同只读模式，仅展示电脑端请求。');
     expect(buildPendingInteractionQueuePresentation([])).toMatchObject({
       active: null,
       countLabel: '当前',

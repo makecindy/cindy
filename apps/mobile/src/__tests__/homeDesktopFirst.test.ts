@@ -70,7 +70,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain("title: 'Chats'");
     expect(source).not.toContain('placeholder="Search Chats"');
     expect(source).not.toContain('placeholder="搜索会话"');
-    expect(source).not.toContain('home.searchInput');
+    expect(source).not.toContain('testID="home.searchToggleButton"');
     expect(source).not.toContain('styles.bottomBar');
     expect(source).not.toContain('styles.newChatText');
     expect(source).not.toContain('home.projectNewSessionButton');
@@ -121,6 +121,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
     const chromeDrawer = readSource('src/session/HomeChromeDrawer.tsx');
     expect(chromeDrawer).toContain('testID="devices.settingsButton"');
+    expect(chromeDrawer).toContain('testID="home.chromeDrawer.search"');
     expect(chromeDrawer).toContain('testID="home.chromeDrawer.account"');
     expect(chromeDrawer).toContain('openSettingsImmediately');
     expect(chromeDrawer).toContain('closeInstant');
@@ -161,6 +162,29 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("position: 'absolute'");
     expect(source).toContain('bottom: CINDY_LIST_FAB_BOTTOM');
     expect(source).toContain('right: CINDY_LIST_GUTTER');
+  });
+
+  it('opens desktop-parity search filters from the search sliders, not display settings', () => {
+    const source = readSource('app/devices/index.tsx');
+    const searchBar = readSource('src/session/HomeSearchBar.tsx');
+    const filterSheet = readSource('src/session/ConversationSearchFilterSheet.tsx');
+
+    expect(source).toContain('<HomeSearchBar');
+    expect(source).toContain('onOpenFilter={() => setSearchFilterOpen(true)}');
+    expect(source).not.toContain('onOpenFilter={openDisplaySettings}');
+    expect(source).toContain('<ConversationSearchFilterSheet');
+    expect(searchBar).toContain('testID={testIDs?.filter ?? \'home.searchFilterButton\'}');
+    expect(filterSheet).toContain('testID="home.searchFilter"');
+    expect(filterSheet).toContain('devices.list.search.filter.sortHeading');
+    expect(filterSheet).toContain('devices.list.search.filter.statusHeading');
+    expect(filterSheet).toContain('devices.list.search.filter.projectsHeading');
+    expect(filterSheet).toContain('devices.list.search.filter.agentHeading');
+    expect(filterSheet).toContain('devices.list.search.filter.lastActivityHeading');
+    expect(filterSheet).toContain('devices.list.search.filter.label');
+    expect(filterSheet).toContain("'all', 'cc', 'codex', 'pi'");
+    expect(source).toContain('conversationSearchOriginsFromDeviceModels');
+    expect(source).toContain('setConversationSearchDeviceModels');
+    expect(source).not.toContain(': deviceModels.filter((item) => item.canOpen);');
   });
 
   it('uses TapTap blue for the online dot treatment', () => {

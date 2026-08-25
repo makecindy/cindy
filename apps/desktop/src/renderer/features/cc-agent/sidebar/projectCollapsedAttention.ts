@@ -112,3 +112,22 @@ export function resolveCollapsedGroupRightStatus({
   if (tone === 'done' && latestKind === 'time') return 'done';
   return latestKind;
 }
+
+/**
+ * 组头点击打开哪一条。展开态仍打开最新一条;收起且整组是红时,
+ * 打开贡献红点的那条,避免点红进到后来成功的巡检。
+ */
+export function resolveCollapsedGroupHeaderSessionId({
+  collapsed,
+  latestSessionId,
+  attention,
+}: {
+  collapsed: boolean;
+  latestSessionId: string | undefined;
+  attention: Pick<CollapsedAttentionSummary, 'tone' | 'errorSessionIds'>;
+}): string | undefined {
+  if (collapsed && attention.tone === 'error' && attention.errorSessionIds[0]) {
+    return attention.errorSessionIds[0];
+  }
+  return latestSessionId;
+}

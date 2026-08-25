@@ -1,11 +1,11 @@
 /**
  * HomeChromeDrawer —— 首页左上角系统菜单。
  *
- * 从左边滑出,不是下拉卡:现在只有设置一项,以后会往里加入口。
+ * 从左边滑出,不是下拉卡:现在有搜索任务和设置。
  * 树内 overlay(不用 RN Modal),避免和首页其它 Modal 抢 present/dismiss。
  * 动画 / 左滑关闭对齐 SessionListDrawer,遵循 reduce-motion。
  */
-import { Settings } from 'lucide-react-native';
+import { Search, Settings } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -51,6 +51,7 @@ export function HomeChromeDrawer({
   closeInstant = false,
   onClose,
   onClosed,
+  onOpenSearch,
   onOpenSettings,
   open,
   user,
@@ -59,6 +60,7 @@ export function HomeChromeDrawer({
   closeInstant?: boolean;
   onClose(): void;
   onClosed?(): void;
+  onOpenSearch(): void;
   onOpenSettings(): void;
   open: boolean;
   user: { avatar: string | null; email: string | null; name: string } | null;
@@ -248,6 +250,17 @@ export function HomeChromeDrawer({
           </Pressable>
 
           <View style={styles.divider} />
+
+          <Pressable
+            accessibilityLabel={t('devices.list.a11y.openSearch')}
+            accessibilityRole="button"
+            onPress={onOpenSearch}
+            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
+            testID="home.chromeDrawer.search"
+          >
+            <Search color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.list.menu.search')}</Text>
+          </Pressable>
 
           <Pressable
             accessibilityLabel={t('devices.list.a11y.openSettings')}

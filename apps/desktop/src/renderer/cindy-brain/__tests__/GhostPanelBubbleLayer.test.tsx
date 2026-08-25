@@ -37,7 +37,6 @@ function ghost(id: string, enabled = true): InstalledGhost {
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['panel'],
     panel: { title: `${id} 面板`, html: 'panel.html' },
   };
   return {

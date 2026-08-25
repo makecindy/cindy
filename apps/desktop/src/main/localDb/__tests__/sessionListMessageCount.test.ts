@@ -206,16 +206,15 @@ describe('sessions:list messageCount source', () => {
   it('keeps the production query pinned to the covering-index column', () => {
     const source = readFileSync(path.join(__dirname, '..', 'ipc', 'sessions.ts'), 'utf-8');
 
-    // 单行 get/update 路径：LEFT JOIN 形状，count 必须走覆盖索引列常量。
-    expect(source).toMatch(/const MESSAGE_COUNT_COL = messages\.sessionId;/);
-    expect(source).toMatch(/messageCount: count\(MESSAGE_COUNT_COL\),/);
-
-    // list 路径：两段式，count 走标量子查询常量。
+    // list / get / update 都走同一条标量子查询，不再 LEFT JOIN 该会话全部消息。
     expect(source).toMatch(/messageCount: SESSION_MESSAGE_COUNT_SQL,/);
+    expect(source).not.toMatch(/leftJoin\(messages/);
+    expect(source).not.toMatch(/MESSAGE_COUNT_COL/);
     // 标量子查询里必须是 count(*)（无 LEFT JOIN 补行，空会话得 0），且限定 session_id。
     expect(source).toMatch(
       /SESSION_MESSAGE_COUNT_SQL = sql<number>`\(\s*SELECT count\(\*\) FROM messages m WHERE m\.session_id = \$\{sessions\.id\}/,
     );
+    expect(source).toMatch(/ORDER BY m\.created_at DESC, m\.rowid DESC LIMIT 1/);
 
     // 回表写法在任何路径都不允许。锚定的是 select 字段的**代码形态**（`messageCount:`
     // 紧跟内联的 messages 列），而不是裸的 `count(messages.id)` 字符串——后者会把

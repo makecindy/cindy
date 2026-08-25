@@ -40,7 +40,7 @@ export interface WorkLouderCodexSettingsIpcDeps {
   openInputMonitoringSettings(): Promise<void>;
   probeDevice(): void;
   publishTasks(tasks: readonly WorkLouderCodexPublishedTask[]): void;
-  setLayoutPreviewActive(active: boolean): void;
+  setLayoutPreviewActive(active: boolean, event: unknown): void;
 }
 
 function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
@@ -335,7 +335,7 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
       if (typeof value !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'layout preview flag must be a boolean');
       }
-      deps.setLayoutPreviewActive(value);
+      deps.setLayoutPreviewActive(value, event);
     },
   };
 }

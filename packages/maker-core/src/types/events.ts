@@ -68,6 +68,7 @@ export interface AgentTaskUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+  costUsd?: number;
 }
 
 export interface AgentTaskUpdateEventData {
@@ -83,10 +84,17 @@ export interface AgentTaskUpdateEventData {
   description?: string;
   /** Provider summary or final subagent answer. */
   summary?: string;
+  /** Host-only complete terminal return; stripped before renderer/device-link broadcast. */
+  returnedResult?: string;
+  /** Distinguishes an explicit empty terminal return from an omitted field. */
+  returnedResultEmpty?: boolean;
+  /** The durable runner bounded the complete terminal return. */
+  returnedResultTruncated?: boolean;
   outputFile?: string;
   usage?: AgentTaskUsage;
   lastToolName?: string;
   taskType?: string;
+  subagentParentContext?: 'none' | 'snapshot' | 'live';
   workflowName?: string;
   /**
    * 实际模型名；`null` 是子代理多 receiver 观测冲突/显式清除的合法值，
@@ -94,6 +102,8 @@ export interface AgentTaskUpdateEventData {
    */
   model?: string | null;
   reasoningEffort?: string;
+  createdAt?: string;
+  updatedAt?: string;
   receiverThreadIds?: string[];
   /** Explicit durable-workspace identity; control/task-card-only updates omit it. */
   subagentObservation?: SubagentObservation;
@@ -157,6 +167,14 @@ export interface AgentEvent {
   turnOrigin?: SendOrigin;
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
+  /**
+   * Session.turnGeneration captured when runEventLoop started the next() that
+   * dequeued this event. Adoption of a later generation must not overwrite it,
+   * so a leftover terminal keeps the older value after the next send. Host-only.
+   */
+  sessionTurnGeneration?: number;
+  /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
+  sessionInstanceId?: string;
   /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
@@ -276,6 +294,11 @@ export type InteractionDecision =
       kind: 'ask_user_question';
       /** 用户对每道问题的回答, key=question(或 header), value=用户回答 */
       answers: Record<string, string>;
+      /**
+       * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
+       * 不是用户 Skip。Codex detached continuation 据此不发起续跑 turn。
+       */
+      dismissed?: boolean;
     }
   | {
       kind: 'plan_review';
@@ -331,6 +354,11 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
+  /**
+   * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
+   * 只由 Claude Code / Pi 的 AutoCompactController 锁存。
+   */
+  needsRollover?: boolean;
 }
 
 /**

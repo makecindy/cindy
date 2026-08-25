@@ -33,7 +33,7 @@ export interface MobileRemotePresentation {
   remoteEnabled: boolean;
   linkedMobileCount: number;
   otherDeviceCount: number;
-  selfDeviceId: string | null;
+  selfDeviceName: string | null;
   linkedMobileName: string | null;
   previewDevices: DeviceLinkDeviceView[];
 }
@@ -56,7 +56,7 @@ export function resolveMobileRemotePresentation(
       remoteEnabled: snapshot.enabled,
       linkedMobileCount: 0,
       otherDeviceCount: 0,
-      selfDeviceId: null,
+      selfDeviceName: null,
       linkedMobileName: null,
       previewDevices: [],
     };
@@ -81,7 +81,7 @@ export function resolveMobileRemotePresentation(
     remoteEnabled: snapshot.enabled,
     linkedMobileCount: linkedMobileDevices.length,
     otherDeviceCount: otherDevices.length,
-    selfDeviceId: selfDevice?.deviceId ?? null,
+    selfDeviceName: selfDevice?.name ?? null,
     linkedMobileName: linkedMobileDevices[0]?.name ?? null,
     previewDevices,
   };
@@ -593,13 +593,13 @@ export function MobileDownloadDialog({
                   <span className="text-13 font-medium leading-[1.385] text-[var(--confirm-title)]">
                     {t('sidebar.mobileDownload.allowControl')}
                   </span>
-                  {remotePresentation?.selfDeviceId ? (
+                  {remotePresentation?.selfDeviceName ? (
                     <span
-                      className="mt-0.5 truncate font-mono text-10 leading-[1.4] text-[var(--confirm-desc)]"
-                      title={remotePresentation.selfDeviceId}
+                      className="mt-0.5 truncate text-11 leading-[1.4] text-[var(--confirm-desc)]"
+                      title={remotePresentation.selfDeviceName}
                     >
-                      {t('sidebar.mobileDownload.deviceId', {
-                        id: remotePresentation.selfDeviceId,
+                      {t('sidebar.mobileDownload.deviceName', {
+                        name: remotePresentation.selfDeviceName,
                       })}
                     </span>
                   ) : null}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CC_MGR_BUNDLE_VERSION,
   PROTOCOL_VERSION,
   METHODS,
   NOTIFICATIONS,
@@ -18,8 +19,12 @@ describe('protocol constants', () => {
     expect(PROTOCOL_VERSION).toBeGreaterThan(0);
   });
 
-  it('requires v4 so old daemons cannot ignore subagent model preflight', () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+  it('requires v5 so old daemons cannot reject native root-only guards', () => {
+    expect(PROTOCOL_VERSION).toBe(5);
+  });
+
+  it('bumps the daemon bundle when the wire contract changes', () => {
+    expect(CC_MGR_BUNDLE_VERSION).toBe('0.0.10');
   });
 
   it('METHODS has expected method names', () => {

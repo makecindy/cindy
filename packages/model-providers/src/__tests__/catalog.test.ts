@@ -145,6 +145,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect((xai.models.codex ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
     expect((xai.models.pi ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_PI_IDS);
     expect(xai.models.pi?.find((m) => m.id === 'grok-4.6')).toMatchObject({
+      piApi: 'openai-responses',
       contextWindow: 500_000,
       maxOutput: 500_000,
       supportsImageInput: true,
@@ -178,6 +179,12 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
         expect(Array.isArray(p.models[a]), `${p.id} models[${a}]`).toBe(true);
       }
     }
+  });
+
+  it('declares native Responses custom-tool support on each built-in Codex Responses route', () => {
+    expect(provider('openai').routing.codex?.supportsResponsesCustomTools).toBe(true);
+    expect(provider('xd').routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(provider('xai').routing.codex?.supportsResponsesCustomTools).toBe(false);
   });
 
   it('declares access separately from model names', () => {

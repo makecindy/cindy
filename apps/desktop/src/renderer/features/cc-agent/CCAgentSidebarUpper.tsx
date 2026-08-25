@@ -97,6 +97,7 @@ import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
+import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -120,10 +121,7 @@ import { useCollapsedProjects } from './hooks/useCollapsedProjects';
 import { useOrcaLeadWorkerMap } from './hooks/useOrcaLeadWorkerMap';
 import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWatcher';
 import { useAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
-import {
-  markAllScheduleRunsReadAndSync,
-  markScheduleRunsReadAndSync,
-} from '../scheduler/lib/scheduleRunReadSync';
+import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
@@ -168,17 +166,17 @@ import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/Pinne
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { holdSidebarViewedPriority, ProjectsSection } from './sidebar/sections/ProjectsSection';
-import { isAutomationGeneratedSession } from './lib/scheduledSessionGrouping';
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
 import { onRequestSessionSwitch, pickAdjacentSessionId } from './lib/sessionSwitchCommands';
-import type {
-  AutomationScheduleAction,
-  AutomationScheduleSessionInfo,
-  AutomationSessionGroup,
+import {
+  unreadSuccessScheduleRunIds,
+  type AutomationScheduleAction,
+  type AutomationScheduleSessionInfo,
+  type AutomationSessionGroup,
 } from './lib/automationSidebarGrouping';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -487,68 +485,6 @@ export function CCAgentSidebarUpper() {
     return next;
   }, [scheduleSessionIndex]);
   const navigate = useNavigate();
-  const automationAttentionSessionIds = useMemo(
-    () =>
-      allSessionsForAttention
-        .filter(
-          (s) =>
-            isAutomationGeneratedSession(s) &&
-            (attentionNotifications.has(s.id) ||
-              scheduleSessionIndex.get(s.id)?.hasUnreadRun === true),
-        )
-        .map((s) => s.id),
-    [allSessionsForAttention, attentionNotifications, scheduleSessionIndex],
-  );
-  // automationAttentionSessionIds 仅供下方「全部标为已读」右键菜单使用;导航栏 /
-  // rail 的自动化入口不再显示未读 dot(未读 / 运行状态改由各 schedule 组头承载)。
-
-  // Automations 按钮右键菜单：复用 TaskListCell 的 "controlled DropdownMenu + 不可见 trigger 跟坐标"模式，
-  // state 提到 root —— 折叠/展开两个视图都用同一个 button 概念,菜单只渲染一次,避免两份重复 state。
-  const [automationsMenuPos, setAutomationsMenuPos] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const handleAutomationsContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setAutomationsMenuPos({ x: e.clientX, y: e.clientY });
-  }, []);
-  const handleMarkAllAutomationsRead = useCallback(async () => {
-    setAutomationsMenuPos(null);
-    // 先清 done / awaiting(passive,store 对 error 免疫):这部分是纯未读标记,
-    // 展示过就算已读,不需要落库处置。
-    clearSessionAttentionMany(automationAttentionSessionIds);
-    // error 红点是未处理告警的派生投影,**必须先落库处置再清点**:此前是乐观先清、
-    // 失败只记日志,一旦 dismissPendingAlerts 拒绝或只处理了部分会话,横幅仍在库里
-    // 而红点已经消失(还连带发了 explicit 桥接 / 远程回执),正是本 PR 要消灭的割裂。
-    // 现在成功才 explicit 清,失败则重算把仍存在的告警点恢复回来。
-    try {
-      const { processed, failed } = await window.electronAPI.localDb.sessions.dismissPendingAlerts(
-        automationAttentionSessionIds,
-      );
-      // 只清 main 侧**确切回报处置成功**的会话。不能用「不在 failed 里」推断成功:
-      // 请求集合里可能有本 IPC 根本不处理的告警来源(如 WorktreeRestoreBanner 打的
-      // 红点),那些会话既不成功也不失败,误清后重算也恢复不了(worktree 告警不进
-      // 那条查询)。
-      clearSessionAttentionMany(processed, { intent: 'explicit' });
-      if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
-    } catch (e) {
-      log.warn('dismiss pending alerts failed', e);
-    }
-    // 成功与失败都重算一次:成功路径收敛掉残留,失败路径把红点恢复成库里的真实告警。
-    void refreshPendingAlerts();
-    try {
-      const updated = await markAllScheduleRunsReadAndSync();
-      if (updated > 0) {
-        toast.success(t('ccAgent.layout.markedAsRead', { count: updated }));
-      }
-    } catch (e) {
-      toast.error(
-        t('ccAgent.layout.markAllReadFailed', {
-          error: e instanceof Error ? e.message : String(e),
-        }),
-      );
-    }
-  }, [automationAttentionSessionIds, t]);
 
   // Sidebar is rendered outside the :sessionId route, so useParams won't work.
   // Use useMatch to extract the active session id from the URL.
@@ -815,7 +751,6 @@ export function CCAgentSidebarUpper() {
           >
             <CollapsedView
               navigate={navigate}
-              onAutomationsContextMenu={handleAutomationsContextMenu}
               allSearchProjects={visibleSearchProjects}
               searchableSessionIds={visibleSearchSessionIds}
               hiddenProjectKeys={hiddenProjectKeys}
@@ -826,45 +761,6 @@ export function CCAgentSidebarUpper() {
               onReorderPinned={handleRailPinnedReorder}
             />
           </div>
-
-          {/* Automations 按钮右键菜单 —— 折叠/展开两份按钮共用此渲染。trigger 跟着 click 坐标定位。 */}
-          <DropdownMenu
-            open={automationsMenuPos !== null}
-            onOpenChange={(open) => {
-              if (!open) setAutomationsMenuPos(null);
-            }}
-          >
-            <DropdownMenuTrigger asChild>
-              <span
-                aria-hidden
-                style={{
-                  position: 'fixed',
-                  left: automationsMenuPos?.x ?? 0,
-                  top: automationsMenuPos?.y ?? 0,
-                  width: 0,
-                  height: 0,
-                  pointerEvents: 'none',
-                }}
-              />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              sideOffset={2}
-              className={cn(
-                'min-w-[180px] rounded-xl p-1 overflow-hidden',
-                'bg-[var(--cmd-palette-bg)]',
-                'border border-[var(--cmd-palette-border)]',
-                'shadow-[var(--shadow-menu)]',
-              )}
-            >
-              <DropdownMenuItem
-                onSelect={() => void handleMarkAllAutomationsRead()}
-                className="cursor-pointer text-sm text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]"
-              >
-                {t('ccAgent.layout.markAllAsRead')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       </SessionAttentionUrgencyProvider>
     </Tooltip.Provider>
@@ -986,6 +882,38 @@ function ExpandedView({
 
   const handleScheduleAction = useCallback(
     async (group: AutomationSessionGroup, action: AutomationScheduleAction) => {
+      if (action === 'mark-read') {
+        const sessionIds = group.sessions.map((session) => session.id);
+        clearSessionAttentionMany(sessionIds);
+        try {
+          const { processed, failed } = await window.electronAPI.localDb.sessions.dismissPendingAlerts(
+            sessionIds,
+          );
+          clearSessionAttentionMany(processed, { intent: 'explicit' });
+          if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
+        } catch (e) {
+          log.warn('dismiss pending alerts failed', e);
+        }
+        void refreshPendingAlerts();
+        const unreadRunIds = sessionIds.flatMap(
+          (sessionId) => scheduleSessionIndex.get(sessionId)?.unreadRunIds ?? [],
+        );
+        if (unreadRunIds.length > 0) {
+          const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds);
+          if (processed.length > 0) {
+            toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
+          }
+          if (failed.length > 0) {
+            toast.error(
+              t('ccAgent.layout.markAllReadFailed', {
+                error: firstError ?? String(failed.length),
+              }),
+            );
+          }
+        }
+        return;
+      }
+
       if (!group.scheduleId) return;
       const scheduleId = group.scheduleId;
       const scheduleName = group.title;
@@ -1101,7 +1029,7 @@ function ExpandedView({
         knownSessionIds: group.sessions.map((session) => session.id),
       });
     },
-    [confirmDialog, navigate, requestDeleteSchedule, t],
+    [confirmDialog, navigate, requestDeleteSchedule, scheduleSessionIndex, t],
   );
 
   const [confirm, setConfirm] = useState<ConfirmState>(CONFIRM_INITIAL);
@@ -1198,11 +1126,14 @@ function ExpandedView({
   const markAutomationSessionRunsRead = useCallback(
     (sessionId: string) => {
       const info = scheduleSessionIndex.get(sessionId);
-      if (!info?.unreadRunIds.length) return;
+      // 成功未读可以看过即已读;失败未读必须等横幅或组菜单显式「标为已读」,
+      // 否则点进去横幅立刻消失,红点又没有可处置入口。
+      const successUnreadRunIds = info ? unreadSuccessScheduleRunIds(info) : [];
+      if (successUnreadRunIds.length === 0) return;
       // …AndSync:settle 后无条件触发 renderer 本地刷新。跨实例场景下这些 runId
       // 可能在 DB 里早已被另一实例标为已读(main no-op 且不广播),没有本地刷新
       // 通道的话,这里的过期未读快照永远等不到事件、红点无法自愈。
-      void markScheduleRunsReadAndSync(info.unreadRunIds);
+      void markScheduleRunsReadAndSync(successUnreadRunIds);
     },
     [scheduleSessionIndex],
   );
@@ -3820,7 +3751,6 @@ function ExpandedView({
 
 interface CollapsedProps {
   navigate: ReturnType<typeof useNavigate>;
-  onAutomationsContextMenu: (e: React.MouseEvent) => void;
   /** 全量项目(供 rail 搜索图标钮的 ConversationSearchBox 用)。 */
   allSearchProjects: ProjectNode[];
   searchableSessionIds: string[];
@@ -3844,7 +3774,6 @@ interface CollapsedProps {
  */
 function CollapsedView({
   navigate,
-  onAutomationsContextMenu,
   allSearchProjects,
   searchableSessionIds,
   hiddenProjectKeys,
@@ -3945,8 +3874,8 @@ function CollapsedView({
         variant="rail"
         active={Boolean(onScheduleMatch)}
         onClick={handleNavScheduled}
-        onContextMenu={onAutomationsContextMenu}
       />
+      <GhostMainViewNavEntries variant="rail" />
       {/* 插件 rail 入口 —— 未读绿点与展开态 SidebarTopNav 对称(同一聚合语义:
           任一插件有未读就点亮,静态不呼吸)。 */}
       <SidebarIconButton

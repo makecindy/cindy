@@ -166,8 +166,21 @@ function allowsLegacyPiRuntimeBackfill(primary: Catalog): boolean {
 }
 
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
+function allowsBundledAccessInheritance(
+  primaryAccess: Provider['access'],
+  bundledAccess: Provider['access'],
+): boolean {
+  if (primaryAccess === undefined) return true;
+  if (bundledAccess === undefined || primaryAccess.kind !== bundledAccess.kind) return false;
+  return (
+    primaryAccess.kind !== 'subscription' ||
+    (bundledAccess.kind === 'subscription' && primaryAccess.product === bundledAccess.product)
+  );
+}
+
 function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access'] {
   if (primary.auth.method !== bundled.auth.method) return undefined;
+  if (!allowsBundledAccessInheritance(primary.access, bundled.access)) return undefined;
   const sharedAgents = primary.agents.filter((agent) => bundled.agents.includes(agent));
   if (sharedAgents.length === 0) return undefined;
   const sameRoutes = sharedAgents.every((agent) => {
@@ -181,6 +194,31 @@ function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access
     );
   });
   return sameRoutes ? bundled.access : undefined;
+}
+
+/**
+ * 回填新增的 Responses custom-tool capability 只认同一条官方 Codex 路由。
+ * 旧远端快照没有这个 append-only 字段；同 id 但改变了鉴权或 upstream 的供应商可能具备
+ * 完全不同的协议能力，不能因为名字相同就套用 bundled 结论。
+ */
+function bundledResponsesCustomToolCapabilityFor(
+  primary: Provider,
+  bundled: Provider,
+): boolean | undefined {
+  const current = primary.routing.codex;
+  const baseline = bundled.routing.codex;
+  if (
+    current === undefined
+    || baseline === undefined
+    || current.supportsResponsesCustomTools !== undefined
+    || baseline.supportsResponsesCustomTools === undefined
+    || primary.auth.method !== bundled.auth.method
+    || current.upstream !== baseline.upstream
+    || current.authStrategy !== baseline.authStrategy
+  ) {
+    return undefined;
+  }
+  return baseline.supportsResponsesCustomTools;
 }
 
 /** 图片能力只可沿用到未声明 access，或仍明确属于同一 bundled 订阅的旧条目。 */
@@ -261,10 +299,29 @@ function backfillPresetMetadata(
  */
 export function mergeWithBundled(primary: Catalog): Catalog {
   const bundledById = new Map(BUNDLED_CATALOG.providers.map((p) => [p.id, p]));
+  const allowLegacyPiBackfill = allowsLegacyPiRuntimeBackfill(primary);
   const withBundledMetadata = primary.providers.map((p) => {
     const bundled = bundledById.get(p.id);
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
+    const bundledResponsesCustomToolCapability = bundled
+      ? bundledResponsesCustomToolCapabilityFor(p, bundled)
+      : undefined;
     if (!bundled) return p;
+    // Pi became a first-class provider runtime in catalog v3. Production may still serve a v2
+    // xAI block that is otherwise the same SuperGrok subscription provider; whole-provider
+    // primary precedence would hide the newer bundled Pi route and models. Backfill the runtime
+    // only for a proven legacy snapshot with the unchanged subscription identity. Any partial Pi
+    // declaration or changed auth/upstream remains authoritative and is never guessed through.
+    const inheritPiRuntime =
+      allowLegacyPiBackfill &&
+      p.id === 'xai' &&
+      bundledAccess !== undefined &&
+      !p.agents.includes('pi') &&
+      p.routing.pi === undefined &&
+      p.models.pi === undefined &&
+      bundled.agents.includes('pi') &&
+      bundled.routing.pi !== undefined &&
+      bundled.models.pi !== undefined;
     const inheritImage =
       p.id === 'xai' &&
       p.imageModels === undefined &&
@@ -291,17 +348,43 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       bundled.embeddingModels !== undefined &&
       bundledAccess !== undefined &&
       allowsBundledImageInheritance(p.access, bundledAccess);
+    const inheritResponsesCustomToolCapability =
+      bundledResponsesCustomToolCapability !== undefined;
     if (
       !(p.access === undefined && bundledAccess !== undefined) &&
+      !inheritPiRuntime &&
       !inheritImage &&
       !inheritVideo &&
-      !inheritEmbedding
+      !inheritEmbedding &&
+      !inheritResponsesCustomToolCapability
     ) {
       return p;
     }
     return {
       ...p,
       ...(p.access === undefined && bundledAccess !== undefined ? { access: bundledAccess } : {}),
+      ...(inheritPiRuntime
+        ? {
+            agents: [...p.agents, 'pi' as const],
+            models: { ...p.models, pi: bundled.models.pi },
+          }
+        : {}),
+      ...(inheritPiRuntime || inheritResponsesCustomToolCapability
+        ? {
+            routing: {
+              ...p.routing,
+              ...(inheritPiRuntime ? { pi: bundled.routing.pi } : {}),
+              ...(inheritResponsesCustomToolCapability
+                ? {
+                    codex: {
+                      ...p.routing.codex!,
+                      supportsResponsesCustomTools: bundledResponsesCustomToolCapability,
+                    },
+                  }
+                : {}),
+            },
+          }
+        : {}),
       ...(inheritImage
         ? {
             imageModels: bundled.imageModels,
@@ -340,7 +423,6 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // 远端独有项按远端原序追加。避免旧远端的非空 presets 整段遮掉新版客户端内置条目。
   const primaryPresets = primary.presets ?? [];
   const bundledPresets = BUNDLED_CATALOG.presets ?? [];
-  const allowLegacyPiBackfill = allowsLegacyPiRuntimeBackfill(primary);
   const primaryPresetsById = new Map(primaryPresets.map((preset) => [preset.id, preset]));
   const bundledPresetIds = new Set(bundledPresets.map((preset) => preset.id));
   const presets = bundledPresets.map((bundled) => {

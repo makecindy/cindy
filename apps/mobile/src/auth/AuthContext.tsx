@@ -71,6 +71,7 @@ import {
 } from '@/auth/xdOrgBetaDefault';
 import { getAuthLocale, getLoginLanguage } from '@/auth/loginMessages';
 import { acquireNativeSocialCredential } from '@/auth/nativeSocial';
+import { rememberSsoOrgIdentifier } from '@/auth/ssoOrgHistory';
 import {
   matchesOAuthCallbackUrl,
   parseOAuthCallbackUrl,
@@ -1393,6 +1394,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               ).discoverSsoOrg(org);
             }
             const methods = ssoOrgDiscoveryToMethods(discovery);
+            // A sole same-region connection auto-starts browser authorization
+            // below. Persist the successful discovery first so cancel/timeout
+            // does not lose a valid organization identifier.
+            await rememberSsoOrgIdentifier(action.org);
             const currentState = loginStateRef.current;
             if (discovery.region !== BUILD_AUTH_REGION) {
               if (currentState?.step !== 'identifier') {

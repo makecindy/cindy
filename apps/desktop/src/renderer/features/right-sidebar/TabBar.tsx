@@ -96,6 +96,7 @@ interface TabBarProps {
   chromeWindowDrag?: boolean;
   /** Whether the installed product plugin currently exposes the Host viewer. */
   iosSimulatorAvailable?: boolean;
+  subagentsAvailable?: boolean;
 }
 
 interface TabStripProps {
@@ -127,6 +128,7 @@ interface TabStripProps {
   addButtonClassName?: string;
   /** Whether the installed product plugin currently exposes the Host viewer. */
   iosSimulatorAvailable?: boolean;
+  subagentsAvailable?: boolean;
 }
 
 const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
@@ -214,6 +216,7 @@ export function TabBar({
   onDetach,
   chromeWindowDrag = true,
   iosSimulatorAvailable = false,
+  subagentsAvailable = false,
 }: TabBarProps) {
   const { t } = useTranslation();
 
@@ -239,6 +242,7 @@ export function TabBar({
         addButtonWrapperClassName="h-[36px]"
         addButtonClassName="mt-[3px]"
         iosSimulatorAvailable={iosSimulatorAvailable}
+        subagentsAvailable={subagentsAvailable}
       />
 
       {/* Right: window controls. 仅 showWindowControls=true(Win 端)时渲染;
@@ -306,6 +310,7 @@ export function TabStrip({
   addButtonWrapperClassName,
   addButtonClassName,
   iosSimulatorAvailable = false,
+  subagentsAvailable = false,
 }: TabStripProps) {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
@@ -464,6 +469,7 @@ export function TabStrip({
             }}
             existingKinds={existingKinds}
             iosSimulatorAvailable={iosSimulatorAvailable}
+            subagentsAvailable={subagentsAvailable}
           />
         )}
       </div>

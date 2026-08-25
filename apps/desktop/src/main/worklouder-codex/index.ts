@@ -5,6 +5,7 @@ import { BrowserWindow, ipcMain, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { getDeepLinkMainWindow, openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
+import { createLayoutPreviewLease, layoutPreviewOwnerFromEvent } from '../input-devices/previewLease.js';
 import { registerInputDevice } from '../input-devices/registry.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import {
@@ -165,6 +166,10 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
   },
 );
 
+const layoutPreviewLease = createLayoutPreviewLease((active) => {
+  workLouderCodexLightingController.setLayoutPreviewActive(active);
+});
+
 let settingsIpcRegistered = false;
 let inputDeviceRegistered = false;
 
@@ -223,8 +228,8 @@ export function registerWorkLouderCodexSettingsIpc(): void {
       rendererTaskCatalogScope = scope;
       void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
     },
-    setLayoutPreviewActive: (active) => {
-      workLouderCodexLightingController.setLayoutPreviewActive(active);
+    setLayoutPreviewActive: (active, event) => {
+      layoutPreviewLease.setActive(active, layoutPreviewOwnerFromEvent(event));
     },
   });
 

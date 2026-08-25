@@ -131,7 +131,7 @@ describe('WorkLouderCodexSettings', () => {
           connectionReason: null,
           devicePresent: true,
           device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
-          settings: createWorkLouderCodexDefaultSettings(),
+          settings: { ...createWorkLouderCodexDefaultSettings(), deviceEnabled: true },
           agentSlots: Array.from({ length: 6 }, (_, slot) => ({
             slot,
             sessionId: null,
@@ -151,13 +151,13 @@ describe('WorkLouderCodexSettings', () => {
     );
 
     expect(onOpen).toHaveBeenCalledOnce();
-    expect(screen.getByText('settings.shortcuts.workLouderCodex.beta')).toBeTruthy();
+    expect(screen.queryByText('settings.shortcuts.workLouderCodex.beta')).toBeNull();
     expect(
       screen.getByText('settings.shortcuts.workLouderCodex.connection.status.connected'),
     ).toBeTruthy();
   });
 
-  it('shows connected on the shortcuts entry when the keyboard is present but this instance is off', () => {
+  it('shows off on the shortcuts entry when the keyboard is present but this instance is off', () => {
     render(
       <WorkLouderCodexEntry
         state={{
@@ -181,8 +181,11 @@ describe('WorkLouderCodexSettings', () => {
     );
 
     expect(
-      screen.getByText('settings.shortcuts.workLouderCodex.connection.status.connected'),
+      screen.getByText('settings.shortcuts.workLouderCodex.connection.status.disabled'),
     ).toBeTruthy();
+    expect(
+      screen.queryByText('settings.shortcuts.workLouderCodex.connection.status.connected'),
+    ).toBeNull();
     expect(
       screen.queryByText('settings.shortcuts.workLouderCodex.connection.status.connecting'),
     ).toBeNull();

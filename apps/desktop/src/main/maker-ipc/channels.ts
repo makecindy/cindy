@@ -99,6 +99,8 @@ export const MAKER_INVOKE = {
    * → UNSUPPORTED_CAPABILITY。
    */
   STOP_AGENT_TASK: 'maker:agent-task:stop',
+  /** Send a message to one active Cindy-owned PI Subagent run. */
+  CONTROL_PI_SUBAGENT: 'maker:pi-subagent:control',
   /**
    * 列出会话当前仍在运行的后台任务({taskId, taskType?, toolUseId?, title?})。只读;
    * renderer 挂载或 reloadMessages 清空 taskUpdates 后,用它补回「订阅前已启动」的
@@ -355,6 +357,9 @@ export const MAKER_INVOKE = {
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
+  /** Global exact-model choices for short host-generated text tasks. */
+  AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
+  AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
   /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
   VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
   VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
@@ -380,12 +385,11 @@ export const MAKER_INVOKE = {
   LSP_MODE_GET: 'maker:lsp-mode:get',
   LSP_MODE_SET: 'maker:lsp-mode:set',
   /**
-   * 聊天嵌入开关 (Phase 1.2 chat-history-embedder) ——
-   *  - GET: 启动期 renderer 同步 localStorage 镜像
-   *  - SET: 用户 toggle 时落 <userData>/chat-embedding-settings.json, 立即触发
-   *         chat-history-embedder.setChatEmbeddingEnabled(); 第一次开启时
-   *         初始化 cutoff (embedding_meta.chat_embedding_started_at)。
-   * 默认 false (新装包不会自动产生 ~¥0.09/天 embedding 费用)。
+   * 对话语义索引开关 (chat-history-embedder) ——
+   *  - GET: 启动期及账号切换时同步 owner-scoped renderer 镜像
+   *  - SET: 用户 toggle 时写入当前 owner 的明确 override，并立即 reconcile runtime；
+   *         第一次开启时初始化 cutoff (embedding_meta.chat_embedding_started_at)。
+   *  - 默认:已认证企业组织账号开启，其余账号 / 本地模式 / 未登录关闭。
    */
   CHAT_EMBEDDING_GET: 'maker:chat-embedding:get',
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
@@ -808,6 +812,8 @@ export const MAKER_PUSH = {
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。
    */
   PROVIDER_CHANGED: 'maker:provider:changed',
+  /** 当前 owner 的对话语义索引设置由另一窗口 / 进程改动。payload 为 owner stamp。 */
+  CHAT_EMBEDDING_CHANGED: 'maker:chat-embedding:changed',
   /** 本机 Ollama 运行态变化（设置页右栏 + 发消息前就绪）。 */
   LOCAL_MODEL_STATUS: 'maker:local-model:status',
   /** 本机 Ollama /api/pull 进度。 */

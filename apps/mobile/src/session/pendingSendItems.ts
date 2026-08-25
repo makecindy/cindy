@@ -247,7 +247,8 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   input.queue.forEach((item, index) => {
     const phase: MobilePendingSendPhase = input.editingClientId === item.clientId
       ? 'editing'
-      : input.steeringClientIds.has(item.clientId) || input.sendingClientIds.has(item.clientId)
+      : input.steeringClientIds.has(item.clientId)
+        || input.sendingClientIds.has(item.clientId)
         ? 'sending'
         : 'queued';
     pushQueued(item, phase, index + 1);
