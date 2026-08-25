@@ -56,7 +56,7 @@ import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
-import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import {
   getActiveAppSession,
@@ -253,14 +253,14 @@ import {
   type ReviewRunOwner,
 } from '../../shared/reviewRun.js';
 import {
-  createRetryableReviewStartup,
+  createRetryableReviewInitialization,
   hasReviewOwnerProcessEnded,
   shouldFailInterruptedReview,
 } from '../reviewer/reviewRunRecovery.js';
 import { startReviewOwnerLiveness } from '../reviewer/reviewOwnerLiveness.js';
 import {
   discardInvalidReviewSourceLease,
-  listPersistedReviewSourceLeases,
+  readPersistedReviewSourceLease,
   releaseReviewSourceLease,
   tryAcquireReviewSourceLease,
 } from '../reviewer/reviewSourceLease.js';
@@ -2865,7 +2865,7 @@ let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
 const reviewRunOwner: ReviewRunOwner = { instanceId: randomUUID(), processId: process.pid };
 configureTempAttachmentOwner(reviewRunOwner);
-const ensureReviewOwnerLivenessReady = createRetryableReviewStartup(async () => {
+const ensureReviewOwnerLivenessReady = createRetryableReviewInitialization(async () => {
   const handle = await startReviewOwnerLiveness();
   reviewRunOwner.liveness = handle.identity;
 });
@@ -3862,6 +3862,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     beforeProviderStart: async (turnGeneration) => {
       if (session.remoteHostId) return;
       silentStopTurnLeaseGate.supersede(session.id);
+      try {
+        await ensureReviewOwnerLivenessReady();
+      } catch (error) {
+        // Exact instance liveness improves stale-lease recovery, but a local
+        // probe endpoint failure must not prevent an ordinary task turn.
+        log.warn('failed to prepare session turn owner liveness', {
+          sessionId: session.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await sessionTurnLeaseTracker.markTurnStarted(
         session.id,
         providerTurnLeaseId(session.instanceId, turnGeneration),
@@ -8031,25 +8041,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warnStderr: (agentKind, line) => log.warn(`[${agentKind}/stderr] ${line}`),
   });
 
-  const reconcileInterruptedReviews = async (): Promise<void> => {
-    const dbClient = getDbClient();
-    const db = dbClient.drizzle;
-    const [rows, sourceLeases] = await Promise.all([
-      db
-        .select({
-          sessionId: messages.sessionId,
-          clientId: messages.clientId,
-          agentMeta: messages.agentMeta,
-        })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.role, 'assistant'),
-            isNull(messages.rewindAt),
-            sql`${messages.agentMeta} LIKE '%"reviewRun"%'`,
-          ),
+  const readSourceReviewCards = async (sourceSessionId: string) =>
+    getDbClient()
+      .drizzle.select({
+        clientId: messages.clientId,
+        agentMeta: messages.agentMeta,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, sourceSessionId),
+          gte(messages.clientId, 'review:'),
+          lt(messages.clientId, 'review;'),
+          eq(messages.role, 'assistant'),
+          isNull(messages.rewindAt),
         ),
-      listPersistedReviewSourceLeases(dbClient),
+      );
+
+  const reconcileReviewForSource = async (sourceSessionId: string): Promise<void> => {
+    const dbClient = getDbClient();
+    const [rows, sourceLease] = await Promise.all([
+      readSourceReviewCards(sourceSessionId),
+      readPersistedReviewSourceLease(dbClient, sourceSessionId),
     ]);
     const interruptedAt = Date.now();
     for (const row of rows) {
@@ -8061,39 +8074,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         completedAt: interruptedAt,
         failureCode: 'interrupted',
       };
-      await updateMessageContent(row.sessionId, row.clientId, '');
-      await patchMessageAgentMeta(row.sessionId, row.clientId, { reviewRun: failed });
-      await broadcastMessageAgentMetaUpdate(row.sessionId, row.clientId);
+      await updateMessageContent(sourceSessionId, row.clientId, '');
+      await patchMessageAgentMeta(sourceSessionId, row.clientId, { reviewRun: failed });
+      await broadcastMessageAgentMetaUpdate(sourceSessionId, row.clientId);
     }
-    for (const row of sourceLeases) {
-      if (!row.lease) {
-        await discardInvalidReviewSourceLease(dbClient, row);
-        log.warn('discarded malformed Review source lease', {
-          sourceSessionId: row.sourceSessionId,
-          leaseRowId: row.id,
-        });
-        continue;
-      }
-      if (!(await hasReviewOwnerProcessEnded(row.lease.owner, reviewRunOwner))) continue;
-      await releaseReviewSourceLease(dbClient, {
-        sourceSessionId: row.sourceSessionId,
-        runId: row.lease.runId,
-        owner: row.lease.owner,
+    if (!sourceLease) return;
+    if (!sourceLease.lease) {
+      await discardInvalidReviewSourceLease(dbClient, sourceLease);
+      log.warn('discarded malformed Review source lease', {
+        sourceSessionId,
+        leaseRowId: sourceLease.id,
       });
+      return;
     }
+    if (!(await hasReviewOwnerProcessEnded(sourceLease.lease.owner, reviewRunOwner))) return;
+    await releaseReviewSourceLease(dbClient, {
+      sourceSessionId,
+      runId: sourceLease.lease.runId,
+      owner: sourceLease.lease.owner,
+    });
   };
   const sourceHasPersistedRunningReview = async (sourceSessionId: string): Promise<boolean> => {
-    const rows = await getDbClient()
-      .drizzle.select({ agentMeta: messages.agentMeta })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.sessionId, sourceSessionId),
-          eq(messages.role, 'assistant'),
-          isNull(messages.rewindAt),
-          sql`${messages.agentMeta} LIKE '%"reviewRun"%'`,
-        ),
-      );
+    const rows = await readSourceReviewCards(sourceSessionId);
     return rows.some((row) => readReviewRunFromAgentMeta(row.agentMeta)?.status === 'running');
   };
   const sourceHasActiveTurn = async (sourceSessionId: string): Promise<boolean> => {
@@ -8105,15 +8107,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     return sessionTurnLeaseTracker.isTurnActive(sourceSessionId);
   };
-  const ensureReviewStartupReady = createRetryableReviewStartup(async () => {
+  // This is ordinary attachment hygiene rather than Review recovery. Keep its
+  // existing startup behavior while Review-specific work remains on demand.
+  void cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }).catch((error) => {
+    log.warn('failed to clean orphaned temporary attachments', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  const ensureReviewRuntimeReady = createRetryableReviewInitialization(async () => {
     try {
       await ensureReviewOwnerLivenessReady();
-      await Promise.all([
-        reconcileInterruptedReviews(),
-        sessionTurnLeaseTracker.reconcileStaleLeases(),
-        cleanupOrphanedReviewArtifactSnapshots({ currentOwner: reviewRunOwner }),
-        cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }),
-      ]);
+      await cleanupOrphanedReviewArtifactSnapshots({ currentOwner: reviewRunOwner });
     } catch (error) {
       log.error('failed to prepare Review runtime state', {
         error: error instanceof Error ? error.message : String(error),
@@ -8121,11 +8125,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throw error;
     }
   });
-  // Registration happens before the renderer can invoke /review. Keep a
-  // rejection observer here so a startup database failure is logged without
-  // becoming an unhandled promise. A rejected attempt is forgotten so a later
-  // START_REVIEW can retry the full reconciliation and still fail closed.
-  void ensureReviewStartupReady().catch(() => {});
 
   const readLatestReviewerResult = async (reviewerSessionId: string): Promise<string> => {
     const rows = await getDbClient()
@@ -8150,12 +8149,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerReviewStartHandler(makerSessionRegistry, {
     assertCaller: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
-    waitUntilReady: async () => {
-      await ensureReviewStartupReady();
-      // A supported shared-userData peer can exit after this instance starts.
-      // Recheck ownership immediately before each run so its stale card can be
-      // failed, while a still-live peer remains protected by the DB-backed gate.
-      await reconcileInterruptedReviews();
+    waitUntilReady: async (sourceSessionId) => {
+      await ensureReviewRuntimeReady();
+      // Recover only this task when the user explicitly starts Review again.
+      // A live or ambiguous peer remains protected by the DB-backed gate.
+      await reconcileReviewForSource(sourceSessionId);
     },
     createRunId: randomUUID,
     createReviewerSessionId: randomUUID,

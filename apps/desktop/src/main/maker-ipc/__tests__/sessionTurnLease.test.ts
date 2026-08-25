@@ -56,7 +56,7 @@ describe('shared-process session turn lease', () => {
         ON messages(session_id, client_id);
       INSERT INTO sessions
         (id, status, active_turn_started_at, last_turn_ended_at)
-      VALUES ('source-1', 'active', 20, 10);
+      VALUES ('source-1', 'active', 20, 10), ('source-2', 'active', 20, 10);
     `);
     const second = new Database(dbPath);
     second.pragma('foreign_keys = ON');
@@ -245,12 +245,18 @@ describe('shared-process session turn lease', () => {
     await expect(secondTracker.isTurnActive('source-1')).resolves.toBe(false);
   });
 
-  it('reclaims dead and malformed leases without acknowledging interrupted-turn markers', async () => {
+  it('reclaims dead and malformed leases only for the requested task', async () => {
     const { first, raw } = setup();
     const deadOwner = { instanceId: 'dead', processId: 303 };
     await tryAcquireSessionTurnLease(first, {
       sessionId: 'source-1',
       turnId: 'dead-turn',
+      owner: deadOwner,
+      createdAt: 1,
+    });
+    await tryAcquireSessionTurnLease(first, {
+      sessionId: 'source-2',
+      turnId: 'other-dead-turn',
       owner: deadOwner,
       createdAt: 1,
     });
@@ -269,7 +275,6 @@ describe('shared-process session turn lease', () => {
       ownerProcessEnded: (owner) => owner.instanceId === deadOwner.instanceId,
     });
 
-    await tracker.reconcileStaleLeases();
     await expect(tracker.isTurnActive('source-1')).resolves.toBe(false);
     expect(
       raw
@@ -280,5 +285,8 @@ describe('shared-process session turn lease', () => {
         .get(),
     ).toEqual({ startedAt: 20, endedAt: 10 });
     await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toEqual([]);
+    await expect(readPersistedSessionTurnLeases(first, 'source-2')).resolves.toMatchObject([
+      { lease: { turnId: 'other-dead-turn' } },
+    ]);
   });
 });

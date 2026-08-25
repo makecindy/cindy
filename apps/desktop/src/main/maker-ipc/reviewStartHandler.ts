@@ -171,7 +171,7 @@ export interface ReviewCardWrite {
 
 export interface ReviewStartHandlerDeps {
   assertCaller(event: unknown): void;
-  waitUntilReady(): Promise<void>;
+  waitUntilReady(sourceSessionId: string): Promise<void>;
   createRunId(): string;
   createReviewerSessionId(): string;
   owner: ReviewRunOwner;
@@ -246,8 +246,8 @@ export function registerReviewStartHandler(
 
   registry.handle(MAKER_INVOKE.START_REVIEW, async (event, raw: unknown) => {
     deps.assertCaller(event);
-    await deps.waitUntilReady();
     const request = readStartReviewRequest(raw);
+    await deps.waitUntilReady(request.sourceSessionId);
     if (activeReviewsBySource.has(request.sourceSessionId)) {
       throwIpcError('SESSION_RUNNING', 'This task already has a review in progress');
     }

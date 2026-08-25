@@ -116,9 +116,11 @@ export async function releaseReviewSourceLease(
   return result.changes === 1;
 }
 
-export async function listPersistedReviewSourceLeases(
+/** Read one task's lease through the existing (session_id, client_id) index. */
+export async function readPersistedReviewSourceLease(
   dbClient: Pick<DbClient, 'query'>,
-): Promise<PersistedReviewSourceLeaseRow[]> {
+  sourceSessionId: string,
+): Promise<PersistedReviewSourceLeaseRow | null> {
   const rows = await dbClient.query<{
     id: string;
     sourceSessionId: string;
@@ -126,14 +128,18 @@ export async function listPersistedReviewSourceLeases(
   }>(
     `SELECT id, session_id AS sourceSessionId, agent_meta AS agentMeta
        FROM messages
-      WHERE client_id = ?`,
-    [REVIEW_SOURCE_LEASE_CLIENT_ID],
+      WHERE session_id = ? AND client_id = ?
+      LIMIT 1`,
+    [sourceSessionId, REVIEW_SOURCE_LEASE_CLIENT_ID],
   );
-  return rows.map((row) => ({
-    id: row.id,
-    sourceSessionId: row.sourceSessionId,
-    lease: readReviewSourceLeaseFromAgentMeta(row.agentMeta),
-  }));
+  const row = rows[0];
+  return row
+    ? {
+        id: row.id,
+        sourceSessionId: row.sourceSessionId,
+        lease: readReviewSourceLeaseFromAgentMeta(row.agentMeta),
+      }
+    : null;
 }
 
 /** Remove a malformed legacy/corrupt row only if its immutable id still matches. */

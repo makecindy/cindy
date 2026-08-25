@@ -184,6 +184,7 @@ describe('maker:review:start IPC lifecycle', () => {
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
 
     expect(deps.assertCaller).toHaveBeenCalledTimes(2);
+    expect(deps.waitUntilReady).not.toHaveBeenCalled();
     expect(deps.prepareRun).not.toHaveBeenCalled();
   });
 
@@ -202,6 +203,7 @@ describe('maker:review:start IPC lifecycle', () => {
       reviewerSessionId: 'reviewer-1',
     });
 
+    expect(deps.waitUntilReady).toHaveBeenCalledWith('source-1');
     expect(deps.createSourceCard).toHaveBeenCalledWith(
       expect.objectContaining({
         sourceSessionId: 'source-1',

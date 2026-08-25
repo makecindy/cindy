@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import {
   discardInvalidReviewSourceLease,
-  listPersistedReviewSourceLeases,
+  readPersistedReviewSourceLease,
   releaseReviewSourceLease,
   REVIEW_SOURCE_LEASE_CLIENT_ID,
   tryAcquireReviewSourceLease,
@@ -47,7 +47,7 @@ describe('Review source lease', () => {
       );
       CREATE UNIQUE INDEX uniq_messages_session_client
         ON messages(session_id, client_id);
-      INSERT INTO sessions (id, status) VALUES ('source-1', 'active');
+      INSERT INTO sessions (id, status) VALUES ('source-1', 'active'), ('source-2', 'active');
     `);
     const second = new Database(dbPath);
     second.pragma('foreign_keys = ON');
@@ -98,9 +98,8 @@ describe('Review source lease', () => {
     const loser = acquired[0]
       ? { client: second, runId: 'run-2', owner: secondOwner }
       : { client: first, runId: 'run-1', owner: firstOwner };
-    const rows = await listPersistedReviewSourceLeases(second);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.lease).toMatchObject({ runId: winner.runId, owner: winner.owner });
+    const row = await readPersistedReviewSourceLease(second, 'source-1');
+    expect(row?.lease).toMatchObject({ runId: winner.runId, owner: winner.owner });
 
     await expect(
       releaseReviewSourceLease(loser.client, {
@@ -126,6 +125,29 @@ describe('Review source lease', () => {
     ).resolves.toBe(true);
   });
 
+  it('reads only the requested source task lease', async () => {
+    const { first } = setup();
+    const owner = { instanceId: 'first', processId: 101 };
+    await tryAcquireReviewSourceLease(first, {
+      sourceSessionId: 'source-1',
+      runId: 'run-1',
+      owner,
+      createdAt: 1,
+    });
+    await tryAcquireReviewSourceLease(first, {
+      sourceSessionId: 'source-2',
+      runId: 'run-2',
+      owner,
+      createdAt: 2,
+    });
+
+    await expect(readPersistedReviewSourceLease(first, 'source-1')).resolves.toMatchObject({
+      sourceSessionId: 'source-1',
+      lease: { runId: 'run-1' },
+    });
+    await expect(readPersistedReviewSourceLease(first, 'missing')).resolves.toBeNull();
+  });
+
   it('reclaims a malformed hidden lease by immutable row id', async () => {
     const { first, raw } = setup();
     raw
@@ -136,9 +158,9 @@ describe('Review source lease', () => {
       )
       .run(REVIEW_SOURCE_LEASE_CLIENT_ID);
 
-    const [row] = await listPersistedReviewSourceLeases(first);
+    const row = await readPersistedReviewSourceLease(first, 'source-1');
     expect(row?.lease).toBeNull();
     await expect(discardInvalidReviewSourceLease(first, row!)).resolves.toBe(true);
-    await expect(listPersistedReviewSourceLeases(first)).resolves.toEqual([]);
+    await expect(readPersistedReviewSourceLease(first, 'source-1')).resolves.toBeNull();
   });
 });

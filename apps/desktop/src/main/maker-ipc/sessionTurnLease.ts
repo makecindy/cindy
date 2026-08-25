@@ -198,9 +198,10 @@ export async function releaseSessionTurnLease(
   return result.changes === 1;
 }
 
-export async function listPersistedSessionTurnLeases(
+/** Read and recover turn leases only when that exact task needs them. */
+export async function readPersistedSessionTurnLeases(
   dbClient: Pick<DbClient, 'query'>,
-  sessionId?: string,
+  sessionId: string,
 ): Promise<PersistedSessionTurnLeaseRow[]> {
   const rows = await dbClient.query<{
     id: string;
@@ -210,10 +211,8 @@ export async function listPersistedSessionTurnLeases(
   }>(
     `SELECT id, client_id AS clientId, session_id AS sessionId, agent_meta AS agentMeta
        FROM messages
-      WHERE client_id LIKE ?${sessionId ? ' AND session_id = ?' : ''}`,
-    sessionId
-      ? [`${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}%`, sessionId]
-      : [`${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}%`],
+      WHERE session_id = ? AND client_id LIKE ?`,
+    [sessionId, `${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}%`],
   );
   return rows.map((row) => ({
     id: row.id,
@@ -221,13 +220,6 @@ export async function listPersistedSessionTurnLeases(
     sessionId: row.sessionId,
     lease: readSessionTurnLeaseFromAgentMeta(row.agentMeta),
   }));
-}
-
-export function readPersistedSessionTurnLeases(
-  dbClient: Pick<DbClient, 'query'>,
-  sessionId: string,
-): Promise<PersistedSessionTurnLeaseRow[]> {
-  return listPersistedSessionTurnLeases(dbClient, sessionId);
 }
 
 /** Remove a malformed row only while its immutable id still identifies the same lease row. */
@@ -394,11 +386,5 @@ export class SessionTurnLeaseTracker {
       if (!(await this.clearRecoverableLease(dbClient, row))) active = true;
     }
     return active;
-  }
-
-  async reconcileStaleLeases(): Promise<void> {
-    const dbClient = this.deps.getDbClient();
-    const rows = await listPersistedSessionTurnLeases(dbClient);
-    for (const row of rows) await this.clearRecoverableLease(dbClient, row);
   }
 }

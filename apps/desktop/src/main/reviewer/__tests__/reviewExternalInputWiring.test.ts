@@ -127,18 +127,36 @@ describe('Review external input wiring', () => {
     );
   });
 
-  it('retries failed startup reconciliation before admitting another Review', () => {
-    expect(registerSource.match(/createRetryableReviewStartup\(/g)).toHaveLength(2);
-    expect(registerSource).toContain('void ensureReviewStartupReady().catch(() => {});');
-    expect(registerSource).toMatch(
-      /waitUntilReady: async \(\) => \{\s+await ensureReviewStartupReady\(\);\s+[\s\S]*?await reconcileInterruptedReviews\(\);/,
+  it('prepares Review on demand and reconciles only the requested source task', () => {
+    expect(registerSource.match(/createRetryableReviewInitialization\(/g)).toHaveLength(2);
+    expect(registerSource).not.toContain('void ensureReviewRuntimeReady().catch(() => {});');
+    expect(registerSource).not.toContain('reconcileStaleLeases');
+    expect(registerSource).not.toContain(`LIKE '%"reviewRun"%'`);
+    expect(registerSource).toContain(
+      'void cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }).catch',
     );
-    const reconcileStart = registerSource.indexOf('const reconcileInterruptedReviews');
+    expect(reviewStartSource.indexOf('const request = readStartReviewRequest(raw);')).toBeLessThan(
+      reviewStartSource.indexOf('await deps.waitUntilReady(request.sourceSessionId);'),
+    );
+    expect(registerSource).toMatch(
+      /waitUntilReady: async \(sourceSessionId\) => \{\s+await ensureReviewRuntimeReady\(\);\s+[\s\S]*?await reconcileReviewForSource\(sourceSessionId\);/,
+    );
+    const sourceReadStart = registerSource.indexOf('const readSourceReviewCards');
+    const sourceReadEnd = registerSource.indexOf('const reconcileReviewForSource', sourceReadStart);
+    const sourceRead = registerSource.slice(sourceReadStart, sourceReadEnd);
+    expect(sourceRead).toContain('eq(messages.sessionId, sourceSessionId)');
+    expect(sourceRead).toContain("gte(messages.clientId, 'review:')");
+    expect(sourceRead).toContain("lt(messages.clientId, 'review;')");
+
+    const reconcileStart = registerSource.indexOf('const reconcileReviewForSource');
     const reconcileEnd = registerSource.indexOf(
       'const sourceHasPersistedRunningReview',
       reconcileStart,
     );
     const reconcileSource = registerSource.slice(reconcileStart, reconcileEnd);
+    expect(reconcileSource).toContain(
+      'readPersistedReviewSourceLease(dbClient, sourceSessionId)',
+    );
     expect(reconcileSource.indexOf('patchMessageAgentMeta')).toBeLessThan(
       reconcileSource.indexOf('releaseReviewSourceLease'),
     );
