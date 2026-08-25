@@ -3068,8 +3068,7 @@ export function ChatInput({
 
   const captureSendFocusForRestore = useComposerSendFocusRestore(
     editor,
-    composerMutationLocked,
-    sendDispatchInFlight,
+    composerTypingLocked,
   );
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(

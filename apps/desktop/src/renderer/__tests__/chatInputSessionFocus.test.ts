@@ -152,6 +152,14 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain(
       'const captureSendFocusForRestore = useComposerSendFocusRestore(',
     );
+    const focusRestoreCall = extractBetween(
+      chatInputSource,
+      'const captureSendFocusForRestore = useComposerSendFocusRestore(',
+      'const { settings: voiceInputSettings }',
+    );
+    expect(focusRestoreCall).toContain('composerTypingLocked');
+    expect(focusRestoreCall).not.toContain('composerMutationLocked');
+    expect(focusRestoreCall).not.toContain('sendDispatchInFlight');
     expect(localSendLockBlock).toContain('captureSendFocusForRestore();');
     expect(localSendLockBlock.indexOf('captureSendFocusForRestore();')).toBeLessThan(
       localSendLockBlock.indexOf('setSendDispatchInFlight(true);'),

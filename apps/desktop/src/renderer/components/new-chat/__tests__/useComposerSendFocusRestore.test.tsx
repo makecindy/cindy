@@ -10,8 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useComposerSendFocusRestore } from '../useComposerSendFocusRestore';
 
 interface HarnessProps {
-  composerMutationLocked: boolean;
   sendDispatchInFlight: boolean;
+  allowTypeDuringSend: boolean;
+  voiceLocked: boolean;
 }
 
 let createdEditors: Editor[] = [];
@@ -63,16 +64,27 @@ describe('useComposerSendFocusRestore', () => {
     });
   };
 
+  const typingLocked = ({
+    sendDispatchInFlight,
+    allowTypeDuringSend,
+    voiceLocked,
+  }: HarnessProps) => voiceLocked || (sendDispatchInFlight && !allowTypeDuringSend);
+
   const renderRestoreHook = (editor: Editor) =>
     renderHook(
-      ({ composerMutationLocked, sendDispatchInFlight }: HarnessProps) => {
+      (props: HarnessProps) => {
+        const composerTypingLocked = typingLocked(props);
         useEffect(() => {
-          editor.setEditable(!composerMutationLocked);
-        }, [composerMutationLocked, editor]);
-        return useComposerSendFocusRestore(editor, composerMutationLocked, sendDispatchInFlight);
+          editor.setEditable(!composerTypingLocked);
+        }, [composerTypingLocked, editor]);
+        return useComposerSendFocusRestore(editor, composerTypingLocked);
       },
       {
-        initialProps: { composerMutationLocked: false, sendDispatchInFlight: false },
+        initialProps: {
+          sendDispatchInFlight: false,
+          allowTypeDuringSend: false,
+          voiceLocked: false,
+        },
       },
     );
 
@@ -92,11 +104,19 @@ describe('useComposerSendFocusRestore', () => {
     act(() => {
       hook.result.current();
     });
-    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     act(() => editor.view.dom.blur());
     expect(document.activeElement).toBe(document.body);
 
-    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    hook.rerender({
+      sendDispatchInFlight: false,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     flushAnimationFrames();
 
     expect(document.activeElement).toBe(editor.view.dom);
@@ -112,14 +132,22 @@ describe('useComposerSendFocusRestore', () => {
     act(() => {
       hook.result.current();
     });
-    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     act(() => editor.view.dom.blur());
     // dispatchSend captures a second time after the lock stole focus; this must
     // not overwrite the intent captured while the composer was still focused.
     act(() => {
       hook.result.current();
     });
-    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    hook.rerender({
+      sendDispatchInFlight: false,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     flushAnimationFrames();
 
     expect(document.activeElement).toBe(editor.view.dom);
@@ -133,15 +161,27 @@ describe('useComposerSendFocusRestore', () => {
     act(() => {
       hook.result.current();
     });
-    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     act(() => editor.view.dom.blur());
 
-    // The send lock has settled, but voice input still owns the mutation lock.
-    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: false });
+    // The send lock has settled, but voice input still owns the typing lock.
+    hook.rerender({
+      sendDispatchInFlight: false,
+      allowTypeDuringSend: false,
+      voiceLocked: true,
+    });
     flushAnimationFrames();
     expect(document.activeElement).toBe(document.body);
 
-    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    hook.rerender({
+      sendDispatchInFlight: false,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     flushAnimationFrames();
     expect(document.activeElement).toBe(editor.view.dom);
   });
@@ -156,9 +196,17 @@ describe('useComposerSendFocusRestore', () => {
     act(() => {
       hook.result.current();
     });
-    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     act(() => button.focus());
-    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    hook.rerender({
+      sendDispatchInFlight: false,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     flushAnimationFrames();
 
     expect(document.activeElement).toBe(button);
@@ -176,7 +224,11 @@ describe('useComposerSendFocusRestore', () => {
     act(() => {
       hook.result.current();
     });
-    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     act(() => {
       editor.view.dom.blur();
       const range = document.createRange();
@@ -187,7 +239,11 @@ describe('useComposerSendFocusRestore', () => {
       selection?.addRange(range);
     });
 
-    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    hook.rerender({
+      sendDispatchInFlight: false,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     flushAnimationFrames();
 
     expect(document.activeElement).toBe(document.body);
@@ -206,7 +262,11 @@ describe('useComposerSendFocusRestore', () => {
     act(() => {
       hook.result.current();
     });
-    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     act(() => {
       editor.view.dom.blur();
       const range = document.createRange();
@@ -218,11 +278,43 @@ describe('useComposerSendFocusRestore', () => {
     });
     fireEvent.pointerDown(message);
 
-    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    hook.rerender({
+      sendDispatchInFlight: false,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
     flushAnimationFrames();
 
     expect(document.activeElement).toBe(document.body);
     expect(document.getSelection()?.isCollapsed).toBe(true);
     expect(document.getSelection()?.anchorNode).toBe(messageText);
+  });
+
+  it('restores focus when typing is allowed during an in-flight send', () => {
+    const editor = createEditor();
+    const hook = renderRestoreHook(editor);
+
+    focusComposerSelection(editor);
+    act(() => {
+      hook.result.current();
+    });
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: false,
+      voiceLocked: false,
+    });
+    act(() => editor.view.dom.blur());
+    expect(document.activeElement).toBe(document.body);
+
+    hook.rerender({
+      sendDispatchInFlight: true,
+      allowTypeDuringSend: true,
+      voiceLocked: false,
+    });
+    flushAnimationFrames();
+
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection.from).toBe(2);
+    expect(editor.state.selection.to).toBe(6);
   });
 });
