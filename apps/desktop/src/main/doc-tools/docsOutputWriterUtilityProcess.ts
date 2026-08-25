@@ -11,11 +11,7 @@ interface ParentPortLike {
 
 class OutputWriteError extends Error {
   constructor(
-    readonly code:
-      | 'FILE_EXISTS'
-      | 'PATH_NOT_ALLOWED'
-      | 'ATOMIC_PUBLISH_UNSUPPORTED'
-      | 'INTERNAL',
+    readonly code: 'FILE_EXISTS' | 'PATH_NOT_ALLOWED' | 'ATOMIC_PUBLISH_UNSUPPORTED' | 'INTERNAL',
     message: string,
   ) {
     super(message);

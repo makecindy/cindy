@@ -42,10 +42,6 @@ export type DocsOutputWriteResult =
   | { ok: true }
   | {
       ok: false;
-      errorCode:
-        | 'FILE_EXISTS'
-        | 'PATH_NOT_ALLOWED'
-        | 'ATOMIC_PUBLISH_UNSUPPORTED'
-        | 'INTERNAL';
+      errorCode: 'FILE_EXISTS' | 'PATH_NOT_ALLOWED' | 'ATOMIC_PUBLISH_UNSUPPORTED' | 'INTERNAL';
       message: string;
     };
