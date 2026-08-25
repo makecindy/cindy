@@ -556,17 +556,20 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
     await expect(secondSend).resolves.toEqual({ accepted: true });
     const secondError = waitForSessionEvent(session, 'error');
-    stub.push({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+    stub.push({
+      type: 'error',
+      data: { message: 'Authorization: Bearer secret-token', isTerminal: true },
+    });
     await secondError;
     expect(session.getObservedCurrentTurnTerminal()).toEqual({
       kind: 'error',
-      message: 'provider failed',
+      message: 'Authorization: [REDACTED]',
     });
     stub.push({ type: 'done', data: {} });
     await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
     expect(session.getObservedCurrentTurnTerminal()).toEqual({
       kind: 'error',
-      message: 'provider failed',
+      message: 'Authorization: [REDACTED]',
     });
   });
 });

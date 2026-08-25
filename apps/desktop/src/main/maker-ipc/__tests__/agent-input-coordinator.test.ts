@@ -6301,7 +6301,10 @@ describe('AgentInputCoordinator steer transaction', () => {
       h.setLiveRunning(false);
       h.setLiveSessionPresent(true);
       h.setRunning(false);
-      h.setObservedCurrentTurnTerminal({ kind: 'error', message: 'provider failed' });
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        message: 'Authorization: Bearer secret-token',
+      });
       h.reconcileTurnIdle.mockImplementation(() => true);
       h.coordinator.enqueue(sid, second);
       await flush();
@@ -6314,7 +6317,8 @@ describe('AgentInputCoordinator steer transaction', () => {
       expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
       expect(projection.recovery?.kind).toBe('active-turn');
-      expect(projection.error).toBe('provider failed');
+      expect(projection.error).toBe('Authorization: [REDACTED]');
+      expect(JSON.stringify(projection)).not.toContain('secret-token');
       expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
 
       h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {

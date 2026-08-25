@@ -24,6 +24,7 @@
  * 它只提交 intent payload；排序、投递模式、回滚和持久化由本模块决定。
  */
 
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
@@ -3573,7 +3574,11 @@ export class AgentInputCoordinator {
       state.staleLiveIdleSinceMs = null;
       // Apply recovery before fencing. A same-generation meta would make
       // onTurnEvent treat this synthesized error as the leftover we just fenced.
-      this.onTurnEvent(sessionId, 'error', observed?.message ?? 'Turn ended with an error');
+      this.onTurnEvent(
+        sessionId,
+        'error',
+        redactSensitiveText(observed?.message ?? 'Turn ended with an error'),
+      );
       if (typeof vendorGeneration === 'number' && instanceId) {
         const latest = this.getState(sessionId);
         latest.fencedStaleTerminal = { instanceId, generation: vendorGeneration };

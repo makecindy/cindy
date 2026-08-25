@@ -543,9 +543,11 @@ export class Session {
       return { kind: 'none' };
     }
     if (this.terminalEventObservedKind === 'error') {
-      return this.terminalEventObservedErrorMessage
-        ? { kind: 'error', message: this.terminalEventObservedErrorMessage }
-        : { kind: 'error' };
+      if (!this.terminalEventObservedErrorMessage) return { kind: 'error' };
+      return {
+        kind: 'error',
+        message: redactSensitiveText(this.terminalEventObservedErrorMessage),
+      };
     }
     return { kind: 'done' };
   }
@@ -1987,9 +1989,6 @@ export class Session {
       this.terminalEventObservedGeneration = this.turnGeneration;
       if (event.type === 'error') {
         this.terminalEventObservedKind = 'error';
-        const errorMessage = (event.data as { message?: unknown } | null | undefined)?.message;
-        this.terminalEventObservedErrorMessage =
-          typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null;
         this.armTerminalErrorDrain(this.turnGeneration);
       } else {
         // Codex 失败收尾是 terminal error 后再补 done。同 generation 的成功尾巴
@@ -2013,6 +2012,11 @@ export class Session {
       this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
+    if (terminalBoundaryObserved && event.type === 'error') {
+      const errorMessage = (listenerEvent.data as { message?: unknown } | null | undefined)?.message;
+      this.terminalEventObservedErrorMessage =
+        typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null;
+    }
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
       this.clearTurnControl(resolvedGeneration);
     }

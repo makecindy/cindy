@@ -1200,6 +1200,10 @@ describe('Session per-turn origin 打标', () => {
       expect(rawError.message).toBe('client_secret=[REDACTED]');
       expect(rawError.additionalDetails).toBe('key=[REDACTED]');
     }
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      message: 'Authorization: [REDACTED]',
+    });
   });
 
   it('preserves a non-secret auth status and redacts nested Codex error details', async () => {
