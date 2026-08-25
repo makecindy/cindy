@@ -1862,7 +1862,17 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
       void unsubscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']).catch(() => undefined);
     };
-  }, [connectionEpoch, openLink, presenceVersion, selectedDeviceId, subscribe, unsubscribe]);
+  }, [openLink, selectedDeviceId, subscribe, unsubscribe]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+    }).catch(() => {
+      /* The mount-time owner remains held; the next connection/presence change retries. */
+    });
+  }, [connectionEpoch, openLink, presenceVersion, selectedDeviceId, subscribe]);
 
   useEffect(() => {
     if (!selectedDeviceId) return;
