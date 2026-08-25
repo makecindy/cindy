@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildSessionListFlightKey,
   bumpSessionListWriteGeneration,
+  noteSessionListMembershipPatch,
   resetSessionListSingleFlightForTests,
   runSessionListSingleFlight,
 } from '../sessionListSingleFlight';
@@ -136,6 +137,23 @@ describe('runSessionListSingleFlight', () => {
     expect(u2Run).toHaveBeenCalledTimes(1);
     releaseU1('u1');
     await expect(u1).resolves.toBe('u1');
+  });
+
+  it('treats status and pinned patches as membership writes', () => {
+    const params = {
+      userId: 'u1',
+      cap: 200,
+      statusFilter: 'active' as const,
+      includePinned: true,
+    };
+    const before = buildSessionListFlightKey(params);
+    noteSessionListMembershipPatch({ title: 'nope' });
+    expect(buildSessionListFlightKey(params)).toBe(before);
+    noteSessionListMembershipPatch({ status: 'archived' });
+    const afterStatus = buildSessionListFlightKey(params);
+    expect(afterStatus).not.toBe(before);
+    noteSessionListMembershipPatch({ pinnedAt: 1 });
+    expect(buildSessionListFlightKey(params)).not.toBe(afterStatus);
   });
 
   it('does not join a refresh after a write generation bump', async () => {

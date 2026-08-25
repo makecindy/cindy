@@ -4,6 +4,8 @@
  * 只合并 in-flight Promise，查完即删，不加 TTL。
  * key 必须用归一化后的 cap / status / includePinned，并带上当前 userId，
  * 否则切账号时新请求会接到旧库那次查询。options 以后若加字段，同步扩 key。
+ * 列表成员变化后必须 bump 写代次：新建走 emitSessionCreated，status/pinnedAt
+ * 走 broadcastSessionPatched；local-db:sessions:create 插入后单独 bump。
  */
 
 export type SessionListStatusFilter = 'active' | 'archived' | null;
@@ -13,6 +15,13 @@ let writeGeneration = 0;
 
 export function bumpSessionListWriteGeneration(): void {
   writeGeneration += 1;
+}
+
+/** 归档 / 删除 / 置顶会改 list 成员；标题等字段变化不必隔开 flight。 */
+export function noteSessionListMembershipPatch(patch: Record<string, unknown>): void {
+  if (patch.status !== undefined || patch.pinnedAt !== undefined) {
+    bumpSessionListWriteGeneration();
+  }
 }
 
 export function readSessionListWriteGeneration(): number {

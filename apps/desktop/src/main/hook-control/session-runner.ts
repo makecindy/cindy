@@ -31,7 +31,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { app, BrowserWindow } from 'electron';
+import { app } from 'electron';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -48,7 +48,7 @@ import {
   visibleModelUnion,
 } from '@cindy/model-providers';
 
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
@@ -235,18 +235,9 @@ async function resolveNewSessionConfig(
 /**
  * 广播「新会话已建」给所有窗口 + device-link tap —— renderer sessionsStore
  * 收到即重拉列表, 新 hook 会话实时出现在侧边栏(不广播的话要等手动刷新)。
- * 与 fork.ts / cardActionHandler.ts / learn-host 同款(各模块本地副本是既有惯例)。
  */
 function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
-    } catch {
-      // best-effort UI refresh
-    }
-  }
+  emitSessionCreated(sessionId);
 }
 
 // ── turn 时长策略: hook 侧**不设任何**上限(2026-08-01 定) ────────────────────
