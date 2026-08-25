@@ -7459,6 +7459,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? `model "${model}" is not an agent chat model`
             : verdict.reason === 'model-retired'
               ? `model "${model}" has been retired from the catalog`
+              : verdict.reason === 'payment-required'
+                ? `model "${model}" requires paid access`
               : verdict.reason === 'exclusive-source-unavailable'
                 ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
                 : `model "${model}" is disabled in settings`,
@@ -11708,6 +11710,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
     beforeDispatchDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
+    beforeVendorDispatch: async (sessionId) => {
+      const session = maker.getSession(sessionId);
+      const dbAgentKind = getSessionDbAgentKind(sessionId);
+      const model = session?.model;
+      if (!dbAgentKind || !model) return;
+      const verdict = await verdictForModelRoute(
+        dbToMakerAgentKind(dbAgentKind),
+        model,
+        getSessionProvider(sessionId),
+      );
+      if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
+        throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
+      }
+    },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);

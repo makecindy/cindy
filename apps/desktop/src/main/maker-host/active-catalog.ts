@@ -143,6 +143,7 @@ export interface XdGatewayAgentOverride {
  */
 export interface XdGatewayModelInfo {
   id: string;
+  availability?: 'available' | 'requires_payment';
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
   mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
@@ -798,6 +799,7 @@ function projectXdGatewayMediaModels(
     .map((model) => ({
       id: model.id,
       name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
   const videoModels = gatewayModels
@@ -805,6 +807,7 @@ function projectXdGatewayMediaModels(
     .map((model) => ({
       id: model.id,
       name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
   const identity = { ...provider };
@@ -1153,6 +1156,7 @@ function computeMerged(): Catalog {
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
         const merged: CatalogModel = {
           id: gm.id,
+          ...(gm.availability ? { availability: gm.availability } : {}),
           // name / contextWindow are required by Model Access v3 and therefore never synthesized.
           name: gm.name as string,
           ...(gm.group !== undefined ? { group: gm.group } : {}),

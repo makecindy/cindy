@@ -52,6 +52,7 @@ export type ModelRouteVerdict =
         | 'explicit-source-disabled'
         | 'capability-model'
         | 'model-retired'
+        | 'payment-required'
         | 'exclusive-source-unavailable';
     };
 
@@ -179,6 +180,10 @@ function copyRetired(p: ProviderView, modelId: string, agent: AgentKind): boolea
   return getModel(p, modelId, agent)?.status === 'retired';
 }
 
+function copyPaymentRequired(p: ProviderView, modelId: string, agent: AgentKind): boolean {
+  return getModel(p, modelId, agent)?.availability === 'requires_payment';
+}
+
 function applyExclusiveRoute(
   views: readonly ProviderView[],
   agent: AgentKind,
@@ -231,6 +236,9 @@ function checkDisableAxisRoute(
 
   if (providerId) {
     if (explicit) {
+      if (copyPaymentRequired(explicit, modelId, agent)) {
+        return { kind: 'reject', reason: 'payment-required' };
+      }
       if (copyRetired(explicit, modelId, agent)) {
         return { kind: 'reject', reason: 'model-retired' };
       }
@@ -257,6 +265,13 @@ function checkDisableAxisRoute(
   if (!wouldRouteId) return { kind: 'pass' };
   const wouldRoute = preDisableRail.find((p) => p.id === wouldRouteId);
   if (!wouldRoute) return { kind: 'pass' };
+  if (copyPaymentRequired(wouldRoute, modelId, agent)) {
+    const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
+    const alternativeProvider = alternative ? views.find((p) => p.id === alternative) : undefined;
+    return alternative && alternativeProvider && !copyPaymentRequired(alternativeProvider, modelId, agent)
+      ? { kind: 'reroute', providerId: alternative }
+      : { kind: 'reject', reason: 'payment-required' };
+  }
   if (copyRetired(wouldRoute, modelId, agent)) {
     const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
     const alternativeProvider = alternative

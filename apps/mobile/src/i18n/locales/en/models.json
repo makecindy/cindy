@@ -17,6 +17,9 @@
     "selectModelAccessibility": "Select {{model}}",
     "configureAccessibility": "Configure {{model}}",
     "budgetDisabledHint": "This model needs an API key configured on the controlled device first",
+    "paymentRequiredBadge": "Paid",
+    "paymentRequiredTitle": "Pay to Unlock This Model",
+    "paymentRequiredDescription": "Subscribe to a paid plan or top up your balance to unlock this model. Manage billing in Cindy on your desktop.",
     "priceLine": "Input {{input}} · Output {{output}} / million tokens",
     "contextSuffix": "{{size}} context",
     "fastTag": "Fast"

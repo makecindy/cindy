@@ -17,6 +17,9 @@
     "selectModelAccessibility": "选择模型 {{model}}",
     "configureAccessibility": "配置 {{model}}",
     "budgetDisabledHint": "该模型需先在被控设备配置 API key 才能使用",
+    "paymentRequiredBadge": "付费",
+    "paymentRequiredTitle": "付费后解锁此模型",
+    "paymentRequiredDescription": "订阅付费方案或完成余额充值后即可解锁。请在电脑端 Cindy 的“用量和计费”中操作。",
     "priceLine": "输入 {{input}} · 输出 {{output}} / 百万 token",
     "contextSuffix": "{{size}} 上下文",
     "fastTag": "快速"

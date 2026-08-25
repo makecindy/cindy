@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
@@ -12,6 +12,7 @@ import {
   cancelCodexAuthModeChange,
 } from '../maker-host/index.js';
 import {
+  getXdGatewayModels,
   markXdGatewayModelAccessUnknown,
   setXdGatewayModels,
 } from '../maker-host/active-catalog.js';
@@ -34,6 +35,7 @@ import {
 import {
   buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
+  modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
   withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
@@ -143,6 +145,8 @@ let modelsSyncInflight: Promise<void> | null = null;
 /** 模型请求的单调尝试号与最近成功号，供手动刷新区分“旧成功 + 本次失败”。 */
 let modelsSyncAttempt = 0;
 let lastModelsSyncSucceededAttempt = 0;
+let lastModelsSyncStartedAt = 0;
+export const XD_MODELS_FOREGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 /** 在途目录请求所属的认证世代。 */
 let modelsSyncGen = -1;
 /** 旧世代请求在途时新账号的补发标记。 */
@@ -215,16 +219,26 @@ async function runModelsSync(
     );
     const parsed = parseModelsSyncPayload(payload);
     if (!parsed.ok) {
-      log.warn('xd gateway models response rejected (keeping last valid list)', {
+      log.warn('xd gateway models response rejected (keeping executable last valid list)', {
         error: parsed.error,
       });
+      if (myGen === authGeneration) {
+        setXdGatewayModels(modelsWithoutStalePaymentUpsell(getXdGatewayModels()), {
+          authoritative: false,
+        });
+      }
       return;
     }
     models = parsed.models;
   } catch (err) {
-    log.warn('xd gateway models fetch failed (keeping last valid list)', {
+    log.warn('xd gateway models fetch failed (keeping executable last valid list)', {
       error: err instanceof Error ? err.message : String(err),
     });
+    if (myGen === authGeneration) {
+      setXdGatewayModels(modelsWithoutStalePaymentUpsell(getXdGatewayModels()), {
+        authoritative: false,
+      });
+    }
     return;
   }
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
@@ -285,6 +299,7 @@ function scheduleModelsSync(): void {
   }
   modelsSyncGen = gen;
   const attempt = ++modelsSyncAttempt;
+  lastModelsSyncStartedAt = Date.now();
   modelsSyncInflight = runModelsSync(gen, authenticatedUserId, attempt)
     .catch((err) => {
       log.warn('xd gateway models sync threw', {
@@ -298,6 +313,7 @@ function scheduleModelsSync(): void {
 }
 
 let syncInstance: CredentialsSync | null = null;
+let foregroundRefreshListener: (() => void) | null = null;
 
 function getSync(): CredentialsSync {
   if (!syncInstance) {
@@ -435,6 +451,12 @@ export function initModelAccess(): void {
   if (initial.isAuthenticated) {
     noteAuthState(true, initial.user?.id ?? null, authManager.getActiveAuthRealm());
   }
+  foregroundRefreshListener = () => {
+    if (!lastAuthUserId || getSync().getStatus().state !== 'ok') return;
+    if (Date.now() - lastModelsSyncStartedAt < XD_MODELS_FOREGROUND_REFRESH_INTERVAL_MS) return;
+    scheduleModelsSync();
+  };
+  app.on('browser-window-focus', foregroundRefreshListener);
   ipcMain.handle('model-access:get-status', () => sync.getStatus());
 
   ipcMain.handle('model-access:retry', async (): Promise<ModelAccessStatus> => {
@@ -458,12 +480,17 @@ export function initModelAccess(): void {
 
 /** 仅测试:重置单例。 */
 export function resetModelAccessForTest(): void {
+  if (foregroundRefreshListener) {
+    app.removeListener('browser-window-focus', foregroundRefreshListener);
+    foregroundRefreshListener = null;
+  }
   syncInstance = null;
   modelsSyncInflight = null;
   modelsSyncGen = -1;
   modelsSyncRerunQueued = false;
   modelsSyncAttempt = 0;
   lastModelsSyncSucceededAttempt = 0;
+  lastModelsSyncStartedAt = 0;
   authGeneration = 0;
   lastAuthUserId = null;
   lastAuthRealm = null;

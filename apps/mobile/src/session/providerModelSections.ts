@@ -132,6 +132,7 @@ export function buildMobileModelSections(args: {
         }
       : (pid, mid) => restrictSuspended(pid, mid),
     query: args.query,
+    includePaymentRequired: true,
   });
 
   return { sections, connected, activeSourceId };

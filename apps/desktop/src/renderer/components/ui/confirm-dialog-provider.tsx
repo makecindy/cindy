@@ -313,3 +313,12 @@ export function useConfirmDialog(): ConfirmDialogContextValue {
   }
   return context;
 }
+
+/**
+ * 可选读取全局确认框。仅供既能独立渲染、又能挂在完整应用壳内的复用组件使用：
+ * 正式窗口都由 ConfirmDialogProvider 提供共享弹窗；Story / 单测等裸渲染环境返回 null，
+ * 避免为了展示一个纯列表就强制复制整套应用 Provider。
+ */
+export function useOptionalConfirmDialog(): ConfirmDialogContextValue | null {
+  return useContext(ConfirmDialogContext);
+}

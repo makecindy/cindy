@@ -1,5 +1,5 @@
 import {
-  MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
   parseListModelsResponse,
 } from '@cindy/model-providers';
 import type {
@@ -12,24 +12,31 @@ import type { CredentialsSync } from './credentialsSync.js';
 /** Bound the shared single-flight so a black-hole connection cannot block later refreshes. */
 export const XD_MODELS_SYNC_TIMEOUT_MS = 20_000;
 export const XD_MODELS_SYNC_PATH =
-  `/api/model-access/models?schemaVersion=${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}` as const;
+  `/api/model-access/models?schemaVersion=${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}` as const;
 
 export type ModelsSyncPayloadParseResult =
   { ok: true; models: ModelAccessGatewayModel[] } | { ok: false; error: string };
 
+/** 失败后的 LKG 只保留可执行模型；过期的付费差集不能继续作为升级营销事实。 */
+export function modelsWithoutStalePaymentUpsell(
+  models: readonly ModelAccessGatewayModel[],
+): ModelAccessGatewayModel[] {
+  return models.filter((model) => model.availability !== 'requires_payment');
+}
+
 /**
  * Validate the actual `/models` wire envelope before it can replace the last-known-good snapshot.
  * The client-owned parser is the version boundary: it can validate every published contract,
- * but Desktop sync only accepts the current v4 response instead of partially interpreting an
+ * but Desktop sync only accepts the current v5 response instead of partially interpreting an
  * older or unknown version.
  */
 export function parseModelsSyncPayload(value: unknown): ModelsSyncPayloadParseResult {
   const parsed = parseListModelsResponse(value);
   if (!parsed.ok) return parsed;
-  if (parsed.value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION) {
+  if (parsed.value.schemaVersion !== MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION) {
     return {
       ok: false,
-      error: `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION} for Desktop model sync`,
+      error: `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION} for Desktop model sync`,
     };
   }
   const response: ModelAccessModelsResponse = parsed.value;
@@ -61,13 +68,15 @@ export function withModelsSyncOverallDeadline<T>(
 
 export function buildModelsSyncRequest(baseUrl: string | (() => string)): {
   path: typeof XD_MODELS_SYNC_PATH;
-  options: { baseUrl: string | (() => string); timeoutMs: number };
+  options: { baseUrl: string | (() => string); timeoutMs: number; cache: 'no-store' };
 } {
   return {
     path: XD_MODELS_SYNC_PATH,
     options: {
       baseUrl,
       timeoutMs: XD_MODELS_SYNC_TIMEOUT_MS,
+      // 模型权限随订阅权益变化，强制刷新不能命中 Electron HTTP cache。
+      cache: 'no-store',
     },
   };
 }

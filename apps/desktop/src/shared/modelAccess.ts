@@ -165,6 +165,8 @@ export interface ModelGroupPricing {
  */
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
+  /** v5 entitlement projection; missing only on persisted/legacy snapshots. */
+  availability?: 'available' | 'requires_payment';
   /**
    * Gateway 原生 mode(issue #882:权威分类字段,字段值不改名)。原样透传,可能
    * 缺省(旧缓存 / 服务端尚未覆盖到的模型)——**不代表**本条目已被服务端判定
@@ -218,6 +220,7 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
  * remain a runtime-parser concern.
  */
 export interface ModelAccessModelsResponse {
-  schemaVersion: 1 | 2 | 3 | 4;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
+  accountTier?: 'free' | 'paid' | 'not_applicable';
   models: ModelAccessGatewayModel[];
 }

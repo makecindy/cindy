@@ -157,6 +157,7 @@ export function filterEnabledGatewayMediaModels<
   T extends {
     id: string;
     mode?: string;
+    availability?: 'available' | 'requires_payment';
     modalities?: { input: string[]; output: string[] };
   },
 >(
@@ -167,6 +168,7 @@ export function filterEnabledGatewayMediaModels<
   if (isProviderDisabled(access, CINDY_AI_PROVIDER_ID)) return [];
   const candidateModelIds = models.map((model) => model.id);
   return models.filter((model) => {
+    if (model.availability === 'requires_payment') return false;
     if (
       isModelDisabledWithUniqueLegacyBasename(
         access,

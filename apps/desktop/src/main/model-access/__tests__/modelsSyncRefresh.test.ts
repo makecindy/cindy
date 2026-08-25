@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
+  modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
   withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
@@ -68,7 +69,7 @@ describe('parseModelsSyncPayload', () => {
   it.each([
     {
       label: 'unknown schema version',
-      payload: { schemaVersion: 5, models: [baseModel] },
+      payload: { schemaVersion: 6, models: [baseModel] },
       errorPath: 'response.schemaVersion',
     },
     {
@@ -115,13 +116,15 @@ describe('parseModelsSyncPayload', () => {
   });
 
   it.each(['openai-responses', 'anthropic-messages'] as const)(
-    'reads v4 Pi %s routing and filters future agent kinds without rejecting the catalog',
+    'reads v5 Pi %s routing and filters future agent kinds without rejecting the catalog',
     (piWireProtocol) => {
       const payload = {
-        schemaVersion: 4,
+        schemaVersion: 5,
+        accountTier: 'free',
         models: [
           {
             ...baseModel,
+            availability: 'requires_payment',
             agents: ['claude-code', 'codex', 'pi', 'future-agent'],
             newSessionDefault: ['pi', 'future-agent'],
             perAgent: {
@@ -139,6 +142,7 @@ describe('parseModelsSyncPayload', () => {
         models: [
           {
             ...baseModel,
+            availability: 'requires_payment',
             agents: ['claude-code', 'codex', 'pi'],
             newSessionDefault: ['pi'],
             perAgent: {
@@ -153,13 +157,25 @@ describe('parseModelsSyncPayload', () => {
   );
 });
 
+describe('modelsWithoutStalePaymentUpsell', () => {
+  it('保留旧快照中的可执行模型，但移除已无法在线确认的付费锁定行', () => {
+    expect(modelsWithoutStalePaymentUpsell([
+      { id: 'available', currency: 'CNY', agents: [], availability: 'available' },
+      { id: 'locked', currency: 'CNY', agents: [], availability: 'requires_payment' },
+    ])).toEqual([
+      { id: 'available', currency: 'CNY', agents: [], availability: 'available' },
+    ]);
+  });
+});
+
 describe('waitForModelsSyncRefresh', () => {
   it('gives the shared XD model-list request a finite deadline', () => {
     expect(buildModelsSyncRequest('https://model-access.example.com')).toEqual({
-      path: '/api/model-access/models?schemaVersion=4',
+      path: '/api/model-access/models?schemaVersion=5',
       options: {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,
+        cache: 'no-store',
       },
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);
