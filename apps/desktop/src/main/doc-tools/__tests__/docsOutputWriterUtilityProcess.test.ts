@@ -154,6 +154,58 @@ describe('docs output cwd-bound writer', () => {
     );
   });
 
+  it('falls back to an exclusive synced write when hard links are unsupported', async () => {
+    vi.spyOn(fs.promises, 'link').mockRejectedValueOnce(
+      Object.assign(new Error('hard links unsupported'), { code: 'ENOTSUP' }),
+    );
+
+    await runDocsOutputWriteForTest(await request('report.bin', 'fallback', false), root);
+
+    expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('fallback');
+    expect((await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-'))).toBe(
+      false,
+    );
+  });
+
+  it('keeps no-clobber semantics in the hard-link-free fallback', async () => {
+    await fs.promises.writeFile(path.join(root, 'report.bin'), 'existing');
+    vi.spyOn(fs.promises, 'link').mockRejectedValueOnce(
+      Object.assign(new Error('hard links unsupported'), { code: 'EPERM' }),
+    );
+
+    await expect(
+      runDocsOutputWriteForTest(await request('report.bin', 'replacement', false), root),
+    ).rejects.toMatchObject({ code: 'FILE_EXISTS' });
+    expect(await fs.promises.readFile(path.join(root, 'report.bin'), 'utf8')).toBe('existing');
+  });
+
+  it('removes only its incomplete target when the hard-link-free fallback write fails', async () => {
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    let openCount = 0;
+    vi.spyOn(fs.promises, 'link').mockRejectedValueOnce(
+      Object.assign(new Error('hard links unsupported'), { code: 'EOPNOTSUPP' }),
+    );
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (file, flags, mode) => {
+      openCount += 1;
+      const handle = await originalOpen(file, flags, mode);
+      if (openCount === 2) {
+        vi.spyOn(handle, 'writeFile').mockImplementationOnce(async (data) => {
+          await handle.write(Buffer.from(data as Uint8Array).subarray(0, 3));
+          throw Object.assign(new Error('network write failed'), { code: 'EIO' });
+        });
+      }
+      return handle;
+    });
+
+    await expect(
+      runDocsOutputWriteForTest(await request('report.bin', 'partial-data', false), root),
+    ).rejects.toMatchObject({ code: 'EIO' });
+    await expect(fs.promises.stat(path.join(root, 'report.bin'))).rejects.toThrow();
+    expect((await fs.promises.readdir(root)).some((name) => name.includes('.cindy-docs-'))).toBe(
+      false,
+    );
+  });
+
   it('creates missing parents inside the anchored session root', async () => {
     await runDocsOutputWriteForTest(await missingParentRequest('report.bin', 'nested'), root);
     expect(await fs.promises.readFile(path.join(root, 'nested/reports/report.bin'), 'utf8')).toBe(
@@ -213,7 +265,11 @@ describe('docs output cwd-bound writer', () => {
 
         const probe = spawnSync(
           process.execPath,
-          ['--import', tsxLoader, '-e', `
+          [
+            '--import',
+            tsxLoader,
+            '-e',
+            `
 const fs = (await import('node:fs')).default;
 const path = (await import('node:path')).default;
 const { runDocsOutputWrite } = await import(process.env.CINDY_WRITER_MODULE);
@@ -247,7 +303,8 @@ const movedValue = fs.existsSync(path.join(moved, 'report.bin'))
   ? await fs.promises.readFile(path.join(moved, 'report.bin'), 'utf8')
   : null;
 process.stdout.write(JSON.stringify({ code, outsideExists, movedValue }));
-`],
+`,
+          ],
           {
             cwd: root,
             encoding: 'utf8',

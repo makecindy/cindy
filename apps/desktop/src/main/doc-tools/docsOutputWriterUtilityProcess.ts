@@ -21,6 +21,15 @@ class OutputWriteError extends Error {
 const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
 const hasCode = (error: unknown, code: string): boolean =>
   Boolean(error && typeof error === 'object' && (error as NodeJS.ErrnoException).code === code);
+const HARD_LINK_UNSUPPORTED_CODES = new Set([
+  'EACCES',
+  'EMLINK',
+  'ENOSYS',
+  'ENOTSUP',
+  'EOPNOTSUPP',
+  'EPERM',
+  'EXDEV',
+]);
 
 function samePath(left: string, right: string): boolean {
   const normalize = (value: string) => {
@@ -148,7 +157,73 @@ async function writeExclusive(target: string, data: Uint8Array): Promise<void> {
   }
 }
 
-async function publishExclusive(staging: string, target: string): Promise<void> {
+async function removeIncompleteExclusiveTarget(
+  target: string,
+  identity: Pick<fs.BigIntStats, 'dev' | 'ino'>,
+): Promise<void> {
+  try {
+    const current = await fs.promises.lstat(target, { bigint: true });
+    if (
+      current.isFile() &&
+      !current.isSymbolicLink() &&
+      current.dev === identity.dev &&
+      current.ino === identity.ino
+    ) {
+      await fs.promises.rm(target, { force: true });
+    }
+  } catch {
+    // The path was already removed or replaced; never delete an unknown entry.
+  }
+}
+
+async function publishExclusiveWithoutHardLinks(target: string, data: Uint8Array): Promise<void> {
+  const flags =
+    fs.constants.O_WRONLY |
+    fs.constants.O_CREAT |
+    fs.constants.O_EXCL |
+    (fs.constants.O_NOFOLLOW ?? 0);
+  let handle: fs.promises.FileHandle | undefined;
+  let identity: Pick<fs.BigIntStats, 'dev' | 'ino'> | undefined;
+  let contentComplete = false;
+  let failed = false;
+  let failure: unknown;
+  try {
+    handle = await fs.promises.open(target, flags, 0o600);
+    const opened = await handle.stat({ bigint: true });
+    identity = { dev: opened.dev, ino: opened.ino };
+    await handle.writeFile(data);
+    contentComplete = true;
+    await handle.sync();
+  } catch (error) {
+    failed = true;
+    failure = error;
+  } finally {
+    try {
+      await handle?.close();
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    }
+  }
+
+  if (failed) {
+    if (hasCode(failure, 'EEXIST')) {
+      throw new OutputWriteError('FILE_EXISTS', `目标文件已存在: ${target}`);
+    }
+    // Hard-link-free filesystems cannot provide "visible only when complete".
+    // O_EXCL still preserves no-clobber; on a short/failed write, remove only
+    // the regular file inode created by this attempt. A fully written file is
+    // retained if fsync/close fails so a complete artifact is never erased.
+    if (!contentComplete && identity) {
+      await removeIncompleteExclusiveTarget(target, identity);
+    }
+    throw failure;
+  }
+}
+
+async function publishExclusive(staging: string, target: string, data: Uint8Array): Promise<void> {
   try {
     // A same-directory hard link publishes the fully synced staging inode in
     // one step and never replaces an existing destination. If the utility is
@@ -157,6 +232,11 @@ async function publishExclusive(staging: string, target: string): Promise<void> 
   } catch (error) {
     if (hasCode(error, 'EEXIST')) {
       throw new OutputWriteError('FILE_EXISTS', `目标文件已存在: ${target}`);
+    }
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code && HARD_LINK_UNSUPPORTED_CODES.has(code)) {
+      await publishExclusiveWithoutHardLinks(target, data);
+      return;
     }
     throw error;
   }
@@ -237,7 +317,7 @@ async function writeWithinVerifiedParent(
     if (request.overwrite) {
       await replaceFile(request, workingDir, staging, target);
     } else {
-      await publishExclusive(staging, target);
+      await publishExclusive(staging, target, request.data);
     }
     await verifyParent(request, workingDir);
   } finally {
