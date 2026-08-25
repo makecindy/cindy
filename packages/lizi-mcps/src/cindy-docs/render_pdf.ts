@@ -234,6 +234,52 @@ async function replaceAsync(
   return parts.join('');
 }
 
+function findHtmlTagEnd(input: string, start: number): number {
+  let quote: string | undefined;
+  for (let end = start + 1; end < input.length; end += 1) {
+    const ch = input[end]!;
+    if (quote) {
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === '>') return end;
+  }
+  return -1;
+}
+
+function findTemplateSubtreeEnd(input: string, contentStart: number): number {
+  let depth = 1;
+  let index = contentStart;
+  while (index < input.length) {
+    const start = input.indexOf('<', index);
+    if (start < 0) return input.length;
+    if (input.startsWith('<!--', start)) {
+      const endComment = input.indexOf('-->', start + 4);
+      index = endComment < 0 ? input.length : endComment + 3;
+      continue;
+    }
+    const end = findHtmlTagEnd(input, start);
+    if (end < 0) return input.length;
+    const tag = input.slice(start, end + 1);
+    const rawText = tag.match(/^<\s*(noscript|script|style|textarea|title)\b/i);
+    if (rawText) {
+      const closing = new RegExp(`<\\/\\s*${rawText[1]}\\s*>`, 'ig');
+      closing.lastIndex = end + 1;
+      const closingMatch = closing.exec(input);
+      index = closingMatch ? closingMatch.index + closingMatch[0].length : input.length;
+      continue;
+    }
+    if (/^<\s*template\b/i.test(tag) && !/\/\s*>$/.test(tag)) depth += 1;
+    else if (/^<\s*\/\s*template\s*>/i.test(tag)) {
+      depth -= 1;
+      if (depth === 0) return end + 1;
+    }
+    index = end + 1;
+  }
+  return input.length;
+}
+
 /** HTML tag scanner that does not terminate on `>` inside a quoted attribute. */
 async function replaceHtmlTagsAsync(
   input: string,
@@ -258,22 +304,13 @@ async function replaceHtmlTagsAsync(
       index = endComment < 0 ? input.length : endComment + 3;
       continue;
     }
-    let quote: string | undefined;
-    let end = start + 1;
-    for (; end < input.length; end += 1) {
-      const ch = input[end]!;
-      if (quote) {
-        if (ch === quote) quote = undefined;
-        continue;
-      }
-      if (ch === '"' || ch === "'") {
-        quote = ch;
-      } else if (ch === '>') {
-        break;
-      }
-    }
-    if (end >= input.length) break;
+    const end = findHtmlTagEnd(input, start);
+    if (end < 0) break;
     const tag = input.slice(start, end + 1);
+    if (/^<\s*template\b/i.test(tag) && !/\/\s*>$/.test(tag)) {
+      index = findTemplateSubtreeEnd(input, end + 1);
+      continue;
+    }
     const rawTextMatch = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/i);
     if (rawTextMatch && rawTextTags.has(rawTextMatch[1]!.toLowerCase())) {
       if (predicate(tag)) {
@@ -493,20 +530,13 @@ async function rewriteHtmlStyleElementsAsync(
       index = endComment < 0 ? input.length : endComment + 3;
       continue;
     }
-    let quote: string | undefined;
-    let end = start + 1;
-    for (; end < input.length; end += 1) {
-      const ch = input[end]!;
-      if (quote) {
-        if (ch === quote) quote = undefined;
-      } else if (ch === '"' || ch === "'") {
-        quote = ch;
-      } else if (ch === '>') {
-        break;
-      }
-    }
-    if (end >= input.length) break;
+    const end = findHtmlTagEnd(input, start);
+    if (end < 0) break;
     const tag = input.slice(start, end + 1);
+    if (/^<\s*template\b/i.test(tag) && !/\/\s*>$/.test(tag)) {
+      index = findTemplateSubtreeEnd(input, end + 1);
+      continue;
+    }
     const opening = /^<\s*style\b/i.test(tag) && !/^<\s*\/style\b/i.test(tag);
     if (!opening) {
       const raw = tag.match(/^<\s*(noscript|script|textarea|title)\b/i);

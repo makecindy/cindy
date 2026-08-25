@@ -164,17 +164,25 @@ export function registerInspectPdfTool(
           .filter((p) => p.visibilityUnverified)
           .map((p) => p.page);
         const partial = inspection.pagesInspected < inspection.numPages;
-        const inspectedPageNumbers = new Set(decorated.map((page) => page.page));
+        const lastInspectedPage = Math.max(0, ...decorated.map((page) => page.page));
         const nextPages: number[] = [];
         if (partial) {
           // numPages is untrusted PDF metadata. Never allocate an array sized by
-          // that declaration; generate only the bounded next page batch.
-          for (let page = 1; page <= inspection.numPages && nextPages.length < maxPages; page += 1) {
-            if (!inspectedPageNumbers.has(page)) nextPages.push(page);
+          // that declaration; continue from this batch's cursor and generate only
+          // the bounded next page batch. Starting from page 1 here would make
+          // sequential callers bounce between the first two batches forever.
+          for (
+            let page = lastInspectedPage + 1;
+            page <= inspection.numPages && nextPages.length < maxPages;
+            page += 1
+          ) {
+            nextPages.push(page);
           }
         }
         const coverageWarning = partial
-          ? `本次只检查了 ${inspection.pagesInspected}/${inspection.numPages} 页，未覆盖页码 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}] 继续检查。`
+          ? nextPages.length > 0
+            ? `本次只检查了 ${inspection.pagesInspected}/${inspection.numPages} 页，下一批页码为 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}] 继续检查。`
+            : `本次只检查了 ${inspection.pagesInspected}/${inspection.numPages} 页，当前页码批次之后没有可继续的页面；如需完整覆盖，请显式指定尚未检查的页码。`
           : undefined;
 
         return okPayload({

@@ -290,6 +290,17 @@ describe('make_docx', () => {
     expect(numbering).toContain('<w:start w:val="5"/>');
   });
 
+  it('保留从零开始的有序列表编号', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: ['0. 前置步骤', '1. 第一步'].join('\n'),
+      outPath: 'ordered-zero-start.docx',
+    });
+    expect(result.ok).toBe(true);
+    const numbering = await unzip(result.path as string, 'word/numbering.xml');
+    expect(numbering).toContain('<w:start w:val="0"/>');
+  });
+
   it('输出目录不存在时自动创建', async () => {
     const client = await connect();
     const result = await callTool(client, 'make_docx', {
@@ -1181,6 +1192,34 @@ describe('render_pdf', () => {
     expect(rendered).toContain('<p>ok</p>');
   });
 
+  it('不快照未实例化 template 子树内的图片与样式资源', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'template-safe.html'),
+      `<template><script>const sample = '<template><img src="./fake.png"></template>';</script><img src="./missing.png"><style>.unused{background:url(./missing-bg.png)}</style><template><img src="./nested-missing.png"></template></template><p>ok</p><img src="./chart.png">`,
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'template-safe.html',
+      outPath: 'template-safe.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('./missing.png');
+    expect(rendered).toContain('url(./missing-bg.png)');
+    expect(rendered).toContain('./nested-missing.png');
+    expect(rendered).toContain('<p>ok</p>');
+    expect(rendered).toContain('data:image/png;base64,');
+  });
+
   it('只处理真实 style 元素,不处理脚本与注释中的 style 形状文本', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
@@ -1599,6 +1638,28 @@ describe('inspect_pdf', () => {
     expect(result.nextPages).toEqual([11, 12]);
     expect(result.warning).toContain('11、12');
     expect(result.verdict).not.toBe('ok');
+  });
+
+  it('连续检查多批 PDF 页面时 nextPages 沿游标前进', async () => {
+    const client = await connect({
+      inspectPdf: async ({ pages }) => {
+        const selected = pages.length > 0 ? pages : Array.from({ length: 10 }, (_, index) => index + 1);
+        return {
+          numPages: 30,
+          pagesInspected: selected.length,
+          pages: selected.map((pageNumber) => page({ page: pageNumber })),
+        };
+      },
+    });
+    await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from(`%PDF-1.7\n${'x'.repeat(5000)}`));
+
+    const first = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(first.nextPages).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+    const second = await callTool(client, 'inspect_pdf', {
+      path: 'out.pdf',
+      pages: first.nextPages,
+    });
+    expect(second.nextPages).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
   });
 
   it('算子表未能解析时 verdict 不得误报 ok', async () => {

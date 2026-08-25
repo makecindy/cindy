@@ -185,7 +185,7 @@ function listParagraphs(list: Tokens.List, depth: number, ctx: BlockContext): Pa
     : undefined;
   if (orderedReference) {
     const start =
-      Number.isInteger(list.start) && (list.start as number) > 0 ? (list.start as number) : 1;
+      Number.isInteger(list.start) && (list.start as number) >= 0 ? (list.start as number) : 1;
     ctx.orderedLists.push({ reference: orderedReference, level, start });
   }
   for (const item of list.items) {
