@@ -867,6 +867,7 @@ import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
+  isSupportedRuntimeEffort,
 } from './runtimeSelectionAxes.js';
 import {
   acceptSessionRuntimeMutation,
@@ -14438,14 +14439,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 可以乐观调用 (UI 更新先行, IPC 失败也不会回滚 UI, 老 agentManager 同语义)。
 
   const handleSetModel = async (
-    _e: Electron.IpcMainInvokeEvent | undefined,
+    event: Electron.IpcMainInvokeEvent | undefined,
     sessionId: unknown,
     model: unknown,
     providerId?: unknown,
     expectedAgentSwitchRevision?: unknown,
     selection?: unknown,
-    internalOptions: InternalRuntimeSelectionOptions = { source: 'user' },
+    internalOptions: InternalRuntimeSelectionOptions,
   ) => {
+    if (internalOptions.source === 'user' && !isDeviceLinkInvoke()) {
+      assertTrustedAppRendererEvent(
+        event as Parameters<typeof assertTrustedAppRendererEvent>[0],
+      );
+    }
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
@@ -14490,7 +14496,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (selection === null ||
         typeof selection !== 'object' ||
         Array.isArray(selection) ||
-        (typeof (selection as { effort?: unknown }).effort !== 'string' &&
+        (!isSupportedRuntimeEffort((selection as { effort?: unknown }).effort) &&
           !(
             internalOptions.source !== 'user' &&
             (selection as { effort?: unknown }).effort === null
@@ -15056,7 +15062,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       selection,
       options,
     );
-  ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel);
+  ipcMain.handle(
+    MAKER_INVOKE.SET_MODEL,
+    (event, sessionId, model, providerId, expectedAgentSwitchRevision, selection) =>
+      handleSetModel(
+        event,
+        sessionId,
+        model,
+        providerId,
+        expectedAgentSwitchRevision,
+        selection,
+        { source: 'user' },
+      ),
+  );
 
   const recoverRemoteRuntimeAxisPersistence = async (
     sessionId: string,

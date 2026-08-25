@@ -94,6 +94,33 @@ describe('session runtime control wiring', () => {
     }
   });
 
+  it('guards local user model changes before parsing input while preserving trusted internal paths', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const guard = setModel.indexOf(
+      "if (internalOptions.source === 'user' && !isDeviceLinkInvoke()) {",
+    );
+    expect(guard).toBeGreaterThan(-1);
+    expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeGreaterThan(
+      guard,
+    );
+    expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeLessThan(
+      setModel.indexOf("typeof sessionId !== 'string'"),
+    );
+    expect(setModel).toContain(
+      '!isSupportedRuntimeEffort((selection as { effort?: unknown }).effort)',
+    );
+    expect(setModel).toContain("internalOptions.source !== 'user'");
+    expect(registerSource).toContain(
+      'handleSetModel(undefined, sessionId, model, providerId, undefined, selection, options)',
+    );
+    expect(setModel).toContain("{ source: 'user' }");
+    expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
+  });
+
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
       registerSource,
@@ -153,7 +180,7 @@ describe('session runtime control wiring', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
-      'ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel);',
+      'const recoverRemoteRuntimeAxisPersistence',
     );
     const terminalGuard = setModel.indexOf("runtimeStatus.status !== 'active'");
     expect(terminalGuard).toBeGreaterThan(setModel.indexOf('const applyLocked = async () => {'));

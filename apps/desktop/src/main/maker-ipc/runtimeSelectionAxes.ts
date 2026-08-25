@@ -1,4 +1,10 @@
 import type { AgentKind, Effort } from '@cindy/maker-core';
+import { EFFORT_VALUES } from '@cindy/model-providers';
+
+/** Runtime validation for effort values crossing IPC and Device Link boundaries. */
+export function isSupportedRuntimeEffort(value: unknown): value is Effort {
+  return typeof value === 'string' && (EFFORT_VALUES as readonly string[]).includes(value);
+}
 
 interface RuntimeSelectionAxesSession {
   agentKind: AgentKind;

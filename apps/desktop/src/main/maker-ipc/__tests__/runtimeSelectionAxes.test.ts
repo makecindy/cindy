@@ -3,7 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
+  isSupportedRuntimeEffort,
 } from '../runtimeSelectionAxes.js';
+
+describe('isSupportedRuntimeEffort', () => {
+  it('accepts catalog effort values and rejects unknown wire input', () => {
+    expect(isSupportedRuntimeEffort('minimal')).toBe(true);
+    expect(isSupportedRuntimeEffort('ultra')).toBe(true);
+    expect(isSupportedRuntimeEffort('bogus')).toBe(false);
+    expect(isSupportedRuntimeEffort(null)).toBe(false);
+  });
+});
 
 describe('applyRuntimeSelectionAxesWithRecovery', () => {
   it('commits the control stores only after every live axis succeeds', async () => {
