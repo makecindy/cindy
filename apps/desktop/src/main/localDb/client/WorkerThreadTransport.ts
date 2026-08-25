@@ -1052,7 +1052,7 @@ function codexImportMessages(readyDb, args) {
         clientId,
         sessionId,
         role,
-        content: stringifyContent(row.content),
+        content: stringifyImportedContent(role, row.content),
         agentMeta: JSON.stringify({ sdkSessionId, model }),
         createdAt,
       }).changes;
@@ -1095,12 +1095,13 @@ function claudeImportMessages(readyDb, args) {
     for (const rawRow of rows) {
       const row = asRecord(rawRow, 'claude row');
       const key = expectNumber(row.lineNo, 'row.lineNo') + '-' + expectNumber(row.partIndex, 'row.partIndex');
+      const role = expectString(row.role, 'row.role');
       count += upsert.run({
         id: 'claude-import-' + sdkSessionId + '-' + key,
         clientId: importClientIdPrefix + key,
         sessionId,
-        role: expectString(row.role, 'row.role'),
-        content: stringifyContent(row.content),
+        role,
+        content: stringifyImportedContent(role, row.content),
         toolUseId: nullableString(row.toolUseId),
         agentMeta: row.agentMeta ? stringifyContent(row.agentMeta) : null,
         createdAt: expectNumber(row.createdAt, 'row.createdAt'),
@@ -1727,6 +1728,23 @@ function truncate(value, max) {
 function stringifyContent(value) {
   const json = JSON.stringify(value);
   return json === undefined ? 'null' : json;
+}
+
+function capToolResultTextForPersist(text) {
+  var limit = 8 * 1024;
+  var suffix = '\\n\\n[tool result truncated: stored first 8KB]';
+  if (text.length <= limit) return text;
+  var cut = Math.max(0, limit - suffix.length);
+  var lastKept = text.charCodeAt(cut - 1);
+  if (cut > 0 && lastKept >= 0xd800 && lastKept <= 0xdbff) cut -= 1;
+  return text.slice(0, cut) + suffix;
+}
+
+function stringifyImportedContent(role, content) {
+  if (role === 'tool_result' && typeof content === 'string') {
+    return stringifyContent(capToolResultTextForPersist(content));
+  }
+  return stringifyContent(content);
 }
 
 function asRecord(value, label) {

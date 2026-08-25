@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   TOOL_RESULT_PERSIST_CONTENT_LIMIT,
   TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX,
+  capImportedToolResultContent,
   capToolResultTextForPersist,
 } from '../toolResultPersistCap';
 
@@ -41,5 +42,16 @@ describe('capToolResultTextForPersist', () => {
     const capped = capToolResultTextForPersist('c'.repeat(300), 100);
     expect(capped.length).toBeLessThanOrEqual(100);
     expect(capped.endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+  });
+});
+
+describe('capImportedToolResultContent', () => {
+  it('caps string tool_result and leaves other roles alone', () => {
+    const huge = 'z'.repeat(TOOL_RESULT_PERSIST_CONTENT_LIMIT * 2);
+    const capped = capImportedToolResultContent('tool_result', huge);
+    expect(typeof capped).toBe('string');
+    expect((capped as string).length).toBeLessThanOrEqual(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
+    expect(capImportedToolResultContent('assistant', huge)).toBe(huge);
+    expect(capImportedToolResultContent('tool_result', { text: huge })).toEqual({ text: huge });
   });
 });

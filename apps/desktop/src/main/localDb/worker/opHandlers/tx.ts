@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3';
 
 import type { DbTxName } from '../../client/tx/types.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
-import { capToolResultTextForPersist } from '../../../../shared/toolResultPersistCap.js';
+import { capImportedToolResultContent } from '../../../../shared/toolResultPersistCap.js';
 import {
   wechatActivateBindingEpoch,
   wechatCancelForCommand,
@@ -2001,15 +2001,12 @@ function stringifyContent(value: unknown): string {
 }
 
 /**
- * 外部 CLI 历史导入与 broadcaster 落库同口径:tool_result 正文截到 8KB。
- * 不截会让 rollout / transcript 重导入"复活"全文,绕开运行期的落库上限。
- * 只处理字符串正文;tool_result 之外的 role 原样序列化。
+ * 外部 CLI 历史导入与 live 落库同口径:tool_result 正文截到 8KB。
+ * 不截会让 rollout / transcript 重导入"复活"全文。媒体挂账在 main 导入层
+ * 对原文执行(本函数跑在 DB worker,碰不到 cindy-media ledger)。
  */
 function stringifyImportedContent(role: string, content: unknown): string {
-  if (role === 'tool_result' && typeof content === 'string') {
-    return stringifyContent(capToolResultTextForPersist(content));
-  }
-  return stringifyContent(content);
+  return stringifyContent(capImportedToolResultContent(role, content));
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {

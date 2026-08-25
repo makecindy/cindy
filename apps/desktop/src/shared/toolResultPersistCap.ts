@@ -11,8 +11,9 @@
  * 必须**先对原文扫 URL 挂账、再截断**(见 messagePersistBroadcaster 的
  * persistableToolResultContent),否则生成产物会被 recycler 判零引用回收。
  *
- * 纯函数、无依赖:main 侧 broadcaster 与 DB worker 的外部历史 importer
- * (tx.ts codex/claude importMessages)共用同一份,保证两个写入口一个口径。
+ * 纯函数、无依赖:main 侧 broadcaster、Claude 导入准备层与 DB worker importer
+ * (tx.ts / inline worker fallback)共用同一份,保证所有写入口一个口径。
+ * 导入路径的媒体挂账在 main 侧对原文执行(worker 碰不到 cindy-media ledger)。
  */
 
 export const TOOL_RESULT_PERSIST_CONTENT_LIMIT = 8 * 1024;
@@ -34,4 +35,10 @@ export function capToolResultTextForPersist(
   const lastKept = text.charCodeAt(cut - 1);
   if (cut > 0 && lastKept >= 0xd800 && lastKept <= 0xdbff) cut -= 1;
   return `${text.slice(0, cut)}${TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX}`;
+}
+
+/** 导入行与 live 落库同一上限:只有字符串 tool_result 会被截;其它 role 原样返回。 */
+export function capImportedToolResultContent(role: string, content: unknown): unknown {
+  if (role !== 'tool_result' || typeof content !== 'string') return content;
+  return capToolResultTextForPersist(content);
 }
