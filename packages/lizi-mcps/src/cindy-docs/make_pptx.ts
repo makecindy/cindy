@@ -543,6 +543,9 @@ export function registerMakePptxTool(
             y: slots.title.y,
             w: slots.title.w,
             h: slots.title.h,
+            // 标题框高度属于版式契约，不能让长标题静默裁切。交给 PowerPoint
+            // 在固定框内缩小字号，既保留完整文本，也不开放模型自由改坐标/框高。
+            fit: 'shrink',
             fontSize: slots.title.fontSize,
             bold: true,
             color: palette.title,

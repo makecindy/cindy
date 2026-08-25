@@ -653,6 +653,20 @@ describe('make_pptx', () => {
     expect(PPTX_THEMES.dark.background).not.toBe(PPTX_THEMES.light.background);
   });
 
+  it('最大合法标题启用文本框缩放,不静默裁切', async () => {
+    const client = await connect();
+    const longTitle = '长'.repeat(1_000);
+    const result = await callTool(client, 'make_pptx', {
+      slides: [{ title: longTitle }],
+      outPath: 'long-title.pptx',
+    });
+
+    expect(result.ok).toBe(true);
+    const slide = await unzip(result.path as string, 'ppt/slides/slide1.xml');
+    expect(slide).toContain(longTitle);
+    expect(slide).toContain('<a:normAutofit');
+  });
+
   it('图片路径越界时整个生成不发生,不留半成品', async () => {
     const client = await connect();
     const result = await callTool(client, 'make_pptx', {
