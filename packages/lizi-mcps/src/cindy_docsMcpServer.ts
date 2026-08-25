@@ -55,6 +55,7 @@ const D_COMMON_TAIL =
   ' 全部能力零系统依赖,不需要用户预先装 LibreOffice / Office 或任何外部程序。' +
   '所有输入输出路径必须在当前任务的工作目录内(建议放 documents/,文件名用「日期-主题」)。' +
   '错误码:`PATH_NOT_ALLOWED` 路径越界;`FILE_EXISTS` 目标已存在(确认覆盖再加 overwrite:true);' +
+  '`ATOMIC_PUBLISH_UNSUPPORTED` 当前输出位置无法安全地原子防覆盖发布;' +
   '`NOT_A_FILE` 输入找不到;`NO_SESSION_CONTEXT` 本次调用没绑定工作目录。';
 
 /**

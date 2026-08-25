@@ -57,6 +57,7 @@ function parseResult(value: unknown): DocsOutputWriteResult | null {
     result.ok === false &&
     (result.errorCode === 'FILE_EXISTS' ||
       result.errorCode === 'PATH_NOT_ALLOWED' ||
+      result.errorCode === 'ATOMIC_PUBLISH_UNSUPPORTED' ||
       result.errorCode === 'INTERNAL') &&
     typeof result.message === 'string'
   ) {
@@ -81,6 +82,13 @@ function throwResultError(
       'PATH_NOT_ALLOWED',
       result.message,
       `输出路径 "${abs}" 在最终落盘时不再属于本任务工作目录，已停止写入。请检查目录后重试。`,
+    );
+  }
+  if (result.errorCode === 'ATOMIC_PUBLISH_UNSUPPORTED') {
+    throw new DocsPathError(
+      'ATOMIC_PUBLISH_UNSUPPORTED',
+      result.message,
+      '请换到支持硬链接的本地工作目录；如确认允许覆盖同名文件，可显式传 overwrite:true 后重试。',
     );
   }
   throw new Error(result.message);

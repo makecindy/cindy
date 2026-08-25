@@ -26,6 +26,7 @@ export class DocsPathError extends Error {
       | 'REMOTE_SESSION_UNSUPPORTED'
       | 'PATH_NOT_ALLOWED'
       | 'FILE_EXISTS'
+      | 'ATOMIC_PUBLISH_UNSUPPORTED'
       | 'INVALID_EXTENSION'
       | 'NOT_A_FILE'
       | 'SHEET_NOT_FOUND'
