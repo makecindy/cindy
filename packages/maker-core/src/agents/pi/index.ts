@@ -4221,9 +4221,9 @@ export class PiAgent extends BaseAgent {
       {
         const resp = await proc.request({ type: 'set_auto_compaction', enabled: true });
         if (!resp.success) {
-          this.deps.logger.warn('pi set_auto_compaction failed (non-fatal)', {
-            error: resp.error,
-          });
+          throw new Error(
+            `pi set_auto_compaction failed: ${resp.error ?? 'unknown'} — refusing to start without native auto-compaction`,
+          );
         }
       }
 
