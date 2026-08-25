@@ -966,13 +966,19 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
   // predicate also covers a recycled pid and, on Windows, a dead pid (the CIM
   // query returns nothing) — one cross-platform judgement for "that runner is
   // no longer running". Each attempt costs a `ps`/CIM spawn, so keep it short.
+  if (await waitUntilRunnerGone(status)) return true;
+  if (process.platform !== 'win32') {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone, or unreachable */ }
+    return waitUntilRunnerGone(status);
+  }
+  return false;
+}
+
+async function waitUntilRunnerGone(status: PiSubagentRunStatus): Promise<boolean> {
   for (let attempt = 0; attempt < KILL_CONFIRM_ATTEMPTS; attempt += 1) {
     if (await classifyRunnerPresence(status) === 'gone') return true;
     if (attempt === KILL_CONFIRM_ATTEMPTS - 1) break;
     await new Promise<void>((resolve) => setTimeout(resolve, KILL_CONFIRM_INTERVAL_MS));
-  }
-  if (process.platform !== 'win32') {
-    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone, or unreachable */ }
   }
   return await classifyRunnerPresence(status) === 'gone';
 }

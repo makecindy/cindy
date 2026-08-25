@@ -1121,6 +1121,31 @@ describe('PI durable subagent run store', () => {
       expect(killSignals()).toContain('SIGKILL');
     });
 
+    it('waits after SIGKILL until the runner is gone', async () => {
+      usePlatform('linux');
+      stubKill();
+      let postKillProbes = 0;
+      childProcess.spawnSync.mockImplementation((...args: unknown[]) => {
+        if (args[0] === 'taskkill') return { status: 0 };
+        const killed = killSignals().includes('SIGKILL');
+        if (!killed) return { status: 0, stdout: `node ${runnerScript} config.json` };
+        postKillProbes += 1;
+        // The first post-SIGKILL listing still matches: the process has not
+        // been scheduled out yet. A single immediate probe would report false.
+        // Empty stdout is unreadable/unverifiable, not gone — use a listing
+        // that is readable and does not carry this run's script.
+        return {
+          status: 0,
+          stdout: postKillProbes <= 1 ? `node ${runnerScript} config.json` : 'other-process',
+        };
+      });
+
+      await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(true);
+      expect(killSignals()[0]).toBe('SIGTERM');
+      expect(killSignals()).toContain('SIGKILL');
+      expect(postKillProbes).toBeGreaterThan(1);
+    });
+
     it('does not report an account-boundary sweep as complete while a runner survives', async () => {
       const root = await makeRoot();
       usePlatform('linux');
