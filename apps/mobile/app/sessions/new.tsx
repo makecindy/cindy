@@ -427,6 +427,7 @@ export default function NewRemoteSessionScreen() {
     invoke,
     openLink,
     subscribe,
+    unsubscribe,
     onAgentsChanged,
     status: deviceLinkStatus,
     connectionEpoch,
@@ -1846,6 +1847,22 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
     };
   }, [selectedDeviceId, maker, openLink, availableAgentRefreshNonce]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    let cancelled = false;
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      if (cancelled) return;
+      await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+    }).catch(() => {
+      /* The existing roster fetch remains fail-open; the next focus/retry can resubscribe. */
+    });
+    return () => {
+      cancelled = true;
+      void unsubscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']).catch(() => undefined);
+    };
+  }, [openLink, selectedDeviceId, subscribe, unsubscribe]);
 
   useEffect(() => {
     if (!selectedDeviceId) return;
