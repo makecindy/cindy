@@ -114,10 +114,10 @@ describe('session runtime control wiring', () => {
       '!isSupportedRuntimeEffort((selection as { effort?: unknown }).effort)',
     );
     expect(setModel).toContain("internalOptions.source !== 'user'");
-    expect(registerSource).toContain(
-      'handleSetModel(undefined, sessionId, model, providerId, undefined, selection, options)',
+    expect(registerSource).toMatch(
+      /handleSetModel\(\s*undefined,\s*sessionId,\s*model,\s*providerId,\s*undefined,\s*selection,\s*options,?\s*\)/,
     );
-    expect(setModel).toContain("{ source: 'user' }");
+    expect(setModel).toMatch(/\{\s*source:\s*'user',?\s*\}/);
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
@@ -149,6 +149,23 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('recoverRemoteRuntimeAxisPersistence(');
       expect(body).toContain('assertCanCommit: assertOwnerCurrent');
     }
+  });
+
+  it('cancels and publishes a deferred runtime mutation after settlement fails', () => {
+    const settlement = handlerBody(
+      registerSource,
+      'const settlePendingSessionRuntimeControl =',
+      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+    );
+    const catchBlock = settlement.slice(settlement.indexOf('} catch (error) {'));
+
+    expect(catchBlock).toContain(
+      'cancelPendingSessionRuntimeMutation(sessionId, pending.generation)',
+    );
+    expect(catchBlock).toContain('await broadcastSessionRuntimeProjection(sessionId)');
+    expect(catchBlock.indexOf('cancelPendingSessionRuntimeMutation')).toBeLessThan(
+      catchBlock.indexOf('broadcastSessionRuntimeProjection'),
+    );
   });
 
   it('drops in-flight effort and Fast mutations after an owner boundary', () => {

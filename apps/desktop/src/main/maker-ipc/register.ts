@@ -871,6 +871,7 @@ import {
 } from './runtimeSelectionAxes.js';
 import {
   acceptSessionRuntimeMutation,
+  cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   clearSessionRuntimeControlState,
   getPendingSessionRuntimeMutation,
@@ -10894,11 +10895,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           superseded: result.superseded,
         });
       } catch (error) {
+        const cancelled = cancelPendingSessionRuntimeMutation(sessionId, pending.generation);
         log.warn('pending session runtime settlement failed', {
           sessionId,
           reason,
+          cancelled,
           error: error instanceof Error ? error.message : String(error),
         });
+        if (cancelled) {
+          await broadcastSessionRuntimeProjection(sessionId).catch((broadcastError) => {
+            log.debug('cancelled pending runtime projection broadcast failed', {
+              sessionId,
+              error:
+                broadcastError instanceof Error ? broadcastError.message : String(broadcastError),
+            });
+          });
+        }
       } finally {
         settlingSessionRuntimeControls.delete(sessionId);
         const latest = getPendingSessionRuntimeMutation(sessionId);
@@ -14442,9 +14454,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     event: Electron.IpcMainInvokeEvent | undefined,
     sessionId: unknown,
     model: unknown,
-    providerId?: unknown,
-    expectedAgentSwitchRevision?: unknown,
-    selection?: unknown,
+    providerId: unknown,
+    expectedAgentSwitchRevision: unknown,
+    selection: unknown,
     internalOptions: InternalRuntimeSelectionOptions,
   ) => {
     if (internalOptions.source === 'user' && !isDeviceLinkInvoke()) {

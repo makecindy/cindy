@@ -146,7 +146,7 @@ export function recordUserSessionRuntimeAxisMutation(
     : null;
   state.fallbackHop = 0;
   state.visitedRoutes.clear();
-  if (!pending && state.effectiveOverride) {
+  if (state.effectiveOverride) {
     state.effectiveOverride = { ...state.effectiveOverride, ...patch };
   }
   return state.generation;
@@ -189,6 +189,19 @@ export function settlePendingSessionRuntimeMutation(
     return false;
   state.pending = null;
   state.effectiveOverride = pending.profile;
+  return true;
+}
+
+export function cancelPendingSessionRuntimeMutation(
+  sessionId: string,
+  generation: number,
+): boolean {
+  const state = states.get(sessionId);
+  const pending = state?.pending;
+  if (!state || !pending || pending.generation !== generation || state.generation !== generation) {
+    return false;
+  }
+  state.pending = null;
   return true;
 }
 

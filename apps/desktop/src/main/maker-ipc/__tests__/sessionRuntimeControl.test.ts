@@ -3,6 +3,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 import {
   acceptSessionRuntimeMutation,
+  cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   clearAllSessionRuntimeControlStates,
   clearSessionRuntimeControlState,
@@ -154,6 +155,71 @@ describe('session runtime control state', () => {
       },
       fallbackHop: 0,
       visitedRoutes: [],
+    });
+  });
+
+  it('updates the live override and deferred route when a user changes one runtime axis', () => {
+    const sessionId = 'runtime-user-axis-effective-and-pending';
+    const effective = { ...current, model: 'gpt-live', providerId: 'openai' };
+    const pending = { ...current, model: 'gpt-next', providerId: 'xd', fastMode: false };
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: effective,
+      deferred: false,
+    });
+    const pendingGeneration = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: pending,
+      deferred: true,
+    });
+
+    const generation = recordUserSessionRuntimeAxisMutation(sessionId, {
+      fastMode: true,
+      effort: 'max',
+    });
+
+    expect(generation).toBe(pendingGeneration + 1);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      effectiveOverride: { ...effective, fastMode: true, effort: 'max' },
+      pending: {
+        generation,
+        source: 'agent',
+        profile: { ...pending, fastMode: true, effort: 'max' },
+      },
+    });
+  });
+
+  it('cancels only the unchanged pending generation after settlement fails', () => {
+    const sessionId = 'runtime-cancel-pending';
+    const effective = { ...current, model: 'gpt-live' };
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: effective,
+      deferred: false,
+    });
+    const generation = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: { ...current, model: 'gpt-next' },
+      deferred: true,
+    });
+
+    expect(cancelPendingSessionRuntimeMutation(sessionId, generation - 1)).toBe(false);
+    expect(cancelPendingSessionRuntimeMutation(sessionId, generation)).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      effectiveOverride: effective,
+      pending: null,
+    });
+    expect(cancelPendingSessionRuntimeMutation('runtime-missing', 0)).toBe(false);
+    expect(getSessionRuntimeControlSnapshot('runtime-missing')).toMatchObject({
+      generation: 0,
+      effectiveOverride: null,
+      pending: null,
     });
   });
 
