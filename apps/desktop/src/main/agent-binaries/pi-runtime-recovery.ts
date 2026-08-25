@@ -3,6 +3,14 @@ import type { PrepareResult } from './types.js';
 /** Retry delay for an optional Pi runtime that missed the startup network. */
 export const PI_RUNTIME_RECOVERY_RETRY_MS = 30_000;
 
+/** Only errors that may change when connectivity returns are worth retrying. */
+export function isRetryablePiPrepareError(error?: string): boolean {
+  return error === 'manifest_failed'
+    || error === 'NETWORK'
+    || error === 'HTTP_5XX'
+    || error === 'ABORTED';
+}
+
 export interface PiRuntimeRecoveryOptions {
   isOnline: () => boolean;
   prepare: () => Promise<PrepareResult>;
@@ -37,6 +45,7 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
   const cancel = options.clearTimeout ?? globalThis.clearTimeout;
   let disabled = false;
   let disposed = false;
+  let retryable = false;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let inFlight: Promise<boolean> | null = null;
 
@@ -57,12 +66,20 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
   const recovery: PiRuntimeRecovery = {
     markUnavailable(error) {
       disabled = true;
-      if (error) logWarn('Pi runtime unavailable; scheduling recovery', error);
-      scheduleRetry();
+      retryable = isRetryablePiPrepareError(error);
+      if (error) {
+        logWarn(
+          retryable
+            ? 'Pi runtime unavailable; scheduling recovery'
+            : 'Pi runtime unavailable; recovery not scheduled for permanent prepare error',
+          error,
+        );
+      }
+      if (retryable) scheduleRetry();
     },
 
     retryNow(reason = 'manual') {
-      if (disposed || !disabled) return Promise.resolve(false);
+      if (disposed || !disabled || !retryable) return Promise.resolve(false);
       if (inFlight) return inFlight;
 
       let online = false;
@@ -89,6 +106,7 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
             return false;
           }
           disabled = false;
+          retryable = false;
           options.onRegistered();
           return true;
         } catch (error) {

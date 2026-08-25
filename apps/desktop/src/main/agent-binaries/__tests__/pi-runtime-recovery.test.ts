@@ -63,4 +63,23 @@ describe('Pi runtime recovery', () => {
     expect(recovery.isDisabled()).toBe(true);
     recovery.dispose();
   });
+
+  it('does not schedule retries for permanent prepare errors', async () => {
+    const prepare = vi.fn(async () => ({ ready: true, path: '/tmp/pi' }));
+    const schedule = vi.fn(() => 0);
+    const recovery = createPiRuntimeRecovery({
+      isOnline: () => true,
+      prepare,
+      register: () => true,
+      onRegistered: vi.fn(),
+      setTimeout: schedule as unknown as typeof setTimeout,
+      clearTimeout: (() => undefined) as unknown as typeof clearTimeout,
+    });
+
+    recovery.markUnavailable('asset_missing');
+    expect(schedule).not.toHaveBeenCalled();
+    expect(await recovery.retryNow('permanent')).toBe(false);
+    expect(prepare).not.toHaveBeenCalled();
+    recovery.dispose();
+  });
 });
