@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ArtifactPreview,
   getDocumentCoverThemeStyle,
+  isConfirmedRemoteGeneratedFile,
   isLocalGeneratedFileInTurn,
 } from '../components/chat/GeneratedFilesCard';
 import type { DocumentArtifactMetadata, GeneratedFileRef } from '../lib/generatedFiles';
@@ -101,6 +102,15 @@ describe('isLocalGeneratedFileInTurn', () => {
         END,
       ),
     ).toBe(true);
+  });
+});
+
+describe('remote generated-file visibility', () => {
+  it('shows a card only after remote stat definitively confirms a file', () => {
+    expect(isConfirmedRemoteGeneratedFile('file')).toBe(true);
+    expect(isConfirmedRemoteGeneratedFile('directory')).toBe(false);
+    expect(isConfirmedRemoteGeneratedFile('nonfile')).toBe(false);
+    expect(isConfirmedRemoteGeneratedFile('unknown')).toBe(false);
   });
 });
 

@@ -15,8 +15,8 @@
  *
  * 存在性门槛(DESIGN.md §14.5「可点必存在」):本地会话渲染前 stat 过滤,不存在
  * 的文件不出 chip,整卡为空则不渲染。远程会话经 verifyRemotePathCached 远端 stat
- * 复核:先按 tool_use 记录乐观呈现,verdict 回来后 nonfile/directory 摘掉;
- * unknown(断链 / 限流)保持乐观——与正文 chip 的远程点亮不变量同策。
+ * 复核:仅在远端明确确认是普通文件后呈现；检查中、断链或限流都不先展示一张
+ * 可能无法打开的完成卡。
  *
  * 本地文件统一要求时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内。tool 来源
  * (Write / file-change add)也不能只凭存在性:Write 可能覆盖既有文件,失败路径也可能
@@ -36,6 +36,7 @@ import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin
 import {
   fetchChatFileWithToasts,
   revealRemoteChatFile,
+  type RemotePathVerdict,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
@@ -87,6 +88,10 @@ export function getDocumentCoverThemeStyle(
   theme: DocumentArtifactMetadata['theme'] = 'light',
 ): Record<string, string> {
   return DOCUMENT_COVER_THEME_TOKENS[theme] ?? DOCUMENT_COVER_THEME_TOKENS.light;
+}
+
+export function isConfirmedRemoteGeneratedFile(verdict: RemotePathVerdict): boolean {
+  return verdict === 'file';
 }
 
 function DocumentCoverPreview({
@@ -397,26 +402,21 @@ export function GeneratedFilesCard({
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
-  // 本地会话:stat 过滤到真实存在的文件(null = 尚未算完,不渲染,避免闪现后
-  // 又被过滤掉);远程:tool 来源先乐观呈现、远端 stat 复核,command 候选无法
-  // 验证 mtime 一律不出(见文件头注释)。
-  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(
-    remoteOrigin ? files.filter((f) => f.source === 'tool') : null,
-  );
+  // 本地与远程都先保持 null，等存在性检查完成后再展示，避免完成卡闪现后消失。
+  // 远程 command 候选无法验证 mtime，一律不出（见文件头注释）。
+  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(null);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setExisting(null);
     if (remoteOrigin) {
       const toolFiles = files.filter((f) => f.source === 'tool');
-      setExisting(toolFiles);
       void (async () => {
         const checks = await Promise.all(
           toolFiles.map(async (f) => {
             const verdict = await verifyRemotePathCached(remoteOrigin, fileCtx.workingDir, f.path);
-            // nonfile(不存在 / 非普通文件)/ directory 是远端确定结论 → 摘掉;
-            // unknown(断链 / 限流)保持乐观。
-            return verdict !== 'nonfile' && verdict !== 'directory';
+            return isConfirmedRemoteGeneratedFile(verdict);
           }),
         );
         if (!cancelled) setExisting(toolFiles.filter((_, idx) => checks[idx]));

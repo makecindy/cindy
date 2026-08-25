@@ -8,6 +8,8 @@
  * 纯配置:色板来自 themes.ts,字体只声明系统字体族,不捆 webfont、不捆图片。
  */
 
+import { decodeHTML } from 'entities';
+
 import { themeToCssHex, type DocsTheme } from './themes.js';
 
 export const PDF_TEMPLATE_MARK = 'data-cindy-docs-template="report"';
@@ -41,38 +43,17 @@ function stripTags(raw: string): string {
   return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function decodeHtmlEntities(raw: string): string {
-  const named: Record<string, string> = {
-    amp: '&',
-    apos: "'",
-    gt: '>',
-    lt: '<',
-    nbsp: '\u00a0',
-    quot: '"',
-  };
-  return raw.replace(/&(#(?:x[\da-f]+|\d+)|[a-z][\da-z]+);/gi, (match, entity: string) => {
-    if (entity[0] === '#') {
-      const hex = entity[1]?.toLowerCase() === 'x';
-      const value = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
-      return Number.isFinite(value) && value >= 0 && value <= 0x10ffff
-        ? String.fromCodePoint(value)
-        : match;
-    }
-    return named[entity.toLowerCase()] ?? match;
-  });
-}
-
 export function extractHtmlTitle(html: string): string | undefined {
   const title = findHtmlElementRange(html, 'title');
   if (title) {
-    const value = decodeHtmlEntities(html.slice(title.contentStart, title.contentEnd))
+    const value = decodeHTML(html.slice(title.contentStart, title.contentEnd))
       .replace(/\s+/g, ' ')
       .trim();
     if (value.length > 0) return value;
   }
   const heading = findHtmlElementRange(html, 'h1');
   if (heading) {
-    const value = decodeHtmlEntities(
+    const value = decodeHTML(
       stripTags(html.slice(heading.contentStart, heading.contentEnd)),
     );
     if (value.length > 0) return value;
@@ -234,7 +215,7 @@ function htmlHasStylesheetElement(html: string): boolean {
         const rel = readHtmlAttribute(tag, 'rel');
         if (
           rel &&
-          decodeHtmlEntities(rel)
+          decodeHTML(rel)
             .split(/\s+/)
             .some((token) => token.toLowerCase() === 'stylesheet')
         ) {
