@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -64,13 +65,20 @@ describe('Review PDF utility process packaging contract', () => {
       };
       for (const runtimePackage of runtimePackages) stagePackage(runtimePackage);
 
-      const stagedRequire = createRequire(path.join(temp, 'probe.cjs'));
-      const canvas = stagedRequire('@napi-rs/canvas') as {
-        createCanvas: (width: number, height: number) => { toBuffer: (mime: string) => Buffer };
-      };
-      expect(canvas.createCanvas(1, 1).toBuffer('image/png').subarray(1, 4).toString('ascii')).toBe(
-        'PNG',
+      const probeRequirePath = path.join(temp, 'probe.cjs');
+      const probe = spawnSync(
+        process.execPath,
+        [
+          '-e',
+          `const { createRequire } = require('node:module');
+const stagedRequire = createRequire(${JSON.stringify(probeRequirePath)});
+const canvas = stagedRequire('@napi-rs/canvas');
+process.stdout.write(canvas.createCanvas(1, 1).toBuffer('image/png').subarray(1, 4).toString('ascii'));`,
+        ],
+        { cwd: temp, encoding: 'utf8' },
       );
+      expect(probe.status, probe.stderr || String(probe.error ?? '')).toBe(0);
+      expect(probe.stdout).toBe('PNG');
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });
     }
