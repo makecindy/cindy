@@ -3680,6 +3680,63 @@ describe('Pi provider-aware model routing', () => {
       .toContain((capturedRemoteEnvs[1]!.CINDY_PI_MODELS_JSON_HASH ?? '').slice(0, 16));
   });
 
+  it('includes settings.json in the remote launch identity so retry config restarts the child', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const written = new Map<string, string>();
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    const base = byomDeps(async () => ({ providers: [], env: {} }));
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async (_hostId, opts) => {
+        capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+        return remoteStub;
+      },
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async (filePath, content) => {
+          written.set(filePath, content);
+        },
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-settings-hash',
+      workingDir: cwd,
+      model: 'local-model',
+      remoteHostId: 'remote-host',
+    });
+    await handle.close();
+
+    const modelsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('models.json'))?.[1];
+    const settingsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('settings.json'))?.[1];
+    expect(modelsJson).toBeTruthy();
+    expect(settingsJson).toBeTruthy();
+    const modelsOnlyHash = createHash('sha256').update(modelsJson!).digest('hex');
+    const launchHash = createHash('sha256')
+      .update(modelsJson!)
+      .update('\n')
+      .update(settingsJson!)
+      .digest('hex');
+    expect(launchHash).not.toBe(modelsOnlyHash);
+    expect(capturedRemoteEnvs).toHaveLength(1);
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_MODELS_JSON_HASH).toBe(launchHash);
+    expect(capturedRemoteEnvs[0]!.PI_CODING_AGENT_DIR).toContain(launchHash.slice(0, 16));
+  });
+
   it('inlines remote text attachments and rejects local path mentions before dispatch', async () => {
     const remoteStub: import('../transport.js').PiTransport = {
       writeLine: async () => {},
