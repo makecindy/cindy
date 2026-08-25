@@ -2201,9 +2201,9 @@ export class AgentInputCoordinator {
         dispatchLifecycle: 'dispatched',
         pendingTerminalEvent: null,
         continuationOwnerClientId: null,
-        vendorTurnGeneration: null,
+        vendorTurnGeneration:
+          typeof steerVendorTurnGeneration === 'number' ? steerVendorTurnGeneration : null,
       };
-      this.bindActiveTurnVendorGeneration(sessionId, detachedAcceptedTurn);
       const persisted = await this.persistAcceptedUserMessage(sessionId, detachedAcceptedTurn);
       if (opts?.touchUserSend && persisted === 'persisted') this.touchUserSend(sessionId);
       log.info('steer accepted after marker cancellation; persisted without reopening boundary', {
@@ -2256,9 +2256,9 @@ export class AgentInputCoordinator {
         : sameVendorTurn
           ? steerContinuationOwnerClientId
           : null,
-      vendorTurnGeneration: null,
+      vendorTurnGeneration:
+        typeof steerVendorTurnGeneration === 'number' ? steerVendorTurnGeneration : null,
     };
-    this.bindActiveTurnVendorGeneration(sessionId, accepted.activeTurn);
     this.emit(sessionId);
 
     const persisted = await this.persistAcceptedUserMessage(sessionId, accepted.activeTurn);
@@ -3545,7 +3545,11 @@ export class AgentInputCoordinator {
   ) => infer R
     ? R
     : undefined {
-    return this.deps.getObservedCurrentTurnTerminal?.(sessionId);
+    try {
+      return this.deps.getObservedCurrentTurnTerminal?.(sessionId);
+    } catch {
+      return undefined;
+    }
   }
 
   private bindActiveTurnVendorGeneration(sessionId: string, active: ActiveTurn): void {
@@ -3586,8 +3590,11 @@ export class AgentInputCoordinator {
     if (present === false) return true;
     if (present !== true) return false;
     const observed = this.readObservedCurrentTurnTerminal(sessionId);
-    if (observed?.kind === 'error') return false;
-    if (observed?.kind === 'done') return this.observedMatchesBoundActiveTurn(active, observed);
+    // Probe unavailable / throw is not `{ kind: 'none' }`. Falling through would
+    // treat tracker latch as a successful leftover settlement.
+    if (observed == null) return false;
+    if (observed.kind === 'error') return false;
+    if (observed.kind === 'done') return this.observedMatchesBoundActiveTurn(active, observed);
     return this.deps.isTurnRunning(sessionId) === true;
   }
 
