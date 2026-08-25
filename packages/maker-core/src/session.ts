@@ -430,6 +430,21 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
   } | null = null;
+  /**
+   * N+1 reservation 窗口内观察到的前一轮前台终态。lost-callback 时 turn N 的
+   * done/error 可能在直接 N+1 `handle.send()` 待处理期间才 fan-out；当时
+   * `turnGeneration` 已是 N+1，不能写入当前 generation 快照。拒绝回滚时再提升
+   * 到 N，避免 leftover `activeTurn` 永久失去回收证据。
+   */
+  private terminalObservedDuringReservation: {
+    kind: 'done' | 'error';
+    message: string | null;
+    signals: {
+      reason?: string;
+      sdkError?: string;
+      errorStatus?: number;
+    } | null;
+  } | null = null;
   /** 终态 error 后等待 provider 尾部 done；避免旧尾事件冒领下一轮。 */
   private terminalErrorDrainGeneration: number | null = null;
   private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
@@ -574,6 +589,78 @@ export class Session {
     return { kind: 'done', generation: this.turnGeneration };
   }
 
+  private readRedactedTerminalErrorSnapshot(listenerEvent: AgentEvent): {
+    message: string | null;
+    signals: {
+      reason?: string;
+      sdkError?: string;
+      errorStatus?: number;
+    } | null;
+  } {
+    const errorData = (listenerEvent.data ?? null) as {
+      message?: unknown;
+      reason?: unknown;
+      sdkError?: unknown;
+      errorStatus?: unknown;
+    } | null;
+    const errorMessage = errorData?.message;
+    const signals: {
+      reason?: string;
+      sdkError?: string;
+      errorStatus?: number;
+    } = {};
+    if (typeof errorData?.reason === 'string' && errorData.reason.length > 0) {
+      signals.reason = errorData.reason;
+    }
+    if (typeof errorData?.sdkError === 'string' && errorData.sdkError.length > 0) {
+      signals.sdkError = redactSensitiveText(errorData.sdkError);
+    }
+    if (typeof errorData?.errorStatus === 'number' && Number.isFinite(errorData.errorStatus)) {
+      signals.errorStatus = errorData.errorStatus;
+    }
+    return {
+      message: typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null,
+      signals:
+        signals.reason || signals.sdkError || signals.errorStatus !== undefined ? signals : null,
+    };
+  }
+
+  private rememberReservationWindowPriorTerminal(
+    event: AgentEvent,
+    listenerEvent: AgentEvent,
+  ): void {
+    if (event.type === 'error') {
+      const snapshot = this.readRedactedTerminalErrorSnapshot(listenerEvent);
+      this.terminalObservedDuringReservation = {
+        kind: 'error',
+        message: snapshot.message,
+        signals: snapshot.signals,
+      };
+      return;
+    }
+    if (event.type !== 'done') return;
+    if (this.terminalObservedDuringReservation?.kind === 'error') return;
+    this.terminalObservedDuringReservation = {
+      kind: 'done',
+      message: null,
+      signals: null,
+    };
+  }
+
+  private consumeReservationWindowPriorTerminal(): {
+    kind: 'done' | 'error';
+    message: string | null;
+    signals: {
+      reason?: string;
+      sdkError?: string;
+      errorStatus?: number;
+    } | null;
+  } | null {
+    const snapshot = this.terminalObservedDuringReservation;
+    this.terminalObservedDuringReservation = null;
+    return snapshot;
+  }
+
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
     const {
       afterTurnReserved,
@@ -658,6 +745,7 @@ export class Session {
     const reservedTurnGeneration = this.turnGeneration;
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
+    this.terminalObservedDuringReservation = null;
     onTurnReserved?.(reservedTurnGeneration);
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
@@ -827,10 +915,22 @@ export class Session {
           }
         }
         this.turnGeneration = previousTurnGeneration;
-        this.terminalEventObservedGeneration = previousTerminalObservation.generation;
-        this.terminalEventObservedKind = previousTerminalObservation.kind;
-        this.terminalEventObservedErrorMessage = previousTerminalObservation.message;
-        this.terminalEventObservedErrorSignals = previousTerminalObservation.signals;
+        const reservationWindowTerminal = this.consumeReservationWindowPriorTerminal();
+        if (
+          !dispatchUnconfirmed &&
+          reservationWindowTerminal &&
+          previousTurnGeneration > 0
+        ) {
+          this.terminalEventObservedGeneration = previousTurnGeneration;
+          this.terminalEventObservedKind = reservationWindowTerminal.kind;
+          this.terminalEventObservedErrorMessage = reservationWindowTerminal.message;
+          this.terminalEventObservedErrorSignals = reservationWindowTerminal.signals;
+        } else {
+          this.terminalEventObservedGeneration = previousTerminalObservation.generation;
+          this.terminalEventObservedKind = previousTerminalObservation.kind;
+          this.terminalEventObservedErrorMessage = previousTerminalObservation.message;
+          this.terminalEventObservedErrorSignals = previousTerminalObservation.signals;
+        }
         if (
           previousTurnGeneration > 0 &&
           this.terminalEventObservedGeneration !== previousTurnGeneration
@@ -839,6 +939,8 @@ export class Session {
         } else {
           this.pendingPriorGeneration = null;
         }
+      } else {
+        this.terminalObservedDuringReservation = null;
       }
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
@@ -2057,31 +2159,19 @@ export class Session {
     }
     const listenerEvent = redactEventForListeners(event);
     if (terminalBoundaryObserved && event.type === 'error') {
-      const errorData = (listenerEvent.data ?? null) as {
-        message?: unknown;
-        reason?: unknown;
-        sdkError?: unknown;
-        errorStatus?: unknown;
-      } | null;
-      const errorMessage = errorData?.message;
-      this.terminalEventObservedErrorMessage =
-        typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null;
-      const signals: {
-        reason?: string;
-        sdkError?: string;
-        errorStatus?: number;
-      } = {};
-      if (typeof errorData?.reason === 'string' && errorData.reason.length > 0) {
-        signals.reason = errorData.reason;
-      }
-      if (typeof errorData?.sdkError === 'string' && errorData.sdkError.length > 0) {
-        signals.sdkError = redactSensitiveText(errorData.sdkError);
-      }
-      if (typeof errorData?.errorStatus === 'number' && Number.isFinite(errorData.errorStatus)) {
-        signals.errorStatus = errorData.errorStatus;
-      }
-      this.terminalEventObservedErrorSignals =
-        signals.reason || signals.sdkError || signals.errorStatus !== undefined ? signals : null;
+      const snapshot = this.readRedactedTerminalErrorSnapshot(listenerEvent);
+      this.terminalEventObservedErrorMessage = snapshot.message;
+      this.terminalEventObservedErrorSignals = snapshot.signals;
+    } else if (
+      isTerminal &&
+      !isBackgroundEvent &&
+      !isCurrentGeneration &&
+      this.sendReservation !== null &&
+      this.sendReservation.generation === this.turnGeneration
+    ) {
+      // N 的终态在 N+1 reservation / handle.send 窗口到达：先记在窗口快照里，
+      // 等拒绝回滚再提升。成功派发的 N+1 不得继承这份证据。
+      this.rememberReservationWindowPriorTerminal(event, listenerEvent);
     }
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
       this.clearTurnControl(resolvedGeneration);
