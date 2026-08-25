@@ -17,6 +17,9 @@ import {
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
+import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
+import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
+import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
@@ -300,6 +303,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       pool: deps.lspPool,
       logger: createLogger('mcp/cindy_lsp'),
       isUserEnabled: () => readLspModeSettings().enabled,
+    },
+    // cindy_docs(文档工坊): docx / pptx / xlsx / csv 全在 @cindy/mcps 内用纯 JS 库实现,
+    // 这里只补上包里做不到的三件事 —— 都需要 electron:
+    //   writeDocsOutput: 最终落盘靠 cwd 绑定的单次 utility process;
+    //   renderHtmlToPdf: HTML → PDF 靠 Chromium printToPDF(隐藏窗即用即毁);
+    //   inspectPdf:     回读 PDF 结构靠一次性 utility process 里的 pdfjs。
+    docs: {
+      logger: createLogger('mcp/cindy_docs'),
+      writeDocsOutput,
+      renderHtmlToPdf,
+      inspectPdf,
     },
     // xdt-helper: 自省 + history + send_to_session (essential 常开)。
     // send_to_session 是 skill(issue-bot 等)的会话路由原语, 放 essential 常开不断。

@@ -664,6 +664,10 @@ import {
   readCompactionState,
   resetCompactionPct,
   writeCompactionPct,
+  readPiCompactionPct,
+  readPiCompactionState,
+  resetPiCompactionPct,
+  writePiCompactionPct,
 } from './maker-host/compaction-settings-store.js';
 import {
   readSubagentModelSettings,
@@ -1126,6 +1130,25 @@ function assertChatEmbeddingMutationOwner(raw: unknown): void {
     throwIpcError(
       'PRECONDITION_FAILED',
       'Chat embedding setting belongs to a stale account session.',
+    );
+  }
+}
+
+function assertCompactionMutationOwner(raw: unknown): void {
+  const expected = parseChatEmbeddingOwnerStamp(raw);
+  if (!expected) {
+    throwIpcError('INVALID_PARAMS', 'compaction owner stamp required');
+  }
+  if (
+    !isChatEmbeddingOwnerStampCurrent(
+      expected,
+      getActiveDataOwnerPushStamp(),
+      isAppSessionBoundaryPending(),
+    )
+  ) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Compaction setting belongs to a stale account session.',
     );
   }
 }
@@ -4265,22 +4288,52 @@ const registerIpcHandlers = () => {
     return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
   });
 
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return readCompactionPct();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async (event, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
     resetCompactionPct();
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (_e, pct: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof pct !== 'number' || !Number.isFinite(pct)) {
       throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
     }
+    assertCompactionMutationOwner(owner);
     writeCompactionPct(pct);
     return compactionWire();
+  });
+
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readPiCompactionPct();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT, async (event, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
+    resetPiCompactionPct();
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof pct !== 'number' || !Number.isFinite(pct)) {
+      throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
+    }
+    assertCompactionMutationOwner(owner);
+    writePiCompactionPct(pct);
+    return piCompactionWire();
   });
 
   // Window behavior —— swallowActivationClick 保持 renderer 运行时事实标准;
@@ -8853,6 +8906,15 @@ function compactionWire() {
     pct: state.value.claudeCodeAutoCompactPct,
     isCustomized: state.isCustomized,
     defaultPct: state.defaults.claudeCodeAutoCompactPct,
+  };
+}
+
+function piCompactionWire() {
+  const state = readPiCompactionState();
+  return {
+    pct: state.value.piAutoCompactPct,
+    isCustomized: state.isCustomized,
+    defaultPct: state.defaults.piAutoCompactPct,
   };
 }
 

@@ -932,6 +932,7 @@ import {
   captureDataOwnerBroadcastScope,
   tapWindowBroadcast,
 } from '../device-link/broadcast-tap.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { setBusyProbe as setDeviceLinkBusyProbe } from '../device-link/index.js';
 import {
   markRemoteSettingPersistedInsideHandler,
@@ -1529,19 +1530,10 @@ export async function applyCodexSpawnConfigChangeWithRestart<T extends object>(
 }
 
 // ─── Sessions push helpers ────────────────────────────────────────────────
-// maker-ipc 会话创建路径与 scheduler-host 共享此导出，统一广播
-// `local-db:sessions:created`；renderer sessionsStore.onCreated 收到后
-// forceRefreshAll 重拉所有桶。其它生命周期专属路径仍保留各自的同契约 helper。
+// maker-ipc 会话创建路径与 scheduler-host 共享此导出，统一走 emitSessionCreated。
+// renderer sessionsStore.onCreated 收到后 forceRefreshAll 重拉所有桶。
 export function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
-    } catch {
-      // best-effort UI refresh, 失败不影响业务
-    }
-  }
+  emitSessionCreated(sessionId);
 }
 
 /**

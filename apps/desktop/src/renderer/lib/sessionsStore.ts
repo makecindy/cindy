@@ -242,13 +242,20 @@ function applyOptimisticTitle(id: string, title: string): void {
   if (touched) notify();
 }
 
-async function fetchFilter(filter: ListStatusFilter): Promise<Session[]> {
+async function fetchFilter(
+  filter: ListStatusFilter,
+  opts?: { fresh?: boolean },
+): Promise<Session[]> {
   // chat-data-localization round-5：IPC 'all'/undefined 与 HTTP 旧默认行为
   // 不一致，必须把 filter 原样透传，由 IPC handler 决定过滤语义。
   const spendRevisionAtStart = sessionSpendRevision;
   const titleRevisionAtStart = sessionTitleRevision;
   const startedAt = performance.now();
-  const sessions = await sessionService.list(DEFAULT_LIMIT, filter);
+  const sessions = await sessionService.list(
+    DEFAULT_LIMIT,
+    filter,
+    opts?.fresh ? { fresh: true } : undefined,
+  );
   // 顺序:先把「请求发起之后到达的权威标题」补回去,再叠乐观预览。反过来的话预览会先
   // 盖在旧标题上、随后又被权威值挤掉,中间多一次跳变。
   const result = applyAutoTitlePreviews(
@@ -305,11 +312,11 @@ export const sessionsStore = {
    * 确保指定桶已加载（命中即 noop，dedupe 并发请求）。
    * 失败时 throw 原始错误，由调用方决定如何展示。
    */
-  async ensureByFilter(filter: ListStatusFilter): Promise<void> {
-    if (cache.has(filter)) return;
+  async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean }): Promise<void> {
+    if (!opts?.fresh && cache.has(filter)) return;
     let promise = inflight.get(filter);
     if (!promise) {
-      const request = fetchFilter(filter)
+      const request = fetchFilter(filter, opts)
         .then((data) => {
           // reset / forceRefresh 会把旧 request 从 inflight 移除。只有仍被
           // 当前桶认领的 request 才能提交，避免旧账号请求回填新账号缓存。
@@ -336,7 +343,7 @@ export const sessionsStore = {
   async forceRefresh(filter: ListStatusFilter): Promise<Session[]> {
     cache.delete(filter);
     inflight.delete(filter);
-    await this.ensureByFilter(filter);
+    await this.ensureByFilter(filter, { fresh: true });
     return cache.get(filter) ?? [];
   },
 
@@ -421,7 +428,7 @@ export const sessionsStore = {
       }
       if (removed) notify();
       for (const filter of toRefetch) {
-        void this.ensureByFilter(filter).catch(() => {
+        void this.ensureByFilter(filter, { fresh: true }).catch(() => {
           /* 静默：后续主动操作或 refresh 会再次兜底。 */
         });
       }
@@ -485,7 +492,7 @@ export const sessionsStore = {
     // 订阅者的 subscribe 回调拿到 null 不会 setState,会一直停在陈旧 snapshot。
     // 主动 ensure 一下,IPC 回来后 notify → 订阅者拿到新数据自动 swap。
     for (const filter of toRefetch) {
-      void this.ensureByFilter(filter).catch(() => {
+      void this.ensureByFilter(filter, { fresh: true }).catch(() => {
         /* 静默:网络/IPC 失败由后续主动操作或 refresh 兜底,不上报 toast */
       });
     }

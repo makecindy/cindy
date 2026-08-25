@@ -44,11 +44,18 @@ function wrap<T>(p: Promise<T>): Promise<T> {
 // settled rows must not become a stale renderer cache.
 const getInFlight = new Map<string, Promise<Session>>();
 
+export type SessionListOptions = {
+  includePinned?: boolean;
+  /** forceRefresh / status 重拉：绕开 main 侧 in-flight 合并。 */
+  fresh?: boolean;
+};
+
 export async function list(
   limit: number = 20,
   status?: ListStatusFilter,
+  options?: SessionListOptions,
 ): Promise<Session[]> {
-  return wrap(window.electronAPI.localDb.sessions.list(limit, status));
+  return wrap(window.electronAPI.localDb.sessions.list(limit, status, options));
 }
 
 export async function create(body?: {

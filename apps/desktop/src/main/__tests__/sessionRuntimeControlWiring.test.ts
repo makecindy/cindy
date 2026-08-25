@@ -32,6 +32,14 @@ describe('session runtime control wiring', () => {
         'MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET',
       ],
       ['MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET', 'MAKER_IPC_INVOKE.COMPACTION_GET_PCT'],
+      ['MAKER_IPC_INVOKE.COMPACTION_GET_PCT', 'MAKER_IPC_INVOKE.COMPACTION_GET_STATE'],
+      ['MAKER_IPC_INVOKE.COMPACTION_GET_STATE', 'MAKER_IPC_INVOKE.COMPACTION_RESET_PCT'],
+      ['MAKER_IPC_INVOKE.COMPACTION_RESET_PCT', 'MAKER_IPC_INVOKE.COMPACTION_SET_PCT'],
+      ['MAKER_IPC_INVOKE.COMPACTION_SET_PCT', 'MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT'],
+      ['MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT', 'MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE'],
+      ['MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE', 'MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT'],
+      ['MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT', 'MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT'],
+      ['MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT', 'WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL'],
     ] as const) {
       const body = handlerBody(bootstrapSource, channel, nextChannel);
       const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
@@ -41,11 +49,38 @@ describe('session runtime control wiring', () => {
           'sessionRuntimeFallbackWire()',
           'writeSessionRuntimeFallbackEnabled(',
           'resetSessionRuntimeFallbackSettings()',
+          'writeCompactionPct(',
+          'resetCompactionPct()',
+          'writePiCompactionPct(',
+          'resetPiCompactionPct()',
+          'compactionWire()',
+          'piCompactionWire()',
+          'readCompactionPct()',
+          'readPiCompactionPct()',
         ]
           .map((needle) => body.indexOf(needle))
           .filter((index) => index >= 0),
       );
       expect(guard).toBeLessThan(storeAccess);
+    }
+  });
+
+  it('binds compaction writes to the initiating owner stamp', () => {
+    for (const [channel, nextChannel] of [
+      ['MAKER_IPC_INVOKE.COMPACTION_RESET_PCT', 'MAKER_IPC_INVOKE.COMPACTION_SET_PCT'],
+      ['MAKER_IPC_INVOKE.COMPACTION_SET_PCT', 'MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT'],
+      ['MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT', 'MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT'],
+      ['MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT', 'WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL'],
+    ] as const) {
+      const body = handlerBody(bootstrapSource, channel, nextChannel);
+      const stamp = body.indexOf('assertCompactionMutationOwner(owner);');
+      expect(stamp).toBeGreaterThan(-1);
+      const write = Math.min(
+        ...['writeCompactionPct(', 'resetCompactionPct()', 'writePiCompactionPct(', 'resetPiCompactionPct()']
+          .map((needle) => body.indexOf(needle))
+          .filter((index) => index >= 0),
+      );
+      expect(stamp).toBeLessThan(write);
     }
   });
 

@@ -754,6 +754,10 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
 }
 
 const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
+/** Kimi Code (coding plan) official endpoint DNS boundary. */
+const KIMI_CODING_CHAT_HOST = 'api.kimi.com';
+/** Model ids on the Kimi Code Codex (openai-chat) route verified for image input. */
+const KIMI_CODING_IMAGE_CHAT_MODELS = new Set(['k3', 'k3-256k']);
 /** 火山方舟(豆包)官方 DNS 边界:ark.<region>.volces.com(如 ark.cn-beijing.volces.com)。 */
 const VOLCENGINE_ARK_CHAT_HOST_RE = /^ark\.[a-z0-9-]+\.volces\.com$/;
 /** 阿里云百炼 Coding Plan / Token Plan / 按量付费官方 DNS 边界。 */
@@ -798,6 +802,7 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
  * 在模型级多模态能力元数据接入路由前,图片桥接先按已验证的上游能力显式开启。
  *
  * 当前覆盖:
+ * - Kimi Code（编程计划包月）K3
  * - Moonshot Kimi K3
  * - Volcengine Doubao Seed 系列
  * - Alibaba Cloud Bailian Coding Plan Qwen 3.7 Plus
@@ -828,6 +833,7 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
   if (url.protocol !== 'https:') return false;
   const host = url.hostname.toLowerCase();
   if (realModel === 'kimi-k3') return MOONSHOT_CHAT_HOSTS.has(host);
+  if (KIMI_CODING_IMAGE_CHAT_MODELS.has(realModel)) return host === KIMI_CODING_CHAT_HOST;
   if (isDoubaoVisionModel(realModel)) return VOLCENGINE_ARK_CHAT_HOST_RE.test(host);
   if (isQwenImageChatModel(realModel)) return DASHSCOPE_CODING_CHAT_HOSTS.has(host);
   return false;

@@ -299,7 +299,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
       200,
       'active',
-      { includePinned: true },
+      { includePinned: true, fresh: true },
     ]);
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual([
       'recent-1',
@@ -321,7 +321,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
       1000,
       'archived',
-      { includePinned: true },
+      { includePinned: true, fresh: true },
     ]);
     expect(remoteProjectsStore.getDeviceSessions(d, 'active').map((s) => s.id)).toEqual([
       'active-1',
@@ -398,7 +398,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
       1000,
       'archived',
-      { includePinned: true },
+      { includePinned: true, fresh: true },
     ]);
   });
 
@@ -638,6 +638,30 @@ describe('refreshRemoteDeviceSessions retry', () => {
     ]);
   });
 
+  it('事件重拉传 fresh，周期 tick 不传', async () => {
+    const d = did();
+    invoke.mockResolvedValue([]);
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
+    expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
+      200,
+      'active',
+      { includePinned: true, fresh: true },
+    ]);
+
+    invoke.mockClear();
+    invoke.mockResolvedValue([]);
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      coalescingMode: 'weak',
+    });
+    expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
+      200,
+      'active',
+      { includePinned: true },
+    ]);
+  });
+
   it('同设备补跑排队时立即作废当前 snapshot,避免旧结果短暂覆盖 push 状态', async () => {
     const d = did();
     const firstSnapshot = deferred<Session[]>();
@@ -684,6 +708,11 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
     await expect(Promise.all([periodic, bootstrap])).resolves.toEqual(['ok', 'ok']);
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
+    expect(invoke.mock.calls[1]?.[2]).toEqual([
+      200,
+      'active',
+      { includePinned: true, fresh: true },
+    ]);
   });
 
   it('事件型 refresh 在途时弱周期 tick 直接复用，不补跑也不取消当前请求', async () => {

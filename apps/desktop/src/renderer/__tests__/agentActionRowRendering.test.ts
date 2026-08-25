@@ -45,7 +45,7 @@ vi.mock('@/components/chat/useFileChipContextMenu', () => ({
 vi.mock('@/lib/filePreview', () => ({ shouldOpenTextLightbox: async () => false }));
 vi.mock('@/lib/localPathResolver', () => ({ toLocalFileUrl: (p: string) => `xdt-file://${p}` }));
 
-import { AgentActionRow } from '@/components/chat/AgentActionRow';
+import { AgentActionRow, humanizeDocumentToolResult } from '@/components/chat/AgentActionRow';
 import { AgentActionsBlock } from '@/components/chat/AgentActionsBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -62,6 +62,39 @@ const mkTool = (id: string, toolName: string, toolInput: unknown): ChatMessage =
   toolUseId: `tu-${id}`,
   toolName,
   toolInput,
+});
+
+describe('document tool result presentation', () => {
+  it('shows a human hint instead of the raw JSON error payload', () => {
+    expect(
+      humanizeDocumentToolResult(
+        'mcp__cindy_docs__make_docx',
+        JSON.stringify({
+          ok: false,
+          errorCode: 'FILE_EXISTS',
+          data: { hint: '目标文件已存在，请换一个文件名。' },
+        }),
+      ),
+    ).toBe('目标文件已存在，请换一个文件名。');
+  });
+
+  it('shows a human hint for read-only document tool failures too', () => {
+    const error = JSON.stringify({
+      ok: false,
+      errorCode: 'FILE_TOO_LARGE',
+      data: { hint: '文件超过检查上限，请先压缩或拆分。' },
+    });
+    expect(humanizeDocumentToolResult('mcp__cindy_docs__read_sheet', error)).toBe(
+      '文件超过检查上限，请先压缩或拆分。',
+    );
+    expect(humanizeDocumentToolResult('mcp:cindy_docs:inspect_pdf', error)).toBe(
+      '文件超过检查上限，请先压缩或拆分。',
+    );
+  });
+
+  it('does not rewrite non-document tool results', () => {
+    expect(humanizeDocumentToolResult('Bash', '{"ok":false}')).toBeNull();
+  });
 });
 
 describe('AgentActionRow — 行主文案', () => {
@@ -137,7 +170,12 @@ describe('AgentActionRow — 行主文案', () => {
         message: mkTool('t1', 'exec', {
           command: 'rg -n useMemo src/renderer | head -40',
           commandActions: [
-            { type: 'search', command: 'rg -n useMemo src/renderer', query: 'useMemo', path: 'src/renderer' },
+            {
+              type: 'search',
+              command: 'rg -n useMemo src/renderer',
+              query: 'useMemo',
+              path: 'src/renderer',
+            },
           ],
         }),
       }),
@@ -208,11 +246,13 @@ describe('AgentActionRow — 行主文案', () => {
     render(
       createElement(AgentActionRow, {
         message: mkTool('t1', 'file_change', {
-          changes: [{
-            path: '/repo/src/old.ts',
-            kind: { type: 'update', move_path: '/repo/src/new.ts' },
-            diff: '',
-          }],
+          changes: [
+            {
+              path: '/repo/src/old.ts',
+              kind: { type: 'update', move_path: '/repo/src/new.ts' },
+              diff: '',
+            },
+          ],
         }),
       }),
     );

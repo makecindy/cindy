@@ -2584,13 +2584,20 @@
     },
     "compaction": {
       "title": "컨텍스트 압축",
-      "description": "Claude Code와 Pi가 언제 컨텍스트를 자동 압축할지 제어합니다. 이 설정은 Codex에 영향을 주지 않습니다. Codex는 컨텍스트 압축을 따로 관리합니다.",
+      "description": "Claude Code와 Pi가 컨텍스트를 자동 압축할 시점을 제어합니다. Codex는 별도로 컨텍스트 압축을 관리합니다.",
       "card": {
         "label": "압축 트리거 임계값",
-        "badge": "Claude Code와 Pi",
+        "badge": "Claude Code",
         "description": "컨텍스트 사용량이 이 비율에 도달하면 자동 압축합니다. 낮추면 더 일찍 압축해 여유를 더 남기고, 높이면 더 늦게 압축해 한 턴의 컨텍스트를 더 많이 사용합니다.",
         "hint": "컨텍스트 사용량이 이 비율에 도달하면 자동으로 압축합니다. 변경 사항은 즉시 적용되며 다음 턴이 끝나거나 더 작은 창으로 전환한 뒤에 새 비율로 판단합니다.",
         "sliderAria": "자동 압축 트리거 임계값 조정"
+      },
+      "piCard": {
+        "label": "압축 트리거 임계값",
+        "badge": "Pi",
+        "description": "Pi의 네이티브 자동 압축은 컨텍스트 사용량이 이 비율에 도달하면 시작합니다. 설정은 다음에 Pi 작업을 시작할 때 적용됩니다.",
+        "hint": "낮추면 더 일찍 압축해 응답 여유를 더 남기고, 높이면 더 늦게 압축합니다. 변경 사항은 다음에 Pi 작업을 시작할 때 적용됩니다.",
+        "sliderAria": "Pi 자동 압축 트리거 임계값 조정"
       }
     },
     "personalization": {
@@ -3138,6 +3145,10 @@
         "memory": {
           "name": "Cindy 메모리",
           "description": "세션 간 컨텍스트를 유지하는 Agent 공통 장기 메모리"
+        },
+        "docs": {
+          "name": "문서 공방",
+          "description": "내용을 실제 파일로 — PDF·Word·Excel·PowerPoint 생성과 결과 확인용 읽기. 추가 소프트웨어 설치가 필요 없습니다."
         },
         "xdt_helper": {
           "name": "Cindy Helper",
@@ -7879,7 +7890,10 @@
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",
       "showMore": "{{count}}개 더 보기",
-      "showLess": "간략히 보기"
+      "showLess": "간략히 보기",
+      "artifactLabel": "산출물",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}}페이지", "slides": "{{count}}개 슬라이드", "sheets": "{{count}}개 시트", "rows": "{{count}}행", "bytes": "{{count}}" }
     },
     "turnChanges": {
       "title": "파일 {{count}}개 변경",
