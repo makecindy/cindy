@@ -6151,8 +6151,16 @@ export class PiAgent extends BaseAgent {
 
     if (method === 'input' && event.title === CINDY_SUBAGENT_RUNNER_CONTROL_TITLE) {
       const context = getPermissionCtx();
-      if (context.remote || context.isAccountBoundaryTornDown()) {
+      if (context.remote) {
         proc.send({ type: 'extension_ui_response', id, cancelled: true });
+        return;
+      }
+      if (context.isAccountBoundaryTornDown()) {
+        proc.send({
+          type: 'extension_ui_response',
+          id,
+          value: JSON.stringify({ ok: false, unconfirmed: true }),
+        });
         return;
       }
       void (async () => {

@@ -546,6 +546,12 @@ describe('cindy-subagent extension source', () => {
       .toBeGreaterThan(postSpawn);
     expect(source).toContain('PI Subagent runner did not confirm exit');
     expect(source).toContain("action: 'launch' | 'terminate' | 'status'");
+    const runnerControl = source.indexOf('event.title === CINDY_SUBAGENT_RUNNER_CONTROL_TITLE');
+    const boundary = source.indexOf('isAccountBoundaryTornDown()', runnerControl);
+    const boundaryUnconfirmed = source.indexOf("ok: false, unconfirmed: true", boundary);
+    expect(boundary).toBeGreaterThan(runnerControl);
+    expect(boundaryUnconfirmed).toBeGreaterThan(boundary);
+    expect(source.slice(boundary, boundaryUnconfirmed + 80)).not.toContain('cancelled: true');
   });
 
   it('lets the foreground waiter observe a host exit when status.json cannot be written', () => {
@@ -563,6 +569,13 @@ describe('cindy-subagent extension source', () => {
     );
     expect(terminal).toBeGreaterThan(wait);
     expect(hostPoll).toBeGreaterThan(terminal);
+    const exited = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('err.runnerExited', hostPoll);
+    const reread = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(
+      "join(launched.runDir, 'status.json')",
+      exited,
+    );
+    expect(exited).toBeGreaterThan(hostPoll);
+    expect(reread).toBeGreaterThan(exited);
   });
 
   it('does not store an English resume prefix as the run title', () => {

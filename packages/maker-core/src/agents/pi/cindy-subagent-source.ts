@@ -618,6 +618,12 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
         await requestRunnerControl(ctx, 'status', launched.runId);
       } catch (err) {
         if (err && err.runnerExited) {
+          let latest = null;
+          try { latest = JSON.parse(readFileSync(join(launched.runDir, 'status.json'), 'utf8')); } catch (readErr) { latest = null; }
+          if (latest && (latest.state === 'completed' || latest.state === 'failed' || latest.state === 'stopped')) {
+            onStatus(latest);
+            return latest;
+          }
           const message = err instanceof Error ? err.message : String(err);
           return launched.failureStatus(message);
         }
