@@ -4341,6 +4341,16 @@
         "expandDescription": "展開完整介紹",
         "collapseDescription": "收起介紹"
       },
+      "forgeOidcInstallConfirm": {
+        "title": "確認企業身份自測",
+        "description": "安裝後，這個插件可以使用你目前的企業身份，向下列網域請求 Connection JWT。請確認這是你剛剛建置的插件。",
+        "pluginNameLabel": "插件",
+        "pluginIdLabel": "插件 id",
+        "hostsLabel": "企業身分請求域名",
+        "typedIdLabel": "輸入插件 id <strong>{{id}}</strong> 以確認",
+        "confirm": "安裝並允許自測",
+        "cancel": "取消"
+      },
       "trust": {
         "official": "Cindy 官方插件",
         "officialDetail": "由 Cindy 隨應用提供。",

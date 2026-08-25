@@ -155,10 +155,14 @@ describe('installed Plugin Connection audience resolver', () => {
     ).toBeNull();
   });
 
-  it('keeps legacy Forge OIDC for an approved current-organization prefix plugin', () => {
+  it('resolves explicit Forge OIDC before a stale or foreign market row', () => {
     const forgeManifest: GhostManifest = { ...manifest, id: 'acme-tool' };
     const resolver = loadConnectionAudienceResolver({
-      ...resolverOptions(forgeManifest, null),
+      ...resolverOptions(forgeManifest, {
+        ...marketInstallation,
+        installed: false,
+        organizationId: 'org-other',
+      }),
       readInstallOrigin: () => 'agent-forge',
       readApprovedPackageSha256: () => 'a'.repeat(64),
       lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
@@ -171,7 +175,7 @@ describe('installed Plugin Connection audience resolver', () => {
     });
   });
 
-  it('does not extend legacy Forge OIDC to a manual install or another prefix', () => {
+  it('does not extend Forge OIDC to a manual install or another prefix', () => {
     const forgeManifest: GhostManifest = { ...manifest, id: 'acme-tool' };
     for (const options of [
       { readInstallOrigin: () => 'manual' as const, pluginPrefix: 'acme' },

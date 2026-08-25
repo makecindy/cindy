@@ -161,6 +161,7 @@ import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
+import { getDeepLinkMainWindow } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots } from './skillSlot.js';
 import { assertGhostSkillProjectionStableOwner } from '../authBoundaryQuarantine.js';
 import { type GhostOwnerScope } from './ghostOwnerScope.js';
@@ -268,6 +269,13 @@ import {
   getGhostConfirmDialogBridge,
   initGhostConfirmDialogBridge,
 } from './ghostConfirmDialogBridge.js';
+import {
+  createForgeOidcInstallMainWindowSender,
+  forgeOidcInstallConfirmFacts,
+  forgeInstallOriginForMembership,
+  getForgeOidcInstallConfirmBridge,
+  initForgeOidcInstallConfirmBridge,
+} from './forgeOidcInstallConfirmBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import {
   type ConnectionAudienceResolution,
@@ -277,7 +285,6 @@ import {
   type ConnectionAudienceResolver,
 } from './connectionAudienceResolver.js';
 import {
-  applyGhostFirstPartyFactsOverrides,
   bindPendingMarketRecordToInspectedPackage,
   loadGhostFirstPartyFactsLoader,
   type GhostFirstPartyFactsLoader,
@@ -975,6 +982,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
   getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
   getGhostConfirmDialogBridge()?.cancelAll();
+  getForgeOidcInstallConfirmBridge()?.cancelAll();
   runtimeSingleton?.destroyAll();
   resetNodeRuntimeBrokerForAccountBoundary();
   // Library 会话一并作废:关 db worker + 作废 handle——在途写入已在串行链上
@@ -2557,7 +2565,7 @@ function readInstalledGhostManifestDigest(ghostId: string): string | null {
   return digests[0] ?? null;
 }
 
-/** Resolve Connection metadata from trusted organization installs or legacy Forge receipts. */
+/** Resolve Connection metadata from trusted organization installs or explicit Forge receipts. */
 function getConnectionAudienceResolver(): ConnectionAudienceResolver {
   if (!connectionAudienceResolverSingleton) {
     connectionAudienceResolverSingleton = loadConnectionAudienceResolver({
@@ -2629,11 +2637,13 @@ export function loadGhostFirstPartyFactsForGhost(
 ): GhostFirstPartyFactsLoad {
   const state = getAuthState();
   const user = state.isAuthenticated ? state.user : null;
-  return applyGhostFirstPartyFactsOverrides(
-    getGhostFirstPartyFactsLoader().load(ghostId, purpose, {
+  return getGhostFirstPartyFactsLoader().load(
+    ghostId,
+    purpose,
+    {
       membershipKind: user?.membershipKind ?? 'personal',
       orgId: user?.orgId ?? null,
-    }),
+    },
     overrides,
   );
 }
@@ -2930,6 +2940,22 @@ let confirmSlotSingleton: GhostConfirmSlot | null = null;
 
 /** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
 export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
+export const FORGE_OIDC_INSTALL_CONFIRM_CHANNEL = 'forge-oidc-install:confirm-request';
+
+function ensureForgeOidcInstallConfirmBridge() {
+  return (
+    getForgeOidcInstallConfirmBridge() ??
+    initForgeOidcInstallConfirmBridge({
+      sendToWindow: createForgeOidcInstallMainWindowSender<BrowserWindow>({
+        getMainWindow: getDeepLinkMainWindow,
+        isTrustedMainWindow: isTrustedAppRendererWindow,
+        send: (window, payload) =>
+          sendGhostWindowPush(window, FORGE_OIDC_INSTALL_CONFIRM_CHANNEL, payload),
+      }),
+      log,
+    })
+  );
+}
 
 /**
  * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
@@ -5347,6 +5373,7 @@ async function installAndDockLocked(
     enable?: boolean;
     expectedPackageSha256?: string;
     trustOverride?: GhostHostTrustOverride;
+    installOrigin?: 'agent-forge';
   },
 ): Promise<InstalledGhost> {
   // 初始启用态由入口显式传入；当前用户导入与市场首装都传 true，覆盖更新
@@ -5357,6 +5384,7 @@ async function installAndDockLocked(
       ? { expectedPackageSha256: opts.expectedPackageSha256 }
       : {}),
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
+    ...(opts.installOrigin ? { installOrigin: opts.installOrigin } : {}),
   });
   if ('rejection' in result) throwInstallError(result.rejection);
   // 纵深防御:调用方给错 id 意味着刚才那把锁上在了错误的键上(等于没上锁)。
@@ -5406,6 +5434,7 @@ async function updateLocalGhostPackageLocked(
   expectedPackageSha256: string,
   expectedInstalledApproval: string,
   mutationOwner: ActiveAppSession,
+  installOrigin?: 'agent-forge',
 ): Promise<InstalledGhost> {
   const runtime = getGhostRuntime();
   const marketLedger = getPluginMarketLedger().bind(
@@ -5484,6 +5513,7 @@ async function updateLocalGhostPackageLocked(
       manager.update(cindyFilePath, {
         expectedPackageSha256,
         expectedInstalledApproval,
+        ...(installOrigin ? { installOrigin } : {}),
         ...(previousGhost
           ? {
               beforePackageCommit: () =>
@@ -5555,7 +5585,27 @@ export async function installOrUpdateLocalGhostPackageFromForge(
   }
   rejectReservedGhostId(inspected.manifest.id);
   rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
-  rejectUnauthorizedTokenBroker(inspected.manifest);
+
+  const authState = getAuthState();
+  const user = authState.isAuthenticated ? authState.user : null;
+  const membershipKind = user?.membershipKind ?? 'personal';
+  const installOrigin = forgeInstallOriginForMembership(membershipKind);
+  rejectUnauthorizedTokenBroker(
+    inspected.manifest,
+    installOrigin ? { installOrigin } : undefined,
+  );
+  const confirmFacts = forgeOidcInstallConfirmFacts(inspected.manifest, membershipKind);
+  if (confirmFacts) {
+    let confirmed = false;
+    try {
+      confirmed = await ensureForgeOidcInstallConfirmBridge().request(confirmFacts);
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', '当前无法显示企业身份使用确认，请稍后重试');
+    }
+    if (!confirmed) {
+      throwIpcError('MUTATION_CANCELLED', '用户取消了企业身份插件安装');
+    }
+  }
 
   return withGhostInstallLock(inspected.manifest.id, async () => {
     const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
@@ -5565,6 +5615,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
           ghostId: inspected.manifest.id,
           enable: true,
           expectedPackageSha256: expected.packageSha256,
+          ...(installOrigin ? { installOrigin } : {}),
         }),
         action: 'installed',
       };
@@ -5577,6 +5628,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
         expected.packageSha256,
         ghostInstallApprovalToken(installed.approval),
         getActiveAppSession(),
+        installOrigin,
       ),
       action: 'updated',
     };
@@ -6630,6 +6682,23 @@ export function registerGhostIpc(): void {
       throwIpcError('INVALID_PARAMS', 'requestId must be a non-empty string');
     }
     const bridge = getGhostConfirmDialogBridge();
+    if (!bridge) return { handled: false };
+    return { handled: bridge.resolve(p.requestId, p.confirmed) };
+  });
+
+  ipcMain.handle('forge-oidc-install:resolve-confirm', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const p = raw as { requestId?: unknown; confirmed?: unknown } | null;
+    if (
+      !p ||
+      typeof p.requestId !== 'string' ||
+      p.requestId.length === 0 ||
+      p.requestId.length > 128 ||
+      typeof p.confirmed !== 'boolean'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid Forge OIDC install confirmation');
+    }
+    const bridge = getForgeOidcInstallConfirmBridge();
     if (!bridge) return { handled: false };
     return { handled: bridge.resolve(p.requestId, p.confirmed) };
   });

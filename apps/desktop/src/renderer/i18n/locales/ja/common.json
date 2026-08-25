@@ -4349,6 +4349,16 @@
         "expandDescription": "紹介全文を表示",
         "collapseDescription": "紹介を折りたたむ"
       },
+      "forgeOidcInstallConfirm": {
+        "title": "組織 ID のセルフテストを確認",
+        "description": "インストール後、このプラグインは現在の組織 ID を使用して、以下のホスト向けの Connection JWT をリクエストできます。今ビルドしたプラグインであることを確認してください。",
+        "pluginNameLabel": "プラグイン",
+        "pluginIdLabel": "プラグイン id",
+        "hostsLabel": "組織 ID のリクエスト先ホスト",
+        "typedIdLabel": "確認するにはプラグイン id <strong>{{id}}</strong> を入力",
+        "confirm": "インストールしてテストを許可",
+        "cancel": "キャンセル"
+      },
       "trust": {
         "official": "Cindy 公式プラグイン",
         "officialDetail": "Cindy に同梱されています。",

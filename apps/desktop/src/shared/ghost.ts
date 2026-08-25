@@ -867,8 +867,8 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   `gh auth token`,不可用时回落到同 key 经 /secrets 保存的 PAT。两种值都
  *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
- *   JWT。新授权只有当前组织的 Plugin Market organization 安装记录和 manifest
- *   digest 校验通过时才会签发；升级前已有的 agent-forge receipt 保留只读兼容。
+ *   JWT。当前组织的可信市场安装，或企业作者通过 ghost_forge_install 明确安装且
+ *   id 命中本组织登记前缀时可签发；手动导入不取得该资格。
  *   Host 根据当前组织和插件 id 推导 audience，插件不能声明或读取。
  *   令牌只在 networkSlot 发请求时注入，且永不进入 Node Worker。
  *

@@ -4349,6 +4349,16 @@
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
       },
+      "forgeOidcInstallConfirm": {
+        "title": "조직 ID 자체 테스트 확인",
+        "description": "설치 후 이 플러그인은 현재 조직 ID를 사용하여 아래 호스트용 Connection JWT를 요청할 수 있습니다. 방금 빌드한 플러그인이 맞는지 확인하세요.",
+        "pluginNameLabel": "플러그인",
+        "pluginIdLabel": "플러그인 id",
+        "hostsLabel": "조직 ID 요청 호스트",
+        "typedIdLabel": "확인하려면 플러그인 id <strong>{{id}}</strong> 입력",
+        "confirm": "설치 및 테스트 허용",
+        "cancel": "취소"
+      },
       "trust": {
         "official": "Cindy 공식 플러그인",
         "officialDetail": "Cindy에 함께 제공됩니다.",

@@ -314,7 +314,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     });
   });
 
-  it('keeps Broker only for a legacy Forge receipt under the current organization prefix', () => {
+  it('grants Broker-only self-test to an explicit Forge install under the current organization prefix', () => {
     expect(
       resolveGhostFirstPartyPrivilege(
         facts({
@@ -326,7 +326,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     ).toEqual({
       brokerEligible: true,
       hostPrimitiveEligible: false,
-      basis: 'legacy-forge-current-org-prefix',
+      basis: 'forge-current-org-prefix',
     });
     expect(
       resolveGhostFirstPartyPrivilege(
@@ -353,6 +353,30 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     ).toBe(false);
   });
 
+  it('lets explicit Forge self-test win over every stale or foreign market-row shape', () => {
+    const rows = [
+      market({ scope: 'organization', installed: false }),
+      market({ scope: 'organization', organizationId: 'org-other' }),
+      market({ scope: 'personal', organizationId: null, source: 'local-market' }),
+    ];
+    for (const marketRecord of rows) {
+      expect(
+        resolveGhostFirstPartyPrivilege(
+          facts({
+            ghostId: 'acme-feishu',
+            marketRecord,
+            currentOrganization: CURRENT_ORG,
+            installOrigin: 'agent-forge',
+          }),
+        ),
+      ).toEqual({
+        brokerEligible: true,
+        hostPrimitiveEligible: false,
+        basis: 'forge-current-org-prefix',
+      });
+    }
+  });
+
   // 台账里有这条 id 但 installed 为 false 时,曾经会整段跳过市场分支、落到末尾那条
   // 「本地包 + 本组织前缀 → 放行」的兜底。于是同一条 `scope: 'personal'` 记录
   // (明确不可信)把 installed 从 true 改成 false,结论就从 deny 翻成 allow ——
@@ -375,7 +399,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
         basis: 'denied-unknown-origin',
       });
     }
-    // 作者自测:从未发布过的 id 没有台账行，本地装入仍然 deny。
+    // 手动本地包不能借一个 installed=false 的市场行取得资格。
   });
 
   it('keeps official-prefix broker even when facts are unavailable, and asks the resolver otherwise', () => {
