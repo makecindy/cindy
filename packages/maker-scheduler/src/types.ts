@@ -107,6 +107,8 @@ export interface ScriptExecutionConfig {
   capabilities: ScriptCapability[];
 }
 /**
+ * 'aborted': 用户暂停/删除计划，或调度器 stop（切账号/退出）主动中断。
+ * 视为终态；落库时自带 readAt（不是用户要处理的失败，不产生未读红点）。
  * 'interrupted': app 关闭/崩溃时残留为 'running' 的 run，下次启动时由
  * Scheduler.start() 统一改写为本状态，区别于用户主动 abort。视为终态。
  * 'skipped': 前置检查脚本（preRunHook）exit 2 拦截，本轮未启动 agent。

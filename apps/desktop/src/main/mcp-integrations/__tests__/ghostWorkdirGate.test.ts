@@ -29,9 +29,11 @@ const outsideDir = path.join(tmpUserData, 'outside');
 const logWarnMock = vi.fn();
 const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
-const { packGhostDirMock } = vi.hoisted(() => ({ packGhostDirMock: vi.fn() }));
-const { handleIncomingCindyFileMock, completeForgePackStagingMock } = vi.hoisted(() => ({
-  handleIncomingCindyFileMock: vi.fn(async () => undefined),
+const { packGhostDirMock, forgeInstallPackageMock } = vi.hoisted(() => ({
+  packGhostDirMock: vi.fn(),
+  forgeInstallPackageMock: vi.fn(),
+}));
+const { completeForgePackStagingMock } = vi.hoisted(() => ({
   completeForgePackStagingMock: vi.fn(() => ({
     ticket: 'publish-token-1',
     installPath: '/host/staging/demo.cindy',
@@ -169,6 +171,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
     listMock().find((ghost: any) => ghost.manifest?.id === id) ?? null,
   captureGhostMutationOwnerForMcp: captureMutationOwnerMock,
   acquireGhostMutationLeaseForMcp: acquireMutationLeaseMock,
+  installOrUpdateLocalGhostPackageFromForge: forgeInstallPackageMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
   getGhostSetupAssessment: setupAssessmentMock,
@@ -213,12 +216,8 @@ vi.mock('../../cindy-brain/forgePackStaging.js', () => ({
   invalidateForgePackTicket: vi.fn(),
   releaseForgePackStaging: releaseForgePackStagingMock,
 }));
-vi.mock('../../cindy-brain/openFileInstall.js', () => ({
-  handleIncomingCindyFile: handleIncomingCindyFileMock,
-}));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionFsSnapshot: sessionSnapshotMock,
-  getSessionTitle: vi.fn(async () => 'Test session'),
 }));
 vi.mock('../../plugin-publisher/host.js', () => ({
   currentPublisherIdentity: currentPublisherIdentityMock,
@@ -247,7 +246,7 @@ import type { LiziMcpSessionContext } from '@cindy/mcps';
 
 function chipGhost(
   id: string,
-  slots: string[] = ['tool'],
+  capabilities: string[] = ['tool'],
   extra: Record<string, unknown> = {},
 ): unknown {
   return {
@@ -256,8 +255,9 @@ function chipGhost(
       id,
       name: `Ghost ${id}`,
       kind: 'chip',
-      slots,
       tools: [{ name: 'run', description: 'd' }],
+      ...(capabilities.includes('panel') ? { panel: { html: 'panel.html' } } : {}),
+      ...(capabilities.includes('session-context') ? { sessionContext: true } : {}),
       ...extra,
     },
   };
@@ -410,7 +410,14 @@ beforeEach(() => {
     errorCode: 'MANIFEST_INVALID',
     message: 'stop after gate assertion',
   });
-  handleIncomingCindyFileMock.mockClear();
+  forgeInstallPackageMock.mockReset();
+  forgeInstallPackageMock.mockResolvedValue({
+    action: 'installed',
+    ghost: {
+      enabled: true,
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    },
+  });
   completeForgePackStagingMock.mockClear();
   publishTicketConsumeMock.mockReset();
   publishTicketConsumeMock.mockReturnValue({
@@ -423,7 +430,12 @@ beforeEach(() => {
   });
   releaseForgePackStagingMock.mockClear();
   startPluginPublishMock.mockClear();
-  currentPublisherIdentityMock.mockClear();
+  currentPublisherIdentityMock.mockReset();
+  currentPublisherIdentityMock.mockReturnValue({
+    membershipId: 'member-1',
+    orgSlug: 'acme',
+    orgName: 'Acme',
+  });
   appSessionBoundaryPendingMock.mockReset();
   appSessionBoundaryPendingMock.mockReturnValue(false);
   clearAllPrefs();
@@ -447,7 +459,7 @@ describe('Forge session workdir gate', () => {
     });
   });
 
-  it('keeps default intent on the install-confirm path without exposing a publish token', async () => {
+  it('keeps default intent as pure packaging without exposing a publish token', async () => {
     packGhostDirMock.mockResolvedValueOnce({
       ok: true,
       buf: Buffer.from('packed'),
@@ -455,18 +467,44 @@ describe('Forge session workdir gate', () => {
       manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
     });
     const result = await makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
-    expect(result).toMatchObject({ ok: true, cindyPath: 'demo-1.0.0.cindy' });
-    if (!result.ok) throw new Error('default install pack unexpectedly failed');
+    expect(result).toMatchObject({
+      ok: true,
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+    });
+    if (!result.ok) throw new Error('default pack unexpectedly failed');
     expect(result).not.toHaveProperty('publishToken');
-    expect(result.note).toContain("若接下来要发布到组织市场,请用 intent='publish' 重新打包");
-    expect(handleIncomingCindyFileMock).toHaveBeenCalledWith(
-      '/host/staging/demo.cindy',
-      'ghost-forge',
-      expect.objectContaining({ kind: 'agent-forge' }),
-    );
+    expect(result.note).toContain('本工具不会安装或更新插件');
+    expect(completeForgePackStagingMock).not.toHaveBeenCalled();
   });
 
-  it('does not suggest organization publishing to a personal account after default install pack', async () => {
+  it('installs only through the explicit Forge install method and binds the packed bytes', async () => {
+    const bytes = Buffer.from('packed');
+    const cindyPath = path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy');
+    packGhostDirMock.mockResolvedValueOnce({
+      ok: true,
+      buf: bytes,
+      cindyPath,
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    });
+
+    const result = await makeDeps().forgeInstall({
+      dir: path.join(WORKDIR, 'plugin-src'),
+    });
+
+    expect(forgeInstallPackageMock).toHaveBeenCalledWith(cindyPath, {
+      ghostId: 'demo',
+      packageSha256: createHash('sha256').update(bytes).digest('hex'),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      action: 'installed',
+      id: 'demo',
+      enabled: true,
+    });
+    expect(completeForgePackStagingMock).not.toHaveBeenCalled();
+  });
+
+  it('does not suggest organization publishing to a personal account after default pack', async () => {
     currentPublisherIdentityMock.mockReturnValueOnce(null);
     packGhostDirMock.mockResolvedValueOnce({
       ok: true,
@@ -479,18 +517,13 @@ describe('Forge session workdir gate', () => {
 
     // Excludes showing an unusable publish next step to personal accounts.
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('personal install pack unexpectedly failed');
+    if (!result.ok) throw new Error('personal pack unexpectedly failed');
     expect(result.note).not.toContain("intent='publish'");
-    // Excludes changing the default intent while adding the conditional note.
+    // Default packaging remains independent from publisher identity.
     expect(result).not.toHaveProperty('publishToken');
-    expect(handleIncomingCindyFileMock).toHaveBeenCalledWith(
-      '/host/staging/demo.cindy',
-      'ghost-forge',
-      expect.objectContaining({ kind: 'agent-forge' }),
-    );
   });
 
-  it('returns the one-shot token for publish intent without opening install confirmation', async () => {
+  it('returns the one-shot token for publish intent', async () => {
     packGhostDirMock.mockResolvedValueOnce({
       ok: true,
       buf: Buffer.from('packed'),
@@ -502,7 +535,6 @@ describe('Forge session workdir gate', () => {
       intent: 'publish',
     });
     expect(result).toMatchObject({ ok: true, publishToken: 'publish-token-1' });
-    expect(handleIncomingCindyFileMock).not.toHaveBeenCalled();
   });
 
   it('consumes the publish token and binds publisher input to ticket id, SHA and cleanup', async () => {

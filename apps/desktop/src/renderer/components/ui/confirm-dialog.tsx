@@ -24,7 +24,7 @@ export interface ConfirmDialogProps {
    */
   content?: ReactNode;
   /**
-   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗(如意识装入确认)
+   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗
    * 用默认宽会折行到累,可适度放宽;普通二选一确认别动它。
    */
   maxWidth?: number;
@@ -38,8 +38,7 @@ export interface ConfirmDialogProps {
   dontShowAgainLabel?: string;
   /**
    * 复选框初始勾选态,缺省 false。"下次不再提示"类弹窗保持缺省;
-   * 业务复选框(confirmWithCheckbox)按调用方语义决定,如装意识的
-   * "立即开启"默认勾选。
+   * 业务复选框(confirmWithCheckbox)按调用方语义决定初始状态。
    */
   checkboxDefaultChecked?: boolean;
   /**
@@ -50,20 +49,6 @@ export interface ConfirmDialogProps {
   autoFocusConfirm?: boolean;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
-  /**
-   * 高危确认的「手输一致才放行」闸(如 Agent 发起装入高危插件时手打插件 id)。
-   * 设了就在按钮上方渲染一个输入框,用户必须逐字打出 `expected` 才解锁主按钮 ——
-   * 这是比勾选框更强的确认:它逼用户对着确认框里的那个 id 亲手核对一遍,而不是
-   * 无脑点。输入状态由本组件持有(每次打开复位),不外泄给调用方。
-   */
-  requireTypedConfirmation?: {
-    /** 必须逐字打出的目标串(如插件 id)。 */
-    expected: string;
-    /** 输入框上方的说明,通常含 expected 的插值。 */
-    label: string;
-    /** 输入框 placeholder(缺省用 expected)。 */
-    placeholder?: string;
-  };
   /** 嵌套在其它 Dialog 内时提升层级；普通确认继续使用默认层级。 */
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
@@ -110,7 +95,6 @@ export function ConfirmDialog({
   checkboxDefaultChecked = false,
   autoFocusConfirm,
   confirmDisabled = false,
-  requireTypedConfirmation,
   confirmVariant = 'default',
   confirmIcon,
   describeContent = false,
@@ -130,16 +114,7 @@ export function ConfirmDialog({
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);
-  // 手输确认串:每次打开复位为空,逐字打出 expected 前主按钮保持禁用。
-  const [typedConfirmation, setTypedConfirmation] = useState('');
-  useEffect(() => {
-    if (open) setTypedConfirmation('');
-  }, [open]);
-  const typedConfirmationSatisfied =
-    !requireTypedConfirmation || typedConfirmation.trim() === requireTypedConfirmation.expected;
-  const confirmBlocked = loading || confirmDisabled || !typedConfirmationSatisfied;
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
-  const typedConfirmationRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // 滚动条 thumb 默认透明(globals.css),不滚不 hover 就看不见"下面还有内容"。
   // 授权确认场景里这不是观感问题:权限清单被折在视口下面而用户不知道,等于
@@ -209,21 +184,14 @@ export function ConfirmDialog({
               if (loading) e.preventDefault();
             }}
             onOpenAutoFocus={
-              requireTypedConfirmation
+              autoFocusConfirm
                 ? (e) => {
-                    // 有手输闸时把焦点交给输入框:用户一开就在核对/输入 id,
-                    // 而不是停在一个当前还被禁用的主按钮上。
+                    // Radix 默认聚焦第一个可聚焦元素 / Cancel —— 这里覆盖,
+                    // 把焦点交给主按钮,避免"取消"天然带 focus ring。
                     e.preventDefault();
-                    typedConfirmationRef.current?.focus();
+                    confirmBtnRef.current?.focus();
                   }
-                : autoFocusConfirm
-                  ? (e) => {
-                      // Radix 默认聚焦第一个可聚焦元素 / Cancel —— 这里覆盖,
-                      // 把焦点交给主按钮,避免"取消"天然带 focus ring。
-                      e.preventDefault();
-                      confirmBtnRef.current?.focus();
-                    }
-                  : undefined
+                : undefined
             }
           >
             <AlertDialog.Title
@@ -237,7 +205,7 @@ export function ConfirmDialog({
             {(description || content) && (
               // 富内容 / 长正文可能超过视口高度:包一层限高滚动区,让标题与底部按钮
               // 固定、中间内容纵向滚动,避免整个弹窗被撑出屏幕后无法滚动到被裁掉的内容
-              // (典型:插件更新确认框的权限变更清单)。
+              // (典型:带分组和折叠区的长确认内容)。
               <div
                 ref={scrollRef}
                 id={describeContent && content ? bodyId : undefined}
@@ -277,50 +245,11 @@ export function ConfirmDialog({
                 {dontShowAgainLabel}
               </label>
             )}
-            {requireTypedConfirmation && (
-              <div className="mt-4 shrink-0">
-                <label
-                  htmlFor={`${bodyId}-typed`}
-                  className="block text-13 leading-[1.5] text-[var(--confirm-desc)]"
-                >
-                  {requireTypedConfirmation.label}
-                </label>
-                <input
-                  ref={typedConfirmationRef}
-                  id={`${bodyId}-typed`}
-                  type="text"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  value={typedConfirmation}
-                  disabled={loading}
-                  onChange={(e) => setTypedConfirmation(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Enter 在闸满足时等同点主按钮;未满足则吞掉,不误触。
-                    if (e.key === 'Enter' && typedConfirmationSatisfied && !loading) {
-                      e.preventDefault();
-                      onConfirm?.({ dontShowAgain });
-                    }
-                  }}
-                  placeholder={
-                    requireTypedConfirmation.placeholder ?? requireTypedConfirmation.expected
-                  }
-                  className={cn(
-                    'mt-1.5 h-9 w-full rounded-lg border px-3 text-13',
-                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                    'text-[var(--settings-input-text)] placeholder:text-[var(--text-placeholder)]',
-                    'outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
-                    'disabled:cursor-not-allowed disabled:opacity-60',
-                  )}
-                />
-              </div>
-            )}
             <div className="mt-6 flex shrink-0 justify-end gap-2.5">
               <AlertDialog.Action asChild>
                 <button
                   ref={confirmBtnRef}
-                  disabled={confirmBlocked}
+                  disabled={loading || confirmDisabled}
                   aria-busy={loading || undefined}
                   aria-label={resolvedConfirmText}
                   onClick={() => onConfirm?.({ dontShowAgain })}
@@ -337,9 +266,7 @@ export function ConfirmDialog({
                     loading &&
                       confirmVariant === 'destructive' &&
                       'cursor-default opacity-80 active:scale-100 hover:opacity-80',
-                    !loading &&
-                      (confirmDisabled || !typedConfirmationSatisfied) &&
-                      'cursor-not-allowed opacity-50 active:scale-100',
+                    confirmDisabled && 'cursor-not-allowed opacity-50 active:scale-100',
                   )}
                 >
                   {loading ? (

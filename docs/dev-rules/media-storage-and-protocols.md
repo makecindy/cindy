@@ -74,7 +74,7 @@
 以下缺口在触及相关链路时必须一并修复，或在 PR 中保留明确的正式跟踪，不得静默丢弃：
 
 - 插件持久引用的 per-插件 字节配额只覆盖 **寄存**（`ghost-deposit`，cindy 槽
-  `deposit_media`）：上限 `GHOST_CINDY_DEPOSIT_QUOTA_BYTES`，安装确认框逐项展示该上限，
+  `deposit_media`）：上限 `GHOST_CINDY_DEPOSIT_QUOTA_BYTES`，插件详情逐项展示该上限，
   释放口是 `release_media`，卸载插件时按 refKind 清理。**画廊（`ghost-gallery`：模型
   代办产物与 network `as:'media'` 下载）仍无字节配额、仍不随卸载回收** —— 这两条是
   存量语义，改动它们属于产品决策，触及时另行拍板，不得当作已完成。

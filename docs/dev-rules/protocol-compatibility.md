@@ -41,26 +41,22 @@
 - 插件运行时保留，用户通过 SkillHub 或手动安装 `.cindy` 包；没有任何插件时启动和
   开发不应因此失败。
 - 不要重新引入预装／播种机制或私有种子 submodule；需要推荐插件时走 SkillHub 的
-  分发与安装确认流程。
+  分发与用户主动安装流程。
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
-- `ghost.json` 的跨消费者字段、slot 与枚举属于 Ghost manifest 协议，客户端正本位于
+- `ghost.json` 的跨消费者字段、v2 兼容映射与枚举属于 Ghost manifest 协议，客户端正本位于
   `packages/plugin-protocol/src/manifest.ts`；Desktop 在
   `apps/desktop/src/shared/ghost.ts` 维护运行时 validator。除明确登记的 Desktop-only
   能力外，两份实现及相同的有效／无效 fixture 必须同步，作者契约同时写入
   `FORGE_GUIDE`。
-- 当前 `GHOST_SLOTS` 槽位集合中唯一登记的 Desktop-only 例外，是尚未进入跨消费者发布
-  契约的 `library` 槽；在其首个正式支持版本确定并完成分发端兼容设计前，不得把它加入
-  `packages/plugin-protocol`。这里的「唯一」只描述槽位集合，不表示两套 validator 的其它
-  历史字段语义已经完全同构；`main-view` 是跨消费者字段，不属于该槽位例外。
-- `main-view` / `mainView` 是通用的 Cindy Host 界面能力，不是 `xd-sites` 专用 API，协议中
-  不出现 `xd-sites` 的端点、OIDC 流程或业务模型。具体插件可在它已获批准的其它 slot 内调用
-  自己的服务，基座只负责声明校验、授权、导航和沙箱承载。
+- `mainView` 是通用的 Cindy Host 界面能力，不是 `xd-sites` 专用 API；v2 的 `main-view`
+  只保留输入兼容。协议中不出现 `xd-sites` 的端点、OIDC 流程或业务模型。具体插件可通过
+  其它已声明且经运行时守门的能力调用自己的服务，基座只负责声明校验、导航和沙箱承载。
 - `mainView.icon` 是主视图入口的 Host 系统图标枚举，只作用于该入口；根级 `icon` 仍是插件
   品牌图片协议。字段白名单、默认回退与完整枚举见 `FORGE_GUIDE` §4.20，不能用图片路径或
   未声明别名绕过枚举。
-- 如果 Plugin Market／服务端仓会解析或严格校验新增的 manifest slot／枚举，发布使用新能力
+- 如果 Plugin Market／服务端仓会解析或严格校验新增的 manifest 字段／枚举，发布使用新能力
   的插件前必须同步其本地 `plugin-protocol` 实现；这不要求 Cindy 客户端运行时依赖服务端，
   也不改变两仓独立发布边界。
 

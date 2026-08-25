@@ -43,6 +43,7 @@ import {
 } from './sidebarRightStatus';
 import {
   resolveCollapsedAttention,
+  resolveCollapsedGroupHeaderSessionId,
   resolveCollapsedGroupRightStatus,
 } from './projectCollapsedAttention';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
@@ -187,6 +188,8 @@ export function AutomationSessionGroupItem({
     () => new Set(collapsedAttention.errorSessionIds),
     [collapsedAttention],
   );
+  // 与组头红/绿未读点同源:没有未读就不提供「标为已读」,避免空操作占菜单。
+  const canMarkRead = collapsedAttention.tone != null;
   // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
   // 不变时时间窗口会被冻结,跨过 24h 阈值的运行不会及时移出豁免。与普通对话列表
   // SessionEntryList 一致(它也是 render 内直接算 getSessionListCollapseView、不 memo);
@@ -401,14 +404,18 @@ export function AutomationSessionGroupItem({
     [countdownText, runCountText, stoppedText],
   );
 
-  // 点击空白行区域 = 点击标题,统一打开组内「最新一条」运行(需求:「点击这条自动化
-  // 折叠也打开最新的 session」)。行内可交互控件(chevron toggle / Timer logo / Run /
-  // More)在自己的 handler 里 stopPropagation,不会误触发。
+  // 点击空白行区域 = 点击标题。展开态打开最新一条;收起且整组是红时打开
+  // 贡献红点的那条。行内控件各自 stopPropagation,不会误触发。
   const openLatestSession = () => {
-    if (!latestSession) return;
+    const targetId = resolveCollapsedGroupHeaderSessionId({
+      collapsed,
+      latestSessionId,
+      attention: collapsedAttention,
+    });
+    if (!targetId) return;
     // 仅在展开 + 前 5 条态下冻结当前布局;收起态无子项可冻结。
-    if (!collapsed && !showAll) freezeCurrentLayout(latestSession.id);
-    onSessionClick(latestSession.id);
+    if (!collapsed && !showAll) freezeCurrentLayout(targetId);
+    onSessionClick(targetId);
   };
 
   return (
@@ -433,6 +440,14 @@ export function AutomationSessionGroupItem({
             标题 <button>(Tab focus + Enter/Space)天然提供。 */}
         <div
           onClick={openLatestSession}
+          onContextMenu={(event) => {
+            // 整行右键 = 打开「更多操作」同一份菜单(不再另做一份隐形锚点菜单)。
+            event.preventDefault();
+            event.stopPropagation();
+            if (!scheduleId) return;
+            setRowTooltipOpen(false);
+            setMenuOpen(true);
+          }}
           onPointerOver={(event) => {
             setRowTooltipOpen(!isAutomationGroupInlineAction(event.target));
           }}
@@ -721,6 +736,14 @@ export function AutomationSessionGroupItem({
                         onClick={(event) => event.stopPropagation()}
                         className={cn(MENU_CONTENT_CLASS, 'min-w-36 overflow-hidden')}
                       >
+                        {canMarkRead && (
+                          <DropdownMenuItem
+                            onSelect={() => onScheduleAction(group, 'mark-read')}
+                            className={MENU_ITEM_CLASS}
+                          >
+                            {t('ccAgent.sidebar.automationGroup.menu.markAllAsRead')}
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           onSelect={() => onScheduleAction(group, 'edit')}
                           className={MENU_ITEM_CLASS}

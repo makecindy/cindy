@@ -10,10 +10,10 @@ import {
 } from '../iosSimulatorPluginAvailability';
 import type { TabState } from '../types';
 
-function ghost(id: string, enabled: boolean, slots: string[]): InstalledGhost {
+function ghost(id: string, enabled: boolean, hasCapability: boolean): InstalledGhost {
   return {
     enabled,
-    manifest: { id, slots },
+    manifest: { id, ...(hasCapability ? { iosSimulator: true } : {}) },
   } as unknown as InstalledGhost;
 }
 
@@ -33,16 +33,14 @@ const TABS_WITH_SUBAGENTS: TabState[] = [
 describe('iOS Simulator plugin availability', () => {
   it('requires an enabled plugin with the capability slot', () => {
     expect(isIOSSimulatorPluginAvailable([])).toBe(false);
-    expect(isIOSSimulatorPluginAvailable([ghost('ios-simulator', false, ['ios-simulator'])])).toBe(
+    expect(isIOSSimulatorPluginAvailable([ghost('ios-simulator', false, true)])).toBe(
       false,
     );
-    expect(isIOSSimulatorPluginAvailable([ghost('ios-simulator', true, ['panel'])])).toBe(false);
-    expect(isIOSSimulatorPluginAvailable([ghost('another-plugin', true, ['ios-simulator'])])).toBe(
+    expect(isIOSSimulatorPluginAvailable([ghost('ios-simulator', true, false)])).toBe(false);
+    expect(isIOSSimulatorPluginAvailable([ghost('another-plugin', true, true)])).toBe(
       true,
     );
-    expect(
-      isIOSSimulatorPluginAvailable([ghost('ios-simulator', true, ['panel', 'ios-simulator'])]),
-    ).toBe(true);
+    expect(isIOSSimulatorPluginAvailable([ghost('ios-simulator', true, true)])).toBe(true);
   });
 
   it('hides persisted simulator tabs and selects a visible active fallback', () => {

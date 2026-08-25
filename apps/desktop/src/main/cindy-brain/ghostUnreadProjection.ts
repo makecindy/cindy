@@ -16,10 +16,10 @@ import type { InstalledGhost } from '../../shared/ghost.js';
 
 /**
  * 该意识当前是否还持有未读角标能力(资格,与启用与否无关)。
- * 只看 `badge` 卡槽:它与 `notify` 卡槽是并列的两档权限,不互为前置。
+ * 只看 `badge` 直接声明:它与 `notify` 是并列的两档权限,不互为前置。
  */
 export function ghostDeclaresBadge(ghost: InstalledGhost | null | undefined): boolean {
-  return ghost?.manifest.slots?.includes('badge') === true;
+  return ghost?.manifest.badge === true;
 }
 
 /** 该意识的未读现在该不该出现在界面上(资格 + 已启用)。 */

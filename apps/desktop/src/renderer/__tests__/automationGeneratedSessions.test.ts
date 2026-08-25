@@ -26,6 +26,7 @@ import {
   getAutomationGroupPrimarySession,
   getVisibleAutomationGroupSessions,
   groupAutomationSidebarEntries,
+  unreadSuccessScheduleRunIds,
   type AutomationScheduleSessionInfo,
 } from '@/features/cc-agent/lib/automationSidebarGrouping';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
@@ -36,7 +37,10 @@ import {
   isScheduledSession,
 } from '@/features/cc-agent/lib/scheduledSessionGrouping';
 import { getFocusedScheduleStatusFilter } from '@/features/scheduler/SchedulerPage';
-import { isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
+import {
+  isUnreadFailedScheduleRun,
+  isUnreadScheduleRun,
+} from '@/features/scheduler/lib/runUnread';
 import { formatUsd } from '@/features/scheduler/lib/formatters';
 
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
@@ -90,6 +94,7 @@ const makeScheduleSessionInfo = (
   scheduleId: 'sched-1',
   scheduleName: 'Schedule',
   unreadRunIds: [],
+  unreadFailedRunIds: [],
   hasUnreadRun: false,
   hasUnreadFailedRun: false,
   ...partial,
@@ -493,8 +498,47 @@ describe('automation-generated sessions', () => {
   it('keeps schedule run unread semantics shared with the run history badge', () => {
     expect(isUnreadScheduleRun({ status: 'success', readAt: undefined })).toBe(true);
     expect(isUnreadScheduleRun({ status: 'failed', readAt: undefined })).toBe(true);
+    expect(isUnreadScheduleRun({ status: 'interrupted', readAt: undefined })).toBe(true);
+    expect(isUnreadScheduleRun({ status: 'aborted', readAt: undefined })).toBe(false);
     expect(isUnreadScheduleRun({ status: 'running', readAt: undefined })).toBe(false);
     expect(isUnreadScheduleRun({ status: 'success', readAt: 1 })).toBe(false);
+    expect(isUnreadFailedScheduleRun({ status: 'failed', readAt: undefined })).toBe(true);
+    expect(isUnreadFailedScheduleRun({ status: 'interrupted', readAt: undefined })).toBe(true);
+    expect(isUnreadFailedScheduleRun({ status: 'aborted', readAt: undefined })).toBe(false);
+    expect(isUnreadFailedScheduleRun({ status: 'success', readAt: undefined })).toBe(false);
+    expect(
+      unreadSuccessScheduleRunIds({
+        unreadRunIds: ['ok', 'bad'],
+        unreadFailedRunIds: ['bad'],
+      }),
+    ).toEqual(['ok']);
+  });
+
+  it('surfaces unread failed schedule runs as an in-session mark-as-read banner', () => {
+    const sessionViewSource = readTextLf(
+      new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
+      'utf8',
+    );
+    const bannerSource = readTextLf(
+      new URL('../components/chat/InterruptedTurnBanner.tsx', import.meta.url),
+      'utf8',
+    );
+    const zh = JSON.parse(
+      readTextLf(new URL('../i18n/locales/zh-CN/common.json', import.meta.url), 'utf8'),
+    );
+
+    expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
+    expect(sessionViewSource).toContain('unreadFailedScheduleRunIds.length > 0');
+    expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
+    expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
+    expect(sessionViewSource).toContain('latestUnreadFailedRunId');
+    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
+    expect(sessionViewSource).not.toContain(
+      'void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds)',
+    );
+    expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('这次定时任务没有完成。');
+    expect(zh.chat.unreadFailedScheduleBanner.markAsRead).toBe('标为已读');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {
@@ -824,24 +868,30 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('{hasVisibleChildren && (');
     // 侧栏侧保留「立即运行」直点,低频的编辑 / 暂停恢复 / 删除收回 More 菜单。
     expect(source).toContain("onScheduleAction(group, 'run')");
+    expect(source).toContain('const canMarkRead = collapsedAttention.tone != null');
+    expect(source).toContain('{canMarkRead && (');
+    expect(source).toContain("onScheduleAction(group, 'mark-read')");
     expect(source).toContain("onScheduleAction(group, 'edit')");
     expect(source).toContain("onScheduleAction(group, 'toggle-pause')");
     expect(source).toContain("onScheduleAction(group, 'delete')");
     expect(source).toContain('EllipsisVertical');
     expect(source).toContain('setMenuOpen');
-    expect(source).not.toContain('handleGroupContextMenu');
+    expect(source).toContain('onContextMenu={(event) => {');
+    expect(source).toContain('setMenuOpen(true)');
     // Run / More 图标(lucide Play / EllipsisVertical)必须都在,按钮尺寸与普通会话行对齐。
     expect(source).toMatch(/<Play size=\{14\}/);
     expect(source).toMatch(/<EllipsisVertical size=\{14\}/);
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.runNow');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.more');
+    expect(source).toContain('ccAgent.sidebar.automationGroup.menu.markAllAsRead');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.edit');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.pause');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.resume');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.delete');
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
-    // 组头点击打开组内「最新一条」运行(需求:点折叠组头打开最新 session),不再走 primary。
-    expect(source).toContain('onSessionClick(latestSession.id)');
+    // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
+    expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
+    expect(source).toContain('onSessionClick(targetId)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
     // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。
@@ -1135,6 +1185,12 @@ describe('automation-generated sessions', () => {
     expect(sidebarSource).toContain('useDeleteScheduleWithSessions');
     expect(sidebarSource).toContain('requestDeleteSchedule({');
     expect(sidebarSource).toContain('knownSessionIds: group.sessions.map((session) => session.id)');
+    expect(sidebarSource).toContain("if (action === 'mark-read')");
+    expect(sidebarSource).toContain('unreadSuccessScheduleRunIds(info)');
+    expect(sidebarSource).toContain("t('ccAgent.layout.markedAsRead', { count: processed.length })");
+    expect(sidebarSource).not.toContain(
+      "t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length })",
+    );
     expect(schedulerPageSource).toContain('getFocusedScheduleStatusFilter(schedules, focusId)');
     expect(schedulerPageSource).toContain('setEditing(focused)');
     expect(schedulerPageSource).toContain('setFormOpen(true)');

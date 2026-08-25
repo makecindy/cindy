@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { resolveIOSSimulatorPluginAccess } from '../iosSimulatorPluginGate.js';
 
-function ghost(id: string, enabled: boolean, slots: string[] = ['ios-simulator']): InstalledGhost {
+function ghost(id: string, enabled: boolean, hasCapability = true): InstalledGhost {
   return {
     enabled,
-    manifest: { id, name: id, slots },
+    manifest: { id, name: id, ...(hasCapability ? { iosSimulator: true } : {}) },
   } as unknown as InstalledGhost;
 }
 
@@ -61,7 +61,7 @@ describe('iOS Simulator plugin Host gate', () => {
   });
 
   it('does not treat an unrelated enabled plugin as a capability provider', () => {
-    expect(resolve([ghost('ordinary-plugin', true, ['skill'])])).toMatchObject({
+    expect(resolve([ghost('ordinary-plugin', true, false)])).toMatchObject({
       allowed: false,
       errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
     });
