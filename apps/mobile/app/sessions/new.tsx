@@ -1866,12 +1866,17 @@ export default function NewRemoteSessionScreen() {
 
   useEffect(() => {
     if (!selectedDeviceId) return;
+    let cancelled = false;
     void withTransientRemoteRetry(async () => {
       await openLink(selectedDeviceId);
+      if (cancelled) return;
       await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
     }).catch(() => {
       /* The mount-time owner remains held; the next connection/presence change retries. */
     });
+    return () => {
+      cancelled = true;
+    };
   }, [connectionEpoch, openLink, presenceVersion, selectedDeviceId, subscribe]);
 
   useEffect(() => {
