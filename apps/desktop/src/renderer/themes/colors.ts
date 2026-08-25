@@ -380,6 +380,14 @@ registerColor('destructive', {
   light: '0 84% 60%',
   dark: '0 72% 63%',
 }, 'Titlebar — Ollama layer system (Light)');
+registerColor('beta-channel-badge-bg', {
+  light: '#DF0C27',
+  dark: '#DF0C27',
+}, 'Beta 测试渠道已开启徽标底色(用户指定红底,2026-08-25;跨主题固定品牌红)');
+registerColor('beta-channel-badge-fg', {
+  light: '#FFFFFF',
+  dark: '#FFFFFF',
+}, 'Beta 测试渠道已开启徽标文字(× #DF0C27 = 4.98:1)');
 
 // confirm-dialog
 registerColor('confirm-bg', {

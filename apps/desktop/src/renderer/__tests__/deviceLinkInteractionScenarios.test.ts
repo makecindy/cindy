@@ -332,9 +332,7 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
     const chatInput = src.indexOf('<ChatInput', branchStart);
     expect(branchStart).toBeGreaterThan(-1);
     expect(chatInput).toBeGreaterThan(branchStart);
-    expect(src.slice(branchStart, chatInput)).not.toContain(
-      'pendingRemoteDesktopConfirmation',
-    );
+    expect(src.slice(branchStart, chatInput)).not.toContain('pendingRemoteDesktopConfirmation');
   });
 
   it.each(['issue_confirm', 'rename_sessions_confirm', 'ghost_grant_confirm'] as const)(
@@ -1014,8 +1012,10 @@ describe('远程交互接线不变式', () => {
     expect(syncEnd).toBeGreaterThan(syncStart);
     const syncBody = chatInputSrc.slice(syncStart, syncEnd);
     expect(syncBody).toContain('patchVendorPrefsPreservingModelChoice');
-    expect(syncBody).toContain('markModelChoice ? patchVendorPrefs : patchVendorPrefsPreservingModelChoice');
-    expect(syncBody).toContain("opts.markModelChoice === true");
+    expect(syncBody).toMatch(
+      /markModelChoice\s*\?\s*patchVendorPrefs\s*:\s*patchVendorPrefsPreservingModelChoice/,
+    );
+    expect(syncBody).toContain('opts.markModelChoice === true');
     expect(syncBody).toContain('markModelChoice');
     expect(syncBody).toContain('{ model: modelId, providerId: activeProviderId ?? null }');
     expect(syncBody).not.toContain(': { model: modelId }');
@@ -1032,7 +1032,7 @@ describe('远程交互接线不变式', () => {
       'markModelChoice === false ? patchVendorPrefsPreservingModelChoice : patchVendorPrefs',
     );
     expect(appSrc).toContain('model: modelId');
-    expect(appSrc).not.toContain("markModelChoice === false ? {} : { model: modelId }");
+    expect(appSrc).not.toContain('markModelChoice === false ? {} : { model: modelId }');
 
     const draftSrc = read('state/newMakerDraft.ts');
     expect(draftSrc).toContain('if (!opts.markModelChoice && modelChosen[vendor] === true)');
@@ -1183,9 +1183,7 @@ describe('远程交互接线不变式', () => {
     );
     expect(activeEffort).toBeGreaterThan(-1);
     // 没有显式目标(既有的 effort / fast 编辑入口)时仍回落当前 dlSel / seed 的档。
-    expect(body).toMatch(
-      /dlSel\?\.effort \?\? deviceLinkInitial\?\.effort/,
-    );
+    expect(body).toMatch(/dlSel\?\.effort \?\? deviceLinkInitial\?\.effort/);
     expect(payloadEffort).toBeGreaterThan(activeEffort);
   });
 
@@ -1203,7 +1201,9 @@ describe('远程交互接线不变式', () => {
     expect(pushStart).toBeGreaterThan(-1);
     const pushBody = src.slice(pushStart, pushEnd);
     expect(pushBody).toContain('target?: {');
-    expect(pushBody).toContain("const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;");
+    expect(pushBody).toContain(
+      'const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;',
+    );
     expect(pushBody).toContain('agent: target?.agent ?? capabilityAgentKind');
     expect(pushBody).toMatch(/providerId: target\s*\r?\n?\s*\?\s*\(target\.providerId \?\? ''\)/);
     // 给了目标就**只**认目标的档 —— 不许再回落到上一个模型的 dlSel.effort。

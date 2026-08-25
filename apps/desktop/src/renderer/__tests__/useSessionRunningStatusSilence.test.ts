@@ -11,8 +11,13 @@ import {
   scheduleClearSchedulerOwnedRun,
   scheduleClearSilencedRun,
 } from '@/lib/silencedSessionDoneStore';
+import { markSessionStarting, resetSessionStartingStoreForTests } from '@/lib/sessionStartingStore';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
-import { addSessionAttention, clearSessionAttention, getSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import {
+  addSessionAttention,
+  clearSessionAttention,
+  getSessionAttentionKind,
+} from '@/lib/sessionAttentionStore';
 
 const storeMock = vi.hoisted(() => ({
   snapshot: new Map<string, SessionStatusInfo>(),
@@ -69,6 +74,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.terminalErrorSessions.clear();
     storeMock.sideTaskStopSessions.clear();
     resetSilencedSessionDoneStoreForTests();
+    resetSessionStartingStoreForTests();
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -292,6 +298,112 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     vi.useRealTimers();
   });
 
+  it('does not restore done attention when the session becomes active during debounce', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    const initialProps: { activeSessionId: string | undefined } = {
+      activeSessionId: undefined,
+    };
+    const { rerender } = renderHook(
+      ({ activeSessionId }: { activeSessionId: string | undefined }) =>
+        useSessionRunningStatus(activeSessionId, { onSessionDone }),
+      { initialProps },
+    );
+
+    await emitSnapshot(new Map([['session-active', status(true)]]));
+    await emitSnapshot(new Map([['session-active', status(false)]]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    rerender({ activeSessionId: 'session-active' });
+    rerender({ activeSessionId: undefined });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('session-active', 'done');
+    expect(onSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('does not restore done attention after leaving a session that was active when it completed', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    const initialProps: { activeSessionId: string | undefined } = {
+      activeSessionId: 'session-active-at-completion',
+    };
+    const { rerender } = renderHook(
+      ({ activeSessionId }: { activeSessionId: string | undefined }) =>
+        useSessionRunningStatus(activeSessionId, { onSessionDone }),
+      { initialProps },
+    );
+
+    await emitSnapshot(new Map([['session-active-at-completion', status(true)]]));
+    await emitSnapshot(new Map([['session-active-at-completion', status(false)]]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    rerender({ activeSessionId: undefined });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith(
+      'session-active-at-completion',
+      'done',
+    );
+    expect(onSessionDone).toHaveBeenCalledOnce();
+    expect(onSessionDone).toHaveBeenCalledWith('session-active-at-completion');
+  });
+
+  it('does not restore done attention if a new run is visible when debounce expires', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+
+    await emitSnapshot(new Map([['session-running', status(true)]]));
+    await emitSnapshot(new Map([['session-running', status(false)]]));
+    // 模拟 running snapshot 已更新、订阅 effect 尚未消费的同帧竞态。
+    storeMock.snapshot = new Map([['session-running', status(true)]]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('session-running', 'done');
+    expect(onSessionDone).toHaveBeenCalledWith('session-running');
+  });
+
+  it('does not overwrite a terminal error that appears during the done debounce', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+
+    await emitSnapshot(new Map([['session-error', status(true)]]));
+    await emitSnapshot(new Map([['session-error', status(false)]]));
+    storeMock.terminalErrorSessions.add('session-error');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('session-error', 'done');
+    expect(onSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('preserves the prior done attention if the next turn stays in starting', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+
+    await emitSnapshot(new Map([['session-starting', status(true)]]));
+    await emitSnapshot(new Map([['session-starting', status(false)]]));
+    markSessionStarting('session-starting');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('session-starting', 'done');
+    expect(onSessionDone).toHaveBeenCalledWith('session-starting');
+  });
+
   it('coalesces multiple queue-drain transitions into a single final notification', async () => {
     // 排队 3 条消息:A → done → B → done → C → done。前两次 done 都在 debounce
     // 窗口内被下一次 turn 起始取消,只有 C 结束(队列空)最终 fire 一次通知。
@@ -304,18 +416,24 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     await emitSnapshot(new Map([['session-1', status(true)]]));
     // A done
     await emitSnapshot(new Map([['session-1', status(false)]]));
-    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
     // B running
     await emitSnapshot(new Map([['session-1', status(true)]]));
     // B done
     await emitSnapshot(new Map([['session-1', status(false)]]));
-    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
     // C running
     await emitSnapshot(new Map([['session-1', status(true)]]));
     // C done —— 队列空
     await emitSnapshot(new Map([['session-1', status(false)]]));
     // 推进过 debounce 窗口
-    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
 
     expect(onSessionDone).toHaveBeenCalledTimes(1);
     expect(onSessionDone).toHaveBeenCalledWith('session-1');
@@ -346,9 +464,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     const onSessionNeedsReply = vi.fn();
     renderHook(() => useSessionRunningStatus('another-session', { onSessionNeedsReply }));
 
-    await emitSnapshot(
-      new Map([['s-setup', { ...status(false), hasPendingPluginSetup: true }]]),
-    );
+    await emitSnapshot(new Map([['s-setup', { ...status(false), hasPendingPluginSetup: true }]]));
 
     expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('s-setup', 'awaiting');
     expect(onSessionNeedsReply).toHaveBeenCalledWith('s-setup');
@@ -364,7 +480,9 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.terminalErrorSessions.delete('s-orphan');
     await emitSnapshot(new Map([['s-orphan', status(true)]]));
 
-    expect(vi.mocked(clearSessionAttention)).toHaveBeenCalledWith('s-orphan', { intent: 'explicit' });
+    expect(vi.mocked(clearSessionAttention)).toHaveBeenCalledWith('s-orphan', {
+      intent: 'explicit',
+    });
     vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
   });
 
@@ -375,7 +493,9 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.terminalErrorSessions.add('s-real');
     await emitSnapshot(new Map([['s-real', status(true)]]));
 
-    expect(vi.mocked(clearSessionAttention)).not.toHaveBeenCalledWith('s-real', { intent: 'explicit' });
+    expect(vi.mocked(clearSessionAttention)).not.toHaveBeenCalledWith('s-real', {
+      intent: 'explicit',
+    });
     vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
     storeMock.terminalErrorSessions.delete('s-real');
   });
@@ -468,5 +588,4 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(onSessionDone).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
-
 });

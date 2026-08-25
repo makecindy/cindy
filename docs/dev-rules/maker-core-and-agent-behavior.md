@@ -71,6 +71,42 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
 - 打算用 prompt 解决某个问题前先自问：这件事用代码能不能做？能就用代码。
 - 把本应由代码保证的确定性逻辑（格式校验、字段抽取、流程跳转、是否调用某个工具等）
   交给模型自由发挥，会引入不可复现的行为漂移，属于本规则明确禁止的做法。
+- **产品 turn 未结算不得结束。** provider `turn/completed` 可以立刻给 SDK turn 落墓碑并
+  结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
+  Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
+  `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
+  用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。无 `id`／`call_id`
+  的 item 只认 `itemCompleted` 快照：`itemUpdated` 不得入账，不得给匿名条目发明身份。
+  无 yield marker 的 nameless 完成不得清匿名桶；匿名 `wait` 若按 `cell_id` 结算了其中一个
+  cell，只从匿名桶拿掉该 cell，不得清空仍在跑的其它匿名 cell。同 turn 或续段里
+  后续 `wait` 输出 `Script completed` / `Script terminated` 后视为该 cell 已结算，不得
+  再铸 claim，也不得报 lost-handle。Plan Mode 审批只在产品终态跑：存在 awaiting
+  yield claim 时不得把空计划当循环结束，也不得在 SDK `turn/completed` 上提前挂审批；
+  origin 已产出的计划挂在 claim 上，续段结算后再审。禁止把 `last_agent_message == null` 或开场白当结算
+  判据；cell 跨 turn 存活性未证实前，续段失败必须诚实报 lost-handle，不得 replay 原请求
+  或重跑已执行命令。续段 claim 一旦挡住产品结束，所有非重试终态错误路径（不限
+  transport）都必须同步结算它，不能只推 Done 而让 `isTurnRunning()` 仍为 true。
+  续段 `turn/start` 已被服务端接受后若本地取消，必须先凭响应里的 turn id 落墓碑并
+  best-effort interrupt，再抛/返回取消；`wait` 仍输出 running marker 视为 cell
+  存活证据，重试预算内继续等，不得当空续段报 lost-handle。
+  claim 只归属于铸造它的 origin turn 及其续段 turn；迟到的外族终态（含成功
+  `completed`）不得结算、取消、lost-handle 当前 claim，不得发出未认领的
+  产品 `done`，也不得结算当前续段的 generation／usage。同一产品 turn 上的
+  ask_user／plan 内部续段必须等 yield 空闲后再 `turn/start`，不得并发；Stop／
+  close 取消 yield 时，排队中的内部续段必须退出而不是被当成正常空闲继续发送。
+  只有 cell 真正结算的成功空闲才能唤醒排队续段；lost-handle、重试耗尽、
+  续段 `turn/start` 失败等产品失败必须以 cancelled 释放 waiter，并闩住后续
+  `waitForYieldContinuationIdle()`，同时收掉未完成的 ask_user／plan 卡，不得在用户
+  已看到失败后再开 ask_user／plan turn。续段启动失败的产品终态只由续段层
+  发送一次（`yield-continuation-start-failed`），`handle.send` 不得再发一组
+  通用终态。continuation 的 `turn/start` 已被服务端接受、但 RPC 仍 pending 时若
+  本地 Stop，墓碑会吞掉随后的 `interrupted`，必须补一条未认领 cancelled `done`，
+  避免 Session 仍握着 `currentTurnAttemptToken`。RPC 已返回后由 provider
+  `interrupted` 发唯一产品 Done，abort 不得再合成一条。
+  续段必须继承铸造 claim 时的 origin 上下文：`turnPermissionPolicy`、
+  capability selection 与 auto-review intent。不得把无人值守只读边界重置成普通
+  Auto，也不得用固定 wait 提示覆盖原请求的能力选择或审查意图。
+  Claude wake continuation 与 Codex yield continuation 先分账，不抽公共模块。
 
 ## 3. 守住四项核心数据指标
 

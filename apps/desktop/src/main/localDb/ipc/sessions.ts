@@ -62,7 +62,10 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
+import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
+
+export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -691,30 +694,6 @@ export async function getSessionFsSnapshot(id: string): Promise<{
     return row ?? null;
   } catch (err) {
     log.warn('getSessionFsSnapshot failed', {
-      sessionId: id,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
-
-/**
- * 按 session id 查任务标题(装入确认框的 Agent 来源横幅用:告诉用户"这次装入是
- * 哪个任务里的 Agent 发起的")。纯展示用途,失败 swallow 返 null —— 拿不到标题
- * 只是横幅少一行,不阻断装入编排。
- */
-export async function getSessionTitle(id: string): Promise<string | null> {
-  try {
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select({ title: sessions.title })
-      .from(sessions)
-      .where(eq(sessions.id, id))
-      .limit(1);
-    const title = row?.title?.trim();
-    return title ? title : null;
-  } catch (err) {
-    log.warn('getSessionTitle failed', {
       sessionId: id,
       err: err instanceof Error ? err.message : String(err),
     });
@@ -1486,7 +1465,10 @@ export function registerSessionIpc(
     await withStatusWriteLock(
       sid,
       p.status,
-      () => writeSessionPatch(db, sid, setObj, p.status),
+      async () => {
+        await writeSessionPatch(db, sid, setObj, p.status);
+        cleanupSessionRuntimeForTerminalStatus(sid, p.status);
+      },
       p.workingDir !== undefined,
     );
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
@@ -1699,6 +1681,7 @@ export async function patchSessionMetaInDb(
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
       row.summary = null;
     }
+    cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
     return sessionToCamel(row);
   });
   notifyAgentIslandSessionPatch(updated.id, {
@@ -1851,16 +1834,20 @@ export async function setSessionsStatusInDb(
   if (sessionIds.length === 0) return [];
   const ownerScope = captureOwnerScope();
   const dbClient = getDbClient();
-  const applied = await withSessionRouteLocks(sessionIds, () =>
-    dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
+  const applied = await withSessionRouteLocks(sessionIds, async () => {
+    const rows = await dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : String(err);
       if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS' || code === 'PRECONDITION_FAILED') {
         throwIpcError(code, message);
       }
       throw err;
-    }),
-  );
+    });
+    for (const item of rows) {
+      cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
+    }
+    return rows;
+  });
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
       sessionId: item.sessionId,

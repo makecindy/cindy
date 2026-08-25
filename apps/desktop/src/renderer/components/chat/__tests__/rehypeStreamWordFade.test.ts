@@ -17,7 +17,6 @@ import {
   createWordFadeCandidate,
   createWordFadeState,
   getOrCreateWordFadeState,
-  markSettledFromAnimationEnd,
   releaseWordFadeState,
   rehypeStreamWordFade,
   splitWords,
@@ -99,7 +98,7 @@ describe('splitWords', () => {
 });
 
 describe('rehypeStreamWordFade', () => {
-  it('同一条流式消息 remount 后沿用原时间线，已有词不从头重播', () => {
+  it('同一条流式消息 remount 超过动画时长后把旧词兜底落袋', () => {
     const cacheKey = 'session-1\u0000message-1';
     const firstMount = getOrCreateWordFadeState(cacheKey);
     const tree1 = root(el('p', [textNode('one two')]));
@@ -112,9 +111,9 @@ describe('rehypeStreamWordFade', () => {
     const words = collectWords(tree2);
 
     expect(remount).toBe(firstMount);
-    expect(words.slice(0, 2).map((word) => word.key)).toEqual(firstKeys);
-    expect(words.slice(0, 2).every((word) => word.delay < -150)).toBe(true);
-    expect(words[2].delay).toBe(0);
+    expect(firstKeys.every((key) => remount.settled.has(key))).toBe(true);
+    expect(words.map((word) => word.text)).toEqual(['three']);
+    expect(words[0].delay).toBe(0);
   });
 
   it('消息进入终态后释放 remount 状态', () => {
@@ -170,7 +169,8 @@ describe('rehypeStreamWordFade', () => {
     const tree2 = root(el('p', [textNode('a b x y z')]));
     run(tree2, state, 5000);
     const words = collectWords(tree2);
-    expect(words.slice(2).map((w) => w.delay)).toEqual([0, 0, 0]);
+    expect(words.map((w) => w.text)).toEqual(['x ', 'y ', 'z']);
+    expect(words.map((w) => w.delay)).toEqual([0, 0, 0]);
   });
 
   it('chunk 边界半个词长成整词:前缀延续复用同一 key', () => {
@@ -407,13 +407,12 @@ describe('rehypeStreamWordFade', () => {
     const tree2 = root(el('p', [textNode('one two three four')]));
     run(tree2, state, 500);
     const words2 = collectWords(tree2);
-    expect(words2.map((w) => w.text)).toEqual(['two ', 'three ', 'four']);
+    expect(words2.map((w) => w.text)).toEqual(['four']);
     const p = tree2.children[0] as Element;
-    expect(p.children[0]).toEqual(textNode('one '));
-    // 活动词仍保住原 key,负 delay 继续提供 remount 免疫；新词立即开始。
-    expect(words2[0].key).toBe(words1[1].key);
-    expect(words2[1].key).toBe(words1[2].key);
-    expect(words2[1].delay).toBe(-500);
+    expect(p.children[0]).toEqual(textNode('one two three '));
+    // 即使 remount 丢了 animationend,超过 150ms 的旧词也会按开播时刻自动落袋。
+    expect(words1.every((word) => state.settled.has(word.key))).toBe(true);
+    expect(words2[0].delay).toBe(0);
   });
 
   it('长 settled 前缀只保留一个原生文本节点', () => {
@@ -427,28 +426,8 @@ describe('rehypeStreamWordFade', () => {
     const tree2 = root(el('p', [textNode(`${prefix} tail next`)]));
     run(tree2, state, 500);
     const p = tree2.children[0] as Element;
-    expect(p.children[0]).toEqual(textNode(`${prefix} `));
-    expect(collectWords(tree2).map((w) => w.text)).toEqual(['tail ', 'next']);
-  });
-});
-
-describe('markSettledFromAnimationEnd', () => {
-  function fadeEndEvent(wfKey: string | undefined, animationName = 'stream-word-in') {
-    const target = (wfKey === undefined ? {} : { dataset: { wfKey } }) as unknown as EventTarget;
-    return { animationName, target };
-  }
-
-  it('stream-word-in 播完的词 key 进 settled', () => {
-    const state = createWordFadeState();
-    markSettledFromAnimationEnd(state, fadeEndEvent('wf-3'));
-    expect(state.settled.has('wf-3')).toBe(true);
-  });
-
-  it('其它动画名 / 非 stream-word 目标都不落袋', () => {
-    const state = createWordFadeState();
-    markSettledFromAnimationEnd(state, fadeEndEvent('wf-1', 'spinner-rotate'));
-    markSettledFromAnimationEnd(state, fadeEndEvent(undefined));
-    expect(state.settled.size).toBe(0);
+    expect(p.children[0]).toEqual(textNode(`${prefix} tail `));
+    expect(collectWords(tree2).map((w) => w.text)).toEqual(['next']);
   });
 });
 

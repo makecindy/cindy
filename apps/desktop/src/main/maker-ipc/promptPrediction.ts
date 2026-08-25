@@ -21,6 +21,8 @@ import {
   buildTitleTarget,
   generateTitleViaProviderResult,
 } from '../maker-host/title-one-shot.js';
+import { validateTitleOutput } from '../maker-host/title-output-validation.js';
+import { readAuxiliaryModelSelection } from '../utility-model/auxiliary-model-settings-store.js';
 import {
   connectedProvidersForAgent,
   nativeDefaultSourceId,
@@ -231,6 +233,121 @@ export async function generatePromptPrediction(
       beforeDispatchDrainUpdatedAt = undefined;
     }
   }
+  const auxiliarySelection = readAuxiliaryModelSelection('promptRecommendationModel');
+  if (auxiliarySelection) {
+    const selectionStillCurrent = (route: {
+      providerId: string;
+      agentKind: AgentKind;
+      model: string;
+    }): boolean => {
+      const current = readAuxiliaryModelSelection('promptRecommendationModel');
+      return Boolean(
+        current &&
+        current.pin === auxiliarySelection.pin &&
+        route.providerId === auxiliarySelection.providerId &&
+        route.agentKind === auxiliarySelection.agentKind &&
+        route.model === auxiliarySelection.model,
+      );
+    };
+    const beforeExplicitDispatch = async (route: {
+      providerId: string;
+      agentKind: AgentKind;
+      model: string;
+    }): Promise<boolean> => {
+      try {
+        if (!selectionStillCurrent(route)) return false;
+        const [row] = await getDbClient()
+          .drizzle.select({
+            agentKind: sessions.agentKind,
+            status: sessions.status,
+            source: sessions.source,
+            remoteHostId: sessions.remoteHostId,
+            providerId: sessions.providerId,
+            workingDir: sessions.workingDir,
+            updatedAt: sessions.updatedAt,
+            activeTurnStartedAt: sessions.activeTurnStartedAt,
+            lastTurnEndedAt: sessions.lastTurnEndedAt,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, params.sessionId))
+          .limit(1);
+        if (!row || row.status === 'deleted' || row.source === 'review' || row.remoteHostId) {
+          return false;
+        }
+        if (dbToMakerAgentKind(row.agentKind) !== params.agentKind) return false;
+        if (row.lastTurnEndedAt !== params.completionRevision) return false;
+        if (
+          row.activeTurnStartedAt != null &&
+          row.activeTurnStartedAt >= params.completionRevision
+        ) return false;
+        if (wasPromptPredictionSessionStopped(params.sessionId)) return false;
+        if (row.workingDir !== (params.workingDir ?? null)) return false;
+
+        const [finalRow] = await getDbClient()
+          .drizzle.select({
+            agentKind: sessions.agentKind,
+            status: sessions.status,
+            source: sessions.source,
+            remoteHostId: sessions.remoteHostId,
+            providerId: sessions.providerId,
+            workingDir: sessions.workingDir,
+            updatedAt: sessions.updatedAt,
+            activeTurnStartedAt: sessions.activeTurnStartedAt,
+            lastTurnEndedAt: sessions.lastTurnEndedAt,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, params.sessionId))
+          .limit(1);
+        if (
+          !finalRow ||
+          finalRow.status === 'deleted' ||
+          finalRow.source === 'review' ||
+          finalRow.remoteHostId
+        ) return false;
+        if (dbToMakerAgentKind(finalRow.agentKind) !== params.agentKind) return false;
+        if (finalRow.lastTurnEndedAt !== params.completionRevision) return false;
+        if (
+          finalRow.activeTurnStartedAt != null &&
+          finalRow.activeTurnStartedAt >= params.completionRevision
+        ) return false;
+        if (wasPromptPredictionSessionStopped(params.sessionId)) return false;
+        if (finalRow.providerId !== row.providerId) return false;
+        if (finalRow.workingDir !== (params.workingDir ?? null)) return false;
+        if (
+          beforeDispatchDrainUpdatedAt &&
+          finalRow.updatedAt !== beforeDispatchDrainUpdatedAt
+        ) return false;
+        return selectionStillCurrent(route);
+      } catch {
+        return false;
+      }
+    };
+
+    // Keep the provider/runtime graph off the ordinary automatic path. It is
+    // only needed when the user has selected an exact auxiliary route.
+    const { requestExplicitUtilityText } = await import(
+      '../utility-model/oneShotCandidates.js'
+    );
+    const explicit = await requestExplicitUtilityText(truncated, {
+      providerId: auxiliarySelection.providerId,
+      agentKind: auxiliarySelection.agentKind,
+      model: auxiliarySelection.model,
+      maxTokens: 96,
+      timeoutMs: 12_000,
+      // Recommendation outputs share a short token budget with provider-native
+      // thinking. Disable it so reasoning-first models still return body text.
+      disableReasoning: true,
+      systemPrompt,
+      responseInstructions:
+        'Output only the predicted next user message — no quotes, markdown, or commentary.',
+      beforeDispatch: beforeExplicitDispatch,
+    });
+    if (wasPromptPredictionSessionStopped(params.sessionId)) return null;
+    if (!explicit.ok) return null;
+    const normalized = validateTitleOutput(explicit.text, 512);
+    return normalized ? Array.from(normalized).slice(0, 140).join('') : null;
+  }
+
   const result = await generateTitleViaProviderResult(
     {
       sessionId: params.sessionId,
@@ -251,6 +368,7 @@ export async function generatePromptPrediction(
       //   - providerId: 会话 provider 被切换时中止,避免路由到过期 provider
       beforeDispatch: async ({ sessionId, agentKind, providerId: resolvedProviderId }) => {
         try {
+          if (readAuxiliaryModelSelection('promptRecommendationModel')) return false;
           // drainUpdatedAt 在 provider/凭证解析之前捕获，用于终末复核。
           // 若在 drain 之后、beforeDispatch 首次 DB 读之前用户发送了新消息，
           // row.updatedAt 和 finalRow.updatedAt 都会包含新值，仅做 row↔finalRow
@@ -346,7 +464,7 @@ export async function generatePromptPrediction(
           // 仅与 row.updatedAt（beforeDispatch 内首次 DB 读）比较无法检测到
           // drain 之后、首次 DB 读之前发来的新消息——此时两次读都返回同一新值。
           if (drainUpdatedAt && finalRow.updatedAt !== drainUpdatedAt) return false;
-          return true;
+          return readAuxiliaryModelSelection('promptRecommendationModel') === null;
         } catch {
           // 复查失败按 fail-closed 处理:宁可漏掉一次推荐,也不在归属不确定时外发付费调用。
           return false;

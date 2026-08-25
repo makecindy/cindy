@@ -459,7 +459,7 @@ describe('sendToSession ordering', () => {
   it('serializes SET_MODEL behind the send-time agent switch for the same session', () => {
     const setModelBlock = extractBetween(
       source,
-      'ipcMain.handle(\n    MAKER_INVOKE.SET_MODEL',
+      'const handleSetModel = async (',
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
     );
     const directSendSwitchBlock = extractBetween(
@@ -469,7 +469,7 @@ describe('sendToSession ordering', () => {
     );
 
     expect(setModelBlock).toContain(
-      'return withSendToSessionLock(sessionId, async () => {',
+      'return withSendToSessionLock(sessionId, applyLocked);',
     );
     expect(setModelBlock).toContain(
       'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
@@ -477,45 +477,65 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('return { deferred: false, superseded: true };');
     expectOrder(
       setModelBlock,
-      'return withSendToSessionLock(sessionId, async () => {',
+      'const applyLocked = async () => {',
       'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
     );
     expectOrder(
       setModelBlock,
       'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
-      'applySetModelThenCancelAgentSwitchIntent(',
+      'applyRuntimeSetModelChange({',
     );
     expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
     expect(setModelBlock).toContain('if (atomicSelection) {');
     expect(setModelBlock).toContain('effort: atomicSelection.effort as');
-    expect(setModelBlock).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
-    expect(setModelBlock).toContain('setSessionFastMode(sessionId, atomicSelection.fastMode);');
-    expect(setModelBlock).toContain('await sess.setEffort(');
-    expect(setModelBlock).toContain('await sess.setFastMode(atomicSelection.fastMode);');
-    expect(setModelBlock).toContain('if (isDeviceLinkInvoke() || atomicSelection) {');
+    expect(setModelBlock).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
+    expect(setModelBlock).toContain('setSessionFastMode(sessionId, selectionToCommit.fastMode);');
+    expect(setModelBlock).toContain('applyRuntimeSelectionAxesWithRecovery({');
+    expect(setModelBlock).toContain('restoreControlStores,');
+    expect(setModelBlock).toContain('withRehydrateCloseSuppressed(sessionId');
+    expect(setModelBlock).toMatch(
+      /internalOptions\.source === 'user'\s*&&\s*\(isDeviceLinkInvoke\(\) \|\| atomicSelection\)/,
+    );
     expect(setModelBlock).toContain('patch.effort = atomicSelection.effort;');
     expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
     expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
     expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
     expectOrder(
       setModelBlock,
-      'applySetModelThenCancelAgentSwitchIntent(',
-      'setSessionEffort(sessionId, atomicSelection.effort);',
+      'applyRuntimeSetModelChange({',
+      'const commitControlStores',
     );
     expectOrder(
       setModelBlock,
-      'effort: atomicSelection.effort as',
-      'setSessionEffort(sessionId, atomicSelection.effort);',
+      'applyRuntimeSelectionAxesWithRecovery({',
+      'await persistSessionFields',
     );
     expectOrder(
       setModelBlock,
-      'setSessionFastMode(sessionId, atomicSelection.fastMode);',
+      'setSessionFastMode(sessionId, selectionToCommit.fastMode);',
       'await persistSessionFields(sessionId, patch);',
     );
+    expect(setModelBlock.lastIndexOf('agentSwitchPending.clear(sessionId);')).toBeGreaterThan(
+      setModelBlock.indexOf('await persistSessionFields(sessionId, patch);'),
+    );
     expectOrder(
       setModelBlock,
-      'await persistSessionFields(sessionId, patch);',
-      'return response;',
+      'agentSwitchPending.clear(sessionId);',
+      '...response,',
+    );
+    expect(setModelBlock).toContain('pendingCredentialSwitchHolder?.clear(sessionId);');
+    expect(setModelBlock).toContain('restoreControlStores();');
+    expect(setModelBlock).toContain('previousRuntime.pendingCredentialSwitch');
+    expect(setModelBlock).toContain('withRehydrateCloseSuppressed(sessionId');
+    expect(setModelBlock).toContain('recordRecoveredSessionRuntimeMutation(sessionId');
+    expect(setModelBlock).toContain(
+      'sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)',
+    );
+    expect(setModelBlock).toContain('recovered runtime projection broadcast failed');
+    expectOrder(
+      setModelBlock,
+      'restoreControlStores();',
+      'throw persistenceError;',
     );
     expect(preloadSource).toContain('selection?: { effort: string; fastMode: boolean },');
     expectOrder(
@@ -537,7 +557,7 @@ describe('sendToSession ordering', () => {
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
     const setModelBlock = extractBetween(
       source,
-      'ipcMain.handle(\n    MAKER_INVOKE.SET_MODEL',
+      'const handleSetModel = async (',
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
     );
     expect(setModelBlock).toContain('normalizeDeviceLinkSetModelWireArgs(');

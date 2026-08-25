@@ -23,7 +23,12 @@ const source = readFileSync(sourcePath, 'utf8');
 const localePath = resolve(__dirname, '..', 'i18n', 'locales', 'zh-CN', 'common.json');
 const locale = JSON.parse(readFileSync(localePath, 'utf8')) as {
   sidebar: {
-    user: { settingsLink: string; canaryBadge: string; downloadMobile: string };
+    user: {
+      settingsLink: string;
+      settingsLinkBeta: string;
+      canaryBadge: string;
+      downloadMobile: string;
+    };
     mobileDownload: { title: string };
   };
 };
@@ -79,6 +84,17 @@ describe('UserInfoSection — version label', () => {
     expect(source).not.toContain('XD.Inc');
     expect(source).toContain('{appVersionLabel}');
     expect(source).toContain('title={appVersionLabelDetail}');
+  });
+
+  it('shows the Beta badge only after the persisted channel state has loaded', () => {
+    expect(source).toContain("import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';");
+    expect(source).toContain(
+      'const showBetaBadge = !betaChannelState.loading && betaChannelState.enableBeta;',
+    );
+    expect(source).toContain('data-testid="sidebar-beta-channel-badge"');
+    expect(source).toContain('bg-[var(--beta-channel-badge-bg)]');
+    expect(source).toContain('text-[var(--beta-channel-badge-fg)]');
+    expect(source).toContain("t('settings.betaChannel.badge')");
   });
 });
 
@@ -193,6 +209,16 @@ describe('UserInfoSection — inner main button no longer owns hover background'
     );
     expect(source).toContain('aria-label={settingsLinkLabel}');
     expect(locale.sidebar.user.settingsLink).toBe('设置，当前用户：{{name}}');
+  });
+
+  it('announces the enabled Beta channel from the expanded settings link', () => {
+    expect(source).toContain(
+      "? t('sidebar.user.settingsLinkBeta', { name: displayName })",
+    );
+    expect(source).toContain('aria-label={settingsLinkAriaLabel}');
+    expect(locale.sidebar.user.settingsLinkBeta).toBe(
+      '设置，当前用户：{{name}}，Beta 测试渠道已开启',
+    );
   });
 });
 

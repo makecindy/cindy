@@ -39,6 +39,7 @@
   },
   "betaChannel": {
     "title": "Beta channel",
+    "badge": "Beta",
     "description": "Join the beta channel to receive upcoming client updates early.",
     "restartHint": "The beta channel takes effect after restarting the app. Please restart to apply.",
     "ok": "Got it",

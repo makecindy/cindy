@@ -106,10 +106,17 @@ export function sessionNaturalPriorityRank(
   return naturalPriorityRankForId(session.id, ctx);
 }
 
+function viewedPriorityRank(natural: number, held: number | undefined): number {
+  // 当前轮已经运行时,释放上一轮 unread / waiting 的 hold。否则看的过程中跑完后,
+  // 旧 hold 会再次把任务抬回高档位,直到点击离开才突然重排。
+  if (natural === LIVE_TASK_PRIORITY.running) return natural;
+  return held === undefined ? natural : Math.min(natural, held);
+}
+
 export function sessionPriorityRank(session: Session, ctx: MainListPriorityContext): number {
   const natural = sessionNaturalPriorityRank(session, ctx);
   const held = ctx.heldPriorityRanks?.get(session.id);
-  return held === undefined ? natural : Math.min(natural, held);
+  return viewedPriorityRank(natural, held);
 }
 
 export interface ViewedPriorityHoldState {
@@ -141,10 +148,7 @@ export function advanceViewedPriorityHold(
   if (viewedSessionId) {
     const natural = naturalPriorityRankForId(viewedSessionId, ctx);
     const held = state.heldPriorityRanks.get(viewedSessionId);
-    state.heldPriorityRanks.set(
-      viewedSessionId,
-      held === undefined ? natural : Math.min(held, natural),
-    );
+    state.heldPriorityRanks.set(viewedSessionId, viewedPriorityRank(natural, held));
   }
   state.prevViewedId = viewedSessionId;
   return state;
@@ -164,7 +168,7 @@ export function holdViewedPriorityRank(
 ): void {
   const natural = naturalPriorityRankForId(sessionId, ctx);
   const held = state.heldPriorityRanks.get(sessionId);
-  state.heldPriorityRanks.set(sessionId, held === undefined ? natural : Math.min(held, natural));
+  state.heldPriorityRanks.set(sessionId, viewedPriorityRank(natural, held));
 }
 
 export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriorityContext): number {

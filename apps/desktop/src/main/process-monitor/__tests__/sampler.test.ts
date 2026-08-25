@@ -283,11 +283,14 @@ describe('createProcessMonitorSampler', () => {
     expect(entryByPid(sample, 100)?.kind).toBe('main');
     expect(log.warn).toHaveBeenCalledWith(
       'process monitor os scan failed',
-      expect.objectContaining({ error: 'ps blew up' }),
+      expect.objectContaining({
+        childProcessSource: 'process-monitor.os-process-scan',
+        error: 'ps blew up',
+      }),
     );
   });
 
-  it('Windows 预热首帧不等待 OS 扫描，完成后由下一 tick 补齐 agent', async () => {
+  it('Windows active sampling does not await OS scan before its first frame', async () => {
     let resolveScan!: (snapshot: OsProcessSnapshot) => void;
     const pendingScan = new Promise<OsProcessSnapshot>((resolve) => {
       resolveScan = resolve;

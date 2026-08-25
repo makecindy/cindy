@@ -23,11 +23,27 @@ export interface AutomationScheduleSessionInfo {
   unreadRunIds: string[];
   hasUnreadRun: boolean;
   /**
-   * unreadRunIds 里是否至少有一个非成功结局(`failed` / `aborted` / `interrupted`)
-   * 的 run —— 侧栏右侧状态指示器据此把 failed schedule 涂成红点(urgent),
-   * 而不是和成功完成一样涂绿。
+   * unreadRunIds 里未成功结局(`failed` / `interrupted`)的子集。
+   * `aborted` 生而已读,不算未读失败。
+   */
+  unreadFailedRunIds: string[];
+  /**
+   * 该 session 上最近一次未读失败/中断 run。会话内横幅只清这一条;
+   * 清整组仍走组菜单。
+   */
+  latestUnreadFailedRunId?: string;
+  /**
+   * 是否至少有一个未读失败 run —— 侧栏右侧据此涂红,而不是和成功完成一样涂绿。
    */
   hasUnreadFailedRun: boolean;
+}
+
+export function unreadSuccessScheduleRunIds(
+  info: Pick<AutomationScheduleSessionInfo, 'unreadRunIds' | 'unreadFailedRunIds'>,
+): string[] {
+  if (info.unreadFailedRunIds.length === 0) return info.unreadRunIds;
+  const failed = new Set(info.unreadFailedRunIds);
+  return info.unreadRunIds.filter((id) => !failed.has(id));
 }
 
 export interface AutomationSessionGroup {
@@ -58,7 +74,7 @@ export function getEntryActivityMs(entry: SidebarSessionEntry): number {
   return entry.group.sessions.reduce((max, s) => Math.max(max, sessionActivityMs(s)), 0);
 }
 
-export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete';
+export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete' | 'mark-read';
 
 interface ScopedAutomationGroupKey {
   key: string;

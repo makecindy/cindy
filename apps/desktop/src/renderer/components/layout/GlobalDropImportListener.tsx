@@ -12,7 +12,7 @@
  *     执行路由,但**不 stopPropagation**:事件继续传到内层,内层 handler 自查
  *     标记(lib/globalDropIntercept.ts)后清理自己的拖拽 UI 状态再 return,
  *     避免"悬停识别不到 → 内层遮罩已亮 → drop 被吞 → 计数不归零遮罩卡死"。
- *   - 路由:.cindy → inspect 验明正身 → 确认弹窗 → 装入 + 停靠,与设置页
+ *   - 路由:.cindy → inspect 验明正身 → 装入 + 停靠,与设置页
  *     「注入意识…」同一编排(renderer/cindy-brain/installFlow.ts);
  *     .cshare(含旧 .xdtshare)→ 经 main 的 classify-path 验明后打开会话导入向导。
  *
@@ -33,8 +33,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { confirmAndInstallGhost } from '@/cindy-brain/installFlow';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { installGhostFromFile } from '@/cindy-brain/installFlow';
 import {
   classifyGlobalDropPath,
   markGlobalDropIntercepted,
@@ -61,34 +60,30 @@ export function GlobalDropImportListener({
   const interceptRef = useRef(false);
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
-  // 装入 tab 型插件勾选「立即开启并打开面板」的兑现:面板收束后页签面板
+  // 装入 tab 型插件后直接打开面板:面板收束后页签面板
   // 只住在插件页,从任意视图导航过去并经 ?panel= 深链打开。
   const openPluginPanel = useCallback(
     (ghostId: string) => navigate(`/plugins?panel=${encodeURIComponent(ghostId)}`),
     [navigate],
   );
 
-  // 双击 .cindy / forge 转交的消费:挂载时取一次(冷启动双击 / 关窗期间转交的,
-  // main 已缓存)+ 订阅通知(已运行时双击 / forge 转交)。取到路径即走与按钮/拖入
-  // 完全相同的确认装入编排。
-  //
-  // 来源与路径**一起从 takePendingInstall 取**,不从通知 payload 拿:通知是易失的
-  // (没有窗口时直接丢),而 forge 转交在 macOS 关窗后仍可能发生,来源丢了就会把
-  // Agent 发起的装入显示成手动 —— 恰好是最危险的方向。理由全文见 main 侧
-  // openFileInstall.ts 的头注释。
+  // 双击 .cindy 的转交消费:挂载时取一次(冷启动双击,main 已缓存)+ 订阅
+  // 信号(已运行时双击)。取到路径即走与按钮/拖入完全相同的装入编排。
   useEffect(() => {
     const consumePending = async () => {
-      const { filePath, origin } = await window.electronAPI.ghosts.takePendingInstall();
+      const { filePath } = await window.electronAPI.ghosts.takePendingInstall();
       if (filePath) {
-        await confirmAndInstallGhost(filePath, { t, confirm, openPluginPanel }, origin);
+        await installGhostFromFile(filePath, {
+          t,
+          openPluginPanel,
+        });
       }
     };
     void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     return window.electronAPI.ghosts.onInstallRequested(() => {
       void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     });
-  }, [confirm, openPluginPanel, t]);
+  }, [openPluginPanel, t]);
 
   useEffect(() => {
     // 悬停识别:单文件且 MIME 命中才给遮罩。
@@ -147,9 +142,11 @@ export function GlobalDropImportListener({
       e.preventDefault();
       markGlobalDropIntercepted(e);
       if (kind === 'cindy') {
-        // 验明正身 → 确认弹窗 → 装入的编排在 installFlow(与设置页装入按钮同契约)。
-        // 拖入是用户亲手操作 → 手动来源(不传 origin),不加横幅、不加重。
-        void confirmAndInstallGhost(path, { t, confirm, openPluginPanel });
+        // 验明正身 → 装入的编排在 installFlow(与设置页装入按钮同契约)。
+        void installGhostFromFile(path, {
+          t,
+          openPluginPanel,
+        });
         return;
       }
       void window.electronAPI.localDb.sessionShare

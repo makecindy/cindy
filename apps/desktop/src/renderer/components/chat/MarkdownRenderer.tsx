@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type AnimationEvent as ReactAnimationEvent, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -36,10 +36,10 @@ import {
   commitWordFadeCandidate,
   createWordFadeCandidate,
   getOrCreateWordFadeState,
-  markSettledFromAnimationEnd,
   releaseWordFadeState,
   rehypeStreamWordFade,
 } from './rehypeStreamWordFade';
+import { StreamFadeSpan } from './StreamFadeSpan';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
@@ -1692,11 +1692,6 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     }
   }, [wordFadeState, wordFade]);
   const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
-  const handleWordFadeAnimationEnd = useMemo(() => {
-    if (!wordFadeState) return undefined;
-    return (event: ReactAnimationEvent<HTMLDivElement>) =>
-      markSettledFromAnimationEnd(wordFadeState, event.nativeEvent);
-  }, [wordFadeState]);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地
@@ -1723,6 +1718,15 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
+  const streamFadeComponents = useMemo<Components>(
+    () =>
+      wordFadeState
+        ? {
+            span: (props) => <StreamFadeSpan {...props} wordFadeState={wordFadeState} />,
+          }
+        : {},
+    [wordFadeState],
+  );
 
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
@@ -1731,6 +1735,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   const components = useMemo<Components>(
     () => ({
       ...baseComponents,
+      ...streamFadeComponents,
       // doc-mode anchor: emitSourceLines=true 时把 baseComponents 里的 block
       // renderer 整体替换成带 data-source-line 注入的版本。chat 调用方不传 prop
       // → 默认 false → 整段是 falsy 短路, components 对象与之前完全一致。
@@ -1885,11 +1890,12 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       currentSessionTitle,
       allowPrivilegedLinks,
       remoteMediaOrigin,
+      streamFadeComponents,
     ],
   );
 
   return (
-    <div className="msg-markdown select-text" onAnimationEnd={handleWordFadeAnimationEnd}>
+    <div className="msg-markdown select-text">
       <ReactMarkdown
         remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
         rehypePlugins={rehypePlugins}

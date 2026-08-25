@@ -63,6 +63,13 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
+type SessionRuntimeProjector = (session: Session) => Partial<Session>;
+let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
+
+export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
+  sessionRuntimeProjector = projector;
+}
+
 /**
  * SessionRow + 同 session 下 messages 总条数。IPC handler 必须通过 LEFT JOIN + GROUP BY
  * 或子查询同时带出 messageCount，再交给 `sessionToCamel`。
@@ -183,7 +190,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
   const legacyUsdProjection =
     row.totalCostUsd +
     (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
-  return {
+  const base: Session = {
     id: row.id,
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
@@ -227,6 +234,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     ),
     summary: row.summary ?? null,
   };
+  return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
 }
 
 export function messageToCamel(row: MessageRow): Message {

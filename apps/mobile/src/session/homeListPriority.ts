@@ -50,10 +50,17 @@ export function naturalPriorityRankForId(
   });
 }
 
+function viewedPriorityRank(natural: number, held: number | undefined): number {
+  // 当前轮已经运行时,释放上一轮 unread / waiting 的 hold。否则看的过程中跑完后,
+  // 旧 hold 会再次把任务抬回高档位,直到点击离开才突然重排。
+  if (natural === LIVE_TASK_PRIORITY.running) return natural;
+  return held === undefined ? natural : Math.min(natural, held);
+}
+
 export function sessionPriorityRank(sessionId: string, ctx: HomeListPriorityContext): number {
   const natural = naturalPriorityRankForId(sessionId, ctx);
   const held = ctx.heldPriorityRanks?.get(sessionId);
-  return held === undefined ? natural : Math.min(natural, held);
+  return viewedPriorityRank(natural, held);
 }
 
 /**
@@ -75,13 +82,26 @@ export function advanceViewedPriorityHold(
   if (viewedSessionId) {
     const natural = naturalPriorityRankForId(viewedSessionId, ctx);
     const held = state.heldPriorityRanks.get(viewedSessionId);
-    state.heldPriorityRanks.set(
-      viewedSessionId,
-      held === undefined ? natural : Math.min(held, natural),
-    );
+    state.heldPriorityRanks.set(viewedSessionId, viewedPriorityRank(natural, held));
   }
   state.prevViewedId = viewedSessionId;
   return state;
+}
+
+/**
+ * 详情页打开期间首页仍会收到任务状态更新。自然档变化时推进当前查看 hold,
+ * 返回值只表示档位是否真的变化,供首页决定是否重算排序。
+ */
+export function advanceCurrentViewedPriorityHold(
+  state: ViewedPriorityHoldState,
+  ctx: Pick<HomeListPriorityContext, 'runningSessionIds' | 'unreadSessionIds' | 'waitingSessionIds'>,
+  nowMs: number,
+): boolean {
+  const viewedSessionId = state.prevViewedId;
+  if (!viewedSessionId) return false;
+  const previousRank = state.heldPriorityRanks.get(viewedSessionId);
+  advanceViewedPriorityHold(state, viewedSessionId, ctx, nowMs);
+  return state.heldPriorityRanks.get(viewedSessionId) !== previousRank;
 }
 
 /**
@@ -95,7 +115,7 @@ export function holdViewedPriorityRank(
 ): void {
   const natural = naturalPriorityRankForId(sessionId, ctx);
   const held = state.heldPriorityRanks.get(sessionId);
-  state.heldPriorityRanks.set(sessionId, held === undefined ? natural : Math.min(held, natural));
+  state.heldPriorityRanks.set(sessionId, viewedPriorityRank(natural, held));
 }
 
 export function sessionPriorityRecencyMs(
@@ -124,9 +144,9 @@ export function collectHomePriorityContext(
   for (const item of items) {
     // 各信号独立收集,不从互斥的 resolveMobileSessionRightStatus 反推:定时任务同时
     // 「完成未读」又「下一轮运行中」时,右侧展示状态会先返回 running 把 unread 吞掉,导致
-    // 排序落到 running 档而非「完成未读 > 运行中」。这里对齐桌面(attentionSessionIds /
-    // runningSessionIds 各自独立集合),让同一会话可同时进 unread 与 running,由
-    // liveTaskPriorityRank 的尺子(waiting > unread > running)裁决档位。
+    // 排序丢失上一轮完成未读。这里对齐桌面(attentionSessionIds / runningSessionIds
+    // 各自独立集合),让同一会话可同时进 unread 与 running,由共享尺子裁决:
+    // 当前轮 running 压过旧 done 未读,但纯完成未读仍排在纯 running 前面。
     const liveAttention = item.liveActivity?.attention === true;
     const livePhase = item.liveActivity?.phase;
     const isError = liveAttention && livePhase === 'error';

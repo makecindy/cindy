@@ -474,6 +474,12 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | `--file-badge-pdf/-doc/-sheet/-slide/-code` + `--file-badge-fg`                                                                                               | `#B23A26` / `#2C5CA8` / `#2E7D4F` / `#A25A12` / `#5B49A8`, fg `#FFFFFF` | same                                                                  | File-type badges on the self-drawn attachment icon (2026-07-27). Bound to _what the file is_, not to the theme, so both modes share one value. Each accent is picked for ≥4.5:1 against `--file-badge-fg` (5.96 / 6.56 / 5.05 / 5.24 / 7.09) — the badge label renders at 10px (Micro Label floor, §3), so AA small-text applies. `--file-badge-fg` is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. |
 | `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon` | `#2563EB` / `#7C3AED` / `#DB2777` / `#0891B2` / `#D97706` / `#059669`   | `#60A5FA` / `#A78BFA` / `#F472B6` / `#22D3EE` / `#F59E0B` / `#34D399` | Resource Usage 14px process-category glyphs only (2026-08-06). Category cue, not status; all surrounding UI stays neutral. Protected from automatic external-theme import so category identity does not drift.                                                                                                                                                                                                                                   |
 
+`--beta-channel-badge-bg/-fg` (mobile `betaChannelBadgeBackground/Foreground`) are the
+cross-theme fixed pair `#DF0C27` / `#FFFFFF`. They are limited to the enabled Beta-channel
+badge beside the installed app version (desktop sidebar + mobile Settings), explicitly requested
+2026-08-25. This is a persistent channel-state cue, not an error or CTA; white text contrast is
+4.98:1.
+
 Never freestyle these semantic colors as hardcoded hex — always go through the corresponding token.
 
 ### Built-in Themes
@@ -1142,7 +1148,7 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 ### 15.10 Red-System Boundary & Neutral CTAs — current state(E1D 红色边界)
 
 - Ordinary primary actions never use brand red — they are neutral-inverse. **Neutral button four states**: light bg `#3C3F43` / text `#FCFCFC`, hover `#2E3237`, pressed `#25282C`; dark bg `#EEEEEE` / text `#151515` (2026-08: inverse dark text shifted with the darker ramp, was `#252222`), hover `#E2E2E2`, pressed `#D4D4D4` (WCAG 10.32/15.74:1).
-- Red is confined to semantic exceptions: `destructive`/delete, `error-*`, warning, diff red, status dots — plus the login brand accent via `--login-brand-accent` (§16). The older `brand-login-*` tokens were retired with the wave4 white-canvas login and survive only as whitelist strings in `cindyDecisionData.ts` (harmless — the whitelist permits, it does not require).
+- Red is confined to semantic exceptions: `destructive`/delete, `error-*`, warning, diff red, status dots, and the explicit Beta-channel state badge (`--beta-channel-badge-bg/-fg`, user decision 2026-08-25) — plus the login brand accent via `--login-brand-accent` (§16). The older `brand-login-*` tokens were retired with the wave4 white-canvas login and survive only as whitelist strings in `cindyDecisionData.ts` (harmless — the whitelist permits, it does not require).
 - **send-btn family**: `send-btn-bg/-icon/-hover-bg/-pressed-bg/-disabled-bg/-disabled-icon` — CINDY overrides the whole family to the neutral four states + disabled grays (light `#444242`/`#585555` unchanged; dark shifted 2026-08 to `#323232`/`#464646`); defaults keep `--accent-cta-bg` with the opacity-85 hover. Whole family sits in `cindyDecisionData` REQUIRED_IDS + CINDY_EXPECTED, guarded by assertion ③.
 - **Sidebar color hierarchy** (same set for light/dark):
   - Body (session titles) = `text-foreground` (= `text-primary`: light `#3C3F43` / dark `#D4D4D4`).
@@ -1274,7 +1280,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 登录页是**黑白反色**体系（亮色 = 白底墨字 / 深色 = 深底米字），与编辑器主界面解耦，亮 / 深两模式镜像同构：
 
 - **面板 / 控件走墨黑–米白反色，深色镜像反相**：亮色白面板 `#FBFBFB` + 米白控件 `#EEEEEE` + 墨黑主按钮 `#2A2828`；深色反相为深面板 `#312F2F` + 深控件 `#2C2A2A` + 白主按钮 `#EEEEEE`。**两模式的面板 / 控件底色与文字都不出现纯黑 `#000` 或纯白 `#fff`**（`figma-component-spec §1.1`）；细描边例外——暗色主按钮 / 圆钮的 `#FFFFFF` 白边为 figma `white_button` 实测值，不受此限。
-- **品牌红 `#DF0C27` 只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#EDEDED` / 深 `#1F1F1E`），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
+- **品牌红 `#DF0C27` 在登录画布内只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；画布外仅有 §15.10 登记的 Beta 渠道状态徽标例外。**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#EDEDED` / 深 `#1F1F1E`），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
 - **`--login-*` 调色板双态目标值** —— token 已注册于 `apps/desktop/src/renderer/themes/colors.ts`（dark 槽位当前为 light 占位值）。下表为深色实现的目标规格，经 Figma 组件库 Dark symbol 逐个核验；实现 PR 须将 dark 槽位更新为本表 dark 列的值：
 
 | token                                                            | light                   | dark                     | 核验源                                                                                                                                                              |
