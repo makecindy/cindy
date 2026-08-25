@@ -234,6 +234,21 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     );
   });
 
+  it('refreshes the local restore snapshot only while the editor still owns the source draft', () => {
+    const refreshBlock = extractBetween(
+      chatInputSource,
+      'const sendSnapshot = captureComposerSendSnapshot(',
+      'let recentUsageMarked = false;',
+    );
+
+    expect(refreshBlock).toContain('!optimisticallyClearRemoteComposer');
+    expect(refreshBlock).toContain('editorOwnsSourceDraft({');
+    expect(refreshBlock).toContain('documentBeforeOptimisticClear = editor.getJSON();');
+    expect(refreshBlock.indexOf('editorOwnsSourceDraft({')).toBeLessThan(
+      refreshBlock.indexOf('documentBeforeOptimisticClear = editor.getJSON();'),
+    );
+  });
+
   it('optimistically clears device-link composer state before awaiting send and restores without dropping newer input', () => {
     const transitionBegin = chatInputSource.indexOf(
       'makerChatStore.beginRemoteOptimisticComposerTransition(',

@@ -5172,10 +5172,20 @@ export function ChatInput({
           latestAttachmentsRef.current,
           browserCommentsRef.current,
         );
-        if (!optimisticallyClearRemoteComposer) {
+        if (
+          !optimisticallyClearRemoteComposer &&
+          editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          })
+        ) {
           // Local/SSH hydrate mentions on the live editor first. Refresh the
           // restore snapshot to that post-hydration document so a rejected
-          // send puts back exactly what enqueue would have taken.
+          // send puts back exactly what enqueue would have taken. After a
+          // session switch the reused editor already holds the next task;
+          // keep the click-time / frozen source extras so failure restore
+          // cannot write the target draft into the source slot.
           documentBeforeOptimisticClear = editor.getJSON();
           attachmentsBeforeOptimisticClear = [...latestAttachmentsRef.current];
           commentsBeforeOptimisticClear = [...browserCommentsRef.current];
