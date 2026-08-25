@@ -73,7 +73,7 @@ export {
 } from './shared/stream-interrupt-error.js';
 // 同上理由(同 bundle 直接复用,不造第三份):desktop 的中断自愈判据要认「网络到不了
 // 上游」这一类 —— 那类同样是"连不上"而不是"请求有问题",续跑一次就能过去。
-export { isNetworkishErrorMessage } from './shared/network-error.js';
+export { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from './shared/network-error.js';
 export {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,

@@ -43,7 +43,7 @@ import {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
 } from '../shared/stream-interrupt-error.js';
-import { isNetworkishErrorMessage } from '../shared/network-error.js';
+import { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from '../shared/network-error.js';
 import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import {
@@ -80,7 +80,7 @@ interface PiPendingAssistantError {
   sdkError: string;
   errorStatus?: 401 | 429 | 529;
   usageLimit?: true;
-  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON;
+  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON;
 }
 
 interface PiThinkingBlock {
@@ -467,7 +467,9 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
       ? { reason: CONTEXT_OVERFLOW_REASON }
       : isStreamInterruptedErrorMessage(redactedError)
         ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
-        : {}),
+        : isNetworkishErrorMessage(redactedError)
+          ? { reason: PI_GATEWAY_DROP_REASON }
+          : {}),
   };
 }
 

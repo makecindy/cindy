@@ -558,6 +558,7 @@ describe('pi translator', () => {
         data: expect.objectContaining({
           message: rawError,
           isTerminal: true,
+          reason: 'pi-gateway-drop',
         }),
       }),
     ]);
@@ -631,6 +632,34 @@ describe('pi translator', () => {
     );
 
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+  });
+
+  it('hands exhausted network retries back to the user instead of host auto-resume', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_end',
+        success: false,
+        finalError: 'The operation timed out.',
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const terminalErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        (event.data as { isTerminal?: boolean }).isTerminal === true,
+    );
+    expect(terminalErrors).toHaveLength(1);
+    expect(terminalErrors[0]?.data).toMatchObject({
+      message: 'The operation timed out.',
+      reason: 'pi-gateway-drop',
+    });
   });
 
   it('does not duplicate a terminal error after Pi auto-retry is exhausted', () => {
