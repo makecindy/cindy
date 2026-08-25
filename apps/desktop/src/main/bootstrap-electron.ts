@@ -7156,17 +7156,42 @@ const registerIpcHandlers = () => {
       if (!canClear()) throw new Error('fixed directory owner changed before cleanup');
       await fs.promises.rm(rootDir, { recursive: true, force: true });
     };
-    const withActiveChatAttachmentRoot = <T>(
-      action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
-    ): Promise<T> => {
+    const confirmFixedDirectoryClear = async (
+      event: Electron.IpcMainInvokeEvent,
+      labels: { title: string; message: string; confirmButton: string },
+    ): Promise<boolean> => {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!ownerWindow || ownerWindow.isDestroyed()) {
+        throw new Error('fixed directory cleanup requires a live owner window');
+      }
+      const result = await dialog.showMessageBox(ownerWindow, {
+        type: 'warning',
+        title: labels.title,
+        message: labels.message,
+        buttons: [labels.confirmButton, t('settings.about.storage.cancelButton')],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      return result.response === 0 && !ownerWindow.isDestroyed() && !event.sender.isDestroyed();
+    };
+    const captureActiveChatAttachmentRoot = () => {
       const ownerScopeKey = activeOwnerScopeKey();
       const ownerId = getActiveAppSession().dataOwnerId;
       if (!ownerId || isAppSessionBoundaryPending()) {
         throw new Error('chat attachment directory requires a stable data owner');
       }
-      const isCurrentOwner = () =>
-        activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
-      return action(getChatAttachmentOwnerCacheRoot(ownerId), isCurrentOwner);
+      return {
+        rootDir: getChatAttachmentOwnerCacheRoot(ownerId),
+        isCurrentOwner: () =>
+          activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending(),
+      };
+    };
+    const withActiveChatAttachmentRoot = <T>(
+      action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
+    ): Promise<T> => {
+      const { rootDir, isCurrentOwner } = captureActiveChatAttachmentRoot();
+      return action(rootDir, isCurrentOwner);
     };
 
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
@@ -7212,17 +7237,35 @@ const registerIpcHandlers = () => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openLegacyImagesDir();
     });
-    ipcMain.handle('cindy-media:legacy-images-clear', (event) => {
+    ipcMain.handle('cindy-media:legacy-images-clear', async (event) => {
       assertTrustedAppRendererEvent(event);
-      return storageHandlers.clearLegacyImagesDir();
+      const confirmed = await confirmFixedDirectoryClear(event, {
+        title: t('settings.about.storage.legacyImagesClearConfirmTitle'),
+        message: t('settings.about.storage.legacyImagesClearConfirmDescription'),
+        confirmButton: t('settings.about.storage.legacyImagesClearConfirmButton'),
+      });
+      if (!confirmed) return { cleared: false };
+      await storageHandlers.clearLegacyImagesDir();
+      return { cleared: true };
     });
     ipcMain.handle('cindy-media:chat-attachments-open-dir', (event) => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openChatAttachmentsDir();
     });
-    ipcMain.handle('cindy-media:chat-attachments-clear', (event) => {
+    ipcMain.handle('cindy-media:chat-attachments-clear', async (event) => {
       assertTrustedAppRendererEvent(event);
-      return storageHandlers.clearChatAttachmentsDir();
+      const ownerScope = captureActiveChatAttachmentRoot();
+      const confirmed = await confirmFixedDirectoryClear(event, {
+        title: t('settings.about.storage.chatAttachmentsClearConfirmTitle'),
+        message: t('settings.about.storage.chatAttachmentsClearConfirmDescription'),
+        confirmButton: t('settings.about.storage.chatAttachmentsClearConfirmButton'),
+      });
+      if (!confirmed) return { cleared: false };
+      if (!ownerScope.isCurrentOwner()) {
+        throw new Error('chat attachment directory owner changed before cleanup');
+      }
+      await storageHandlers.clearChatAttachmentsDir();
+      return { cleared: true };
     });
   }
 

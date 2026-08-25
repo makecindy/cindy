@@ -45,6 +45,7 @@ describe('buildRewindDraftAttachments', () => {
       ext: '.txt',
       category: 'text',
       mimeType: 'text/plain',
+      cachePathShared: true,
     });
     expect(attachments[2]).toMatchObject({
       name: 'spec.pdf',
@@ -52,6 +53,7 @@ describe('buildRewindDraftAttachments', () => {
       ext: '.pdf',
       category: 'pdf',
       mimeType: 'application/pdf',
+      cachePathShared: true,
     });
   });
 

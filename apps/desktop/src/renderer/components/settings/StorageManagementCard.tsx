@@ -23,7 +23,6 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { getAllDraftAttachmentUrls } from '@/lib/composerDraftStore';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 
 type StatsResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.stats>>;
 type ScanResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.scan>>;
@@ -37,7 +36,6 @@ type CleanPhase =
 
 export function StorageManagementCard() {
   const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [phase, setPhase] = useState<CleanPhase>({ kind: 'idle' });
   const [reconcile, setReconcile] = useState<ReconcileResult | null>(null);
@@ -72,14 +70,8 @@ export function StorageManagementCard() {
     if (directoryCleanupBusyRef.current) return;
     directoryCleanupBusyRef.current = true;
     try {
-      const accepted = await confirm({
-        title: t('settings.about.storage.legacyImagesClearConfirmTitle'),
-        description: t('settings.about.storage.legacyImagesClearConfirmDescription'),
-        confirmText: t('settings.about.storage.legacyImagesClearConfirmButton'),
-        confirmVariant: 'destructive',
-      });
-      if (!accepted) return;
-      await window.electronAPI.cindyMediaStorage.clearLegacyImagesDir();
+      const result = await window.electronAPI.cindyMediaStorage.clearLegacyImagesDir();
+      if (!result.cleared) return;
       toast.success(t('settings.about.storage.legacyImagesCleared'));
     } catch {
       toast.error(t('settings.about.storage.legacyImagesClearFailed'));
@@ -103,14 +95,8 @@ export function StorageManagementCard() {
     if (directoryCleanupBusyRef.current) return;
     directoryCleanupBusyRef.current = true;
     try {
-      const accepted = await confirm({
-        title: t('settings.about.storage.chatAttachmentsClearConfirmTitle'),
-        description: t('settings.about.storage.chatAttachmentsClearConfirmDescription'),
-        confirmText: t('settings.about.storage.chatAttachmentsClearConfirmButton'),
-        confirmVariant: 'destructive',
-      });
-      if (!accepted) return;
-      await window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir();
+      const result = await window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir();
+      if (!result.cleared) return;
       toast.success(t('settings.about.storage.chatAttachmentsCleared'));
     } catch {
       toast.error(t('settings.about.storage.chatAttachmentsClearFailed'));

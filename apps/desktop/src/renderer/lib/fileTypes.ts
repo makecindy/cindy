@@ -114,6 +114,11 @@ export interface AttachedFile {
    */
   cacheUrlShared?: boolean;
   /**
+   * path 指向历史消息仍在引用的共享文件。丢弃当前草稿时不回收该路径;
+   * 用户主动清理整个附件缓存目录时不受此标记影响。
+   */
+  cachePathShared?: boolean;
+  /**
    * @deprecated image-local-cache removed blob-URL thumbnails. Setting this
    * is now a compile error so any leftover code path surfaces immediately.
    */

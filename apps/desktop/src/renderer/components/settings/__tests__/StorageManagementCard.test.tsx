@@ -3,8 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { confirm, toast } = vi.hoisted(() => ({
-  confirm: vi.fn(async () => true),
+const { toast } = vi.hoisted(() => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
@@ -18,9 +17,6 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/lib/toast', () => ({ toast }));
 vi.mock('@/lib/composerDraftStore', () => ({ getAllDraftAttachmentUrls: () => [] }));
-vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm }),
-}));
 
 import { StorageManagementCard } from '../StorageManagementCard';
 
@@ -28,9 +24,9 @@ function storageApi() {
   return {
     reportDraftUrls: vi.fn(),
     openLegacyImagesDir: vi.fn(async () => ({ opened: true })),
-    clearLegacyImagesDir: vi.fn(async () => undefined),
+    clearLegacyImagesDir: vi.fn(async () => ({ cleared: true })),
     openChatAttachmentsDir: vi.fn(async () => ({ opened: true })),
-    clearChatAttachmentsDir: vi.fn(async () => undefined),
+    clearChatAttachmentsDir: vi.fn(async () => ({ cleared: true })),
     stats: vi.fn(async () => ({
       success: true,
       blobs: { totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 },
@@ -44,8 +40,6 @@ function storageApi() {
 }
 
 beforeEach(() => {
-  confirm.mockReset();
-  confirm.mockResolvedValue(true);
   toast.success.mockReset();
   toast.error.mockReset();
   toast.info.mockReset();
@@ -121,7 +115,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
   });
 
-  it('clears the image cache only after destructive confirmation', async () => {
+  it('requests image cache cleanup through the privileged API', async () => {
     render(<StorageManagementCard />);
 
     fireEvent.click(
@@ -129,27 +123,25 @@ describe('StorageManagementCard fixed cache directories', () => {
     );
 
     await waitFor(() => {
-      expect(confirm).toHaveBeenCalledWith({
-        title: 'settings.about.storage.legacyImagesClearConfirmTitle',
-        description: 'settings.about.storage.legacyImagesClearConfirmDescription',
-        confirmText: 'settings.about.storage.legacyImagesClearConfirmButton',
-        confirmVariant: 'destructive',
-      });
       expect(window.electronAPI.cindyMediaStorage.clearLegacyImagesDir).toHaveBeenCalledWith();
       expect(toast.success).toHaveBeenCalledWith('settings.about.storage.legacyImagesCleared');
     });
   });
 
-  it('does not clear the chat attachment cache when confirmation is cancelled', async () => {
-    confirm.mockResolvedValue(false);
+  it('does not report success when native confirmation is cancelled', async () => {
+    vi.mocked(window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir).mockResolvedValue({
+      cleared: false,
+    });
     render(<StorageManagementCard />);
 
     fireEvent.click(
       screen.getByRole('button', { name: 'settings.about.storage.chatAttachmentsClearButton' }),
     );
 
-    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
-    expect(window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir).toHaveBeenCalledWith();
+    });
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('clears the chat attachment cache without passing a path', async () => {

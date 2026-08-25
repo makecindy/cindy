@@ -51,6 +51,34 @@ describe('fixed cache directory settings', () => {
     }
   });
 
+  it('confirms fixed directory deletion in Main with cancel as the safe default', () => {
+    const bootstrap = fs.readFileSync(
+      new URL('../bootstrap-electron.ts', import.meta.url),
+      'utf8',
+    );
+    const confirmBlock = bootstrap.slice(
+      bootstrap.indexOf('const confirmFixedDirectoryClear'),
+      bootstrap.indexOf('const captureActiveChatAttachmentRoot'),
+    );
+
+    expect(confirmBlock).toContain('BrowserWindow.fromWebContents(event.sender)');
+    expect(confirmBlock).toContain('dialog.showMessageBox(ownerWindow');
+    expect(confirmBlock).toContain("t('settings.about.storage.cancelButton')");
+    expect(confirmBlock).toContain('defaultId: 1');
+    expect(confirmBlock).toContain('cancelId: 1');
+    expect(confirmBlock).toContain('noLink: true');
+
+    for (const channel of [
+      'cindy-media:legacy-images-clear',
+      'cindy-media:chat-attachments-clear',
+    ]) {
+      const start = bootstrap.indexOf(`ipcMain.handle('${channel}'`);
+      expect(bootstrap.slice(start, start + 900), channel).toContain(
+        'confirmFixedDirectoryClear(event',
+      );
+    }
+  });
+
   it('opens and clears only the active owner chat attachment directory', () => {
     const bootstrap = fs.readFileSync(
       new URL('../bootstrap-electron.ts', import.meta.url),
