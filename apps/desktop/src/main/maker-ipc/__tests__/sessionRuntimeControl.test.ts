@@ -455,6 +455,9 @@ describe('session runtime fallback selection', () => {
     const model = provider('xd', [
       { id: 'gpt-main', efforts: ['medium'], fast: false },
     ]).models.codex![0]!;
+    const fixedEffortModel = provider('xd', [
+      { id: 'gpt-fixed', efforts: [], fast: false },
+    ]).models.codex![0]!;
     expect(
       resolveSessionRuntimeAxes({
         model,
@@ -473,6 +476,15 @@ describe('session runtime fallback selection', () => {
         fastExplicit: false,
       }),
     ).toEqual({ ok: true, effort: 'medium', fastMode: false });
+    expect(
+      resolveSessionRuntimeAxes({
+        model: fixedEffortModel,
+        effort: 'low',
+        fastMode: false,
+        effortExplicit: true,
+        fastExplicit: false,
+      }),
+    ).toEqual({ ok: true, effort: null, fastMode: false });
   });
 
   it('prefers the same model on another connected source', () => {

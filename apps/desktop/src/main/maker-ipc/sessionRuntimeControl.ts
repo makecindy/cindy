@@ -330,6 +330,7 @@ export function resolveSessionRuntimeAxes(params: {
   if (
     params.effortExplicit &&
     params.effort !== null &&
+    params.model.efforts.length > 0 &&
     !params.model.efforts.includes(params.effort)
   ) {
     return { ok: false, reason: 'effort-unavailable' };
