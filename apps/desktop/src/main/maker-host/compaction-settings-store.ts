@@ -21,6 +21,7 @@ import {
   type OverrideSettingsState,
 } from './override-settings-file.js';
 import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
 const log = desktopMakerLogger.child('compaction-settings-store');
 
@@ -104,11 +105,35 @@ function piMigrationMarkerPath(rootPath?: string): string {
   return path.join(rootPath ?? ownerScopedUserDataPath(), 'pi-compaction-migrated.json');
 }
 
+function writeJsonAtomic(filePath: string, value: unknown): void {
+  atomicWriteFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function isReadableJsonObject(filePath: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+  } catch {
+    return false;
+  }
+}
+
+function readMigratedPiPct(piPath: string): number | null {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(piPath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const pct = (parsed as { piAutoCompactPct?: unknown }).piAutoCompactPct;
+    if (typeof pct !== 'number' || !Number.isFinite(pct)) return null;
+    return clampPct(pct);
+  } catch {
+    return null;
+  }
+}
+
 function markPiMigrationDone(ownerRoot: string | null): void {
   const marker = piMigrationMarkerPath(ownerRoot ?? undefined);
-  if (fs.existsSync(marker)) return;
-  fs.mkdirSync(path.dirname(marker), { recursive: true });
-  fs.writeFileSync(marker, `${JSON.stringify({ version: 1 })}\n`);
+  if (isReadableJsonObject(marker)) return;
+  writeJsonAtomic(marker, { version: 1 });
 }
 
 function normalizePi(raw: unknown): PiCompactionSettings {
@@ -123,16 +148,23 @@ const piStores = new Map<string, ReturnType<typeof createOverrideSettingsFile<Pi
 
 function migratePiFromLegacyIfNeeded(ownerRoot: string | null): void {
   const marker = piMigrationMarkerPath(ownerRoot ?? undefined);
-  if (fs.existsSync(marker)) return;
+  if (isReadableJsonObject(marker)) return;
   const piPath = piSettingsFilePath(ownerRoot ?? undefined);
-  if (!fs.existsSync(piPath)) {
-    const claude = currentStore().readState();
-    if (claude.isCustomized) {
-      const pct = clampPct(claude.value.claudeCodeAutoCompactPct);
-      fs.mkdirSync(path.dirname(piPath), { recursive: true });
-      fs.writeFileSync(piPath, `${JSON.stringify({ piAutoCompactPct: pct }, null, 2)}\n`);
-      log.info('pi compaction migrated from customized claude setting', { pct });
+  if (readMigratedPiPct(piPath) !== null) {
+    markPiMigrationDone(ownerRoot);
+    return;
+  }
+  const claude = currentStore().readState();
+  if (claude.isCustomized) {
+    const pct = clampPct(claude.value.claudeCodeAutoCompactPct);
+    writeJsonAtomic(piPath, { piAutoCompactPct: pct });
+    if (readMigratedPiPct(piPath) === null) {
+      log.warn('pi compaction migration wrote an unreadable override; will retry next start', {
+        pct,
+      });
+      return;
     }
+    log.info('pi compaction migrated from customized claude setting', { pct });
   }
   markPiMigrationDone(ownerRoot);
 }

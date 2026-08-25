@@ -83,6 +83,18 @@ describe('compaction settings store', () => {
     expect(readPiCompactionState().isCustomized).toBe(true);
   });
 
+  it('repairs a truncated Pi override from the customized Claude threshold before marking migration done', () => {
+    writeCompactionPct(80);
+    fs.writeFileSync(path.join(tempRoot, 'pi-compaction-settings.json'), '{ "piAutoCompactPct": 8');
+    __testing.resetStores();
+    expect(readPiCompactionPct()).toBe(80);
+    expect(readPiCompactionState().isCustomized).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(tempRoot, 'pi-compaction-settings.json'), 'utf8'))).toEqual({
+      piAutoCompactPct: 80,
+    });
+    expect(fs.existsSync(path.join(tempRoot, 'pi-compaction-migrated.json'))).toBe(true);
+  });
+
   it('does not remigrate Pi after the user restores the Pi default', () => {
     writeCompactionPct(80);
     __testing.resetStores();
