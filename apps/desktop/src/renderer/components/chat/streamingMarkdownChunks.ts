@@ -8,7 +8,7 @@ function isTopLevelContinuation(line: string): boolean {
   return (
     /^[\t ]/.test(line) ||
     /^[-+*][\t ]+/.test(line) ||
-    /^\d+\.[\t ]+/.test(line) ||
+    /^\d{1,9}[.)][\t ]+/.test(line) ||
     line.startsWith('>')
   );
 }
@@ -39,7 +39,7 @@ function isDirectiveClose(trimmedLine: string): boolean {
 function hasGlobalMarkdownDefinitions(markdown: string): boolean {
   // 引用式链接定义会反向影响前面的 block；一旦出现就保留整篇解析，避免稳定前缀
   // 被拆开后失去定义上下文。围栏里的误命中只会少做一次优化，不影响正确性。
-  return /^ {0,3}\[[^\]\r\n]+\]:/m.test(markdown);
+  return /^ {0,3}\[(?:\\[^\r\n]|[^\]\\\r\n])+\]:/m.test(markdown);
 }
 
 function hasMultipleHeadings(markdown: string): boolean {

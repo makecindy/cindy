@@ -469,12 +469,10 @@ describe('globals.css 的 stream-word 动画本体', () => {
   it('引用 --motion-fast token + both 填充(delay 未到时保持透明)', () => {
     const rule = /\.stream-word\s*\{[\s\S]*?\}/.exec(css)?.[0] ?? '';
     expect(rule).toContain('var(--motion-fast)');
-    expect(rule).toContain('var(--motion-ease-stream-word)');
+    expect(rule).toContain('var(--motion-ease-out)');
     expect(rule).toContain('var(--wf-delay');
     expect(rule).toContain('both');
-    expect(css).toContain(
-      '--motion-ease-stream-word: cubic-bezier(0.37, 0.55, 0.86, 0.88)',
-    );
+    expect(css).not.toContain('--motion-ease-stream-word');
   });
 
   it('关键帧只动 opacity(compositor-only,一次性非 infinite)', () => {
@@ -488,7 +486,7 @@ describe('globals.css 的 stream-word 动画本体', () => {
     const rule = /\[data-stream-marker\]::marker\s*\{[\s\S]*?\}/.exec(css)?.[0] ?? '';
     expect(rule).toContain('stream-marker-in');
     expect(rule).toContain('var(--motion-fast)');
-    expect(rule).toContain('var(--motion-ease-stream-word)');
+    expect(rule).toContain('var(--motion-ease-out)');
     expect(rule).toContain('var(--wf-delay');
     expect(rule).toContain('both');
     // ::marker 只支持 color/font 系属性,关键帧必须动 color 而不是 opacity。

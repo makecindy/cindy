@@ -72,10 +72,20 @@ describe('splitStreamingMarkdownChunks', () => {
     ]);
   });
 
+  it('括号式有序列表续项保持在同一分片', () => {
+    const markdown = 'before\n\n1) one\n\n2) two\n\nafter';
+
+    expect(splitStreamingMarkdownChunks(markdown)).toEqual([
+      { start: 0, content: 'before\n\n1) one\n\n2) two\n\n' },
+      { start: 24, content: 'after' },
+    ]);
+  });
+
   it('单行或多行引用式链接定义出现时保留整篇上下文', () => {
     for (const markdown of [
       'See [guide].\n\nMore text.\n\n[guide]: https://example.com',
       'See [guide].\n\nMore text.\n\n[guide]:\n  https://example.com',
+      'See [foo\\]bar].\n\nMore text.\n\n[foo\\]bar]: https://example.com',
     ]) {
       expect(splitStreamingMarkdownChunks(markdown)).toEqual([
         { start: 0, content: markdown },

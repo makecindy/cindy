@@ -60,7 +60,7 @@
 
     /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
        引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档交互时长 +
-       spinner 语义循环例外、侧栏标题阅读例外 + 4 条曲线,与三档圆角同一哲学。 */
+       spinner 语义循环例外、侧栏标题阅读例外 + 3 条曲线,与三档圆角同一哲学。 */
     --motion-instant: 80ms; /* hover 即时反馈、轻浮层退场 */
     --motion-fast: 150ms; /* 颜色/透明度状态切换、轻浮层入场(§14.4 功能性过渡上限) */
     --motion-base: 200ms; /* 尺寸变化:展开折叠、面板收展 */
@@ -71,7 +71,6 @@
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
-    --motion-ease-stream-word: cubic-bezier(0.37, 0.55, 0.86, 0.88); /* 流式词段浮现 */
 
     /* Claude 额度条的首帧 alias 与 ColorRegistry 一致：只复用已批准语义槽。 */
     --quota-bar-fill: var(--text-secondary);
@@ -1159,14 +1158,14 @@ body.resizing-pane [data-ghost-webview] {
    不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
    这里 0% 帧之外元素本身没有 opacity 声明)。 */
 .stream-word {
-  animation: stream-word-in var(--motion-fast) var(--motion-ease-stream-word) var(--wf-delay, 0ms) both;
+  animation: stream-word-in var(--motion-fast) var(--motion-ease-out) var(--wf-delay, 0ms) both;
 }
 /* 流式列表圆点淡入(同一 motion class 家族,2026-08-08):动画打在 ::marker 上,圆点/序号从 transparent
    浮现,delay 由 rehypeStreamWordFade 写入(与 li 内第一个词共享 timeline
    位置,圆点与文字同帧出现)。::marker 只支持 color/font 等少数属性,故用
    color 关键帧而不是 opacity。data 属性仅流式挂载;终版渲染无此属性。 */
 [data-stream-marker]::marker {
-  animation: stream-marker-in var(--motion-fast) var(--motion-ease-stream-word) var(--wf-delay, 0ms) both;
+  animation: stream-marker-in var(--motion-fast) var(--motion-ease-out) var(--wf-delay, 0ms) both;
 }
 /* 只定义 0% 帧：终点回落元素自然颜色，不用 inherit 终帧。 */
 @keyframes stream-marker-in {
