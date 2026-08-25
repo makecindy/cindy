@@ -1026,6 +1026,11 @@ export class PiAgent extends BaseAgent {
       const status = (await listPiSubagentRuns(path.dirname(runDir))).find((entry) => entry.runId === runId);
       return status ? killVerifiedPiSubagentRunner(status) : false;
     }
+    const dropHandle = (): void => {
+      if (this.subagentRunners.get(runId) === runner) {
+        this.subagentRunners.delete(runId);
+      }
+    };
     const confirmed = await new Promise<boolean>((resolve) => {
       let settled = false;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1036,17 +1041,21 @@ export class PiAgent extends BaseAgent {
         if (killTimer) clearTimeout(killTimer);
         resolve(ok);
       };
-      runner.once('exit', () => finish(true));
-      runner.once('close', () => finish(true));
+      const onGone = (): void => {
+        dropHandle();
+        finish(true);
+      };
+      runner.once('exit', onGone);
+      runner.once('close', onGone);
       runner.kill('SIGTERM');
       const termTimer = setTimeout(() => {
         runner.kill('SIGKILL');
         killTimer = setTimeout(() => finish(false), 200);
       }, 1_500);
     });
-    if (this.subagentRunners.get(runId) === runner) {
-      this.subagentRunners.delete(runId);
-    }
+    // Unconfirmed exit keeps the handle so a later terminate or account-boundary
+    // sweep can still reach the live process. A delayed exit/close still drops it.
+    if (confirmed) dropHandle();
     return confirmed;
   }
 
