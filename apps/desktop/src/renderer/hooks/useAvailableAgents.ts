@@ -17,8 +17,35 @@ import { useEffect, useState } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
+import {
+  evictDeviceCapabilities,
+  prefetchDeviceCapabilities,
+  refreshLocalCapabilities,
+} from './useAgentCapabilities';
 
 const log = createLogger('useAvailableAgents');
+
+let localCapabilitiesRefreshInFlight: Promise<void> | null = null;
+const remoteCapabilitiesRefreshInFlight = new Map<string, Promise<void>>();
+
+function refreshLocalCapabilitiesOnce(): void {
+  if (localCapabilitiesRefreshInFlight) return;
+  const pending = refreshLocalCapabilities().finally(() => {
+    if (localCapabilitiesRefreshInFlight === pending) localCapabilitiesRefreshInFlight = null;
+  });
+  localCapabilitiesRefreshInFlight = pending;
+}
+
+function refreshRemoteCapabilitiesOnce(deviceId: string): void {
+  if (remoteCapabilitiesRefreshInFlight.has(deviceId)) return;
+  evictDeviceCapabilities(deviceId);
+  const pending = prefetchDeviceCapabilities(deviceId).finally(() => {
+    if (remoteCapabilitiesRefreshInFlight.get(deviceId) === pending) {
+      remoteCapabilitiesRefreshInFlight.delete(deviceId);
+    }
+  });
+  remoteCapabilitiesRefreshInFlight.set(deviceId, pending);
+}
 
 type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi';
 
@@ -153,6 +180,8 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
       const key = cacheKeyOf(deviceId);
       agentsCache.delete(key);
       inFlight.delete(key);
+      if (deviceId) refreshRemoteCapabilitiesOnce(deviceId);
+      else refreshLocalCapabilitiesOnce();
       run();
     };
     window.addEventListener('focus', onFocus);

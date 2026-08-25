@@ -1862,7 +1862,7 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
       void unsubscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']).catch(() => undefined);
     };
-  }, [openLink, selectedDeviceId, subscribe, unsubscribe]);
+  }, [connectionEpoch, openLink, presenceVersion, selectedDeviceId, subscribe, unsubscribe]);
 
   useEffect(() => {
     if (!selectedDeviceId) return;

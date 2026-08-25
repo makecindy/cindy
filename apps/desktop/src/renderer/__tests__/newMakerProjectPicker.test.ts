@@ -551,6 +551,9 @@ describe('Shared create project picker', () => {
     );
     // claude-code → cc 归一,fail-open(未加载不隐藏)。
     expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");
+    expect(availableAgentsHookSource).toContain('refreshLocalCapabilities');
+    expect(availableAgentsHookSource).toContain('evictDeviceCapabilities');
+    expect(availableAgentsHookSource).toContain('prefetchDeviceCapabilities');
     // 未加载完成时不隐藏任何入口(loaded 保持 false → 空 hidden)。
     expect(availableAgentsHookSource).toMatch(/loaded/);
 
