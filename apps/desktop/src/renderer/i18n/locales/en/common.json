@@ -91,6 +91,11 @@
       "restored": "Restored default settings",
       "restoreFailed": "Failed to restore default settings"
     },
+    "newChatDefaults": {
+      "title": "Default permission for new chats",
+      "description": "Applies the chosen permission mode to new chats that haven't picked a permission explicitly. Vendors you've already chosen a permission for keep your choice.",
+      "hint": "Only auto and Full access are offered here. You can still switch per chat."
+    },
     "tabs": {
       "general": "General",
       "billing": "Usage and billing",

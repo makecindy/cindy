@@ -30,6 +30,7 @@ import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { getDraft } from '@/state/newMakerDraft';
 
 interface UseCCSessionsOptions {
   /** Session status filter — F-PJ-10 V0.5.1。默认 'active'。 */
@@ -160,8 +161,11 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       providerId?: string | null;
     }): Promise<Session | null> => {
       try {
+        // 新建对话未显式选权限时,用全局「新建对话默认权限」override;无 override 回落
+        // auto(自动审批)。调用方传入 permissionMode 时以调用方为准(...opts 覆盖)。
+        const defaultPermissionMode = getDraft().newChatDefaultPermissionMode ?? 'auto';
         const newSession = await sessionService.create({
-          permissionMode: 'auto',
+          permissionMode: defaultPermissionMode,
           fastMode: false,
           ...opts,
         });

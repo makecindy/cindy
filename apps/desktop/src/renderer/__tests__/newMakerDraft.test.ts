@@ -957,4 +957,75 @@ describe('newMakerDraft store', () => {
       expect(getDraft().collab.workerConfig?.model).toBe('claude-opus-4-7');
     });
   });
+
+  describe('newChatDefaultPermissionMode (新对话默认权限 override)', () => {
+    it('出厂默认 null,seed 回落到 auto(自动审批)', async () => {
+      const { getDraft } = await loadModule();
+      expect(getDraft().newChatDefaultPermissionMode).toBeNull();
+      expect(getDraft().lastByVendor.cc.permissionMode).toBe('auto');
+      expect(getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+      expect(getDraft().lastByVendor.codex.permissionMode).toBe('auto');
+    });
+
+    it('setNewChatDefaultPermissionMode 设 override 后,各 vendor seed 都跟随,且跨重载持久化', async () => {
+      vi.resetModules();
+      const { setNewChatDefaultPermissionMode, getDraft } = await loadModule();
+      setNewChatDefaultPermissionMode('bypassPermissions');
+      expect(getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+      expect(getDraft().lastByVendor.cc.permissionMode).toBe('bypassPermissions');
+      expect(getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+      expect(getDraft().lastByVendor.codex.permissionMode).toBe('bypassPermissions');
+
+      // 跨「重启」(重新加载模块)后 override 仍恢复,且 vendor seed 仍跟随。
+      vi.resetModules();
+      const m = await loadModule();
+      expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+      expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('bypassPermissions');
+    });
+
+    it('用户显式选过的 vendor 权限不被 override 覆盖(sanitize 保留显式值)', async () => {
+      // 先造一份:该 vendor 显式选了 'acceptEdits',同时全局 override 设了 bypass。
+      memStorage.setItem(
+        'xdt:newMakerDraft:v1',
+        JSON.stringify({
+          vendor: 'cc',
+          newChatDefaultPermissionMode: 'bypassPermissions',
+          lastByVendor: { cc: { model: 'm', effort: 'medium', permissionMode: 'acceptEdits', planMode: false, providerId: null } },
+        }),
+      );
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      // 显式选过的保留,不被 global override 顶掉。
+      expect(getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+      // 未显式选过的 vendor seed 仍读全局 override。
+      expect(getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+      expect(getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+    });
+
+    it('mode 传 null 清除 override,回落系统默认 auto', async () => {
+      const { setNewChatDefaultPermissionMode, getDraft } = await loadModule();
+      setNewChatDefaultPermissionMode('bypassPermissions');
+      expect(getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+      setNewChatDefaultPermissionMode(null);
+      expect(getDraft().newChatDefaultPermissionMode).toBeNull();
+      expect(getDraft().lastByVendor.cc.permissionMode).toBe('auto');
+    });
+
+    it('脏值(非字符串或缺字段)一律归一为 null', async () => {
+      memStorage.setItem(
+        'xdt:newMakerDraft:v1',
+        JSON.stringify({ vendor: 'cc', newChatDefaultPermissionMode: 123 }),
+      );
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      expect(getDraft().newChatDefaultPermissionMode).toBeNull();
+      expect(getDraft().lastByVendor.cc.permissionMode).toBe('auto');
+    });
+
+    it('通用 patchDraft 不能改动 newChatDefaultPermissionMode(专用 setter 契约)', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ newChatDefaultPermissionMode: 'bypassPermissions' });
+      expect(getDraft().newChatDefaultPermissionMode).toBeNull();
+    });
+  });
 });
