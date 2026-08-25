@@ -249,6 +249,18 @@ function findHtmlTagEnd(input: string, start: number): number {
   return -1;
 }
 
+const HTML_RAW_TEXT_TAGS = new Set([
+  'iframe',
+  'noembed',
+  'noframes',
+  'noscript',
+  'script',
+  'style',
+  'textarea',
+  'title',
+  'xmp',
+]);
+
 function findTemplateSubtreeEnd(input: string, contentStart: number): number {
   let depth = 1;
   let index = contentStart;
@@ -263,8 +275,8 @@ function findTemplateSubtreeEnd(input: string, contentStart: number): number {
     const end = findHtmlTagEnd(input, start);
     if (end < 0) return input.length;
     const tag = input.slice(start, end + 1);
-    const rawText = tag.match(/^<\s*(noscript|script|style|textarea|title)\b/i);
-    if (rawText) {
+    const rawText = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/i);
+    if (rawText && HTML_RAW_TEXT_TAGS.has(rawText[1]!.toLowerCase())) {
       const closing = new RegExp(`<\\/\\s*${rawText[1]}\\s*>`, 'ig');
       closing.lastIndex = end + 1;
       const closingMatch = closing.exec(input);
@@ -287,7 +299,6 @@ async function replaceHtmlTagsAsync(
   predicate: (tag: string) => boolean,
   replacer: (tag: string) => Promise<string>,
 ): Promise<string> {
-  const rawTextTags = new Set(['noscript', 'script', 'style', 'textarea', 'title']);
   const parts: string[] = [];
   let outputBytes = 0;
   const pushPart = (part: string): void => {
@@ -313,7 +324,7 @@ async function replaceHtmlTagsAsync(
       continue;
     }
     const rawTextMatch = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/i);
-    if (rawTextMatch && rawTextTags.has(rawTextMatch[1]!.toLowerCase())) {
+    if (rawTextMatch && HTML_RAW_TEXT_TAGS.has(rawTextMatch[1]!.toLowerCase())) {
       if (predicate(tag)) {
         pushPart(input.slice(cursor, start));
         pushPart(await replacer(tag));
@@ -460,6 +471,7 @@ async function rewriteCssResources(
           context,
           baseUrl,
           decodeCssResourceReference(decodeReference(reference.trim())),
+          'text/css',
         );
         out.push(css.slice(index, start));
         out.push(snapshot ? `url("${snapshot}")` : css.slice(start, cursor + 1));
@@ -558,7 +570,21 @@ async function rewriteHtmlAttributes(
       const value = quote ? quoted : bare;
       const rewritten = await replacer(value, normalizedName);
       if (rewritten === value) return match;
-      return `${leading}${attributeName}${equals}${quote ? `${quote}${rewritten}${quote}` : rewritten}`;
+      if (quote) {
+        const escaped = rewritten
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(quote === '"' ? /"/g : /'/g, quote === '"' ? '&quot;' : '&#39;');
+        return `${leading}${attributeName}${equals}${quote}${escaped}${quote}`;
+      }
+      if (/^[^\s"'=<>\x60]+$/.test(rewritten)) {
+        return `${leading}${attributeName}${equals}${rewritten}`;
+      }
+      const escaped = rewritten
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/"/g, '&quot;');
+      return `${leading}${attributeName}${equals}"${escaped}"`;
     },
   );
 }
@@ -615,8 +641,8 @@ async function rewriteHtmlStyleElementsAsync(
     }
     const opening = /^<\s*style\b/i.test(tag) && !/^<\s*\/style\b/i.test(tag);
     if (!opening) {
-      const raw = tag.match(/^<\s*(noscript|script|textarea|title)\b/i);
-      if (raw) {
+      const raw = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/i);
+      if (raw && HTML_RAW_TEXT_TAGS.has(raw[1]!.toLowerCase())) {
         const closing = new RegExp(`<\\/\\s*${raw[1]}\\s*>`, 'ig');
         closing.lastIndex = end + 1;
         const closingMatch = closing.exec(input);
@@ -647,6 +673,7 @@ async function snapshotLocalResource(
   context: ResourceSnapshotContext,
   baseUrl: URL,
   reference: string,
+  mimeOverride?: string,
 ): Promise<string | undefined> {
   if (!isLocalResourceReference(reference)) return undefined;
   let fragment = '';
@@ -658,7 +685,7 @@ async function snapshotLocalResource(
   const absPath = resolveLocalResourcePath(baseUrl, reference);
   if (!absPath) return undefined;
   const preparedPath = await prepareInputPath(context.root, absPath);
-  const cacheKey = path.resolve(preparedPath);
+  const cacheKey = `${path.resolve(preparedPath)}\0${mimeOverride ?? ''}`;
   const cached = context.cache.get(cacheKey);
   if (cached) return `${cached}${fragment}`;
 
@@ -690,7 +717,7 @@ async function snapshotLocalResource(
     );
   }
 
-  const mime = resourceMime(preparedPath);
+  const mime = mimeOverride ?? resourceMime(preparedPath);
   let snapshotBytes = bytes;
   if (mime === 'text/css') {
     if (context.cssStack.has(cacheKey)) return dataUri(mime, bytes);
@@ -763,12 +790,19 @@ async function inlineLocalResources(
     async (tag) => {
       const href = readHtmlAttribute(tag, 'href');
       if (!href) return tag;
-      const rel = readHtmlAttribute(tag, 'rel') ?? '';
-      if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(href)) return tag;
+      const rel = decodeHTMLAttribute(readHtmlAttribute(tag, 'rel') ?? '');
+      const isStylesheet = rel
+        .split(/\s+/)
+        .some((token) => token.toLowerCase() === 'stylesheet');
+      if (!isStylesheet && !/\.css(?:[?#]|$)/i.test(href)) return tag;
       return rewriteHtmlAttributes(tag, ['href'], async (reference) => {
         return (
-          (await snapshotLocalResource(context, baseUrl, decodeHTMLAttribute(reference))) ??
-          reference
+          (await snapshotLocalResource(
+            context,
+            baseUrl,
+            decodeHTMLAttribute(reference),
+            'text/css',
+          )) ?? reference
         );
       });
     },
@@ -795,7 +829,7 @@ async function inlineLocalResources(
     (tag) => tag[1] !== '/' && /\bstyle\s*=/i.test(tag),
     (tag) =>
       rewriteHtmlAttributes(tag, ['style'], async (css) => {
-        const rewrittenCss = await inlineCssUrls(css, baseUrl, context, decodeHTMLAttribute);
+        const rewrittenCss = await inlineCssUrls(decodeHTMLAttribute(css), baseUrl, context);
         return rewrittenCss;
       }),
   );

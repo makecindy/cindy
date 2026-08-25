@@ -239,7 +239,14 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
       const failure = new Promise<never>((_resolve, reject) => {
         target.webContents.once(
           'did-fail-load',
-          (_event: unknown, errorCode: number, errorDescription: string) => {
+          (
+            _event: unknown,
+            errorCode: number,
+            errorDescription: string,
+            _validatedUrl: string,
+            isMainFrame: boolean,
+          ) => {
+            if (!isMainFrame) return;
             reject(new Error(`HTML 加载失败(${errorCode} ${errorDescription})`));
           },
         );

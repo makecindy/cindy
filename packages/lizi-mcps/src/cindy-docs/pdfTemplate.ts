@@ -63,14 +63,16 @@ function decodeHtmlEntities(raw: string): string {
 }
 
 export function extractHtmlTitle(html: string): string | undefined {
-  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (title?.[1]) {
-    const value = decodeHtmlEntities(stripTags(title[1]));
+  const title = findHtmlElementRange(html, 'title');
+  if (title) {
+    const value = decodeHtmlEntities(stripTags(html.slice(title.contentStart, title.contentEnd)));
     if (value.length > 0) return value;
   }
-  const heading = html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
-  if (heading?.[1]) {
-    const value = decodeHtmlEntities(stripTags(heading[1]));
+  const heading = findHtmlElementRange(html, 'h1');
+  if (heading) {
+    const value = decodeHtmlEntities(
+      stripTags(html.slice(heading.contentStart, heading.contentEnd)),
+    );
     if (value.length > 0) return value;
   }
   return undefined;
@@ -96,6 +98,101 @@ function readHtmlAttribute(tag: string, attributeName: string): string | undefin
     if (match[2]!.toLowerCase() === wanted) return match[4] ? match[5] : match[6];
   }
   return undefined;
+}
+
+interface HtmlElementRange {
+  start: number;
+  contentStart: number;
+  contentEnd: number;
+  end: number;
+}
+
+function findRawTextClosing(
+  html: string,
+  name: string,
+  contentStart: number,
+): { start: number; end: number } | undefined {
+  const closing = new RegExp(`<\\/\\s*${name}\\s*>`, 'ig');
+  closing.lastIndex = contentStart;
+  const match = closing.exec(html);
+  return match ? { start: match.index, end: match.index + match[0].length } : undefined;
+}
+
+/** Find one real HTML element while ignoring comments, raw-text contents and template subtrees. */
+function findHtmlElementRange(html: string, wantedName: string): HtmlElementRange | undefined {
+  const wanted = wantedName.toLowerCase();
+  let opening: { start: number; contentStart: number } | undefined;
+  let templateDepth = 0;
+  let index = 0;
+  while (index < html.length) {
+    const tagStart = html.indexOf('<', index);
+    if (tagStart < 0) break;
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      index = commentEnd < 0 ? html.length : commentEnd + 3;
+      continue;
+    }
+    const tagEnd = findHtmlTagEnd(html, tagStart);
+    if (tagEnd < 0) break;
+    const tag = html.slice(tagStart, tagEnd + 1);
+    const closingName = tag.match(/^<\s*\/\s*([A-Za-z][\w:-]*)\s*>/)?.[1]?.toLowerCase();
+    if (closingName === 'template' && templateDepth > 0) {
+      templateDepth -= 1;
+      index = tagEnd + 1;
+      continue;
+    }
+    if (closingName === wanted && opening && templateDepth === 0) {
+      return {
+        start: opening.start,
+        contentStart: opening.contentStart,
+        contentEnd: tagStart,
+        end: tagEnd + 1,
+      };
+    }
+    const name = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/)?.[1]?.toLowerCase();
+    if (!name) {
+      index = tagEnd + 1;
+      continue;
+    }
+    if (name === 'template' && !/\/\s*>$/.test(tag)) {
+      templateDepth += 1;
+      index = tagEnd + 1;
+      continue;
+    }
+    if (templateDepth === 0 && name === wanted && !opening) {
+      if (HTML_RAW_TEXT_TAGS.has(name)) {
+        const rawClosing = findRawTextClosing(html, name, tagEnd + 1);
+        return rawClosing
+          ? {
+              start: tagStart,
+              contentStart: tagEnd + 1,
+              contentEnd: rawClosing.start,
+              end: rawClosing.end,
+            }
+          : {
+              start: tagStart,
+              contentStart: tagEnd + 1,
+              contentEnd: html.length,
+              end: html.length,
+            };
+      }
+      opening = { start: tagStart, contentStart: tagEnd + 1 };
+    }
+    if (HTML_RAW_TEXT_TAGS.has(name)) {
+      const rawClosing = findRawTextClosing(html, name, tagEnd + 1);
+      index = rawClosing?.end ?? html.length;
+      continue;
+    }
+    index = tagEnd + 1;
+  }
+  return opening
+    ? {
+        start: opening.start,
+        contentStart: opening.contentStart,
+        contentEnd: html.length,
+        end: html.length,
+      }
+    : undefined;
 }
 
 function htmlHasStylesheetElement(html: string): boolean {
@@ -161,61 +258,18 @@ function htmlHasStylesheetElement(html: string): boolean {
  * template only needs the byte range, while Chromium remains the HTML parser.
  */
 function findHtmlBodyRange(html: string): { start: number; end: number } | undefined {
-  let bodyStart: number | undefined;
-  let templateDepth = 0;
-  let index = 0;
-  while (index < html.length) {
-    const tagStart = html.indexOf('<', index);
-    if (tagStart < 0) break;
-    if (html.startsWith('<!--', tagStart)) {
-      const commentEnd = html.indexOf('-->', tagStart + 4);
-      index = commentEnd < 0 ? html.length : commentEnd + 3;
-      continue;
-    }
-    const tagEnd = findHtmlTagEnd(html, tagStart);
-    if (tagEnd < 0) break;
-    const tag = html.slice(tagStart, tagEnd + 1);
-    const closing = tag.match(/^<\s*\/\s*([A-Za-z][\w:-]*)\s*>/);
-    const closingName = closing?.[1]?.toLowerCase();
-    if (closingName === 'template' && templateDepth > 0) {
-      templateDepth -= 1;
-      index = tagEnd + 1;
-      continue;
-    }
-    if (closingName === 'body' && bodyStart !== undefined && templateDepth === 0) {
-      return { start: bodyStart, end: tagStart };
-    }
-    const opening = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/);
-    const name = opening?.[1]?.toLowerCase();
-    if (!name) {
-      index = tagEnd + 1;
-      continue;
-    }
-    if (name === 'body' && bodyStart === undefined) bodyStart = tagEnd + 1;
-    if (name === 'template' && !/\/\s*>$/.test(tag)) {
-      templateDepth += 1;
-      index = tagEnd + 1;
-      continue;
-    }
-    if (HTML_RAW_TEXT_TAGS.has(name)) {
-      const rawTextEnd = new RegExp(`<\\/\\s*${name}\\s*>`, 'ig');
-      rawTextEnd.lastIndex = tagEnd + 1;
-      const closingMatch = rawTextEnd.exec(html);
-      index = closingMatch ? closingMatch.index + closingMatch[0].length : html.length;
-      continue;
-    }
-    index = tagEnd + 1;
-  }
-  return bodyStart === undefined ? undefined : { start: bodyStart, end: html.length };
+  const body = findHtmlElementRange(html, 'body');
+  return body ? { start: body.contentStart, end: body.contentEnd } : undefined;
 }
 
 export function extractHtmlBody(html: string): string {
   const body = findHtmlBodyRange(html);
   if (body) return html.slice(body.start, body.end).trim();
-  return html
+  const head = findHtmlElementRange(html, 'head');
+  const withoutHead = head ? `${html.slice(0, head.start)}${html.slice(head.end)}` : html;
+  return withoutHead
     .replace(/<!doctype[^>]*>/i, '')
     .replace(/<\/?html\b[^>]*>/gi, '')
-    .replace(/<head\b[\s\S]*?<\/head>/i, '')
     .trim();
 }
 

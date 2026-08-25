@@ -1225,6 +1225,37 @@ describe('render_pdf', () => {
     expect(rendered).toContain('<p>ok</p>');
   });
 
+  it('不快照其它 HTML raw-text 元素里的资源形状文本', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    const rawText = ['iframe', 'noembed', 'noframes', 'xmp']
+      .map(
+        (tag) =>
+          `<${tag}><img src="./missing-${tag}.png"><style>.x{background:url(./missing-${tag}-bg.png)}</style></${tag}>`,
+      )
+      .join('');
+    await fs.writeFile(
+      path.join(workdir, 'other-raw-text-safe.html'),
+      `${rawText}<p>ok</p>`,
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'other-raw-text-safe.html',
+      outPath: 'other-raw-text-safe.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('./missing-iframe.png');
+    expect(rendered).toContain('url(./missing-xmp-bg.png)');
+    expect(rendered).toContain('<p>ok</p>');
+  });
+
   it('不快照未实例化 template 子树内的图片与样式资源', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
@@ -1345,6 +1376,58 @@ describe('render_pdf', () => {
         `data:image/png;base64,${Buffer.from(contents).toString('base64')}`,
       );
     }
+  });
+
+  it('解码 stylesheet rel 实体并以内联 CSS MIME 快照无扩展名样式表', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'theme'), 'body{color:purple}', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'encoded-rel.html'),
+      '<link rel="style&#115;heet" href="./theme"><p>ok</p>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'encoded-rel.html',
+      outPath: 'encoded-rel.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain(
+      `data:text/css;base64,${Buffer.from('body{color:purple}').toString('base64')}`,
+    );
+  });
+
+  it('重写内联 style 后按原引号重新转义 HTML 属性值', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'style-entities.html'),
+      '<div style="font-family:&quot;Arial&quot;;background:url(&quot;./chart.png&quot;)">ok</div>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'style-entities.html',
+      outPath: 'style-entities.pdf',
+      template: 'none',
+    });
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain('font-family:&quot;Arial&quot;');
+    expect(rendered).toContain('background:url(&quot;data:image/png;base64,');
+    expect(rendered).not.toContain('style="font-family:"Arial""');
   });
 
   it('在首个资源快照前替换 base 子目录时拒绝混合目录版本', async () => {

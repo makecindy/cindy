@@ -407,7 +407,7 @@ describe('字体就绪等待', () => {
 describe('故障隔离', () => {
   it('加载失败让这次渲染失败,窗口销毁,且不去调 printToPDF', async () => {
     FakeBrowserWindow.loadBehavior = async (win) => {
-      win.webContents.emit('did-fail-load', {}, -6, 'ERR_FILE_NOT_FOUND');
+      win.webContents.emit('did-fail-load', {}, -6, 'ERR_FILE_NOT_FOUND', 'file:///missing', true);
       await new Promise(() => {
         /* 永不 resolve —— 真实 loadFile 在失败时也不会正常完成 */
       });
@@ -416,6 +416,25 @@ describe('故障隔离', () => {
     const win = FakeBrowserWindow.instances[0]!;
     expect(win.destroyed).toBe(true);
     expect(win.webContents.printToPDF).not.toHaveBeenCalled();
+  });
+
+  it('子 frame 加载失败不阻断已成功的顶层文档', async () => {
+    FakeBrowserWindow.loadBehavior = async (win) => {
+      win.webContents.emit(
+        'did-fail-load',
+        {},
+        -3,
+        'ERR_ABORTED',
+        'https://blocked.example/frame',
+        false,
+      );
+    };
+    const { buffer } = await renderHtmlToPdf({
+      ...BASE_INPUT,
+      html: '<iframe src="https://blocked.example/frame"></iframe><p>ok</p>',
+    });
+    expect(buffer.toString()).toBe('%PDF-ok');
+    expect(FakeBrowserWindow.instances[0]!.webContents.printToPDF).toHaveBeenCalledTimes(1);
   });
 
   it('渲染进程崩溃被翻成失败,不升级成别的东西', async () => {

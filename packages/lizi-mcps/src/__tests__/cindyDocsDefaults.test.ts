@@ -465,6 +465,16 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(extractHtmlTitle('<title>季度回顾</title>')).toBe('季度回顾');
     expect(extractHtmlTitle('<h1>季度回顾</h1>')).toBe('季度回顾');
     expect(extractHtmlTitle('<title>R&amp;D &#x62a5;&#x544a;</title>')).toBe('R&D 报告');
+    expect(
+      extractHtmlTitle(
+        `<!-- <title>Draft</title> --><script>const sample = '<title>Script</title>';</script><title>Final</title>`,
+      ),
+    ).toBe('Final');
+    expect(
+      extractHtmlTitle(
+        `<script>const sample = '<h1>Draft</h1>';</script><!-- <h1>Comment</h1> --><h1>Final heading</h1>`,
+      ),
+    ).toBe('Final heading');
   });
 
   it('htmlLooksUnstyled 只在没有 stylesheet 时为真', () => {
@@ -493,6 +503,17 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(wrapped.html).toContain("const demo = '</body>';");
     expect(wrapped.html).toContain('<!-- </body> -->');
     expect(wrapped.html).toContain('<h1>完整报告</h1>');
+  });
+
+  it('省略 body 时只移除真实 head,不把脚本或注释里的伪结束标签留进正文', () => {
+    const wrapped = applyReportTemplate(
+      `<html><head><script>const sample = '</head><h1>脚本标题</h1>';</script><!-- </head> --><title>报告</title></head><h1>真实正文</h1></html>`,
+      DOCS_THEMES.light,
+    );
+    expect(wrapped.applied).toBe(true);
+    expect(wrapped.html).toContain('<h1>真实正文</h1>');
+    expect(wrapped.html).not.toContain('脚本标题');
+    expect(wrapped.html).not.toContain('const sample =');
   });
 
   it('render_pdf 对无样式 HTML 自动套模板,已有 style 的原样透传', async () => {
