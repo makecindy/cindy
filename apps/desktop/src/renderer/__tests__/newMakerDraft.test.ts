@@ -1027,5 +1027,49 @@ describe('newMakerDraft store', () => {
       patchDraft({ newChatDefaultPermissionMode: 'bypassPermissions' });
       expect(getDraft().newChatDefaultPermissionMode).toBeNull();
     });
+
+    it('升级迁移:老数据无标记但权限非 auto 的 vendor,改全局默认后不被覆盖', async () => {
+      // 模拟升级前用户:vendor cc 显式选过 acceptEdits,但旧数据没有 permissionModeChosenByVendor
+      // 标记(该字段是新增的)。此时改全局默认,不得把 acceptEdits 放宽成 bypassPermissions。
+      memStorage.setItem(
+        'xdt:newMakerDraft:v1',
+        JSON.stringify({
+          vendor: 'cc',
+          lastByVendor: {
+            cc: { model: 'm', effort: 'medium', permissionMode: 'acceptEdits', planMode: false, providerId: null },
+            pi: { model: 'm', effort: 'high', permissionMode: 'auto', planMode: false, providerId: null },
+          },
+        }),
+      );
+      vi.resetModules();
+      const { getDraft, setNewChatDefaultPermissionMode } = await loadModule();
+      setNewChatDefaultPermissionMode('bypassPermissions');
+      // 非 auto 的显式权限保留;auto(种子默认)的 vendor 被穿透为全局默认。
+      expect(getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+      expect(getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+    });
+
+    it('非法权限值(未知字符串)在 sanitize / setter 均归一为 null 或 auto', async () => {
+      // 全局 override 是未知字符串 → 归一 null。
+      memStorage.setItem(
+        'xdt:newMakerDraft:v1',
+        JSON.stringify({ vendor: 'cc', newChatDefaultPermissionMode: 'totally-invalid' }),
+      );
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      expect(getDraft().newChatDefaultPermissionMode).toBeNull();
+      expect(getDraft().lastByVendor.cc.permissionMode).toBe('auto');
+      // vendor 持久化权限是未知字符串 → 归一为 seed auto。
+      memStorage.setItem(
+        'xdt:newMakerDraft:v1',
+        JSON.stringify({ vendor: 'cc', lastByVendor: { cc: { model: 'm', effort: 'medium', permissionMode: 'nonsense', planMode: false, providerId: null } } }),
+      );
+      vi.resetModules();
+      const m = await loadModule();
+      expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('auto');
+      // setter 传入非法值直接忽略。
+      m.setNewChatDefaultPermissionMode('bad-value');
+      expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
+    });
   });
 });

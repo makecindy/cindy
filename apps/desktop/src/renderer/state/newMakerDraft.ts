@@ -35,6 +35,25 @@ function storageKey(): string {
   return activeDataOwnerId ? `${STORAGE_KEY}:${encodeURIComponent(activeDataOwnerId)}` : STORAGE_KEY;
 }
 
+/**
+ * 合法权限模式枚举(runtime 校验用)。renderer 的 PermissionMode 类型别名是 string(合法值
+ * 由 maker capabilities 运行时给出),但本地偏好持久化的权限值必须限定在已知档位上,
+ * 未知字符串会污染 vendor 草稿并透传到会话创建流程 —— 这里按官方式 maker-core 枚举做
+ * 白名单(见 packages/maker-core/src/types/common.ts 的 PermissionMode)。
+ */
+const VALID_PERMISSION_MODES = new Set([
+  'ask',
+  'default',
+  'acceptEdits',
+  'plan',
+  'auto',
+  'bypassPermissions',
+]);
+
+function isPermissionMode(value: unknown): value is PermissionMode {
+  return typeof value === 'string' && VALID_PERMISSION_MODES.has(value);
+}
+
 export interface VendorPrefs {
   model: string;
   effort: Effort;
@@ -347,10 +366,11 @@ function sanitize(raw: unknown): NewMakerDraft {
   const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };
   // 新建对话默认权限 override:只接受合法 PermissionMode 字符串,脏值 / 缺字段一律置 null
   // (跟随系统默认)。与 worktreePreferenceCustomized 同理,持久化只存显式 override。
-  const newChatDefaultPermissionMode: PermissionMode | null =
-    typeof r.newChatDefaultPermissionMode === 'string'
-      ? (r.newChatDefaultPermissionMode as PermissionMode)
-      : null;
+  const newChatDefaultPermissionMode: PermissionMode | null = isPermissionMode(
+    r.newChatDefaultPermissionMode,
+  )
+    ? r.newChatDefaultPermissionMode
+    : null;
   // modelChosenByVendor: 老版本 localStorage 没有这个字段 → 空对象兜底
   //（语义上等于"全部 vendor 都没显式选过",调度三级回退会落到成本保守兜底)。
   const modelChosenRaw =
@@ -368,6 +388,19 @@ function sanitize(raw: unknown): NewMakerDraft {
   for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
     if (permissionModeChosenRaw[v] === true) permissionModeChosenByVendor[v] = true;
+    // 迁移:老数据没有 permissionModeChosenByVendor 标记,但某 vendor 权限值**非** auto
+    // (seed 默认)且非空 → 只可能是用户显式选择,补打标记,绝不被全局默认穿透。auto/null
+    // 才视为可能是种子回填,允许用户改全局默认时被 override 覆盖。
+    const legacyPerm = lastByVendorRaw[v] as Partial<VendorPrefs> | undefined;
+    const legacyPermValue = legacyPerm?.permissionMode;
+    if (
+      legacyPermValue != null &&
+      legacyPermValue !== 'auto' &&
+      legacyPermValue !== 'plan' &&
+      (typeof legacyPermValue === 'string' && VALID_PERMISSION_MODES.has(legacyPermValue))
+    ) {
+      permissionModeChosenByVendor[v] = true;
+    }
   }
   const sanitizeVendorPrefs = (p: Partial<VendorPrefs> | undefined, v: MakerVendor): VendorPrefs => {
     const fallback = defaultVendorPrefs(v, newChatDefaultPermissionMode);
@@ -379,16 +412,23 @@ function sanitize(raw: unknown): NewMakerDraft {
     // newChatDefaultPermissionMode 有 override(且持久化值正是 seed auto)时用它穿透,
     // 否则回落 seed auto。已显式选过的 vendor 一律保留用户自己的选择,绝不被全局
     // override 顶掉(2026-07 安全口径:不得静默放宽用户显式收紧的档)。
+    // 该 vendor 持久化权限是否合法;非法值(未知字符串)一律归一为 fallback,
+    // 避免脏值写进 vendor 草稿并透传给会话创建流程(Greptile Issue#2)。
+    const storedPermissionMode = isPermissionMode(p.permissionMode)
+      ? (p.permissionMode as PermissionMode)
+      : fallback.permissionMode;
     const chosenPermission = permissionModeChosenByVendor[v] === true;
     const effectivePermissionMode =
       chosenPermission || newChatDefaultPermissionMode == null
-        ? typeof p.permissionMode === 'string' && !legacyPlanPermission
-          ? (p.permissionMode as PermissionMode)
+        ? !legacyPlanPermission
+          ? storedPermissionMode
           : fallback.permissionMode
-        : // 未显式选过 + 设了全局 override:非 legacy plan 值可用则用全局 override
-          p.permissionMode === 'auto' || p.permissionMode == null
+        : // 未显式选过 + 设了全局 override:仅当持久化值确为 seed auto 时用 override 穿透,
+          // 其余非 auto 值(只能是显式选择)一律保留,绝不被全局 override 顶掉
+          // (2026-07 安全口径:不得静默放宽用户显式收紧的档)。
+          storedPermissionMode === 'auto'
           ? newChatDefaultPermissionMode
-          : (p.permissionMode as PermissionMode);
+          : storedPermissionMode;
     return {
       model: typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model,
       effort: typeof p.effort === 'string' ? (p.effort as Effort) : fallback.effort,
@@ -686,17 +726,20 @@ export function setWorktreePreference(enabled: boolean): void {
  * 已显式选过权限的 vendor 保留用户自己的选择。写入的是完整当前草稿快照。
  */
 export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): void {
-  if (mode != null && typeof mode !== 'string') return;
+  if (mode != null && !isPermissionMode(mode)) return;
   const next: PermissionMode | null = mode;
-  // 设置 override 后,对「从未显式选过权限」的 vendor,联动重算 lastByVendor 的种子
-  // 权限档,让新默认立即生效;已显式选过权限的 vendor(permissionModeChosenByVendor)
-  // 一律保留用户自己的选择,不被全局 override 顶掉。
+  // 只对「从未显式选过权限」的 vendor 联动重算种子档,让新默认立即生效(设为 null 时
+  // 回 auto)。已显式选过权限的 vendor(permissionModeChosenByVendor=true,或老数据迁移
+  // 时在 sanitize 被补打标)保留用户自己的选择,不被全局 override 顶掉 —— 否则升级用户
+  // 改全局默认会静默丢失原有权限档(如 acceptEdits 被放宽成 bypassPermissions)。
   const chosen = currentDraft.permissionModeChosenByVendor ?? {};
   const seedPermission = next ?? 'auto';
   const lastByVendor = { ...currentDraft.lastByVendor };
   for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
-    if (chosen[v] !== true && lastByVendor[v]) {
-      lastByVendor[v] = { ...lastByVendor[v], permissionMode: seedPermission };
+    const prefs = lastByVendor[v];
+    if (!prefs) continue;
+    if (chosen[v] !== true) {
+      lastByVendor[v] = { ...prefs, permissionMode: seedPermission };
     }
   }
   const nextDraft: NewMakerDraft = {
