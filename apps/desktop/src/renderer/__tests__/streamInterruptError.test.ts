@@ -82,4 +82,14 @@ describe('unwrapProviderErrorDisplay', () => {
       unwrapProviderErrorDisplay('OpenAI API error (400): {"message":"invalid_prompt"}'),
     ).toBe('OpenAI API error (400): {"message":"invalid_prompt"}');
   });
+
+  it('does not rewrite the other Pi API error dialects', () => {
+    const anthropic =
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}';
+    const google = 'GoogleGenerativeAI Error: [400] Invalid JSON payload received';
+    const completions = 'OpenAI API error (429): rate_limit_exceeded';
+    expect(unwrapProviderErrorDisplay(anthropic)).toBe(anthropic);
+    expect(unwrapProviderErrorDisplay(google)).toBe(google);
+    expect(unwrapProviderErrorDisplay(completions)).toBe(completions);
+  });
 });
