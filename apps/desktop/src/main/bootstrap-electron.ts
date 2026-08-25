@@ -7130,6 +7130,22 @@ const registerIpcHandlers = () => {
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。
   {
+    const fixedDirectoryIpcLog = createLogger('fixed-directory-ipc');
+    const runFixedDirectoryIpcAction = async <T>(
+      actionName: string,
+      action: () => Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await action();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        fixedDirectoryIpcLog.warn('fixed directory IPC action failed', {
+          action: actionName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError('INTERNAL', 'fixed cache directory action failed');
+      }
+    };
     const openExistingFixedDirectory = async (
       rootDir: string,
       canOpen: () => boolean = () => true,
@@ -7164,7 +7180,10 @@ const registerIpcHandlers = () => {
     ): Promise<boolean> => {
       const ownerWindow = BrowserWindow.fromWebContents(event.sender);
       if (!ownerWindow || ownerWindow.isDestroyed()) {
-        throw new Error('fixed directory cleanup requires a live owner window');
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'fixed directory cleanup requires a live owner window',
+        );
       }
       const result = await dialog.showMessageBox(ownerWindow, {
         type: 'warning',
@@ -7181,7 +7200,10 @@ const registerIpcHandlers = () => {
       const ownerScopeKey = activeOwnerScopeKey();
       const ownerId = getActiveAppSession().dataOwnerId;
       if (!ownerId || isAppSessionBoundaryPending()) {
-        throw new Error('chat attachment directory requires a stable data owner');
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'chat attachment directory requires a stable data owner',
+        );
       }
       return {
         rootDir: getChatAttachmentOwnerCacheRoot(ownerId),
@@ -7239,36 +7261,43 @@ const registerIpcHandlers = () => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openLegacyImagesDir();
     });
-    ipcMain.handle('cindy-media:legacy-images-clear', async (event) => {
-      assertTrustedAppRendererEvent(event);
-      const confirmed = await confirmFixedDirectoryClear(event, {
-        title: t('settings.about.storage.legacyImagesClearConfirmTitle'),
-        message: t('settings.about.storage.legacyImagesClearConfirmDescription'),
-        confirmButton: t('settings.about.storage.legacyImagesClearConfirmButton'),
-      });
-      if (!confirmed) return { cleared: false };
-      await storageHandlers.clearLegacyImagesDir();
-      return { cleared: true };
-    });
+    ipcMain.handle('cindy-media:legacy-images-clear', (event) =>
+      runFixedDirectoryIpcAction('legacy-images-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.about.storage.legacyImagesClearConfirmTitle'),
+          message: t('settings.about.storage.legacyImagesClearConfirmDescription'),
+          confirmButton: t('settings.about.storage.legacyImagesClearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        await storageHandlers.clearLegacyImagesDir();
+        return { cleared: true };
+      }),
+    );
     ipcMain.handle('cindy-media:chat-attachments-open-dir', (event) => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openChatAttachmentsDir();
     });
-    ipcMain.handle('cindy-media:chat-attachments-clear', async (event) => {
-      assertTrustedAppRendererEvent(event);
-      const ownerScope = captureActiveChatAttachmentRoot();
-      const confirmed = await confirmFixedDirectoryClear(event, {
-        title: t('settings.about.storage.chatAttachmentsClearConfirmTitle'),
-        message: t('settings.about.storage.chatAttachmentsClearConfirmDescription'),
-        confirmButton: t('settings.about.storage.chatAttachmentsClearConfirmButton'),
-      });
-      if (!confirmed) return { cleared: false };
-      if (!ownerScope.isCurrentOwner()) {
-        throw new Error('chat attachment directory owner changed before cleanup');
-      }
-      await storageHandlers.clearChatAttachmentsDir();
-      return { cleared: true };
-    });
+    ipcMain.handle('cindy-media:chat-attachments-clear', (event) =>
+      runFixedDirectoryIpcAction('chat-attachments-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const ownerScope = captureActiveChatAttachmentRoot();
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.about.storage.chatAttachmentsClearConfirmTitle'),
+          message: t('settings.about.storage.chatAttachmentsClearConfirmDescription'),
+          confirmButton: t('settings.about.storage.chatAttachmentsClearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        if (!ownerScope.isCurrentOwner()) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'chat attachment directory owner changed before cleanup',
+          );
+        }
+        await storageHandlers.clearChatAttachmentsDir();
+        return { cleared: true };
+      }),
+    );
   }
 
   // F5: SDK send-time temporary base64 read (renderer-initiated; main-initiated

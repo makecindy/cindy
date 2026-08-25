@@ -79,6 +79,32 @@ describe('fixed cache directory settings', () => {
     }
   });
 
+  it('encodes fixed directory confirmation and cleanup failures as IPC errors', () => {
+    const bootstrap = fs.readFileSync(
+      new URL('../bootstrap-electron.ts', import.meta.url),
+      'utf8',
+    );
+    const storageBlock = bootstrap.slice(
+      bootstrap.indexOf('// ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账'),
+      bootstrap.indexOf('// F5: SDK send-time temporary base64 read'),
+    );
+
+    expect(storageBlock).toContain('const runFixedDirectoryIpcAction');
+    expect(storageBlock).toContain('if (isIpcError(error)) throw error;');
+    expect(storageBlock).toContain(
+      "throwIpcError('INTERNAL', 'fixed cache directory action failed')",
+    );
+    expect(storageBlock).toContain(
+      "'fixed directory cleanup requires a live owner window'",
+    );
+    expect(storageBlock).toContain(
+      "runFixedDirectoryIpcAction('legacy-images-clear'",
+    );
+    expect(storageBlock).toContain(
+      "runFixedDirectoryIpcAction('chat-attachments-clear'",
+    );
+  });
+
   it('opens and clears only the active owner chat attachment directory', () => {
     const bootstrap = fs.readFileSync(
       new URL('../bootstrap-electron.ts', import.meta.url),
