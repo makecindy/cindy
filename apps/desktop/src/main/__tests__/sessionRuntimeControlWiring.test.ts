@@ -143,6 +143,9 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       "internalOptions.source === 'user' || internalOptions.fastExplicit === true",
     );
+    expect(setModel).toContain(
+      "allowFixedEffortPlaceholder: internalOptions.source === 'user'",
+    );
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
   });

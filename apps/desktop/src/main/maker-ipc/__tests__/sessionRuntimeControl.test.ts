@@ -484,6 +484,16 @@ describe('session runtime fallback selection', () => {
         effortExplicit: true,
         fastExplicit: false,
       }),
+    ).toEqual({ ok: false, reason: 'effort-unavailable' });
+    expect(
+      resolveSessionRuntimeAxes({
+        model: fixedEffortModel,
+        effort: 'low',
+        fastMode: false,
+        effortExplicit: true,
+        fastExplicit: false,
+        allowFixedEffortPlaceholder: true,
+      }),
     ).toEqual({ ok: true, effort: null, fastMode: false });
   });
 

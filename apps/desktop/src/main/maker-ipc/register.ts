@@ -14797,6 +14797,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             internalOptions.source === 'user' || internalOptions.effortExplicit === true,
           fastExplicit:
             internalOptions.source === 'user' || internalOptions.fastExplicit === true,
+          allowFixedEffortPlaceholder: internalOptions.source === 'user',
         });
         if (!axes.ok && axes.reason === 'effort-unavailable') {
           throwIpcError(
