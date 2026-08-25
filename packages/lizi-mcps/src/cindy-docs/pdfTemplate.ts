@@ -65,7 +65,9 @@ function decodeHtmlEntities(raw: string): string {
 export function extractHtmlTitle(html: string): string | undefined {
   const title = findHtmlElementRange(html, 'title');
   if (title) {
-    const value = decodeHtmlEntities(stripTags(html.slice(title.contentStart, title.contentEnd)));
+    const value = decodeHtmlEntities(html.slice(title.contentStart, title.contentEnd))
+      .replace(/\s+/g, ' ')
+      .trim();
     if (value.length > 0) return value;
   }
   const heading = findHtmlElementRange(html, 'h1');

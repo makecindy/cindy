@@ -485,6 +485,7 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(extractHtmlTitle('<title>季度回顾</title>')).toBe('季度回顾');
     expect(extractHtmlTitle('<h1>季度回顾</h1>')).toBe('季度回顾');
     expect(extractHtmlTitle('<title>R&amp;D &#x62a5;&#x544a;</title>')).toBe('R&D 报告');
+    expect(extractHtmlTitle('<title>C++ <vector> 指南</title>')).toBe('C++ <vector> 指南');
     expect(
       extractHtmlTitle(
         `<!-- <title>Draft</title> --><script>const sample = '<title>Script</title>';</script><title>Final</title>`,

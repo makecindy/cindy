@@ -1174,6 +1174,31 @@ describe('render_pdf', () => {
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
   });
 
+  it('内联 html 的任务目录图片与样式表同样先快照成 data URI', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(path.join(workdir, 'style.css'), '.hero { color: red; }', 'utf8');
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      html: '<link rel="stylesheet" href="./style.css"><img src="./chart.png">',
+      outPath: 'inline-snapshotted.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(seen[0]!.htmlBytes).toBeUndefined();
+    expect(seen[0]!.html).toContain('data:image/png;base64,');
+    expect(seen[0]!.html).toContain('data:text/css;base64,');
+    expect(seen[0]!.html).not.toContain('./chart.png');
+    expect(seen[0]!.html).not.toContain('./style.css');
+  });
+
   it('HTML 读取后源目录被重绑时拒绝混合目录版本的资源', async () => {
     const sourceDir = path.join(workdir, 'source');
     const movedDir = path.join(workdir, 'source-original');

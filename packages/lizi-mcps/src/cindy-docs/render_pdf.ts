@@ -887,7 +887,7 @@ export function registerRenderPdfTool(
         .string()
         .optional()
         .describe(
-          '内联 HTML 源码。与 htmlPath 二选一。图片/字体请使用 data URI,file:// 子资源不会被解析。',
+          '内联 HTML 源码。与 htmlPath 二选一。相对图片/字体/样式以任务工作目录为基准快照;file:// 与工作目录外路径会被拒绝。',
         ),
       outPath: z.string().min(1).describe('输出 .pdf 路径,工作目录内的相对路径或绝对路径。'),
       pageSize: z
@@ -997,15 +997,13 @@ export function registerRenderPdfTool(
             );
           }
         }
-        const snapshotHtml = sourcePath
-          ? await inlineLocalResources(
-              root,
-              sourceSnapshotPath ?? sourcePath,
-              sourceHtml,
-              sourceDirectory,
-              initialDirectorySnapshots,
-            )
-          : sourceHtml;
+        const snapshotHtml = await inlineLocalResources(
+          root,
+          sourceSnapshotPath ?? sourcePath ?? path.join(root, '__cindy_inline__.html'),
+          sourceHtml,
+          sourceDirectory,
+          initialDirectorySnapshots,
+        );
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
         const wrapped = applyReportTemplate(snapshotHtml, palette, template);
         const userSetMargins = margins !== undefined;
