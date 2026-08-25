@@ -25,6 +25,7 @@ import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
 import {
   buildSessionListFlightKey,
+  bumpSessionListWriteGeneration,
   runSessionListSingleFlight,
 } from './sessionListSingleFlight';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
@@ -73,6 +74,23 @@ const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
+
+function readCurrentDbClientSnapshot(): { client: DbClient; userId: string } | null {
+  try {
+    return currentDb.getCurrentDbClientSnapshot?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readCurrentDbClientUserId(): string | null {
+  try {
+    return currentDb.getCurrentDbClientUserId?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
 type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
@@ -186,6 +204,9 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  if (patch.status !== undefined || patch.pinnedAt !== undefined) {
+    bumpSessionListWriteGeneration();
+  }
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   if (hasCapturedScope) {
@@ -983,7 +1004,9 @@ export function registerSessionIpc(
     'local-db:sessions:list',
     async (_e, limit: unknown, status: unknown, options: unknown) => {
       const startedAt = performance.now();
-      const db = getDbClient().drizzle;
+      const snapshot = readCurrentDbClientSnapshot();
+      const db = snapshot?.client.drizzle ?? getDbClient().drizzle;
+      const userId = snapshot?.userId ?? readCurrentDbClientUserId();
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
@@ -1024,8 +1047,7 @@ export function registerSessionIpc(
           }),
         );
       };
-      // key 用归一化后的 cap/status/includePinned，并带当前账号，避免切账号接到旧库 flight。
-      const userId = currentDb.getCurrentDbClientUserId?.() ?? null;
+      // key 用同一快照上的 userId + 归一化参数 + 写代次，避免切账号或写后 refresh 接到旧 flight。
       const result = userId
         ? await runSessionListSingleFlight(
             buildSessionListFlightKey({ userId, cap, statusFilter, includePinned }),
@@ -1107,6 +1129,7 @@ export function registerSessionIpc(
       source: 'local-db:sessions:create',
     });
     await db.insert(sessions).values(insertRow);
+    bumpSessionListWriteGeneration();
     const [row] = await db.select().from(sessions).where(eq(sessions.id, id));
     if (!row) throwIpcError('NOT_FOUND', 'Session 创建后查询失败');
     // recent-workdirs: 项目目录走 sidebar 分组,要进"最近"列表;dialogue 目录是

@@ -9,6 +9,15 @@
 export type SessionListStatusFilter = 'active' | 'archived' | null;
 
 const inflight = new Map<string, Promise<unknown>>();
+let writeGeneration = 0;
+
+export function bumpSessionListWriteGeneration(): void {
+  writeGeneration += 1;
+}
+
+export function readSessionListWriteGeneration(): number {
+  return writeGeneration;
+}
 
 export function buildSessionListFlightKey(input: {
   userId: string;
@@ -17,7 +26,7 @@ export function buildSessionListFlightKey(input: {
   includePinned: boolean;
 }): string {
   const status = input.statusFilter ?? 'all';
-  return `${input.userId}|${status}|${input.cap}|${input.includePinned ? 'pinned' : 'plain'}`;
+  return `${input.userId}|${status}|${input.cap}|${input.includePinned ? 'pinned' : 'plain'}|g${writeGeneration}`;
 }
 
 export function runSessionListSingleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
@@ -39,4 +48,5 @@ export function runSessionListSingleFlight<T>(key: string, run: () => Promise<T>
 /** 测试用：清空残留 flight，避免用例互相污染。 */
 export function resetSessionListSingleFlightForTests(): void {
   inflight.clear();
+  writeGeneration = 0;
 }

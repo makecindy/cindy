@@ -44,3 +44,8 @@ export function tryGetDbClient(): DbClient | null {
 export function getCurrentDbClientUserId(): string | null {
   return current?.userId ?? null;
 }
+
+/** 同一引用上读出 client 与 userId，避免分两次读赶上账号切换。 */
+export function getCurrentDbClientSnapshot(): { client: DbClient; userId: string } | null {
+  return current;
+}

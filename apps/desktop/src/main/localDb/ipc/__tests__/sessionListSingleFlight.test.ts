@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildSessionListFlightKey,
+  bumpSessionListWriteGeneration,
   resetSessionListSingleFlightForTests,
   runSessionListSingleFlight,
 } from '../sessionListSingleFlight';
@@ -19,7 +20,7 @@ describe('buildSessionListFlightKey', () => {
         statusFilter: null,
         includePinned: true,
       }),
-    ).toBe('u1|all|200|pinned');
+    ).toBe('u1|all|200|pinned|g0');
   });
 
   it('separates filter, cap, pinned, and userId', () => {
@@ -29,7 +30,7 @@ describe('buildSessionListFlightKey', () => {
       statusFilter: 'active' as const,
       includePinned: true,
     };
-    expect(buildSessionListFlightKey(base)).toBe('u1|active|200|pinned');
+    expect(buildSessionListFlightKey(base)).toBe('u1|active|200|pinned|g0');
     expect(buildSessionListFlightKey({ ...base, statusFilter: null })).not.toBe(
       buildSessionListFlightKey(base),
     );
@@ -37,7 +38,7 @@ describe('buildSessionListFlightKey', () => {
       buildSessionListFlightKey(base),
     );
     expect(buildSessionListFlightKey({ ...base, includePinned: false })).toBe(
-      'u1|active|200|plain',
+      'u1|active|200|plain|g0',
     );
     expect(buildSessionListFlightKey({ ...base, userId: 'u2' })).not.toBe(
       buildSessionListFlightKey(base),
@@ -135,5 +136,26 @@ describe('runSessionListSingleFlight', () => {
     expect(u2Run).toHaveBeenCalledTimes(1);
     releaseU1('u1');
     await expect(u1).resolves.toBe('u1');
+  });
+
+  it('does not join a refresh after a write generation bump', async () => {
+    const params = {
+      userId: 'u1',
+      cap: 200,
+      statusFilter: 'active' as const,
+      includePinned: true,
+    };
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const first = runSessionListSingleFlight(buildSessionListFlightKey(params), async () => gate);
+    bumpSessionListWriteGeneration();
+    const afterWrite = vi.fn(async () => 'fresh');
+    const second = runSessionListSingleFlight(buildSessionListFlightKey(params), afterWrite);
+    await expect(second).resolves.toBe('fresh');
+    expect(afterWrite).toHaveBeenCalledTimes(1);
+    release('stale');
+    await expect(first).resolves.toBe('stale');
   });
 });
