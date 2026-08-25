@@ -154,6 +154,11 @@ interface CallEntry {
   toolUseId: string | null;
   sessionId: string | null;
   /**
+   * SSH remote 会话的 host id；本地会话必须显式登记 null。省略表示调用方
+   * 没有提供 locality 事实，能力消费方必须 fail closed，不能当成本地。
+   */
+  remoteHostId: string | null | undefined;
+  /**
    * 调用通道:'session' = 会话内 ghost_call(默认);'script' = scheduler
    * 「仅运行脚本」broker 直调。显式字段而非由 sessionId/scriptWorkdir 推导
    * ——workingDir 空白的脚本条目(scriptWorkdir null)也必须被识别为脚本
@@ -233,6 +238,8 @@ export class GhostCardService {
       ghostId: string;
       toolUseId: string | null;
       sessionId: string | null;
+      /** SSH remote host；本地会话显式传 null，未知时省略并 fail closed。 */
+      remoteHostId?: string | null;
       /** 脚本通道调用方传入 schedule.workingDir;普通会话调用省略。 */
       scriptWorkdir?: string | null;
       /** 脚本通道调用方传入脚本声明的 out_file(唯一可写相对路径);无写窗时省略。 */
@@ -246,6 +253,7 @@ export class GhostCardService {
       ghostId: info.ghostId,
       toolUseId: info.toolUseId,
       sessionId: info.sessionId,
+      remoteHostId: info.remoteHostId,
       channel: info.channel ?? 'session',
       scriptWorkdir: info.scriptWorkdir ?? null,
       scriptWritePath: info.scriptWritePath ?? null,
@@ -299,10 +307,10 @@ export class GhostCardService {
    * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
    * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
   }
 
   /**
@@ -326,6 +334,7 @@ export class GhostCardService {
       ghostId: info.ghostId,
       toolUseId: null,
       sessionId: info.sessionId,
+      remoteHostId: undefined,
       // 交互卡重开只发生在会话通道(脚本通道条目拒供片,无卡可点)。
       channel: 'session',
       scriptWorkdir: null,

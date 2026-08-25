@@ -33,6 +33,10 @@ import {
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { setUserPromptOwner } from '@/lib/userPromptStore';
 import { bootstrapMemorySettingsFromMain, setMemorySettingsOwner } from '@/lib/memorySettingsStore';
+import {
+  refreshChatEmbeddingFromMain,
+  setChatEmbeddingSettingsOwner,
+} from '@/lib/chatEmbeddingStore';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
@@ -199,6 +203,14 @@ export function AuthProvider({
       setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
       setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
+      const chatEmbeddingOwnerChanged = setChatEmbeddingSettingsOwner(
+        state.dataOwnerId,
+        state.ownerGeneration,
+        state.mode === 'cloud'
+          && state.isAuthenticated
+          && state.user?.membershipKind === 'org',
+      );
+      if (chatEmbeddingOwnerChanged) void refreshChatEmbeddingFromMain();
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();

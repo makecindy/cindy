@@ -32,18 +32,43 @@ function emit(): void {
   for (const listener of [...listeners]) listener();
 }
 
+export interface MarkScheduleRunsReadResult {
+  processed: string[];
+  failed: string[];
+  firstError?: string;
+}
+
 /**
  * 批量标记 run 已读,settle 后无条件触发本地刷新。
  * 单条失败不阻塞其余(allSettled);IPC 全挂时也照样 emit——刷新只是重查 DB,
  * 让 UI 至少回到与 DB 一致的状态。
+ * 返回实际成功 / 失败的 runId,调用方按真实结果出 toast,不要用请求数当成功数。
  */
-export async function markScheduleRunsReadAndSync(runIds: readonly string[]): Promise<void> {
+export async function markScheduleRunsReadAndSync(
+  runIds: readonly string[],
+): Promise<MarkScheduleRunsReadResult> {
+  const processed: string[] = [];
+  const failed: string[] = [];
+  let firstError: string | undefined;
   if (runIds.length > 0) {
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       runIds.map((runId) => window.electronAPI.maker.schedule.markRunRead(runId)),
     );
+    results.forEach((result, index) => {
+      const runId = runIds[index];
+      if (runId === undefined) return;
+      if (result.status === 'fulfilled') {
+        processed.push(runId);
+        return;
+      }
+      failed.push(runId);
+      if (firstError === undefined) {
+        firstError = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      }
+    });
   }
   emit();
+  return firstError === undefined ? { processed, failed } : { processed, failed, firstError };
 }
 
 /** 单条版本(run 历史卡片用)。 */

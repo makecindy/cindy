@@ -119,6 +119,14 @@ import {
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
 import {
+  dedupeCells,
+  extractAliveYieldCellsFromCodexItem,
+  extractSettledYieldCellIdsFromCodexItem,
+  extractYieldedExecCellsFromCodexItem,
+  formatYieldContinuationPrompt,
+  type YieldedExecCell,
+} from './yielded-exec-cell.js';
+import {
   newCodexRuntimeState,
   isAuthRelatedErrorMessage,
   translateErrorNotification,
@@ -1158,9 +1166,31 @@ const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySel
 // 计划实施/修订 turn 的**审查意图**:这些 turn 的 message 是固定内部串('Implement the plan.'),
 // 直接拿它当 review intent 会让灰区 reviewer 完全看不到用户原始请求与获批计划(codex 报)。
 const CODEX_AUTO_REVIEW_INTENT = Symbol('codexAutoReviewIntent');
+const CODEX_YIELD_CONTINUATION = Symbol('codexYieldContinuation');
+const CODEX_INTERNAL_CONTINUATION = Symbol('codexInternalContinuation');
+const YIELD_CONTINUATION_MAX_ATTEMPTS = 2;
 type CodexInternalSendOptions = SendOptions & {
   [CODEX_INHERITED_CAPABILITY_SELECTION]?: string;
   [CODEX_AUTO_REVIEW_INTENT]?: string;
+  [CODEX_YIELD_CONTINUATION]?: number;
+  [CODEX_INTERNAL_CONTINUATION]?: true;
+};
+type YieldContinuationClaim = {
+  id: number;
+  state: 'awaiting' | 'active' | 'cancelled';
+  cells: YieldedExecCell[];
+  settledCellIds: Set<string>;
+  pendingBoundaryEvents: number;
+  settled: boolean;
+  retryCount: number;
+  originTurnId: string;
+  continuationTurnId: string | null;
+  permissionPolicy: TurnPermissionPolicy | null;
+  capabilitySelectionText: string;
+  autoReviewIntent: string;
+  deferredPlanText: string | null;
+  deferredPlanTurnId: string | null;
+  deferredPlanCapabilitySelectionText: string;
 };
 const SYSTEM_PLAN_REVIEW_DISMISSAL_REASONS = new Set([
   'no_listener_attached',
@@ -3103,6 +3133,335 @@ export class CodexAgent extends BaseAgent {
       });
     };
     let isTurnInFlight = false;
+    const yieldedExecCellsByTurnId = new Map<string, Map<string, YieldedExecCell[]>>();
+    const yieldContinuationClaims = new Map<number, YieldContinuationClaim>();
+    const yieldContinuationListeners = new Set<(
+      continuationId: number,
+      state: 'awaiting' | 'active' | 'cancelled',
+    ) => void>();
+    let nextYieldContinuationId = 1;
+    let activeYieldContinuationId: number | null = null;
+    let yieldContinuationInFlight = false;
+    let yieldContinuationAbort: AbortController | null = null;
+    let yieldContinuationIdleWaiters: Array<(cancelled: boolean) => void> = [];
+    let yieldContinuationProductFailed = false;
+    const emitYieldContinuationState = (
+      continuationId: number,
+      state: 'awaiting' | 'active' | 'cancelled',
+    ): void => {
+      for (const listener of [...yieldContinuationListeners]) {
+        try {
+          listener(continuationId, state);
+        } catch (e) {
+          log.warn('yield continuation listener threw', { error: String(e) });
+        }
+      }
+    };
+    const activeYieldContinuationClaim = (): YieldContinuationClaim | null =>
+      activeYieldContinuationId === null
+        ? null
+        : yieldContinuationClaims.get(activeYieldContinuationId) ?? null;
+    const releaseSettledYieldContinuationClaim = (claim: YieldContinuationClaim): void => {
+      if (!claim.settled || claim.pendingBoundaryEvents > 0) return;
+      yieldContinuationClaims.delete(claim.id);
+    };
+    const yieldItemLedgerKey = (record: Record<string, unknown> | null): string => {
+      if (!record) return '';
+      for (const key of ['id', 'call_id', 'callId'] as const) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim()) return value;
+      }
+      return '';
+    };
+    const abortYieldContinuationSend = (): void => {
+      const pending = yieldContinuationAbort;
+      yieldContinuationAbort = null;
+      try {
+        pending?.abort();
+      } catch (error) {
+        log.debug('yield continuation abort controller threw', { error: String(error) });
+      }
+    };
+    const forgetSettledYieldCells = (turnId: string, item: unknown): void => {
+      const settledIds = extractSettledYieldCellIdsFromCodexItem(item);
+      if (settledIds.length === 0) return;
+      const existing = yieldedExecCellsByTurnId.get(turnId);
+      if (existing) {
+        for (const [itemId, cells] of [...existing.entries()]) {
+          const remaining = cells.filter((cell) => !settledIds.includes(cell.cellId));
+          if (remaining.length === 0) existing.delete(itemId);
+          else existing.set(itemId, remaining);
+        }
+        if (existing.size === 0) yieldedExecCellsByTurnId.delete(turnId);
+      }
+      const claim = activeYieldContinuationClaim();
+      if (!claim) return;
+      for (const cellId of settledIds) claim.settledCellIds.add(cellId);
+    };
+    const rememberYieldedExecCells = (
+      turnId: string | undefined,
+      item: unknown,
+      phase: 'updated' | 'completed',
+    ): void => {
+      if (!turnId) return;
+      if (completedTurnIds.has(turnId) || terminalErroredTurnIds.has(turnId)) return;
+      const record = item && typeof item === 'object' && !Array.isArray(item)
+        ? item as Record<string, unknown>
+        : null;
+      const itemId = yieldItemLedgerKey(record);
+      const cells = dedupeCells([
+        ...extractYieldedExecCellsFromCodexItem(item),
+        ...extractAliveYieldCellsFromCodexItem(item),
+      ]);
+      const existing = yieldedExecCellsByTurnId.get(turnId) ?? new Map<string, YieldedExecCell[]>();
+      if (cells.length === 0) {
+        if (phase === 'completed' && itemId) {
+          // Named completions drop that item. Nameless completions share the
+          // anonymous bucket; an unmarked sibling (short exec Exit 0) must not
+          // wipe still-running cells. Settled waits drop one cell_id via
+          // forgetSettledYieldCells below — never delete('').
+          existing.delete(itemId);
+        }
+      } else if (itemId) {
+        existing.set(itemId, cells);
+      } else if (phase === 'completed') {
+        // Nameless exec and wait share the same anonymous bucket. A later wait
+        // that is still running must accumulate, not replace the yielded exec.
+        // Only completed snapshots are authoritative; nameless itemUpdated
+        // cannot later be forgotten without an id.
+        const anonymous = existing.get('') ?? [];
+        existing.set('', dedupeCells([...anonymous, ...cells]));
+      }
+      if (existing.size === 0) yieldedExecCellsByTurnId.delete(turnId);
+      else yieldedExecCellsByTurnId.set(turnId, existing);
+      forgetSettledYieldCells(turnId, item);
+    };
+    const cellsForCompletedTurn = (turnId: string): YieldedExecCell[] => {
+      const byItem = yieldedExecCellsByTurnId.get(turnId);
+      if (!byItem) return [];
+      return dedupeCells([...byItem.values()].flat());
+    };
+    const attachYieldContinuationClaim = (
+      event: AgentEvent,
+      claim: YieldContinuationClaim,
+    ): void => {
+      event.turnContinuationId = claim.id;
+      claim.pendingBoundaryEvents += 1;
+    };
+    const mintYieldContinuationClaim = (
+      cells: YieldedExecCell[],
+      originTurnId: string,
+      retryCount: number,
+    ): YieldContinuationClaim => {
+      const claim: YieldContinuationClaim = {
+        id: nextYieldContinuationId++,
+        state: 'awaiting',
+        cells,
+        settledCellIds: new Set(),
+        pendingBoundaryEvents: 0,
+        settled: false,
+        retryCount,
+        originTurnId,
+        continuationTurnId: null,
+        permissionPolicy: activeTurnPermissionPolicy,
+        capabilitySelectionText: '',
+        autoReviewIntent: '',
+        deferredPlanText: null,
+        deferredPlanTurnId: null,
+        deferredPlanCapabilitySelectionText: '',
+      };
+      yieldContinuationClaims.set(claim.id, claim);
+      activeYieldContinuationId = claim.id;
+      yieldContinuationProductFailed = false;
+      log.info('yield continuation claim created', {
+        continuationId: claim.id,
+        originTurnId,
+        cellIds: cells.map((cell) => cell.cellId),
+        retryCount,
+      });
+      return claim;
+    };
+    const claimOwnsTurn = (claim: YieldContinuationClaim, turnId: string | null | undefined): boolean => {
+      if (!turnId) return false;
+      return claim.originTurnId === turnId || claim.continuationTurnId === turnId;
+    };
+    const bindYieldContinuationTurn = (turnId: string): void => {
+      const claim = activeYieldContinuationClaim();
+      if (!claim || claim.settled || claim.continuationTurnId) return;
+      claim.continuationTurnId = turnId;
+    };
+    const flushYieldContinuationIdleWaiters = (cancelled = false): void => {
+      if (!cancelled && (activeYieldContinuationClaim() != null || yieldContinuationInFlight)) return;
+      const waiters = yieldContinuationIdleWaiters;
+      yieldContinuationIdleWaiters = [];
+      for (const resolve of waiters) resolve(cancelled);
+    };
+    const waitForYieldContinuationIdle = async (): Promise<boolean> => {
+      if (yieldContinuationProductFailed) return true;
+      if (activeYieldContinuationClaim() == null && !yieldContinuationInFlight) return false;
+      return await new Promise<boolean>((resolve) => {
+        yieldContinuationIdleWaiters.push(resolve);
+      });
+    };
+    const emitCancelledYieldProductDone = (): void => {
+      eventQueue.push({
+        type: 'done',
+        data: {
+          type: 'codex/event/task_complete',
+          cancelled: true,
+        },
+        source: 'codex',
+      });
+      eventQueue.push({
+        type: 'status',
+        data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+        source: 'codex',
+      });
+    };
+    const cancelActiveYieldContinuation = (reason: string): YieldContinuationClaim | null => {
+      const claim = activeYieldContinuationClaim();
+      abortYieldContinuationSend();
+      if (!claim || claim.settled) return null;
+      claim.state = 'cancelled';
+      claim.settled = true;
+      activeYieldContinuationId = null;
+      yieldContinuationInFlight = false;
+      log.info('yield continuation cancelled', { reason, continuationId: claim.id });
+      emitYieldContinuationState(claim.id, 'cancelled');
+      releaseSettledYieldContinuationClaim(claim);
+      flushYieldContinuationIdleWaiters(true);
+      // Cancel is a product terminal. Do not leak a deferred plan cycle into the
+      // next user send after Stop / owned-turn failure / replacement send.
+      planCycleActive = false;
+      proposedPlanText = null;
+      return claim;
+    };
+    const discardYieldContinuationClaims = (reason: string): void => {
+      abortYieldContinuationSend();
+      if (yieldContinuationClaims.size > 0) {
+        log.debug('discarding yield continuation claims', {
+          reason,
+          continuationIds: [...yieldContinuationClaims.keys()],
+        });
+      }
+      activeYieldContinuationId = null;
+      yieldContinuationInFlight = false;
+      yieldedExecCellsByTurnId.clear();
+      for (const claim of yieldContinuationClaims.values()) {
+        claim.settled = true;
+        releaseSettledYieldContinuationClaim(claim);
+      }
+      yieldContinuationClaims.clear();
+      flushYieldContinuationIdleWaiters(true);
+    };
+    const releaseYieldContinuationEvent = (event: AgentEvent): void => {
+      if (event.turnContinuationId === undefined) return;
+      const claim = yieldContinuationClaims.get(event.turnContinuationId);
+      if (!claim) return;
+      claim.pendingBoundaryEvents = Math.max(0, claim.pendingBoundaryEvents - 1);
+      releaseSettledYieldContinuationClaim(claim);
+    };
+    const emitYieldContinuationFailure = (opts: {
+      reason: 'yield-continuation-start-failed' | 'yield-continuation-lost-handle';
+      message: string;
+      cells: YieldedExecCell[];
+      detail?: string;
+    }): void => {
+      log.warn(
+        opts.reason === 'yield-continuation-start-failed'
+          ? 'yield continuation turn failed to start'
+          : 'yield continuation lost exec cell',
+        {
+          reason: opts.reason,
+          ...(opts.detail ? { detail: opts.detail } : {}),
+          cellIds: opts.cells.map((cell) => cell.cellId),
+        },
+      );
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: opts.message,
+          isTerminal: true,
+          reason: opts.reason,
+        },
+        source: 'codex',
+      });
+      eventQueue.push({
+        type: 'status',
+        data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+        source: 'codex',
+      });
+      // Failure is a product terminal. Latch so later ask_user / plan answers
+      // cannot treat idle as permission to start another turn, and dismiss
+      // unfinished cards from the failed product turn.
+      yieldContinuationProductFailed = true;
+      flushYieldContinuationIdleWaiters(true);
+      planCycleActive = false;
+      proposedPlanText = null;
+      dismissAllPending(opts.reason, 'deny');
+      dismissAllPendingUserInput(opts.reason);
+    };
+    const emitYieldContinuationStartFailure = (error: unknown, cells: YieldedExecCell[]): void => {
+      emitYieldContinuationFailure({
+        reason: 'yield-continuation-start-failed',
+        message: `yield continuation turn failed to start: ${String(error)}`,
+        cells,
+        detail: String(error),
+      });
+    };
+    const emitYieldContinuationLostHandle = (cells: YieldedExecCell[], reason: string): void => {
+      emitYieldContinuationFailure({
+        reason: 'yield-continuation-lost-handle',
+        message: `Foreground exec cell ${cells.map((cell) => cell.cellId).join(', ')} was lost after the previous turn completed.`,
+        cells,
+        detail: reason,
+      });
+    };
+    async function startYieldContinuation(claim: YieldContinuationClaim): Promise<void> {
+      if (closed || yieldContinuationInFlight || claim.state !== 'awaiting' || claim.settled) return;
+      yieldContinuationInFlight = true;
+      claim.state = 'active';
+      emitYieldContinuationState(claim.id, 'active');
+      const abort = new AbortController();
+      yieldContinuationAbort = abort;
+      const sendOptions: CodexInternalSendOptions = {
+        [CODEX_YIELD_CONTINUATION]: claim.retryCount + 1,
+        [CODEX_INTERNAL_CONTINUATION]: true,
+        throwOnStartFailure: true,
+        signal: abort.signal,
+        ...(claim.permissionPolicy
+          ? { turnPermissionPolicy: claim.permissionPolicy }
+          : {}),
+        ...(claim.capabilitySelectionText
+          ? { [CODEX_INHERITED_CAPABILITY_SELECTION]: claim.capabilitySelectionText }
+          : {}),
+        ...(claim.autoReviewIntent
+          ? { [CODEX_AUTO_REVIEW_INTENT]: claim.autoReviewIntent }
+          : {}),
+      };
+      try {
+        await handle.send(
+          { type: 'user', content: formatYieldContinuationPrompt(claim.cells) },
+          sendOptions,
+        );
+      } catch (error) {
+        const alreadySettled = claim.settled || abort.signal.aborted;
+        if (activeYieldContinuationId === claim.id) activeYieldContinuationId = null;
+        yieldContinuationInFlight = false;
+        if (alreadySettled) {
+          releaseSettledYieldContinuationClaim(claim);
+          return;
+        }
+        claim.settled = true;
+        emitYieldContinuationStartFailure(error, claim.cells);
+        releaseSettledYieldContinuationClaim(claim);
+      } finally {
+        if (yieldContinuationAbort === abort) yieldContinuationAbort = null;
+        if (claim.settled || activeYieldContinuationId !== claim.id) {
+          yieldContinuationInFlight = false;
+        }
+      }
+    }
     /**
      * 本 handle 上「起过多少个 turn」的单调计数器,每个新 turn 首次被置活时 +1。
      *
@@ -5640,6 +5999,7 @@ export class CodexAgent extends BaseAgent {
           .filter(Boolean)
           .join('\n'),
         ...(autoReviewIntent ? { [CODEX_AUTO_REVIEW_INTENT]: autoReviewIntent } : {}),
+        [CODEX_INTERNAL_CONTINUATION]: true,
       });
       const emitPlanFollowUpStartFailure = (kind: 'implementation' | 'revision', error: unknown): void => {
         log.warn(`plan ${kind} turn failed to start`, { error: String(error) });
@@ -5689,6 +6049,8 @@ export class CodexAgent extends BaseAgent {
         );
         log.debug('plan review ◀ approved — starting implementation turn', { turnId, edited: Boolean(edited && edited !== plan.trim()) });
         try {
+          if (await waitForYieldContinuationIdle()) return;
+          if (closed) return;
           await handle.send(
             { type: 'user', content: message },
             planFollowUpSendOptions(
@@ -5717,6 +6079,8 @@ export class CodexAgent extends BaseAgent {
       }
       log.debug('plan review ◀ revision requested — starting plan revision turn', { turnId });
       try {
+        if (await waitForYieldContinuationIdle()) return;
+        if (closed) return;
         await handle.send(
           { type: 'user', content: feedback },
           // 修订轮同样带上原始审查意图快照:否则 send 会把 auto-review intent 覆盖成这条修改意见,
@@ -6022,6 +6386,8 @@ export class CodexAgent extends BaseAgent {
       autoReviewIntent?: string,
     ): Promise<void> {
       if (closed) return;
+      if (await waitForYieldContinuationIdle()) return;
+      if (closed) return;
       const message = formatAskUserContinuationMessage(live.questions, answers);
       const sendOptions: CodexInternalSendOptions = {
         ...(live.permissionPolicy ? { turnPermissionPolicy: live.permissionPolicy } : {}),
@@ -6029,6 +6395,7 @@ export class CodexAgent extends BaseAgent {
           ? { [CODEX_INHERITED_CAPABILITY_SELECTION]: live.capabilitySelectionText }
           : {}),
         ...(autoReviewIntent ? { [CODEX_AUTO_REVIEW_INTENT]: autoReviewIntent } : {}),
+        [CODEX_INTERNAL_CONTINUATION]: true,
       };
       try {
         await handle.send({ type: 'user', content: message }, sendOptions);
@@ -6214,6 +6581,7 @@ export class CodexAgent extends BaseAgent {
       const isNewTurn = currentTurnId !== turnId;
       currentTurnId = turnId;
       isTurnInFlight = true;
+      bindYieldContinuationTurn(turnId);
       if (!isNewTurn) return;
 
       resetCodexGenerationTiming(translatorRt);
@@ -6249,7 +6617,7 @@ export class CodexAgent extends BaseAgent {
       clearUpstreamIdle();
       if (upstreamIdleTimeoutMs <= 0) return;
       if (closed || !isTurnInFlight) return;
-      // 工具执行 / 等审批期间 ball 不在上游,不计 idle 配额。
+      // 工具执行 / 等审批 / yield cell 等待期间 ball 不在上游,不计 idle 配额。
       if (pendingToolItemIds.size > 0) return;
       upstreamIdleRemainingMs = upstreamIdleTimeoutMs;
       armUpstreamIdleSlice();
@@ -6699,7 +7067,9 @@ export class CodexAgent extends BaseAgent {
         armUpstreamIdle();
         observeReconnectStallEvent(ev);
       }
-      return rawEventQueuePush(ev);
+      const accepted = rawEventQueuePush(ev);
+      if (!accepted) releaseYieldContinuationEvent(ev);
+      return accepted;
     };
 
     // ── ServerRequest handlers (Phase 2 approval, Phase 5 dismiss-on-mode-change) ──
@@ -7810,6 +8180,28 @@ export class CodexAgent extends BaseAgent {
       return true;
     }
 
+    function isolateCancelledTurnStart(
+      resp: TurnStartResponse | undefined,
+      sendOpts: SendOptions | undefined,
+      stage: string,
+    ): void {
+      if (!closed && sendOpts?.signal?.aborted !== true) return;
+      abandonBufferedTurns(`send cancelled ${stage}`);
+      const staleTurnId = resp?.turn?.id;
+      if (!staleTurnId) return;
+      terminalErroredTurnIds.add(staleTurnId);
+      if (!threadId) return;
+      host
+        .request(Method.TurnInterrupt, { threadId, turnId: staleTurnId })
+        .catch((error: unknown) => {
+          log.warn('cancelled turn/start interrupt failed (best-effort)', {
+            turnId: staleTurnId,
+            stage,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
+
     function isLocalAcceptBoundaryError(err: unknown): boolean {
       const text = err instanceof Error ? err.message : String(err);
       return /Codex send (?:cancelled|cannot be accepted)/i.test(text);
@@ -8510,10 +8902,24 @@ export class CodexAgent extends BaseAgent {
         detachPendingAskUserForSuccessfulTurn(turn.id);
       } else {
         dismissPendingUserInputForTurn(turn.id, `turn_${turn.status}`);
+        yieldedExecCellsByTurnId.delete(turn.id);
+        const claim = activeYieldContinuationClaim();
+        if (claim && claimOwnsTurn(claim, turn.id)) {
+          cancelActiveYieldContinuation(`turn_${turn.status}`);
+        }
       }
       clearActiveToolContextsForTurn(turn.id);
       const overlapsActiveTurn = suppressTerminalUi && currentTurnId !== null && currentTurnId !== turn.id;
       if (overlapsActiveTurn) return;
+      const activeYieldClaim = activeYieldContinuationClaim();
+      if (activeYieldClaim && !claimOwnsTurn(activeYieldClaim, turn.id)) {
+        // Foreign terminals must not settle the live continuation's usage,
+        // generation timing, claim, or product Done. Tombstone the foreign
+        // turn above, then leave the owned continuation untouched.
+        latestPlanByTurn.delete(turn.id);
+        flushDeferredTerminalTurnCompletionsIfIdle();
+        return;
+      }
       const completedTurnWasPlanMode = currentTurnPlanModeActive;
       if (currentTurnId === turn.id || currentTurnId === null) {
         isTurnInFlight = false;
@@ -8679,58 +9085,145 @@ export class CodexAgent extends BaseAgent {
         return;
       }
 
-      eventQueue.push({
-        type: 'status',
-        data: {
-          status: 'Done',
-          ...attachLiveGeneration(endSnap, {
-            outputTokens: realTurnUsage.output,
-            closedDurationMs: translatorRt.generationDurationMs,
-            openStartedAt: null,
-            reliable: translatorRt.generationTimingReliable,
-          }),
-          isRunning: false,
-        },
-        source: 'codex',
-      });
-      // 真实 per-turn 用量 (host 的 today chip / daily_model_usage 记账消费):
-      //   promptTokens     = 本 turn 未命中缓存的输入 (不再是 contextTokens 上下文快照)
-      //   completionTokens = 本 turn outputTokens（已包含 reasoning 子集，不重复相加）
-      //   reasoningTokens  = reasoning 明细子集，仅展示/诊断，不再参与总量求和
-      //   cachedTokens     = 本 turn 命中缓存的输入
-      //   segments         = 每次 total cursor 前进对应的请求级 usage；定价方必须
-      //                      逐段选长上下文档位后再求和，不能拿 turn aggregate 选档
-      // 契约: 本 payload **永远是 per-turn 增量语义**, 消费方 (today chip /
-      // daily_model_usage 记账) 直接累加, 不做任何 delta 化。整个 turn 没收到
-      // tokenUsage/updated 时就是全 0 (该 turn 不记账) — 不退回 contextTokens:
-      // 在直接累加的消费方手里, 上下文快照会被当成一笔巨额输入, 高估远糟于漏记。
-      eventQueue.push({
-        type: 'done',
-        data: {
-          type: 'codex/event/task_complete',
-          usage: codexDoneUsage,
-          raw: turn,
-          plan: latestPlanByTurn.get(turn.id) ?? null,
-        },
-        source: 'codex',
-      });
-      latestPlanByTurn.delete(turn.id);
-      // 计划模式: plan turn 正常收尾且产出了 proposed plan → 发起审批闭环。
-      // 放在 done 之后 (AsyncQueue FIFO), renderer 先做完 turn 收尾再挂 plan 卡片。
-      // 空跑(模型没产出 <proposed_plan>, 例如直接回答了问题) → 循环结束,
-      // 下一 turn 经 threadTouchedPlanMode 复位 default。
-      const planForReview = proposedPlanText?.trim();
-      proposedPlanText = null;
-      if (completedTurnWasPlanMode && planCycleActive) {
-        if (planForReview) {
-          void runPlanReviewFlow(
-            planForReview,
-            turn.id,
-            completedCapabilitySelectionText,
+      const existingYieldClaim = activeYieldContinuationClaim();
+      const yieldedCells = cellsForCompletedTurn(turn.id);
+      yieldedExecCellsByTurnId.delete(turn.id);
+      let yieldClaim: YieldContinuationClaim | null = null;
+      let suppressSuccessfulYieldBoundary = false;
+      if (existingYieldClaim?.state === 'awaiting') {
+        yieldClaim = existingYieldClaim;
+        if (yieldedCells.length > 0) {
+          yieldClaim.cells = dedupeCells([...yieldClaim.cells, ...yieldedCells]);
+        }
+        if (!yieldClaim.capabilitySelectionText && completedCapabilitySelectionText) {
+          yieldClaim.capabilitySelectionText = completedCapabilitySelectionText;
+        }
+        if (!yieldClaim.autoReviewIntent && currentAutoReviewIntent) {
+          yieldClaim.autoReviewIntent = currentAutoReviewIntent;
+        }
+      } else if (existingYieldClaim?.state === 'active') {
+        existingYieldClaim.settled = true;
+        activeYieldContinuationId = null;
+        yieldContinuationInFlight = false;
+        releaseSettledYieldContinuationClaim(existingYieldClaim);
+        const outstandingCells = dedupeCells([
+          ...existingYieldClaim.cells,
+          ...yieldedCells,
+        ]).filter((cell) => !existingYieldClaim.settledCellIds.has(cell.cellId));
+        const retryCount = existingYieldClaim.retryCount + 1;
+        if (outstandingCells.length === 0) {
+          // Continuation waited the claimed cell(s) to completion. This is the
+          // product terminal, not a lost handle.
+          flushYieldContinuationIdleWaiters();
+        } else if (yieldedCells.length === 0 || retryCount >= YIELD_CONTINUATION_MAX_ATTEMPTS) {
+          emitYieldContinuationLostHandle(
+            outstandingCells,
+            yieldedCells.length === 0 ? 'empty_completion' : 'retry_exhausted',
           );
+          suppressSuccessfulYieldBoundary = true;
         } else {
-          log.debug('plan turn produced no proposed plan — plan cycle ends', { turnId: turn.id });
-          planCycleActive = false;
+          yieldClaim = mintYieldContinuationClaim(outstandingCells, turn.id, retryCount);
+          yieldClaim.permissionPolicy = existingYieldClaim.permissionPolicy;
+          yieldClaim.capabilitySelectionText = existingYieldClaim.capabilitySelectionText;
+          yieldClaim.autoReviewIntent = existingYieldClaim.autoReviewIntent;
+          yieldClaim.deferredPlanText = existingYieldClaim.deferredPlanText;
+          yieldClaim.deferredPlanTurnId = existingYieldClaim.deferredPlanTurnId;
+          yieldClaim.deferredPlanCapabilitySelectionText =
+            existingYieldClaim.deferredPlanCapabilitySelectionText;
+        }
+      } else if (yieldedCells.length > 0) {
+        yieldClaim = mintYieldContinuationClaim(yieldedCells, turn.id, 0);
+        // turn/completed already deleted the origin turn's selection map. Use the
+        // snapshot taken before that delete, plus the still-live review intent.
+        yieldClaim.capabilitySelectionText = completedCapabilitySelectionText;
+        yieldClaim.autoReviewIntent = currentAutoReviewIntent;
+      }
+      if (!suppressSuccessfulYieldBoundary) {
+        const idleStatusEvent: AgentEvent = {
+          type: 'status',
+          data: {
+            status: 'Done',
+            ...attachLiveGeneration(endSnap, {
+              outputTokens: realTurnUsage.output,
+              closedDurationMs: translatorRt.generationDurationMs,
+              openStartedAt: null,
+              reliable: translatorRt.generationTimingReliable,
+            }),
+            isRunning: false,
+          },
+          source: 'codex',
+        };
+        const doneEvent: AgentEvent = {
+          type: 'done',
+          data: {
+            type: 'codex/event/task_complete',
+            usage: codexDoneUsage,
+            raw: turn,
+            plan: latestPlanByTurn.get(turn.id) ?? null,
+          },
+          source: 'codex',
+        };
+        if (yieldClaim?.state === 'awaiting') {
+          attachYieldContinuationClaim(idleStatusEvent, yieldClaim);
+          attachYieldContinuationClaim(doneEvent, yieldClaim);
+        }
+        eventQueue.push(idleStatusEvent);
+        // 真实 per-turn 用量 (host 的 today chip / daily_model_usage 记账消费):
+        //   promptTokens     = 本 turn 未命中缓存的输入 (不再是 contextTokens 上下文快照)
+        //   completionTokens = 本 turn outputTokens（已包含 reasoning 子集，不重复相加）
+        //   reasoningTokens  = reasoning 明细子集，仅展示/诊断，不再参与总量求和
+        //   cachedTokens     = 本 turn 命中缓存的输入
+        //   segments         = 每次 total cursor 前进对应的请求级 usage；定价方必须
+        //                      逐段选长上下文档位后再求和，不能拿 turn aggregate 选档
+        // 契约: 本 payload **永远是 per-turn 增量语义**, 消费方 (today chip /
+        // daily_model_usage 记账) 直接累加, 不做任何 delta 化。整个 turn 没收到
+        // tokenUsage/updated 时就是全 0 (该 turn 不记账) — 不退回 contextTokens:
+        // 在直接累加的消费方手里, 上下文快照会被当成一笔巨额输入, 高估远糟于漏记。
+        eventQueue.push(doneEvent);
+      }
+      latestPlanByTurn.delete(turn.id);
+      if (yieldClaim?.state === 'awaiting') {
+        if (completedTurnWasPlanMode && planCycleActive) {
+          const livePlan = proposedPlanText?.trim() || null;
+          if (livePlan) {
+            yieldClaim.deferredPlanText = livePlan;
+            yieldClaim.deferredPlanTurnId = turn.id;
+            yieldClaim.deferredPlanCapabilitySelectionText = completedCapabilitySelectionText;
+          } else if (!yieldClaim.deferredPlanText) {
+            yieldClaim.deferredPlanTurnId = turn.id;
+            yieldClaim.deferredPlanCapabilitySelectionText = completedCapabilitySelectionText;
+          }
+        }
+        proposedPlanText = null;
+        void startYieldContinuation(yieldClaim);
+      } else {
+        // 计划模式: 只在产品终态审批。awaiting yield claim 时 SDK turn 边界不是
+        // 产品结束 —— 空跑不得把 planCycleActive 关掉，已有计划也等续段结算后再挂卡。
+        // 放在 done 之后 (AsyncQueue FIFO), renderer 先做完 turn 收尾再挂 plan 卡片。
+        // 空跑(模型没产出 <proposed_plan>, 例如直接回答了问题) → 循环结束,
+        // 下一 turn 经 threadTouchedPlanMode 复位 default。
+        const livePlan = proposedPlanText?.trim() || null;
+        proposedPlanText = null;
+        const deferredPlan = existingYieldClaim?.deferredPlanText?.trim() || null;
+        const planForReview = livePlan ?? deferredPlan;
+        const planReviewTurnId = livePlan
+          ? turn.id
+          : (existingYieldClaim?.deferredPlanTurnId ?? turn.id);
+        const planCapabilitySelection = livePlan
+          ? completedCapabilitySelectionText
+          : (existingYieldClaim?.deferredPlanCapabilitySelectionText
+            || completedCapabilitySelectionText);
+        if (planCycleActive && (completedTurnWasPlanMode || deferredPlan)) {
+          if (planForReview) {
+            void runPlanReviewFlow(
+              planForReview,
+              planReviewTurnId,
+              planCapabilitySelection,
+            );
+          } else {
+            log.debug('plan turn produced no proposed plan — plan cycle ends', { turnId: turn.id });
+            planCycleActive = false;
+          }
         }
       }
       flushDeferredTerminalTurnCompletionsIfIdle();
@@ -9476,12 +9969,15 @@ export class CodexAgent extends BaseAgent {
         const hadPendingWork =
           isTurnInFlight
           || isTurnStartPending
-          || overloadRetryPending();
+          || overloadRetryPending()
+          || yieldContinuationInFlight
+          || activeYieldContinuationClaim() != null;
         if (!hadPendingWork) {
           log.info('idle Codex session invalidated by forced host retirement', { threadId });
           eventQueue.end();
           return;
         }
+        discardYieldContinuationClaims('app-server force-retired');
 
         // turn/start 可能尚未返回 id。先把所有在途请求标为已收口并隔离，随后 RPC
         // reject/迟到 resolve 时复用既有 finally/墓碑路径，不再发第二组终态。
@@ -9947,6 +10443,7 @@ export class CodexAgent extends BaseAgent {
           producedOutputTurnIds.add(params.turnId);
         }
         noteActiveToolContext(params.item, params.turnId);
+        rememberYieldedExecCells(params.turnId, params.item, 'updated');
         // updated 也要登记映射,顺序与 started / completed 一致(先登记 → 翻译 → 后发重放帧)。
         // V1 的 spawn 是长跑 item(started → updated* → completed):started 那帧若没到我们手里
         // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
@@ -10010,6 +10507,7 @@ export class CodexAgent extends BaseAgent {
           producedOutputTurnIds.add(params.turnId);
         }
         completeActiveToolContext(params.item, params.turnId);
+        rememberYieldedExecCells(params.turnId, params.item, 'completed');
         // This late item belongs to an already-terminal parent. The parent
         // cleanup already cleared its pending tools; touching the shared
         // lifecycle set here would re-arm the currently active turn's idle
@@ -10175,7 +10673,6 @@ export class CodexAgent extends BaseAgent {
         // codex R12 P1): 合法 → 激活后重放走正常终端路径收口 send; 孤儿 →
         // 丢弃, 不得让孤儿 error 终结合法 send。
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.error?.(params))) return;
-        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         let effectiveParams = params;
         let isTerminalError = params.willRetry !== true;
         const isTransportError = params.scope === 'transport';
@@ -10197,7 +10694,9 @@ export class CodexAgent extends BaseAgent {
           terminalDescendantTurnIds.clear();
           submittedUserInputByTurn.clear();
           clearAllPendingUserInputInteractions();
+          cancelActiveYieldContinuation('transport error');
         }
+        if (!isTransportError && shouldIgnoreStaleTurnEvent(params.turnId)) return;
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
         // currentTurnId 是 null 且 isTurnInFlight 是 false —— 上面两条既有判据都不成立,
@@ -10364,7 +10863,11 @@ export class CodexAgent extends BaseAgent {
             }
           }
         }
-        const wasTurnRunning = isTurnInFlight || targetsPendingTurn;
+        const wasTurnRunning =
+          isTurnInFlight
+          || targetsPendingTurn
+          || yieldContinuationInFlight
+          || activeYieldContinuationClaim() != null;
         if (isTerminalError && targetsCurrentTurn && !isTransportError) {
           const recoveryTurnId = effectiveParams.turnId || currentTurnId || '';
           // error notification 只登记恢复意图并保持 logical turn 运行；
@@ -10439,6 +10942,10 @@ export class CodexAgent extends BaseAgent {
         // 没接管(预算耗尽 / 已有产出 / 非容量错误)且这一轮确实在跑 → 下面推 Done 收口。
         // 同上: 收口即撤销重投资格, 否则延后标记会在别的 start settle 时补排。
         revokeOverloadRetryOnTerminalSettle('terminal error notification');
+        // yield claim 让 isTurnRunning() 在 SDK turn 结束后仍为 true。transport
+        // 路径在订阅作废时已经结算；非 transport 的终态 error 同样会推 Done,
+        // 若不在这里同步取消, UI 已失败而后续 send 仍被 SESSION_RUNNING 拒绝。
+        cancelActiveYieldContinuation('terminal error');
         eventQueue.push({
           type: 'status',
           data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
@@ -10492,6 +10999,7 @@ export class CodexAgent extends BaseAgent {
       // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
       // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
       // 永不返回, server 侧请求卡死。
+      discardYieldContinuationClaims('session closed');
       abandonBufferedTurns('session closed');
       abandonPendingCapabilitySteers();
       // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
@@ -10547,6 +11055,12 @@ export class CodexAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions) {
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
           return;
+        }
+        const internalOpts = sendOpts as CodexInternalSendOptions | undefined;
+        const yieldAttempt = internalOpts?.[CODEX_YIELD_CONTINUATION];
+        if (yieldAttempt == null && internalOpts?.[CODEX_INTERNAL_CONTINUATION] !== true) {
+          cancelActiveYieldContinuation('new send');
+          yieldContinuationProductFailed = false;
         }
         // 用户开启新 turn = 旧重连序列作废；deadline 不得跨 turn 误伤新请求。
         clearReconnectStall();
@@ -10627,16 +11141,20 @@ export class CodexAgent extends BaseAgent {
           rejectIfCancelled(sendOpts, 'send');
           const message = `Failed to restore Codex read-only reference permissions: ${String(e)}`;
           log.error('read-only reference profile refresh failed', { error: String(e), threadId });
-          eventQueue.push({
-            type: 'error',
-            data: { message, isTerminal: true },
-            source: 'codex',
-          });
-          eventQueue.push({
-            type: 'status',
-            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
-            source: 'codex',
-          });
+          // Yield continuation owns its product terminal. Emitting here would
+          // duplicate the later yield-continuation-start-failed events.
+          if (yieldAttempt == null) {
+            eventQueue.push({
+              type: 'error',
+              data: { message, isTerminal: true },
+              source: 'codex',
+            });
+            eventQueue.push({
+              type: 'status',
+              data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+              source: 'codex',
+            });
+          }
           if (sendOpts?.throwOnStartFailure) throw new Error(message);
           return;
         }
@@ -11061,10 +11579,11 @@ export class CodexAgent extends BaseAgent {
           });
           markTurnConfigAccepted();
           adoptUnidentifiedDeadTurn(resp, initialStartSeq);
+          // yield continuation 带 throwOnStartFailure + AbortSignal: 取消检查会
+          // 抛, 不能把墓碑/interrupt 写在 return 后面。先隔离已被 server 接受
+          // 的 turn, 再让取消检查抛/返回, 迟到的 turnStarted 才会撞墓碑。
+          isolateCancelledTurnStart(resp, sendOpts, 'after turn/start');
           if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start')) {
-            // 本地取消边界直接 return: 挂起的 buffered 请求没有 settle 者
-            // (codex R17 P2), 统一释放。
-            abandonBufferedTurns('send cancelled after turn/start');
             return;
           }
           handleTurnStartResp(resp, initialStartSeq);
@@ -11158,8 +11677,8 @@ export class CodexAgent extends BaseAgent {
               });
               markTurnConfigAccepted();
               adoptUnidentifiedDeadTurn(resp, initialStartSeq);
+              isolateCancelledTurnStart(resp, sendOpts, 'after turn/start retry');
               if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start retry')) {
-                abandonBufferedTurns('send cancelled after turn/start retry');
                 return;
               }
               handleTurnStartResp(resp, initialStartSeq);
@@ -11240,7 +11759,7 @@ export class CodexAgent extends BaseAgent {
             log.info('turn/start failure suppressed — this send was already settled by cancel', {
               threadId,
             });
-          } else {
+          } else if (yieldAttempt == null) {
             eventQueue.push({
               type: 'error',
               data: { message: `turn/start failed: ${String(finalErr)}`, isTerminal: true },
@@ -11523,6 +12042,16 @@ export class CodexAgent extends BaseAgent {
       },
 
       async abort() {
+        const cancelledYield = cancelActiveYieldContinuation('aborted');
+        // isolateCancelledTurnStart tombstones an accepted turn whose TurnStart
+        // RPC is still pending, and that tombstone swallows interrupted
+        // turn/completed. Only then emit an unclaimed cancelled done so Session
+        // releases currentTurnAttemptToken. After the RPC has returned,
+        // provider interrupted already emits one product Done — synthesizing
+        // another here would settle the next attempt.
+        if (cancelledYield && isTurnStartPending) {
+          emitCancelledYieldProductDone();
+        }
         clearReconnectStall();
         // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。
         // 放在 currentTurnId 判空之前：重投等待期间 turn 已死、currentTurnId 为
@@ -11565,7 +12094,16 @@ export class CodexAgent extends BaseAgent {
       },
 
       events(): AsyncIterable<AgentEvent> {
-        return eventQueue;
+        const consumedEventStream = async function* (): AsyncGenerator<AgentEvent> {
+          for await (const event of eventQueue) {
+            try {
+              yield event;
+            } finally {
+              releaseYieldContinuationEvent(event);
+            }
+          }
+        };
+        return consumedEventStream();
       },
 
       getUsageSnapshot(): UsageSnapshot {
@@ -11852,7 +12390,23 @@ export class CodexAgent extends BaseAgent {
         // idle 语义——终态先于 turn/start 响应到达时（协议允许的乱序），
         // coordinator 要看到 idle 才能收口，否则 send 挂死（既有用例
         // "accepts terminal error before TurnStartResponse…" 锁的就是这条）。
-        return isTurnInFlight || overloadRetryPending();
+        //
+        // yield continuation claim 把 provider turn/completed 与产品结束拆开:
+        // 等 cell / 续段尚未启动时 isTurnInFlight 已是 false, 但仍是同一产品请求。
+        return isTurnInFlight
+          || overloadRetryPending()
+          || yieldContinuationInFlight
+          || activeYieldContinuationClaim() != null;
+      },
+
+      beginTurnContinuationWait(continuationId?: number) {
+        if (continuationId === undefined) return null;
+        return yieldContinuationClaims.get(continuationId)?.state ?? null;
+      },
+
+      onTurnContinuationChange(listener) {
+        yieldContinuationListeners.add(listener);
+        return () => yieldContinuationListeners.delete(listener);
       },
     };
 

@@ -335,7 +335,6 @@ setTimeout(() => process.exit(0), 20000).unref();
 const fs = require('node:fs');
 const path = require('node:path');
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-fs.writeFileSync(path.join(config.runDir, 'started'), '1');
 const timer = setInterval(() => {
   let files = [];
   try { files = fs.readdirSync(path.join(config.runDir, 'controls')); } catch {}
@@ -357,6 +356,10 @@ const timer = setInterval(() => {
     process.exit(0);
   }
 }, 20);
+// Publish readiness only after the stop-control poller is installed. Writing
+// this before setInterval leaves a small CI race where the parent aborts while
+// this fixture is still initializing and observes only the process exit.
+fs.writeFileSync(path.join(config.runDir, 'started'), '1');
 setTimeout(() => process.exit(2), 5000).unref();
 `, { mode: 0o700 });
       const previous = { ...process.env };

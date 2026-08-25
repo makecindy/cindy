@@ -1,7 +1,8 @@
 /**
- * Host-owned Connection audience resolution. Only organization-scoped Plugin
- * Market installs with an intact manifest may receive a token; the Host derives
- * the audience from the current organization and the installed plugin id.
+ * Host-owned Connection audience resolution. New grants require an intact
+ * organization-scoped Plugin Market install; a bounded read-only fallback keeps
+ * legacy Forge receipts working. The Host derives the audience from the current
+ * organization and the installed plugin id.
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
@@ -127,20 +128,15 @@ export function loadConnectionAudienceResolver(
         }
       };
 
-      // Forge branch before market-record: a forge package has no ledger row.
-      // Personal identity / missing orgSlug already rejected above.
+      // 只读兼容升级前的 Forge receipt。新安装不再写 agent-forge；但旧插件的
+      // Connection JWT 资格不能因客户端升级中断。个人身份、缺失组织 slug、未知
+      // 前缀与缺失批准包哈希都已在进入此分支前后 fail closed。
       const forgeOrigin = options.readInstallOrigin?.(ghostId);
       if (forgeOrigin === 'agent-forge') {
-        const prefixLookup = identity.orgId
-          ? options.lookupOrganizationPrefix?.(identity.orgId)
-          : undefined;
+        const prefixLookup = options.lookupOrganizationPrefix?.(identity.orgId);
         const prefix =
           prefixLookup && prefixLookup.kind === 'known' ? prefixLookup.pluginPrefix : null;
-        if (
-          prefix &&
-          PLUGIN_PREFIX_PATTERN.test(prefix) &&
-          ghostId.startsWith(`${prefix}-`)
-        ) {
+        if (prefix && PLUGIN_PREFIX_PATTERN.test(prefix) && ghostId.startsWith(`${prefix}-`)) {
           const approvedSha = options.readApprovedPackageSha256?.(ghostId) ?? null;
           if (!approvedSha || !/^[a-f0-9]{64}$/.test(approvedSha)) {
             return reject('forge-package-sha-missing');

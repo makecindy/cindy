@@ -18,16 +18,16 @@ const zhCommon = JSON.parse(
 };
 
 describe('Ghost Plugin creation prompt', () => {
-  it('reads the forge guide before designing, packing, and installing', () => {
+  it('reads the forge guide before designing and keeps packing separate from installation', () => {
     const prompt = zhCommon.settings.ghosts.page.createPrompt;
 
     expect(prompt).toContain('先从提问开始');
     expect(prompt.indexOf('ghost_forge_guide')).toBeGreaterThanOrEqual(0);
     expect(prompt.indexOf('ghost_forge_guide')).toBeLessThan(prompt.indexOf('ghost_forge_pack'));
-    // 用真实章号指向卡槽总览:agent 可能照抄文案字样调 ghost_forge_guide 的
-    // section 取章,而章节匹配只认章号或标题子串,"卡槽总览"不是任何标题的子串。
-    expect(prompt).toContain('第 2 章卡槽总览');
-    expect(prompt).toContain('打包并安装插件');
+    expect(prompt).toContain('能力总览');
+    expect(prompt).toContain('生成 .cindy 产物');
+    expect(prompt).toContain('不要声称已经安装');
+    expect(prompt).not.toContain('打包并安装插件');
   });
 
   it('asks with option cards and surfaces hidden design choices (guide §0)', () => {
@@ -52,8 +52,8 @@ describe('Ghost Plugin creation prompt', () => {
     expect(prompt).toContain('未读角标');
     expect(prompt).toContain('随包 Node 进程');
     expect(prompt).toContain('媒体能力');
-    // 必读章节含 §2 卡槽总览:18 个槽的全局视野是"按需读相关章节"的前提。
-    expect(prompt).toContain('卡槽总览');
-    expect(prompt).toContain('第 2 章');
+    // 必读内容保持能力全局视野，但不再把能力模型表达成 slot。
+    expect(prompt).toContain('能力总览');
+    expect(prompt).not.toContain('卡槽总览');
   });
 });

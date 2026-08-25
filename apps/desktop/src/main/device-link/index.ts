@@ -73,6 +73,7 @@ import {
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   dropAllControllers,
+  deactivateAllControllers,
   flushMakerEventBatchesOnReconnect,
   flushRemoteInvokeResultOutboxOnReconnect,
   forgetControllerInvokeState,
@@ -705,8 +706,18 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   }, RESPONSIVENESS_PROBE_TICK_MS);
   responsivenessProbeTimer.unref();
 
+  client.onPeerRouteStateChanged((change) => {
+    if (change.state === 'offline') {
+      handleControllerOffline(change.deviceId, change);
+    }
+  });
+
   client.onStatusChange((status) => {
     if (status !== 'online') {
+      // The shared relay connection is a larger fault domain than one peer:
+      // release every active controller projection, but keep remembered topics
+      // so reconnect recovery can still replay them explicitly.
+      deactivateAllControllers('relay-disconnected');
       controllerDisplayNameRefreshGeneration += 1;
       // 不清 openLinkInFlight:登记生命周期的唯一判据是 promise settle(每个
       // 请求 settle 时自清理,closeRemoteLink 的显式删除有取消代次兜底)。建链

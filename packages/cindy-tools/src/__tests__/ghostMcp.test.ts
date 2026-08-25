@@ -7,6 +7,7 @@ import {
   ghostForgePublishInputSchema,
   ghostSetupPlanInputSchema,
   handleForgeGuide,
+  handleForgeInstall,
   handleForgePack,
   handleForgePublish,
   handleForgePublishStatus,
@@ -71,7 +72,16 @@ function fakeDeps(
       id: "x",
       name: "X",
       version: "1.0.0",
-      note: "pending confirm",
+      note: "packed",
+    }),
+    forgeInstall: async () => ({
+      ok: true,
+      action: "installed",
+      id: "x",
+      name: "X",
+      version: "1.0.0",
+      enabled: true,
+      note: "installed",
     }),
     forgePublish: async () => ({
       ok: true,
@@ -1172,6 +1182,7 @@ describe("cindy_ghosts · server 构建", () => {
     expect(Object.keys(server._registeredTools).sort()).toEqual([
       "ghost_call",
       "ghost_forge_guide",
+      "ghost_forge_install",
       "ghost_forge_pack",
       "ghost_forge_publish",
       "ghost_forge_publish_status",
@@ -1477,7 +1488,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     const requests: Array<{
       dir: string;
       iconSource?: string;
-      intent?: "install" | "publish";
+      intent?: "publish";
     }> = [];
     const deps = fakeDeps({
       forgePack: async (request) => {
@@ -1508,6 +1519,58 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       { dir: "/src/default" },
       { dir: "/src/publish", intent: "publish" },
     ]);
+  });
+
+  it("forge_install 透传源码目录与可选图标并返回真实安装动作;失败标 isError", async () => {
+    const requests: Array<{ dir: string; iconSource?: string }> = [];
+    const installed = await handleForgeInstall(
+      fakeDeps({
+        forgeInstall: async (request) => {
+          requests.push(request);
+          return {
+            ok: true,
+            action: "updated",
+            id: "my-ghost",
+            name: "My Ghost",
+            version: "1.0.0",
+            enabled: false,
+            note: "updated",
+          };
+        },
+      }),
+      {
+        dir: "/src/my-ghost",
+        icon_source: `cindy-media://blobs/${"a".repeat(64)}.png`,
+      },
+    );
+    expect(parsePayload(installed)).toMatchObject({
+      ok: true,
+      action: "updated",
+      id: "my-ghost",
+      enabled: false,
+    });
+    expect(requests).toEqual([
+      {
+        dir: "/src/my-ghost",
+        iconSource: `cindy-media://blobs/${"a".repeat(64)}.png`,
+      },
+    ]);
+
+    const failed = await handleForgeInstall(
+      fakeDeps({
+        forgeInstall: async () => ({
+          ok: false,
+          errorCode: "GHOST_FILE_INVALID",
+          message: "invalid package",
+        }),
+      }),
+      { dir: "/src/bad" },
+    );
+    expect(failed.isError).toBe(true);
+    expect(parsePayload(failed)).toMatchObject({
+      ok: false,
+      errorCode: "GHOST_FILE_INVALID",
+    });
   });
 
   it("forge_publish 只透传 opaque token 并立即返回 transferId;失败标 isError", async () => {
@@ -1614,20 +1677,23 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     expect(description).toContain("xdt_image_url");
     expect(description).toContain("xdt_image_urls");
     expect(description).toContain("icon_source");
+    expect(description).toContain("缺省只打包并返回产物路径");
     expect(description).toContain("intent=publish");
     expect(description).toContain("intent=publish 仅企业组织成员可用");
-    expect(description).toContain("个人账号不可用,请用缺省的 install");
+    expect(description).toContain("个人账号仍可使用缺省的纯打包模式");
     const intentDescription =
       server._registeredTools.ghost_forge_pack?.inputSchema?.shape?.intent
         ?.description ?? "";
     // Excludes documenting the organization restriction only in the tool summary
     // while the registered intent parameter still advertises publish to everyone.
     expect(intentDescription).toContain("publish 仅企业组织成员可用");
-    expect(intentDescription).toContain("个人账号不可用,请用缺省的 install");
+    expect(intentDescription).toContain("个人账号仍可使用缺省的纯打包模式");
     const publishDescription = server._registeredTools.ghost_forge_publish?.description ?? "";
     expect(publishDescription).toContain("publishToken");
     expect(publishDescription).toContain("仅企业组织成员可用");
     expect(publishDescription).toContain("个人账号不可用");
+    expect(description).toContain("不安装或更新插件");
+    expect(description).not.toContain("确认框");
   });
 
   it("forge_publish_status 在上传成功后收口,不守着轮询人工审核", () => {
