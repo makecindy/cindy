@@ -4,6 +4,7 @@ import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
   isSupportedRuntimeEffort,
+  resolveRetainedRuntimeEffort,
 } from '../runtimeSelectionAxes.js';
 
 describe('isSupportedRuntimeEffort', () => {
@@ -12,6 +13,38 @@ describe('isSupportedRuntimeEffort', () => {
     expect(isSupportedRuntimeEffort('ultra')).toBe(true);
     expect(isSupportedRuntimeEffort('bogus')).toBe(false);
     expect(isSupportedRuntimeEffort(null)).toBe(false);
+  });
+});
+
+describe('resolveRetainedRuntimeEffort', () => {
+  it('clears stale effort for a fixed-effort target model', () => {
+    expect(
+      resolveRetainedRuntimeEffort({
+        targetModelHasFixedEffort: true,
+        requestedEffort: undefined,
+        liveEffort: 'ultra',
+        previousEffort: 'high',
+      }),
+    ).toBeNull();
+  });
+
+  it('uses the retained live effort before the previous store for variable-effort models', () => {
+    expect(
+      resolveRetainedRuntimeEffort({
+        targetModelHasFixedEffort: false,
+        requestedEffort: undefined,
+        liveEffort: 'xhigh',
+        previousEffort: 'medium',
+      }),
+    ).toBe('xhigh');
+    expect(
+      resolveRetainedRuntimeEffort({
+        targetModelHasFixedEffort: false,
+        requestedEffort: undefined,
+        liveEffort: null,
+        previousEffort: 'medium',
+      }),
+    ).toBe('medium');
   });
 });
 

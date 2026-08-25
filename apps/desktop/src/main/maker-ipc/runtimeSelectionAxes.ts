@@ -6,6 +6,16 @@ export function isSupportedRuntimeEffort(value: unknown): value is Effort {
   return typeof value === 'string' && (EFFORT_VALUES as readonly string[]).includes(value);
 }
 
+export function resolveRetainedRuntimeEffort(input: {
+  targetModelHasFixedEffort: boolean;
+  requestedEffort: Effort | null | undefined;
+  liveEffort: Effort | null;
+  previousEffort: Effort | null | undefined;
+}): Effort | null {
+  if (input.targetModelHasFixedEffort || input.requestedEffort === null) return null;
+  return input.liveEffort ?? input.previousEffort ?? null;
+}
+
 interface RuntimeSelectionAxesSession {
   agentKind: AgentKind;
   setEffort: (effort: Effort) => Promise<void>;

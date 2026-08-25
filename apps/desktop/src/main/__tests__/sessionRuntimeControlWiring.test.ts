@@ -66,9 +66,8 @@ describe('session runtime control wiring', () => {
     expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
     );
-    expect(registerSource).toContain(
-      'effort: retainedSession.getEffort() ?? previousRuntime.effort ?? null',
-    );
+    expect(registerSource).toContain('effort: resolveRetainedRuntimeEffort({');
+    expect(registerSource).toContain('targetModelHasFixedEffort,');
     expect(registerSource).toContain(
       'fastMode: retainedSession.getFastMode() ?? previousRuntime.fastMode',
     );
@@ -336,6 +335,48 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
+  });
+
+  it('records failed fallback routes without allowing stale owner work to mutate state', () => {
+    const fallback = handlerBody(
+      registerSource,
+      'const maybeApplySessionRuntimeFallback = async (',
+      'const sessionControlService = createSessionControlService({',
+    );
+    expect(fallback).toContain(
+      'const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();',
+    );
+    expect(fallback).toContain(
+      'if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;',
+    );
+    expect(fallback).toContain('await withSendToSessionLock(sessionId, async () => {');
+    expect(fallback).toContain("if (runtimeStatus?.status !== 'active') return;");
+    expect(fallback).toContain('recordFailedSessionRuntimeFallbackCandidate(');
+    expect(fallback).toContain('profiles.control.generation,');
+  });
+
+  it('commits runtime control before best-effort context bookkeeping', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const runtimeCommit = setModel.indexOf('let generation: number;');
+    const contextSnapshot = setModel.indexOf('await recordSessionContextSnapshot(');
+    expect(runtimeCommit).toBeGreaterThan(-1);
+    expect(contextSnapshot).toBeGreaterThan(runtimeCommit);
+    expect(setModel.indexOf('recordUserSessionRuntimeMutation(sessionId)', runtimeCommit)).toBeLessThan(
+      contextSnapshot,
+    );
+    expect(setModel.indexOf('settlePendingSessionRuntimeMutation(', runtimeCommit)).toBeLessThan(
+      contextSnapshot,
+    );
+    expect(setModel.indexOf('acceptSessionRuntimeMutation({', runtimeCommit)).toBeLessThan(
+      contextSnapshot,
+    );
+    expect(setModel.slice(runtimeCommit, contextSnapshot)).toContain('if (!response.deferred) {');
+    expect(setModel.slice(runtimeCommit, contextSnapshot)).toContain('try {');
+    expect(setModel).toContain('runtime model context snapshot refresh failed');
   });
 
   it('composes later partial runtime changes on the accepted pending profile', () => {

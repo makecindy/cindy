@@ -10,6 +10,7 @@ import {
   getSessionRuntimeControlSnapshot,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
+  recordFailedSessionRuntimeFallbackCandidate,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
@@ -357,6 +358,50 @@ describe('session runtime control state', () => {
 });
 
 describe('session runtime fallback selection', () => {
+  it('skips a failed candidate without consuming a fallback hop or generation', () => {
+    const sessionId = 'runtime-failed-candidate';
+    const candidate = { ...current, providerId: 'xd' };
+    const observed = getSessionRuntimeControlSnapshot(sessionId);
+
+    expect(
+      recordFailedSessionRuntimeFallbackCandidate(sessionId, observed.generation, candidate),
+    ).toBe(true);
+    const afterFailure = getSessionRuntimeControlSnapshot(sessionId);
+    expect(afterFailure).toMatchObject({
+      generation: observed.generation,
+      fallbackHop: observed.fallbackHop,
+      visitedRoutes: ['xd\u0000gpt-main'],
+    });
+
+    expect(
+      pickSessionRuntimeFallback({
+        providers: [
+          provider('openai', [{ id: 'gpt-main' }]),
+          provider('xd', [{ id: 'gpt-main' }]),
+          provider('other', [{ id: 'gpt-main' }]),
+        ],
+        current,
+        visitedRoutes: afterFailure.visitedRoutes,
+        currentHop: afterFailure.fallbackHop,
+        maxHops: 2,
+      }),
+    ).toMatchObject({ providerId: 'other', model: 'gpt-main' });
+  });
+
+  it('does not record a failed candidate against a stale generation', () => {
+    const sessionId = 'runtime-stale-failed-candidate';
+    const observed = getSessionRuntimeControlSnapshot(sessionId).generation;
+    recordUserSessionRuntimeMutation(sessionId);
+
+    expect(
+      recordFailedSessionRuntimeFallbackCandidate(sessionId, observed, {
+        ...current,
+        providerId: 'xd',
+      }),
+    ).toBe(false);
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual([]);
+  });
+
   it('rejects explicit unsupported axes and normalizes inherited axes', () => {
     const model = provider('xd', [
       { id: 'gpt-main', efforts: ['medium'], fast: false },

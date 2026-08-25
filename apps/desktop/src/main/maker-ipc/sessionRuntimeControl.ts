@@ -181,6 +181,17 @@ export function acceptSessionRuntimeMutation(params: {
   return state.generation;
 }
 
+export function recordFailedSessionRuntimeFallbackCandidate(
+  sessionId: string,
+  expectedGeneration: number,
+  profile: SessionRuntimeProfile,
+): boolean {
+  const state = stateFor(sessionId);
+  if (state.generation !== expectedGeneration) return false;
+  state.visitedRoutes.add(routeKey(profile));
+  return true;
+}
+
 export function settlePendingSessionRuntimeMutation(
   sessionId: string,
   generation: number,

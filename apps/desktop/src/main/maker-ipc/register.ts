@@ -871,6 +871,7 @@ import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
   isSupportedRuntimeEffort,
+  resolveRetainedRuntimeEffort,
 } from './runtimeSelectionAxes.js';
 import {
   acceptSessionRuntimeMutation,
@@ -881,6 +882,7 @@ import {
   getSessionRuntimeControlSnapshot,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
+  recordFailedSessionRuntimeFallbackCandidate,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
@@ -10983,6 +10985,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     attemptToken: number,
   ): Promise<Session | null> => {
     if (!readSessionRuntimeFallbackSettings().enabled || episodeAttempt < 2) return null;
+    const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: Session | null = null;
     try {
       const profiles = await readSessionRuntimeProfiles(sessionId);
@@ -11032,6 +11035,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             fastExplicit: false,
           },
         );
+      const recordFailedCandidate = async (): Promise<void> => {
+        try {
+          await withSendToSessionLock(sessionId, async () => {
+            if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
+            const [runtimeStatus] = await getDbClient()
+              .drizzle.select({ status: sessions.status })
+              .from(sessions)
+              .where(eq(sessions.id, sessionId))
+              .limit(1);
+            if (runtimeStatus?.status !== 'active') return;
+            recordFailedSessionRuntimeFallbackCandidate(
+              sessionId,
+              profiles.control.generation,
+              candidate,
+            );
+          });
+        } catch (recordError) {
+          log.debug('automatic runtime fallback failed-candidate record skipped', {
+            sessionId,
+            providerId: candidate.providerId,
+            model: candidate.model,
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      };
       let result: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
       try {
         result = await applyCandidate();
@@ -11041,6 +11069,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           !runtimeSession.remoteHostId ||
           !isRemoteModelSwitchRouteChangeError(error)
         ) {
+          await recordFailedCandidate();
           throw error;
         }
         // SSH Claude daemons freeze endpoint/credential env at spawn. The old
@@ -11056,7 +11085,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           toModel: candidate.model,
         });
         await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-        result = await applyCandidate();
+        try {
+          result = await applyCandidate();
+        } catch (retryError) {
+          await recordFailedCandidate();
+          throw retryError;
+        }
       }
       log.info('automatic session runtime fallback evaluated', {
         sessionId,
@@ -14797,14 +14831,51 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!retainedSession || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
           return;
         }
+        const retainedProviderId =
+          effectiveProviderId === undefined
+            ? (previousRuntime.providerId ?? null)
+            : (normalizeSessionProviderId(effectiveProviderId) ?? null);
+        let targetModelHasFixedEffort = atomicSelection?.effort === null;
+        if (!targetModelHasFixedEffort) {
+          try {
+            const retainedProviders = await getDesktopProviderService().listProviders({
+              allowSideEffects: false,
+              catalog: getActiveCatalog(),
+            });
+            const actualRetainedProviderId =
+              retainedProviderId ??
+              effectiveSourceIdForModel(
+                retainedProviders,
+                null,
+                retainedSession.model,
+                retainedSession.agentKind,
+              );
+            const retainedProvider = retainedProviders.find(
+              (provider) => provider.id === actualRetainedProviderId,
+            );
+            targetModelHasFixedEffort =
+              findCatalogModel(retainedProvider, retainedSession.model, retainedSession.agentKind, {
+                exact: true,
+              })?.efforts.length === 0;
+          } catch (error) {
+            log.debug('retained runtime model capability lookup failed', {
+              sessionId,
+              model: retainedSession.model,
+              providerId: retainedProviderId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         const retainedProfile: SessionRuntimeProfile = {
           agentKind: retainedSession.agentKind,
           model: retainedSession.model,
-          providerId:
-            effectiveProviderId === undefined
-              ? (previousRuntime.providerId ?? null)
-              : (normalizeSessionProviderId(effectiveProviderId) ?? null),
-          effort: retainedSession.getEffort() ?? previousRuntime.effort ?? null,
+          providerId: retainedProviderId,
+          effort: resolveRetainedRuntimeEffort({
+            targetModelHasFixedEffort,
+            requestedEffort: atomicSelection?.effort,
+            liveEffort: retainedSession.getEffort(),
+            previousEffort: previousRuntime.effort,
+          }),
           fastMode: retainedSession.getFastMode() ?? previousRuntime.fastMode,
         };
         if (effectiveProviderId !== undefined) {
@@ -14974,35 +15045,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentSwitchIntent: null,
           agentSwitchIntentCanceled: true,
         });
-        if (!response.deferred) {
-          const currentAgentKind =
-            maker.getSession(sessionId)?.agentKind ??
-            dbToMakerAgentKind(getSessionDbAgentKind(sessionId));
-          const verifiedWindow = lookupVerifiedContextWindow(
-            (agentKind, modelId, pid) =>
-              resolveVerifiedContextWindow(
-                getActiveCatalog(),
-                dbToMakerAgentKind(agentKind),
-                pid,
-                modelId,
-              ),
-            model,
-            typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
-            currentAgentKind,
-          );
-          if (verifiedWindow) {
-            const [usage] = await getDbClient()
-              .drizzle.select({ contextTokens: sessions.contextTokens })
-              .from(sessions)
-              .where(eq(sessions.id, sessionId))
-              .limit(1);
-            await recordSessionContextSnapshot(
-              sessionId,
-              usage?.contextTokens ?? 0,
-              verifiedWindow,
-            );
-          }
-        }
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
         }
@@ -15039,6 +15081,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
             },
           });
+        }
+        if (!response.deferred) {
+          try {
+            const currentAgentKind =
+              maker.getSession(sessionId)?.agentKind ??
+              dbToMakerAgentKind(getSessionDbAgentKind(sessionId));
+            const verifiedWindow = lookupVerifiedContextWindow(
+              (agentKind, modelId, pid) =>
+                resolveVerifiedContextWindow(
+                  getActiveCatalog(),
+                  dbToMakerAgentKind(agentKind),
+                  pid,
+                  modelId,
+                ),
+              model,
+              typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
+              currentAgentKind,
+            );
+            if (verifiedWindow) {
+              const [usage] = await getDbClient()
+                .drizzle.select({ contextTokens: sessions.contextTokens })
+                .from(sessions)
+                .where(eq(sessions.id, sessionId))
+                .limit(1);
+              await recordSessionContextSnapshot(
+                sessionId,
+                usage?.contextTokens ?? 0,
+                verifiedWindow,
+              );
+            }
+          } catch (error) {
+            log.debug('runtime model context snapshot refresh failed', {
+              sessionId,
+              model,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
         const projectionMeta = await maker.getSessionMeta(sessionId);
         const userBaselineOverride =
