@@ -83,6 +83,22 @@ describe('playSessionEventSound', () => {
     expect(audioHarness.play).toHaveBeenCalledTimes(1);
   });
 
+  it('merges concurrent same-kind events before the first playback settles', async () => {
+    let resolvePlayback!: () => void;
+    audioHarness.play.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePlayback = resolve;
+      }),
+    );
+
+    const first = playSessionEventSound('done');
+    const second = playSessionEventSound('done');
+
+    expect(audioHarness.play).toHaveBeenCalledTimes(1);
+    resolvePlayback();
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+  });
+
   it('cooldown is per kind: different kinds do not suppress each other', async () => {
     audioHarness.play.mockResolvedValue(undefined);
     await expect(playSessionEventSound('done')).resolves.toBe(true);

@@ -22,15 +22,15 @@ describe('useNotificationSettings sound override', () => {
     expect(localStorage.getItem(SOUND_KEY)).toBeNull();
   });
 
-  it('persists only a non-default value and clears it when returning to default', () => {
+  it('persists an explicit value even when it matches the current default', () => {
     const { result } = renderHook(() => useNotificationSettings());
     act(() => result.current.setSoundEnabled(false));
     expect(localStorage.getItem(SOUND_KEY)).toBe('false');
     expect(result.current.soundIsCustomized).toBe(true);
 
     act(() => result.current.setSoundEnabled(true));
-    expect(localStorage.getItem(SOUND_KEY)).toBeNull();
-    expect(result.current.soundIsCustomized).toBe(false);
+    expect(localStorage.getItem(SOUND_KEY)).toBe('true');
+    expect(result.current.soundIsCustomized).toBe(true);
   });
 
   it('reset removes the override and follows the current default', () => {
@@ -45,9 +45,11 @@ describe('useNotificationSettings sound override', () => {
     expect(localStorage.getItem(SOUND_KEY)).toBeNull();
   });
 
-  it('removes a legacy stored snapshot that equals the current default', () => {
+  it('treats a stored value equal to the current default as an explicit override', () => {
     localStorage.setItem(SOUND_KEY, 'true');
     expect(getSoundNotificationsEnabled()).toBe(true);
-    expect(localStorage.getItem(SOUND_KEY)).toBeNull();
+    const { result } = renderHook(() => useNotificationSettings());
+    expect(result.current.soundIsCustomized).toBe(true);
+    expect(localStorage.getItem(SOUND_KEY)).toBe('true');
   });
 });

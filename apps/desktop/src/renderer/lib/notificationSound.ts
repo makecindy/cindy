@@ -38,19 +38,27 @@ export const NOTIFICATION_SOUND_START_TIMEOUT_MS = 500;
 export const SESSION_SOUND_COOLDOWN_MS = 1_500;
 
 const lastPlayedAtByKind = new Map<SessionNotificationSoundKind, number>();
+/**
+ * 进行中的同 kind 播放尝试(review P2):进入函数时**同步登记**,让同一批
+ * 状态更新里并发到达的同类事件在任一 play() settle 之前就被合并——否则
+ * 并发调用都会读到空冷却 Map 而各自启动 Audio,重叠失真依旧。
+ */
+const inflightByKind = new Set<SessionNotificationSoundKind>();
 
-/** 仅供测试:模块级冷却 Map 会跨用例残留,用例间用它清零。 */
+/** 仅供测试:模块级冷却与 in-flight 状态会跨用例残留,用例间用它清零。 */
 export function resetNotificationSoundCooldownForTest(): void {
   lastPlayedAtByKind.clear();
+  inflightByKind.clear();
 }
 
 /**
- * 播放一次会话事件提示音,返回是否真的开始播放。
+ * 播放或合并一次会话事件提示音,返回对应系统通知是否应静音。
  *
  * 返回值驱动调用方决定是否把系统 toast 置静音(review P2):
- *   - true  = play() 已 resolve(实际出声)→ 调用方静音 OS 通知音,单一声源;
- *   - false = 自动播放被策略拒绝 / 资源缺失或解码失败 → 调用方保持 Electron
- *             默认(silent:false),OS 通知音照常,用户至少还有一条可听的提醒。
+ *   - true  = 本次 play() 已 resolve,或已被进行中／冷却中的同类提示音覆盖
+ *             → 调用方静音 OS 通知音,避免同批声音叠加;
+ *   - false = 当前主播放尝试被策略拒绝、超时、中止或解码失败 → 调用方保持
+ *             Electron 默认(silent:false),让这一条 OS 通知音兜底。
  */
 export async function playSessionEventSound(
   kind: SessionNotificationSoundKind,
@@ -64,6 +72,24 @@ export async function playSessionEventSound(
   if (now - lastPlayedAt < SESSION_SOUND_COOLDOWN_MS) {
     return true;
   }
+  // 同批并发合并(review P2):登记必须发生在任何 await 之前——并发调用在
+  // 任一 play() settle 前就能看到 in-flight 标记,从而合并进进行中的那次。
+  if (inflightByKind.has(kind)) {
+    return true;
+  }
+  inflightByKind.add(kind);
+  try {
+    return await playSessionEventSoundInner(kind, signal);
+  } finally {
+    // 成功路径已转入 lastPlayedAtByKind 冷却;失败路径则释放后允许后续事件重试。
+    inflightByKind.delete(kind);
+  }
+}
+
+async function playSessionEventSoundInner(
+  kind: SessionNotificationSoundKind,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const audio = new Audio(SOUND_URL_BY_KIND[kind]);
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let abortListener: (() => void) | null = null;

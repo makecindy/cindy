@@ -1074,16 +1074,16 @@ function ExpandedView({
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
-      // 先播应用提示音,拿到真实播放结果再决定 toast 是否静音(review P2):
-      // 播放成功 → 静音 OS 通知音,单一声源;失败(autoplay 被拒/资源缺失)→
-      // 保持 Electron 默认,OS 通知音照常,用户至少还有一条可听的提醒。
-      let soundOn = false;
+      // 先尝试或合并应用提示音,再决定 toast 是否静音(review P2):
+      // 已播放／已被同类提示音覆盖 → 静音 OS 通知音,避免同批声音叠加;
+      // 主播放失败 → 保持 Electron 默认,让这一条 OS 通知音兜底。
+      let suppressSystemSound = false;
       if (soundRequested) {
         const focusAbortController = new AbortController();
         const abortPendingSound = () => focusAbortController.abort();
         window.addEventListener('focus', abortPendingSound, { once: true });
         try {
-          soundOn = await playSessionEventSound(kind, focusAbortController.signal);
+          suppressSystemSound = await playSessionEventSound(kind, focusAbortController.signal);
         } finally {
           window.removeEventListener('focus', abortPendingSound);
         }
@@ -1108,7 +1108,7 @@ function ExpandedView({
           desktop: desktopEnabled,
           feishu: feishuEnabled,
           mobile: true,
-          sound: soundOn,
+          sound: suppressSystemSound,
         },
       });
     },
