@@ -1101,9 +1101,15 @@ export class GhostNodeRuntimeBroker {
     if (this.stoppingWorkers.has(key)) return;
     const barrier = this.waitForProcessExit(entry.child, entry.ghost.manifest.id);
     // A worker may be stopped without an immediate replacement request. Keep
-    // a rejection from becoming an unhandled promise while retaining it for
+    // a rejection from becoming unhandled while preserving its diagnostic for
     // the next request to surface as a bounded start failure.
-    void barrier.catch(() => undefined);
+    void barrier.catch((error: unknown) => {
+      this.deps.log?.warn('Node 工作进程退出屏障超时', {
+        ghostId: entry.ghost.manifest.id,
+        entry: entry.entryRel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     this.stoppingWorkers.set(key, barrier);
     entry.child.once('exit', () => {
       if (this.stoppingWorkers.get(key) === barrier) this.stoppingWorkers.delete(key);

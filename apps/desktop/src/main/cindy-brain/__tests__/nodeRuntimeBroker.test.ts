@@ -474,6 +474,88 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     expect(spawnProcess).toHaveBeenCalledTimes(2);
   });
 
+  it('同 key 的并发请求共享退出屏障且只启动一个替代进程', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    ghost.manifest.node!.idleTimeoutSeconds = 1;
+    const first = makeAutoReplyProcess();
+    const second = makeAutoReplyProcess();
+    vi.spyOn(first, 'kill').mockImplementation(() => {
+      first.killed = true;
+      return true;
+    });
+    const children = [first, second];
+    const spawnProcess = vi.fn(() => children.shift() as FakeNodeProcess);
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: spawnProcess as never,
+    });
+
+    await expect(broker.handleRequest('node-ghost', rpcRequest('first'))).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const requestA = broker.handleRequest('node-ghost', rpcRequest('a'));
+    const requestB = broker.handleRequest('node-ghost', rpcRequest('b'));
+    await vi.runAllTicks();
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+
+    first.emit('exit', null, 'SIGTERM');
+    await vi.runAllTicks();
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    second.emit('spawn');
+    const results = await Promise.all([requestA, requestB]);
+    expect(results[0]).toMatchObject({ ok: true, result: { method: 'a' } });
+    expect(results[1]).toMatchObject({ ok: true, result: { method: 'b' } });
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+  });
+
+  it('退出屏障超时后旧进程最终退出可恢复后续启动', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    ghost.manifest.node!.idleTimeoutSeconds = 1;
+    const first = makeAutoReplyProcess();
+    const second = makeAutoReplyProcess();
+    vi.spyOn(first, 'kill').mockImplementation(() => {
+      first.killed = true;
+      return true;
+    });
+    const children = [first, second];
+    const spawnProcess = vi.fn(() => children.shift() as FakeNodeProcess);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: spawnProcess as never,
+      log: { info: vi.fn(), warn },
+    });
+
+    await expect(broker.handleRequest('node-ghost', rpcRequest('first'))).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const blocked = broker.handleRequest('node-ghost', rpcRequest('blocked'));
+    await vi.advanceTimersByTimeAsync(2_500);
+    await expect(blocked).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'Node 工作进程退出屏障超时',
+      expect.objectContaining({ ghostId: 'node-ghost' }),
+    );
+
+    first.emit('exit', null, 'SIGTERM');
+    const recovered = broker.handleRequest('node-ghost', rpcRequest('recovered'));
+    await vi.runAllTicks();
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    second.emit('spawn');
+    await expect(recovered).resolves.toMatchObject({
+      ok: true,
+      result: { method: 'recovered' },
+    });
+  });
+
   it('resident 档可提前启动且不会设置空闲关闭', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost({ lifecycle: 'resident' });
