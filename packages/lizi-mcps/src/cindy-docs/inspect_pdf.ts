@@ -14,6 +14,7 @@
  * 二进制),代价与收益不匹配。空白/串页/尺寸错这几类真实翻车,结构证据已经能定死。
  */
 
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { z } from 'zod';
@@ -78,7 +79,7 @@ const DESCRIPTION = [
   '真实翻车靠上面的字段已经能定死;需要肉眼确认版式细节时,请把文件路径给用户去打开。',
   '',
   '【参数】pages 可指定要看的页码(1 起,如 [1,2,5]);不传就从第 1 页顺序取 maxPages 页。',
-  '分批连续检查时,把上一批响应的 inspectedThrough 和 verdict 分别作为 inspectedThrough 与 previousVerdict 原样传回,工具才会累计覆盖和已发现的异常。',
+  '分批连续检查时,把上一批响应的 inspectedThrough、verdict 和 pdfSha256 分别作为 inspectedThrough、previousVerdict 与 previousPdfSha256 原样传回,工具才会确认文件未变化并累计覆盖和已发现的异常。',
 ].join('\n');
 
 export function registerInspectPdfTool(
@@ -94,8 +95,11 @@ export function registerInspectPdfTool(
       path: z.string().min(1).describe('PDF 路径,工作目录内的相对路径或绝对路径。'),
       pages: z
         .array(z.number().int().min(1))
+        .max(HARD_MAX_PAGES)
         .optional()
-        .describe('要检查的页码(1 起)。不传 = 从第 1 页顺序取 maxPages 页。'),
+        .describe(
+          `要检查的页码(1 起),最多 ${HARD_MAX_PAGES} 项。不传 = 从第 1 页顺序取 maxPages 页。`,
+        ),
       inspectedThrough: z
         .number()
         .int()
@@ -108,6 +112,13 @@ export function registerInspectPdfTool(
         .describe(
           '上一批响应的 verdict。inspectedThrough > 0 时必须原样传回,避免后续正常页覆盖已发现的异常。',
         ),
+      previousPdfSha256: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional()
+        .describe(
+          '上一批响应的 pdfSha256。inspectedThrough > 0 时必须原样传回,文件变化时会要求从第 1 页重新检查。',
+        ),
       maxPages: z
         .number()
         .int()
@@ -116,12 +127,22 @@ export function registerInspectPdfTool(
         .default(DEFAULT_MAX_PAGES)
         .describe(`最多检查多少页,默认 ${DEFAULT_MAX_PAGES},上限 ${HARD_MAX_PAGES}。`),
     },
-    handler: async ({ path: inputPath, pages, inspectedThrough, previousVerdict, maxPages }) => {
+    handler: async ({
+      path: inputPath,
+      pages,
+      inspectedThrough,
+      previousVerdict,
+      previousPdfSha256,
+      maxPages,
+    }) => {
       try {
-        if (inspectedThrough > 0 && previousVerdict === undefined) {
+        if (
+          inspectedThrough > 0 &&
+          (previousVerdict === undefined || previousPdfSha256 === undefined)
+        ) {
           return errorPayload(
             'INVALID_ARGS',
-            '分批检查已带 inspectedThrough,但缺少上一批的 previousVerdict。请把上一批响应的 verdict 原样传回,避免丢失已发现的空白页或未验证结论。',
+            '分批检查已带 inspectedThrough,但缺少上一批的 previousVerdict 或 previousPdfSha256。请把上一批响应的 verdict 和 pdfSha256 原样传回,避免跨文件累计或丢失已发现的异常。',
             { inspectedThrough },
           );
         }
@@ -152,6 +173,18 @@ export function registerInspectPdfTool(
             'EMPTY_FILE',
             '这个 PDF 是 0 字节 —— 上一步的生成其实没成功。请重新生成,不要交付。',
             { path: abs },
+          );
+        }
+        const pdfSha256 = createHash('sha256').update(data).digest('hex');
+        if (inspectedThrough > 0 && previousPdfSha256 !== pdfSha256) {
+          return errorPayload(
+            'PDF_CHANGED',
+            '分批检查期间 PDF 内容已经变化,不能把不同文件版本的检查结果合并。请去掉 pages、inspectedThrough、previousVerdict 和 previousPdfSha256,从第 1 页重新检查当前文件。',
+            {
+              path: abs,
+              previousPdfSha256,
+              pdfSha256,
+            },
           );
         }
         const inspection = await inspectPdf({
@@ -202,7 +235,7 @@ export function registerInspectPdfTool(
           }
         }
         const coverageWarning = partial
-          ? `当前已连续覆盖 ${accumulatedThrough}/${inspection.numPages} 页，下一批页码为 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}]，并传 inspectedThrough: ${accumulatedThrough}，再把本次响应的 verdict 原样作为 previousVerdict 继续检查。`
+          ? `当前已连续覆盖 ${accumulatedThrough}/${inspection.numPages} 页，下一批页码为 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}]，并传 inspectedThrough: ${accumulatedThrough}，再把本次响应的 verdict 和 pdfSha256 原样作为 previousVerdict 与 previousPdfSha256 继续检查。`
           : undefined;
 
         const previousFoundBlank = carriedVerdict === 'blank' || carriedVerdict === 'partial-blank';
@@ -236,6 +269,7 @@ export function registerInspectPdfTool(
         return okPayload({
           path: abs,
           bytes: data.byteLength,
+          pdfSha256,
           numPages: inspection.numPages,
           pagesInspected: inspection.pagesInspected,
           inspectedThrough: accumulatedThrough,

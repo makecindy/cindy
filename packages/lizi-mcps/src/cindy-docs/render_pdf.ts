@@ -57,6 +57,30 @@ const MAX_SNAPSHOT_HTML_BYTES = 64 * 1024 * 1024;
 
 const DEFAULT_MARGIN_INCHES = 0.4;
 
+function decodeHtmlFile(bytes: Buffer): string {
+  let encoding: 'utf-8' | 'utf-16le' | 'utf-16be' = 'utf-8';
+  let offset = 0;
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    offset = 3;
+  } else if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    encoding = 'utf-16le';
+    offset = 2;
+  } else if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    encoding = 'utf-16be';
+    offset = 2;
+  }
+
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(bytes.subarray(offset));
+  } catch {
+    throw new DocsPathError(
+      'UNSUPPORTED_ENCODING',
+      `HTML 不是有效的 ${encoding.toUpperCase()} 文本`,
+      '请把 HTML 保存为 UTF-8、带 BOM 的 UTF-16LE 或带 BOM 的 UTF-16BE 后重试，避免乱码 PDF。',
+    );
+  }
+}
+
 const LOCAL_RESOURCE_MIME_TYPES: Record<string, string> = {
   '.avif': 'image/avif',
   '.css': 'text/css',
@@ -1019,7 +1043,7 @@ export function registerRenderPdfTool(
                 ),
             )
           : undefined;
-        const sourceHtml = sourceBytes ? sourceBytes.toString('utf8') : html!;
+        const sourceHtml = sourceBytes ? decodeHtmlFile(sourceBytes) : html!;
         if (!sourcePath) {
           const inlineBytes = Buffer.byteLength(sourceHtml, 'utf8');
           if (inlineBytes > RENDER_PDF_MAX_HTML_BYTES) {

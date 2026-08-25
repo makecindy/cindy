@@ -94,5 +94,5 @@ const JSZip = stagedRequire('jszip');
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });

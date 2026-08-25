@@ -1207,6 +1207,51 @@ describe('render_pdf', () => {
     expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toBe('<p>x</p>');
   });
 
+  it('htmlPath 按 BOM 解码 UTF-16 后再交给资源扫描与渲染', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    const source = '<html><head><title>季度报告</title></head><body><p>正文内容</p></body></html>';
+    await fs.writeFile(
+      path.join(workdir, 'utf16.html'),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(source, 'utf16le')]),
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'utf16.html',
+      outPath: 'utf16.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    expect((result.artifact as Record<string, unknown>).title).toBe('季度报告');
+    expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toBe(source);
+  });
+
+  it('htmlPath 不是受支持的有效 Unicode 编码时明确拒绝', async () => {
+    const renderHtmlToPdf = vi.fn(async () => ({ buffer: pdfBytes, fontsReady: true }));
+    await fs.writeFile(
+      path.join(workdir, 'invalid-encoding.html'),
+      Buffer.from([0x3c, 0x70, 0x3e, 0x80, 0x3c, 0x2f, 0x70, 0x3e]),
+    );
+    const client = await connect({ renderHtmlToPdf });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'invalid-encoding.html',
+      outPath: 'invalid-encoding.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('UNSUPPORTED_ENCODING');
+    expect((result.data as Record<string, string>).hint).toContain('UTF-8');
+    expect(renderHtmlToPdf).not.toHaveBeenCalled();
+  });
+
   it('htmlPath 的任务目录图片与样式表先快照成 data URI', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
@@ -2083,6 +2128,7 @@ describe('inspect_pdf', () => {
       pages: first.nextPages,
       inspectedThrough: first.inspectedThrough,
       previousVerdict: first.verdict,
+      previousPdfSha256: first.pdfSha256,
     });
     expect(second.inspectedThrough).toBe(20);
     expect(second.nextPages).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
@@ -2091,6 +2137,7 @@ describe('inspect_pdf', () => {
       pages: second.nextPages,
       inspectedThrough: second.inspectedThrough,
       previousVerdict: second.verdict,
+      previousPdfSha256: second.pdfSha256,
     });
     expect(third.inspectedThrough).toBe(30);
     expect(third.nextPages).toBeUndefined();
@@ -2144,12 +2191,14 @@ describe('inspect_pdf', () => {
         pages: first.nextPages,
         inspectedThrough: first.inspectedThrough,
         previousVerdict: first.verdict,
+        previousPdfSha256: first.pdfSha256,
       });
       const third = await callTool(client, 'inspect_pdf', {
         path: 'out.pdf',
         pages: second.nextPages,
         inspectedThrough: second.inspectedThrough,
         previousVerdict: second.verdict,
+        previousPdfSha256: second.pdfSha256,
       });
 
       expect(third.inspectedThrough).toBe(30);
@@ -2211,6 +2260,54 @@ describe('inspect_pdf', () => {
       maxPages: 3,
       timeoutMs: 15_000,
     });
+  });
+
+  it('在 schema 阶段拒绝超过单批上限的页码数组', async () => {
+    const inspectPdf = vi.fn(async () => ({ numPages: 1, pagesInspected: 1, pages: [page()] }));
+    const client = await connect({ inspectPdf });
+    await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from('%PDF-1.7 body'));
+
+    const result = await client.callTool({
+      name: 'inspect_pdf',
+      arguments: {
+        path: 'out.pdf',
+        pages: Array.from({ length: 51 }, (_, index) => index + 1),
+      },
+    });
+
+    expect((result as { content: Array<{ text: string }> }).content[0]!.text).toContain(
+      'MCP error -32602',
+    );
+    expect(inspectPdf).not.toHaveBeenCalled();
+  });
+
+  it('PDF 在分批检查期间变化时拒绝累计旧文件结果', async () => {
+    const inspectPdf = vi.fn(async ({ pages }: { pages: number[] }) => {
+      const selected =
+        pages.length > 0 ? pages : Array.from({ length: 10 }, (_, index) => index + 1);
+      return {
+        numPages: 20,
+        pagesInspected: selected.length,
+        pages: selected.map((pageNumber) => page({ page: pageNumber })),
+      };
+    });
+    const client = await connect({ inspectPdf });
+    await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from(`%PDF-1.7\nold-${'x'.repeat(5000)}`));
+
+    const first = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from(`%PDF-1.7\nnew-${'x'.repeat(5000)}`));
+    const second = await callTool(client, 'inspect_pdf', {
+      path: 'out.pdf',
+      pages: first.nextPages,
+      inspectedThrough: first.inspectedThrough,
+      previousVerdict: first.verdict,
+      previousPdfSha256: first.pdfSha256,
+    });
+
+    expect(second.ok).toBe(false);
+    expect(second.errorCode).toBe('PDF_CHANGED');
+    expect((second.data as Record<string, string>).hint).toContain('从第 1 页重新检查');
+    expect(inspectPdf).toHaveBeenCalledTimes(1);
   });
 
   it('指定页码全部越界时不把零页检查误报为 ok', async () => {

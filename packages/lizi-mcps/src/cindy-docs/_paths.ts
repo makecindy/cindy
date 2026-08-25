@@ -31,6 +31,7 @@ export class DocsPathError extends Error {
       | 'NOT_A_FILE'
       | 'SHEET_NOT_FOUND'
       | 'FILE_TOO_LARGE'
+      | 'UNSUPPORTED_ENCODING'
       | 'READ_TIMEOUT',
     message: string,
     readonly hint: string,
