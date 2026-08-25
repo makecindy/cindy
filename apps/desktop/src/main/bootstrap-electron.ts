@@ -4269,17 +4269,21 @@ const registerIpcHandlers = () => {
     return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
   });
 
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return readCompactionPct();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
     resetCompactionPct();
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (_e, pct: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (event, pct: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof pct !== 'number' || !Number.isFinite(pct)) {
       throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
     }
@@ -4287,17 +4291,21 @@ const registerIpcHandlers = () => {
     return compactionWire();
   });
 
-  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return readPiCompactionPct();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return piCompactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
     resetPiCompactionPct();
     return piCompactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (_e, pct: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (event, pct: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof pct !== 'number' || !Number.isFinite(pct)) {
       throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
     }

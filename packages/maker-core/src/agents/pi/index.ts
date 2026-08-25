@@ -1194,6 +1194,26 @@ export class PiAgent extends BaseAgent {
     };
   }
 
+  private buildCurrentPiSettingsJson(contextWindow?: number): string {
+    return buildPiSettingsJsonContent(
+      contextWindow && contextWindow > 0 ? contextWindow : 128_000,
+      this.deps.runtimeConfig.piAutoCompactThresholdPct,
+    );
+  }
+
+  private async writePiRuntimeSettings(
+    agentHome: string,
+    opts: { fileOps?: PiRemoteFileOps; contextWindow?: number } = {},
+  ): Promise<void> {
+    const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
+    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow);
+    if (opts.fileOps) {
+      await opts.fileOps.writeFile(settingsJsonPath, settingsJsonContent);
+      return;
+    }
+    await fs.writeFile(settingsJsonPath, settingsJsonContent, { mode: 0o600 });
+  }
+
   /**
    * 生成 agentHome/models.json:
    *   - 网关模型 → 单一 provider `cindy`(baseUrl = compat proxy);
@@ -1353,9 +1373,7 @@ export class PiAgent extends BaseAgent {
     // The native ChatGPT adapter prefers WebSocket in auto mode. Cindy's
     // authenticated loopback proxy is an HTTP/SSE boundary, so pin SSE for the
     // isolated embedded runtime. Other PI providers ignore this transport knob.
-    const piCompactionPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
-    const contextWindow = opts.contextWindow && opts.contextWindow > 0 ? opts.contextWindow : 128_000;
-    const settingsJsonContent = buildPiSettingsJsonContent(contextWindow, piCompactionPct);
+    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow);
     if (!opts.preview) {
       // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
       // 执行、endpoint 是否有值、路径形态。
@@ -4751,9 +4769,37 @@ export class PiAgent extends BaseAgent {
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
+      const previousWindow = ctx.contextWindow;
       const data = (resp.data ?? {}) as { contextWindow?: number };
-      if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
-        ctx.contextWindow = data.contextWindow;
+      const nextWindow =
+        typeof data.contextWindow === 'number' && data.contextWindow > 0
+          ? data.contextWindow
+          : (this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)?.contextWindow
+            ?? this.capabilities.availableModels.find((candidate) => candidate.id === model)?.contextWindow
+            ?? ctx.contextWindow);
+      if (nextWindow > 0) ctx.contextWindow = nextWindow;
+      if (nextWindow > 0 && nextWindow !== previousWindow) {
+        try {
+          await this.writePiRuntimeSettings(configHome, {
+            fileOps,
+            contextWindow: nextWindow,
+          });
+          if (sdkSessionId) {
+            const reloaded = await proc.request({
+              type: 'switch_session',
+              sessionPath: sdkSessionId,
+            });
+            if (!reloaded.success) {
+              this.deps.logger.warn('pi: failed to reload settings after context window change', {
+                error: reloaded.error ?? 'unknown',
+              });
+            }
+          }
+        } catch (err) {
+          this.deps.logger.warn('pi: failed to refresh native compaction reserve after model switch', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     };
 

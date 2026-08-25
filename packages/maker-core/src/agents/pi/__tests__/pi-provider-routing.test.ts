@@ -1350,12 +1350,12 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await handle.setModel!('xai/grok-4.5', { providerId: 'xai' });
     expect(resolves).toBe(1);
-    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
     expect(captured.requests).toContainEqual({
       type: 'set_model',
       provider: 'xai',
       modelId: 'grok-4.5',
     });
+    expect(captured.requests.filter((request) => request.type === 'switch_session')).toHaveLength(1);
     await handle.close();
   });
 
@@ -1403,12 +1403,12 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await handle.setModel!('xai/grok-4.6', { providerId: null });
     expect(resolves).toBe(1);
-    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
     expect(captured.requests).toContainEqual({
       type: 'set_model',
       provider: 'cindy',
       modelId: 'xai/grok-4.6',
     });
+    expect(captured.requests.filter((request) => request.type === 'switch_session')).toHaveLength(1);
     await handle.close();
   });
 

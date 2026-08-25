@@ -3,7 +3,7 @@
  * events and only latches deterministic failures for the next-send rollover.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +94,14 @@ describe("Pi native settings", () => {
       transport: "sse",
       compaction: { reserveTokens: 32_000 },
     });
+    expect(JSON.parse(buildPiSettingsJsonContent(200_000, 75))).toEqual({
+      transport: "sse",
+      compaction: { reserveTokens: 50_000 },
+    });
+    expect(JSON.parse(buildPiSettingsJsonContent(100_000, 75))).toEqual({
+      transport: "sse",
+      compaction: { reserveTokens: 25_000 },
+    });
     expect(JSON.parse(buildPiSettingsJsonContent(128_000))).toEqual({ transport: "sse" });
   });
 });
@@ -132,6 +140,7 @@ describe("PiAgent native auto-compaction ownership", () => {
       runtimeConfig: {
         endpoint: "http://127.0.0.1:9",
         autoCompactThresholdPct: 75,
+        piAutoCompactThresholdPct: 75,
       },
       binaryPath: path.join(agentHome, "pi"),
       logger: noopLogger,
@@ -320,4 +329,29 @@ describe("PiAgent native auto-compaction ownership", () => {
       await handle.close();
     },
   );
+
+  function readLatestPiSettings(): { compaction?: { reserveTokens?: number } } {
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "settings.json") files.push(next);
+      }
+    };
+    walk(agentHome);
+    expect(files.length).toBeGreaterThan(0);
+    return JSON.parse(readFileSync(files[files.length - 1]!, "utf8")) as {
+      compaction?: { reserveTokens?: number };
+    };
+  }
+
+  it("rewrites native reserve tokens when the model window changes", async () => {
+    const handle = await start();
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(50_000);
+    await handle.setModel!("n");
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
+    expect(knobs.rpcCalls.some((call) => call.type === "switch_session")).toBe(true);
+    await handle.close();
+  });
 });

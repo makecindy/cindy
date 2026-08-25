@@ -12,6 +12,7 @@
  * 同步 R/W —— 文件极小，Electron main 已是 background，不会卡 renderer 主线程。
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -109,11 +110,23 @@ function normalizePi(raw: unknown): PiCompactionSettings {
 
 const piStores = new Map<string, ReturnType<typeof createOverrideSettingsFile<PiCompactionSettings>>>();
 
+function migratePiFromLegacyIfNeeded(ownerRoot: string | null): void {
+  const piPath = piSettingsFilePath(ownerRoot ?? undefined);
+  if (fs.existsSync(piPath)) return;
+  const claude = currentStore().readState();
+  if (!claude.isCustomized) return;
+  const pct = clampPct(claude.value.claudeCodeAutoCompactPct);
+  fs.mkdirSync(path.dirname(piPath), { recursive: true });
+  fs.writeFileSync(piPath, `${JSON.stringify({ piAutoCompactPct: pct }, null, 2)}\n`);
+  log.info('pi compaction migrated from customized claude setting', { pct });
+}
+
 function currentPiStore() {
   const ownerRoot = getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null;
   const key = ownerRoot ?? '<no-session>';
   let store = piStores.get(key);
   if (!store) {
+    migratePiFromLegacyIfNeeded(ownerRoot);
     store = createOverrideSettingsFile<PiCompactionSettings>({
       filePath: () => piSettingsFilePath(ownerRoot ?? undefined),
       defaults: { piAutoCompactPct: DEFAULT_PCT },
@@ -144,3 +157,10 @@ export function writePiCompactionPct(value: number): void {
 export function resetPiCompactionPct(): number {
   return currentPiStore().reset().piAutoCompactPct;
 }
+
+export const __testing = {
+  resetStores(): void {
+    stores.clear();
+    piStores.clear();
+  },
+};
