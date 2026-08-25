@@ -40,10 +40,10 @@ const listParams = {
 };
 
 describe('emitSessionCreated', () => {
-  it('bumps write generation then notifies windows and device-link', () => {
+  it('notifies windows and device-link without owning write generation', () => {
     const before = buildSessionListFlightKey(listParams);
     emitSessionCreated('s1');
-    expect(buildSessionListFlightKey(listParams)).not.toBe(before);
+    expect(buildSessionListFlightKey(listParams)).toBe(before);
     expect(h.tap).toHaveBeenCalledWith('local-db:sessions:created', { sessionId: 's1' });
     expect(h.send).toHaveBeenCalledWith('local-db:sessions:created', { sessionId: 's1' });
   });
@@ -55,7 +55,7 @@ describe('sessions:created 唯一出口', () => {
     const helper = readFileSync(join(mainRoot, 'localDb/ipc/sessionCreatedBroadcast.ts'), 'utf8');
     expect(helper).toContain("tapWindowBroadcast('local-db:sessions:created'");
     expect(helper).toContain("win.webContents.send('local-db:sessions:created'");
-    expect(helper).toContain('bumpSessionListWriteGeneration()');
+    expect(helper).not.toContain('bumpSessionListWriteGeneration()');
 
     const callers = [
       'maker-ipc/register.ts',

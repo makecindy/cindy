@@ -23,12 +23,7 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
-import {
-  buildSessionListFlightKey,
-  bumpSessionListWriteGeneration,
-  noteSessionListMembershipPatch,
-  runSessionListSingleFlight,
-} from './sessionListSingleFlight';
+import { buildSessionListFlightKey, runSessionListSingleFlight } from './sessionListSingleFlight';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { bindDeletedPiSubagentCleanupCancel } from './piSubagentDeletion';
 import { resolveBusinessSessionId } from '../../sessionIds';
@@ -205,7 +200,6 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
-  noteSessionListMembershipPatch(patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   if (hasCapturedScope) {
@@ -1128,8 +1122,6 @@ export function registerSessionIpc(
       source: 'local-db:sessions:create',
     });
     await db.insert(sessions).values(insertRow);
-    // 这条 IPC 不发 sessions:created，调用方拿返回行后会 refresh，所以这里单独 bump。
-    bumpSessionListWriteGeneration();
     const [row] = await db.select().from(sessions).where(eq(sessions.id, id));
     if (!row) throwIpcError('NOT_FOUND', 'Session 创建后查询失败');
     // recent-workdirs: 项目目录走 sidebar 分组,要进"最近"列表;dialogue 目录是

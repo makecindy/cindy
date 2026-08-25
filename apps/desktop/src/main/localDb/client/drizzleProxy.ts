@@ -10,6 +10,7 @@ import * as drizzleUtils from 'drizzle-orm/utils';
 
 import * as schema from '../schema.js';
 import type { DbTransport } from './DbTransport.js';
+import { noteSessionListDbWrite } from './sessionListWriteGeneration.js';
 
 type AnyObject = Record<PropertyKey, unknown>;
 type SelectedField = { path: string[]; field: unknown };
@@ -102,6 +103,7 @@ async function executeAll<T>(builder: AnyObject, transport: DbTransport): Promis
   // .returning() 需要在此分支(查 SQL 末尾 RETURNING)再走 query。
   const { sql, params } = toSql(builder);
   await transport.send('run', { sql, params });
+  noteSessionListDbWrite({ sql });
   return [];
 }
 
@@ -132,7 +134,12 @@ async function executeRun(
   transport: DbTransport,
 ): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
   const { sql, params } = toSql(builder);
-  return transport.send('run', { sql, params });
+  const result = await transport.send<{ changes: number; lastInsertRowid: number | bigint }>(
+    'run',
+    { sql, params },
+  );
+  noteSessionListDbWrite({ sql });
+  return result;
 }
 
 function canBuildSql(value: AnyObject): boolean {

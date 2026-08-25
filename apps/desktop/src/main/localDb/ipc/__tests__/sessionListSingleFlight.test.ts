@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildSessionListFlightKey,
   bumpSessionListWriteGeneration,
-  noteSessionListMembershipPatch,
   resetSessionListSingleFlightForTests,
   runSessionListSingleFlight,
 } from '../sessionListSingleFlight';
+import { noteSessionListDbWrite } from '../../client/sessionListWriteGeneration';
 
 afterEach(() => {
   resetSessionListSingleFlightForTests();
@@ -139,24 +139,28 @@ describe('runSessionListSingleFlight', () => {
     await expect(u1).resolves.toBe('u1');
   });
 
-  it('treats status and pinned patches as membership writes', () => {
+  it('does not join a refresh after a list-projection write', async () => {
     const params = {
       userId: 'u1',
       cap: 200,
       statusFilter: 'active' as const,
       includePinned: true,
     };
-    const before = buildSessionListFlightKey(params);
-    noteSessionListMembershipPatch({ title: 'nope' });
-    expect(buildSessionListFlightKey(params)).toBe(before);
-    noteSessionListMembershipPatch({ status: 'archived' });
-    const afterStatus = buildSessionListFlightKey(params);
-    expect(afterStatus).not.toBe(before);
-    noteSessionListMembershipPatch({ pinnedAt: 1 });
-    expect(buildSessionListFlightKey(params)).not.toBe(afterStatus);
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const first = runSessionListSingleFlight(buildSessionListFlightKey(params), async () => gate);
+    noteSessionListDbWrite({ sql: 'INSERT INTO sessions (id) VALUES (?)' });
+    const afterWrite = vi.fn(async () => 'fresh');
+    const second = runSessionListSingleFlight(buildSessionListFlightKey(params), afterWrite);
+    await expect(second).resolves.toBe('fresh');
+    expect(afterWrite).toHaveBeenCalledTimes(1);
+    release('stale');
+    await expect(first).resolves.toBe('stale');
   });
 
-  it('does not join a refresh after a write generation bump', async () => {
+  it('does not join a later client onto an earlier client flight after owner swap', async () => {
     const params = {
       userId: 'u1',
       cap: 200,
@@ -169,11 +173,11 @@ describe('runSessionListSingleFlight', () => {
     });
     const first = runSessionListSingleFlight(buildSessionListFlightKey(params), async () => gate);
     bumpSessionListWriteGeneration();
-    const afterWrite = vi.fn(async () => 'fresh');
-    const second = runSessionListSingleFlight(buildSessionListFlightKey(params), afterWrite);
-    await expect(second).resolves.toBe('fresh');
-    expect(afterWrite).toHaveBeenCalledTimes(1);
-    release('stale');
-    await expect(first).resolves.toBe('stale');
+    const afterSwap = vi.fn(async () => 'new-client');
+    const second = runSessionListSingleFlight(buildSessionListFlightKey(params), afterSwap);
+    await expect(second).resolves.toBe('new-client');
+    expect(afterSwap).toHaveBeenCalledTimes(1);
+    release('old-client');
+    await expect(first).resolves.toBe('old-client');
   });
 });

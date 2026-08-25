@@ -1,14 +1,18 @@
 import type { DbClient } from './DbClient.js';
+import { bumpSessionListWriteGeneration } from './sessionListWriteGeneration.js';
 
 let current: { client: DbClient; userId: string } | null = null;
 
 export function setCurrentDbClient(client: DbClient, userId: string): void {
   current = { client, userId };
+  bumpSessionListWriteGeneration();
 }
 
 export function clearCurrentDbClient(client?: DbClient): void {
   if (client && current?.client !== client) return;
+  if (current === null) return;
   current = null;
+  bumpSessionListWriteGeneration();
 }
 
 export function getDbClient(): DbClient {

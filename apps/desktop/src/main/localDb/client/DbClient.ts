@@ -9,6 +9,7 @@ import type { DbTransport } from './DbTransport.js';
 import { UtilityProcessTransport } from './UtilityProcessTransport.js';
 import { WorkerThreadTransport } from './WorkerThreadTransport.js';
 import { createDrizzleProxy } from './drizzleProxy.js';
+import { noteSessionListDbWrite } from './sessionListWriteGeneration.js';
 import type { DbTxArgsByName, DbTxName, DbTxResultByName } from './tx/types.js';
 import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 
@@ -85,9 +86,20 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
     queryOne: (sql, params) =>
       withTransport('queryOne', () => transport.send('queryOne', { sql, params: params ?? [] })),
     exec: (sql, params) =>
-      withTransport('exec', () => transport.send('exec', { sql, params: params ?? [] })),
+      withTransport('exec', async () => {
+        const result = await transport.send<{ changes: number; lastInsertRowid: number | bigint }>(
+          'exec',
+          { sql, params: params ?? [] },
+        );
+        noteSessionListDbWrite({ sql });
+        return result;
+      }),
     tx: (name: string, args: unknown, transferList?: unknown[]) =>
-      withTransport('tx', () => transport.send('tx', { name, args }, transferList)),
+      withTransport('tx', async () => {
+        const result = await transport.send('tx', { name, args }, transferList);
+        noteSessionListDbWrite({ txName: name });
+        return result;
+      }),
     drizzle: createDrizzleProxy(() => transport) as BetterSQLite3Database<typeof schema>,
     get vecAvailable() {
       return (transport as DbTransport & { isVecAvailable?: boolean }).isVecAvailable ?? false;
@@ -120,9 +132,16 @@ export async function createInprocDbClient(opts: CreateDbClientOptions = {}): Pr
       getRawDb().prepare(sql).all(...params) as T[],
     queryOne: async <T = unknown>(sql: string, params: unknown[] = []) =>
       getRawDb().prepare(sql).get(...params) as T | undefined,
-    exec: async (sql, params = []) => getRawDb().prepare(sql).run(...params),
-    tx: async (name: string, args: unknown) =>
-      runInprocTx(getRawDb(), { name, args }) as never,
+    exec: async (sql, params = []) => {
+      const result = getRawDb().prepare(sql).run(...params);
+      noteSessionListDbWrite({ sql });
+      return result;
+    },
+    tx: async (name: string, args: unknown) => {
+      const result = runInprocTx(getRawDb(), { name, args }) as never;
+      noteSessionListDbWrite({ txName: name });
+      return result;
+    },
     get drizzle() {
       return getDrizzle();
     },
