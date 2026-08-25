@@ -248,7 +248,11 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
       '// Click-time composer must disappear before any await that can surface',
       'result = await onSend(',
     );
+    expect(unlockAfterClear).toContain('dispatchSendClearedKeysRef.current.add(sendInFlightKey);');
     expect(unlockAfterClear).toContain('setAllowTypeDuringSend(true);');
+    expect(unlockAfterClear.indexOf('dispatchSendClearedKeysRef.current.add(sendInFlightKey);')).toBeLessThan(
+      unlockAfterClear.indexOf('setAllowTypeDuringSend(true);'),
+    );
     expect(unlockAfterClear).not.toContain('setSendDispatchInFlight(false);');
     expect(chatInputSource).toContain(
       'disabled || (sendDispatchInFlight && !allowTypeDuringSend)',
@@ -256,12 +260,18 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(chatInputSource).toContain('sendDispatchInFlight ||');
     expect(chatInputSource).toContain('setSendDispatchInFlight(nextSendInFlight);');
     expect(chatInputSource).toContain(
+      'setAllowTypeDuringSend(nextSendInFlight && nextSendCleared);',
+    );
+    expect(chatInputSource).toContain(
       'documentBeforeOptimisticClear = plainTextToComposerDocument(serializedContent.text);',
     );
     const settleLockBlock = extractBetween(
       chatInputSource,
       'dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);',
       'finishAgentSendDispatch();',
+    );
+    expect(settleLockBlock).toContain(
+      'dispatchSendClearedKeysRef.current.delete(sendInFlightKey);',
     );
     expect(settleLockBlock).toContain(
       'storageKeyForDraftRef.current === sourceStorageKey',

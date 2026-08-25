@@ -270,7 +270,12 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'dispatchSendInFlightKeysRef.current.has(nextSendKey)',
     );
     expect(restoreEffectBlock).toContain('setSendDispatchInFlight(nextSendInFlight);');
-    expect(restoreEffectBlock).toContain('setAllowTypeDuringSend(nextSendInFlight);');
+    expect(restoreEffectBlock).toContain(
+      'setAllowTypeDuringSend(nextSendInFlight && nextSendCleared);',
+    );
+    expect(restoreEffectBlock).toContain(
+      'dispatchSendClearedKeysRef.current.has(nextSendKey)',
+    );
     expect(restoreEffectBlock).toContain('wasBusyWithoutSend');
     expect(restoreEffectBlock.indexOf('restoreNextDraft();')).toBeLessThan(
       restoreEffectBlock.indexOf('setSendDispatchInFlight(nextSendInFlight);'),

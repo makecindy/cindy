@@ -3687,11 +3687,13 @@ export function ChatInput({
     restoreNextDraft();
     // Destination task must stay editable. If we land back on a task whose send
     // is still awaiting onSend, restore that task's send lock so the button
-    // stays disabled instead of silently dropping the next click.
+    // stays disabled instead of silently dropping the next click. Typing stays
+    // locked until that send has actually cleared the click-time draft.
     const nextSendKey = storageKey ?? sessionId ?? '__draft__';
     const nextSendInFlight = dispatchSendInFlightKeysRef.current.has(nextSendKey);
+    const nextSendCleared = dispatchSendClearedKeysRef.current.has(nextSendKey);
     setSendDispatchInFlight(nextSendInFlight);
-    setAllowTypeDuringSend(nextSendInFlight);
+    setAllowTypeDuringSend(nextSendInFlight && nextSendCleared);
     if (wasBusyWithoutSend && prevEditorKey && prevEditorKey === voiceOwnerKey) {
       const sourceKey = prevEditorKey;
       const persistDetachedVoice = (previousVoiceText: string, nextVoiceText: string) => {
@@ -4861,6 +4863,7 @@ export function ChatInput({
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightKeysRef = useRef(new Set<string>());
+  const dispatchSendClearedKeysRef = useRef(new Set<string>());
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
@@ -5513,6 +5516,7 @@ export function ChatInput({
           restoreRemoteComposerAndRelease();
           throw error;
         }
+        dispatchSendClearedKeysRef.current.add(sendInFlightKey);
         if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
           setAllowTypeDuringSend(true);
         }
@@ -5615,6 +5619,7 @@ export function ChatInput({
         markRecentPluginUsage();
       } finally {
         dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);
+        dispatchSendClearedKeysRef.current.delete(sendInFlightKey);
         if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
           setSendDispatchInFlight(false);
           setAllowTypeDuringSend(false);
