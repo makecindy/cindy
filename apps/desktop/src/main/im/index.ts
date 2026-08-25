@@ -92,6 +92,8 @@ import { bindingStore, executeDetach } from './binding';
 import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS } from '../../shared/imDefaultSettings';
 import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
+import { ImSchedulerManager } from './scheduler/manager';
+import { stopImBeforeFinishingSchedulerDrain } from './discordQuitOrdering';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -115,6 +117,7 @@ export {
 const log = createLogger('main:im');
 
 let wired = false;
+const imScheduler = new ImSchedulerManager(discordIm);
 
 export interface DesktopCcPrefs {
   model: string;
@@ -451,6 +454,9 @@ async function initializeImConnection(): Promise<void> {
     log.warn(`feishu sessions title backfill failed (non-fatal): ${msg}`);
   }
   activateImAccountBoundary();
+  // Same-account election requires an authenticated Device Link identity.
+  // Local/skip-login mode keeps the existing single-Desktop Discord behavior.
+  if (getAuthState().isAuthenticated) await imScheduler.start();
   await im.init();
 }
 
@@ -560,9 +566,7 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
   stopConnection: async (reason) => {
     // Transports stop first so no new message can enter while account-scoped
     // orchestrator and binding caches are being discarded.
-    try {
-      await im.dispose();
-    } finally {
+    const disposeOrchestratorSessions = async (): Promise<void> => {
       for (const orchestrator of listImOrchestrators()) {
         try {
           await orchestrator.disposeAllSessions();
@@ -571,6 +575,24 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
           log.warn(`disposeAllSessions channel=${orchestrator.channel} failed: ${msg}`);
         }
       }
+    };
+    try {
+      await stopImBeforeFinishingSchedulerDrain(
+        // Keep fail-closed hooks installed while Discord performs its normal
+        // offline announcement and runtime-marker cleanup.
+        () => imScheduler.stop({ preserveTransportForDispose: true }),
+        async () => {
+          try {
+            await im.dispose();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`IM aggregate dispose failed: ${msg}`);
+          }
+        },
+        disposeOrchestratorSessions,
+        () => imScheduler.finishStop({ transportDisposed: true }),
+      );
+    } finally {
       bindingStore.resetRuntime();
       // 普通退出、登出、换账号与模式切换都只清内存热缓存, 保留本地 DB 游标；
       // 只有明确删除账号数据时才清持久表。Telegram bot 解绑由 hook-control 的

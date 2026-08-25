@@ -30,7 +30,7 @@ import { getControlScope, isInControl } from './controlState';
 import { isCommandAuthorized, isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
-import type { ImTurnRunner } from './turnRunner';
+import type { ImTurnRunner, ImTurnTerminal } from './turnRunner';
 import type { ImChannelAdapter } from './types';
 
 /**
@@ -401,6 +401,13 @@ export function createMessageHandler(
             log.warn(`account-scoped background task failed (non-fatal): ${msg}`);
           });
         },
+        ...(im.trackAcceptedTask
+          ? {
+              onTurnAccepted: (terminal: Promise<ImTurnTerminal>) => {
+                im.trackAcceptedTask?.(terminal);
+              },
+            }
+          : {}),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -457,6 +464,9 @@ export function createMessageHandler(
         // Only clear if I'm still the tail (no follow-up enqueued).
         if (userLocks.get(key) === work) userLocks.delete(key);
       });
+      // Only Discord consumes handler completion for scheduler handoff. Keep
+      // every other channel's callback return behavior unchanged.
+      if (im.trackAcceptedTask) return work;
     });
   };
 }

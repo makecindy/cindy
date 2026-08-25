@@ -16,6 +16,9 @@ const discordMock = vi.hoisted(() => {
     readonly destroy = vi.fn(() => {
       this.destroyed = true;
     });
+    readonly ws = {
+      destroy: vi.fn(async () => undefined),
+    };
 
     destroyed = false;
     ready = false;
@@ -207,6 +210,100 @@ describe('discord gateway pure logic', () => {
     await gateway.destroy();
   });
 
+  it('reuses the existing client while discord.js is reconnecting', async () => {
+    const { gateway, statuses } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    emitReady(client, 'helper#0000');
+
+    client.emit('shardReconnecting');
+    expect(gateway.ingressOpen).toBe(false);
+    expect(statuses.at(-1)).toEqual({ kind: 'connecting' });
+
+    await gateway.connect('token');
+
+    expect(discordMock.MockDiscordClient.instances).toHaveLength(1);
+    expect(gateway.client).toBe(client);
+
+    await gateway.destroy();
+  });
+
+  it('keeps ingress close best-effort when websocket destroy fails', async () => {
+    const { gateway } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    client.ws.destroy.mockRejectedValueOnce(new Error('socket already closed'));
+
+    await expect(gateway.closeIngress()).resolves.toBeUndefined();
+    expect(gateway.ingressOpen).toBe(false);
+
+    await gateway.destroy();
+    expect(client.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('does not reopen ingress when Gateway readiness arrives after forced close', async () => {
+    const { gateway, statuses } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    await gateway.closeIngress();
+
+    emitReady(client, 'late#0000');
+    client.emit('shardResume');
+    client.emit('shardReady');
+
+    expect(gateway.ingressOpen).toBe(false);
+    expect(statuses).not.toContainEqual({ kind: 'connected', appId: 'late#0000' });
+
+    await gateway.destroy();
+  });
+
+  it('releases the client after a terminal runtime disconnect', async () => {
+    const { gateway, statuses } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    emitReady(client, 'helper#0000');
+
+    client.emit('shardDisconnect', { code: 4004 });
+
+    expect(gateway.client).toBeNull();
+    expect(gateway.appId).toBe('');
+    expect(gateway.botTag).toBe('');
+    expect(client.destroy).toHaveBeenCalledOnce();
+    expect(statuses.at(-1)).toEqual({
+      kind: 'error',
+      reason: 'Discord authentication failed: invalid bot token',
+    });
+  });
+
+  it('does not flip a ready client to connecting for transient errors', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { gateway, statuses } = createGatewayHarness();
+
+    try {
+      await gateway.connect('token');
+      const client = discordMock.MockDiscordClient.instances[0];
+      emitReady(client, 'helper#0000');
+
+      statuses.length = 0;
+      expect(() => client.emit('error', new Error('rate limit hiccup'))).not.toThrow();
+      expect(() => client.emit('shardError', new Error('ws hiccup'), 2)).not.toThrow();
+
+      // A healthy, ready client should keep reporting connected for transient
+      // errors; only ShardDisconnect / ShardReconnecting / login failures may
+      // move the status off `connected`. See GitHub issue #2971.
+      expect(statuses).toEqual([]);
+      expect(warn).toHaveBeenCalledWith('[im:discord:gateway]', 'client error: rate limit hiccup');
+      expect(warn).toHaveBeenCalledWith('[im:discord:gateway]', 'shard error shard=2: ws hiccup');
+    } finally {
+      warn.mockRestore();
+      await gateway.destroy();
+    }
+  });
+
   it('does not throw from discord error handlers when status callbacks fail', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     let rejectStatus = false;
@@ -225,6 +322,41 @@ describe('discord gateway pure logic', () => {
     expect(() => client.emit('error', new Error('gateway hiccup'))).not.toThrow();
 
     warn.mockRestore();
+    await gateway.destroy();
+  });
+
+  it('publishes button acceptance before the Discord ACK settles', async () => {
+    const acknowledged = deferred<void>();
+    const onButtonInteraction = vi.fn();
+    const gateway = createDiscordGateway({
+      onButtonInteraction,
+      onDmMessage: vi.fn(),
+      onStatus: vi.fn(),
+    });
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    const interaction = {
+      isButton: () => true,
+      deferUpdate: vi.fn(() => acknowledged.promise),
+    };
+
+    client.emit('interactionCreate', interaction);
+
+    expect(onButtonInteraction).toHaveBeenCalledOnce();
+    const acceptedAck = onButtonInteraction.mock.calls[0]?.[1] as Promise<void> | undefined;
+    let ackSettled = false;
+    void acceptedAck?.then(() => {
+      ackSettled = true;
+    });
+    await Promise.resolve();
+    expect(ackSettled).toBe(false);
+
+    acknowledged.resolve(undefined);
+    await acceptedAck;
+    expect(ackSettled).toBe(true);
+    expect(interaction.deferUpdate).toHaveBeenCalledOnce();
+
     await gateway.destroy();
   });
 

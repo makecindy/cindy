@@ -284,6 +284,12 @@ export type IMStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
+  /**
+   * Credentials are configured, but another linked Desktop of the same Cindy
+   * account currently owns this provider transport.  The local client keeps
+   * the binding and will take over automatically when election changes.
+   */
+  | { kind: 'standby'; appId: string }
   | { kind: 'conflict'; appId: string }
   /**
    * 凭证仍在、但用户主动下线 —— 不轮询、不收派发, 重启后保持。

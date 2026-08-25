@@ -1250,6 +1250,22 @@ export class DeviceLinkClient {
   }
 
   /**
+   * Same-account discovery/state hints that must not depend on an open remote
+   * control link. These frames are intentionally best-effort and bypass the
+   * per-peer reliable queue, so an explicitly closed control session cannot
+   * suppress unrelated account-level coordination.
+   */
+  sendBestEffortPush(dst: string, channel: string, payload: unknown): void {
+    if (this.status !== 'online') return;
+    this.sendEnvelope({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      dst,
+      payload: { channel, payload },
+    });
+  }
+
+  /**
    * 指定 peer 可靠发送队列中未确认的逻辑消息数(0 = 无积压或未建立可靠传输)。
    * 供上层做**软背压**:可整流的状态镜像流量(如会话活动快照)在窗口
    * (MAX_TRANSPORT_PENDING_MESSAGES)被占满、BACKPRESSURE 变成硬失败之前提前停手,

@@ -2123,6 +2123,7 @@
         "needsConfig": "需要配置",
         "connecting": "連線中…",
         "connected": "已連線",
+        "standby": "已在其他已連結電腦接收",
         "conflict": "已被另一臺裝置使用",
         "error": "連線失敗"
       },
@@ -2135,6 +2136,8 @@
       "connected": {
         "heading": "已連線 Discord Bot",
         "note": "你在 Discord 上私聊 Bot 傳送的訊息會路由到本機的 {{appName}}。",
+        "headingStandby": "Discord Bot 已繫結，本機待命",
+        "noteStandby": "目前由同一 Cindy 帳號下的另一臺已連結電腦接收訊息；該電腦離線後，本機會自動接管。",
         "botLabel": "Bot 帳號",
         "ownerLabel": "我的使用者 ID"
       },

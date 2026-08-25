@@ -39,12 +39,15 @@ export function createDmResolver(client: ClientLike): (userId: string) => Promis
 export async function sendChunked(
   ch: DMChannelLike,
   text: string,
+  assertCurrent: () => void = () => {},
 ): Promise<{ firstMessageId: string }> {
   const chunks = chunkDiscordText(text);
   let firstMessageId = '';
 
   for (const chunk of chunks) {
+    assertCurrent();
     const sent = await ch.send(chunk);
+    assertCurrent();
     if (!firstMessageId) firstMessageId = encodeMessageId(ch.id, sent.id);
   }
 

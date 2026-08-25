@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DiscordIM } from '../index.js';
 import { normalizeDmMessage } from '../inbound.js';
 import type { AttachmentLike, StickerLike } from '../inbound.js';
-import type { IMHost, IMMessageEvent, IMStatus } from '../../types.js';
+import { encodeCustomId } from '../codec.js';
+import type { IMCardActionEvent, IMHost, IMMessageEvent, IMStatus } from '../../types.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -596,25 +597,708 @@ describe('DiscordIM inbound pipeline', () => {
     expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-new']);
   });
 
+  it('closes the Gateway and drains DMs accepted before a scheduler handoff', async () => {
+    const gateway = makeGateway({ clearAppIdOnDestroy: true });
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const fetchStarted = deferred();
+    const releaseFetch = deferred();
+    const received: IMMessageEvent[] = [];
+    let transportAllowed = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        fetchStarted.resolve();
+        await releaseFetch.promise;
+        return {
+          ok: true,
+          arrayBuffer: async () => new Uint8Array([1]).buffer,
+        };
+      }),
+    );
+    im.setSchedulerHooks({
+      isTransportAllowed: () => transportAllowed,
+    });
+    im.onMessage((event) => {
+      received.push(event);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({
+      id: 'msg-handoff',
+      content: 'accepted before handoff',
+      attachments: [{
+        id: 'att-1',
+        name: 'photo.png',
+        url: 'https://cdn.example/slow.png',
+        size: 1024,
+        contentType: 'image/png',
+      }],
+    }));
+    await fetchStarted.promise;
+
+    transportAllowed = false;
+    let handoffFinished = false;
+    const handoff = im.enterSchedulerStandby({ clearRuntimeActiveMarker: true }).then(() => {
+      handoffFinished = true;
+    });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(gateway.appId).toBe('app-1');
+    expect(handoffFinished).toBe(false);
+    expect(received).toEqual([]);
+
+    releaseFetch.resolve();
+    await handoff;
+
+    expect(gateway.destroy).toHaveBeenCalledTimes(1);
+    expect(gateway.appId).toBe('');
+    expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-handoff']);
+
+    await gateway.emitDm(message({ id: 'msg-after-handoff', content: 'must not enter' }));
+    expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-handoff']);
+  });
+
+  it('drains a button accepted before ACK when the scheduler hands off', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const acknowledged = deferred();
+    const received: IMCardActionEvent[] = [];
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onCardAction((event) => {
+      received.push(event);
+    });
+
+    await im.init();
+    gateway.emitButton({
+      customId: encodeCustomId('control:start', { source: 'accepted' }),
+      user: { id: 'user-1' },
+      channelId: 'dm-1',
+      message: { id: 'msg-button' },
+    }, acknowledged.promise);
+
+    transportAllowed = false;
+    let handoffFinished = false;
+    const handoff = im.enterSchedulerStandby().then(() => {
+      handoffFinished = true;
+    });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(handoffFinished).toBe(false);
+    expect(received).toEqual([]);
+
+    gateway.emitButton({
+      customId: encodeCustomId('control:start', { source: 'late' }),
+      user: { id: 'user-1' },
+      channelId: 'dm-1',
+      message: { id: 'msg-late' },
+    });
+    acknowledged.resolve(undefined);
+    await handoff;
+
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+    expect(received).toHaveLength(2);
+    expect(received).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          buttonId: 'control:start',
+          messageId: 'dm-1|msg-button',
+          payload: { source: 'accepted' },
+        }),
+        expect.objectContaining({
+          buttonId: 'control:start',
+          messageId: 'dm-1|msg-late',
+          payload: { source: 'late' },
+        }),
+      ]),
+    );
+  });
+
+  it('keeps DMs received during a normal handoff in the drain queue', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    const received: string[] = [];
+    let first = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage(async (event) => {
+      received.push(event.messageId);
+      if (first) {
+        first = false;
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+    });
+    let transportAllowed = true;
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-before-drain' }));
+    await firstStarted.promise;
+
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby();
+    await flushMicrotasks();
+    await gateway.emitDm(message({ id: 'msg-during-drain' }));
+
+    releaseFirst.resolve();
+    await handoff;
+
+    expect(received).toEqual(['dm-1|msg-before-drain', 'dm-1|msg-during-drain']);
+    expect(gateway.closeIngress).not.toHaveBeenCalled();
+  });
+
+  it('closes only Discord ingress before draining an ownership handoff', async () => {
+    const channel = makeChannel('dm-1');
+    const gateway = makeGateway({ client: makeClient(channel) });
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+
+    await im.init();
+    transportAllowed = false;
+    await im.enterSchedulerStandby({ closeIngress: true });
+
+    expect(gateway.closeIngress).toHaveBeenCalledOnce();
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+    const closeOrder = gateway.closeIngress.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+    const destroyOrder = gateway.destroy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+    expect(closeOrder).toBeLessThan(destroyOrder);
+  });
+
+  it('commits an accepted Agent task response before closing the handoff Gateway', async () => {
+    const channel = makeChannel('dm-1');
+    const gateway = makeGateway({ client: makeClient(channel) });
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage((event) => {
+      const terminal = (async () => {
+        await releaseTask.promise;
+        await im.sendText(event.senderId, 'final response');
+      })();
+      im.trackAcceptedTask(terminal);
+    });
+    im.onCardAction((event) => {
+      if (event.buttonId === 'control:finish') releaseTask.resolve(undefined);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    transportAllowed = false;
+    let handoffFinished = false;
+    const handoff = im.enterSchedulerStandby().then(() => {
+      handoffFinished = true;
+    });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(handoffFinished).toBe(false);
+    expect(channel.send).not.toHaveBeenCalled();
+
+    await gateway.emitDm(message({ id: 'msg-late-task', content: 'must not enter' }));
+    gateway.emitButton({
+      customId: encodeCustomId('control:finish', {}),
+      user: { id: 'user-1' },
+      channelId: 'dm-1',
+      message: { id: 'msg-finish' },
+    });
+    await handoff;
+
+    expect(channel.send).toHaveBeenCalledWith('final response');
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+    expect(handoffFinished).toBe(true);
+  });
+
+  it('keeps the draining outbound lease when the Gateway reconnects during handoff', async () => {
+    const channel = makeChannel('dm-1');
+    const gateway = makeGateway({ client: makeClient(channel) });
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    const received: string[] = [];
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage((event) => {
+      received.push(event.messageId);
+      const terminal = (async () => {
+        await releaseTask.promise;
+        await im.sendText(event.senderId, `final response for ${event.messageId}`);
+      })();
+      im.trackAcceptedTask(terminal);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+    gateway.emitStatus({ kind: 'connecting' });
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby();
+    await flushMicrotasks();
+
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    await flushMicrotasks();
+    await gateway.emitDm(message({ id: 'msg-after-resume', content: 'continue during drain' }));
+
+    expect(gateway.closeIngress).not.toHaveBeenCalled();
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(channel.send).not.toHaveBeenCalled();
+
+    releaseTask.resolve(undefined);
+    await handoff;
+
+    expect(received).toEqual(['dm-1|msg-task', 'dm-1|msg-after-resume']);
+    expect(channel.send).toHaveBeenCalledTimes(2);
+    expect(channel.send).toHaveBeenCalledWith('final response for dm-1|msg-task');
+    expect(channel.send).toHaveBeenCalledWith('final response for dm-1|msg-after-resume');
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a stale handoff when this Desktop regains ingress while accepted work drains', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage(() => {
+      im.trackAcceptedTask(releaseTask.promise);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+    gateway.setIngressOpen(false);
+    gateway.emitStatus({ kind: 'connecting' });
+    expect(im.getStatus()).toEqual({ kind: 'connecting' });
+
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby({ clearRuntimeActiveMarker: true });
+    await flushMicrotasks();
+    expect(gateway.destroy).not.toHaveBeenCalled();
+
+    transportAllowed = true;
+    releaseTask.resolve();
+    await handoff;
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(gateway.appId).toBe('app-1');
+    expect(im.getStatus()).toEqual({ kind: 'connecting' });
+  });
+
+  it('restores connected after a Gateway resumes during a cancelled handoff', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage(() => {
+      im.trackAcceptedTask(releaseTask.promise);
+    });
+
+    await im.init();
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby({ clearRuntimeActiveMarker: true });
+    await flushMicrotasks();
+
+    // The real Gateway recovers while the original handoff is still valid.
+    // Its connected event is correctly projected to standby until election
+    // grants this Desktop ingress again.
+    gateway.setIngressOpen(true);
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    expect(im.getStatus()).toEqual({ kind: 'standby', appId: '12345678901234567' });
+
+    transportAllowed = true;
+    releaseTask.resolve();
+    await handoff;
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: 'bot#0000' });
+  });
+
+  it('destroys a forced-closed Gateway when a stale handoff regains ownership', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage(() => {
+      im.trackAcceptedTask(releaseTask.promise);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby();
+    await flushMicrotasks();
+    await im.closeSchedulerIngress();
+    expect(gateway.ingressForcedClosed).toBe(true);
+
+    transportAllowed = true;
+    releaseTask.resolve();
+    await handoff;
+
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+    expect(im.getStatus()).toEqual({ kind: 'standby', appId: '12345678901234567' });
+  });
+
   it('connects gateway when set-config receives a token', async () => {
     const gateway = makeGateway();
-    const host = makeHost();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const host = makeHost({ initialSecrets: [['discord-bot-token', 'old-token'], ['discord-owner-user-id', 'user-1']] });
     const im = new DiscordIM(host, {
       gatewayFactory: (handlers) => {
         gateway.setHandlers(handlers);
         return gateway;
       },
     });
+    const allowed = vi.fn(() => true);
+    const onConfigurationChanged = vi.fn();
+    im.setSchedulerHooks({ isTransportAllowed: allowed, onConfigurationChanged });
 
     im.registerIpc();
     await host.invoke('discordBot:set-config', {
-      token: 'new-token',
+      token,
       ownerUserId: 'user-1',
     });
 
     expect(gateway.destroy).toHaveBeenCalledOnce();
-    expect(gateway.connect).toHaveBeenCalledWith('new-token');
+    expect(onConfigurationChanged).toHaveBeenCalledOnce();
+    expect(onConfigurationChanged.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.connect.mock.invocationCallOrder[0],
+    );
+    expect(gateway.connect).toHaveBeenCalledWith(token);
+    expect(host.readSecret('discord-bot-token')).toBe(token);
+    expect(host.readSecret('discord-bot-token-pending')).toBeNull();
   });
+
+  it('keeps a candidate token pending while scheduler discovery is incomplete', async () => {
+    const gateway = makeGateway();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    im.setSchedulerHooks({ isTransportAllowed: () => false });
+
+    im.registerIpc();
+    const result = await host.invoke('discordBot:set-config', {
+      token: candidateToken,
+      ownerUserId: 'user-2',
+    });
+
+    expect(result).toEqual({
+      status: { kind: 'standby', appId: '12345678901234567' },
+      ownerUserId: 'user-2',
+    });
+    expect(host.readSecret('discord-bot-token')).toBe(previousToken);
+    expect(host.readSecret('discord-owner-user-id')).toBe('user-1');
+    expect(host.readSecret('discord-bot-token-pending')).toBe(candidateToken);
+    expect(host.readSecret('discord-owner-user-id-pending')).toBe('user-2');
+    expect(gateway.connect).not.toHaveBeenCalled();
+  });
+
+  it('handles a rejected Gateway destroy while enforcing scheduler standby', async () => {
+    const gateway = makeGateway();
+    gateway.destroy.mockRejectedValueOnce(new Error('destroy failed'));
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    im.setSchedulerHooks({ isTransportAllowed: () => false });
+
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('promotes a pending candidate only after its first successful connection', async () => {
+    const gateway = makeGateway();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    let allowed = false;
+    im.setSchedulerHooks({ isTransportAllowed: () => allowed });
+
+    im.registerIpc();
+    await host.invoke('discordBot:set-config', {
+      token: candidateToken,
+      ownerUserId: 'user-2',
+    });
+    allowed = true;
+    await im.init();
+
+    expect(gateway.connect).toHaveBeenCalledWith(candidateToken);
+    expect(host.readSecret('discord-bot-token')).toBe(candidateToken);
+    expect(host.readSecret('discord-owner-user-id')).toBe('user-2');
+    expect(host.readSecret('discord-bot-token-pending')).toBeNull();
+    expect(host.readSecret('discord-owner-user-id-pending')).toBeNull();
+  });
+
+  it('restores the previous usable Bot when a pending candidate fails authentication', async () => {
+    const gateway = makeGateway();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.invalid.signature`;
+    gateway.connect
+      .mockRejectedValueOnce(Object.assign(new Error('bad token'), { code: 'TokenInvalid' }))
+      .mockImplementationOnce(async () => {
+        gateway.emitStatus({ kind: 'connected', appId: 'old-bot#0000' });
+      });
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    let allowed = false;
+    const onConfigurationChanged = vi.fn();
+    im.setSchedulerHooks({ isTransportAllowed: () => allowed, onConfigurationChanged });
+
+    im.registerIpc();
+    await host.invoke('discordBot:set-config', {
+      token: candidateToken,
+      ownerUserId: 'user-2',
+    });
+    expect(host.readSecret('discord-bot-token')).toBe(previousToken);
+
+    allowed = true;
+    await im.init();
+
+    expect(gateway.connect).toHaveBeenNthCalledWith(1, candidateToken);
+    expect(gateway.connect).toHaveBeenNthCalledWith(2, previousToken);
+    expect(host.readSecret('discord-bot-token')).toBe(previousToken);
+    expect(host.readSecret('discord-owner-user-id')).toBe('user-1');
+    expect(host.readSecret('discord-bot-token-pending')).toBeNull();
+    expect(host.readSecret('discord-owner-user-id-pending')).toBeNull();
+    expect(onConfigurationChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reconnect the previous account while a pending activation is being disposed', async () => {
+    const gateway = makeGateway();
+    const activation = deferred<void>();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+    gateway.connect.mockImplementationOnce(() => activation.promise);
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-token-pending', candidateToken],
+        ['discord-owner-user-id-pending', 'user-2'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    im.setSchedulerHooks({ isTransportAllowed: () => true });
+
+    const initializing = im.init();
+    await vi.waitFor(() => expect(gateway.connect).toHaveBeenCalledWith(candidateToken));
+    const disposing = im.dispose();
+    activation.reject(Object.assign(new Error('login aborted'), { code: 'TokenInvalid' }));
+
+    await initializing;
+    await disposing;
+
+    expect(gateway.connect).toHaveBeenCalledTimes(1);
+    expect(gateway.connect).not.toHaveBeenCalledWith(previousToken);
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'does not let a stale timed-out activation %s overwrite a later successful retry',
+    async (settlement) => {
+      const gateway = makeGateway();
+      const staleActivation = deferred<void>();
+      const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+      const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+      gateway.connect
+        .mockImplementationOnce(() => staleActivation.promise)
+        .mockImplementationOnce(async () => {
+          gateway.emitStatus({ kind: 'connected', appId: 'candidate-bot#0000' });
+        });
+      const host = makeHost({
+        initialSecrets: [
+          ['discord-bot-token', previousToken],
+          ['discord-owner-user-id', 'user-1'],
+          ['discord-bot-token-pending', candidateToken],
+          ['discord-owner-user-id-pending', 'user-2'],
+        ],
+      });
+      const im = new DiscordIM(host, {
+        gatewayFactory: (handlers) => {
+          gateway.setHandlers(handlers);
+          return gateway;
+        },
+      });
+      im.setSchedulerHooks({ isTransportAllowed: () => true });
+
+      const staleInit = im.init();
+      await vi.waitFor(() => expect(gateway.connect).toHaveBeenCalledTimes(1));
+
+      // Mirrors the scheduler timeout path: invalidate the pending init before
+      // the cooldown permits a fresh attempt, while preserving drain leases.
+      await im.enterSchedulerStandby({ closeIngress: true });
+      await im.init();
+
+      if (settlement === 'resolve') {
+        staleActivation.resolve();
+      } else {
+        staleActivation.reject(Object.assign(new Error('late login failure'), { code: 'TokenInvalid' }));
+      }
+      await staleInit;
+
+      expect(gateway.connect).toHaveBeenCalledTimes(2);
+      expect(gateway.connect).toHaveBeenNthCalledWith(1, candidateToken);
+      expect(gateway.connect).toHaveBeenNthCalledWith(2, candidateToken);
+      expect(gateway.destroy).toHaveBeenCalledTimes(1);
+      expect(host.readSecret('discord-bot-token')).toBe(candidateToken);
+      expect(host.readSecret('discord-owner-user-id')).toBe('user-2');
+      expect(host.readSecret('discord-bot-token-pending')).toBeNull();
+      expect(host.readSecret('discord-owner-user-id-pending')).toBeNull();
+    },
+  );
 
   it('sends the owner a fixed notice after a successful link', async () => {
     const channel = makeChannel('dm-1');
@@ -1148,6 +1832,27 @@ describe('DiscordIM inbound pipeline', () => {
     expect(channel.send).toHaveBeenNthCalledWith(1, 'localized:offlineNotice');
     expect(channel.send).toHaveBeenNthCalledWith(2, 'localized:online');
     expect(host.readSecret('discord-bot-runtime-active')).toBeTruthy();
+  });
+
+  it('clears the runtime marker when scheduler hands ingress to another Desktop', async () => {
+    const gateway = makeGateway();
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', 'token'],
+        ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-runtime-active', 'previous-run'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+
+    await im.enterSchedulerStandby({ clearRuntimeActiveMarker: true });
+
+    expect(host.readSecret('discord-bot-runtime-active')).toBeNull();
   });
 
   it('keeps dirty runtime marker until offlineNotice succeeds', async () => {
@@ -1849,7 +2554,7 @@ describe('DiscordIM inbound pipeline', () => {
     const gateway = makeGateway();
     const host = makeHost({
       write: (name, value, secrets) => {
-        if (name === 'discord-owner-user-id' && value === 'new-owner') return false;
+        if (name === 'discord-owner-user-id-pending' && value === 'new-owner') return false;
         secrets.set(name, value);
         return true;
       },
@@ -1885,7 +2590,7 @@ describe('DiscordIM inbound pipeline', () => {
     const host = makeHost({
       initialSecrets: [],
       write: (name, value, secrets) => {
-        if (name === 'discord-owner-user-id' && value === 'new-owner') return false;
+        if (name === 'discord-owner-user-id-pending' && value === 'new-owner') return false;
         secrets.set(name, value);
         return true;
       },
@@ -2048,10 +2753,15 @@ function makeHost(options: {
   };
 }
 
-function makeGateway(options: { client?: unknown } = {}) {
+function makeGateway(options: { client?: unknown; clearAppIdOnDestroy?: boolean } = {}) {
   let onDmMessage: ((m: never) => void) | null = null;
+  let onButtonInteraction:
+    | ((i: never, acknowledged: Promise<void>) => void)
+    | null = null;
   let onStatus: ((s: IMStatus) => void) | null = null;
   let appId = 'app-1';
+  let ingressOpen = true;
+  let ingressForcedClosed = false;
   const client = options.client ?? null;
   return {
     get client() {
@@ -2060,15 +2770,39 @@ function makeGateway(options: { client?: unknown } = {}) {
     get appId() {
       return appId;
     },
+    get ingressOpen() {
+      return ingressOpen;
+    },
+    get ingressForcedClosed() {
+      return ingressForcedClosed;
+    },
     botTag: 'bot#0000',
-    connect: vi.fn(async () => {}),
-    destroy: vi.fn(async () => {}),
-    setHandlers(handlers: { onStatus: (s: IMStatus) => void; onDmMessage: (m: never) => void }) {
+    connect: vi.fn(async () => {
+      ingressForcedClosed = false;
+    }),
+    closeIngress: vi.fn(async () => {
+      ingressForcedClosed = true;
+      ingressOpen = false;
+    }),
+    destroy: vi.fn(async () => {
+      ingressForcedClosed = false;
+      ingressOpen = false;
+      if (options.clearAppIdOnDestroy) appId = '';
+    }),
+    setHandlers(handlers: {
+      onStatus: (s: IMStatus) => void;
+      onDmMessage: (m: never) => void;
+      onButtonInteraction: (i: never, acknowledged: Promise<void>) => void;
+    }) {
       onStatus = handlers.onStatus;
       onDmMessage = handlers.onDmMessage;
+      onButtonInteraction = handlers.onButtonInteraction;
     },
     setAppId(nextAppId: string) {
       appId = nextAppId;
+    },
+    setIngressOpen(nextIngressOpen: boolean) {
+      ingressOpen = nextIngressOpen;
     },
     emitStatus(status: IMStatus) {
       onStatus?.(status);
@@ -2076,6 +2810,9 @@ function makeGateway(options: { client?: unknown } = {}) {
     async emitDm(m: unknown) {
       onDmMessage?.(m as never);
       await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    emitButton(i: unknown, acknowledged: Promise<void> = Promise.resolve()) {
+      onButtonInteraction?.(i as never, acknowledged);
     },
   };
 }

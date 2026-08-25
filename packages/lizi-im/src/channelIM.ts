@@ -34,6 +34,13 @@ export interface TextChannelIM {
   onMessage(handler: (e: IMMessageEvent) => void): () => void;
   onStatusChange(handler: (s: IMStatus) => void): () => void;
 
+  /**
+   * Optional transport handoff hook. Discord uses it to keep an already
+   * accepted Agent turn inside the previous ingress lease until its terminal
+   * output has been committed; other channels do not need to implement it.
+   */
+  trackAcceptedTask?(task: Promise<unknown>): void;
+
   // ── outbound ───────────────────────────────────────────────────────────────
   // 末位 opts.threadTs: thread 能力渠道(slack)把消息发进指定 thread;
   // 无 thread 概念的渠道(feishu)的实现可省略该参数(结构类型兼容), 调用方
