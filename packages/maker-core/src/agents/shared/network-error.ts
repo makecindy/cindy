@@ -21,7 +21,7 @@
  * `API Error:` 前缀的 `The operation timed out.`，以及
  * `OpenAI Responses stream ended before a terminal response event`。
  */
-/** Pi 把 GPT Gateway 超时 / 半截流收成终态后，Host 不得再自动续跑，把「点一下重试」留给用户。 */
+/** 仅在 Pi `auto_retry_end` 失败后使用：把「点一下重试」留给用户，Host 不再续跑。首次 aborted 不得打这个 reason。 */
 export const PI_GATEWAY_DROP_REASON = 'pi-gateway-drop';
 
 export interface ReconnectAttempt {

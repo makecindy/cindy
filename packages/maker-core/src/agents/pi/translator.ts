@@ -467,9 +467,7 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
       ? { reason: CONTEXT_OVERFLOW_REASON }
       : isStreamInterruptedErrorMessage(redactedError)
         ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
-        : isNetworkishErrorMessage(redactedError)
-          ? { reason: PI_GATEWAY_DROP_REASON }
-          : {}),
+        : {}),
   };
 }
 
@@ -935,11 +933,17 @@ export function translatePiEvent(
         ? piAssistantErrorOf(rawFinalError)
         : ctx.pendingAssistantError ?? piAssistantErrorOf('pi auto-retry failed');
       ctx.pendingAssistantError = null;
+      // 只有 Pi 自己的 retry budget 用尽，才挡住 Host 续跑。首次 aborted 半截流
+      // 没有 auto_retry_*，必须保持无 reason，好让 Host 按网络类接走。
+      const exhaustedReason = !finalError.reason && isNetworkishErrorMessage(finalError.message)
+        ? PI_GATEWAY_DROP_REASON
+        : undefined;
       queue.push({
         type: 'error',
         data: {
           ...finalError,
           isTerminal: true,
+          ...(exhaustedReason ? { reason: exhaustedReason } : {}),
         },
         source: 'pi',
       });

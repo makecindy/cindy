@@ -558,10 +558,11 @@ describe('pi translator', () => {
         data: expect.objectContaining({
           message: rawError,
           isTerminal: true,
-          reason: 'pi-gateway-drop',
         }),
       }),
     ]);
+    expect((events.find((event) => event.type === 'error')?.data as { reason?: string }).reason)
+      .toBeUndefined();
   });
 
   it('does not treat a bare abort as a provider failure', () => {
