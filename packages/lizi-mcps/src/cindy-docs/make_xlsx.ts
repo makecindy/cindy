@@ -32,6 +32,14 @@ const MAX_COL_WIDTH = 60;
 /** 只用前若干行估宽 —— 万行表逐格量宽既慢又没必要。 */
 const WIDTH_SAMPLE_ROWS = 200;
 const BORDER_ROW_CAP = 2000;
+/** ExcelJS 会在当前进程中构建整棵工作簿对象树，输入必须先过硬边界。 */
+const MAX_XLSX_SHEETS = 32;
+const MAX_XLSX_ROWS_PER_SHEET = 5000;
+const MAX_XLSX_COLUMNS = 256;
+const MAX_XLSX_CELL_TEXT_CHARS = 32_767;
+const MAX_XLSX_FORMULA_CHARS = 8192;
+const MAX_XLSX_TOTAL_CELLS = 100_000;
+const MAX_XLSX_TOTAL_TEXT_BYTES = 8 * 1024 * 1024;
 
 const DESCRIPTION = [
   '把结构化数据生成为 Excel 工作簿(.xlsx),支持多个工作表。',
@@ -44,6 +52,7 @@ const DESCRIPTION = [
   'theme: "light"(默认) / "dark" / "navy";zebra 默认 true。',
   'rows 里的每个单元格可以是字符串、数字、布尔或 null(留空)。',
   '数字请传数字类型而不是字符串,否则 Excel 里不能参与求和。',
+  `单份工作簿最多 ${MAX_XLSX_SHEETS} 张表、每表 ${MAX_XLSX_ROWS_PER_SHEET} 行 × ${MAX_XLSX_COLUMNS} 列、合计 ${MAX_XLSX_TOTAL_CELLS} 个单元格。`,
   '',
   '【公式】要写公式就传 { formula, result },例如',
   '{ "formula": "SUM(B2:B4)", "result": 3060 }。',
@@ -62,14 +71,85 @@ const DESCRIPTION = [
  * LibreOffice 重算一遍」,那等于给文档功能绑一个系统级依赖 —— 我们不走那条路,
  * 改成让调用方把算好的值一起给过来。模型本来就知道这个数,写下来是零成本的。
  */
+const CellTextSchema = z.string().max(MAX_XLSX_CELL_TEXT_CHARS);
+
 const FormulaCellSchema = z.object({
-  formula: z.string().min(1).describe('Excel 公式,不带开头的等号,如 "SUM(B2:B10)"。'),
+  formula: z
+    .string()
+    .min(1)
+    .max(MAX_XLSX_FORMULA_CHARS)
+    .describe('Excel 公式,不带开头的等号,如 "SUM(B2:B10)"。'),
   result: z
-    .union([z.string(), z.number(), z.boolean()])
+    .union([CellTextSchema, z.number(), z.boolean()])
     .describe('公式的计算结果(缓存值)。必填 —— 没有它,打开文件重算前这格是空的。'),
 });
 
-const CellSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), FormulaCellSchema]);
+const CellSchema = z.union([
+  CellTextSchema,
+  z.number(),
+  z.boolean(),
+  z.null(),
+  FormulaCellSchema,
+]);
+
+const SheetSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(31)
+    .describe('工作表名。Excel 限 31 字符,且不能含 : \\ / ? * [ ]。'),
+  header: z
+    .array(CellTextSchema)
+    .max(MAX_XLSX_COLUMNS)
+    .optional()
+    .describe('可选表头行。给了就会加粗 + 主题色带 + 冻结首行。'),
+  rows: z
+    .array(z.array(CellSchema).max(MAX_XLSX_COLUMNS))
+    .max(MAX_XLSX_ROWS_PER_SHEET)
+    .describe('数据行,每行是一个单元格数组。数字请用数字类型。'),
+});
+
+const SheetsSchema = z.array(SheetSchema).min(1).max(MAX_XLSX_SHEETS);
+
+type XlsxSheetInput = z.infer<typeof SheetSchema>;
+
+/** 聚合边界需在 ExcelJS 构造 Workbook 之前执行，避免先实体化再报错。 */
+export function assertXlsxAggregateBounds(sheets: readonly XlsxSheetInput[]): void {
+  let totalCells = 0;
+  let totalTextBytes = 0;
+  const addText = (value: unknown): void => {
+    if (typeof value === 'string') totalTextBytes += Buffer.byteLength(value, 'utf8');
+  };
+  for (const sheet of sheets) {
+    totalCells += sheet.header?.length ?? 0;
+    for (const header of sheet.header ?? []) addText(header);
+    for (const row of sheet.rows) {
+      totalCells += row.length;
+      for (const cell of row) {
+        if (isFormulaCell(cell)) {
+          addText(cell.formula);
+          addText(cell.result);
+        } else {
+          addText(cell);
+        }
+      }
+    }
+    if (totalCells > MAX_XLSX_TOTAL_CELLS) {
+      throw new DocsPathError(
+        'FILE_TOO_LARGE',
+        `工作簿合计超过 ${MAX_XLSX_TOTAL_CELLS} 个单元格`,
+        `请把工作簿拆分到不超过 ${MAX_XLSX_TOTAL_CELLS} 个单元格后重试。`,
+      );
+    }
+    if (totalTextBytes > MAX_XLSX_TOTAL_TEXT_BYTES) {
+      throw new DocsPathError(
+        'FILE_TOO_LARGE',
+        '工作簿文本合计超过 8 MB',
+        '请缩短单元格文本或拆分工作簿后重试。',
+      );
+    }
+  }
+}
 
 type FormulaCell = z.infer<typeof FormulaCellSchema>;
 
@@ -247,25 +327,7 @@ export function registerMakeXlsxTool(
     category: 'author',
     description: DESCRIPTION,
     inputShape: {
-      sheets: z
-        .array(
-          z.object({
-            name: z
-              .string()
-              .min(1)
-              .max(31)
-              .describe('工作表名。Excel 限 31 字符,且不能含 : \\ / ? * [ ]。'),
-            header: z
-              .array(z.string())
-              .optional()
-              .describe('可选表头行。给了就会加粗 + 主题色带 + 冻结首行。'),
-            rows: z
-              .array(z.array(CellSchema))
-              .describe('数据行,每行是一个单元格数组。数字请用数字类型。'),
-          }),
-        )
-        .min(1)
-        .describe('工作表列表,至少一张。'),
+      sheets: SheetsSchema.describe('工作表列表,至少一张。'),
       outPath: z.string().min(1).describe('输出 .xlsx 路径,工作目录内的相对路径或绝对路径。'),
       theme: z
         .enum(['light', 'dark', 'navy'])
@@ -276,6 +338,7 @@ export function registerMakeXlsxTool(
     },
     handler: async ({ sheets, outPath, theme, zebra, overwrite }) => {
       try {
+        assertXlsxAggregateBounds(sheets);
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.xlsx');
         const abs = await prepareOutputPath(root, outPath, overwrite);

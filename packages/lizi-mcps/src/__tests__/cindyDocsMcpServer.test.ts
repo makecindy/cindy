@@ -301,6 +301,21 @@ describe('make_docx', () => {
     expect(numbering).toContain('<w:start w:val="0"/>');
   });
 
+  it('列表项的正文与嵌套列表保持原始块顺序,只有首段带编号', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: ['1. 第一段', '', '   - 子项', '', '   结论段'].join('\n'),
+      outPath: 'ordered-block-order.docx',
+    });
+    expect(result.ok).toBe(true);
+    const xml = await unzip(result.path as string, 'word/document.xml');
+    expect(xml.indexOf('第一段')).toBeLessThan(xml.indexOf('子项'));
+    expect(xml.indexOf('子项')).toBeLessThan(xml.indexOf('结论段'));
+    const paragraphs = xml.match(/<w:p\b[\s\S]*?<\/w:p>/g) ?? [];
+    expect(paragraphs.find((paragraph) => paragraph.includes('第一段'))).toContain('<w:numPr>');
+    expect(paragraphs.find((paragraph) => paragraph.includes('结论段'))).not.toContain('<w:numPr>');
+  });
+
   it('输出目录不存在时自动创建', async () => {
     const client = await connect();
     const result = await callTool(client, 'make_docx', {
@@ -313,6 +328,45 @@ describe('make_docx', () => {
 });
 
 describe('make_xlsx', () => {
+  it('在进入 ExcelJS 前限制工作表、行、列和单元格文本规模', async () => {
+    const client = await connect();
+    const invalidSheets = await client.callTool({
+      name: 'make_xlsx',
+      arguments: {
+        sheets: Array.from({ length: 33 }, (_, index) => ({ name: `S${index}`, rows: [] })),
+        outPath: 'too-many-sheets.xlsx',
+      },
+    });
+    expect((invalidSheets as { isError?: boolean }).isError).toBe(true);
+
+    const invalidRows = await client.callTool({
+      name: 'make_xlsx',
+      arguments: {
+        sheets: [{ name: 'S', rows: Array.from({ length: 5001 }, () => []) }],
+        outPath: 'too-many-rows.xlsx',
+      },
+    });
+    expect((invalidRows as { isError?: boolean }).isError).toBe(true);
+
+    const invalidColumns = await client.callTool({
+      name: 'make_xlsx',
+      arguments: {
+        sheets: [{ name: 'S', rows: [Array.from({ length: 257 }, () => null)] }],
+        outPath: 'too-many-columns.xlsx',
+      },
+    });
+    expect((invalidColumns as { isError?: boolean }).isError).toBe(true);
+
+    const invalidText = await client.callTool({
+      name: 'make_xlsx',
+      arguments: {
+        sheets: [{ name: 'S', rows: [['x'.repeat(32_768)]] }],
+        outPath: 'cell-text-too-long.xlsx',
+      },
+    });
+    expect((invalidText as { isError?: boolean }).isError).toBe(true);
+  });
+
   it('写出的表能被 exceljs 读回,表头加粗 + 冻结首行 + 类型保真', async () => {
     const client = await connect();
     const result = await callTool(client, 'make_xlsx', {

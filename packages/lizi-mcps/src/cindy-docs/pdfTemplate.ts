@@ -262,15 +262,57 @@ function findHtmlBodyRange(html: string): { start: number; end: number } | undef
   return body ? { start: body.contentStart, end: body.contentEnd } : undefined;
 }
 
+/** 只剥扫描器确认的文档包装节点；raw-text 中的标签形状字符串必须原样保留。 */
+function stripHtmlDocumentWrappers(html: string): string {
+  let output = '';
+  let cursor = 0;
+  let index = 0;
+  let templateDepth = 0;
+
+  while (index < html.length) {
+    const tagStart = html.indexOf('<', index);
+    if (tagStart < 0) break;
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      index = commentEnd < 0 ? html.length : commentEnd + 3;
+      continue;
+    }
+    const tagEnd = findHtmlTagEnd(html, tagStart);
+    if (tagEnd < 0) break;
+    const tag = html.slice(tagStart, tagEnd + 1);
+    const closingName = tag.match(/^<\s*\/\s*([A-Za-z][\w:-]*)\s*>/)?.[1]?.toLowerCase();
+    const openingName = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/)?.[1]?.toLowerCase();
+
+    if (closingName === 'template' && templateDepth > 0) {
+      templateDepth -= 1;
+    } else if (openingName === 'template' && !/\/\s*>$/.test(tag)) {
+      templateDepth += 1;
+    }
+
+    const isDoctype = templateDepth === 0 && /^<!doctype\b/i.test(tag);
+    const isHtmlWrapper = templateDepth === 0 && (openingName === 'html' || closingName === 'html');
+    if (isDoctype || isHtmlWrapper) {
+      output += html.slice(cursor, tagStart);
+      cursor = tagEnd + 1;
+    }
+
+    if (openingName && HTML_RAW_TEXT_TAGS.has(openingName)) {
+      const rawClosing = findRawTextClosing(html, openingName, tagEnd + 1);
+      index = rawClosing?.end ?? html.length;
+      continue;
+    }
+    index = tagEnd + 1;
+  }
+
+  return `${output}${html.slice(cursor)}`;
+}
+
 export function extractHtmlBody(html: string): string {
   const body = findHtmlBodyRange(html);
   if (body) return html.slice(body.start, body.end).trim();
   const head = findHtmlElementRange(html, 'head');
   const withoutHead = head ? `${html.slice(0, head.start)}${html.slice(head.end)}` : html;
-  return withoutHead
-    .replace(/<!doctype[^>]*>/i, '')
-    .replace(/<\/?html\b[^>]*>/gi, '')
-    .trim();
+  return stripHtmlDocumentWrappers(withoutHead).trim();
 }
 
 export function reportTemplateCss(theme: DocsTheme): string {

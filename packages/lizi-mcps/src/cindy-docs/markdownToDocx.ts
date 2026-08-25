@@ -177,8 +177,12 @@ function quoteParagraphStyle(theme: DocsTheme) {
   } as const;
 }
 
-function listParagraphs(list: Tokens.List, depth: number, ctx: BlockContext): Paragraph[] {
-  const out: Paragraph[] = [];
+function listParagraphs(
+  list: Tokens.List,
+  depth: number,
+  ctx: BlockContext,
+): Array<Paragraph | Table> {
+  const out: Array<Paragraph | Table> = [];
   const level = Math.min(depth, 3);
   const orderedReference = list.ordered
     ? `${ORDERED_REF_PREFIX}-${ctx.nextOrderedListId++}`
@@ -189,25 +193,39 @@ function listParagraphs(list: Tokens.List, depth: number, ctx: BlockContext): Pa
     ctx.orderedLists.push({ reference: orderedReference, level, start });
   }
   for (const item of list.items) {
-    const inline: Token[] = [];
-    const blocks: Token[] = [];
-    for (const child of item.tokens ?? []) {
-      if (child.type === 'list') blocks.push(child);
-      else inline.push(child);
-    }
     const numbering: IParagraphOptions['numbering'] = orderedReference
       ? { reference: orderedReference, level, instance: 0 }
       : undefined;
-    out.push(
-      new Paragraph({
-        children: inlineRuns(inline, ctx.theme),
-        ...(numbering ? { numbering } : { bullet: { level } }),
-        spacing: { after: 60 },
-      }),
-    );
-    for (const nested of blocks) {
-      out.push(...listParagraphs(nested as Tokens.List, depth + 1, ctx));
+    const marker = numbering ? { numbering } : { bullet: { level } };
+    let markerWritten = false;
+    const writeMarker = (children: ParagraphChild[]): void => {
+      out.push(new Paragraph({ children, ...marker, spacing: { after: 60 } }));
+      markerWritten = true;
+    };
+
+    for (const child of item.tokens ?? []) {
+      if (child.type === 'space') continue;
+      if (child.type === 'list') {
+        // 极端输入可以让列表项直接从子列表开始；仍需保留父级项目符号。
+        if (!markerWritten) writeMarker([]);
+        out.push(...listParagraphs(child as Tokens.List, depth + 1, ctx));
+        continue;
+      }
+      if (!markerWritten && (child.type === 'paragraph' || child.type === 'text')) {
+        const paragraph = child as Tokens.Paragraph;
+        const children = inlineRuns(paragraph.tokens, ctx.theme);
+        writeMarker(
+          children.length > 0
+            ? children
+            : [new TextRun({ text: (child as { text?: string }).text ?? '' })],
+        );
+        continue;
+      }
+      if (!markerWritten) writeMarker([]);
+      // 后续正文块各自保持独立段落，并留在嵌套列表前后的原始位置。
+      out.push(...blocksFromTokens([child], ctx));
     }
+    if (!markerWritten) writeMarker([]);
   }
   return out;
 }
