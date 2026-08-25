@@ -477,6 +477,17 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     expect(applyReportTemplate(wrapped.html, DOCS_THEMES.light).applied).toBe(false);
   });
 
+  it('套模板时不把 script 或注释里的伪 body 结束标签当成正文边界', () => {
+    const wrapped = applyReportTemplate(
+      `<html><body><script>const demo = '</body>';</script><!-- </body> --><h1>完整报告</h1></body></html>`,
+      DOCS_THEMES.light,
+    );
+    expect(wrapped.applied).toBe(true);
+    expect(wrapped.html).toContain("const demo = '</body>';");
+    expect(wrapped.html).toContain('<!-- </body> -->');
+    expect(wrapped.html).toContain('<h1>完整报告</h1>');
+  });
+
   it('render_pdf 对无样式 HTML 自动套模板,已有 style 的原样透传', async () => {
     const seen: DocsPdfRenderInput[] = [];
     const pdfBytes = Buffer.from(`%PDF-1.7\n${'x'.repeat(4096)}\n%%EOF`);

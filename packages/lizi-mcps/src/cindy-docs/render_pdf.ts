@@ -354,6 +354,64 @@ async function inlineCssUrls(
   return rewriteCssResources(css, baseUrl, context, decodeReference);
 }
 
+function isCssHexDigit(value: string | undefined): boolean {
+  return value !== undefined && /^[\da-f]$/i.test(value);
+}
+
+function isCssWhitespace(value: string | undefined): boolean {
+  return value === ' ' || value === '\t' || value === '\r' || value === '\n' || value === '\f';
+}
+
+function cssEscapeEnd(value: string, start: number): number {
+  const next = value[start + 1];
+  if (next === undefined) return start + 1;
+  if (next === '\r' && value[start + 2] === '\n') return start + 3;
+  if (next === '\r' || next === '\n' || next === '\f') return start + 2;
+  if (!isCssHexDigit(next)) return start + 2;
+  let end = start + 1;
+  let digits = 0;
+  while (digits < 6 && isCssHexDigit(value[end])) {
+    end += 1;
+    digits += 1;
+  }
+  if (value[end] === '\r' && value[end + 1] === '\n') return end + 2;
+  if (isCssWhitespace(value[end])) return end + 1;
+  return end;
+}
+
+/** Decode CSS escapes after the containing HTML attribute has been decoded. */
+function decodeCssResourceReference(value: string): string {
+  let decoded = '';
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== '\\') {
+      decoded += value[index]!;
+      index += 1;
+      continue;
+    }
+    const escapeEnd = cssEscapeEnd(value, index);
+    const escaped = value.slice(index + 1, escapeEnd);
+    if (escaped === '\n' || escaped === '\r' || escaped === '\f' || escaped === '\r\n') {
+      index = escapeEnd;
+      continue;
+    }
+    const hex = escaped.match(/^[\da-f]{1,6}/i)?.[0];
+    if (hex) {
+      const codePoint = Number.parseInt(hex, 16);
+      decoded +=
+        codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)
+          ? '\ufffd'
+          : String.fromCodePoint(codePoint);
+    } else if (escaped.length > 0) {
+      decoded += escaped[0]!;
+    } else {
+      decoded += '\ufffd';
+    }
+    index = escapeEnd;
+  }
+  return decoded;
+}
+
 async function rewriteCssResources(
   css: string,
   baseUrl: URL,
@@ -375,7 +433,7 @@ async function rewriteCssResources(
       const quote = current;
       let end = index + 1;
       while (end < css.length) {
-        if (css[end] === '\\') end += 2;
+        if (css[end] === '\\') end = cssEscapeEnd(css, end);
         else if (css[end] === quote) {
           end += 1;
           break;
@@ -394,14 +452,14 @@ async function rewriteCssResources(
         const start = cursor;
         cursor += 1;
         while (cursor < css.length && css[cursor] !== quote) {
-          if (css[cursor] === '\\') cursor += 2;
+          if (css[cursor] === '\\') cursor = cssEscapeEnd(css, cursor);
           else cursor += 1;
         }
         const reference = css.slice(start + 1, cursor);
         const snapshot = await snapshotLocalResource(
           context,
           baseUrl,
-          decodeReference(reference.trim()),
+          decodeCssResourceReference(decodeReference(reference.trim())),
         );
         out.push(css.slice(index, start));
         out.push(snapshot ? `url("${snapshot}")` : css.slice(start, cursor + 1));
@@ -419,20 +477,27 @@ async function rewriteCssResources(
         cursor += 1;
         const start = cursor;
         while (cursor < css.length && css[cursor] !== quote) {
-          if (css[cursor] === '\\') cursor += 2;
+          if (css[cursor] === '\\') cursor = cssEscapeEnd(css, cursor);
           else cursor += 1;
         }
         reference = css.slice(start, cursor);
         cursor += 1;
       } else {
         const start = cursor;
-        while (cursor < css.length && css[cursor] !== ')') cursor += 1;
+        while (cursor < css.length && css[cursor] !== ')') {
+          if (css[cursor] === '\\') cursor = cssEscapeEnd(css, cursor);
+          else cursor += 1;
+        }
         reference = css.slice(start, cursor).trim();
       }
       while (/\s/.test(css[cursor] ?? '')) cursor += 1;
       if (css[cursor] === ')') {
         const original = css.slice(index, cursor + 1);
-        const snapshot = await snapshotLocalResource(context, baseUrl, decodeReference(reference));
+        const snapshot = await snapshotLocalResource(
+          context,
+          baseUrl,
+          decodeCssResourceReference(decodeReference(reference)),
+        );
         out.push(snapshot ? `url("${snapshot}")` : original);
         index = cursor + 1;
         continue;

@@ -1120,6 +1120,39 @@ describe('render_pdf', () => {
     expect(Buffer.from(seen[0]!.htmlBytes!).toString('utf8')).toContain('./missing.png');
   });
 
+  it('按 CSS token 语义解码本地资源 URL 的转义', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'my image.png'), 'escaped-space', 'utf8');
+    await fs.writeFile(path.join(workdir, 'hex name.png'), 'hex-space', 'utf8');
+    await fs.writeFile(path.join(workdir, 'linewrap.png'), 'continued-line', 'utf8');
+    const css = [
+      '.space { background: url("./my\\ image.png"); }',
+      '.hex { background: url("./hex\\20 name.png"); }',
+      '.continued { background: url("./line\\' + '\n' + 'wrap.png"); }',
+    ].join('\n');
+    await fs.writeFile(path.join(workdir, 'css-escapes.html'), `<style>${css}</style>`, 'utf8');
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'css-escapes.html',
+      outPath: 'css-escapes.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    for (const contents of ['escaped-space', 'hex-space', 'continued-line']) {
+      expect(rendered).toContain(
+        `data:image/png;base64,${Buffer.from(contents).toString('base64')}`,
+      );
+    }
+  });
+
   it('只在真实 HTML 开始标签内重写 style 属性', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(

@@ -65,9 +65,88 @@ export function extractHtmlTitle(html: string): string | undefined {
   return undefined;
 }
 
+function findHtmlTagEnd(html: string, start: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let index = start + 1; index < html.length; index += 1) {
+    const current = html[index]!;
+    if (quote) {
+      if (current === quote) quote = undefined;
+      continue;
+    }
+    if (current === '"' || current === "'") quote = current;
+    else if (current === '>') return index;
+  }
+  return -1;
+}
+
+/**
+ * Locate the real body element without treating tag-shaped text in comments or
+ * HTML raw-text elements as markup. A lightweight scanner is enough here: the
+ * template only needs the byte range, while Chromium remains the HTML parser.
+ */
+function findHtmlBodyRange(html: string): { start: number; end: number } | undefined {
+  const rawTextTags = new Set([
+    'iframe',
+    'noembed',
+    'noframes',
+    'noscript',
+    'script',
+    'style',
+    'textarea',
+    'title',
+    'xmp',
+  ]);
+  let bodyStart: number | undefined;
+  let templateDepth = 0;
+  let index = 0;
+  while (index < html.length) {
+    const tagStart = html.indexOf('<', index);
+    if (tagStart < 0) break;
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      index = commentEnd < 0 ? html.length : commentEnd + 3;
+      continue;
+    }
+    const tagEnd = findHtmlTagEnd(html, tagStart);
+    if (tagEnd < 0) break;
+    const tag = html.slice(tagStart, tagEnd + 1);
+    const closing = tag.match(/^<\s*\/\s*([A-Za-z][\w:-]*)\s*>/);
+    const closingName = closing?.[1]?.toLowerCase();
+    if (closingName === 'template' && templateDepth > 0) {
+      templateDepth -= 1;
+      index = tagEnd + 1;
+      continue;
+    }
+    if (closingName === 'body' && bodyStart !== undefined && templateDepth === 0) {
+      return { start: bodyStart, end: tagStart };
+    }
+    const opening = tag.match(/^<\s*([A-Za-z][\w:-]*)\b/);
+    const name = opening?.[1]?.toLowerCase();
+    if (!name) {
+      index = tagEnd + 1;
+      continue;
+    }
+    if (name === 'body' && bodyStart === undefined) bodyStart = tagEnd + 1;
+    if (name === 'template' && !/\/\s*>$/.test(tag)) {
+      templateDepth += 1;
+      index = tagEnd + 1;
+      continue;
+    }
+    if (rawTextTags.has(name)) {
+      const rawTextEnd = new RegExp(`<\\/\\s*${name}\\s*>`, 'ig');
+      rawTextEnd.lastIndex = tagEnd + 1;
+      const closingMatch = rawTextEnd.exec(html);
+      index = closingMatch ? closingMatch.index + closingMatch[0].length : html.length;
+      continue;
+    }
+    index = tagEnd + 1;
+  }
+  return bodyStart === undefined ? undefined : { start: bodyStart, end: html.length };
+}
+
 export function extractHtmlBody(html: string): string {
-  const body = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
-  if (body?.[1]) return body[1].trim();
+  const body = findHtmlBodyRange(html);
+  if (body) return html.slice(body.start, body.end).trim();
   return html
     .replace(/<!doctype[^>]*>/i, '')
     .replace(/<\/?html\b[^>]*>/gi, '')

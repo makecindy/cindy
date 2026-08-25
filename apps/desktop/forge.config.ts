@@ -21,6 +21,7 @@ import {
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { reviewPdfRuntimePackages } from './src/main/reviewer/reviewPdfRuntimeDeps';
 
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
@@ -324,6 +325,9 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     ...NATIVE_RUNTIME_DEPS,
     parcelWatcherPlatformPkg(targetPlatform, targetArch),
     ...sharpPlatformPkgs(targetPlatform, targetArch),
+    // Reviewer PDF utility 的 canvas wrapper 由 Vite externalize；正式包必须
+    // 同时带 wrapper 与目标平台的预编译 binding，不能依赖 workspace hoist。
+    ...reviewPdfRuntimePackages(targetPlatform, targetArch),
     // loudness 只在 Windows 用 (录音时静音)。它的 Win 后端是个捆绑的 .exe,
     // 必须运行时按 __dirname 找 — 所以走 NATIVE_RUNTIME_DEPS 这条路, 不让 vite
     // bundle。Mac/Linux 完全不带, 避免拖入 execa 这条无用依赖链。
