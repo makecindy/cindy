@@ -309,6 +309,25 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel).toContain('const assertRuntimeOwnerCurrent = (): void => {');
     expect(setModel).toContain('assertCanCommit: assertRuntimeOwnerCurrent,');
+
+    const retainedRecovery = handlerBody(
+      setModel,
+      'const reconcileRetainedLiveProfile = async (): Promise<void> => {',
+      'try {\n        const result = await applyRuntimeSetModelChange({',
+    );
+    const capabilityLookup = retainedRecovery.indexOf(
+      'const retainedProviders = await getDesktopProviderService().listProviders({',
+    );
+    const postLookupOwnerFence = retainedRecovery.indexOf(
+      'if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {',
+      capabilityLookup,
+    );
+    const firstRecoveredStoreWrite = retainedRecovery.indexOf(
+      'setSessionProvider(sessionId, retainedProfile.providerId);',
+    );
+    expect(capabilityLookup).toBeGreaterThan(-1);
+    expect(postLookupOwnerFence).toBeGreaterThan(capabilityLookup);
+    expect(postLookupOwnerFence).toBeLessThan(firstRecoveredStoreWrite);
   });
 
   it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {

@@ -14908,6 +14908,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             });
           }
         }
+        if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+          return;
+        }
         const retainedProfile: SessionRuntimeProfile = {
           agentKind: retainedSession.agentKind,
           model: retainedSession.model,
