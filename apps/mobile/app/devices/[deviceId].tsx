@@ -247,7 +247,8 @@ export default function DeviceDetailScreen() {
           // 自动化任务作用域页承诺展示"该任务的全部 N 次运行",归档的 run 也算,
           // 必须拉全量;其余模式仍按当前筛选拉取。
           automationScopeKey ? 'all' : remoteListStatusFilter(statusFilter),
-          { includePinned: true },
+          // 首拉 / reseed / 筛选重拉都是权威快照，不并入被控端写前查询。
+          { includePinned: true, fresh: true },
         ]);
       });
       remoteSessionStore.setDeviceSessions(deviceId, deviceName, Array.isArray(list) ? list : []);
