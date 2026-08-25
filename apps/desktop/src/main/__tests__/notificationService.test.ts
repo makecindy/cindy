@@ -525,9 +525,9 @@ describe('notificationService — channels 分发', () => {
   });
 
   // ── sound 通道(#3177)────────────────────────────────────────────────────
-  // renderer 播放应用提示音后传 sound:true → 本条 toast 必须静音,避免
-  // OS 通知音与应用提示音双响;未传/关闭时保持 Electron 默认(silent 不设,
-  // OS 通知音照常),老调用方零改动。
+  // renderer 提示音已开始或本条已被同类声音合并覆盖时传 sound:true →
+  // 本条 toast 必须静音,避免 OS 通知音与应用提示音双响;未传/关闭时保持
+  // Electron 默认(silent 不设,OS 通知音照常),老调用方零改动。
 
   it('channels.sound:true → toast 置 silent(OS 音不与应用提示音叠加)', async () => {
     const { initNotificationService } = await freshService();

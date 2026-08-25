@@ -80,8 +80,9 @@ interface ShowSessionEventPayload {
    * 这层 default 仅为新增调用方留兜底。
    * mobile 通道没有桌面侧开关:是否收到由手机端自行注册/注销推送 token 决定,
    * 发送侧的防打扰(远程正在看该会话 / 短窗去重)在 device-link 模块内收口。
-   * sound = 应用级提示音通道(#3177):renderer 已在本地播过提示音并要求本条
-   * toast 静音(OS 通知音不再叠加);缺省时保持 Electron 默认(silent:false)。
+   * sound = 应用级提示音通道(#3177):renderer 已开始播放提示音,或本条已被
+   * 同类提示音合并覆盖,因此要求 toast 静音(OS 通知音不再叠加);缺省时保持
+   * Electron 默认(silent:false)。
    */
   channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean; sound?: boolean };
 }
@@ -127,7 +128,7 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
 export function showDesktopSessionEvent(
   getWindow: () => BrowserWindow | null,
   payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & {
-    /** #3177:toast 是否静音(sound 通道开时由 renderer 播放应用提示音,OS 音不叠加)。 */
+    /** #3177:toast 是否静音(renderer 提示音已开始或本条已被同类声音覆盖)。 */
     silent?: boolean;
   },
 ): void {
@@ -174,8 +175,8 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const wantFeishu = channels?.feishu === true;
 
       if (wantDesktop) {
-        // sound 通道开 → toast 静音:提示音已由 renderer 播放,OS 通知音不再叠加,
-        // 保证跨平台单一声源;未传/关闭时保持 Electron 默认(交给 OS)。
+        // sound 通道开 → toast 静音:renderer 提示音已开始,或本条已被同类声音
+        // 合并覆盖,OS 通知音不再叠加;未传/关闭时保持 Electron 默认(交给 OS)。
         const silent = channels?.sound === true;
         showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind, silent });
       } else {
