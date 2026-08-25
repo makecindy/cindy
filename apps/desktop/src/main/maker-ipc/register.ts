@@ -5928,6 +5928,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
   setSessionRuntimeCleanup((sessionId) => {
     clearSessionRuntimeControlState(sessionId);
+    clearSessionProvider(sessionId);
+    setSessionEffort(sessionId, null);
+    setSessionFastMode(sessionId, false);
     void broadcastSessionRuntimeProjection(sessionId).catch((error) => {
       log.debug('session runtime cleanup projection failed', {
         sessionId,

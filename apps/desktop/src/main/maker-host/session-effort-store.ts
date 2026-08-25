@@ -11,8 +11,9 @@
  *
  * 纯内存;keyed by xdt sessionId(与 session-provider-store 同键)。未记录的会话 → effort 读到
  * null(bridge 回退默认档)、fast 读到 false(不发 service_tier)。条目是 sessionId → 短字符串 /
- * 布尔,量级 = 本次运行触过的会话数,不做关闭清理(与 session-provider-store 同取舍;重启即清,
- * 复开会话由 bootstrapSession / IM turnRunner 从 DB 重新 hydrate 覆盖)。
+ * 布尔,量级 = 本次运行触过的会话数。普通进程关闭不清理,使 runtime override 能跨 lazy
+ * rehydrate 保留；任务归档/删除的终态边界会清理,复开后由 bootstrapSession / IM turnRunner
+ * 从 DB baseline 重新 hydrate。
  */
 
 const bySession = new Map<string, string>();

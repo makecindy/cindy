@@ -157,10 +157,17 @@ describe('session runtime control wiring', () => {
       "if (status === 'closed') {",
       'const closedDirectAbortBoundary',
     );
+    const terminalCleanup = handlerBody(
+      registerSource,
+      'setSessionRuntimeCleanup((sessionId) => {',
+      'disposePiPackagesChangedBroadcast?.();',
+    );
 
     expect(closeBoundary).not.toContain('clearSessionRuntimeControlState(session.id);');
-    expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) => {');
-    expect(registerSource).toContain('clearSessionRuntimeControlState(sessionId);');
+    expect(terminalCleanup).toContain('clearSessionRuntimeControlState(sessionId);');
+    expect(terminalCleanup).toContain('clearSessionProvider(sessionId);');
+    expect(terminalCleanup).toContain('setSessionEffort(sessionId, null);');
+    expect(terminalCleanup).toContain('setSessionFastMode(sessionId, false);');
   });
 
   it('preserves the exact auto-resume attempt across a fallback route rebuild', () => {
