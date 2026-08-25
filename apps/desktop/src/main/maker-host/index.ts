@@ -2238,6 +2238,7 @@ export function registerPiAgentIfAvailable(): boolean {
   const register = _registerPiAgent;
   if (!register) return false;
   try {
+    if (_maker?.listAvailableAgents().includes('pi')) return true;
     const registered = register();
     if (!registered) return false;
     for (const win of BrowserWindow.getAllWindows()) {

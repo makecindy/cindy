@@ -33,6 +33,9 @@ interface MakerApiShape {
 }
 interface DeviceLinkShape {
   invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
+  onRemotePush?: (
+    cb: (payload: { deviceId: string; channel: string; payload: unknown }) => void,
+  ) => () => void;
 }
 
 function getMakerApi(): MakerApiShape | null {
@@ -157,10 +160,16 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     const offAgentsChanged = makerApi && typeof makerApi.onAgentsChanged === 'function'
       ? makerApi.onAgentsChanged(onAgentsChanged)
       : undefined;
+    const deviceLink = deviceId ? getDeviceLink() : null;
+    const offRemoteAgentsChanged = deviceLink?.onRemotePush?.((push) => {
+      if (push.deviceId !== deviceId || push.channel !== 'maker:agents:changed') return;
+      onAgentsChanged();
+    });
     return () => {
       cancelled = true;
       window.removeEventListener('focus', onFocus);
       offAgentsChanged?.();
+      offRemoteAgentsChanged?.();
     };
   }, [deviceId]);
 

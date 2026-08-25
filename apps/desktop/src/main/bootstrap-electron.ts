@@ -5717,7 +5717,6 @@ const registerIpcHandlers = () => {
 
     // 必装 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
     await registerMakerIpcsAfterSplash();
-    if (piInfo.status === 'passed') registerPiAgentIfAvailable();
 
     return {
       claudeCode: { status: 'passed' as const, path: claudeRes.path },

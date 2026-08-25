@@ -552,6 +552,8 @@ export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
 export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // maker-ipc MAKER_PUSH
   'maker:event',
+  // Device-level runtime Agent roster changes; controllers refresh their local availability cache.
+  'maker:agents:changed',
   'maker:status-changed',
   'maker:input:projection',
   'maker:interaction-request',
