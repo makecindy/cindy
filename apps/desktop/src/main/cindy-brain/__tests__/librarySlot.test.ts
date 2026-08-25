@@ -1,5 +1,5 @@
 /**
- * librarySlot 单测:资格审(未声明/停用拒)、管道级全链路(open/status/write/
+ * library 能力单测:资格审(未声明/停用拒)、管道级全链路(open/status/write/
  * read/rename/delete)、db 子集(经进程内 core)、binding 漂移 → unavailable、
  * owner scope 切换后旧会话作废且写入落新根。注入 deps + tmpdir,零 Electron。
  */
@@ -19,16 +19,17 @@ import type { InstalledGhost } from '../../../shared/ghost.js';
 const Ctor = Database as unknown as SqliteDatabaseConstructor;
 const GHOST_ID = 'mivo-canvas';
 
-function makeGhost(slots: string[], enabled = true): InstalledGhost {
+function makeGhost(library: boolean, enabled = true): InstalledGhost {
   return {
     manifest: {
-      schemaVersion: 2,
+      schemaVersion: 3,
+      minCindyVersion: '0.1.61',
       id: GHOST_ID,
       name: '测试意识',
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: slots as InstalledGhost['manifest']['slots'],
+      ...(library ? { library: true } : {}),
     },
     dir: '/tmp/fake-install-dir',
     enabled,
@@ -51,7 +52,7 @@ describe('GhostLibrarySlot', () => {
     bindingFile = path.join(tmp, 'owners', 'a', 'libraries-binding.json');
     candidate = path.join(tmp, 'picked');
     await fs.promises.mkdir(candidate, { recursive: true });
-    ghost = makeGhost(['library']);
+    ghost = makeGhost(true);
     const deps: GhostLibrarySlotDeps = {
       getGhost: (id) => (id === GHOST_ID ? ghost : null),
       bindingStore: new LibraryBindingStore({
@@ -80,15 +81,15 @@ describe('GhostLibrarySlot', () => {
     await fs.promises.rm(tmp, { recursive: true, force: true });
   });
 
-  it('资格审:未声明 library 槽/停用 → NOT_DECLARED', async () => {
-    ghost = makeGhost(['fs']);
+  it('资格审:未声明 library 能力/停用 → NOT_DECLARED', async () => {
+    ghost = makeGhost(false);
     const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errorCode).toBe('NOT_DECLARED');
-    ghost = makeGhost(['library'], false);
+    ghost = makeGhost(true, false);
     const r2 = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
     expect(r2.ok).toBe(false);
-    ghost = makeGhost(['library']);
+    ghost = makeGhost(true);
   });
 
   it('管道级全链路:open/status/write/read/rename/delete(默认根)', async () => {

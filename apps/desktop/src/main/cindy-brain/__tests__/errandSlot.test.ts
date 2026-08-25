@@ -21,7 +21,11 @@ import {
 } from '../../../shared/ghost';
 
 function fakeGhost(
-  overrides: { enabled?: boolean; slots?: string[]; agent?: Record<string, unknown> | null } = {},
+  overrides: {
+    enabled?: boolean;
+    agentCapability?: boolean;
+    agent?: Record<string, unknown> | null;
+  } = {},
 ): InstalledGhost {
   return {
     manifest: {
@@ -31,8 +35,9 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'agent'],
-      ...(overrides.agent === null ? {} : { agent: overrides.agent ?? { errand: true } }),
+      ...(overrides.agentCapability === false || overrides.agent === null
+        ? {}
+        : { agent: overrides.agent ?? { errand: true } }),
     },
     dir: '/fake/brain/helper',
     enabled: overrides.enabled ?? true,
@@ -68,9 +73,9 @@ function makeSlot(overrides: Partial<GhostErrandSlotDeps> = {}): {
 const RUN = { type: 'agent-errand-request', kind: 'run', task: '总结 README' };
 
 describe('资格审', () => {
-  it('未声明 agent 槽 / 未声明 errand / 未启用 → PERMISSION_DENIED', async () => {
+  it('未声明 agent 能力 / 未声明 errand / 未启用 → PERMISSION_DENIED', async () => {
     for (const ghost of [
-      fakeGhost({ slots: ['tool'] }),
+      fakeGhost({ agentCapability: false }),
       fakeGhost({ agent: null }),
       fakeGhost({ agent: { background: true } }),
       fakeGhost({ enabled: false }),

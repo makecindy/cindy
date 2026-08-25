@@ -21,6 +21,7 @@ import {
   PROCESS_MONITOR_SUBSCRIBE_CHANNEL,
   PROCESS_MONITOR_TERMINATE_CHANNEL,
   PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL,
+  type ProcessMonitorSample,
   type TerminateAgentProcessResult,
 } from '../../shared/processMonitor.js';
 import { registerUserDataMarkers } from '../agent-process-priority.js';
@@ -69,6 +70,8 @@ export interface ProcessMonitorIpcOptions {
   scanOsProcessesSync?: () => OsProcessSnapshot;
   /** sampler 的异步 OS 扫描。 */
   scanOsProcesses?: () => Promise<OsProcessSnapshot>;
+  /** 隐藏预热窗口等 sender 可保留订阅，但 Main 不允许它触发采样或接收快照。 */
+  allowsSampling?: (sender: WebContents) => boolean;
   classify?: (cmdLineLower: string) => MonitoredAgentKind | null;
   resolveAgentProcessRegistration?: (pid: number) => AgentProcessRegistration | null;
   killProcessTree?: (pid: number, childrenByParent: Map<number, number[]>) => boolean;
@@ -101,6 +104,16 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     });
   const platform = opts.platform ?? process.platform;
   const sampleIntervalMs = opts.sampleIntervalMs ?? SAMPLE_INTERVAL_MS;
+  let windowsScanSourceLogged = false;
+  const sampleScanWithSource = (): Promise<OsProcessSnapshot> => {
+    if (platform === 'win32' && !windowsScanSourceLogged) {
+      windowsScanSourceLogged = true;
+      log.info('Windows OS process scan requested by resource usage sampling', {
+        childProcessSource: 'process-monitor.windows-os-scan',
+      });
+    }
+    return sampleScan();
+  };
 
   if (!opts.sampler) {
     // 运行时 userData 可被重定向(XDG_CONFIG_HOME / --user-data-dir),静态品牌
@@ -120,13 +133,13 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     opts.sampler ??
     createProcessMonitorSampler({
       getMetrics: () => app.getAppMetrics(),
-      scanOsProcesses: sampleScan,
+      scanOsProcesses: sampleScanWithSource,
       describeRendererProcess: describeRendererProcessByPid,
       classify,
       resolveAgentProcessRegistration: resolveAgentRegistration,
       selfPid,
       log,
-      // Windows 冷启 PowerShell 可达秒级；隐藏窗口预热首帧只等 app.getAppMetrics，
+      // Windows 冷启 PowerShell 可达秒级；用户打开后的首帧只等 app.getAppMetrics，
       // Worker 扫描完成后由下一次 2s tick 补齐 agent 树。
       deferOsScan: platform === 'win32',
     });
@@ -135,6 +148,43 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
   const destroyListeners = new WeakMap<WebContents, () => void>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let sampling = false;
+
+  function samplingAllowed(wc: WebContents): boolean {
+    return !opts.allowsSampling || opts.allowsSampling(wc);
+  }
+
+  function hasActiveSubscriber(): boolean {
+    let active = false;
+    for (const wc of [...subscribers]) {
+      if (wc.isDestroyed()) {
+        dropSubscriber(wc);
+        continue;
+      }
+      if (samplingAllowed(wc)) active = true;
+    }
+    return active;
+  }
+
+  function publishSample(sample: ProcessMonitorSample): void {
+    for (const wc of [...subscribers]) {
+      if (wc.isDestroyed()) {
+        dropSubscriber(wc);
+        continue;
+      }
+      // 窗口可能在采样 in-flight 期间被隐藏；Main gate 重新检查，禁止把结果发回。
+      if (!samplingAllowed(wc)) continue;
+      // 出站闸:快照含页面标题(用户内容),窗口导航离开 Cindy 页面后不再推。
+      if (!isTrustedAppRendererWindow(BrowserWindow.fromWebContents(wc))) {
+        dropSubscriber(wc);
+        continue;
+      }
+      try {
+        wc.send(PROCESS_MONITOR_SAMPLE_CHANNEL, sample);
+      } catch {
+        // 窗口可能在枚举与 send 之间被销毁。
+      }
+    }
+  }
 
   function dropSubscriber(wc: WebContents): void {
     subscribers.delete(wc);
@@ -150,30 +200,17 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
   }
 
   async function tick(): Promise<void> {
-    if (sampling || subscribers.size === 0) return; // 采样慢于周期时跳过,不排队叠加
+    if (sampling || !hasActiveSubscriber()) return; // 采样慢于周期时跳过,不排队叠加
     sampling = true;
     try {
       const sample = await sampler.sample();
-      for (const wc of [...subscribers]) {
-        if (wc.isDestroyed()) {
-          dropSubscriber(wc);
-          continue;
-        }
-        // 出站闸:快照含页面标题(用户内容),窗口导航离开 Cindy 页面后不再推。
-        if (!isTrustedAppRendererWindow(BrowserWindow.fromWebContents(wc))) {
-          dropSubscriber(wc);
-          continue;
-        }
-        try {
-          wc.send(PROCESS_MONITOR_SAMPLE_CHANNEL, sample);
-        } catch {
-          // 窗口可能在枚举与 send 之间被销毁。
-        }
-      }
+      publishSample(sample);
     } catch (err) {
       log.warn('process monitor sample failed', {
         error: err instanceof Error ? err.message : String(err),
       });
+      // 不把顶层失败伪装成有效的「0 个进程」快照。已展示的最后一份数据继续保留；
+      // 冷打开则保持 Loading，定时器会在下一 tick 自动重试。
     } finally {
       sampling = false;
     }
@@ -182,6 +219,11 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
   ipcMain.handle(PROCESS_MONITOR_SUBSCRIBE_CHANNEL, (event) => {
     assertTrustedAppRendererEvent(event);
     const wc = event.sender;
+    if (!samplingAllowed(wc)) {
+      log.info('process monitor subscription deferred while resource window is prewarmed', {
+        source: 'resource-usage-window-prewarm',
+      });
+    }
     if (!subscribers.has(wc)) {
       const destroyListener = () => dropSubscriber(wc);
       subscribers.add(wc);

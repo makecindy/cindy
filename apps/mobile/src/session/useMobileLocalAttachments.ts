@@ -20,6 +20,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   MOBILE_MAX_ATTACHMENTS,
   assertMobileDocumentSize,
@@ -414,15 +415,17 @@ export function useMobileLocalAttachments(
         optionsRef.current.onError(t('composer.upload.simulatorNoCamera'));
         return;
       }
-      const permission = source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync(false);
-      if (!isAttachmentScopeActive()) return;
-      if (!permission.granted) {
-        optionsRef.current.onError(source === 'camera'
-          ? t('composer.upload.cameraPermission')
-          : t('composer.upload.photoPermission'));
-        return;
+      if (source === 'camera' || canBrowsePhotoLibraryDirectly(Platform.OS)) {
+        const permission = source === 'camera'
+          ? await ImagePicker.requestCameraPermissionsAsync()
+          : await ImagePicker.requestMediaLibraryPermissionsAsync(false);
+        if (!isAttachmentScopeActive()) return;
+        if (!permission.granted) {
+          optionsRef.current.onError(source === 'camera'
+            ? t('composer.upload.cameraPermission')
+            : t('composer.upload.photoPermission'));
+          return;
+        }
       }
 
       const picked = source === 'camera'

@@ -28,6 +28,9 @@ vi.mock('../../maker-host/title-one-shot.js', () => ({
   generateTitleViaProvider: vi.fn(),
   generateTitleViaProviderResult: vi.fn(),
 }));
+vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
+  readAuxiliaryModelSelection: vi.fn(() => null),
+}));
 vi.mock('../../i18n.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'en'),
 }));

@@ -108,6 +108,7 @@ import {
   type MobileHomeProjectGroup,
 } from '@/session/mobileHome';
 import {
+  advanceCurrentViewedPriorityHold,
   advanceViewedPriorityHold,
   collectHomePriorityContext,
   holdViewedPriorityRank,
@@ -1126,6 +1127,15 @@ export default function HomeScreen() {
     () => collectHomePriorityContext(homePriorityItems, runningSessionIds, homeViewedPriorityHold),
     [homePriorityItems, priorityHoldEpoch, runningSessionIds],
   );
+  useEffect(() => {
+    if (!leftHomeForSessionRef.current) return;
+    // 首页留在导航栈中时仍会收到详情页任务的运行 / 等待状态更新。同步推进 hold,
+    // 避免新一轮跑完后旧 unread / waiting 档位重新生效,直到返回首页才跳位。
+    if (!advanceCurrentViewedPriorityHold(homeViewedPriorityHold, priorityContext, Date.now())) {
+      return;
+    }
+    setPriorityHoldEpoch((epoch) => epoch + 1);
+  }, [priorityContext]);
   const selectedHostOrder = selectedDeviceId ? hostProjectOrders.get(selectedDeviceId) : undefined;
   const hostManualProjectOrder = selectedDeviceId && selectedHostOrder
     ? controllerKeysFromHost(selectedDeviceId, selectedHostOrder)

@@ -9,7 +9,7 @@ import {
   type IOSSimulatorSlotFocusContext,
 } from '../iosSimulatorSlot';
 
-function simulatorGhost(options: { enabled?: boolean; slots?: string[] } = {}): InstalledGhost {
+function simulatorGhost(options: { enabled?: boolean; iosSimulator?: boolean } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -18,7 +18,7 @@ function simulatorGhost(options: { enabled?: boolean; slots?: string[] } = {}): 
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: options.slots ?? ['ios-simulator'],
+      ...(options.iosSimulator === false ? {} : { iosSimulator: true }),
     },
     dir: '/fake/ios-simulator',
     enabled: options.enabled ?? true,
@@ -101,8 +101,8 @@ function makeSlot(overrides: Partial<IOSSimulatorSlotDeps> = {}) {
 }
 
 describe('GhostIOSSimulatorSlot', () => {
-  it('requires the explicit slot and an enabled plugin', async () => {
-    const noSlot = makeSlot({ getGhost: () => simulatorGhost({ slots: ['panel'] }) });
+  it('requires the explicit capability and an enabled plugin', async () => {
+    const noSlot = makeSlot({ getGhost: () => simulatorGhost({ iosSimulator: false }) });
     await expect(
       noSlot.slot.handleRequest('ios-simulator', { kind: 'status' }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });

@@ -165,6 +165,7 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
     inputShape: {
       pid: z.number().int().positive(),
       text: z.string(),
+      delivery_mode: z.enum(['background', 'foreground']).optional(),
       element_index: z.number().int().nonnegative().optional(),
       window_id: z.number().int().nonnegative().optional(),
       delay_ms: z.number().int().min(0).max(200).optional(),

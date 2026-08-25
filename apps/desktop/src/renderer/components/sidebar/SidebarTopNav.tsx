@@ -31,6 +31,7 @@ import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
+import { GhostMainViewNavEntries } from './GhostMainViewNavEntries';
 
 /** 列表行通用样式 —— 各行同款 pill 行。 */
 const ROW_CLASS =
@@ -126,6 +127,7 @@ export function SidebarTopNav({
       {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
     </button>
   ) : null;
+  const mainViewRows = showScrollable ? <GhostMainViewNavEntries variant="row" /> : null;
   const restoreRow = showScrollable ? (
     <GhostPanelRestoreEntry variant="row" className={ROW_CLASS} />
   ) : null;
@@ -146,6 +148,7 @@ export function SidebarTopNav({
         <div className="flex flex-col gap-0.5 pr-3 pl-3">
           {automationsRow}
           {pluginsRow}
+          {mainViewRows}
           {restoreRow}
         </div>
         <div
@@ -186,6 +189,7 @@ export function SidebarTopNav({
       )}
       {automationsRow}
       {pluginsRow}
+      {mainViewRows}
       {restoreRow}
       {searchRow}
     </div>

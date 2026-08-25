@@ -670,8 +670,15 @@
     {
       "idx": 95,
       "version": "6",
-      "when": 1787548634729,
-      "tag": "0095_supreme_lifeguard",
+      "when": 1787644558248,
+      "tag": "0095_scope_messages_fts_update_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "6",
+      "when": 1787664399640,
+      "tag": "0096_lively_strong_guy",
       "breakpoints": true
     }
   ]

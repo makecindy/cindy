@@ -330,6 +330,42 @@ describe('SessionRegistry', () => {
     })).resolves.toEqual({ continue: true });
   });
 
+  it('allows AskUserQuestion for the root and denies it for nested Claude agents', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+    });
+    registry.create({
+      sessionId: 's-ask-user-question-root-only',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [{
+        toolNamePrefix: 'AskUserQuestion',
+        sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage: 'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED',
+      }],
+    });
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    const call = {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'AskUserQuestion',
+    };
+    await expect(preToolUse!(call)).resolves.toEqual({ continue: true });
+    await expect(preToolUse!({ ...call, agent_id: 'child-1' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED',
+      },
+    });
+  });
+
   it('keeps explicit selection across accepted same-turn steering inputs', async () => {
     let captured: SdkQueryFactoryOptions | undefined;
     const factory: SdkQueryFactory = (opts) => {
