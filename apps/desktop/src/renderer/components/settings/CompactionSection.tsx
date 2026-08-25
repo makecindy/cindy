@@ -1,7 +1,7 @@
 /**
  * CompactionSection — Settings → Personalization 下的自动上下文压缩阈值。
  *
- * Claude Code 与 Pi 分别保存阈值；Claude 由 host 读取，Pi 在新任务启动时写入
+ * Claude Code 与 Pi 分别保存阈值；Claude 由 host 读取，Pi 在每次启动或恢复任务时写入
  * 原生 settings.json 的 compaction.reserveTokens。renderer 只负责渲染和提交设置。
  */
 

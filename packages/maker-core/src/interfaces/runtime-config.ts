@@ -106,7 +106,7 @@ export interface AgentRuntimeConfig {
 
   /**
    * Pi 原生自动压缩的目标上下文占用百分比。Pi 将它换算成
-   * `compaction.reserveTokens` 写入每个新任务的 settings.json；未设置时保留 Pi 默认值。
+   * `compaction.reserveTokens` 写入每次启动或恢复任务时的 settings.json；未设置时保留 Pi 默认值。
    */
   piAutoCompactThresholdPct?: number;
 
