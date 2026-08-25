@@ -378,7 +378,7 @@ export const MAKER_INVOKE = {
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
-  /** Pi 原生自动上下文压缩触发阈值。仅新建 Pi 任务读取。 */
+  /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
   PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
   PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',
   PI_COMPACTION_SET_PCT: 'maker:pi-compaction:set-pct',

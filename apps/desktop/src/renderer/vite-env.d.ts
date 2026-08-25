@@ -5658,7 +5658,7 @@ interface ElectronAPI {
     ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
     compactionResetPct: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
 
-    /** Pi 原生自动上下文压缩触发百分比。仅对新建 Pi 任务生效 */
+    /** Pi 原生自动上下文压缩触发百分比。下次启动或恢复 Pi 任务时生效 */
     piCompactionGetPct: () => Promise<number>;
     piCompactionGetState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
     piCompactionSetPct: (

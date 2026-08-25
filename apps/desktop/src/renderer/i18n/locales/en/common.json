@@ -2596,8 +2596,8 @@
       "piCard": {
         "label": "Compaction trigger threshold",
         "badge": "Pi",
-        "description": "Pi's native auto-compaction starts when context usage reaches this percentage. The setting is applied when you start a new Pi task.",
-        "hint": "Lower values compact earlier and leave more room for the response; higher values compact later. Changes apply to new Pi tasks.",
+        "description": "Pi's native auto-compaction starts when context usage reaches this percentage. The setting is applied the next time a Pi task starts.",
+        "hint": "Lower values compact earlier and leave more room for the response; higher values compact later. Changes apply the next time a Pi task starts.",
         "sliderAria": "Adjust Pi auto-compaction trigger threshold"
       }
     },

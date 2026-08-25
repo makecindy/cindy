@@ -4398,7 +4398,7 @@ export class PiAgent extends BaseAgent {
         previousProviders,
         retainedRuntimeModel,
         authProviderId,
-        { remote, fileOps, contextWindow: startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
+        { remote, fileOps, contextWindow: ctx.contextWindow || startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
       );
       nativeProviders = previousProviders;
       nativeProviderById.clear();
@@ -4470,7 +4470,7 @@ export class PiAgent extends BaseAgent {
           nativeProviders,
           retainedRuntimeModel,
           authProviderId,
-          { remote, fileOps, contextWindow: startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
+          { remote, fileOps, contextWindow: ctx.contextWindow || startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
         );
         gatewayApiByModel.clear();
         for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);

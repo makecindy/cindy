@@ -155,7 +155,7 @@ function currentPiStore() {
   return store;
 }
 
-/** 同步读取 Pi 原生自动压缩百分比。仅新建 Pi 任务读取。 */
+/** 同步读取 Pi 原生自动压缩百分比。下次 startSession / 恢复任务时读取。 */
 export function readPiCompactionPct(): number {
   return currentPiStore().read().piAutoCompactPct;
 }

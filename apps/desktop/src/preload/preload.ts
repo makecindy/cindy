@@ -6239,7 +6239,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     compactionResetPct: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:reset-pct'),
 
-    // Pi 原生自动上下文压缩阈值。仅对新建 Pi 任务生效。
+    // Pi 原生自动上下文压缩阈值。下次启动或恢复 Pi 任务时生效。
     piCompactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:pi-compaction:get-pct'),
     piCompactionGetState: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:pi-compaction:get-state'),
