@@ -6399,6 +6399,7 @@
     },
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
+      "settingsLinkBeta": "設定, 現在のユーザー: {{name}}, Beta チャンネル有効",
       "canaryBadge": "Canary ユーザー",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

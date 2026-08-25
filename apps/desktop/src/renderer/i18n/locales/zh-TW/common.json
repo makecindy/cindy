@@ -6391,6 +6391,7 @@
     },
     "user": {
       "settingsLink": "設定，當前使用者：{{name}}",
+      "settingsLinkBeta": "設定，當前使用者：{{name}}，Beta 測試管道已開啟",
       "canaryBadge": "灰度使用者",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

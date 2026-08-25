@@ -6401,6 +6401,7 @@
     },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
+      "settingsLinkBeta": "Settings, current user: {{name}}, Beta channel enabled",
       "canaryBadge": "Canary user",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

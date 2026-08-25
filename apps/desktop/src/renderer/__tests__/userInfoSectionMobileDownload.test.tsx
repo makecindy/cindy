@@ -89,6 +89,9 @@ describe('UserInfoSection mobile download entry', () => {
     expect(screen.getByTestId('sidebar-beta-channel-badge').textContent).toBe(
       'settings.betaChannel.badge',
     );
+    expect(
+      screen.getByRole('link', { name: 'sidebar.user.settingsLinkBeta' }),
+    ).toBeTruthy();
   });
 
   it.each([

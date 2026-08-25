@@ -43,6 +43,9 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const isLocal = mode === 'local';
   const displayName = user?.name ?? (isLocal ? t('settings.userProfile.local.name') : '');
   const settingsLinkLabel = t('sidebar.user.settingsLink', { name: displayName });
+  const settingsLinkAriaLabel = showBetaBadge
+    ? t('sidebar.user.settingsLinkBeta', { name: displayName })
+    : settingsLinkLabel;
   const avatarUrl = user?.avatar ?? null;
   useEffect(() => {
     setAvatarError(false);
@@ -190,7 +193,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         <button
           onClick={handleClick}
           role="link"
-          aria-label={settingsLinkLabel}
+          aria-label={settingsLinkAriaLabel}
           className={cn('flex min-w-0 flex-1 items-center gap-[10px]', 'text-left')}
         >
           {/* Avatar — admin 用户加 1.5px 反色描边 + 右下角盾牌角标 */}

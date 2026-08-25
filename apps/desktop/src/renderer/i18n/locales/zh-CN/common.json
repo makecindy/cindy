@@ -6391,6 +6391,7 @@
     },
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
+      "settingsLinkBeta": "设置，当前用户：{{name}}，Beta 测试渠道已开启",
       "canaryBadge": "灰度用户",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
