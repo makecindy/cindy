@@ -80,6 +80,21 @@ describe('parseProviderManifest — 合法形态', () => {
     });
   });
 
+  it('pi runtime 显式声明 wireProtocol 时接受', () => {
+    const result = parseProviderManifest(
+      manifestText((m) => {
+        (m.runtimes as RuntimeRecord).pi = {
+          baseUrl: 'https://gateway.example.com/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'acme-large', name: 'Acme Large' }],
+        };
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.preset.runtimes.pi?.wireProtocol).toBe('openai-chat');
+  });
+
   it('展示名 trim 后写入 preset', () => {
     const result = parseProviderManifest(manifestText((m) => (m.name = '  Acme  ')));
     expect(result.ok).toBe(true);
@@ -164,6 +179,14 @@ describe('parseProviderManifest — runtimes 拒绝', () => {
       'claude-code 配 openai-chat（isValidPreset 同款规则）',
       (m: Record<string, unknown>) =>
         ((m.runtimes as RuntimeRecord)['claude-code'].wireProtocol = 'openai-chat'),
+    ],
+    [
+      'pi runtime 缺省 wireProtocol（下游 configuredPresetAgents 会静默过滤，校验层先拒）',
+      (m: Record<string, unknown>) =>
+        ((m.runtimes as RuntimeRecord).pi = {
+          baseUrl: 'https://gateway.example.com/v1',
+          models: [],
+        }),
     ],
   ])('%s → invalid-runtimes', (_label, mutate) => {
     expect(parseProviderManifest(manifestText(mutate))).toEqual({

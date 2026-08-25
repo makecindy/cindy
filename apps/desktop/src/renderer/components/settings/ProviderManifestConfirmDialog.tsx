@@ -45,12 +45,16 @@ const AGENT_LABEL: Record<AgentKind, string> = {
 const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
 /** 失败原因 → 文案桶:拉取层失败各自成桶,内容校验拒绝统一为 invalid(附原因码)。 */
-function errorBucket(reason: FetchFailureReason): 'timeout' | 'redirect' | 'http' | 'network' | 'oversize' | 'invalid' {
+function errorBucket(
+  reason: FetchFailureReason,
+): 'timeout' | 'redirect' | 'blockedAddress' | 'http' | 'network' | 'oversize' | 'invalid' {
   switch (reason) {
     case 'timeout':
       return 'timeout';
     case 'redirect':
       return 'redirect';
+    case 'blocked-address':
+      return 'blockedAddress';
     case 'http-status':
       return 'http';
     case 'network':

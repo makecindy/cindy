@@ -188,6 +188,13 @@ function parseManifestRuntime(
   if (rt.wireProtocol !== undefined && !isWireProtocolAllowedForAgent(agent, rt.wireProtocol)) {
     return { ok: false, reason: 'invalid-runtimes' };
   }
+  // pi runtime 必须显式声明 wireProtocol:下游 configuredPresetAgents(shared/
+  // piRuntimeInitialization)会把缺省协议的 pi runtime 视为不可保存并静默过滤——
+  // 与其让确认屏展示一个最终会消失的 runtime,不如在校验层 fail-closed 拒绝
+  // (目录 preset 的官方 API 入口同样逐一显式声明 Pi 协议)。
+  if (agent === 'pi' && rt.wireProtocol === undefined) {
+    return { ok: false, reason: 'invalid-runtimes' };
+  }
   if (!Array.isArray(rt.models) || rt.models.length > MAX_MODELS_PER_RUNTIME) {
     return { ok: false, reason: 'invalid-models' };
   }

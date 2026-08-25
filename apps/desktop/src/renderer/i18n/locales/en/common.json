@@ -1708,6 +1708,7 @@
         "error": {
           "timeout": "Timed out fetching the provider configuration.",
           "redirect": "The configuration URL redirected and was rejected by policy. Ask the vendor for a direct link.",
+          "blockedAddress": "The configuration URL resolves to a local or private network address and was rejected by policy.",
           "http": "Failed to fetch the provider configuration (HTTP {{status}}).",
           "network": "Network error while fetching the provider configuration.",
           "oversize": "The configuration file exceeds the size limit and was rejected.",
