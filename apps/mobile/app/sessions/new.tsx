@@ -427,6 +427,7 @@ export default function NewRemoteSessionScreen() {
     invoke,
     openLink,
     subscribe,
+    onAgentsChanged,
     status: deviceLinkStatus,
     connectionEpoch,
     presenceVersion,
@@ -513,6 +514,7 @@ export default function NewRemoteSessionScreen() {
   // 建出最终 requireAgent 报 not-registered 的会话(codex review P2)。
   const [availableAgentKinds, setAvailableAgentKinds] =
     useState<ReadonlySet<NewSessionAgentKind> | null>(null);
+  const [availableAgentRefreshNonce, setAvailableAgentRefreshNonce] = useState(0);
   // worktree 开关(project 模式 + 已选目录时显示):勾选值存工作端(get-new-maker-defaults
   // 播种 / 显式点击写穿),资格由 worktree:detect-cwd 探测(目录变化即重探,seq 防竞态)。
   const [worktreeProbe, setWorktreeProbe] = useState<NewSessionWorktreeProbeSnapshot | null>(null);
@@ -1843,7 +1845,14 @@ export default function NewRemoteSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId, maker, openLink]);
+  }, [selectedDeviceId, maker, openLink, availableAgentRefreshNonce]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    return onAgentsChanged((deviceId) => {
+      if (deviceId === selectedDeviceId) setAvailableAgentRefreshNonce((value) => value + 1);
+    });
+  }, [onAgentsChanged, selectedDeviceId]);
 
   useEffect(() => {
     if (!selectedDeviceId || composerTrigger.kind !== 'slash') {
