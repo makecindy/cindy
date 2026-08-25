@@ -266,10 +266,14 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(restoreEffectBlock).toContain('latestStorageKeyRef.current === storageKey');
     expect(restoreEffectBlock).toContain('if (!isCurrentTransition()) return;');
     expect(restoreEffectBlock).toContain('restoreNextDraft();');
-    expect(restoreEffectBlock).toContain('setSendDispatchInFlight(false);');
+    expect(restoreEffectBlock).toContain(
+      'dispatchSendInFlightKeysRef.current.has(nextSendKey)',
+    );
+    expect(restoreEffectBlock).toContain('setSendDispatchInFlight(nextSendInFlight);');
+    expect(restoreEffectBlock).toContain('setAllowTypeDuringSend(nextSendInFlight);');
     expect(restoreEffectBlock).toContain('wasBusyWithoutSend');
     expect(restoreEffectBlock.indexOf('restoreNextDraft();')).toBeLessThan(
-      restoreEffectBlock.indexOf('setSendDispatchInFlight(false);'),
+      restoreEffectBlock.indexOf('setSendDispatchInFlight(nextSendInFlight);'),
     );
 
     const waitForBusyCompletionBlock = extractBetween(

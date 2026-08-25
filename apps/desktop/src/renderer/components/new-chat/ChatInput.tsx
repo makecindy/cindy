@@ -3686,10 +3686,13 @@ export function ChatInput({
     // the next task never paints the previous session's listening/refining text.
     saveCurrentEditorDraft();
     restoreNextDraft();
-    // The reused composer now shows the destination draft. Drop the source
-    // send lock so the next task is immediately editable.
-    setSendDispatchInFlight(false);
-    setAllowTypeDuringSend(false);
+    // Destination task must stay editable. If we land back on a task whose send
+    // is still awaiting onSend, restore that task's send lock so the button
+    // stays disabled instead of silently dropping the next click.
+    const nextSendKey = storageKey ?? sessionId ?? '__draft__';
+    const nextSendInFlight = dispatchSendInFlightKeysRef.current.has(nextSendKey);
+    setSendDispatchInFlight(nextSendInFlight);
+    setAllowTypeDuringSend(nextSendInFlight);
     if (wasBusyWithoutSend && prevEditorKey && prevEditorKey === voiceOwnerKey) {
       const sourceKey = prevEditorKey;
       const persistDetachedVoice = (previousVoiceText: string, nextVoiceText: string) => {
@@ -4980,6 +4983,9 @@ export function ChatInput({
                 refined,
               ),
             };
+            documentBeforeOptimisticClear = plainTextToComposerDocument(serializedContent.text);
+            attachmentsBeforeOptimisticClear = [...frozenVoiceSend.attachments];
+            commentsBeforeOptimisticClear = [...frozenVoiceSend.comments];
             frozenVoiceSendRef.current = null;
           }
         }

@@ -246,6 +246,10 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
       'disabled || (sendDispatchInFlight && !allowTypeDuringSend)',
     );
     expect(chatInputSource).toContain('sendDispatchInFlight ||');
+    expect(chatInputSource).toContain('setSendDispatchInFlight(nextSendInFlight);');
+    expect(chatInputSource).toContain(
+      'documentBeforeOptimisticClear = plainTextToComposerDocument(serializedContent.text);',
+    );
   });
 
   it('snapshots the source restore payload instead of a reused destination editor', () => {
