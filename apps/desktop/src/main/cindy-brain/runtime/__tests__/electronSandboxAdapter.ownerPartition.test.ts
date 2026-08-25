@@ -8,6 +8,7 @@ const harness = vi.hoisted(() => {
     on: ReturnType<typeof vi.fn>;
     beforeRequest: ReturnType<typeof vi.fn>;
     protocolHandle: ReturnType<typeof vi.fn>;
+    protocolHandler?: (request: Request) => Promise<Response>;
     downloadHandler?: (event: { preventDefault(): void }) => void;
   };
   const sessions = new Map<string, RegisteredSession>();
@@ -28,7 +29,11 @@ const harness = vi.hoisted(() => {
           if (event === 'will-download') created.downloadHandler = handler;
         }),
         beforeRequest: vi.fn(),
-        protocolHandle: vi.fn(),
+        protocolHandle: vi.fn(
+          (_scheme: string, handler: (request: Request) => Promise<Response>) => {
+            created.protocolHandler = handler;
+          },
+        ),
       };
       sessions.set(partition, created);
       return {
@@ -57,6 +62,11 @@ const harness = vi.hoisted(() => {
   };
 });
 
+const kvEndpoint = vi.hoisted(() => ({
+  handleGhostKvRequest: vi.fn(),
+  readBoundedBodyText: vi.fn(),
+}));
+
 vi.mock('electron', () => ({
   BrowserWindow: harness.BrowserWindow,
   session: { fromPartition: harness.fromPartition },
@@ -71,7 +81,8 @@ vi.mock('node:fs/promises', () => ({
   },
 }));
 vi.mock('../../../appSessionState', () => ({
-  dataOwnerStorageKey: (ownerId: string) => `opaque-${ownerId}`,
+  dataOwnerStorageKey: (ownerId: string) =>
+    ownerId.startsWith('collision-') ? 'opaque-collision' : `opaque-${ownerId}`,
   getActiveAppSession: () => ({ ...harness.activeOwner }),
 }));
 vi.mock('../../../logger', () => ({
@@ -85,9 +96,20 @@ vi.mock('../../../cindy-media/ledger', () => ({
   ghostCanRead: vi.fn(),
   listGhostGallery: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../ghostKvEndpoint', () => kvEndpoint);
 
-import type { InstalledGhost } from '../../../../shared/ghost';
-import { electronSandboxAdapter, ensureGhostProtocolRegistered } from '../electronSandboxAdapter';
+import type {
+  GhostAppContextResult,
+  GhostMediaModelsResult,
+  InstalledGhost,
+} from '../../../../shared/ghost';
+import {
+  electronSandboxAdapter,
+  ensureGhostProtocolRegistered,
+  setGhostAppContextProvider,
+  setGhostKvStore,
+  setGhostMediaModelsProvider,
+} from '../electronSandboxAdapter';
 
 function ghost(id: string): InstalledGhost {
   return {
@@ -113,6 +135,8 @@ beforeEach(() => {
   harness.fromPartition.mockClear();
   harness.BrowserWindow.mockClear();
   harness.browserWindowOptions.length = 0;
+  kvEndpoint.handleGhostKvRequest.mockReset();
+  kvEndpoint.readBoundedBodyText.mockReset();
 });
 
 describe('electronSandboxAdapter owner partition', () => {
@@ -164,6 +188,121 @@ describe('electronSandboxAdapter owner partition', () => {
     expect([...harness.sessions.keys()]).toEqual([
       'cindy-ghost-owner:cloud:opaque-owner-a:generation-stable',
     ]);
+  });
+
+  it('owner 切换后旧 Session 的新请求在路由和业务读取前返回 403', async () => {
+    const store = { read: vi.fn(() => ({})), write: vi.fn() };
+    setGhostKvStore(store);
+    ensureGhostProtocolRegistered(ghost('stale-request'), {
+      mode: 'cloud',
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    });
+    const sessionA = harness.sessions.get(
+      'cindy-ghost-owner:cloud:opaque-owner-a:stale-request',
+    );
+    const routeRead = vi.fn(() => 'cindy-ghost://stale-request/kv');
+    const request = {
+      get url() {
+        return routeRead();
+      },
+      method: 'POST',
+      headers: new Headers(),
+    } as unknown as Request;
+
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    const response = await sessionA?.protocolHandler?.(request);
+
+    expect(response?.status).toBe(403);
+    expect(response?.headers.get('cache-control')).toBe('no-store');
+    expect(routeRead).not.toHaveBeenCalled();
+    expect(kvEndpoint.handleGhostKvRequest).not.toHaveBeenCalled();
+    expect(kvEndpoint.readBoundedBodyText).not.toHaveBeenCalled();
+    expect(store.read).not.toHaveBeenCalled();
+    expect(store.write).not.toHaveBeenCalled();
+  });
+
+  it('同 owner generation 变化后旧 Session 仍可走静态与能力路由', async () => {
+    const appContext: GhostAppContextResult = {
+      ok: true,
+      context: { region: 'global', locale: 'en' },
+    };
+    const appContextProvider = vi.fn(() => appContext);
+    setGhostAppContextProvider(appContextProvider);
+    ensureGhostProtocolRegistered(ghost('active-request'), {
+      mode: 'cloud',
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    });
+    harness.activeOwner.generation = 99;
+    const registered = harness.sessions.get(
+      'cindy-ghost-owner:cloud:opaque-owner-a:active-request',
+    );
+
+    const bootResponse = await registered?.protocolHandler?.(
+      new Request('cindy-ghost://active-request/'),
+    );
+    const contextResponse = await registered?.protocolHandler?.(
+      new Request('cindy-ghost://active-request/app-context'),
+    );
+
+    expect(bootResponse?.status).toBe(200);
+    expect(contextResponse?.status).toBe(200);
+    expect(appContextProvider).toHaveBeenCalledOnce();
+  });
+
+  it('请求已进入 handler 后切换 owner 不取消或重新检查在途 provider', async () => {
+    let finishProvider!: (result: GhostMediaModelsResult) => void;
+    const provider = vi.fn(
+      () =>
+        new Promise<GhostMediaModelsResult>((resolve) => {
+          finishProvider = resolve;
+        }),
+    );
+    setGhostMediaModelsProvider(provider);
+    ensureGhostProtocolRegistered(ghost('inflight-request'), {
+      mode: 'cloud',
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    });
+    const registered = harness.sessions.get(
+      'cindy-ghost-owner:cloud:opaque-owner-a:inflight-request',
+    );
+    const pending = registered?.protocolHandler?.(
+      new Request('cindy-ghost://inflight-request/media-models?type=image'),
+    );
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledOnce());
+
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    const outcome: GhostMediaModelsResult = {
+      ok: true,
+      type: 'image',
+      models: [],
+      defaultModelId: null,
+      defaultProviderId: null,
+    };
+    finishProvider(outcome);
+
+    const response = await pending;
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual(outcome);
+  });
+
+  it('相同 partition 不能被不同 owner snapshot 重新认领', () => {
+    const installed = ghost('owner-collision');
+    ensureGhostProtocolRegistered(installed, {
+      mode: 'cloud',
+      dataOwnerId: 'collision-a',
+      generation: 1,
+    });
+
+    expect(() =>
+      ensureGhostProtocolRegistered(installed, {
+        mode: 'cloud',
+        dataOwnerId: 'collision-b',
+        generation: 2,
+      }),
+    ).toThrow('ghost protocol partition already belongs to a different data owner');
   });
 
   it('逻辑沙箱也使用当前 owner 的同一非持久 partition', () => {
