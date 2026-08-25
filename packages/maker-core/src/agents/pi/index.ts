@@ -3957,8 +3957,12 @@ export class PiAgent extends BaseAgent {
                   inFlightSubagentLaunches.delete(launching);
                 }
                 if (accountBoundaryTeardown) {
-                  await this.terminateSubagentRunner(runId, runDir);
-                  throw new Error('PI Subagent runner request is unavailable');
+                  const confirmed = await this.terminateSubagentRunner(runId, runDir);
+                  throw confirmed
+                    ? new Error('PI Subagent runner request is unavailable')
+                    : new PiSubagentRunnerExitUnconfirmedError(
+                      'PI Subagent runner request is unavailable',
+                    );
                 }
                 return true;
               },

@@ -540,6 +540,10 @@ describe('cindy-subagent extension source', () => {
     expect(launch).toBeGreaterThan(recheck);
     expect(source).toContain('inFlightSubagentLaunches');
     expect(source).toContain('ok: false, unconfirmed: true');
+    const postSpawn = source.indexOf('if (accountBoundaryTeardown)', launch);
+    expect(postSpawn).toBeGreaterThan(launch);
+    expect(source.indexOf('PiSubagentRunnerExitUnconfirmedError', postSpawn))
+      .toBeGreaterThan(postSpawn);
   });
 
   it('does not store an English resume prefix as the run title', () => {
