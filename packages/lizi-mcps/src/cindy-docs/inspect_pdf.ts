@@ -78,6 +78,7 @@ const DESCRIPTION = [
   '真实翻车靠上面的字段已经能定死;需要肉眼确认版式细节时,请把文件路径给用户去打开。',
   '',
   '【参数】pages 可指定要看的页码(1 起,如 [1,2,5]);不传就从第 1 页顺序取 maxPages 页。',
+  '分批连续检查时,把上一批响应的 inspectedThrough 原样传回,工具才会累计覆盖并在最后一批结束 incomplete。',
 ].join('\n');
 
 export function registerInspectPdfTool(
@@ -95,6 +96,12 @@ export function registerInspectPdfTool(
         .array(z.number().int().min(1))
         .optional()
         .describe('要检查的页码(1 起)。不传 = 从第 1 页顺序取 maxPages 页。'),
+      inspectedThrough: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe('此前已连续检查到的页码。分批检查时传上一批响应的同名字段,默认 0。'),
       maxPages: z
         .number()
         .int()
@@ -103,7 +110,7 @@ export function registerInspectPdfTool(
         .default(DEFAULT_MAX_PAGES)
         .describe(`最多检查多少页,默认 ${DEFAULT_MAX_PAGES},上限 ${HARD_MAX_PAGES}。`),
     },
-    handler: async ({ path: inputPath, pages, maxPages }) => {
+    handler: async ({ path: inputPath, pages, inspectedThrough, maxPages }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareInputPath(root, inputPath);
@@ -163,16 +170,17 @@ export function registerInspectPdfTool(
         const visibilityUnverifiedPages = decorated
           .filter((p) => p.visibilityUnverified)
           .map((p) => p.page);
-        const partial = inspection.pagesInspected < inspection.numPages;
-        const lastInspectedPage = Math.max(0, ...decorated.map((page) => page.page));
+        const inspectedPageNumbers = new Set(decorated.map((page) => page.page));
+        let accumulatedThrough = Math.min(inspectedThrough, inspection.numPages);
+        while (inspectedPageNumbers.has(accumulatedThrough + 1)) accumulatedThrough += 1;
+        const partial = accumulatedThrough < inspection.numPages;
         const nextPages: number[] = [];
         if (partial) {
           // numPages is untrusted PDF metadata. Never allocate an array sized by
-          // that declaration; continue from this batch's cursor and generate only
-          // the bounded next page batch. Starting from page 1 here would make
-          // sequential callers bounce between the first two batches forever.
+          // that declaration. Advance only through pages proven contiguous with
+          // the caller's previous cursor, then generate one bounded next batch.
           for (
-            let page = lastInspectedPage + 1;
+            let page = accumulatedThrough + 1;
             page <= inspection.numPages && nextPages.length < maxPages;
             page += 1
           ) {
@@ -180,9 +188,7 @@ export function registerInspectPdfTool(
           }
         }
         const coverageWarning = partial
-          ? nextPages.length > 0
-            ? `本次只检查了 ${inspection.pagesInspected}/${inspection.numPages} 页，下一批页码为 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}] 继续检查。`
-            : `本次只检查了 ${inspection.pagesInspected}/${inspection.numPages} 页，当前页码批次之后没有可继续的页面；如需完整覆盖，请显式指定尚未检查的页码。`
+          ? `当前已连续覆盖 ${accumulatedThrough}/${inspection.numPages} 页，下一批页码为 ${nextPages.join('、')}。请用 pages: [${nextPages.join(', ')}] 并传 inspectedThrough: ${accumulatedThrough} 继续检查。`
           : undefined;
 
         return okPayload({
@@ -190,6 +196,7 @@ export function registerInspectPdfTool(
           bytes: data.byteLength,
           numPages: inspection.numPages,
           pagesInspected: inspection.pagesInspected,
+          inspectedThrough: accumulatedThrough,
           pages: decorated,
           blankPages,
           visibilityUnverifiedPages,
@@ -197,8 +204,7 @@ export function registerInspectPdfTool(
           ...(allInspectedBlank
             ? {
                 verdict: 'blank',
-                warning:
-                  `检查到的每一页都是空白 —— 这份 PDF 不能交付。回去检查 HTML 是否真有可见内容、外部图片/字体是否加载失败,修好后重新生成再查一次。${coverageWarning ? ` ${coverageWarning}` : ''}`,
+                warning: `检查到的每一页都是空白 —— 这份 PDF 不能交付。回去检查 HTML 是否真有可见内容、外部图片/字体是否加载失败,修好后重新生成再查一次。${coverageWarning ? ` ${coverageWarning}` : ''}`,
               }
             : blankPages.length > 0
               ? {
@@ -208,8 +214,7 @@ export function registerInspectPdfTool(
               : visibilityUnverifiedPages.length > 0
                 ? {
                     verdict: 'warning',
-                    warning:
-                      `第 ${visibilityUnverifiedPages.join('、')} 页的结构算子解析未完成,未做位图级可见性确认,本次检查证据不完整。请重试并在必要时打开 PDF 确认。${coverageWarning ? ` ${coverageWarning}` : ''}`,
+                    warning: `第 ${visibilityUnverifiedPages.join('、')} 页的结构算子解析未完成,未做位图级可见性确认,本次检查证据不完整。请重试并在必要时打开 PDF 确认。${coverageWarning ? ` ${coverageWarning}` : ''}`,
                   }
                 : partial
                   ? { verdict: 'incomplete', warning: coverageWarning! }

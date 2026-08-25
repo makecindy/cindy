@@ -1276,6 +1276,44 @@ describe('render_pdf', () => {
     expect(rendered).not.toContain(Buffer.from('root-chart').toString('base64'));
   });
 
+  it('按 HTML 属性语义解码命名与数字实体后快照本地资源', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    const assets = path.join(workdir, 'R&D');
+    await fs.mkdir(assets);
+    await fs.writeFile(path.join(assets, 'theme.css'), 'body{color:red}', 'utf8');
+    await fs.writeFile(path.join(assets, '©.png'), 'named-image', 'utf8');
+    await fs.writeFile(path.join(assets, 'chart.png'), 'numeric-image', 'utf8');
+    await fs.writeFile(path.join(assets, 'chart&copy.png'), 'style-image', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'attribute-entities.html'),
+      '<base href="./R&amp;D/"><link rel=stylesheet href=theme&#46;css><img src="&copy;.png" srcset="chart&#x2e;png 1x"><div style="background:url(chart&amp;copy.png)"></div>',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'attribute-entities.html',
+      outPath: 'attribute-entities.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    expect(rendered).toContain(
+      `data:text/css;base64,${Buffer.from('body{color:red}').toString('base64')}`,
+    );
+    for (const contents of ['named-image', 'numeric-image', 'style-image']) {
+      expect(rendered).toContain(
+        `data:image/png;base64,${Buffer.from(contents).toString('base64')}`,
+      );
+    }
+  });
+
   it('在首个资源快照前替换 base 子目录时拒绝混合目录版本', async () => {
     const assetsDir = path.join(workdir, 'assets');
     const movedDir = path.join(workdir, 'assets-original');
@@ -1635,6 +1673,7 @@ describe('inspect_pdf', () => {
     });
     const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
     expect(result.verdict).toBe('incomplete');
+    expect(result.inspectedThrough).toBe(10);
     expect(result.nextPages).toEqual([11, 12]);
     expect(result.warning).toContain('11、12');
     expect(result.verdict).not.toBe('ok');
@@ -1643,7 +1682,8 @@ describe('inspect_pdf', () => {
   it('连续检查多批 PDF 页面时 nextPages 沿游标前进', async () => {
     const client = await connect({
       inspectPdf: async ({ pages }) => {
-        const selected = pages.length > 0 ? pages : Array.from({ length: 10 }, (_, index) => index + 1);
+        const selected =
+          pages.length > 0 ? pages : Array.from({ length: 10 }, (_, index) => index + 1);
         return {
           numPages: 30,
           pagesInspected: selected.length,
@@ -1654,12 +1694,23 @@ describe('inspect_pdf', () => {
     await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from(`%PDF-1.7\n${'x'.repeat(5000)}`));
 
     const first = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(first.inspectedThrough).toBe(10);
     expect(first.nextPages).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
     const second = await callTool(client, 'inspect_pdf', {
       path: 'out.pdf',
       pages: first.nextPages,
+      inspectedThrough: first.inspectedThrough,
     });
+    expect(second.inspectedThrough).toBe(20);
     expect(second.nextPages).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+    const third = await callTool(client, 'inspect_pdf', {
+      path: 'out.pdf',
+      pages: second.nextPages,
+      inspectedThrough: second.inspectedThrough,
+    });
+    expect(third.inspectedThrough).toBe(30);
+    expect(third.nextPages).toBeUndefined();
+    expect(third.verdict).toBe('ok');
   });
 
   it('算子表未能解析时 verdict 不得误报 ok', async () => {

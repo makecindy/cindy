@@ -6,9 +6,10 @@ import { utilityProcess } from 'electron';
 
 import { DocsPathError, type WriteDocsOutputFn } from '@cindy/mcps';
 
-import type {
-  DocsOutputWriteRequest,
-  DocsOutputWriteResult,
+import {
+  relativeOutputParentPath,
+  type DocsOutputWriteRequest,
+  type DocsOutputWriteResult,
 } from './docsOutputWriterProtocol.js';
 
 interface DocsOutputWriterChildLike {
@@ -89,8 +90,8 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
   const parentDir = path.dirname(input.path);
   const realRoot = await fs.realpath(input.root);
   const lexicalParent = path.resolve(parentDir);
-  const parentRelativePath = path.relative(realRoot, lexicalParent);
-  if (parentRelativePath.startsWith('..') || path.isAbsolute(parentRelativePath)) {
+  const parentRelativePath = relativeOutputParentPath(input.root, lexicalParent);
+  if (parentRelativePath === null) {
     throw new DocsPathError(
       'PATH_NOT_ALLOWED',
       `输出目录不在任务工作目录内: ${lexicalParent}`,

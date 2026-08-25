@@ -1053,6 +1053,9 @@ importers:
       docx:
         specifier: ^9.7.1
         version: 9.7.1
+      entities:
+        specifier: ^6.0.1
+        version: 6.0.1
       eventsource-parser:
         specifier: ^3.0.6
         version: 3.1.0

@@ -4,7 +4,10 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { DocsOutputWriteRequest } from '../docsOutputWriterProtocol.js';
+import {
+  relativeOutputParentPath,
+  type DocsOutputWriteRequest,
+} from '../docsOutputWriterProtocol.js';
 import { runDocsOutputWrite, sameRelativePath } from '../docsOutputWriterUtilityProcess.js';
 
 let root: string;
@@ -50,7 +53,10 @@ async function request(
   };
 }
 
-async function missingParentRequest(targetName: string, data: string): Promise<DocsOutputWriteRequest> {
+async function missingParentRequest(
+  targetName: string,
+  data: string,
+): Promise<DocsOutputWriteRequest> {
   const rootStat = await fs.promises.lstat(root, { bigint: true });
   const rootRealPath = await fs.promises.realpath(root);
   return {
@@ -64,6 +70,14 @@ async function missingParentRequest(targetName: string, data: string): Promise<D
 }
 
 describe('docs output cwd-bound writer', () => {
+  it('derives output parents from the lexical session root before realpath canonicalization', () => {
+    const lexicalRoot = path.join(root, 'session-root-alias');
+    expect(relativeOutputParentPath(lexicalRoot, path.join(lexicalRoot, 'documents'))).toBe(
+      'documents',
+    );
+    expect(relativeOutputParentPath(lexicalRoot, path.join(root, 'outside'))).toBeNull();
+  });
+
   it('uses Windows case-insensitive semantics for relative parent paths', () => {
     expect(sameRelativePath('Documents/Reports', 'documents\\reports', 'win32')).toBe(true);
     expect(sameRelativePath('Documents/Reports', 'documents\\reports', 'darwin')).toBe(false);
@@ -80,7 +94,9 @@ describe('docs output cwd-bound writer', () => {
 
   it('creates missing parents inside the anchored session root', async () => {
     await runDocsOutputWrite(await missingParentRequest('report.bin', 'nested'), root);
-    expect(await fs.promises.readFile(path.join(root, 'nested/reports/report.bin'), 'utf8')).toBe('nested');
+    expect(await fs.promises.readFile(path.join(root, 'nested/reports/report.bin'), 'utf8')).toBe(
+      'nested',
+    );
   });
 
   it('atomically replaces an existing regular file', async () => {

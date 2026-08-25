@@ -13,6 +13,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { decodeHTMLAttribute } from 'entities';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
@@ -348,14 +349,16 @@ async function inlineCssUrls(
   css: string,
   baseUrl: URL,
   context: ResourceSnapshotContext,
+  decodeReference: (reference: string) => string = (reference) => reference,
 ): Promise<string> {
-  return rewriteCssResources(css, baseUrl, context);
+  return rewriteCssResources(css, baseUrl, context, decodeReference);
 }
 
 async function rewriteCssResources(
   css: string,
   baseUrl: URL,
   context: ResourceSnapshotContext,
+  decodeReference: (reference: string) => string = (reference) => reference,
 ): Promise<string> {
   const out: string[] = [];
   let index = 0;
@@ -395,7 +398,11 @@ async function rewriteCssResources(
           else cursor += 1;
         }
         const reference = css.slice(start + 1, cursor);
-        const snapshot = await snapshotLocalResource(context, baseUrl, reference.trim());
+        const snapshot = await snapshotLocalResource(
+          context,
+          baseUrl,
+          decodeReference(reference.trim()),
+        );
         out.push(css.slice(index, start));
         out.push(snapshot ? `url("${snapshot}")` : css.slice(start, cursor + 1));
         index = Math.min(css.length, cursor + 1);
@@ -425,7 +432,7 @@ async function rewriteCssResources(
       while (/\s/.test(css[cursor] ?? '')) cursor += 1;
       if (css[cursor] === ')') {
         const original = css.slice(index, cursor + 1);
-        const snapshot = await snapshotLocalResource(context, baseUrl, reference);
+        const snapshot = await snapshotLocalResource(context, baseUrl, decodeReference(reference));
         out.push(snapshot ? `url("${snapshot}")` : original);
         index = cursor + 1;
         continue;
@@ -501,7 +508,11 @@ async function inlineSrcset(
     candidates.map(async (candidate) => {
       const match = candidate.match(/^(\S+)(?:\s+(.+))?$/);
       if (!match) return candidate;
-      const snapshot = await snapshotLocalResource(context, baseUrl, match[1]!);
+      const snapshot = await snapshotLocalResource(
+        context,
+        baseUrl,
+        decodeHTMLAttribute(match[1]!),
+      );
       return `${snapshot ?? match[1]}${match[2] ? ` ${match[2]}` : ''}`;
     }),
   );
@@ -668,7 +679,8 @@ async function inlineLocalResources(
       return tag;
     },
   );
-  const baseHref = baseTag ? readHtmlAttribute(baseTag, 'href') : undefined;
+  const rawBaseHref = baseTag ? readHtmlAttribute(baseTag, 'href') : undefined;
+  const baseHref = rawBaseHref ? decodeHTMLAttribute(rawBaseHref) : undefined;
   if (baseHref) {
     try {
       baseUrl = new URL(baseHref, documentUrl);
@@ -689,7 +701,10 @@ async function inlineLocalResources(
       const rel = readHtmlAttribute(tag, 'rel') ?? '';
       if (!/\bstylesheet\b/i.test(rel) && !/\.css(?:[?#]|$)/i.test(href)) return tag;
       return rewriteHtmlAttributes(tag, ['href'], async (reference) => {
-        return (await snapshotLocalResource(context, baseUrl, reference)) ?? reference;
+        return (
+          (await snapshotLocalResource(context, baseUrl, decodeHTMLAttribute(reference))) ??
+          reference
+        );
       });
     },
   );
@@ -701,7 +716,8 @@ async function inlineLocalResources(
         tag,
         ['src', 'poster', 'data', 'href', 'xlink:href'],
         async (reference) =>
-          (await snapshotLocalResource(context, baseUrl, reference)) ?? reference,
+          (await snapshotLocalResource(context, baseUrl, decodeHTMLAttribute(reference))) ??
+          reference,
       );
       return rewriteHtmlAttributes(withSources, ['srcset'], async (value) =>
         inlineSrcset(value, baseUrl, context),
@@ -714,7 +730,7 @@ async function inlineLocalResources(
     (tag) => tag[1] !== '/' && /\bstyle\s*=/i.test(tag),
     (tag) =>
       rewriteHtmlAttributes(tag, ['style'], async (css) => {
-        const rewrittenCss = await inlineCssUrls(css, baseUrl, context);
+        const rewrittenCss = await inlineCssUrls(css, baseUrl, context, decodeHTMLAttribute);
         return rewrittenCss;
       }),
   );
