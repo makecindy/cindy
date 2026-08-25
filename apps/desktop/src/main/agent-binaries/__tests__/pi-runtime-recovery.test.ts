@@ -82,4 +82,26 @@ describe('Pi runtime recovery', () => {
     expect(prepare).not.toHaveBeenCalled();
     recovery.dispose();
   });
+
+  it('stops an existing retry loop when a later prepare becomes permanent', async () => {
+    const prepare = vi.fn(async () => ({ ready: false, error: 'asset_missing' }));
+    const schedule = vi.fn(() => 0);
+    const cancel = vi.fn();
+    const recovery = createPiRuntimeRecovery({
+      isOnline: () => true,
+      prepare,
+      register: () => true,
+      onRegistered: vi.fn(),
+      setTimeout: schedule as unknown as typeof setTimeout,
+      clearTimeout: cancel as unknown as typeof clearTimeout,
+    });
+
+    recovery.markUnavailable('manifest_failed');
+    expect(schedule).toHaveBeenCalledOnce();
+    expect(await recovery.retryNow('permanent-after-transient')).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(schedule).toHaveBeenCalledOnce();
+    expect(recovery.isDisabled()).toBe(true);
+    recovery.dispose();
+  });
 });

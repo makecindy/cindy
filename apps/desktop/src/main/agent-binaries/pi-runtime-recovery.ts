@@ -67,6 +67,10 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
     markUnavailable(error) {
       disabled = true;
       retryable = isRetryablePiPrepareError(error);
+      if (!retryable && retryTimer !== null) {
+        cancel(retryTimer);
+        retryTimer = null;
+      }
       if (error) {
         logWarn(
           retryable
@@ -98,7 +102,7 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
           const result = await options.prepare();
           if (!result.ready || !result.path) {
             logWarn(`Pi runtime recovery prepare failed (${reason})`, result.error);
-            scheduleRetry();
+            recovery.markUnavailable(result.error);
             return false;
           }
           if (!options.register()) {
@@ -111,7 +115,7 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
           return true;
         } catch (error) {
           logWarn(`Pi runtime recovery threw (${reason})`, error);
-          scheduleRetry();
+          recovery.markUnavailable(error instanceof Error ? error.message : String(error));
           return false;
         }
       })();
