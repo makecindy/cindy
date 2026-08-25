@@ -879,6 +879,13 @@ function classifyCommandLineProbe(
   return classifyRunnerCommandLine(probe.text, script);
 }
 
+function resolveUnreadablePresence(pid: number): PiSubagentRunnerPresence {
+  // ps/CIM/empty output is also what a pid looks like after it exits between
+  // the liveness check and the listing. Recheck before treating that as a live
+  // process we cannot identify.
+  return isProcessAlive(pid) === false ? 'gone' : 'unverifiable';
+}
+
 export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boolean {
   const pid = status.runnerPid;
   if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return false;
@@ -904,7 +911,8 @@ function classifyRunnerPresenceSync(status: PiSubagentRunStatus): PiSubagentRunn
   if (isProcessAlive(pid!) === false) return 'gone';
   const script = status.runnerScript;
   if (typeof script !== 'string' || script.length === 0) return 'unverifiable';
-  return classifyCommandLineProbe(readProcessCommandLine(pid!), script);
+  const classified = classifyCommandLineProbe(readProcessCommandLine(pid!), script);
+  return classified === 'unverifiable' ? resolveUnreadablePresence(pid!) : classified;
 }
 
 async function classifyRunnerPresence(status: PiSubagentRunStatus): Promise<PiSubagentRunnerPresence> {
@@ -914,7 +922,8 @@ async function classifyRunnerPresence(status: PiSubagentRunStatus): Promise<PiSu
   if (isProcessAlive(pid!) === false) return 'gone';
   const script = status.runnerScript;
   if (typeof script !== 'string' || script.length === 0) return 'unverifiable';
-  return classifyCommandLineProbe(await readProcessCommandLineAsync(pid!), script);
+  const classified = classifyCommandLineProbe(await readProcessCommandLineAsync(pid!), script);
+  return classified === 'unverifiable' ? resolveUnreadablePresence(pid!) : classified;
 }
 
 /**

@@ -1089,6 +1089,32 @@ describe('PI durable subagent run store', () => {
       await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(true);
     });
 
+    it('treats a runner that exits during the command-line probe as gone', async () => {
+      usePlatform('linux');
+      const real = process.kill.bind(process);
+      let liveChecks = 0;
+      sentSignals = [];
+      sentKillPids = [];
+      const spy = vi.spyOn(process, 'kill').mockImplementation(
+        ((pid: number, signal?: NodeJS.Signals | number) => {
+          if (Math.abs(pid) !== runnerPid) return real(pid, signal);
+          if (signal === 0) {
+            liveChecks += 1;
+            if (liveChecks === 1) return true;
+            throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+          }
+          sentKillPids.push(pid);
+          sentSignals.push(signal ?? 'unknown');
+          return true;
+        }) as typeof process.kill,
+      );
+      restores.push(() => spy.mockRestore());
+      stubProbes({ aliveProbes: 0 });
+
+      await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(true);
+      expect(killSignals()).toEqual([]);
+    });
+
     it('treats a zombie left by the kill as reclaimed', async () => {
       usePlatform('linux');
       stubKill();
