@@ -1346,6 +1346,83 @@ describe('render_pdf', () => {
     expect(Object.prototype.hasOwnProperty.call(seen[0], 'htmlBaseDir')).toBe(false);
   });
 
+  it('按 BOM 或 @charset 解码本地 CSS 并移除旧编码声明', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, '图.png'), 'utf16-image', 'utf8');
+    await fs.writeFile(path.join(workdir, 'café.png'), 'legacy-image', 'utf8');
+    const utf16Css = '@charset "utf-16le"; .标题 { background: url("./图.png"); }';
+    await fs.writeFile(
+      path.join(workdir, 'utf16.css'),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(utf16Css, 'utf16le')]),
+    );
+    await fs.writeFile(
+      path.join(workdir, 'legacy.css'),
+      Buffer.from('@charset "windows-1252"; .café { background: url("./café.png"); }', 'latin1'),
+    );
+    await fs.writeFile(
+      path.join(workdir, 'encoded-css.html'),
+      '<link rel="stylesheet" href="./utf16.css"><link rel="stylesheet" href="./legacy.css">',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'encoded-css.html',
+      outPath: 'encoded-css.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
+    const stylesheets = [...rendered.matchAll(/data:text\/css;base64,([^"'&>\s]+)/g)].map(
+      (match) => Buffer.from(match[1]!, 'base64').toString('utf8'),
+    );
+    expect(stylesheets).toHaveLength(2);
+    expect(stylesheets.join('\n')).toContain('.标题');
+    expect(stylesheets.join('\n')).toContain('.café');
+    expect(stylesheets.join('\n')).not.toContain('@charset');
+    expect(stylesheets.join('\n')).toContain(
+      `data:image/png;base64,${Buffer.from('utf16-image').toString('base64')}`,
+    );
+    expect(stylesheets.join('\n')).toContain(
+      `data:image/png;base64,${Buffer.from('legacy-image').toString('base64')}`,
+    );
+  });
+
+  it('按 srcset 语法分割无空格候选并保留 data URL 内部逗号', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'small.png'), 'small-image', 'utf8');
+    await fs.writeFile(path.join(workdir, 'large.png'), 'large-image', 'utf8');
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      html:
+        '<img srcset="./small.png,./large.png 2x"><source srcset="data:image/png;base64,AAAA 1x,./large.png 2x">',
+      outPath: 'compact-srcset.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = seen[0]!.html!;
+    expect(rendered).toContain(
+      `data:image/png;base64,${Buffer.from('small-image').toString('base64')}`,
+    );
+    expect(rendered.match(new RegExp(Buffer.from('large-image').toString('base64'), 'g'))).toHaveLength(
+      2,
+    );
+    expect(rendered).toContain('data:image/png;base64,AAAA 1x');
+  });
+
   it('内联 html 的任务目录图片与样式表同样先快照成 data URI', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');

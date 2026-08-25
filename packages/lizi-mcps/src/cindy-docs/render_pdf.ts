@@ -27,7 +27,7 @@ import {
   resolveSessionRoot,
 } from './_paths.js';
 import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
-import { decodeUnicodeText } from './_textEncoding.js';
+import { decodeCssText, decodeUnicodeText } from './_textEncoding.js';
 import { applyReportTemplate, extractHtmlTitle } from './pdfTemplate.js';
 import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsThemeName } from './themes.js';
 import type {
@@ -595,11 +595,12 @@ function splitSrcset(value: string): string[] {
   const candidates: string[] = [];
   let start = 0;
   for (let index = 0; index < value.length - 1; index += 1) {
-    const segment = value.slice(start, index);
-    if (value[index] === ',' && (/\s/.test(value[index + 1] ?? '') || /\s/.test(segment))) {
-      candidates.push(value.slice(start, index));
-      start = index + 1;
-    }
+    if (value[index] !== ',') continue;
+    const segment = value.slice(start, index).trimStart();
+    const insideDataUrl = /^data:/i.test(segment) && !/\s/.test(segment);
+    if (insideDataUrl) continue;
+    candidates.push(value.slice(start, index));
+    start = index + 1;
   }
   candidates.push(value.slice(start));
   return candidates.map((candidate) => candidate.trim()).filter(Boolean);
@@ -789,14 +790,13 @@ async function snapshotLocalResource(
   const mime = mimeOverride ?? resourceMime(preparedPath);
   let snapshotBytes = bytes;
   if (mime === 'text/css') {
-    if (context.cssStack.has(cacheKey)) return dataUri(mime, bytes);
+    const decodedCss = decodeCssText(bytes);
+    if (context.cssStack.has(cacheKey)) {
+      return dataUri(mime, Buffer.from(decodedCss, 'utf8'));
+    }
     context.cssStack.add(cacheKey);
     try {
-      const imported = await inlineCssImports(
-        bytes.toString('utf8'),
-        pathToFileURL(preparedPath),
-        context,
-      );
+      const imported = await inlineCssImports(decodedCss, pathToFileURL(preparedPath), context);
       const rewritten = await inlineCssUrls(imported, pathToFileURL(preparedPath), context);
       snapshotBytes = Buffer.from(rewritten, 'utf8');
     } finally {
