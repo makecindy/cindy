@@ -44,6 +44,14 @@ export function sameRelativePath(
     : normalizedLeft === normalizedRight;
 }
 
+export function relativePathSegments(
+  relative: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  return pathApi.normalize(relative).split(pathApi.sep).filter(Boolean);
+}
+
 async function verifyParent(request: DocsOutputWriteRequest, workingDir: string): Promise<void> {
   try {
     const rootStat = await fs.promises.lstat(request.expectedRoot.realPath, { bigint: true });
@@ -92,9 +100,10 @@ async function ensureParent(request: DocsOutputWriteRequest, workingDir: string)
     await verifyParent(request, workingDir);
     return;
   }
-  // parentRelativePath comes from the current platform's path.relative(). On
-  // POSIX a backslash is a legal filename character, not a path separator.
-  const segments = relative.split(path.sep).filter(Boolean);
+  // Normalize separators with the current platform before walking each
+  // component. Windows accepts both slash forms, while POSIX keeps a
+  // backslash as a literal filename character.
+  const segments = relativePathSegments(relative);
   if (segments.some((segment) => segment === '.' || segment === '..' || segment.includes('\0'))) {
     throw new OutputWriteError('PATH_NOT_ALLOWED', '输出目录相对路径不合法');
   }

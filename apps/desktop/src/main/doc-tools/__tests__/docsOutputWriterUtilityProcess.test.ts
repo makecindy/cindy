@@ -12,6 +12,7 @@ import {
   type DocsOutputWriteRequest,
 } from '../docsOutputWriterProtocol.js';
 import {
+  relativePathSegments,
   runDocsOutputWriteForTest,
   sameRelativePath,
 } from '../docsOutputWriterUtilityProcess.js';
@@ -91,6 +92,12 @@ describe('docs output cwd-bound writer', () => {
   it('uses Windows case-insensitive semantics for relative parent paths', () => {
     expect(sameRelativePath('Documents/Reports', 'documents\\reports', 'win32')).toBe(true);
     expect(sameRelativePath('Documents/Reports', 'documents\\reports', 'darwin')).toBe(false);
+  });
+
+  it('normalizes only the current platform separators when walking output parents', () => {
+    expect(relativePathSegments('nested/reports', 'win32')).toEqual(['nested', 'reports']);
+    expect(relativePathSegments('nested\\reports', 'win32')).toEqual(['nested', 'reports']);
+    expect(relativePathSegments('reports\\2026', 'darwin')).toEqual(['reports\\2026']);
   });
 
   it.runIf(process.platform !== 'win32')(
