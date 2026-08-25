@@ -39,6 +39,26 @@ import {
 
 const roots: string[] = [];
 
+async function launchRunnerWithNode(request: {
+  runnerFile: string;
+  configFile: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const child = spawn(process.execPath, [request.runnerFile, request.configFile], {
+    cwd: request.cwd,
+    env: request.env,
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+}
+
 /**
  * `runner.cjs` is byte-identical for every fixture and by far the biggest file
  * each one writes. Writing it once for the suite keeps ~30 real file creations
@@ -630,7 +650,7 @@ describe('Cindy durable PI Subagent runner', () => {
 
     function resumeLaunch(fixture: Awaited<ReturnType<typeof makeFixture>>) {
       return {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: {
@@ -897,7 +917,7 @@ describe('Cindy durable PI Subagent runner', () => {
       first.runId,
       'continue from the prior result',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: {
@@ -946,7 +966,7 @@ describe('Cindy durable PI Subagent runner', () => {
       resumedRunId!,
       'continue for a second resumed generation',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: {
@@ -993,7 +1013,7 @@ describe('Cindy durable PI Subagent runner', () => {
       first.runId,
       'continue from redirected catalog',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: process.env,
@@ -1016,7 +1036,7 @@ describe('Cindy durable PI Subagent runner', () => {
       first.runId,
       'continue without leaving partial staging',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: process.env,
@@ -1038,7 +1058,7 @@ describe('Cindy durable PI Subagent runner', () => {
     });
     await waitForClose(fixture.child, fixture.stderr);
     const launch = {
-      nodeExecutable: process.execPath,
+      launchRunner: launchRunnerWithNode,
       runtimeOwnerId: 'resume-owner',
       runnerFallbackFile: fixture.runnerFile,
       env: {

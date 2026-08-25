@@ -11,6 +11,7 @@ import {
   CINDY_SUBAGENT_EXTENSION_FILENAME,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
   CINDY_SUBAGENT_PARENT_PID_ENV,
+  CINDY_SUBAGENT_RUNNER_CONTROL_TITLE,
   CINDY_SUBAGENT_TOOL_NAME,
 } from '../cindy-subagent-source.js';
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
@@ -146,20 +147,26 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('childConfigHome: childConfigHome');
   });
 
-  it('persists a terminal failure if the detached runner cannot spawn', () => {
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("runner.once('error'");
+  it('persists a terminal failure if the host rejects the runner launch', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("await requestRunnerControl(ctx, 'launch', runId)");
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("state: 'failed'");
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("writePrivateJson(join(runDir, 'status.json')");
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("runnerInstanceId: 'launch-pending-' + runId");
   });
 
-  it('publishes the run directory before reading the fence, and spawns after', () => {
-    // The Host cannot prevent this spawn by scanning: it happens here, inside
-    // Pi, in an extension the Host never calls. A single fence read before the
-    // spawn is not enough either — the Host could raise the fence and finish
-    // scanning in the gap between the read and the write. What makes it
-    // airtight is the *order*: the Host writes its fence and then scans, this
-    // writes its run directory and then reads. Opposite orders, so at least one
+  it('never treats the packaged application executable as Node', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('ELECTRON_RUN_AS_NODE');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('CINDY_PI_SUBAGENT_NODE');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('spawn(nodeExecutable');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      `const RUNNER_CONTROL_TITLE = '${CINDY_SUBAGENT_RUNNER_CONTROL_TITLE}';`,
+    );
+  });
+
+  it('publishes the run directory before reading the fence, and asks the host to launch after', () => {
+    // The extension publishes its intent before asking the Host to launch. The
+    // Host raises its fence before scanning, while the extension writes the run
+    // directory before reading that fence. Opposite orders ensure at least one
     // side always sees the other. Both halves are pinned here because either
     // one moving re-opens the hole.
     const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
@@ -171,11 +178,11 @@ describe('cindy-subagent extension source', () => {
     );
     // The pre-per-host name stays readable through the upgrade window.
     expect(src).toContain("const LEGACY_LAUNCH_FENCE_FILENAME = '.launch-fence.json'");
-    const launch = src.indexOf('function launchDurableRun(');
+    const launch = src.indexOf('async function launchDurableRun(');
     const mkdir = src.indexOf('mkdirSync(runDir', launch);
     const publish = src.indexOf("writePrivateJson(join(runDir, 'status.json')", launch);
     const check = src.indexOf('if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {', launch);
-    const spawned = src.indexOf('spawn(nodeExecutable', launch);
+    const spawned = src.indexOf("await requestRunnerControl(ctx, 'launch', runId)", launch);
     expect(mkdir).toBeGreaterThan(launch);
     expect(publish).toBeGreaterThan(mkdir);
     expect(check).toBeGreaterThan(publish);
@@ -214,7 +221,7 @@ describe('cindy-subagent extension source', () => {
     const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
     const body = src.slice(
       src.indexOf("const LAUNCH_FENCE_PREFIX = '.launch-fence-'"),
-      src.indexOf('function launchDurableRun('),
+      src.indexOf('async function launchDurableRun('),
     );
     const gateFor = (read: (file: string) => string): (root: string, owner: string) => boolean => (
       new Function(
@@ -293,7 +300,7 @@ describe('cindy-subagent extension source', () => {
     const guard = src.indexOf('if (runtime.pending) {');
     const execute = src.indexOf('async execute(toolCallId');
     expect(guard).toBeGreaterThan(execute);
-    const dispatch = src.indexOf('const launched = launchDurableRun(', guard);
+    const dispatch = src.indexOf('const launched = await launchDurableRun(', guard);
     expect(dispatch).toBeGreaterThan(guard);
   });
 
@@ -446,15 +453,18 @@ describe('cindy-subagent extension source', () => {
     }
   });
 
-  it('escalates to its own handle when taskkill reports failure', () => {
-    // spawnSync 的失败只体现在返回值(status / error)上,不进 catch。不检查 = Windows 上
-    // fallback 永远不可达:runner 里的 child.kill 死代码,扩展里则干等满 grace 才升级。
+  it('keeps Windows taskkill fallback inside the durable runner and delegates runner termination to the host', () => {
+    // Child PI processes still belong to the durable runner, so its Windows
+    // taskkill fallback remains. The extension no longer owns the runner
+    // process handle; it asks Desktop to terminate through the supported host
+    // process boundary instead.
     expect(CINDY_SUBAGENT_RUNNER_SOURCE).toMatch(
       /const killed = spawnSync\('taskkill'[\s\S]*?if \(killed\.error \|\| killed\.status !== 0\) child\.kill\(signal\);/,
     );
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toMatch(
-      /const killed = spawnSync\('taskkill'[\s\S]*?if \(killed\.error \|\| killed\.status !== 0\) runner\.kill\('SIGKILL'\);/,
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "await requestRunnerControl(ctx, 'terminate', runId)",
     );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("runner.kill('SIGKILL')");
   });
 
   it('records parent start time and checks process identity in the runner watchdog', () => {

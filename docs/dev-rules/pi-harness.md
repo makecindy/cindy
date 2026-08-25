@@ -124,6 +124,16 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
    extension(`cindy-bridge` / `cindy-subagent`)源码字节必须进入 launch identity:
    `CINDY_PI_EXTENSION_BUNDLE_HASH` 只由源码确定,禁止随机数或时间戳;字节不变可 reattach,
    字节变化必须 restart。
+11. **正式包后台脚本启动边界**:Desktop 正式包保持 `RunAsNode=false`,因此 Main 的
+   `process.execPath` 是 Cindy 应用程序,**不是 Node 可执行文件**。Pi Subagent 的 durable
+   runner 必须经 host 注入的 `spawnPiSubagentRunner` 交给 Desktop
+   `utilityProcess.fork` 固定入口执行;扩展与 maker-core 不得再拼
+   `ELECTRON_RUN_AS_NODE=1` 或把 `process.execPath` 写入子代理 env。开发版 / Vitest 里
+   `process.execPath` 恰好可执行 JavaScript 不构成生产证据。打包契约测试必须同时断言
+   `RunAsNode=false`、固定 utility-process 入口在 forge 清单中、Pi host 使用该入口，避免
+   两份各自正确的测试再次掩盖跨模块矛盾。身份校验必须读未截断命令行（POSIX `ps -ww`
+   / Linux `/proc/<pid>/cmdline`）；紧急停止先对 runner pid 发 SIGTERM 再 SIGKILL，
+   禁止 `kill(-pid)` 把 utility-process 当成独立进程组。
 
 ## 5. 已交付(2026-07 里程碑)
 

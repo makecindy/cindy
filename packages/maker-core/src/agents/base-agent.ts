@@ -475,6 +475,27 @@ export interface PiExtensionUiStrings {
   mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
 }
 
+export interface PiSubagentRunnerProcess {
+  readonly pid?: number;
+  readonly killed: boolean;
+  once(event: 'spawn', listener: () => void): this;
+  once(event: 'error', listener: (error: Error) => void): this;
+  once(
+    event: 'exit' | 'close',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): this;
+  kill(signal?: NodeJS.Signals): boolean;
+}
+
+export interface PiSubagentRunnerLaunchRequest {
+  runId: string;
+  runDir: string;
+  runnerFile: string;
+  configFile: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}
+
 export interface AgentDeps {
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
@@ -549,6 +570,15 @@ export interface AgentDeps {
    * interaction surfaces, so maker-core never hard-codes one UI language.
    */
   getPiExtensionUiStrings?: () => PiExtensionUiStrings;
+
+  /**
+   * Pi-only: start a durable Subagent runner through a host-supported Node
+   * process boundary. Desktop injects Electron utilityProcess; maker-core never
+   * assumes that the application executable can run JavaScript.
+   */
+  spawnPiSubagentRunner?: (
+    request: PiSubagentRunnerLaunchRequest,
+  ) => PiSubagentRunnerProcess;
 
   /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new

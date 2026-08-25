@@ -70,6 +70,8 @@ import {
   type PiExtensionUiStrings,
   type PiNativeModelSpec,
   type PiNativeProviderSpec,
+  type PiSubagentRunnerLaunchRequest,
+  type PiSubagentRunnerProcess,
   type SendOptions,
   type StartSessionOptions,
   type TurnPermissionPolicy,
@@ -81,7 +83,7 @@ import {
   CINDY_SUBAGENT_ENV,
   CINDY_SUBAGENT_EXTENSION_FILENAME,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
-  CINDY_SUBAGENT_TOOL_NAME,
+  CINDY_SUBAGENT_RUNNER_CONTROL_TITLE,
 } from './cindy-subagent-source.js';
 import {
   CINDY_SUBAGENT_RUNNER_FILENAME,
@@ -94,12 +96,14 @@ import {
   controlPiSubagentRuns,
   countPiSubagentRunDirectories,
   isPiSubagentTerminal,
+  killVerifiedPiSubagentRunner,
   listPiSubagentRunDiagnostics,
   listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
   piSubagentRunRoot,
   piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
+  recordPiSubagentRunnerFailure,
   resumePiSubagentRun,
   stopPiSubagentRunsForAccountBoundary,
   syncPiSubagentPermissions,
@@ -226,8 +230,11 @@ const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
 const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
+const PI_LEGACY_SUBAGENT_NODE_ENV = 'CINDY_PI_SUBAGENT_NODE';
+const PI_ELECTRON_RUN_AS_NODE_ENV = 'ELECTRON_RUN_AS_NODE';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
+const PI_SUBAGENT_RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 /** 轮 42 P1:models.json 内容指纹(远端 daemon 启动身份的一部分, 值无凭证)。 */
 const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
@@ -953,11 +960,74 @@ export class PiAgent extends BaseAgent {
   readonly capabilities: Capabilities;
   private readonly failedStartupCleanups = new Map<string, FailedPiStartupCleanup>();
   private readonly inFlightStartups = new Set<Promise<AgentSessionHandle>>();
+  private readonly subagentRunners = new Map<string, PiSubagentRunnerProcess>();
   private disposeStarted = false;
 
   constructor(deps: AgentDeps) {
     super(deps);
     this.capabilities = this.buildCapabilities(PiAgent.baseCapabilities());
+  }
+
+  private async launchSubagentRunner(request: PiSubagentRunnerLaunchRequest): Promise<void> {
+    const spawnRunner = this.deps.spawnPiSubagentRunner;
+    if (!spawnRunner) throw new Error('PI Subagent runner host is unavailable');
+    if (this.subagentRunners.has(request.runId)) return;
+
+    const runner = spawnRunner(request);
+    this.subagentRunners.set(request.runId, runner);
+    const recordFailure = (message: string): void => {
+      if (this.subagentRunners.get(request.runId) === runner) {
+        this.subagentRunners.delete(request.runId);
+      }
+      void recordPiSubagentRunnerFailure(request.runDir, message).catch((error) => {
+        this.deps.logger.warn('pi Subagent runner failure status could not be persisted', {
+          runId: request.runId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+    runner.once('error', (error) => {
+      recordFailure(`Durable runner failed: ${error.message}`);
+    });
+    runner.once('exit', (code, signal) => {
+      recordFailure(
+        `Durable runner exited${signal ? ` with signal ${signal}` : ''}`
+          + (typeof code === 'number' ? ` with code ${code}` : ''),
+      );
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      const timer = setTimeout(() => {
+        runner.kill('SIGKILL');
+        finish(new Error('PI Subagent runner did not become ready'));
+      }, 5_000);
+      runner.once('spawn', () => finish());
+      runner.once('error', (error) => finish(error));
+      runner.once('exit', (code, signal) => {
+        finish(new Error(
+          `PI Subagent runner exited before ready${signal ? ` (${signal})` : ''}`
+            + (typeof code === 'number' ? ` (exit ${code})` : ''),
+        ));
+      });
+    });
+  }
+
+  private async terminateSubagentRunner(runId: string, runDir: string): Promise<boolean> {
+    const runner = this.subagentRunners.get(runId);
+    if (runner) {
+      this.subagentRunners.delete(runId);
+      return runner.kill('SIGTERM');
+    }
+    const status = (await listPiSubagentRuns(path.dirname(runDir))).find((entry) => entry.runId === runId);
+    return status ? killVerifiedPiSubagentRunner(status) : false;
   }
 
   private async retryFailedStartupCleanup(
@@ -984,6 +1054,8 @@ export class PiAgent extends BaseAgent {
 
   override async dispose(): Promise<void> {
     this.disposeStarted = true;
+    for (const runner of this.subagentRunners.values()) runner.kill('SIGTERM');
+    this.subagentRunners.clear();
     const startupSnapshot = Array.from(this.inFlightStartups);
     await Promise.allSettled(startupSnapshot);
 
@@ -1966,7 +2038,11 @@ export class PiAgent extends BaseAgent {
     // the remote host while Cindy observes and controls an unrelated local
     // directory. Keep the capability absent until the wire protocol owns those
     // files remotely end-to-end.
-    const localSubagentSupported = !reviewMode && !remote;
+    const localSubagentSupported = Boolean(
+      !reviewMode
+      && !remote
+      && this.deps.spawnPiSubagentRunner,
+    );
     if (localSubagentSupported) {
       await writeFile(subagentExtensionPath, CINDY_SUBAGENT_EXTENSION_SOURCE);
       await writeFile(subagentRunnerPath, CINDY_SUBAGENT_RUNNER_SOURCE, 0o600);
@@ -2188,7 +2264,7 @@ export class PiAgent extends BaseAgent {
      * 用它当"撤销开关"(上一版就是这么用的,那是个空操作,review 连点两轮)。运行期要收回子代理
      * 能力只有一条可证明有效的路:终止会话。
      */
-    let subagentRoutingEnabled = localSubagentSupported;
+    const subagentRoutingEnabled = localSubagentSupported;
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean }): Promise<boolean> => {
       const gen = ++subagentRuntimeWriteGen;
@@ -3710,7 +3786,6 @@ export class PiAgent extends BaseAgent {
           [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile,
           [CINDY_SUBAGENT_ENV.runRoot]: subagentRunRoot,
           [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
-          [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
           [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
         } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
@@ -3724,7 +3799,14 @@ export class PiAgent extends BaseAgent {
       // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
       // 所有 casing 再写入 host 校验并 stage 后的唯一绝对路径。
       for (const key of Object.keys(spawnEnv)) {
-        if (key.toLowerCase() === PI_MANAGED_RG_PATH_ENV.toLowerCase()) delete spawnEnv[key];
+        const normalizedKey = key.toLowerCase();
+        if (
+          normalizedKey === PI_MANAGED_RG_PATH_ENV.toLowerCase()
+          || normalizedKey === PI_LEGACY_SUBAGENT_NODE_ENV.toLowerCase()
+          || normalizedKey === PI_ELECTRON_RUN_AS_NODE_ENV.toLowerCase()
+        ) {
+          delete spawnEnv[key];
+        }
       }
       if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
       // 轮 42 P1:models.json 内容 hash 进 spawn env —— 远端 daemon 的 envHash
@@ -3787,6 +3869,32 @@ export class PiAgent extends BaseAgent {
               remote: Boolean(opts.remoteHostId),
               allowPiPackageManagement,
               piPackageManagementToken,
+              controlSubagentRunner: async (action, runId) => {
+                if (!localSubagentSupported || !PI_SUBAGENT_RUN_ID_RE.test(runId)) {
+                  throw new Error('PI Subagent runner request is unavailable');
+                }
+                const status = (await listPiSubagentRuns(subagentRunRoot))
+                  .find((candidate) => candidate.runId === runId);
+                if (!status || status.runtimeOwnerId !== subagentRuntimeOwnerId) {
+                  throw new Error('PI Subagent runner request does not belong to this task');
+                }
+                const runDir = path.join(subagentRunRoot, runId);
+                if (action === 'terminate') {
+                  return this.terminateSubagentRunner(runId, runDir);
+                }
+                if (isPiSubagentTerminal(status.state)) {
+                  throw new Error('PI Subagent runner request is already terminal');
+                }
+                await this.launchSubagentRunner({
+                  runId,
+                  runDir,
+                  runnerFile: path.join(runDir, 'runner.cjs'),
+                  configFile: path.join(runDir, 'config.json'),
+                  cwd: opts.workingDir,
+                  env: durableSpawnEnv,
+                });
+                return true;
+              },
               emitExtensionNotification: (message, event) => {
                 const text = shouldRewriteContextModeDoctorNotification(
                   message,
@@ -4324,6 +4432,8 @@ export class PiAgent extends BaseAgent {
       throw err;
     }
 
+    const launchSubagentRunner = (request: PiSubagentRunnerLaunchRequest): Promise<void> =>
+      this.launchSubagentRunner(request);
     const deps = this.deps;
     const agentKind = this.kind;
 
@@ -5122,7 +5232,7 @@ export class PiAgent extends BaseAgent {
             fs.readFile(subagentRunnerPath),
           ]);
           const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
-            nodeExecutable: process.execPath,
+            launchRunner: launchSubagentRunner,
             env: durableSpawnEnv,
             runtimeOwnerId: subagentRuntimeOwnerId,
             permissionSnapshot: {
@@ -5906,6 +6016,10 @@ export class PiAgent extends BaseAgent {
       remote: boolean;
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
+      controlSubagentRunner: (
+        action: 'launch' | 'terminate',
+        runId: string,
+      ) => Promise<boolean>;
       emitExtensionNotification: (message: string, event?: PiRpcEvent) => void;
       notifyUnsupportedExtensionUi: (method: string, reason: 'unsupported-ui' | 'timed-dialog') => void;
       /**
@@ -5942,6 +6056,45 @@ export class PiAgent extends BaseAgent {
         message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH),
         event,
       );
+      return;
+    }
+
+    if (method === 'input' && event.title === CINDY_SUBAGENT_RUNNER_CONTROL_TITLE) {
+      const context = getPermissionCtx();
+      if (context.remote || context.isAccountBoundaryTornDown()) {
+        proc.send({ type: 'extension_ui_response', id, cancelled: true });
+        return;
+      }
+      void (async () => {
+        try {
+          const payload = JSON.parse(
+            typeof event.placeholder === 'string' ? event.placeholder : '{}',
+          ) as { action?: unknown; runId?: unknown };
+          if (
+            (payload.action !== 'launch' && payload.action !== 'terminate')
+            || typeof payload.runId !== 'string'
+            || !PI_SUBAGENT_RUN_ID_RE.test(payload.runId)
+          ) {
+            throw new Error('Invalid PI Subagent runner request');
+          }
+          const accepted = await context.controlSubagentRunner(payload.action, payload.runId);
+          proc.send({
+            type: 'extension_ui_response',
+            id,
+            value: JSON.stringify({ ok: accepted }),
+          });
+        } catch (error) {
+          this.deps.logger.warn('pi Subagent runner control failed', {
+            sessionId: context.sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          proc.send({
+            type: 'extension_ui_response',
+            id,
+            value: JSON.stringify({ ok: false, error: 'PI Subagent runner control failed' }),
+          });
+        }
+      })();
       return;
     }
 
