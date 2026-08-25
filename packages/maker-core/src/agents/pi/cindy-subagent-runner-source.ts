@@ -274,6 +274,7 @@ function main() {
       scheduled: false,
       toolUses: 0,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usageSegments: [],
       output: '',
       outputTruncated: false,
       error: undefined,
@@ -317,6 +318,7 @@ function main() {
       addUsage(usage, task.usage);
       toolUses += task.toolUses;
     }
+    const usageSegments = tasks.flatMap(function (task) { return task.usageSegments; });
     return {
       version: STATUS_VERSION,
       runId: config.runId,
@@ -343,6 +345,7 @@ function main() {
       toolUses: toolUses,
       totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
       usage: usage,
+      usageSegments: usageSegments,
       transcriptPath: transcriptPath,
       resultPath: state.resultWritten ? resultPath : undefined,
       tasks: tasks.map(function (task) {
@@ -358,6 +361,7 @@ function main() {
           thinking: task.thinking,
           toolUses: task.toolUses,
           usage: task.usage,
+          usageSegments: task.usageSegments,
           // message_end is already a complete generation result even if Pi
           // keeps the RPC process alive for follow-up. Publish it immediately
           // so the host can hide late Steer before writing a doomed control.
@@ -886,7 +890,19 @@ function main() {
             task.output = bounded.value;
             task.outputTruncated = bounded.truncated;
           }
-          addUsage(task.usage, usageOf(event.message));
+          const requestUsage = usageOf(event.message);
+          addUsage(task.usage, requestUsage);
+          task.usageSegments.push({
+            id: task.childId + ':' + String(task.usageSegments.length + 1),
+            model: typeof event.message.model === 'string' && event.message.model
+              ? event.message.model
+              : (task.displayModel || task.model),
+            input: requestUsage.input,
+            output: requestUsage.output,
+            cacheRead: requestUsage.cacheRead,
+            cacheWrite: requestUsage.cacheWrite,
+            cost: requestUsage.cost,
+          });
           scheduleStatus();
           return;
         }
@@ -1131,6 +1147,7 @@ function main() {
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
           usage: task.usage,
+          usageSegments: task.usageSegments,
           toolUses: task.toolUses,
         };
       }),

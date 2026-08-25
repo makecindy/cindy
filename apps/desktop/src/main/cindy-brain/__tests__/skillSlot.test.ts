@@ -70,7 +70,6 @@ function ghost(
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['skill'],
     skill: {
       items: skills.map((s) => ({ ...s, description: s.description ?? '说明' })),
     },
@@ -662,13 +661,13 @@ describe('skillSlot · 全链路(打包 → 装入 → 对账 → 双端可见)'
     await write(
       'ghost.json',
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
+        minCindyVersion: '0.1.61',
         id: 'e2e-ghost',
         name: '全链路演示',
         version: '1.0.0',
         kind: 'chip',
         entry: 'main.js',
-        slots: ['tool', 'skill'],
         tools: [{ name: 'do_thing', description: '做点事' }],
         skill: { items: [{ dir: 'skills/demo', name: 'demo', description: '演示技能' }] },
       }),

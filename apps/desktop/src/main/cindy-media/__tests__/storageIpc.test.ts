@@ -98,6 +98,7 @@ function makeHandlers(overrides?: {
   queueTexts?: string[];
   snapshotPayloads?: string[];
   registeredDraftUrls?: string[];
+  openLegacyImagesDir?: () => Promise<boolean>;
 }) {
   return createStorageIpcHandlers({
     getQueueScanTexts: () => overrides?.queueTexts ?? [],
@@ -105,6 +106,7 @@ function makeHandlers(overrides?: {
     getRegisteredDraftUrls: () => overrides?.registeredDraftUrls ?? [],
     db,
     legacyRootDir: legacyRoot,
+    openLegacyImagesDir: overrides?.openLegacyImagesDir ?? (async () => false),
   });
 }
 
@@ -120,7 +122,7 @@ describe('stats(占用总览)', () => {
     expect(res.blobs.totalCount).toBe(2);
     expect(res.blobs.totalBytes).toBe(a.bytes + c.bytes);
     expect(res.blobs.cacheBytes).toBe(c.bytes);
-    expect(res.legacy.bytes).toBe(6); // 'legacy'
+    expect(res.legacy.bytes).toBe(0); // Settings mount never walks the legacy image root.
     expect(res.deadDirs).toHaveLength(3);
   });
 });
@@ -217,5 +219,15 @@ describe('reconcile(体检只报不删)', () => {
     expect(res.missingSamples).toEqual([`${missing.hash}${missing.ext}`]);
     // 账本行仍在(只报不删)。
     expect(await ledger.getBlobInfo(missing.hash, db)).not.toBeNull();
+  });
+});
+
+describe('legacy images directory', () => {
+  it('opens only through the fixed-purpose main dependency', async () => {
+    const openLegacyImagesDir = vi.fn(async () => true);
+    const result = await makeHandlers({ openLegacyImagesDir }).openLegacyImagesDir();
+
+    expect(result).toEqual({ opened: true });
+    expect(openLegacyImagesDir).toHaveBeenCalledWith();
   });
 });

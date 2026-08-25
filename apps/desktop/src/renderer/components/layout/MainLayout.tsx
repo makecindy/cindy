@@ -79,7 +79,6 @@ import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
 import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
 import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast';
-import { usePluginUpgradeNoticeToast } from '@/hooks/usePluginUpgradeNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
@@ -477,7 +476,6 @@ export function MainLayout() {
   useVoiceInputShortcutRecoveryToast();
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
-  usePluginUpgradeNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
 
@@ -1168,7 +1166,7 @@ export function MainLayout() {
           navigate('/cc-agent/new');
           return true;
         case 'settings':
-          navigate('/settings?tab=shortcuts&workLouderCodex=1');
+          navigate('/settings?tab=shortcuts');
           return true;
         case 'manageTasks':
           navigate('/cc-agent/scheduled');
@@ -1187,6 +1185,9 @@ export function MainLayout() {
           return true;
         case 'navigateForward':
           navigate(1);
+          return true;
+        case 'toggleFullscreen':
+          void window.electronAPI?.toggleFullscreen?.();
           return true;
         case 'toggleSidebar':
           handleToggleSidebar();

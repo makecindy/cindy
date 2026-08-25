@@ -17,9 +17,10 @@
  *     没有才发新 key。markdown 结构变化(列表标记吃掉 "2. "、加粗闭合劈开文本
  *     节点、Segmenter 对 chunk 尾部的切分变化)只会让**词序号**漂移,key 不漂 ——
  *     漂移序号曾让已稳定的整片前文被当新词重淡(2026-08-08 实测)。
- *   - **settled 落袋 + settled 前缀还原纯文本**:span 带 data-wf-key,
- *     MarkdownRenderer 根节点监听冒泡的 animationend(markSettledFromAnimationEnd),
- *     播完的 key 进 state.settled;settled 词从槽位中还原为合并后的原生文本,
+ *   - **settled 落袋 + settled 前缀还原纯文本**:span 带 data-wf-key,作为 HAST
+ *     到 React renderer 的逻辑身份通道;StreamFadeSpan 用该 key 控制真实 DOM
+ *     remount,并由每个 span 的 animationend 闭包把自身 key 放进 state.settled。
+ *     settled 词从槽位中还原为合并后的原生文本,
  *     settled inline code 则恢复原始 code 节点,
  *     只保留仍在播放的尾部 span——流式长文档的元素数因此回落到与无动效渲染
  *     同阶,react-markdown 每 tick 的重建 + diff 不随已播完的前文线性涨
@@ -95,6 +96,9 @@ export interface WordFadeState {
   nowFn?: () => number;
 }
 
+/** 与 globals.css 的 --motion-fast 保持一致,用于 animationend 丢失时的到期兜底。 */
+const FADE_DURATION_MS = 150;
+
 export function createWordFadeState(): WordFadeState {
   return {
     nextId: 0,
@@ -163,19 +167,9 @@ export function _resetWordFadeStateCacheForTests(): void {
   wordFadeStateCache.clear();
 }
 
-/**
- * animationend 落袋入口:MarkdownRenderer 根节点上监听冒泡的 animationend,
- * 把播完 stream-word-in 的段 key 记进 state.settled。按动画名过滤 —— 同一子树里
- * 其它动画(代码高亮、chip 等)的 animationend 不误伤。
- */
-export function markSettledFromAnimationEnd(
-  state: WordFadeState,
-  event: { animationName: string; target: EventTarget | null },
-): void {
-  if (event.animationName !== 'stream-word-in') return;
-  const target = event.target as { dataset?: { wfKey?: string } } | null;
-  const key = target?.dataset?.wfKey;
-  if (key) state.settled.add(key);
+/** animationend 闭包的落袋入口;身份来自 render 时捕获的 key,不读取可变 DOM dataset。 */
+export function markWordFadeSettled(state: WordFadeState, key: string): void {
+  state.settled.add(key);
 }
 
 /** 整棵子树跳过(不进入):块级代码、非正文节点与公式内部结构。 */
@@ -503,6 +497,14 @@ export const rehypeStreamWordFade: Plugin<[WordFadeState], Root> = (state) => {
     // pass 3:回填 span。同 tick 新段全部 0ms 开始,旧段按绝对开播时刻续播。
     // 槽位从后往前 splice,前面槽位的 index 不受影响。
     const nowMs = (state.nowFn ?? (() => performance.now()))();
+    // 结构变化会让活动 span remount,旧节点因此可能收不到 animationend。超过动画
+    // 时长的已开播段直接落袋,避免它永久保留活动包装。
+    for (const key of keys) {
+      const startAt = state.startAtByKey.get(key);
+      if (startAt !== undefined && nowMs - startAt >= FADE_DURATION_MS) {
+        state.settled.add(key);
+      }
+    }
     const nodesBySlot = slots.map((slot) => {
       // 全 settled 槽位不改树(性能核心,见 isSlotFullySettled 注释)。
       if (isSlotFullySettled(slot, keys, state)) return null;

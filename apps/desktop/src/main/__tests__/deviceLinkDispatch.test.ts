@@ -43,6 +43,7 @@ import {
   isDeviceLinkInvoke,
 } from '../device-link/invoke-context';
 import * as subscriptions from '../device-link/subscriptions';
+import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection';
 
 beforeEach(() => {
   remoteControlEnabled = true;
@@ -2448,7 +2449,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     'issue_confirm',
     'rename_sessions_confirm',
     'ghost_grant_confirm',
-  ])('device-link does not forward Desktop-only %s live pushes', (kind) => {
+  ])('device-link forwards a redacted Desktop-only %s live status', (kind) => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
@@ -2464,7 +2465,46 @@ describe('被控端订阅 registry + topic 转发', () => {
       },
     });
 
-    expect(calls.push).toEqual([]);
+    expect(calls.push).toHaveLength(1);
+    expect(calls.push[0]).toMatchObject({
+      dst: 'ctrl-a',
+      channel: MAKER_PUSH.INTERACTION_REQUEST,
+      payload: {
+        sessionId: 's1',
+        request: { kind, requestId: expect.stringMatching(/^desktop-confirm-/) },
+      },
+    });
+    expect(JSON.stringify(calls.push[0].payload)).not.toContain('private');
+    expect(JSON.stringify(calls.push[0].payload)).not.toContain(`${kind}-1`);
+  });
+
+  it('device-link dismisses a Desktop-only status with its opaque request id', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
+
+    const sourceRequestId = createDesktopOnlyConfirmationRequestId();
+    tapWindowBroadcast(MAKER_PUSH.INTERACTION_REQUEST, {
+      sessionId: 's1',
+      request: { kind: 'issue_confirm', requestId: sourceRequestId, draft: { title: 'private' } },
+    });
+    const remoteRequestId = (calls.push[0].payload as {
+      request: { requestId: string };
+    }).request.requestId;
+
+    tapWindowBroadcast(MAKER_PUSH.INTERACTION_DISMISSED, {
+      sessionId: 's1',
+      requestId: sourceRequestId,
+      reason: 'resolved',
+    });
+
+    expect(calls.push[1]).toMatchObject({
+      dst: 'ctrl-a',
+      channel: MAKER_PUSH.INTERACTION_DISMISSED,
+      payload: { sessionId: 's1', requestId: remoteRequestId, reason: 'resolved' },
+    });
+    expect(JSON.stringify(calls.push[1].payload)).not.toContain(sourceRequestId);
   });
 
   it('explicit unsubscribe removes the final remembered topic and stops the tap', () => {

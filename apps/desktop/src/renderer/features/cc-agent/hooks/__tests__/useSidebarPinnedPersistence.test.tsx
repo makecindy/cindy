@@ -21,6 +21,7 @@ const SNAPSHOT = {
   pinnedOrderIsAuthoritative: false,
   pinnedOrder: [] as string[],
   hiddenProjectKeys: [] as string[],
+  hiddenMainViewGhostIds: [] as string[],
 };
 
 type PinnedListener = (order: string[], ownerStamp: DataOwnerPushStamp) => void;
@@ -435,6 +436,7 @@ describe('pinned sidebar persistence', () => {
       pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     });
 
     const view = renderFilter();
@@ -494,6 +496,7 @@ describe('pinned sidebar persistence', () => {
       pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     };
     window.electronAPI.sidebarSettings.loadSnapshot = () => ownerBSnapshot;
     mutatePinnedOrder.mockClear();

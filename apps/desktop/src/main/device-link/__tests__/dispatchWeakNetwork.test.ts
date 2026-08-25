@@ -11,7 +11,14 @@
  * mock 面与 dispatchSendSafety.test.ts 一致:只 mock electron + settings。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { DeviceLinkError, INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
+import {
+  DeviceLinkClient,
+  DeviceLinkError,
+  DL_SUBSCRIBE_CHANNEL,
+  INVOKE_TIMEOUT_OVERRIDES_MS,
+  PROTOCOL_VERSION,
+  type Envelope,
+} from '@cindy/device-link';
 
 vi.mock('electron', () => ({
   app: {
@@ -35,19 +42,26 @@ vi.mock('../settings-store', () => ({
 
 import {
   __testing,
+  deactivateAllControllers,
+  deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
+  setControllersChangedListener,
   setDispatchPresenceOfflineCheck,
+  wireInboundDispatch,
 } from '../dispatch';
+import * as subscriptions from '../subscriptions';
 
 function mkClient(
   over: Partial<{
+    getConnectionEpoch: ReturnType<typeof vi.fn>;
     getStatus: ReturnType<typeof vi.fn>;
     sendInvokeResult: ReturnType<typeof vi.fn>;
     sendLinkAccept: ReturnType<typeof vi.fn>;
   }> = {},
 ) {
   return {
+    getConnectionEpoch: over.getConnectionEpoch ?? vi.fn(() => 1),
     getStatus: over.getStatus ?? vi.fn(() => 'online'),
     sendInvokeResult: over.sendInvokeResult ?? vi.fn(),
     sendLinkAccept: over.sendLinkAccept ?? vi.fn(),
@@ -59,6 +73,142 @@ function mkClient(
 
 const backpressure = () => new DeviceLinkError('BACKPRESSURE', 'websocket send buffer is full');
 const notConnected = () => new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
+
+type LinkedWsHandler = (...args: never[]) => void;
+
+/** 只保留这轮回归需要的最小内存 relay:真实 DeviceLinkClient 互相建链,可按目的地注入离线。 */
+class DispatchTestWs {
+  readonly sent: Envelope[] = [];
+  readonly bufferedAmount = 0;
+  private readonly handlers = new Map<string, LinkedWsHandler[]>();
+
+  constructor(
+    private readonly relay: DispatchTestRelay,
+    readonly ownerId: string,
+  ) {}
+
+  send(data: string): void {
+    const envelope = JSON.parse(data) as Envelope;
+    this.sent.push(envelope);
+    this.relay.route(this.ownerId, this, envelope);
+  }
+
+  close(code = 1000, reason = ''): void {
+    this.emit('close', code, reason);
+  }
+
+  terminate(): void {
+    this.emit('close', 1006, 'terminated');
+  }
+
+  on(event: string, cb: LinkedWsHandler): void {
+    const handlers = this.handlers.get(event) ?? [];
+    handlers.push(cb);
+    this.handlers.set(event, handlers);
+  }
+
+  push(envelope: Envelope): void {
+    this.emit('message', { toString: () => JSON.stringify(envelope) });
+  }
+
+  open(): void {
+    this.emit('open');
+  }
+
+  private emit(event: string, ...args: unknown[]): void {
+    for (const cb of this.handlers.get(event) ?? []) cb(...(args as never[]));
+  }
+}
+
+class DispatchTestRelay {
+  private readonly sockets = new Map<string, DispatchTestWs>();
+  private holdPredicate: ((senderId: string, envelope: Envelope) => boolean) | null = null;
+  private readonly held: Array<{ senderId: string; envelope: Envelope }> = [];
+  readonly offline = new Set<string>();
+
+  makeWebSocket(deviceId: string): DispatchTestWs {
+    const socket = new DispatchTestWs(this, deviceId);
+    this.sockets.set(deviceId, socket);
+    setTimeout(() => socket.open(), 0);
+    return socket;
+  }
+
+  holdNext(predicate: (senderId: string, envelope: Envelope) => boolean): void {
+    this.holdPredicate = predicate;
+  }
+
+  heldCount(): number {
+    return this.held.length;
+  }
+
+  releaseHeld(): void {
+    const held = this.held.splice(0);
+    this.holdPredicate = null;
+    for (const item of held) this.deliver(item.senderId, item.envelope);
+  }
+
+  route(senderId: string, socket: DispatchTestWs, envelope: Envelope): void {
+    if (envelope.kind === 'hello') {
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'hello-ack',
+        payload: {
+          serverProtocolVersion: PROTOCOL_VERSION,
+          deviceId: senderId,
+          userId: 'test-user',
+        },
+      });
+      return;
+    }
+    if (!envelope.dst) return;
+    if (this.offline.has(envelope.dst)) {
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'relay-error',
+        payload: {
+          code: 'DEVICE_OFFLINE',
+          message: 'target device offline',
+          dst: envelope.dst,
+        },
+      });
+      return;
+    }
+    if (this.holdPredicate?.(senderId, envelope)) {
+      this.held.push({ senderId, envelope });
+      this.holdPredicate = null;
+      return;
+    }
+    this.deliver(senderId, envelope);
+  }
+
+  private deliver(senderId: string, envelope: Envelope): void {
+    const destination = envelope.dst ? this.sockets.get(envelope.dst) : undefined;
+    if (!destination) return;
+    destination.push({ ...envelope, src: senderId });
+  }
+}
+
+function makeDispatchTestClient(relay: DispatchTestRelay, deviceId: string): DeviceLinkClient {
+  return new DeviceLinkClient({
+    getWsUrl: () => 'ws://test/api/device-link/ws',
+    getToken: async () => 'jwt-token',
+    getHello: () => ({
+      deviceName: deviceId,
+      platform: 'darwin',
+      appVersion: '1.0.0',
+      remoteControlEnabled: true,
+      busy: false,
+    }),
+    createWebSocket: () => relay.makeWebSocket(deviceId) as never,
+    timing: {
+      reconnectBaseMs: 5,
+      reconnectMaxMs: 20,
+      pingIntervalMs: 60_000,
+      pongMissLimit: 4,
+      requestTimeoutMs: 2_000,
+    },
+  });
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -470,5 +620,123 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
     expect(__testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session')).toBe(
       compactBudget * 2,
     );
+  });
+});
+
+describe('[6] active controller 生命周期与故障半径', () => {
+  it('真实双 peer 链路中 A 的 DEVICE_OFFLINE 不清 B，B 的在途请求仍能完成', async () => {
+    vi.useRealTimers();
+    const relay = new DispatchTestRelay();
+    const target = makeDispatchTestClient(relay, 'target');
+    const controllerA = makeDispatchTestClient(relay, 'ctrl-a');
+    const controllerB = makeDispatchTestClient(relay, 'ctrl-b');
+
+    wireInboundDispatch(target);
+    __testing.setActiveClient(target);
+    const routeChanges: string[] = [];
+    target.onPeerRouteStateChanged((change) => {
+      routeChanges.push(`${change.deviceId}:${change.state}`);
+      if (change.state === 'offline') handleControllerOffline(change.deviceId, change);
+    });
+    target.start();
+    controllerA.start();
+    controllerB.start();
+    await vi.waitFor(() => {
+      expect(target.getStatus()).toBe('online');
+      expect(controllerA.getStatus()).toBe('online');
+      expect(controllerB.getStatus()).toBe('online');
+    });
+
+    const openPayload = {
+      controllerName: 'controller',
+      protocolVersion: 1,
+      appVersion: '1.0.0',
+    };
+    await Promise.all([
+      controllerA.openLink('target', openPayload),
+      controllerB.openLink('target', openPayload),
+    ]);
+    await expect(controllerA.invoke('target', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:a'], controllerName: 'A', capabilities: ['cap-a'] }],
+    })).resolves.toMatchObject({ ok: true });
+
+    relay.holdNext((senderId, envelope) => (
+      senderId === 'target' && envelope.dst === 'ctrl-b' && envelope.kind === 'invoke-result'
+    ));
+    const pendingFromB = controllerB.invoke('target', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:b'], controllerName: 'B', capabilities: ['cap-b'] }],
+    });
+    await vi.waitFor(() => expect(relay.heldCount()).toBe(1));
+
+    // 模拟 relay 对 target→A 的真实路由错误:DeviceLinkClient 先发 typed offline,
+    // 再由 host 接入唯一的 deactivateController 状态转换。
+    relay.offline.add('ctrl-a');
+    target.sendInvokeResult('ctrl-a', 'offline-probe', { ok: true, result: null });
+
+    expect(routeChanges).toContain('ctrl-a:offline');
+    expect(__testing.getActiveControllers().map((controller) => controller.deviceId).sort()).toEqual([
+      'ctrl-b',
+    ]);
+    expect(subscriptions.getKnownControllersForTopic('session:a')).toEqual(['ctrl-a']);
+    expect(subscriptions.getKnownControllersForTopic('session:b')).toEqual(['ctrl-b']);
+    expect(__testing.controllerSupports('ctrl-a', 'cap-a')).toBe(true);
+
+    relay.releaseHeld();
+    await expect(pendingFromB).resolves.toMatchObject({ ok: true });
+    // B 的 invoke 在 A 失活期间仍完成,证明同一 relay 上的 B 控制方向未被拆掉。
+
+    target.stop();
+    controllerA.stop();
+    controllerB.stop();
+  });
+
+  it('relay 断开清空所有 active projection，但保留 remembered topics/capabilities', () => {
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', ['cap-a']);
+    subscriptions.subscribe('ctrl-b', ['fs-watch:/repo'], 'B', ['cap-b']);
+    const changes: Array<{ active: string[]; updateRelaunch: string[] }> = [];
+    setControllersChangedListener((active, updateRelaunch) => {
+      changes.push({
+        active: active.map((controller) => controller.deviceId),
+        updateRelaunch: updateRelaunch.map((controller) => controller.deviceId),
+      });
+    });
+
+    deactivateAllControllers('relay-disconnected');
+
+    expect(__testing.getActiveControllers()).toEqual([]);
+    expect(__testing.getUpdateRelaunchControllers()).toEqual([]);
+    expect(subscriptions.getKnownControllersForTopic('session:a')).toEqual(['ctrl-a']);
+    expect(subscriptions.getKnownControllersForTopic('fs-watch:/repo')).toEqual(['ctrl-b']);
+    expect(__testing.controllerSupports('ctrl-a', 'cap-a')).toBe(true);
+    expect(__testing.controllerSupports('ctrl-b', 'cap-b')).toBe(true);
+    expect(changes.at(-1)).toEqual({ active: [], updateRelaunch: [] });
+  });
+
+  it('旧 connection epoch 的 offline 事件不能清掉新 link-open 的 active controller', () => {
+    let connectionEpoch = 1;
+    const client = mkClient({ getConnectionEpoch: vi.fn(() => connectionEpoch) });
+    __testing.setActiveClient(client as never);
+
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-old', undefined);
+    connectionEpoch = 2;
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-new', undefined);
+
+    handleControllerOffline('ctrl-a', {
+      deviceId: 'ctrl-a',
+      state: 'offline',
+      connectionEpoch: 1,
+    });
+    expect(__testing.getActiveControllers().map((controller) => controller.deviceId)).toEqual([
+      'ctrl-a',
+    ]);
+
+    handleControllerOffline('ctrl-a', {
+      deviceId: 'ctrl-a',
+      state: 'offline',
+      connectionEpoch: 2,
+    });
+    expect(__testing.getActiveControllers()).toEqual([]);
   });
 });

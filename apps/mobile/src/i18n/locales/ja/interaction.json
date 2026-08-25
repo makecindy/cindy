@@ -37,7 +37,7 @@
     "queuePositionNth": "{{index}} 番目",
     "composerBlockedByPending": "パソコンからの保留中のリクエストを処理してから入力を続けてください。",
     "missingRequestId": "このリモート操作には requestId がないため、決定を返信できません。",
-    "issueConfirmUnsupported": "Issue の送信確認はパソコンでのみ行えます。デスクトップアプリに戻って確認またはキャンセルしてください。",
+    "desktopConfirmUnsupported": "この確認は操作対象のパソコンでのみ処理できます。デスクトップアプリに戻って続けてください。",
     "unsupportedType": "このリモート操作タイプはモバイルではまだ対応していません。",
     "unsupportedKind": "未対応",
     "desktopOnlyKind": "パソコンで処理",
@@ -106,6 +106,14 @@
     "issue_confirm": {
       "title": "Issue の内容を確認してください",
       "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "セッション名の変更を確認してください",
+      "label": "名前変更"
+    },
+    "ghost_grant_confirm": {
+      "title": "ファイルアクセスを確認してください",
+      "label": "ファイルアクセス"
     },
     "plugin_setup": {
       "title": "パソコンでプラグインの設定が必要です",

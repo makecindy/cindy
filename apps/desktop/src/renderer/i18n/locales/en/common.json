@@ -94,6 +94,7 @@
     "tabs": {
       "general": "General",
       "billing": "Usage and billing",
+      "usage": "Usage history",
       "personalization": "Personalization",
       "apiKeys": "Tool Keys",
       "voiceInput": "Voice Input",
@@ -130,6 +131,7 @@
       "chipMetrics": "Usage indicator",
       "memory": "Memory",
       "subagentModels": "Subagents",
+      "auxiliaryModels": "Auxiliary models",
       "visionBridge": "Vision Bridge",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
@@ -720,6 +722,13 @@
         "item2": "Break large tasks into multiple turns: understand first, edit second, verify third.",
         "item3": "Create a new session for independent problems instead of mixing everything into one thread."
       },
+      "linuxUpdates": {
+        "title": "Linux install and updates",
+        "description": "Linux currently ships as a .deb for Ubuntu 22.04 / 24.04. When a newer build is available, the app downloads it and asks for your system password to install.",
+        "item1": "First install with sudo apt install ./cindy-<version>-<arch>.deb (amd64 on x64, arm64 on arm64).",
+        "item2": "In-app updates download the .deb. After you choose Update, a system prompt installs it over the current package.",
+        "item3": "Linux does not offer the beta channel or idle auto-install, because installing requires your password."
+      },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
       "qnaPlaceholder": "For example: how do I import a Codex session?",
@@ -778,6 +787,7 @@
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
+      "linuxUpdateDescription": "When a newer build is available, Cindy downloads the .deb in the app. Installing it asks for your system password, so updates are not applied while idle.",
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
@@ -815,6 +825,11 @@
         "usageValue": "{{size}} ({{count}} files, {{cacheSize}} cache)",
         "statsFailed": "Stats temporarily unavailable",
         "legacyUsage": "Legacy data (read-only, not part of cleanup): {{size}}",
+        "legacyImagesLabel": "Image cache directory",
+        "legacyImagesDescription": "Cindy does not scan or clean this directory automatically. Deleting files may make images in message history unavailable; review them before deleting.",
+        "legacyImagesOpenButton": "Open directory",
+        "legacyImagesDirectoryMissing": "The image cache directory was not found",
+        "legacyImagesOpenFailed": "Could not open the image cache directory. Try again.",
         "cleanupLabel": "Disk cleanup",
         "cleanupDescription": "Scans for media files no session references anymore, oversized caches, and obsolete folders. Shows the numbers first and deletes only after you confirm; images in composer drafts and queued messages are protected automatically.",
         "scanButton": "Scan",
@@ -1050,6 +1065,13 @@
           "cancel": "Cancel",
           "edit": "Edit",
           "delete": "Delete",
+          "termLabel": "Term",
+          "aliasSeparator": ", ",
+          "aliases": "Often misheard as: {{aliases}}",
+          "aliasesEditLabel": "Often misheard as",
+          "aliasesEditAriaLabel": "Edit common misrecognitions",
+          "aliasesPlaceholder": "One misrecognition per line",
+          "aliasesEditHint": "Use one per line. Clear the field to remove them all.",
           "searchAriaLabel": "Search dictionary",
           "closeSearch": "Close search",
           "searchPlaceholder": "Search dictionary",
@@ -1779,15 +1801,23 @@
         "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
         "advancedExactName": "Advanced: exact library name",
         "models": {
-          "qwen38-27b": { "blurb": "The strongest dense model you can run locally. Best for coding and long tasks." },
+          "qwen38-27b": {
+            "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
+          },
           "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
           "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
           "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
           "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
           "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
-          "gemma4-26b": { "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines." },
-          "ornith15-35b": { "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup." },
-          "glm-47-flash": { "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents." }
+          "gemma4-26b": {
+            "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
+          },
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup."
+          },
+          "glm-47-flash": {
+            "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents."
+          }
         },
         "onboardingTitle": "Install the Ollama runtime",
         "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
@@ -2529,6 +2559,31 @@
         "saved": "Subagent settings saved",
         "deferredSuffix": " — running Codex sessions will apply this after their current task finishes"
       }
+    },
+    "auxiliaryModels": {
+      "title": "Auxiliary models",
+      "description": "Choose one Agent and model pair for automatic task naming and another for composer prompt suggestions.",
+      "sessionTitle": {
+        "label": "Automatic task naming",
+        "description": "Applies to Claude Code, Codex, and Pi tasks, plus manual AI renaming.",
+        "ariaLabel": "Choose the automatic task naming model",
+        "automatic": "Automatic (follow the current task)"
+      },
+      "promptRecommendation": {
+        "label": "Composer prompt suggestions",
+        "description": "Used only when prompt recommendations are enabled under Tips.",
+        "ariaLabel": "Choose the composer prompt suggestion model",
+        "automatic": "Automatic (keep current routing)"
+      },
+      "chooseAgent": "Choose an Agent",
+      "backToAgents": "Back to Agent selection",
+      "explicitRouteHint": "An explicit selection uses only that Agent and model. If unavailable, Cindy will not switch automatically.",
+      "searchPlaceholder": "Search models or providers",
+      "noResults": "No available models",
+      "unavailable": "Currently unavailable",
+      "budget": "Discount",
+      "subscription": "Subscription",
+      "saveFailed": "Failed to save auxiliary model settings"
     },
     "compaction": {
       "title": "Context compaction",
@@ -3495,6 +3550,12 @@
     },
     "shortcuts": {
       "title": "Keyboard Shortcuts",
+      "accessories": {
+        "title": "Accessories",
+        "description": "Keyboards, gamepads, and other input devices",
+        "openAria": "Open accessories",
+        "back": "Back"
+      },
       "resetAll": "Reset all to defaults",
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
@@ -3531,7 +3592,7 @@
           },
           "composer.submit": {
             "name": "Send message",
-            "description": "Send the current composer message"
+            "description": "Send the composer message, or approve the pending request"
           },
           "feedback": {
             "name": "Send feedback",
@@ -3614,7 +3675,11 @@
           },
           "navigateBack": {
             "name": "Back",
-            "description": "Go back in navigation history"
+            "description": "Go back, or decline the pending request"
+          },
+          "toggleFullscreen": {
+            "name": "Toggle fullscreen",
+            "description": "Enter or exit fullscreen"
           },
           "composer.focus": {
             "name": "Focus composer",
@@ -3634,7 +3699,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
         "openAria": "Open Work Louder Codex Micro settings",
         "back": "Back to keyboard shortcuts",
@@ -3935,7 +3999,113 @@
       "edit": "Edit",
       "delete": "Delete",
       "deleteAria": "Delete shortcut for {{name}}",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "xboxGamepad": {
+        "title": "Xbox controller",
+        "openAria": "Open Xbox controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "back": "Back",
+        "retry": "Retry",
+        "layout": {
+          "title": "Controls",
+          "description": "Click a control to change what it does. Pressing the pad lights the matching control here.",
+          "clickToEdit": "Click to set",
+          "editor": {
+            "title": "Control",
+            "description": "Choose a Cindy action for this control. Unmapped controls do nothing.",
+            "done": "Done",
+            "assigned": "Action",
+            "assignedDescription": "Fires on press. Hold-to-talk ends when you release."
+          },
+          "reset": {
+            "title": "Reset mapping",
+            "description": "Restores each control’s action without turning the controller off.",
+            "button": "Reset mapping"
+          }
+        },
+        "stick": {
+          "description": "A stick can scroll the conversation, or fire a different action in each direction.",
+          "customDescription": "Fires once when the stick enters this direction.",
+          "mode": {
+            "label": "Stick mode",
+            "description": "Conversation scroll follows how far you push. Custom assigns an action per direction.",
+            "options": {
+              "conversation-scroll": "Scroll conversation",
+              "custom": "Custom directions"
+            }
+          }
+        },
+        "directions": {
+          "up": "Up",
+          "right": "Right",
+          "down": "Down",
+          "left": "Left"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "Left stick click",
+          "rs": "Right stick click",
+          "dpadUp": "D-pad up",
+          "dpadDown": "D-pad down",
+          "dpadLeft": "D-pad left",
+          "dpadRight": "D-pad right",
+          "leftStick": "Left stick",
+          "rightStick": "Right stick"
+        },
+        "actions": {
+          "none": "Unmapped",
+          "voice": "Voice input",
+          "voiceDescription": "Hold for voice input, release to stop.",
+          "commands": "Commands",
+          "skills": "Skills",
+          "choose": "Choose action"
+        },
+        "errors": {
+          "load": "Could not load controller settings",
+          "save": "Could not save controller settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "toggle": {
+            "label": "Enable",
+            "aria": "Let this Cindy use an Xbox controller while it is in the foreground"
+          },
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "present": "Connected",
+            "disabled": "Off",
+            "error": "Connection error",
+            "unavailable": "Not supported on this system"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for an Xbox controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect an Xbox controller with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read an Xbox controller yet."
+          }
+        },
+        "device": {
+          "usb": "Wired",
+          "bluetooth": "Bluetooth",
+          "battery": "{{percent}}%",
+          "charging": "Charging {{percent}}%"
+        }
+      }
     },
     "ghosts": {
       "title": "Plugins",
@@ -3943,6 +4113,8 @@
       "page": {
         "search": "Search plugins",
         "clearSearch": "Clear Plugin Search",
+        "secondaryTabsAria": "Plugin page sections",
+        "overviewTab": "Overview",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "installedSection": "Installed",
@@ -3955,7 +4127,7 @@
         "updateTo": "Update to v{{version}}",
         "updateAria": "Update {{name}} to v{{version}}",
         "createWithCindy": "Create with Cindy",
-        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum chapter 2 for the slot overview, plus the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, panel inside the Plugins page, chat card, or no UI), a $ command word, launch mode, background abilities (event listening, in-app toast notifications, unread badges, confirmation dialogs), network access, whether a settings page is needed, whether a bundled Node process should do heavy lifting, and whether image/video media abilities are needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
+        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum the capability overview, sandbox red-lines, and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, panel inside the Plugins page, chat card, or no UI), a $ command word, launch mode, background abilities (event listening, in-app toast notifications, unread badges, confirmation dialogs), network access, whether a settings page is needed, whether a bundled Node process should do heavy lifting, and whether image/video media abilities are needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to validate and produce the .cindy package; do not claim that it was installed.",
         "filterAll": "All",
         "filtersAria": "Filter plugins by source",
         "origin": {
@@ -3999,14 +4171,6 @@
         "customSourcesUnavailable": "These custom marketplaces are temporarily unavailable: {{names}}. Other marketplaces are unaffected.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
-        "upgradeNotice": {
-          "single": "Automatically updated organization plugin “{{name}}”.",
-          "multiple_one": "Automatically updated {{count}} organization plugin.",
-          "multiple_other": "Automatically updated {{count}} organization plugins.",
-          "singleWithPermissions": "Automatically updated organization plugin “{{name}}”; new permissions: {{permissions}}.",
-          "multipleWithPermissions_one": "Automatically updated {{count}} organization plugin; it includes new permissions.",
-          "multipleWithPermissions_other": "Automatically updated {{count}} organization plugins; some plugins include new permissions."
-        },
         "removalNotice": {
           "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
           "multiple_one": "The organization removed {{count}} plugin. Its local copy and data on this device have been cleaned up.",
@@ -4020,16 +4184,13 @@
           "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
           "accessDenied": "This plugin operation is not permitted or was cancelled.",
           "notConfigured": "The plugin market is not available in this environment.",
-          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
+          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy.",
+          "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release."
         },
         "securityTitle": "Install and permissions",
         "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
         "customSecurityDescription": "This plugin comes from a custom marketplace you added and has not been verified by the Cindy server. Its manifest is validated in the main process before install. First-time installs are enabled automatically and can be disabled anytime on the Plugins page.",
         "noPermissions": "This plugin declares no additional capabilities.",
-        "installConfirmTitle": "Install “{{name}}”?",
-        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
-        "customInstallConfirmDescription": "This plugin comes from a custom marketplace and has not been verified for integrity by the server; its manifest will be validated before install. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
-        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged.",
         "sources": {
           "addMarketplace": "Add Plugin Marketplace…",
           "dialogTitle": "Add Plugin Marketplace",
@@ -4087,7 +4248,7 @@
             "authTitle": "Private Repositories",
             "authBody": "Authentication relies entirely on your system Git configuration — Cindy never stores Git credentials. SSH: a working key must be configured on this machine; if the organization enforces SAML SSO, authorize the key for that organization via Configure SSO in your GitHub SSH key settings. HTTPS: use a Personal Access Token stored by the system credential helper.",
             "rulesTitle": "Install Rules",
-            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins using officially reserved prefixes like cindy- cannot be installed from custom marketplaces. Before install, every permission the plugin declares is shown for review; confirming completes the install and enables the plugin.",
+            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins whose ids use the official reserved prefixes ({{reservedGhostIdPrefixes}}) cannot be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Declared permissions are shown on the detail page; clicking Install completes installation and enables the plugin without another permission confirmation dialog.",
             "copy": "Copy guide",
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Please try again."
@@ -4098,13 +4259,13 @@
         "conflictDescription": "This plugin identifier is already in use and cannot be installed right now"
       },
       "reapproval": {
-        "badge": "Permission review needed",
-        "action": "Review Permissions",
-        "actionAria": "Review permissions for plugin {{name}}",
-        "noticeTitle": "Permission review needed",
-        "bodyLegacy": "Cindy has no record of a permission review for this plugin, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
-        "bodyInvalid": "The permission review record for this plugin is damaged, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
-        "bodyBuiltinRestart": "Something went wrong with this built-in plugin's approval record. Restart Cindy to recover automatically — no other action needed."
+        "badge": "Installation recovery needed",
+        "action": "Reinstall",
+        "actionAria": "Reinstall plugin {{name}}",
+        "noticeTitle": "Installation recovery needed",
+        "bodyLegacy": "Cindy cannot verify this plugin's complete installation record, so the plugin is paused. Reinstall the marketplace release or select the matching .cindy package again.",
+        "bodyInvalid": "This plugin's installation verification record is damaged, so the plugin is paused. Reinstall the marketplace release or select the matching .cindy package again.",
+        "bodyBuiltinRestart": "Something went wrong with this built-in plugin's installation verification record. Restart Cindy to recover automatically — no other action is needed."
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
@@ -4158,7 +4319,6 @@
       "toast": {
         "installed": "Installed \"{{name}}\"",
         "uninstalled": "Uninstalled \"{{name}}\"",
-        "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
         "reapproved": "\"{{name}}\" restored",
         "exported": "Exported the .cindy file for \"{{name}}\"",
@@ -4174,12 +4334,8 @@
       },
       "installConfirm": {
         "title": "Install plugin “{{name}}”?",
-        "confirm": "Install plugin",
-        "cancel": "Cancel",
         "meta": "Version {{version}}. Installs locally and can be uninstalled anytime.",
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
-        "enableNow": "Enable right after install",
-        "enableNowOpenPanel": "Enable and open its panel right after install",
         "manualCount": "Bundled manuals: {{count}}",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
@@ -4235,6 +4391,8 @@
         "command": "Chat command ${{command}}",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
         "panelTab": "Panel \"{{title}}\" · opens inside the Plugins page",
+        "mainView": "Can add a “{{title}}” entry to Cindy's sidebar",
+        "mainViewDetail": "Opening it displays the main view in the plugin sandbox and does not grant file, network, or credential access.",
         "code": "Executable code",
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
@@ -4303,11 +4461,12 @@
       },
       "errors": {
         "fileInvalid": "Not a valid .cindy plugin file",
-        "hostUnsupported": "This plugin needs Cindy capabilities that this version does not provide. Update Cindy, then install it again.",
+        "hostUnsupported": "This Cindy version cannot read this plugin's manifest format.",
         "alreadyInstalled": "This plugin is already installed",
-        "approvalRequired": "This plugin's permissions must be reviewed again before continuing.",
         "commandConflict": "Its command conflicts with an installed plugin. Uninstall the other one or rename the command.",
-        "idReserved": "This id uses the reserved official prefix cindy-; it is only available to plugins bundled with the app",
+        "idReserved": "{{reservedGhostIdPrefixes}} are reserved for official plugins and can’t be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Install the corresponding official plugin from the Cindy plugin market",
+        "brokerManualInstallNotAuthorized": "A locally installed .cindy package is not authorized to use the authorization broker. Install it from your organization’s plugin market.",
+        "brokerRedirectPortRequired": "This plugin declares an authorization broker but does not declare redirectPort in the same OAuth configuration. Ask the author to add the field so the final authorization hop can return to the local listening port.",
         "sourceMissing": "The selected file could not be found",
         "generic": "Operation failed. Please try again.",
         "updateIdMismatch": "The selected file is plugin \"{{id}}\", which does not match this plugin \"{{expected}}\""
@@ -4386,6 +4545,9 @@
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "oauthScopeStale": "This authorization does not include newly added permissions. Reconnect to grant them.",
         "configurationTitle": "Configuration",
+        "sidebarEntryTitle": "Sidebar entry",
+        "showInSidebar": "Show in sidebar",
+        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar. Hiding it does not disable the plugin.",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
         "viewAllTools": "See All",
@@ -4395,6 +4557,7 @@
         "closeDialog": "Close Dialog"
       },
       "contents": {
+        "mainView": "Main view",
         "panel": "Panel",
         "settingsUi": "Custom settings UI",
         "code": "Executable code",
@@ -4469,11 +4632,6 @@
         "confirm": "Update",
         "cancel": "Cancel"
       },
-      "reapproveConfirm": {
-        "title": "Re-approve permissions for \"{{name}}\"?",
-        "body": "Review the permissions below to re-approve this installed plugin — no install file needed.",
-        "confirm": "Approve & Restore"
-      },
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
@@ -4491,7 +4649,7 @@
       "updateAll": {
         "title": "Update all · {{count}} plugins",
         "collapseDiff": "Collapse",
-        "description": "Regular updates finish automatically; verified packages that request new permissions need per-item approval.",
+        "description": "Updates normally run silently. Use this dialog to retry updates that were skipped or failed.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "Queued",
         "statusInstalling": "Updating…",
@@ -4507,6 +4665,46 @@
         "reviewOutdated": "Review outdated",
         "approve": "Approve",
         "skip": "Skip"
+      },
+      "publish": {
+        "section": "My publishes",
+        "action": "Publish plugin…",
+        "confirmTitle": "Publish {{name}}",
+        "confirmDescription": "After you confirm, the package is uploaded to the current organization.",
+        "org": "Organization",
+        "pluginId": "Plugin id",
+        "version": "Version",
+        "size": "Size",
+        "confirm": "Publish",
+        "cancel": "Cancel",
+        "disabled": "This organization has not enabled member publishing. Contact an admin.",
+        "loadFailed": "Could not load your publishes",
+        "startFailed": "Could not start publishing",
+        "empty": "No publishes yet",
+        "unknownPlugin": "Plugin",
+        "uploading": "Publishing",
+        "badge": {
+          "validating": "Checking",
+          "processing": "Processing",
+          "pending": "Pending review",
+          "approved": "Published",
+          "rejected": "Rejected",
+          "failed": "Failed",
+          "expired": "Expired"
+        },
+        "stage": {
+          "confirming": "Waiting for confirmation",
+          "hashing": "Checking the file",
+          "preparing": "Creating the upload",
+          "uploading": "Uploading",
+          "committing": "Submitting",
+          "processing": "Processing",
+          "succeeded": "Finished",
+          "failed": "Failed",
+          "expired": "Expired",
+          "cancelled": "Cancelled",
+          "cancelledTracking": "Stopped watching. The server is still processing."
+        }
       }
     },
     "mcp": {
@@ -5148,6 +5346,70 @@
       "lowCache": "Cache hit rate is low; more context was billed again this turn"
     }
   },
+  "usageHistory": {
+    "description": "Token usage produced inside Cindy on this device. Records start accumulating when the feature ships; earlier history is not backfilled.",
+    "empty": "No usage recorded yet. This fills in once you start a chat.",
+    "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
+    "summary": {
+      "title": "Overview"
+    },
+    "stats": {
+      "todayTokens": "Tokens today",
+      "totalTokens": "Tokens (30d)",
+      "streak": "Active streak",
+      "cacheHitRate": "Cache hit rate (30d)",
+      "models": "Models used"
+    },
+    "heatmap": {
+      "title": "Activity heatmap",
+      "subtitle": "Last 20 weeks",
+      "emptyCell": "No usage recorded"
+    },
+    "daily": {
+      "title": "Daily tokens (30d)",
+      "subtitle": "Stacked by model"
+    },
+    "byAgent": {
+      "title": "By Agent / harness",
+      "subtitle": "Last 30 days",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "Tokens (30d)",
+        "share": "Share",
+        "today": "Today",
+        "hitRate": "Cache hit rate",
+        "models": "Models"
+      }
+    },
+    "byModel": {
+      "title": "By model",
+      "subtitle": "Last 30 days",
+      "col": {
+        "model": "Model",
+        "total": "Total tokens",
+        "share": "Share",
+        "input": "Input",
+        "output": "Output",
+        "cacheRead": "Cache read",
+        "cacheCreate": "Cache write",
+        "hitRate": "Cache hit rate"
+      }
+    },
+    "tasks": {
+      "title": "Top sessions by tokens",
+      "subtitle": "Sessions active in the last 30 days, ranked by lifetime tokens",
+      "col": {
+        "task": "Session",
+        "model": "Model",
+        "provider": "Provider",
+        "tokens": "Total tokens",
+        "context": "Context used",
+            "lastActive": "Last active"
+      },
+      "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
+      "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
+    }
+  },
   "usageDashboard": {
     "title": "Usage & Spend",
     "updating": "Updating",
@@ -5194,7 +5456,7 @@
       "ready": "New version ready — click the sidebar to apply",
       "manifestFailed": "Update check failed, please check your network",
       "downloadFailed": "New version download failed, try again later",
-      "manualDownload": "Linux first release uses manual downloads only. Download the latest installer from the download page."
+      "manualDownload": "Download the update in the app. Installing it requires your system password."
     },
     "closeConfirm": {
       "title": "Confirm exit?",
@@ -6126,7 +6388,7 @@
       "myDevices": "My Devices",
       "deviceOffline": "Offline",
       "allowControl": "Allow same-account devices to control this machine",
-      "deviceId": "This device · {{id}}",
+      "deviceName": "This device · {{name}}",
       "remoteAction": {
         "checking": "Checking…",
         "unavailable": "Unavailable",
@@ -6635,6 +6897,7 @@
     "chatInput": {
       "defaultPlaceholder": "What shall we work on today~",
       "createAgentPlaceholder": "Hi {{appName}}!",
+      "recommendationShortcut": "Tab",
       "voiceInput": {
         "start": "Start voice input",
         "stop": "Stop voice input",
@@ -7067,6 +7330,8 @@
       "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
+      "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in",
+      "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in",
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
@@ -7089,6 +7354,11 @@
       "continuing": "Continuing…",
       "continueTitle": "Continue from where the task left off (completed steps will not be repeated)",
       "dismissTitle": "Dismiss this interruption notice"
+    },
+    "unreadFailedScheduleBanner": {
+      "text": "This scheduled run did not finish.",
+      "markAsRead": "Mark as read",
+      "markAsReadTitle": "Clear this failed unread state"
     },
     "worktreeRestoreBanner": {
       "text": "This session's worktree has been cleaned up (directory missing).",
@@ -7712,6 +7982,8 @@
       "waiting": "Just wait…",
       "working": "Working…",
       "running": "Running…",
+      "waitingWorkflow": "Waiting for Workflow…",
+      "waitingWorkflowProgress": "Waiting for Workflow · {{done}}/{{total}} agents",
       "turnStart": "{{status}}",
       "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
       "runningTool": "{{tool}} running…"
@@ -7806,6 +8078,10 @@
       "backToAutomations": "Back to Automations",
       "waitForReply": "Waiting for your reply in the document area…",
       "modelSwitchedFastModeOff": "Model switched, Fast Mode disabled"
+    },
+    "remoteDesktopConfirmation": {
+      "title": "Confirmation required on the controlled computer",
+      "description": "Open Cindy on the controlled computer to review and respond."
     },
     "handoff": {
       "card": {
@@ -8027,6 +8303,7 @@
         "menu": {
           "runNow": "Run now",
           "more": "More actions",
+          "markAllAsRead": "Mark as read",
           "edit": "Edit",
           "pause": "Pause",
           "resume": "Resume",
@@ -10051,6 +10328,10 @@
       "layoutMenuLabel": "Worker list layout",
       "layoutTabs": "Tabs",
       "layoutDropdown": "Dropdown",
+      "scrollWorkersLeft": "Scroll to earlier workers",
+      "scrollWorkersRight": "Scroll to more workers",
+      "scrollWorkersLeftEdge": "Already at the earliest worker",
+      "scrollWorkersRightEdge": "Already at the latest worker",
       "errorBadge": "ERR",
       "errorBadgeAria": "A worker has an error"
     },

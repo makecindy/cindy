@@ -268,9 +268,11 @@ export function useDeviceLinkRemoteProjects(): void {
     //  2. 补读可能因待清队列 / owner 边界复核 / 瞬时 IPC 错误失败,失败后**重试**直到锚点
     //     就位 —— 否则订阅仍持续排程 undefined 写入,冷缓存停写到重挂载(本线程)。
     // 账号在重试期间再次变化时,effect 重跑清掉定时器,旧账号的重试不再继续。
-    if (!dataOwnerId) return;
+    // local mode 也有 `local-v1` data owner,但没有 Device Link capability;只看 dataOwnerId
+    // 会让跳过登录的客户端无限重试一个必然被 main 以 PERMISSION_DENIED 拒绝的 IPC。
+    if (!isAuthenticated || !dataOwnerId) return;
     return startSessionListTokenRefresh();
-  }, [ownerBoundaryGeneration]);
+  }, [ownerBoundaryGeneration, isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated || !selfDeviceId) {

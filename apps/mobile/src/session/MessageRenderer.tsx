@@ -304,6 +304,7 @@ import {
   evaluateMobileFollowEndContentSizePin,
   isMobileMvcpSettling,
   mobileFollowVerifyStartDelayMs,
+  mobileMessageListKeysSignature,
   mobileMvcpSettleDeadline,
   mobileMessageListTopPadding,
   MOBILE_FOLLOW_END_PIN_SUPPRESS_MS,
@@ -918,9 +919,14 @@ export function MessageRenderer({
     prevListLengthRef.current = listData.length;
   }
   const itemKeys = useMemo(() => listData.map((item) => item.key), [listData]);
+  const itemKeysSignature = useMemo(
+    () => mobileMessageListKeysSignature(itemKeys),
+    [itemKeys],
+  );
+  // 只认行身份（追加 / 换行 / 重排）。流式改内容会换 items 引用，但不能续安静窗。
   useEffect(() => {
     markMobileMvcpSettle();
-  }, [itemKeys, markMobileMvcpSettle]);
+  }, [itemKeysSignature, markMobileMvcpSettle]);
   const firstItemKey = itemKeys[0] ?? null;
   // 本地缩略兜底映射版本:collect 内部对 cindy-oss-attach:// 附件读全局 store 做 overlay,
   // hydrate / 新注册后 gallery 需要重建,否则点开气泡本地图时 initialUrl 对不上图集条目。

@@ -37,7 +37,7 @@
     "queuePositionNth": "第 {{index}}",
     "composerBlockedByPending": "先处理电脑端的待处理请求后才能继续输入。",
     "missingRequestId": "这个远程交互缺少 requestId，无法回传决定。",
-    "issueConfirmUnsupported": "Issue 提交确认只在电脑端处理。请回到桌面端确认或取消提交。",
+    "desktopConfirmUnsupported": "此确认只能在被控电脑处理。请回到桌面端继续。",
     "unsupportedType": "手机版暂不支持这个远程交互类型。",
     "unsupportedKind": "暂不支持",
     "desktopOnlyKind": "电脑端处理",
@@ -106,6 +106,14 @@
     "issue_confirm": {
       "title": "需要确认 Issue 内容",
       "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "需要确认任务名称变更",
+      "label": "重命名"
+    },
+    "ghost_grant_confirm": {
+      "title": "需要确认文件访问权限",
+      "label": "文件访问"
     },
     "plugin_setup": {
       "title": "需要在电脑端配置插件",

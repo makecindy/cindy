@@ -1,17 +1,19 @@
 /**
- * networkSlot.ts — network 槽代理 fetch(docs/dev-rules/plugin-security-and-authoring.md)。
+ * networkSlot.ts — 插件沙箱的主机代理 fetch 边界
+ * (docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
- * 意识自带服务的出网通道。沙箱本身保持零直连(electronSandboxAdapter 的
- * onBeforeRequest 断网闸不放开),意识想访问自己声明的域名只能经管子上行:
+ * 沙箱本身保持零直连(electronSandboxAdapter 的 onBeforeRequest 断网闸
+ * 不放开),所有请求都只能经管子上行。授权分两类：当前 Agent tool-call
+ * 凭严格在途 callId 复用 Agent 授权；插件自主调用按 network 详单守门。
  *
  *   电子脑 cindy.send({type:'fetch-request', url, method?, headers?, body?, …})
- *     → 资格审(声明了 'network' 卡槽 + 详单?)
- *     → URL 硬校验(仅 https 默认端口;host 命中 network.hosts 白名单)
+ *     → 调用上下文审(Agent 在途，或已声明自主 network 详单)
+ *     → URL 硬校验(仅 https 默认端口;自主调用 host 必须命中白名单)
  *     → 意识自带 headers 消毒(协议关键头/凭证类头一律剥除)
  *     → 凭证注入(保险库现读明文,按 secret.inject 声明拼进请求头——
  *       key 只流向它声明的域名;意识代码从头到尾摸不到凭证字节;
  *       声明了 exchange 的凭证先照单换令牌:缓存 + 单飞 + 401 作废重换)
- *     → 主机真实 HTTP(注入的 fetchImpl;超时 clamp;重定向逐跳重验白名单)
+ *     → 主机真实 HTTP(注入的 fetchImpl;超时 clamp;重定向逐跳重验同一边界)
  *     → 响应文本化(体积上限截断;响应头只回白名单字段)
  *     → 只回结构化 GhostPipeFetchResult(永不 reject)
  *
@@ -63,6 +65,19 @@ import {
 export interface NetworkSlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /**
+   * callId → 严格在途的 Agent 调用上下文。只有 channel:'session'、
+   * sessionId 存在、明确是本地会话(remoteHostId === null)且 ghostId
+   * 匹配时，才能复用外层 ghost_call 已经通过的 Cindy Agent 授权；
+   * 面板、订阅、后台、远程 SSH 与脚本通道都不在此列。
+   */
+  inFlightCallInfo?(callId: string): {
+    ghostId: string;
+    sessionId: string | null;
+    /** null = 已证明是本地会话；string = SSH remote；undefined = 未知。 */
+    remoteHostId: string | null | undefined;
+    channel: 'session' | 'script';
+  } | null;
+  /**
    * 读某意识某条凭证的明文(safeStorage 现读,不缓存——用户改了 key 下一单
    * 即生效);未配置 / 读失败返回 null。
    */
@@ -87,6 +102,20 @@ export interface NetworkSlotDeps {
     signal: AbortSignal;
     redirect: 'manual';
   }): Promise<Response>;
+  /**
+   * Agent 在途访问未声明公网目标时使用的单跳安全 fetch。实现必须在连接前
+   * 复核 DNS 结果并把连接钉到已复核地址；调用方消费完响应后执行 release。
+   */
+  fetchPublicImpl(url: string, init: {
+    method: string;
+    headers: Record<string, string>;
+    body?: string | Uint8Array;
+    signal: AbortSignal;
+    redirect: 'manual';
+  }, beforeDispatch: () => void | Promise<void>): Promise<{
+    response: Response;
+    release: () => Promise<void>;
+  }>;
   /**
    * 上传通道:按指纹读"该意识名下"的总仓媒体字节(生产实现内做归属查账
    * ghostCanRead——出生自它 / 挂它画廊 / 用户显式过户;越权与不存在统一
@@ -148,7 +177,13 @@ export interface NetworkSlotDeps {
       | { ok: true; accessToken: string; accountId: string }
       | {
           ok: false;
-          error: 'NO_CLIENT_CONFIG' | 'NO_ACCOUNT' | 'AUTH_EXPIRED' | 'REFRESH_FAILED' | 'NETWORK';
+          error:
+            | 'NO_CLIENT_CONFIG'
+            | 'NO_ACCOUNT'
+            | 'AUTH_EXPIRED'
+            | 'REFRESH_FAILED'
+            | 'NETWORK'
+            | 'BROKER_FORBIDDEN';
           detail?: string;
         }
     >;
@@ -765,7 +800,8 @@ export class GhostNetworkSlot {
     if (p.callId !== undefined && (typeof p.callId !== 'string' || p.callId.length === 0 || p.callId.length > MAX_CALL_ID_LEN)) {
       return { ok: false, message: 'callId 不合法(1–128 字符的字符串,或不传)' };
     }
-    const callId = (p.callId as string | undefined) ?? 'unattributed';
+    const requestCallId = p.callId as string | undefined;
+    const callId = requestCallId ?? 'unattributed';
     let body: string | Uint8Array | undefined;
     if (p.body !== undefined) {
       if (typeof p.body !== 'string') return { ok: false, message: 'body 必须是字符串' };
@@ -1000,22 +1036,31 @@ export class GhostNetworkSlot {
     if ('error' in parsed) return { ok: false, message: parsed.error };
     const url = parsed.url;
 
-    // ── 资格审:意识在场 + 槽 + 详单 ─────────────────────────────────
+    // ── 资格审:意识在场 + 能力详单 ───────────────────────────────────
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
-    if (!ghost.manifest.slots?.includes('network')) {
-      return { ok: false, message: '本意识未声明 network 卡槽,无权出网' };
-    }
     const net = ghost.manifest.network;
+    const hasLiveAgentAuthorization = (): boolean => {
+      const callInfo = requestCallId
+        ? this.deps.inFlightCallInfo?.(requestCallId) ?? null
+        : null;
+      return callInfo?.ghostId === ghostId
+        && callInfo.channel === 'session'
+        && callInfo.sessionId !== null
+        && callInfo.remoteHostId === null;
+    };
+    const agentMediated = hasLiveAgentAuthorization();
     // 静态 hosts 与动态连接地址(network.connections,用户在设置页添加、
     // 逐条过主机受信确认)至少有其一,才算"声明过白名单"。
     const connectionDecls = net?.connections ?? [];
-    if (!net || (net.hosts.length === 0 && connectionDecls.length === 0)) {
+    if ((!net || (net.hosts.length === 0 && connectionDecls.length === 0)) && !agentMediated) {
       return { ok: false, message: '本意识未声明域名白名单(身份卡缺 network.hosts),请意识作者更新声明' };
     }
-    const ghCliSecrets = net.secrets?.filter((secret) => secret.source === 'gh-cli') ?? [];
+    const declaredHosts = net?.hosts ?? [];
+    const declaredSecrets = net?.secrets ?? [];
+    const ghCliSecrets = declaredSecrets.filter((secret) => secret.source === 'gh-cli');
     if (
       ghCliSecrets.length > 0 &&
       (ghost.manifest.id !== 'cindy-github' || !isCindyOfficialTrustInfo(ghost.trust))
@@ -1026,12 +1071,16 @@ export class GhostNetworkSlot {
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。
     const connectionHosts =
       connectionDecls.length > 0 ? (this.deps.connections?.hostsFor(ghostId) ?? []) : [];
-    // 白名单判定:静态条目走通配语义,连接地址只精确匹配(不吃通配)。
-    const hostAllowed = (hostname: string): boolean =>
-      net.hosts.some((pattern) => ghostNetworkHostMatches(pattern, hostname)) ||
+    // 自主调用仍只能访问 manifest 声明的地址。Agent 在途调用已经
+    // 通过外层 ghost_call 的 Cindy 授权，因此可以访问未预声明的普通
+    // 地址；但只有真正命中 manifest 详单的 host 才可获得 Host 托管凭证。
+    const hostDeclared = (hostname: string): boolean =>
+      declaredHosts.some((pattern) => ghostNetworkHostMatches(pattern, hostname)) ||
       connectionHosts.includes(hostname);
+    const hostAllowed = (hostname: string): boolean =>
+      hostDeclared(hostname) || hasLiveAgentAuthorization();
     if (!hostAllowed(url.hostname)) {
-      const declared = [...net.hosts, ...connectionHosts];
+      const declared = [...declaredHosts, ...connectionHosts];
       return {
         ok: false,
         message:
@@ -1043,7 +1092,18 @@ export class GhostNetworkSlot {
     // ── 凭证注入:命中本次目标域名的每条声明凭证,保险库现读明文拼头
     // (交换型凭证在此换取/取缓存令牌)。未配置的凭证快速失败(带清晰
     // 指引),不发一个注定 401 的请求。
-    const inject0 = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url.hostname, net.hosts, requestHeaders, authAccount);
+    // 即使目标是 Agent 临时放行的未声明 host，也必须走一遍
+    // injectSecrets：它会删掉上一跳/插件伪造的凭证头，只是不会注入
+    // 任何未命中 manifest 详单的 Host 托管凭证。
+    const inject0 = await this.injectSecrets(
+      ghostId,
+      declaredSecrets,
+      connectionDecls,
+      url.hostname,
+      declaredHosts,
+      requestHeaders,
+      authAccount,
+    );
     if (inject0.error) return { ok: false, message: inject0.error };
     let usedExchange = inject0.usedExchange;
     const oauthInjected = new Map(inject0.oauthInjected);
@@ -1061,6 +1121,7 @@ export class GhostNetworkSlot {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
     let holdingMediaGate = false;
+    const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
       this.deps.log?.info('ghost fetch-request start', {
         ghostId, callId, method, host: url.hostname, path: url.pathname,
@@ -1107,7 +1168,7 @@ export class GhostNetworkSlot {
       const originalRequestMethod = method;
       for (let attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) {
-          this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
+          this.invalidateExchangedTokens(ghostId, declaredSecrets);
           for (const [secretKey, accountId] of oauthInjected) {
             this.deps.oauthTokens?.invalidateAccessToken(ghostId, secretKey, accountId);
           }
@@ -1117,7 +1178,15 @@ export class GhostNetworkSlot {
               audience: input.audience,
             });
           }
-          const reInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url.hostname, net.hosts, requestHeaders, authAccount);
+          const reInject = await this.injectSecrets(
+            ghostId,
+            declaredSecrets,
+            connectionDecls,
+            url.hostname,
+            declaredHosts,
+            requestHeaders,
+            authAccount,
+          );
           if (reInject.error) return { ok: false, message: reInject.error };
           initialConnectionInjected = new Map(reInject.connectionInjected);
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
@@ -1142,7 +1211,15 @@ export class GhostNetworkSlot {
           if (hop > 0) {
             // 换了域名的跳转:上一跳注入的凭证不能跟着走,按新 host 重算
             // (injectSecrets 开头会先把所有声明凭证头的大小写变体删干净)。
-            const hopInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, currentUrl.hostname, net.hosts, hopHeaders, authAccount);
+            const hopInject = await this.injectSecrets(
+              ghostId,
+              declaredSecrets,
+              connectionDecls,
+              currentUrl.hostname,
+              declaredHosts,
+              hopHeaders,
+              authAccount,
+            );
             if (hopInject.error) return { ok: false, message: hopInject.error };
             currentConnectionInjected = hopInject.connectionInjected;
             usedExchange ||= hopInject.usedExchange;
@@ -1176,13 +1253,33 @@ export class GhostNetworkSlot {
               };
             }
           }
-          response = await this.deps.fetchImpl(currentUrl.toString(), {
+          const fetchInit = {
             method: currentMethod,
             headers: hopHeaders,
             ...(currentBody !== undefined ? { body: currentBody } : {}),
             signal: controller.signal,
-            redirect: 'manual',
-          });
+            redirect: 'manual' as const,
+          };
+          const hopHostDeclared = hostDeclared(currentUrl.hostname);
+          const hopAgentMediated = !hopHostDeclared && hasLiveAgentAuthorization();
+          if (!hopHostDeclared && !hopAgentMediated) {
+            return { ok: false, message: '当前 Agent 调用已结束，未声明目标不再允许访问' };
+          }
+          if (hopAgentMediated) {
+            const guarded = await this.deps.fetchPublicImpl(
+              currentUrl.toString(),
+              fetchInit,
+              () => {
+                if (!hasLiveAgentAuthorization()) {
+                  throw new Error('当前 Agent 调用已结束，未声明目标不再允许访问');
+                }
+              },
+            );
+            guardedFetchReleases.push(guarded.release);
+            response = guarded.response;
+          } else {
+            response = await this.deps.fetchImpl(currentUrl.toString(), fetchInit);
+          }
           responseConnectionInjected = currentConnectionInjected;
           responseMethod = currentMethod;
           if (![301, 302, 303, 307, 308].includes(response.status)) break;
@@ -1449,6 +1546,7 @@ export class GhostNetworkSlot {
       return { ok: false, message: `请求失败:${message}` };
     } finally {
       clearTimeout(timer);
+      await Promise.allSettled(guardedFetchReleases.map((release) => release()));
       if (holdingMediaGate) this.mediaReadsInflight -= 1;
       const left = (this.inflight.get(ghostId) ?? 1) - 1;
       if (left <= 0) this.inflight.delete(ghostId);
@@ -1642,6 +1740,8 @@ export class GhostNetworkSlot {
             return { error: `凭证「${secret.label}」尚未连接账号(或指定的账号不存在)——请到主界面侧边栏「插件」的本插件详情页点「连接账号」完成授权` };
           case 'AUTH_EXPIRED':
             return { error: `凭证「${secret.label}」的账号授权已失效——请到主界面侧边栏「插件」的本插件详情页重新连接该账号` };
+          case 'BROKER_FORBIDDEN':
+            return { error: `凭证「${secret.label}」当前身份无权使用授权 broker` };
           case 'NETWORK':
             return { error: `凭证「${secret.label}」刷新令牌时网络失败,请稍后重试` };
           default:

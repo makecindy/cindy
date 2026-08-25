@@ -32,6 +32,7 @@ import {
   subscribeAnalyticsConsent,
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
+import { hasPrivacyConsent } from '@/update/updateConsentGate';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -323,6 +324,10 @@ export default function SettingsScreen() {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
+        // OTA 检查会携带 eas-client-id,须经隐私同意闸门(企业 SSO 豁免协议门,可能未
+        // 同意;且检查进行中登出会撤销同意)。整包 /latest 为匿名请求,不在此列。动态
+        // 判定而非调用瞬间快照,manifest 请求前与资源下载前各问一次。
+        isConsented: hasPrivacyConsent,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),

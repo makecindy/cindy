@@ -14,6 +14,18 @@
   ],
   "terms": [
     {
+      "id": "plugin-main-view",
+      "status": "proposed",
+      "en": "Main view",
+      "translations": {
+        "zh-CN": "主视图",
+        "zh-TW": "主視圖",
+        "ja": "メインビュー",
+        "ko": "메인 보기"
+      },
+      "note": "Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。"
+    },
+    {
       "id": "active",
       "status": "decided",
       "en": "Active",
@@ -67,6 +79,18 @@
         "ko": "Cindy Codex home"
       },
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
+    },
+    {
+      "id": "accessories",
+      "status": "proposed",
+      "en": "Accessories",
+      "translations": {
+        "zh-CN": "配件",
+        "zh-TW": "配件",
+        "ja": "アクセサリ",
+        "ko": "액세서리"
+      },
+      "note": "设置 → 键盘快捷键里，尚未检测到的硬件输入设备（Work Louder 键盘、Xbox 手柄等）收在这一栏。已插入的设备单独成卡，不进这一栏。与 device-link 的「设备／设备互联」不是同一概念。"
     },
     {
       "id": "captcha",
@@ -787,6 +811,18 @@
         ]
       },
       "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
+    },
+    {
+      "id": "overview",
+      "status": "proposed",
+      "en": "Overview",
+      "translations": {
+        "zh-CN": "概览",
+        "zh-TW": "總覽",
+        "ja": "概要",
+        "ko": "개요"
+      },
+      "note": "插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。"
     },
     {
       "id": "plugin",

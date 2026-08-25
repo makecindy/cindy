@@ -17,6 +17,14 @@ const h = vi.hoisted(() => ({
   providers: [{ id: 'provider-1' }],
   resolvedProviderId: 'provider-1',
   afterDispatch: null as null | (() => void),
+  auxiliarySelection: null as null | {
+    pin: string;
+    providerId: string;
+    agentKind: 'codex' | 'claude-code';
+    model: string;
+  },
+  legacyCalls: 0,
+  explicitRequest: vi.fn(),
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -69,6 +77,7 @@ vi.mock('../../maker-host/title-one-shot.js', () => ({
       }) => Promise<boolean>;
     },
   ) => {
+    h.legacyCalls += 1;
     h.beforeDispatchCalls += 1;
     const allowed = await deps.beforeDispatch?.({
       sessionId: request.sessionId,
@@ -78,6 +87,14 @@ vi.mock('../../maker-host/title-one-shot.js', () => ({
     if (allowed) h.afterDispatch?.();
     return allowed ? { status: 'ok', title: '继续补测试' } : { status: 'aborted', title: null };
   },
+}));
+
+vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
+  readAuxiliaryModelSelection: () => h.auxiliarySelection,
+}));
+
+vi.mock('../../utility-model/oneShotCandidates.js', () => ({
+  requestExplicitUtilityText: (...args: unknown[]) => h.explicitRequest(...args),
 }));
 
 import { generatePromptPrediction } from '../promptPrediction.js';
@@ -119,6 +136,9 @@ beforeEach(() => {
   h.providers = [{ id: 'provider-1' }];
   h.resolvedProviderId = 'provider-1';
   h.afterDispatch = null;
+  h.auxiliarySelection = null;
+  h.legacyCalls = 0;
+  h.explicitRequest.mockReset();
   h.rows = [{ ...VALID_ROW }, { ...VALID_ROW }];
   resetPromptPredictionStopLedgerForTests();
 });
@@ -172,6 +192,55 @@ describe('prompt prediction completion revision guard', () => {
 
     await expect(predict()).resolves.toBeNull();
     expect(h.beforeDispatchCalls).toBe(1);
+    expect(h.dbReads).toBe(2);
+  });
+
+  it('uses the independently configured recommendation route without the legacy task provider', async () => {
+    h.auxiliarySelection = {
+      pin: 'cat:openrouter:codex:openai/gpt-5-mini',
+      providerId: 'openrouter',
+      agentKind: 'codex',
+      model: 'openai/gpt-5-mini',
+    };
+    h.explicitRequest.mockImplementation(
+      async (_prompt: string, options: Record<string, unknown>) => {
+        h.beforeDispatchCalls += 1;
+        const allowed = await (
+          options.beforeDispatch as (route: {
+            providerId: string;
+            agentKind: string;
+            model: string;
+          }) => Promise<boolean>
+        )({
+          providerId: 'openrouter',
+          agentKind: 'codex',
+          model: 'openai/gpt-5-mini',
+        });
+        return allowed
+          ? {
+              ok: true,
+              text: '继续补测试',
+              providerId: 'openrouter',
+              model: 'openai/gpt-5-mini',
+              transport: 'litellm-chat-completions',
+            }
+          : { ok: false, reason: 'all_candidates_failed', attempts: [] };
+      },
+    );
+
+    await expect(predict()).resolves.toBe('继续补测试');
+    expect(h.explicitRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        providerId: 'openrouter',
+        agentKind: 'codex',
+        model: 'openai/gpt-5-mini',
+        disableReasoning: true,
+        systemPrompt: expect.any(String),
+      }),
+    );
+    expect(h.explicitRequest.mock.calls[0]?.[1]).not.toHaveProperty('reasoningEffort');
+    expect(h.legacyCalls).toBe(0);
     expect(h.dbReads).toBe(2);
   });
 });

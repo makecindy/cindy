@@ -77,6 +77,35 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+interface SealedAssistantLateFinalCandidate {
+  persistId: string;
+  text: string;
+  requestId?: string;
+  uuid?: string;
+}
+
+/**
+ * A stale-idle reconcile may persist a half-open block before the SDK's final
+ * snapshot drains. Keep that exact SDK identity outside per-turn reset state so
+ * the late snapshot can update/reuse the same row instead of creating another.
+ */
+const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFinalCandidate>();
+
+function matchesSealedAssistantIdentity(
+  candidate: SealedAssistantLateFinalCandidate,
+  agentMeta: AgentMeta | null,
+): boolean {
+  if (!agentMeta) return false;
+  if (candidate.requestId !== undefined && agentMeta.requestId !== undefined) {
+    return candidate.requestId === agentMeta.requestId;
+  }
+  return (
+    candidate.uuid !== undefined &&
+    agentMeta.uuid !== undefined &&
+    candidate.uuid === agentMeta.uuid
+  );
+}
+
 const clearBoundaryBySession = new Map<string, number>();
 
 export function noteSessionClearBoundary(sessionId: string, clearedAt: string | number | null | undefined): void {
@@ -89,6 +118,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
     clearBoundaryBySession.set(sessionId, parsed);
+    sealedAssistantLateFinalBySession.delete(sessionId);
     // A cleared transcript must not be revived by a late terminal update from an
     // older background task. New tool calls repopulate this linkage after the boundary.
     clearAgentTaskPersistState(sessionId);
@@ -1498,6 +1528,19 @@ export function onInteractionMessage(
  *
  * 仅 ask_user_question / plan_review 落库(permission 无 chat 消息,persistId 为空时直接跳过)。
  */
+const finalizedInteractionPersistIdsBySession = new Map<string, Set<string>>();
+
+function claimInteractionPersistId(sessionId: string, persistId: string): boolean {
+  let claimed = finalizedInteractionPersistIdsBySession.get(sessionId);
+  if (!claimed) {
+    claimed = new Set<string>();
+    finalizedInteractionPersistIdsBySession.set(sessionId, claimed);
+  }
+  if (claimed.has(persistId)) return false;
+  claimed.add(persistId);
+  return true;
+}
+
 export function onInteractionResolved(
   sessionId: string,
   persistId: string | undefined,
@@ -1508,14 +1551,16 @@ export function onInteractionResolved(
   if (!persistId) return;
   const requestId = typeof request.requestId === 'string' ? request.requestId : '';
   if (!requestId) return;
+  if (!claimInteractionPersistId(sessionId, persistId)) return;
 
   if (kind === 'ask_user_question') {
     const answers = (decision.answers as Record<string, string> | undefined) ?? {};
+    const cancelled = decision.dismissed === true;
     enqueueWrite(`ask_user_resolved:${sessionId}:${persistId}`, () =>
       updateDbMessageContent(sessionId, persistId, {
         requestId,
         questions: request.questions ?? [],
-        status: 'answered',
+        status: cancelled ? 'cancelled' : 'answered',
         answers,
       }),
     );
@@ -1660,6 +1705,42 @@ export function onAssistantTextEvent(
   const isFullText = data.isFullText === true;
 
   if (isFinal) {
+    const visible = stripInternalWebCitations(rawText);
+    const lateFinalCandidate = sealedAssistantLateFinalBySession.get(sessionId);
+    if (
+      lateFinalCandidate &&
+      visible.length > 0 &&
+      matchesSealedAssistantIdentity(lateFinalCandidate, agentMeta) &&
+      (isFullText ||
+        visible === lateFinalCandidate.text ||
+        visible.startsWith(lateFinalCandidate.text))
+    ) {
+      const contentChanged = visible !== lateFinalCandidate.text;
+      if (contentChanged) {
+        const isCandidateCurrent = () =>
+          sealedAssistantLateFinalBySession.get(sessionId) === lateFinalCandidate;
+        enqueueWrite(
+          `assistant_late_final:${sessionId}:${lateFinalCandidate.persistId}`,
+          async (ownerScope) => {
+            if (!isCandidateCurrent()) return;
+            const updated = await updateDbMessageContent(
+              sessionId,
+              lateFinalCandidate.persistId,
+              visible,
+            );
+            if (updated && isCandidateCurrent()) {
+              lateFinalCandidate.text = visible;
+              broadcastMessageRow(sessionId, updated, ownerScope);
+            }
+          },
+        );
+      }
+      // Do not restore the consumed per-turn Assistant ids here. A paired late
+      // done must keep the stale-idle failure seal instead of changing it to a
+      // successful turn merely because its final text snapshot arrived late.
+      return lateFinalCandidate.persistId;
+    }
+
     const block = assistantBlocks.get(sessionId);
     if (block) {
       // 流式确认:不落库,留给边界 flush。显式 isFullText 表示 SDK 权威全文；
@@ -1676,7 +1757,6 @@ export function onAssistantTextEvent(
       return block.persistId;
     }
     // 非流式 isFinal burst(result 兜底补推也走这):无在飞 block,立即落库。
-    const visible = stripInternalWebCitations(rawText);
     if (visible) {
       // DUP-SKIP(对齐 renderer 老 757-762):若紧邻的上一条已落库消息正是内容完全
       // 相同的 assistant(典型:重复 isFinal / block flush 后又来同内容补推),复用其
@@ -1717,15 +1797,46 @@ export function flushAssistantBlock(
   sessionId: string,
   agentMetaFallback: AgentMeta | null = null,
 ): void {
+  flushAssistantBlockInternal(sessionId, agentMetaFallback);
+}
+
+function flushAssistantBlockInternal(
+  sessionId: string,
+  agentMetaFallback: AgentMeta | null,
+): { persistId: string; text: string; agentMeta: AgentMeta | null } | undefined {
   const block = assistantBlocks.get(sessionId);
-  if (!block) return;
+  if (!block) return undefined;
   assistantBlocks.delete(sessionId);
   const visible = stripInternalWebCitations(block.text);
-  if (!visible) return;
+  if (!visible) return undefined;
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
   enqueuePersistAssistant(sessionId, block.persistId, visible, meta, block.createdAt);
+  return { persistId: block.persistId, text: visible, agentMeta: meta };
+}
+
+/**
+ * Flush a lost-terminal streaming block while retaining its SDK identity for a
+ * possible late final snapshot. resetTurnPersistState intentionally leaves this
+ * candidate intact; /clear and full session cleanup invalidate it.
+ */
+export function sealAssistantBlockForLateFinal(
+  sessionId: string,
+  agentMetaFallback: AgentMeta | null = null,
+): void {
+  const flushed = flushAssistantBlockInternal(sessionId, agentMetaFallback);
+  if (!flushed) return;
+  sealedAssistantLateFinalBySession.delete(sessionId);
+  const requestId = flushed.agentMeta?.requestId;
+  const uuid = flushed.agentMeta?.uuid;
+  if (!requestId && !uuid) return;
+  sealedAssistantLateFinalBySession.set(sessionId, {
+    persistId: flushed.persistId,
+    text: flushed.text,
+    ...(requestId ? { requestId } : {}),
+    ...(uuid ? { uuid } : {}),
+  });
 }
 
 /**
@@ -1932,6 +2043,7 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 export function clearSessionPersistState(sessionId: string): void {
   clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);
+  sealedAssistantLateFinalBySession.delete(sessionId);
   backgroundTurnPersistStatesBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);
   knownToolUseIdsBySession.delete(sessionId);
@@ -1946,6 +2058,7 @@ export function clearSessionPersistState(sessionId: string): void {
   lastAssistantPersistIdBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);
+  finalizedInteractionPersistIdsBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
   _turnAttemptTokenBySession.delete(sessionId);

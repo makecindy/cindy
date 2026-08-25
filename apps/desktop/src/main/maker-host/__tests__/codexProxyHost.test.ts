@@ -119,7 +119,8 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
   };
 });
 
-vi.mock('@cindy/responses-chat-bridge', () => ({
+vi.mock('@cindy/responses-chat-bridge', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@cindy/responses-chat-bridge')>(),
   createResponsesChatHandler: mockState.createResponsesChatHandler,
 }));
 
@@ -2396,9 +2397,17 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
+        transformRequest: [
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          mockState.stripNonAnthropicFields,
+        ],
+        transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
+        retryProvenWebSocketUpgrades: true,
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
           expect.objectContaining({ id: 'image_generation_id' }),
@@ -2408,8 +2417,17 @@ describe('codex proxy host', () => {
     );
     const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
       upstream: () => string;
+      transformRequest: Array<{
+        errorMode?: 'reject-request';
+        onRequestSettled?: (requestId: number) => void;
+      }>;
     };
     expect(proxyOpts.upstream()).toBe(`${XD_GATEWAY_BASE_URL}/v1`);
+    const requestScopedTransforms = proxyOpts.transformRequest.filter(
+      (transform) => transform.onRequestSettled,
+    );
+    expect(requestScopedTransforms).toHaveLength(1);
+    expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {
@@ -2436,6 +2454,27 @@ describe('codex proxy host', () => {
     expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBe(
       'https://chatgpt.com/backend-api/codex',
     );
+  });
+
+  it('forgets only the closing session websocket proofs before a provider-route resume', async () => {
+    const host = await freshCodexProxyHost();
+    const forgetWebSocketStateForThread = vi.fn(() => 1);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      forgetWebSocketStateForThread,
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-switching', 'thread-switching', 'PRODUCT_PROMPT');
+    host.registerChildThread('thread-switching', 'thread-switching-child');
+    host.registerComposed('session-untouched', 'thread-untouched', 'PRODUCT_PROMPT');
+
+    host.unregister('session-switching');
+
+    expect(forgetWebSocketStateForThread).toHaveBeenCalledTimes(2);
+    expect(forgetWebSocketStateForThread).toHaveBeenCalledWith('thread-switching');
+    expect(forgetWebSocketStateForThread).toHaveBeenCalledWith('thread-switching-child');
+    expect(forgetWebSocketStateForThread).not.toHaveBeenCalledWith('thread-untouched');
   });
 
   it('declines the next websocket upgrade after a body recovery error is armed', async () => {
@@ -4102,43 +4141,207 @@ describe('codex proxy host', () => {
     });
   });
 
-  it('removes unsupported DeepSeek V4 custom tools but retains apply_patch', async () => {
+  it('round-trips exec for a custom Responses Provider that lacks native custom tools', async () => {
     const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([buildUserProvider({
+      id: 'stealth',
+      name: 'Stealth',
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:43168/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'stealth/ox-alpha', name: 'OX Alpha' }],
+        },
+      },
+    })]);
+    host.registerComposed('session-stealth-exec', 'thread-stealth-exec', 'PRODUCT_PROMPT');
+    setSessionProvider('session-stealth-exec', 'stealth');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'stealth/ox-alpha',
+        tools: [
+          { type: 'custom', name: 'exec', description: 'run a command' },
+          { type: 'custom', name: 'apply_patch', description: 'edit files' },
+          { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        ],
+        tool_choice: { type: 'custom', name: 'exec' },
+        input: [
+          { type: 'custom_tool_call', id: 'ctc_1', status: 'completed',
+            name: 'exec', call_id: 'old_call', input: 'text("old")' },
+          { type: 'custom_tool_call_output', call_id: 'old_call', output: 'old result' },
+        ],
+      };
+      const ctx = {
+        reqId: 3168,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-stealth-exec' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+
+      expect(current).toMatchObject({
+        tools: [
+          expect.objectContaining({
+            type: 'function',
+            name: 'exec',
+            description: expect.stringContaining('run a command'),
+            parameters: expect.objectContaining({ type: 'object', required: ['input'] }),
+          }),
+          { type: 'custom', name: 'apply_patch', description: 'edit files' },
+          { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        ],
+        tool_choice: { type: 'function', name: 'exec' },
+        input: [
+          expect.objectContaining({
+            type: 'function_call', id: 'ctc_1', status: 'completed', name: 'exec',
+            arguments: '{"input":"text(\\"old\\")"}',
+          }),
+          { type: 'function_call_output', call_id: 'old_call', output: 'old result' },
+        ],
+      });
+
+      const responseTransform = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformResponse({
+        reqId: 3168,
+        responseHeaders: { 'content-type': 'text/event-stream' },
+      });
+      const chunks: Buffer[] = [];
+      responseTransform.on('data', (chunk: Buffer) => chunks.push(chunk));
+      const completed = new Promise<void>((resolve, reject) => {
+        responseTransform.once('end', resolve);
+        responseTransform.once('error', reject);
+      });
+      const call = { type: 'function_call', name: 'exec', call_id: 'call_exec', arguments: '' };
+      responseTransform.end([
+        { type: 'response.output_item.added', output_index: 0, item: call },
+        { type: 'response.function_call_arguments.done', item_id: 'fc_1', output_index: 0,
+          arguments: '{"input":"text(\\"local\\")"}' },
+        { type: 'response.output_item.done', output_index: 0,
+          item: { ...call, arguments: '{"input":"text(\\"local\\")"}' } },
+      ].map((value) => `data: ${JSON.stringify(value)}\n\n`).join(''));
+      await completed;
+      const events = Buffer.concat(chunks).toString('utf8').split('\n')
+        .filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
+      expect(events.map((event) => event.type)).toEqual([
+        'response.output_item.added',
+        'response.custom_tool_call_input.delta',
+        'response.custom_tool_call_input.done',
+        'response.output_item.done',
+      ]);
+      expect(events[1]).toMatchObject({ item_id: 'fc_1', delta: 'text("local")' });
+      expect(events[3].item).toEqual({
+        type: 'custom_tool_call',
+        name: 'exec',
+        call_id: 'call_exec',
+        input: 'text("local")',
+      });
+    } finally {
+      host.unregister('session-stealth-exec');
+      clearSessionProvider('session-stealth-exec');
+      setCustomProviders([]);
+    }
+  });
+
+  it('adapts exec when env-key falls through a built-in OpenAI session to XD', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    host.setCodexProxyAuthInjection('env-key');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
       dispose: vi.fn(async () => undefined),
     });
     await host.ensureCodexProxyReady();
+    host.registerComposed('session-openai-envkey-exec', 'thread-openai-envkey-exec', 'PRODUCT_PROMPT');
+    setSessionProvider('session-openai-envkey-exec', 'openai');
 
-    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    let current: unknown = {
-      model: 'deepseek/deepseek-v4-pro',
-      tools: [
-        'exec',
-        'apply_patch',
-        { type: 'custom', name: 'exec', description: 'run a command' },
-        { type: 'custom', name: 'apply_patch', description: 'edit files' },
-        { type: 'function', name: 'read_file', parameters: { type: 'object' } },
-      ],
-      tool_choice: { type: 'custom', name: 'exec' },
-      input: 'review this file',
-    };
-    const ctx = { method: 'POST', url: '/responses', headers: {} };
-    for (const transform of transforms) {
-      const next = transform(current, ctx);
-      if (next !== null && next !== undefined) current = next;
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'gpt-5.5',
+        tools: [
+          { type: 'custom', name: 'exec', description: 'run a command' },
+          { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        ],
+        tool_choice: { type: 'custom', name: 'exec' },
+      };
+      const ctx = {
+        reqId: 3262,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-openai-envkey-exec' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+
+      expect(current).toMatchObject({
+        tools: [
+          expect.objectContaining({
+            type: 'function',
+            name: 'exec',
+            parameters: expect.objectContaining({ required: ['input'] }),
+          }),
+          { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        ],
+        tool_choice: expect.objectContaining({ type: 'function' }),
+      });
+    } finally {
+      host.unregister('session-openai-envkey-exec');
+      clearSessionProvider('session-openai-envkey-exec');
     }
+  });
 
-    expect(current).toEqual({
-      model: 'deepseek/deepseek-v4-pro',
-      tools: [
-        'apply_patch',
-        { type: 'custom', name: 'apply_patch', description: 'edit files' },
-        { type: 'function', name: 'read_file', parameters: { type: 'object' } },
-      ],
-      tool_choice: 'auto',
-      input: 'review this file',
+  it('keeps native exec when oauth-bearer adopts the built-in OpenAI session', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
     });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-openai-oauth-exec', 'thread-openai-oauth-exec', 'PRODUCT_PROMPT');
+    setSessionProvider('session-openai-oauth-exec', 'openai');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'gpt-5.5',
+        tools: [{ type: 'custom', name: 'exec', description: 'run a command' }],
+        tool_choice: { type: 'custom', name: 'exec' },
+      };
+      const ctx = {
+        reqId: 3263,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-openai-oauth-exec' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+
+      expect(current).toMatchObject({
+        tools: [{ type: 'custom', name: 'exec' }],
+        tool_choice: { type: 'custom', name: 'exec' },
+      });
+    } finally {
+      host.unregister('session-openai-oauth-exec');
+      clearSessionProvider('session-openai-oauth-exec');
+    }
   });
 
   it('keeps parallel strict-gateway tool calls grouped before their matched outputs', async () => {
@@ -5441,7 +5644,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(20); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(21); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

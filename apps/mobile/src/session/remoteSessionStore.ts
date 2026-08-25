@@ -306,6 +306,11 @@ const pendingTitlePreview = new Map<string, string>();
 const inputProjectionAuthorityEpochs = new Map<string, number>();
 let nextInputProjectionAuthorityEpoch = 0;
 let inputProjectionAuthorityEpochFloor = 0;
+const inputProjectionRemoteEpochs = new Map<string, number>();
+let nextInputProjectionRemoteEpoch = 0;
+let inputProjectionRemoteEpochFloor = 0;
+const inputProjectionRemoteQueuedEvidence = new Map<string, Map<string, number>>();
+const INPUT_PROJECTION_REMOTE_EVIDENCE_LIMIT = 256;
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
 const sessionRunning = new Map<string, boolean>();
 const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
@@ -615,7 +620,6 @@ const subs = new Set<() => void>();
 const emptyMessages: RemoteMessage[] = [];
 const emptyPendingInteractions: PendingInteraction[] = [];
 const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
-
 const REGULAR_SESSION_GLOBAL_MESSAGE_BUDGET = 800;
 const REGULAR_SESSION_GLOBAL_MESSAGE_BYTES_BUDGET = 64 * 1024 * 1024;
 const MESSAGE_STRUCTURAL_BYTES_ESTIMATE = 512;
@@ -762,6 +766,8 @@ function removeSessionRuntimeState(sessionId: string): void {
   pendingInteractions.delete(sessionId);
   pendingInteractionsAuthoritative.delete(sessionId);
   inputProjections.delete(sessionId);
+  inputProjectionRemoteEpochs.delete(sessionId);
+  inputProjectionRemoteQueuedEvidence.delete(sessionId);
   bumpInputProjectionAuthorityEpoch(sessionId);
   sessionLiveActivity.delete(sessionId);
   sessionRunning.delete(sessionId);
@@ -1047,6 +1053,52 @@ function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
   const epoch = ++nextInputProjectionAuthorityEpoch;
   inputProjectionAuthorityEpochs.set(sessionId, epoch);
   return epoch;
+}
+
+function recordInputProjectionRemoteEvidence(sessionId: string, clientIds: Iterable<string>, settled = false): void {
+  const epoch = ++nextInputProjectionRemoteEpoch;
+  inputProjectionRemoteEpochs.set(sessionId, epoch);
+  let evidence = inputProjectionRemoteQueuedEvidence.get(sessionId);
+  for (const clientId of clientIds) {
+    inputProjectionRemoteQueuedEvidence.set(sessionId, evidence ??= new Map<string, number>());
+    evidence.delete(clientId);
+    evidence.set(clientId, settled ? -epoch : epoch);
+  }
+  while (evidence && evidence.size > INPUT_PROJECTION_REMOTE_EVIDENCE_LIMIT) evidence.delete(evidence.keys().next().value!);
+}
+
+function settleInputProjectionClientIds(
+  sessionId: string,
+  settledClientIds: ReadonlySet<string>,
+): boolean {
+  if (settledClientIds.size === 0) return false;
+  recordInputProjectionRemoteEvidence(sessionId, settledClientIds, true);
+  const current = inputProjections.get(sessionId);
+  const pendingQueue = current?.pendingQueue.filter(
+    (item) => !settledClientIds.has(item.clientId),
+  );
+  const projectionChanged = Boolean(current && pendingQueue?.length !== current.pendingQueue.length);
+  if (!projectionChanged || !current || !pendingQueue) return false;
+  inputProjections.set(sessionId, { ...current, pendingQueue });
+  bumpInputProjectionAuthorityEpoch(sessionId);
+  return true;
+}
+
+function settleInputProjectionFromMessages(
+  sessionId: string, list: readonly RemoteMessage[],
+): boolean {
+  const tracked = new Set(inputProjections.get(sessionId)?.pendingQueue.map((item) => item.clientId) ?? []);
+  for (const [clientId, epoch] of inputProjectionRemoteQueuedEvidence.get(sessionId) ?? []) if (epoch > 0) tracked.add(clientId);
+  if (tracked.size === 0) return false;
+  const settled = new Set(list
+    .filter((message) => message.role === 'user' && tracked.has(message.clientId))
+    .map((message) => message.clientId));
+  return settleInputProjectionClientIds(sessionId, settled);
+}
+
+function invalidateInputProjectionForOffline(sessionId: string): boolean {
+  recordInputProjectionRemoteEvidence(sessionId, []);
+  return inputProjections.delete(sessionId);
 }
 
 function commitInputProjection(sessionId: string, next: InputProjection): boolean {
@@ -2755,13 +2807,14 @@ export const remoteSessionStore = {
     if (!messageWriteAllowed(sessionId, options.authority)) return;
     const textFlushed = flushPendingTextDelta(sessionId);
     const next = normalizeWindowForRetention(sessionId, normalizeMessages(list));
+    const projectionSettled = settleInputProjectionFromMessages(sessionId, next);
     // 记账在相等早退**之前**:这一页是服务端一次给出的连续段,它带来的连续性结论与"窗口内容有没有
     // 变"无关。冷开缓存恰好与服务端最新页逐行相同时(常态)若被早退跳过,这次权威响应就白来了 ——
     // 之后会话涨过一页、再遇一次满页重连刷新,本可保留的历史会被当成来源不明全丢(#1210 review)。
     coverReplacedWindow(sessionId, next);
     if (next.length === 0) clearSessionMessageCache(sessionId);
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
-      if (textFlushed) emit();
+      if (textFlushed || projectionSettled) emit();
       return;
     }
     messages.set(sessionId, next);
@@ -2804,6 +2857,7 @@ export const remoteSessionStore = {
     if (!messageWriteAllowed(sessionId, options.authority)) return;
     const textFlushed = flushPendingTextDelta(sessionId);
     const latestWindow = normalizeWindowForRetention(sessionId, normalizeMessages(list));
+    const projectionSettled = settleInputProjectionFromMessages(sessionId, latestWindow);
     if (latestWindow.length === 0) {
       // 空窗口仍需保留本地系统卡(mobile-system-*):新会话首条消息发出后服务端
       // 消息列表可能仍为空,下一次 setLatestMessageWindow 传空数组不能把刚追加的
@@ -2812,7 +2866,7 @@ export const remoteSessionStore = {
       // A live assistant row is not yet represented in the DB window. Do not erase it
       // while the persistence push is still in flight.
       if (hasLiveAssistantMessage(sessionId)) {
-        if (textFlushed) emit();
+        if (textFlushed || projectionSettled) emit();
         return;
       }
       const preserved = existing.filter((item) => messageKey(item).startsWith('mobile-system-'));
@@ -2825,7 +2879,7 @@ export const remoteSessionStore = {
         if (next.length === 0) clearSessionMessageCache(sessionId);
         bumpMessageVersion();
         emit();
-      } else if (textFlushed) {
+      } else if (textFlushed || projectionSettled) {
         emit();
       }
       return;
@@ -3031,6 +3085,7 @@ export const remoteSessionStore = {
   ): void {
     if (!messageWriteAllowed(sessionId, options.authority)) return;
     const textFlushed = flushPendingTextDelta(sessionId);
+    const projectionSettled = settleInputProjectionFromMessages(sessionId, list);
     const byKey = new Map<string, RemoteMessage>();
     for (const item of messages.get(sessionId) ?? []) {
       byKey.set(messageKey(item), item);
@@ -3054,7 +3109,7 @@ export const remoteSessionStore = {
     }
     const next = normalizeWindowForRetention(sessionId, normalizeMessages([...byKey.values()]));
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
-      if (textFlushed) emit();
+      if (textFlushed || projectionSettled) emit();
       return;
     }
     messages.set(sessionId, next);
@@ -3093,6 +3148,7 @@ export const remoteSessionStore = {
   ): void {
     if (!messageWriteAllowed(sessionId, options.authority)) return;
     let changed = flushPendingTextDelta(sessionId);
+    changed = settleInputProjectionFromMessages(sessionId, [message]) || changed;
     const reanchorAfterMessage = options.hostTimeAuthoritative !== false && message.role === 'user';
     const userCanReanchorPendingLiveReply = reanchorAfterMessage
       && userMessageCanConsumePendingLiveReply(sessionId, message);
@@ -3161,6 +3217,10 @@ export const remoteSessionStore = {
   removeMessages(sessionId: string, clientIds: readonly string[], deviceId?: string): void {
     const deletedClientIds = new Set(clientIds.filter(Boolean));
     if (!sessionId || deletedClientIds.size === 0) return;
+    const tracked = new Set(inputProjections.get(sessionId)?.pendingQueue.map((item) => item.clientId) ?? []);
+    for (const [clientId, epoch] of inputProjectionRemoteQueuedEvidence.get(sessionId) ?? []) if (epoch > 0) tracked.add(clientId);
+    const settled = new Set([...deletedClientIds].filter((clientId) => tracked.has(clientId)));
+    const projectionSettled = settleInputProjectionClientIds(sessionId, settled);
     const existing = messages.get(sessionId) ?? emptyMessages;
     const removed = existing.filter((message) => (
       deletedClientIds.has(message.clientId) || deletedClientIds.has(message.id)
@@ -3219,7 +3279,7 @@ export const remoteSessionStore = {
     if (messagesChanged) {
       applyMessageWriteRetention(sessionId);
     }
-    if (!messagesChanged && !tasksChanged) return;
+    if (!messagesChanged && !tasksChanged && !projectionSettled) return;
     bumpMessageVersion();
     emit();
   },
@@ -3318,6 +3378,14 @@ export const remoteSessionStore = {
   setInputProjection(sessionId: string, projection: unknown): void {
     const next = normalizeInputProjection(projection, sessionId);
     bumpInputProjectionAuthorityEpoch(sessionId);
+    recordInputProjectionRemoteEvidence(sessionId, next.pendingQueue.map((item) => item.clientId));
+    commitInputProjection(sessionId, next);
+  },
+
+  /** Apply local UI state without claiming that the controlled device accepted it. */
+  setInputProjectionOptimistically(sessionId: string, projection: unknown): void {
+    const next = normalizeInputProjection(projection, sessionId);
+    bumpInputProjectionAuthorityEpoch(sessionId);
     commitInputProjection(sessionId, next);
   },
 
@@ -3325,16 +3393,36 @@ export const remoteSessionStore = {
     return inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
   },
 
+  captureInputProjectionRemoteEpoch(sessionId: string): number {
+    return inputProjectionRemoteEpochs.get(sessionId) ?? inputProjectionRemoteEpochFloor;
+  },
+
+  hasAuthoritativeQueuedItemSince(sessionId: string, clientId: string, expectedRemoteEpoch: number): boolean {
+    return Math.abs(inputProjectionRemoteQueuedEvidence.get(sessionId)?.get(clientId) ?? 0)
+      > expectedRemoteEpoch;
+  },
+
   setInputProjectionIfCurrent(
     sessionId: string,
     projection: unknown,
     expectedEpoch: number,
+    expectedRemoteEpoch?: number,
+    acceptedClientId?: string,
   ): boolean {
+    const remoteEpoch = inputProjectionRemoteEpochs.get(sessionId) ?? inputProjectionRemoteEpochFloor;
     const currentEpoch = inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
-    if (currentEpoch !== expectedEpoch) {
+    const authorityStale = currentEpoch !== expectedEpoch;
+    const remoteStale = expectedRemoteEpoch !== undefined && remoteEpoch !== expectedRemoteEpoch;
+    if (authorityStale || remoteStale) {
+      if (acceptedClientId) {
+        recordInputProjectionRemoteEvidence(sessionId, [acceptedClientId]);
+      }
       return false;
     }
     const next = normalizeInputProjection(projection, sessionId);
+    const queuedClientIds = new Set(next.pendingQueue.map((item) => item.clientId));
+    if (acceptedClientId) queuedClientIds.add(acceptedClientId);
+    recordInputProjectionRemoteEvidence(sessionId, queuedClientIds);
     bumpInputProjectionAuthorityEpoch(sessionId);
     commitInputProjection(sessionId, next);
     return true;
@@ -3350,6 +3438,7 @@ export const remoteSessionStore = {
     boundaryAgentMeta?: Record<string, unknown> | null,
   ): void {
     if (!sessionId) return;
+    recordInputProjectionRemoteEvidence(sessionId, []);
     // A maker turn boundary supersedes any projection query that started
     // before it. This is the terminal fence for late owner snapshots.
     bumpInputProjectionAuthorityEpoch(sessionId);
@@ -4194,7 +4283,7 @@ export const remoteSessionStore = {
       changed = pendingInteractions.delete(sessionId) || changed;
       // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
       changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
-      changed = inputProjections.delete(sessionId) || changed;
+      changed = invalidateInputProjectionForOffline(sessionId) || changed;
       bumpInputProjectionAuthorityEpoch(sessionId);
       changed = sessionLiveActivity.delete(sessionId) || changed;
       changed = sessionGoalStatus.delete(sessionId) || changed;
@@ -4309,6 +4398,9 @@ export const remoteSessionStore = {
     inputProjections.clear();
     inputProjectionAuthorityEpochFloor = ++nextInputProjectionAuthorityEpoch;
     inputProjectionAuthorityEpochs.clear();
+    inputProjectionRemoteEpochFloor = ++nextInputProjectionRemoteEpoch;
+    inputProjectionRemoteEpochs.clear();
+    inputProjectionRemoteQueuedEvidence.clear();
     // Keep authority tombstones monotonic across a global store reset so an
     // old in-flight query cannot be accepted after the session is recreated.
     sessionLiveActivity.clear();

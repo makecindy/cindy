@@ -1240,8 +1240,10 @@ export default async function cindySubagent(pi: any) {
       const startedAt = Date.now();
       const label = tasks.map(function (t) { return t.agent; }).join(', ');
       const taskId = String(toolCallId || 'subagent');
-      const totals = { toolUses: 0, tokens: 0, usage: emptyUsage() };
-      const perTask = tasks.map(function () { return { toolUses: 0, tokens: 0, usage: emptyUsage() }; });
+      const totals = { toolUses: 0, tokens: 0, usage: emptyUsage(), usageSegments: [] as any[] };
+      const perTask = tasks.map(function () {
+        return { toolUses: 0, tokens: 0, usage: emptyUsage(), usageSegments: [] as any[] };
+      });
 
       const report = function (status: string, summary?: string) {
         if (typeof onUpdate !== 'function') return;
@@ -1263,6 +1265,9 @@ export default async function cindySubagent(pi: any) {
             cacheWrite: totals.usage.cacheWrite,
             cost: totals.usage.cost,
           },
+          usageSegments: totals.usageSegments.map(function (segment) {
+            return Object.assign({}, segment);
+          }),
         };
         details[MARKER] = 1;
         if (summary) details.summary = summary;
@@ -1278,14 +1283,19 @@ export default async function cindySubagent(pi: any) {
         let toolUses = 0;
         let tokens = 0;
         const usage = emptyUsage();
+        const usageSegments: any[] = [];
         for (const entry of perTask) {
           toolUses += entry.toolUses;
           tokens += entry.tokens;
           mergeUsage(usage, entry.usage);
+          if (Array.isArray(entry.usageSegments)) {
+            usageSegments.push.apply(usageSegments, entry.usageSegments);
+          }
         }
         totals.toolUses = toolUses;
         totals.tokens = tokens;
         totals.usage = usage;
+        totals.usageSegments = usageSegments;
       };
 
       // 两道**派发前**的失败关闭闸。注意它们排在 report 定义**之后**、report('running')
@@ -1352,6 +1362,7 @@ export default async function cindySubagent(pi: any) {
               + Number(task.usage.cacheWrite || 0)
             )),
             usage: task.usage || emptyUsage(),
+            usageSegments: Array.isArray(task.usageSegments) ? task.usageSegments : [],
           };
         });
         recompute();
@@ -1369,10 +1380,16 @@ export default async function cindySubagent(pi: any) {
             + Number(task.usage.cacheWrite || 0)
           )),
           usage: task.usage || emptyUsage(),
+          usageSegments: Array.isArray(task.usageSegments) ? task.usageSegments : [],
         };
       });
       results.forEach(function (result, index) {
-        perTask[index] = { toolUses: result.toolUses, tokens: result.tokens, usage: result.usage };
+        perTask[index] = {
+          toolUses: result.toolUses,
+          tokens: result.tokens,
+          usage: result.usage,
+          usageSegments: result.usageSegments,
+        };
       });
       recompute();
 

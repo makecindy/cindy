@@ -8,6 +8,7 @@ import { validateGhostManifest } from '../../../shared/ghost';
 
 import {
   createGhostInstallReceipt,
+  effectiveInstallOrigin,
   type GhostInstallReceipt,
   GhostInstallReceiptStore,
 } from '../ghostInstallReceipt';
@@ -19,8 +20,9 @@ describe('GhostInstallReceiptStore cleanup', () => {
 
   beforeEach(async () => {
     workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-receipt-cleanup-'));
-    stateRoot = path.join(workDir, 'state');
-    await fs.promises.mkdir(stateRoot);
+    const rawStateRoot = path.join(workDir, 'state');
+    await fs.promises.mkdir(rawStateRoot);
+    stateRoot = await fs.promises.realpath(rawStateRoot);
     store = new GhostInstallReceiptStore(() => stateRoot, async ({ parentDir, targetName, operation }) => {
       if (operation === 'remove') await fs.promises.rm(path.join(parentDir, targetName), { recursive: true, force: true });
     });
@@ -225,6 +227,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
       state: 'approved',
       receipt: { manifest: receipt.manifest },
     });
+  });
+
+  it('preserves only the legacy Forge origin as an effective authorization fact', async () => {
+    await store.write(
+      createGhostInstallReceipt({
+        ...createSetupReceipt(),
+        installOrigin: 'agent-forge',
+      }),
+    );
+
+    const read = store.read('hello');
+    expect(read.state).toBe('approved');
+    if (read.state !== 'approved') return;
+    expect(effectiveInstallOrigin(read.receipt)).toBe('agent-forge');
+    expect(effectiveInstallOrigin({ installOrigin: 'future-origin' })).toBe('manual');
   });
 
   it('treats only a missing migration marker as absent', () => {

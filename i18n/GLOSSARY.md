@@ -155,6 +155,10 @@
 
 **注意别指望 `--update-baseline` 帮你收尾。** `proposed` 存在的理由正是「已知有存量不一致」，改成 `decided` 的那一刻这些告警会变成阻断违规；而 `--update-baseline` 只删不加，遇到 baseline 里没有的指纹会直接拒绝。所以裁决时只有两条路：要么把命中逐条读语境改掉，要么先人工把已 review 过的指纹写进 `i18n/glossary-baseline.json` 冻结存量，之后再用 `--update-baseline` 做修剪。
 
+### Accessories
+
+设置 → 键盘快捷键里，尚未检测到的硬件输入设备（Work Louder 键盘、Xbox 手柄等）收在这一栏。已插入的设备单独成卡，不进这一栏。与 device-link 的「设备／设备互联」不是同一概念。
+
 ### Anthropic Messages
 
 Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。
@@ -267,6 +271,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 腾讯授权页可能展示的外部产品名称，客户端仅按原品牌名展示；先登记为 proposed，待产品术语评审后再决定是否固化。
 
+### Overview
+
+插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。
+
 ### Passkey
 
 WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Microsoft 平台常见译法；先登记为 proposed，待产品术语评审后固化。
@@ -278,6 +286,10 @@ WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Micros
 ### Pin
 
 右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。
+
+### Main view
+
+Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。
 
 ### Manual
 

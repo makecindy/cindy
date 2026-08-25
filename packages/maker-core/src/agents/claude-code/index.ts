@@ -113,9 +113,11 @@ import {
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
+  buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
   buildClaudeRemoteOrcaCallerGuards,
+  buildClaudeRemoteRootOnlyToolGuards,
   buildClaudeRemoteToolGuards,
   mergeClaudeHookSets,
 } from './capability-routing.js';
@@ -1575,6 +1577,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // rely on their observable order. The exact-match Orca provenance guard
           // still runs for send_to_lead after those hooks and denies descendants.
           buildClaudeOrcaCallerProvenanceHooks(),
+          buildClaudeAskUserQuestionCallerProvenanceHooks(),
           this.deps.claudeHooks,
         );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -2345,13 +2348,18 @@ export class ClaudeCodeAgent extends BaseAgent {
       generation: 0,
       interruptGeneration: 0,
       lastAssistantMsgHadSubstance: true,
+      nextRequestPriceVariant: 'standard',
     };
     const runtimeState: RuntimeState = newRuntimeState();
-    const beginNewTurn = (): void => {
+    const beginNewTurn = (priceVariant: 'standard' | 'priority' = mutableFastMode ? 'priority' : 'standard'): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
       resetClaudeGenerationTiming(runtimeState.generation);
+      runtimeState.activeUsageSegmentByParent.clear();
+      runtimeState.activeUsagePriceVariantByParent.clear();
+      runtimeState.pendingUsagePriceVariantByParent.clear();
+      turnState.nextRequestPriceVariant = priceVariant;
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
@@ -2419,6 +2427,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const bridgeStateActive = (): boolean =>
       queuedBridgeTurns > 0 || activeBridgeKind !== null || activeBridgeRewindResumeAt !== undefined;
     let q: Query;
+    // Query-scoped lifecycle fact: modelUsage is cumulative within the SDK
+    // process. A query created without a resume id starts that counter at zero;
+    // resumed queries may include prior transcript usage and must establish a
+    // baseline unless request segments prove the delta independently.
+    const modelUsageStartsAtZeroQueries = new WeakSet<Query>();
     function restoreBridgeAutoCompactSnapshot(reason: string): void {
       const snapshot = bridgeCompactUsageSnapshot;
       bridgeCompactUsageSnapshot = null;
@@ -2631,7 +2644,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         contextWindow: snapshot?.contextWindow,
         sdkSessionId,
       });
-      beginNewTurn();
+      beginNewTurn(mutableFastMode ? 'priority' : 'standard');
       resetToolLoopGuards();
       turnInFlight = true;
       if (origin === 'idle') hostAutoCompactInFlight = true;
@@ -2741,6 +2754,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // resume 优先用当前的 sdkSessionId (rewind 重启时它指向上一轮 SDK 给的 id);
       // 缺省回到 startSession 入参的 resumeSessionId (新会话首次起 query 时用)。
       let resumeSdkSid = sdkSessionId ?? configuredResumeSessionId;
+      let modelUsageCumulativeStartsAtZero = !resumeSdkSid;
 
       // ── 远端 cc 分支 (Phase 4.3) ──
       // session 标了 remoteHostId 且 host 注入了 remoteCcQueryFactory → 走远端
@@ -2860,6 +2874,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = [
           ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteRootOnlyToolGuards(),
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
 
@@ -3253,6 +3268,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         })().catch(() => undefined);
 
         if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
+        if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(remoteQuery);
         return remoteQuery;
       }
 
@@ -3318,6 +3334,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               resumeRecoveryAttempted = false;
               freshSessionValidationPending = true;
               resumeSdkSid = undefined;
+              modelUsageCumulativeStartsAtZero = true;
             } else {
               log.warn('resume transcript not found in any project dir (CLI resume may fail)', {
                 resumeSdkSid,
@@ -3454,6 +3471,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       });
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
+      if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
       return query;
     };
 
@@ -4502,7 +4520,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 rawType,
                 sdkSessionId,
               });
-              beginNewTurn();
+              beginNewTurn(mutableFastMode ? 'priority' : 'standard');
               resetToolLoopGuards();
               turnInFlight = true;
             }
@@ -4517,10 +4535,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               turn: turnState,
               log,
               getModel: () => mutableModel,
+              getProviderId: () => mutableProviderId,
               getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
+              getFastMode: () => mutableFastMode,
               getSdkSessionId: () => sdkSessionId,
+              modelUsageCumulativeStartsAtZero: () =>
+                modelUsageStartsAtZeroQueries.has(currentQ),
               getLogTitle: () => lastSendTitle,
               tracker: usageTracker,
               onSessionId: (sid) => {
@@ -4924,7 +4946,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // turnInFlight,否则 isTurnRunning() 会在没有 turn 运行时误报为忙。无 replay 的
       // 全新 query + startForwardLoop 等价于 startSession 首次起 q 的空闲态。
       if (replayInput) {
-        beginNewTurn();
+        beginNewTurn(runtimeSnapshot.fastMode ? 'priority' : 'standard');
         resetToolLoopGuards();
         turnInFlight = true;
       }
@@ -5461,7 +5483,7 @@ export class ClaudeCodeAgent extends BaseAgent {
 
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
-        beginNewTurn();
+        beginNewTurn(mutableFastMode ? 'priority' : 'standard');
         resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。

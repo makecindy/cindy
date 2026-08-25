@@ -37,7 +37,7 @@
     "queuePositionNth": "{{index}}번째",
     "composerBlockedByPending": "컴퓨터의 대기 중인 요청을 처리한 뒤 계속 입력할 수 있습니다.",
     "missingRequestId": "이 원격 상호작용에는 requestId가 없어 결정을 돌려보낼 수 없습니다.",
-    "issueConfirmUnsupported": "Issue 제출 확인은 컴퓨터에서만 처리됩니다. 데스크톱 앱으로 돌아가 확인하거나 취소하세요.",
+    "desktopConfirmUnsupported": "이 확인은 제어 중인 컴퓨터에서만 처리할 수 있습니다. 데스크톱 앱으로 돌아가 계속하세요.",
     "unsupportedType": "이 원격 상호작용 유형은 모바일에서 아직 지원되지 않습니다.",
     "unsupportedKind": "미지원",
     "desktopOnlyKind": "컴퓨터에서 처리",
@@ -106,6 +106,14 @@
     "issue_confirm": {
       "title": "이슈 내용을 확인해 주세요",
       "label": "이슈"
+    },
+    "rename_sessions_confirm": {
+      "title": "세션 이름 변경을 확인해 주세요",
+      "label": "이름 변경"
+    },
+    "ghost_grant_confirm": {
+      "title": "파일 접근을 확인해 주세요",
+      "label": "파일 접근"
     },
     "plugin_setup": {
       "title": "컴퓨터에서 플러그인 설정이 필요합니다",

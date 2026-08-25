@@ -1361,6 +1361,12 @@ export interface StartSessionOptions {
    * Undefined means do not override the agent/server default.
    */
   fastMode?: boolean;
+  /**
+   * Host-owned live pricing variant for request-level usage segments.
+   * Pi reads this at each provider request boundary so a mid-turn Fast toggle
+   * prices already-started requests with the tariff they actually used.
+   */
+  getPriceVariant?: () => 'standard' | 'priority';
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**

@@ -93,6 +93,8 @@ const LOCALIZED_INTERACTION_KINDS = new Set([
   'ask_user_question',
   'plan_review',
   'issue_confirm',
+  'rename_sessions_confirm',
+  'ghost_grant_confirm',
   'plugin_setup',
 ]);
 
@@ -538,10 +540,10 @@ function InteractionItem({
       />
     );
   }
-  if (kind === 'issue_confirm') {
+  if (kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm') {
     return (
       <UnsupportedCard
-        message={t('interaction.panel.issueConfirmUnsupported')}
+        message={t('interaction.panel.desktopConfirmUnsupported')}
         request={item.request}
         touchLayout={touchLayout}
       />

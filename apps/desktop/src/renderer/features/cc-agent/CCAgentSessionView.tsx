@@ -66,6 +66,7 @@ import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
+import { RemoteDesktopConfirmationNotice } from './RemoteDesktopConfirmationNotice';
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
@@ -86,9 +87,13 @@ import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
+  UnreadFailedScheduleBanner,
 } from '@/components/chat/InterruptedTurnBanner';
+import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
+import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
+import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import {
   APP_EXIT_INTERRUPTED_REASON,
@@ -548,6 +553,36 @@ function findLatestWorkflowTask(
   }
   return latest;
 }
+
+function summarizeRunningWorkflow(taskUpdates: ReadonlyMap<string, AgentTaskUpdate>): {
+  done: number;
+  total: number;
+} | null {
+  let workflow: AgentTaskUpdate | undefined;
+  let latestTs = Number.NEGATIVE_INFINITY;
+  const seen = new Set<AgentTaskUpdate>();
+  for (const update of taskUpdates.values()) {
+    if (update.taskType !== 'local_workflow' || update.status !== 'running' || seen.has(update)) continue;
+    seen.add(update);
+    const timestamp = Date.parse(update.updatedAt ?? update.createdAt ?? '');
+    if ((Number.isFinite(timestamp) ? timestamp : 0) >= latestTs) {
+      workflow = update;
+      latestTs = Number.isFinite(timestamp) ? timestamp : 0;
+    }
+  }
+  if (!workflow) return null;
+  const agents = (workflow.workflowProgress ?? []).filter((entry) => entry.type === 'workflow_agent');
+  if (agents.length === 0) return { done: 0, total: 0 };
+  return {
+    done: agents.filter((entry) => {
+      const visual = workflowAgentVisualState(entry.state);
+      return visual === 'done' || visual === 'failed';
+    }).length,
+    total: agents.length,
+  };
+}
+
+const EMPTY_UNREAD_FAILED_RUN_IDS: string[] = [];
 
 export function CCAgentSessionView({
   sessionIdProp,
@@ -1531,6 +1566,7 @@ export function CCAgentSessionView({
     pendingRenameSessionsConfirm,
     respondToRenameSessionsConfirm,
     pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation,
     respondToGhostGrantConfirm,
     lastExpandedPlanViewerState,
     updatePlanContent,
@@ -1575,7 +1611,10 @@ export function CCAgentSessionView({
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type !== 'command') return false;
       if (!sessionId || !ownsHardwareTaskActions) return false;
-      if (action.commandId === 'approval.approve') {
+      if (
+        action.commandId === 'approval.approve' ||
+        action.commandId === 'composer.submit'
+      ) {
         if (pendingPermission) {
           respondToPermission({ behavior: 'allow' });
           return true;
@@ -1586,7 +1625,10 @@ export function CCAgentSessionView({
         }
         return false;
       }
-      if (action.commandId === 'approval.decline') {
+      if (
+        action.commandId === 'approval.decline' ||
+        action.commandId === 'navigateBack'
+      ) {
         if (pendingPermission) {
           respondToPermission({
             behavior: 'deny',
@@ -1599,6 +1641,7 @@ export function CCAgentSessionView({
           cancelPlanReview(pendingPlanReview.requestId);
           return true;
         }
+        return false;
       }
       if (action.commandId === 'forkTask') {
         if (!canNavigateSession) return false;
@@ -1726,6 +1769,17 @@ export function CCAgentSessionView({
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
+  // SSH 与 device-link 镜像的 task 终态都可能在断连窗口丢失，不能用本地事件永久撑住状态栏。
+  const runningWorkflow = useMemo(
+    () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
+    [isRemoteSession, remoteDeviceId, taskUpdates],
+  );
+  const composerStatus =
+    runningWorkflow
+      ? runningWorkflow.total > 0
+        ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
+        : t('ccAgent.agentStatus.waitingWorkflow')
+      : agentStatus.status;
 
   // error-tail-banner:会话尾部停在未忽略的 role='error' 行 → 输入框上方显示
   // 可操作红条(与 live ErrorBanner 同风格;2026-07-05 产品决策统一——所有尾部
@@ -1735,6 +1789,25 @@ export function CCAgentSessionView({
   //     →「重试/关闭」
   // 后面有新消息 = 任务已被推进,判定自然不命中。此时消息流内不重复渲染该行
   // (MessageStream 对尾部未忽略 error 行返回 null,由本条独家承载)。
+  const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
+  const unreadFailedScheduleRunIds =
+    scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
+  const currentUnreadFailedRunId =
+    scheduleSessionInfo?.latestUnreadFailedRunId ?? unreadFailedScheduleRunIds[0];
+  const markCurrentUnreadFailedScheduleRun = useCallback(async (): Promise<boolean> => {
+    if (!currentUnreadFailedRunId) return true;
+    const { failed, firstError } = await markScheduleRunsReadAndSync([currentUnreadFailedRunId]);
+    if (failed.length === 0) return true;
+    toast.error(
+      t('ccAgent.layout.markAllReadFailed', {
+        error: firstError ?? failed[0],
+      }),
+    );
+    return false;
+  }, [currentUnreadFailedRunId, t]);
+  const handleUnreadFailedScheduleDismiss = useCallback(() => {
+    void markCurrentUnreadFailedScheduleRun();
+  }, [markCurrentUnreadFailedScheduleRun]);
   const errorTailMsg = useMemo(() => {
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
     return last && last.role === 'error' && !last.errorDismissed ? last : null;
@@ -1829,30 +1902,41 @@ export function CCAgentSessionView({
       // 本机会话才清:远程会话的红点靠隧道回执清被控端,而本机库里没有它的行,
       // 重算恢复不了 —— 那条腿延后到 pending 落回 false 且横幅确实消失后再 ack。
       if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
+      // 只清当前这次失败 run。整组历史仍走组菜单。
+      await markCurrentUnreadFailedScheduleRun();
     } catch (err) {
       setErrorTailBannerHiddenFor(null);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [errorTailKind, errorTailMsg, rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
+  }, [
+    errorTailKind,
+    errorTailMsg,
+    markCurrentUnreadFailedScheduleRun,
+    rebuildClaudeSubscriptionSessionBeforeRetry,
+    sessionId,
+  ]);
   const handleErrorTailDismiss = useCallback(() => {
     if (!sessionId || !errorTailMsg) return;
-    // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
-    // (main 侧 merge dismissed:true,不丢 sdkError 等原字段)。落库失败会回滚乐观态。
-    // 必须**等落库完成**再重算:dismiss 落库无广播,而告警查询是纯 DB 读,
-    // 抢在写入前读会仍判定告警存在 —— 横幅已熄灭、红点却卡住。
-    void makerChatStore
-      .dismissErrorTailMessage(sessionId, errorTailMsg.clientId)
-      .then((persisted) => {
-        // device-link 远程会话:dismiss 经隧道写到**被控端** DB,控制端本机库里没有
-        // 这个会话的行,派生腿查不到、也从未认领它 —— 必须显式 ack(explicit 清本机
-        // 角标 + 隧道回执清被控端未读)。删掉展示型 ack 后这是唯一的清除路径。
-        // **只在落库成功时 ack**:隧道写失败时 store 已回滚乐观态、横幅重新出现,
-        // 此时清红点会再造成「横幅在、红点没」(PR #879 review P1)。
-        // 本机会话由下面的重算收敛,不重复 ack。
-        if (persisted && remoteDeviceId) ackErrorAlertHandled(sessionId);
-        return refreshPendingAlerts();
-      });
-  }, [errorTailMsg, remoteDeviceId, sessionId]);
+    void markCurrentUnreadFailedScheduleRun().then((marked) => {
+      if (!marked) return;
+      // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
+      // (main 侧 merge dismissed:true,不丢 sdkError 等原字段)。落库失败会回滚乐观态。
+      // 必须**等落库完成**再重算:dismiss 落库无广播,而告警查询是纯 DB 读,
+      // 抢在写入前读会仍判定告警存在 —— 横幅已熄灭、红点却卡住。
+      return makerChatStore.dismissErrorTailMessage(sessionId, errorTailMsg.clientId).then(
+        (persisted) => {
+          // device-link 远程会话:dismiss 经隧道写到**被控端** DB,控制端本机库里没有
+          // 这个会话的行,派生腿查不到、也从未认领它 —— 必须显式 ack(explicit 清本机
+          // 角标 + 隧道回执清被控端未读)。删掉展示型 ack 后这是唯一的清除路径。
+          // **只在落库成功时 ack**:隧道写失败时 store 已回滚乐观态、横幅重新出现,
+          // 此时清红点会再造成「横幅在、红点没」(PR #879 review P1)。
+          // 本机会话由下面的重算收敛,不重复 ack。
+          if (persisted && remoteDeviceId) ackErrorAlertHandled(sessionId);
+          return refreshPendingAlerts();
+        },
+      );
+    });
+  }, [errorTailMsg, markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
   // interrupted-turn-resume(简化版):「疑似中断」由 session 行的双时间戳驱动
   // (startedAt > endedAt 且未被 /clear 越过,见 sessionActiveTurn.ts 文件头),
   // 不再依赖持久化中断消息行。判定是打开会话时的一次性快照:本窗口 turn 一旦
@@ -1943,29 +2027,33 @@ export function CCAgentSessionView({
       // dispatch 成功,而横幅已隐藏 —— 先临时清点保持一致,排队被取消时由 pending
       // 落回 false 的 effect 重算恢复。远程会话同样延后(见那里的说明)。
       if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
+      await markCurrentUnreadFailedScheduleRun();
     } catch (err) {
       setSessionInterruptAcked(false);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [sessionId]);
+  }, [markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
   const handleSessionInterruptDismiss = useCallback(() => {
     if (!sessionId) return;
-    setSessionInterruptAcked(true);
-    void ackInterruptedTurnFor(sessionId)
-      .then(() => {
-        // 远程会话同 handleErrorTailDismiss:ack 落的是被控端 DB,控制端本机库里没有
-        // 这个会话,派生腿管不到它的红点 —— 显式 ack。本机会话靠 ended 落库广播的
-        // sessions:patched(lastTurnEndedAt)收敛,不重复 ack。
-        if (remoteDeviceId) ackErrorAlertHandled(sessionId);
-      })
-      .catch((err) => {
-        // 落库失败(典型:device-link 断连时忽略远程中断)必须复位闩锁 —— 否则横幅
-        // 永久隐藏而中断并未被确认,红点还挂着,用户不离开再重进就没法重试
-        // (PR #879 review P1)。与 handleSessionInterruptContinue 的失败处理一致。
-        setSessionInterruptAcked(false);
-        toast.error(err instanceof Error ? err.message : String(err));
-      });
-  }, [remoteDeviceId, sessionId]);
+    void markCurrentUnreadFailedScheduleRun().then((marked) => {
+      if (!marked) return;
+      setSessionInterruptAcked(true);
+      return ackInterruptedTurnFor(sessionId)
+        .then(() => {
+          // 远程会话同 handleErrorTailDismiss:ack 落的是被控端 DB,控制端本机库里没有
+          // 这个会话,派生腿管不到它的红点 —— 显式 ack。本机会话靠 ended 落库广播的
+          // sessions:patched(lastTurnEndedAt)收敛,不重复 ack。
+          if (remoteDeviceId) ackErrorAlertHandled(sessionId);
+        })
+        .catch((err) => {
+          // 落库失败(典型:device-link 断连时忽略远程中断)必须复位闩锁 —— 否则横幅
+          // 永久隐藏而中断并未被确认,红点还挂着,用户不离开再重进就没法重试
+          // (PR #879 review P1)。与 handleSessionInterruptContinue 的失败处理一致。
+          setSessionInterruptAcked(false);
+          toast.error(err instanceof Error ? err.message : String(err));
+        });
+    });
+  }, [markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
   // device-link 远程会话首屏:历史/元数据经隧道往返(网络),慢网下 historyLoaded=false
   // 期间消息区空白。仅远程 + 延迟防闪后给「正在从被控端加载」提示(本机会话恒 false)。
   // 冷缓存已经把最近一页画出来时(messages 非空)不再显示覆盖层 —— 它会盖住可读内容。
@@ -3975,7 +4063,8 @@ export function CCAgentSessionView({
       pendingPluginSetup ||
       pendingIssueConfirm ||
       pendingRenameSessionsConfirm ||
-      pendingGhostGrantConfirm,
+      pendingGhostGrantConfirm ||
+      pendingRemoteDesktopConfirmation,
     );
   useEffect(() => {
     if (shareSelectionActive && shareSelectionBlocked) shareSelectionStore.exit();
@@ -4274,16 +4363,20 @@ export function CCAgentSessionView({
               {(!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed)) && (
                 <RunningStatusBar
                   key={sessionId}
-                  status={agentStatus.status}
+                  status={composerStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
                   startedAt={agentStatus.startedAt}
-                  visible={!pendingPlanReview && (agentStatus.isRunning || backgroundTasksActive)}
+                  visible={
+                    !pendingPlanReview &&
+                    (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null)
+                  }
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
+                  workflowStatus={runningWorkflow ? composerStatus : undefined}
                   // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
                   // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
                   // (关子进程止损,bash 任务随之终止,无需再逐个停)。
@@ -4330,7 +4423,8 @@ export function CCAgentSessionView({
                       pendingPluginSetup ||
                       pendingIssueConfirm ||
                       pendingRenameSessionsConfirm ||
-                      pendingGhostGrantConfirm
+                      pendingGhostGrantConfirm ||
+                      pendingRemoteDesktopConfirmation
                     )
                   }
                   className="mb-0"
@@ -4433,6 +4527,22 @@ export function CCAgentSessionView({
                 />
               )}
 
+            {!errorTailMsg &&
+              !interruptedFromSession &&
+              unreadFailedScheduleRunIds.length > 0 &&
+              !syntheticContinuationPending &&
+              !error &&
+              !credentialSwitchWait &&
+              !isStreaming &&
+              !agentStatus.isRunning &&
+              sessionId && (
+                <UnreadFailedScheduleBanner
+                  onDismiss={handleUnreadFailedScheduleDismiss}
+                  style={{ width: inputWidth }}
+                  className="py-1"
+                />
+              )}
+
             {error && (
               <ErrorBanner
                 error={error}
@@ -4519,7 +4629,8 @@ export function CCAgentSessionView({
                     pendingPluginSetup ||
                     pendingIssueConfirm ||
                     pendingRenameSessionsConfirm ||
-                    pendingGhostGrantConfirm
+                    pendingGhostGrantConfirm ||
+                    pendingRemoteDesktopConfirmation
                   )
                 }
                 placeholder={
@@ -4586,13 +4697,17 @@ export function CCAgentSessionView({
                     pending={pendingGhostGrantConfirm}
                     onRespond={respondToGhostGrantConfirm}
                   />
+                ) : pendingRemoteDesktopConfirmation ? (
+                  <RemoteDesktopConfirmationNotice
+                    key={pendingRemoteDesktopConfirmation.requestId}
+                  />
                 ) : null}
               </InteractionPromptHost>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               <GoalIndicator sessionId={sessionId} />
-              {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
-                 全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
-                 Takeover ? : ChatInput) 的语义一致。
+              {/* 互斥:控制端能终结的 pending interaction 会接管 composer；
+                 Desktop-only 只读确认只能提示等待，必须保留 ChatInput，避免控制端
+                 既处理不了确认又无法继续发送或排队消息。
                  优先级 (高 → 低):
                    1. attached (远程接管中)  → TakeoverMask  (90px)
                    2. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
@@ -5029,6 +5144,7 @@ function RunningStatusBar({
   inputWidth,
   sideTaskRunning = false,
   backgroundTasksRunning = false,
+  workflowStatus,
   backgroundBashOnlyCount = 0,
   backgroundStopping = false,
   onStopBackgroundTasks,
@@ -5058,6 +5174,8 @@ function RunningStatusBar({
    * 计数在此语义下都是误导信息。替代原独立横幅(2026-07-13 假停止治理)。
    */
   backgroundTasksRunning?: boolean;
+  /** 本机 Workflow 在运行时的专属状态文案；保留后台停止语义，但优先解释等待进度。 */
+  workflowStatus?: string;
   /**
    * 后台模式细分:>0 表示当前只有后台 Bash 任务在跑(无模型调用)。左段换
    * 「后台任务运行中(N 个)」文案,「全部停止」tooltip 换成逐任务停止语义
@@ -5116,6 +5234,7 @@ function RunningStatusBar({
   }, [startedAt]);
 
   const isHidden = suppressContent || (!showContent && !visible);
+  const workflowWaiting = workflowStatus !== undefined;
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
@@ -5123,11 +5242,11 @@ function RunningStatusBar({
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
   // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
-  const displayStatus = backgroundTasksRunning
+  const displayStatus = workflowStatus ?? (backgroundTasksRunning
     ? backgroundBashOnlyCount > 0
       ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
       : t('chat.backgroundActivity.status')
-    : localizeAgentStatus(status, t);
+    : localizeAgentStatus(status, t));
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -5292,7 +5411,7 @@ function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : (
+            ) : workflowWaiting ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}

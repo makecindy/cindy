@@ -4,6 +4,7 @@ import { CURRENT_CINDY_REGION } from './brandRegion.js';
 
 export type MoneyCurrency = 'CNY' | 'USD';
 export type MoneyKind = 'actual-cost' | 'value-estimate';
+export type PriceVariant = 'standard' | 'priority' | 'fast' | 'batch';
 export type MoneyEstimateReason =
   'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency';
 
@@ -35,6 +36,14 @@ export interface ModelPriceQuote {
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
+  /** Gateway fast/priority tariff. Missing fields make that request unpriceable. */
+  priority?: {
+    inputPerMtok?: number;
+    outputPerMtok?: number;
+    cacheReadPerMtok?: number;
+    cacheCreatePerMtok?: number;
+    inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
+  };
   /**
    * Context-length pricing bands. minInputTokens is inclusive and maxInputTokens
    * is exclusive; omitted prices inherit the quote's baseline field.

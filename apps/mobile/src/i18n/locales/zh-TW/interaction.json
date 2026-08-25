@@ -37,7 +37,7 @@
     "queuePositionNth": "第 {{index}}",
     "composerBlockedByPending": "先處理電腦端的待處理請求後才能繼續輸入。",
     "missingRequestId": "這個遠端互動缺少 requestId，無法回傳決定。",
-    "issueConfirmUnsupported": "Issue 提交確認只在電腦端處理。請回到桌面端確認或取消提交。",
+    "desktopConfirmUnsupported": "此確認只能在被控電腦處理。請回到桌面端繼續。",
     "unsupportedType": "手機版暫不支援這個遠端互動型別。",
     "unsupportedKind": "暫不支援",
     "desktopOnlyKind": "電腦端處理",
@@ -106,6 +106,14 @@
     "issue_confirm": {
       "title": "需要確認 Issue 內容",
       "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "需要確認任務名稱變更",
+      "label": "重新命名"
+    },
+    "ghost_grant_confirm": {
+      "title": "需要確認檔案存取權限",
+      "label": "檔案存取"
     },
     "plugin_setup": {
       "title": "需要在電腦端配置插件",

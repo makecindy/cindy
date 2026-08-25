@@ -6,7 +6,6 @@ private let onScreenshot = "onScreenshot"
 private let conversationShareRenderTimeout: TimeInterval = 20
 private let conversationShareMaxOutputPixels: CGFloat = 12_000_000
 private let conversationShareMaxSourcePixels: CGFloat = 12_000_000
-private let conversationShareViewportHeight: CGFloat = 760
 
 public class XdtScreenshotMonitorModule: Module {
   private var screenshotObserver: NSObjectProtocol?
@@ -88,7 +87,6 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
   private var completed = false
   private var timeoutWorkItem: DispatchWorkItem?
   private var webView: WKWebView?
-  private var hostingWindow: UIWindow?
 
   init(
     html: String,
@@ -103,48 +101,13 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
   }
 
   func start() {
-    guard let windowScene = UIApplication.shared.connectedScenes
-      .compactMap({ $0 as? UIWindowScene })
-      .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive })
-    else {
-      finish(.failure(ConversationShareRenderError("Conversation share renderer has no active window scene.")))
-      return
-    }
-
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
-    let viewportHeight = min(conversationShareViewportHeight, max(1, width * 2))
-    let webView = WKWebView(
-      frame: CGRect(x: 0, y: 0, width: width, height: viewportHeight),
-      configuration: configuration
-    )
-    webView.isOpaque = false
-    webView.scrollView.isScrollEnabled = true
-    webView.scrollView.showsVerticalScrollIndicator = false
-    webView.scrollView.showsHorizontalScrollIndicator = false
-    webView.backgroundColor = .clear
-
-    // WKWebView 的离屏 snapshot 仍需要挂在可见的 UIKit window 层级中。
-    // 不把它挂到业务页面，避免导出期间改变用户当前页面的布局或焦点。
-    let hostingWindow = UIWindow(windowScene: windowScene)
-    hostingWindow.frame = CGRect(x: 0, y: 0, width: width, height: viewportHeight)
-    // 放到主窗口上方才能让 WebKit 进入可合成状态；极低透明度避免导出时闪屏。
-    // takeSnapshot 直接读取 WKWebView 内容，不会继承 hostingWindow 的透明度。
-    hostingWindow.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
-    hostingWindow.backgroundColor = .clear
-    hostingWindow.alpha = 0.01
-    hostingWindow.isUserInteractionEnabled = false
-    let viewController = UIViewController()
-    viewController.view.backgroundColor = .clear
-    viewController.view.frame = hostingWindow.bounds
-    webView.frame = viewController.view.bounds
-    viewController.view.addSubview(webView)
-    hostingWindow.rootViewController = viewController
-    hostingWindow.isHidden = false
-
+    let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: width, height: 1), configuration: configuration)
     webView.navigationDelegate = self
+    webView.isOpaque = false
+    webView.scrollView.isScrollEnabled = false
     self.webView = webView
-    self.hostingWindow = hostingWindow
 
     let timeout = DispatchWorkItem { [weak self] in
       self?.finish(.failure(ConversationShareRenderError("Conversation share rendering timed out.")))
@@ -224,171 +187,28 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
         self.finish(.failure(ConversationShareRenderError("Conversation share content is too large.")))
         return
       }
-      guard captureWidth <= webView.bounds.width + 1 else {
-        self.finish(.failure(ConversationShareRenderError("Conversation share width changed unexpectedly.")))
-        return
-      }
-      let viewportHeight = webView.bounds.height
+      webView.frame = CGRect(x: 0, y: 0, width: captureWidth, height: captureHeight)
       webView.setNeedsLayout()
       webView.layoutIfNeeded()
-      self.hostingWindow?.rootViewController?.view.setNeedsLayout()
-      self.hostingWindow?.rootViewController?.view.layoutIfNeeded()
       let requestedScale = max(0.25, self.scale)
       let maxScale = sqrt(
         conversationShareMaxOutputPixels / max(1, captureWidth * captureHeight)
       )
       let effectiveScale = min(requestedScale, maxScale)
       let snapshot = WKSnapshotConfiguration()
-      snapshot.rect = webView.bounds
+      snapshot.rect = CGRect(x: 0, y: 0, width: captureWidth, height: captureHeight)
       snapshot.snapshotWidth = NSNumber(value: Double(captureWidth * effectiveScale))
       snapshot.afterScreenUpdates = true
-      // 长页面不能用超出 WKWebView.bounds 的 rect 一次截图；按固定视口滚动分片，
-      // 每片的 rect 始终位于 bounds 内，再在原生侧拼接成完整 PNG。
-      CATransaction.flush()
-      self.captureTiles(
-        webView: webView,
-        snapshot: snapshot,
-        contentWidth: captureWidth,
-        contentHeight: captureHeight,
-        viewportHeight: viewportHeight,
-        effectiveScale: effectiveScale
-      ) { [weak self] result in
-        guard let self else { return }
-        switch result {
-        case .success(let image):
-          guard let data = image.pngData(), !data.isEmpty else {
-            self.finish(.failure(ConversationShareRenderError("Conversation share PNG is empty.")))
-            return
-          }
-          self.finish(.success(data.base64EncodedString()))
-        case .failure(let error):
-          self.finish(.failure(error))
-        }
-      }
-    }
-  }
-
-  private func captureTiles(
-    webView: WKWebView,
-    snapshot: WKSnapshotConfiguration,
-    contentWidth: CGFloat,
-    contentHeight: CGFloat,
-    viewportHeight: CGFloat,
-    effectiveScale: CGFloat,
-    completion: @escaping (Result<UIImage, Error>) -> Void
-  ) {
-    let outputSize = CGSize(
-      width: contentWidth * effectiveScale,
-      height: contentHeight * effectiveScale
-    )
-    guard outputSize.width > 0, outputSize.height > 0 else {
-      completion(.failure(ConversationShareRenderError("Conversation share output is empty.")))
-      return
-    }
-    let tileOffsets: [CGFloat] = {
-      if contentHeight <= viewportHeight { return [0] }
-      var offsets = stride(from: CGFloat(0), through: contentHeight - viewportHeight, by: viewportHeight).map { $0 }
-      let lastOffset = contentHeight - viewportHeight
-      if offsets.last != lastOffset { offsets.append(lastOffset) }
-      return offsets
-    }()
-    captureTile(
-      index: 0,
-      offsets: tileOffsets,
-      webView: webView,
-      snapshot: snapshot,
-      effectiveScale: effectiveScale,
-      outputSize: outputSize,
-      tiles: [],
-      completion: completion
-    )
-  }
-
-  private func captureTile(
-    index: Int,
-    offsets: [CGFloat],
-    webView: WKWebView,
-    snapshot: WKSnapshotConfiguration,
-    effectiveScale: CGFloat,
-    outputSize: CGSize,
-    tiles: [(offset: CGFloat, image: UIImage)],
-    completion: @escaping (Result<UIImage, Error>) -> Void
-  ) {
-    guard !completed else { return }
-    guard !offsets.isEmpty else {
-      completion(.failure(ConversationShareRenderError("Conversation share produced no tiles.")))
-      return
-    }
-    guard index < offsets.count else {
-      let format = UIGraphicsImageRendererFormat()
-      // outputSize 已包含 effectiveScale；renderer 再采用屏幕 scale 会把像素数额外
-      // 放大 4～9 倍，长图会在合成阶段超时或触发内存压力。
-      format.scale = 1
-      let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
-      let merged = renderer.image { _ in
-        for tile in tiles {
-          tile.image.draw(in: CGRect(
-            x: 0,
-            y: tile.offset * effectiveScale,
-            width: outputSize.width,
-            height: snapshot.rect.height * effectiveScale
-          ))
-        }
-      }
-      guard merged.hasVisibleVariation else {
-        completion(.failure(ConversationShareRenderError("Conversation share PNG is blank.")))
-        return
-      }
-      completion(.success(merged))
-      return
-    }
-    let offset = offsets[index]
-    webView.scrollView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
-    waitForWebContentPaint(webView) { [weak self, weak webView] result in
-      guard let self, let webView else { return }
-      guard case .success = result else {
-        if case .failure(let error) = result { completion(.failure(error)) }
-        return
-      }
-      webView.takeSnapshot(with: snapshot) { [weak self] image, error in
-        guard let self else { return }
+      webView.takeSnapshot(with: snapshot) { image, error in
         if let error {
-          completion(.failure(error))
+          self.finish(.failure(error))
           return
         }
-        guard let image else {
-          completion(.failure(ConversationShareRenderError("Conversation share tile is empty.")))
+        guard let data = image?.pngData(), !data.isEmpty else {
+          self.finish(.failure(ConversationShareRenderError("Conversation share PNG is empty.")))
           return
         }
-        self.captureTile(
-          index: index + 1,
-          offsets: offsets,
-          webView: webView,
-          snapshot: snapshot,
-          effectiveScale: effectiveScale,
-          outputSize: outputSize,
-          tiles: tiles + [(offset: offset, image: image)],
-          completion: completion
-        )
-      }
-    }
-  }
-
-  private func waitForWebContentPaint(
-    _ webView: WKWebView,
-    completion: @escaping (Result<Void, Error>) -> Void
-  ) {
-    let script = """
-      return await new Promise((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(resolve));
-      });
-    """
-    webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
-      switch result {
-      case .success:
-        completion(.success(()))
-      case .failure(let error):
-        completion(.failure(error))
+        self.finish(.success(data.base64EncodedString()))
       }
     }
   }
@@ -416,53 +236,8 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
     timeoutWorkItem = nil
     webView?.stopLoading()
     webView?.navigationDelegate = nil
-    webView?.removeFromSuperview()
-    hostingWindow?.isHidden = true
-    hostingWindow?.rootViewController = nil
-    hostingWindow = nil
     webView = nil
     completion(result)
-  }
-}
-
-private extension UIImage {
-  var hasVisibleVariation: Bool {
-    guard let cgImage else { return false }
-    let sampleWidth = 64
-    let sampleHeight = 64
-    let bytesPerPixel = 4
-    let bytesPerRow = sampleWidth * bytesPerPixel
-    var pixels = [UInt8](repeating: 0, count: sampleHeight * bytesPerRow)
-    guard let context = CGContext(
-      data: &pixels,
-      width: sampleWidth,
-      height: sampleHeight,
-      bitsPerComponent: 8,
-      bytesPerRow: bytesPerRow,
-      space: CGColorSpaceCreateDeviceRGB(),
-      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ) else {
-      return false
-    }
-    context.interpolationQuality = .low
-    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: sampleWidth, height: sampleHeight))
-
-    var minimum = [Int](repeating: 255, count: 3)
-    var maximum = [Int](repeating: 0, count: 3)
-    var hasOpaquePixel = false
-    for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
-      guard pixels[offset + 3] > 8 else { continue }
-      hasOpaquePixel = true
-      for channel in 0..<3 {
-        let value = Int(pixels[offset + channel])
-        minimum[channel] = min(minimum[channel], value)
-        maximum[channel] = max(maximum[channel], value)
-      }
-    }
-    guard hasOpaquePixel else { return false }
-    return zip(minimum, maximum).contains { lower, upper in
-      upper - lower >= 4
-    }
   }
 }
 
