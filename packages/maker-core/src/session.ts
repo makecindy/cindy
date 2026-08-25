@@ -296,6 +296,8 @@ export interface SessionSendOptions extends SendOptions {
    * hook 完成后才启动 vendor handle。
    */
   onAccepted?: () => void | Promise<void>;
+  /** Reservation 建立后立刻回调本轮 turn generation；host 必须用它绑定 leftover，不能等 send 返回后再读最新 generation。 */
+  onTurnReserved?: (turnGeneration: number) => void;
   /**
    * vendor dispatch 前最后一个同步边界。用于让 host 在底层可能产生新 turn
    * callback 之前，精确切换自己的 turn-scoped 状态。
@@ -573,7 +575,14 @@ export class Session {
   }
 
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
-    const { afterTurnReserved, beforeProviderStart, onAccepted, onDispatching, ...handleOpts } = opts ?? {};
+    const {
+      afterTurnReserved,
+      beforeProviderStart,
+      onAccepted,
+      onDispatching,
+      onTurnReserved,
+      ...handleOpts
+    } = opts ?? {};
     const cancelledBeforeReservation = (): SessionSendResult | null =>
       handleOpts.signal?.aborted === true
         ? { accepted: false, reason: 'cancelled-before-dispatch' }
@@ -629,6 +638,14 @@ export class Session {
     // 新一轮 turn 的代号（见 turnGeneration）：看门狗的善后动作据此判断"还是不是那个
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     const previousTurnGeneration = this.turnGeneration;
+    const previousTerminalObservation = {
+      generation: this.terminalEventObservedGeneration,
+      kind: this.terminalEventObservedKind,
+      message: this.terminalEventObservedErrorMessage,
+      signals: this.terminalEventObservedErrorSignals
+        ? { ...this.terminalEventObservedErrorSignals }
+        : null,
+    };
     this.turnGeneration += 1;
     if (
       previousTurnGeneration > 0 &&
@@ -641,6 +658,7 @@ export class Session {
     const reservedTurnGeneration = this.turnGeneration;
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
+    onTurnReserved?.(reservedTurnGeneration);
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
@@ -809,6 +827,10 @@ export class Session {
           }
         }
         this.turnGeneration = previousTurnGeneration;
+        this.terminalEventObservedGeneration = previousTerminalObservation.generation;
+        this.terminalEventObservedKind = previousTerminalObservation.kind;
+        this.terminalEventObservedErrorMessage = previousTerminalObservation.message;
+        this.terminalEventObservedErrorSignals = previousTerminalObservation.signals;
         if (
           previousTurnGeneration > 0 &&
           this.terminalEventObservedGeneration !== previousTurnGeneration
@@ -2005,7 +2027,7 @@ export class Session {
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
     // ownership to the new attempt.
-    const terminalBoundaryObserved = isCurrentGeneration && isTerminal;
+    const terminalBoundaryObserved = isCurrentGeneration && isTerminal && !isBackgroundEvent;
     if (terminalBoundaryObserved) {
       this.terminalEventObservedGeneration = this.turnGeneration;
       if (event.type === 'error') {

@@ -190,6 +190,7 @@ function createHarness(opts?: {
 
   const sendToAgent = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(
     async (sessionId, _message, _createOpts, sendOpts) => {
+      sendOpts.onVendorTurnReserved?.(turnGeneration);
       await persistQueuedUserMessage(sessionId, sendOpts);
       running = true;
       return sendSuccess();
@@ -6300,6 +6301,47 @@ describe('AgentInputCoordinator steer transaction', () => {
       expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
         'q-2',
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('binds leftover reclaim to the reserved generation, not the post-await latest generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-reserved-generation-not-latest';
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+        sendOpts.onVendorTurnReserved?.(1);
+        h.setTurnGeneration(2);
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        h.setRunning(true);
+        return sendSuccess();
+      });
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-later-turn'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 1 });
+      h.coordinator.enqueue(sid, makeItem('q-3', 'queued-after-match'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-later-turn',
+      });
     } finally {
       vi.useRealTimers();
     }

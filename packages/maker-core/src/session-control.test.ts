@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { Session } from './session.js';
-import type { AgentSessionHandle } from './agents/base-agent.js';
+import { TurnDispatchRejectedError, type AgentSessionHandle } from './agents/base-agent.js';
 import type {
   AgentEvent,
   InteractionDecision,
@@ -585,5 +585,38 @@ describe('Session current-generation terminal observation', () => {
       sdkError: 'server_error',
       errorStatus: 529,
     });
+  });
+
+  it('ignores background terminals when recording foreground evidence', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {}, turnScope: 'background' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    const firstDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+  });
+
+  it('restores terminal evidence when a later send is rejected before dispatch', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const firstDone = waitForSessionEvent(session, 'done');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+
+    stub.handle.send = vi.fn(async () => {
+      throw new TurnDispatchRejectedError('provider rejected before acceptance');
+    });
+    await expect(session.send('second')).resolves.toEqual({
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+    });
+    expect(session.getTurnGeneration()).toBe(1);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
   });
 });

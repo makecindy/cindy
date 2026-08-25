@@ -207,6 +207,8 @@ export interface AgentInputSendOpts {
   expectedTurnSession?: object;
   /** Main-owned maker-core turn generation for a control-plane same-turn steer. */
   expectedTurnGeneration?: number;
+  /** Session reservation 时回调本轮 vendor generation；必须在 send 返回前绑定 leftover。 */
+  onVendorTurnReserved?: (generation: number) => void;
   persistUserMessage?: {
     clientId: string;
     content: string;
@@ -1708,6 +1710,8 @@ export class AgentInputCoordinator {
           throwOnStartFailure: true,
           expectedClearBoundaryMs: active.clearBoundaryMs,
           expectedInputGeneration: active.generation,
+          onVendorTurnReserved: (generation) =>
+            this.captureReservedVendorGeneration(sessionId, active, generation),
         },
       );
       if (!this.isActiveTurnCurrent(sessionId, active)) return this.getProjection(sessionId);
@@ -3512,9 +3516,19 @@ export class AgentInputCoordinator {
   }
 
   private bindActiveTurnVendorGeneration(sessionId: string, active: ActiveTurn): void {
+    if (typeof active.vendorTurnGeneration === 'number') return;
     const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
     active.vendorTurnGeneration =
       typeof vendorGeneration === 'number' ? vendorGeneration : null;
+  }
+
+  private captureReservedVendorGeneration(
+    sessionId: string,
+    active: ActiveTurn,
+    generation: number,
+  ): void {
+    if (!this.isActiveTurnCurrent(sessionId, active)) return;
+    active.vendorTurnGeneration = generation;
   }
 
   private markActiveTurnDispatched(sessionId: string, active: ActiveTurn): void {
@@ -3875,6 +3889,8 @@ export class AgentInputCoordinator {
         messageUuid: active.messageUuid,
         userName: head.userName,
         throwOnStartFailure: true,
+        onVendorTurnReserved: (generation) =>
+          this.captureReservedVendorGeneration(sessionId, active, generation),
         ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
           ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
           : {}),
