@@ -108,6 +108,33 @@ export function createWordFadeCandidate(committed: WordFadeState): WordFadeState
   };
 }
 
+/**
+ * 全局 Markdown 上下文晚到时，外层会从多个稳定分片回退成 start=0 的整篇解析。
+ * 这里按原文起点合并各分片的匹配历史，让整篇 candidate 继续认出已经播放过的段；
+ * 只读 committed state，不在 React render 阶段发布状态。
+ */
+export function createWholeDocumentWordFadeCandidate(
+  owner: WordFadeState,
+  committed: WordFadeState,
+): WordFadeState {
+  const candidate = createWordFadeCandidate(committed);
+  const previous = [...owner.sourceStateByKey.entries()]
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .flatMap(([, sourceState]) => sourceState.previous);
+  if (previous.length > 0) candidate.previous = previous;
+  return candidate;
+}
+
+/** 整篇 candidate 落袋后移除旧分片匹配状态；共享 timeline 仍由保留项持有。 */
+export function retainOnlyWordFadeSourceState(
+  owner: WordFadeState,
+  sourceKey: string,
+): void {
+  for (const key of owner.sourceStateByKey.keys()) {
+    if (key !== sourceKey) owner.sourceStateByKey.delete(key);
+  }
+}
+
 export function commitWordFadeCandidate(committed: WordFadeState, candidate: WordFadeState): void {
   committed.nextId = candidate.nextId;
   committed.previous = candidate.previous;

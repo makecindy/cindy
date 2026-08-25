@@ -191,4 +191,55 @@ describe('StreamingMarkdownChunk', () => {
       ),
     ).toEqual(['0ms', '16ms', '32ms', '48ms']);
   });
+
+  it('全局上下文晚到并回退整篇解析时不重播已完成分片', () => {
+    const state = createWordFadeState();
+    state.timeline.nowFn = () => 0;
+    const remarkPlugins: PluggableList = [];
+    const rehypePlugins: PluggableList = [];
+
+    function Harness({ markdown }: { markdown: string }) {
+      const chunks = splitStreamingMarkdownChunks(markdown);
+      return (
+        <div>
+          {chunks.map((chunk) => (
+            <StreamingMarkdownChunk
+              key={chunk.start}
+              sourceKey={String(chunk.start)}
+              content={chunk.content}
+              remarkPlugins={remarkPlugins}
+              rehypePlugins={rehypePlugins}
+              components={{}}
+              wordFadeState={state}
+              emitSourceLines={false}
+              wholeDocument={chunks.length === 1}
+            />
+          ))}
+        </div>
+      );
+    }
+
+    const initial = '# First\n\nstable prefix\n\nlive tail';
+    const view = render(<Harness markdown={initial} />);
+    const firstFrame = Array.from(
+      view.container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),
+    );
+    const completedKeys = firstFrame.map((span) => span.dataset.wfKey!);
+    expect(state.sourceStateByKey.size).toBeGreaterThan(1);
+    for (const key of completedKeys) state.timeline.settled.add(key);
+
+    view.rerender(<Harness markdown={`${initial}\n\n# Second`} />);
+
+    const secondFrame = Array.from(
+      view.container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),
+    );
+    const byKey = new Map(secondFrame.map((span) => [span.dataset.wfKey!, span]));
+    expect(completedKeys.every((key) => byKey.has(key))).toBe(true);
+    expect(completedKeys.every((key) => !byKey.get(key)!.classList.contains('stream-word'))).toBe(
+      true,
+    );
+    expect(secondFrame.filter((span) => span.classList.contains('stream-word'))).toHaveLength(1);
+    expect(secondFrame.at(-1)?.textContent).toBe('Second');
+    expect(state.sourceStateByKey.size).toBe(1);
+  });
 });

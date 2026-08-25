@@ -6,8 +6,10 @@ import type { PluggableList } from 'unified';
 import {
   commitWordFadeCandidate,
   createWordFadeCandidate,
+  createWholeDocumentWordFadeCandidate,
   getOrCreateWordFadeSourceState,
   rehypeStreamWordFade,
+  retainOnlyWordFadeSourceState,
   type WordFadeState,
 } from './rehypeStreamWordFade';
 import { StreamFadeListItem, StreamFadeSpan } from './StreamFadeSpan';
@@ -21,6 +23,7 @@ interface StreamingMarkdownChunkProps {
   urlTransform?: UrlTransform;
   wordFadeState: WordFadeState | null;
   emitSourceLines: boolean;
+  wholeDocument?: boolean;
 }
 
 function sourceLineAttr(node?: Element): { 'data-source-line'?: number } {
@@ -41,6 +44,7 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
   urlTransform,
   wordFadeState,
   emitSourceLines,
+  wholeDocument = false,
 }: StreamingMarkdownChunkProps) {
   const sourceWordFadeState = useMemo(
     () =>
@@ -49,18 +53,24 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
   );
   const wordFade = useMemo(() => {
     if (!sourceWordFadeState) return null;
-    const candidate = createWordFadeCandidate(sourceWordFadeState);
+    const candidate =
+      wholeDocument && wordFadeState
+        ? createWholeDocumentWordFadeCandidate(wordFadeState, sourceWordFadeState)
+        : createWordFadeCandidate(sourceWordFadeState);
     return {
       candidate,
       plugins: [...rehypePlugins, [rehypeStreamWordFade, candidate]] as PluggableList,
     };
-  }, [content, rehypePlugins, sourceWordFadeState]);
+  }, [content, rehypePlugins, sourceWordFadeState, wholeDocument, wordFadeState]);
 
   useLayoutEffect(() => {
     if (sourceWordFadeState && wordFade) {
       commitWordFadeCandidate(sourceWordFadeState, wordFade.candidate);
+      if (wholeDocument && wordFadeState) {
+        retainOnlyWordFadeSourceState(wordFadeState, sourceKey);
+      }
     }
-  }, [sourceWordFadeState, wordFade]);
+  }, [sourceKey, sourceWordFadeState, wholeDocument, wordFade, wordFadeState]);
 
   const chunkComponents = useMemo<Components>(() => {
     if (!sourceWordFadeState) return components;

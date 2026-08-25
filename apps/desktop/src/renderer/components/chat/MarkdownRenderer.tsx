@@ -1886,6 +1886,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
             }
             wordFadeState={wordFadeState}
             emitSourceLines={emitSourceLines}
+            wholeDocument={streamingChunks.length === 1}
           />
         ))
       ) : (
