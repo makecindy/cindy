@@ -61,7 +61,6 @@ import {
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
 
-const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
 // both downloads, but allow normal consumer connections to finish while the
 // splash displays real byte progress.
@@ -258,7 +257,6 @@ import {
   getChatAttachmentCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
-  sweepStagedChatAttachmentsOnStartup,
 } from './file-browser/remote-file-cache';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import { legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
@@ -298,7 +296,6 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
-import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
 import {
   getSessionRowSnapshot,
   resumeDeletedPiSubagentCleanup,
@@ -6732,14 +6729,12 @@ const registerIpcHandlers = () => {
     const ownerScopeKey = activeOwnerScopeKey();
     const ownerId = getActiveAppSession().dataOwnerId;
     if (!ownerId || isAppSessionBoundaryPending()) return;
-    const protectedPaths = await listPersistedChatAttachmentPaths();
     const isCurrentOwner = () =>
       activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
     if (!isCurrentOwner()) return;
     await cleanupOwnedUnpersistedStagedChatAttachments({
       ownerId,
       filePaths,
-      protectedPaths,
       canRemove: isCurrentOwner,
     });
   });
@@ -7134,6 +7129,25 @@ const registerIpcHandlers = () => {
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。
   {
+    const openExistingFixedDirectory = async (rootDir: string): Promise<boolean> => {
+      try {
+        const stat = await fs.promises.lstat(rootDir);
+        if (!stat.isDirectory()) return false;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+        throw err;
+      }
+      const error = await shell.openPath(rootDir);
+      if (error) throw new Error(error);
+      return true;
+    };
+    // These actions intentionally accept no renderer path. Each invocation
+    // resolves one fixed userData root in Main and deletes that root only;
+    // message history and the media ledger are never consulted.
+    const clearFixedDirectory = async (rootDir: string): Promise<void> => {
+      await fs.promises.rm(rootDir, { recursive: true, force: true });
+    };
+
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
     // 时清理取全窗口并集,防误删别的窗口的草稿图)。fire-and-forget send。
     ipcMain.on('cindy-media:report-draft-urls', (event, urls: string[]) => {
@@ -7144,19 +7158,10 @@ const registerIpcHandlers = () => {
       getQueueScanTexts: collectAgentInputQueueScanTexts,
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
-      openLegacyImagesDir: async () => {
-        const rootDir = imageCacheStore.getCacheRoot();
-        try {
-          const stat = await fs.promises.lstat(rootDir);
-          if (!stat.isDirectory()) return false;
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
-          throw err;
-        }
-        const error = await shell.openPath(rootDir);
-        if (error) throw new Error(error);
-        return true;
-      },
+      openLegacyImagesDir: () => openExistingFixedDirectory(imageCacheStore.getCacheRoot()),
+      clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
+      openChatAttachmentsDir: () => openExistingFixedDirectory(getChatAttachmentCacheRoot()),
+      clearChatAttachmentsDir: () => clearFixedDirectory(getChatAttachmentCacheRoot()),
     });
     ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
     ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>
@@ -7179,6 +7184,18 @@ const registerIpcHandlers = () => {
     ipcMain.handle('cindy-media:legacy-images-open-dir', (event) => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openLegacyImagesDir();
+    });
+    ipcMain.handle('cindy-media:legacy-images-clear', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.clearLegacyImagesDir();
+    });
+    ipcMain.handle('cindy-media:chat-attachments-open-dir', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.openChatAttachmentsDir();
+    });
+    ipcMain.handle('cindy-media:chat-attachments-clear', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.clearChatAttachmentsDir();
     });
   }
 
@@ -7728,44 +7745,6 @@ app.on('ready', async () => {
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
-      //
-      // Staged-attachment bookkeeping is not first-paint readiness. The persisted-path
-      // lookup is a LIKE + json_tree scan over every retained message body; on a
-      // multi-GB owner DB that blocked LocalDbGate for ~24s after splash had already
-      // unmounted, leaving a white window. Sweep is fire-and-forget, only queries the
-      // DB when the owner cache already has stale files, and is delayed so the shared
-      // db worker can serve session-list / first-paint RPCs first. A stale-cache user
-      // would otherwise just move the 24s stall from the white screen onto the first
-      // task-list query (the db worker's better-sqlite3 .all() is synchronous).
-      const STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS = 5_000;
-      const stagedAttachmentSweepTimer = setTimeout(() => {
-        void sweepStagedChatAttachmentsOnStartup({
-          ownerId: userId,
-          createdBeforeMs: PROCESS_STARTED_AT_MS,
-          loadProtectedPaths: listPersistedChatAttachmentPaths,
-          canContinue: () =>
-            getActiveAppSession().dataOwnerId === userId && !isAppSessionBoundaryPending(),
-        })
-          .then((result) => {
-            if (result.removed > 0 || result.protected > 0) {
-              dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
-                ...result,
-                ownerId: userId,
-              });
-            }
-          })
-          .catch((err) => {
-            dbClientLog.warn(
-              '[ChatAttachment] startup staged attachment sweep failed (non-fatal)',
-              {
-                ownerId: userId,
-                error: err instanceof Error ? err.message : String(err),
-              },
-            );
-          });
-      }, STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS);
-      stagedAttachmentSweepTimer.unref?.();
-      logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
         // 还会长期持有同一 DB；lease 必须留到真正 logout / app quit 才释放。

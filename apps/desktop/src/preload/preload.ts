@@ -3829,6 +3829,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openLegacyImagesDir: (): Promise<{ opened: boolean }> =>
       ipcRenderer.invoke('cindy-media:legacy-images-open-dir'),
 
+    clearLegacyImagesDir: (): Promise<void> =>
+      ipcRenderer.invoke('cindy-media:legacy-images-clear'),
+
+    openChatAttachmentsDir: (): Promise<{ opened: boolean }> =>
+      ipcRenderer.invoke('cindy-media:chat-attachments-open-dir'),
+
+    clearChatAttachmentsDir: (): Promise<void> =>
+      ipcRenderer.invoke('cindy-media:chat-attachments-clear'),
+
     stats: (): Promise<{
       success: boolean;
       error?: string;

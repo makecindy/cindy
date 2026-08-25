@@ -191,24 +191,6 @@ function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
   }
 }
 
-// DbClient uses better-sqlite3 `.all()`: never return whole message bodies for
-// retention bookkeeping. JSON1 extracts only the distinct paths that startup
-// cleanup needs, while LIKE avoids invoking json_each for unrelated history.
-const PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN = '%chat-attachment-cache%';
-const PERSISTED_CHAT_ATTACHMENT_PATHS_SQL = `SELECT DISTINCT
-         attachment.atom AS filePath
-   FROM messages AS m
-   JOIN sessions AS s ON s.id = m.session_id
-   JOIN json_tree(
-          CASE WHEN json_valid(m.content) THEN m.content ELSE '{}' END,
-          '$.files'
-        ) AS attachment
-  WHERE s.status != 'deleted'
-    AND m.rewind_at IS NULL
-    AND m.content LIKE ?
-    AND attachment.key = 'path'
-    AND attachment.type = 'text'`;
-
 export interface EstimatedSessionValueEntry {
   clientId: string;
   money: RegionalMoney;
@@ -235,15 +217,6 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'plan_review',
   'thinking',
 ] as const);
-
-/** Return all staged attachment paths retained by the current owner's message DB. */
-export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
-  const rows = await getDbClient().query<{ filePath: unknown }>(
-    PERSISTED_CHAT_ATTACHMENT_PATHS_SQL,
-    [PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN],
-  );
-  return rows.flatMap((row) => (typeof row.filePath === 'string' ? [row.filePath] : []));
-}
 
 export function registerMessageIpc(): void {
   ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
