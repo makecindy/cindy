@@ -159,8 +159,6 @@ export interface PiTranslateContext {
    * reduce it into the preceding live-card state.
    */
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
-  /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
-  hostAutoCompactInFlight: boolean;
   /** Optional rewrite for ctx_doctor tool result text (Cindy-managed package paths). */
   rewriteToolResultText?: (text: string) => string;
   /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
@@ -208,7 +206,6 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     subagentToolCalls: new Map(),
     toolNamesByCallId: new Map(),
     pendingAssistantError: null,
-    hostAutoCompactInFlight: false,
     compactTurnScope: null,
   };
 }
@@ -917,9 +914,9 @@ export function translatePiEvent(
     }
 
     case 'compaction_start': {
-      // Host auto-compact 发在 agent_settled 之后(isStreaming=false)。若这里
-      // 无条件 isRunning=true 而不标 background，desktop tracker 会当成新一轮产品 turn。
-      // 在 start 锁存 scope：end 时 isStreaming 可能已因新 turn 变 true。
+      // Idle manual compaction is background work, while native threshold and
+      // overflow compaction remain inside Pi's active agent run.
+      // Latch the scope at start because a new turn may begin before end arrives.
       pushStatus(queue, ctx, 'Compacting context…', true, latchCompactTurnScope(ctx));
       return;
     }
@@ -937,7 +934,7 @@ export function translatePiEvent(
       queue.push({
         type: 'compact_boundary',
         data: {
-          trigger: event.reason === 'manual' && !ctx.hostAutoCompactInFlight ? 'manual' : 'auto',
+          trigger: event.reason === 'manual' ? 'manual' : 'auto',
           preTokens: result?.tokensBefore,
           postTokens: result?.estimatedTokensAfter,
         },

@@ -83,13 +83,13 @@ import hostSystemPrompt from './host-system-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
+import { readPiCompactionPct } from './compaction-settings-store.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
   getDesktopMcpToolApprovalPolicy,
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
-import { readCompactionPct } from './compaction-settings-store.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import {
   getActiveCatalog,
@@ -834,7 +834,11 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     managedExecutablePaths: { ripgrep: ripgrepPath },
     userDataPath: app.getPath('userData'),
   };
-  // 网关 endpoint 随 model-access 凭据同步就绪,用 getter 惰性读(与 claude remoteEndpoint 同理)。
+  Object.defineProperty(config, 'piAutoCompactThresholdPct', {
+    get: () => readPiCompactionPct(),
+    enumerable: true,
+    configurable: false,
+  });
   Object.defineProperty(config, 'endpoint', {
     get: () => getClaudeEndpoint(),
     enumerable: true,
@@ -857,11 +861,6 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     },
     makerMemoryEnabled: {
       get: () => readMemorySettings().maker,
-      enumerable: true,
-    },
-    // 与 Claude Code 共用 compaction-settings.json；Codex 不读。
-    autoCompactThresholdPct: {
-      get: () => readCompactionPct(),
       enumerable: true,
     },
   });

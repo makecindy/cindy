@@ -6239,6 +6239,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     compactionResetPct: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:reset-pct'),
 
+    // Pi 原生自动上下文压缩阈值。仅对新建 Pi 任务生效。
+    piCompactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:pi-compaction:get-pct'),
+    piCompactionGetState: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+      ipcRenderer.invoke('maker:pi-compaction:get-state'),
+    piCompactionSetPct: (
+      pct: number,
+    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+      ipcRenderer.invoke('maker:pi-compaction:set-pct', pct),
+    piCompactionResetPct: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+      ipcRenderer.invoke('maker:pi-compaction:reset-pct'),
+
     // LSP Beta 开关 —— 控制 mcp providers 是否注入 lsp_* 工具 (Phase 1 Beta)。
     // 默认 false; 仅对**新 session** 生效, 已开 session 工具列表已固化, 不变。
     lspModeGet: (): Promise<{ enabled: boolean }> => ipcRenderer.invoke('maker:lsp-mode:get'),

@@ -5658,6 +5658,14 @@ interface ElectronAPI {
     ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
     compactionResetPct: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
 
+    /** Pi 原生自动上下文压缩触发百分比。仅对新建 Pi 任务生效 */
+    piCompactionGetPct: () => Promise<number>;
+    piCompactionGetState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    piCompactionSetPct: (
+      pct: number,
+    ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    piCompactionResetPct: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+
     /** LSP Beta 开关 — 控制 mcp providers 是否注入 lsp_* 工具 (默认 false) */
     lspModeGet: () => Promise<{ enabled: boolean }>;
     /** 仅对新 session 生效; 已开 session 的 mcp providers 已固化 */

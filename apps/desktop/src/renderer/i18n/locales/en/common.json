@@ -2585,13 +2585,20 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
+      "description": "Control when Claude Code and Pi automatically compact context. Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code and Pi",
+        "badge": "Claude Code",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
         "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
         "sliderAria": "Adjust auto-compaction trigger threshold"
+      },
+      "piCard": {
+        "label": "Compaction trigger threshold",
+        "badge": "Pi",
+        "description": "Pi's native auto-compaction starts when context usage reaches this percentage. The setting is applied when you start a new Pi task.",
+        "hint": "Lower values compact earlier and leave more room for the response; higher values compact later. Changes apply to new Pi tasks.",
+        "sliderAria": "Adjust Pi auto-compaction trigger threshold"
       }
     },
     "personalization": {

@@ -1,22 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('UseCompactionSettings');
 
-// main (compaction-settings-store) 是 clamp 的唯一 source of truth: compactionGetPct /
-// compactionSetPct 的返回值已是 [50,95] 内的合法整数, Slider 也用 min/max/step 约束了
-// 输入, 所以 renderer 不再重复 clamp。DEFAULT_PCT 仅作 IPC 读失败时的兜底。
+// main (compaction-settings-store) 是 clamp 的唯一 source of truth: IPC 返回值已是
+// [50,95] 内的合法整数, Slider 也用 min/max/step 约束输入。
 const DEFAULT_PCT = 75;
 const WRITE_DEBOUNCE_MS = 300;
 
-export function useCompactionSettings(): {
+export type CompactionAgent = 'claude' | 'pi';
+
+type CompactionApi = {
+  getState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+  setPct: (pct: number) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+  resetPct: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+};
+
+export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
   pct: number | null;
   isCustomized: boolean;
   defaultPct: number;
   setPct: (next: number) => void;
   resetPct: () => Promise<number>;
 } {
+  const api = useMemo<CompactionApi>(
+    () =>
+      agent === 'pi'
+        ? {
+            getState: window.electronAPI.maker.piCompactionGetState,
+            setPct: window.electronAPI.maker.piCompactionSetPct,
+            resetPct: window.electronAPI.maker.piCompactionResetPct,
+          }
+        : {
+            getState: window.electronAPI.maker.compactionGetState,
+            setPct: window.electronAPI.maker.compactionSetPct,
+            resetPct: window.electronAPI.maker.compactionResetPct,
+          },
+    [agent],
+  );
+
   const [pct, setPctState] = useState<number | null>(null);
   const [isCustomized, setIsCustomized] = useState(false);
   const [defaultPct, setDefaultPct] = useState(DEFAULT_PCT);
@@ -26,22 +49,22 @@ export function useCompactionSettings(): {
 
   const reloadPct = useCallback(async () => {
     try {
-      const next = await window.electronAPI.maker.compactionGetState();
+      const next = await api.getState();
       if (mountedRef.current) {
         setPctState(next.pct);
         setIsCustomized(next.isCustomized);
         setDefaultPct(next.defaultPct);
       }
     } catch (err) {
-      log.warn('compactionGetPct failed', err);
+      log.warn('compactionGetState failed', err);
       if (mountedRef.current) setPctState(DEFAULT_PCT);
     }
-  }, []);
+  }, [api]);
 
   const commitPct = useCallback(
     async (next: number) => {
       try {
-        const state = await window.electronAPI.maker.compactionSetPct(next);
+        const state = await api.setPct(next);
         if (mountedRef.current) {
           setPctState(state.pct);
           setIsCustomized(state.isCustomized);
@@ -52,7 +75,7 @@ export function useCompactionSettings(): {
         await reloadPct();
       }
     },
-    [reloadPct],
+    [api, reloadPct],
   );
 
   const setPct = useCallback(
@@ -75,14 +98,14 @@ export function useCompactionSettings(): {
       timerRef.current = null;
     }
     pendingPctRef.current = null;
-    const next = await window.electronAPI.maker.compactionResetPct();
+    const next = await api.resetPct();
     if (mountedRef.current) {
       setPctState(next.pct);
       setIsCustomized(next.isCustomized);
       setDefaultPct(next.defaultPct);
     }
     return next.pct;
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -96,10 +119,10 @@ export function useCompactionSettings(): {
       const pending = pendingPctRef.current;
       pendingPctRef.current = null;
       if (pending !== null) {
-        void window.electronAPI.maker.compactionSetPct(pending);
+        void api.setPct(pending);
       }
     };
-  }, [reloadPct]);
+  }, [api, reloadPct]);
 
   return { pct, isCustomized, defaultPct, setPct, resetPct };
 }

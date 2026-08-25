@@ -664,6 +664,10 @@ import {
   readCompactionState,
   resetCompactionPct,
   writeCompactionPct,
+  readPiCompactionPct,
+  readPiCompactionState,
+  resetPiCompactionPct,
+  writePiCompactionPct,
 } from './maker-host/compaction-settings-store.js';
 import {
   readSubagentModelSettings,
@@ -4281,6 +4285,24 @@ const registerIpcHandlers = () => {
     }
     writeCompactionPct(pct);
     return compactionWire();
+  });
+
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT, async () => {
+    return readPiCompactionPct();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE, async () => {
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT, async () => {
+    resetPiCompactionPct();
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (_e, pct: unknown) => {
+    if (typeof pct !== 'number' || !Number.isFinite(pct)) {
+      throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
+    }
+    writePiCompactionPct(pct);
+    return piCompactionWire();
   });
 
   // Window behavior —— swallowActivationClick 保持 renderer 运行时事实标准;
@@ -8853,6 +8875,15 @@ function compactionWire() {
     pct: state.value.claudeCodeAutoCompactPct,
     isCustomized: state.isCustomized,
     defaultPct: state.defaults.claudeCodeAutoCompactPct,
+  };
+}
+
+function piCompactionWire() {
+  const state = readPiCompactionState();
+  return {
+    pct: state.value.piAutoCompactPct,
+    isCustomized: state.isCustomized,
+    defaultPct: state.defaults.piAutoCompactPct,
   };
 }
 

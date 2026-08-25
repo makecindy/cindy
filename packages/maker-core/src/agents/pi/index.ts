@@ -146,7 +146,7 @@ import {
   rewriteContextModeDoctorPath,
   shouldRewriteContextModeDoctorNotification,
 } from './context-mode-doctor-path.js';
-import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
+import { isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
@@ -948,6 +948,22 @@ interface FailedPiStartupCleanup {
   cleanupLocal?: () => void;
 }
 
+export function buildPiSettingsJsonContent(
+  contextWindow: number,
+  piCompactionPct?: number,
+): string {
+  const effectiveContextWindow = contextWindow > 0 ? contextWindow : 128_000;
+  const reserveTokens = piCompactionPct === undefined
+    ? undefined
+    : Math.max(1, Math.ceil(effectiveContextWindow * (1 - piCompactionPct / 100)));
+  return JSON.stringify({
+    transport: 'sse',
+    ...(reserveTokens !== undefined
+      ? { compaction: { reserveTokens } }
+      : {}),
+  }, null, 2) + '\n';
+}
+
 export class PiAgent extends BaseAgent {
   readonly kind: AgentKind = 'pi';
   readonly capabilities: Capabilities;
@@ -1195,6 +1211,8 @@ export class PiAgent extends BaseAgent {
       fileOps?: PiRemoteFileOps;
       preview?: boolean;
       offlineValidationOnly?: boolean;
+      /** Current model context window used to translate the Pi percentage setting. */
+      contextWindow?: number;
     } = {},
   ): Promise<{
     gatewayImageInputByModel: Map<string, boolean>;
@@ -1335,7 +1353,9 @@ export class PiAgent extends BaseAgent {
     // The native ChatGPT adapter prefers WebSocket in auto mode. Cindy's
     // authenticated loopback proxy is an HTTP/SSE boundary, so pin SSE for the
     // isolated embedded runtime. Other PI providers ignore this transport knob.
-    const settingsJsonContent = JSON.stringify({ transport: 'sse' }, null, 2) + '\n';
+    const piCompactionPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
+    const contextWindow = opts.contextWindow && opts.contextWindow > 0 ? opts.contextWindow : 128_000;
+    const settingsJsonContent = buildPiSettingsJsonContent(contextWindow, piCompactionPct);
     if (!opts.preview) {
       // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
       // 执行、endpoint 是否有值、路径形态。
@@ -1584,6 +1604,8 @@ export class PiAgent extends BaseAgent {
         });
       }
     }
+    const startupContextWindow =
+      selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000;
 
     // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明
     // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
@@ -1925,6 +1947,7 @@ export class PiAgent extends BaseAgent {
         remote,
         fileOps,
         preview: true,
+        contextWindow: startupContextWindow,
       });
       configHome = joinRemotePosixPath(
         agentHome,
@@ -1937,7 +1960,7 @@ export class PiAgent extends BaseAgent {
       nativeProviders,
       retainedRuntimeModel,
       authProviderId,
-      { remote, fileOps },
+      { remote, fileOps, contextWindow: startupContextWindow },
     );
     const bashPackageHome = joinRemotePosixPath(configHome, 'bash-package-home');
     await mkdirp(bashPackageHome);
@@ -3261,18 +3284,9 @@ export class PiAgent extends BaseAgent {
     // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
     // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
     let proc: PiRpcProcess;
-    const getAutoCompactThresholdPct = (): number | undefined =>
-      this.deps.runtimeConfig.autoCompactThresholdPct;
-    const autoCompactController =
-      getAutoCompactThresholdPct() === undefined
-        ? null
-        : new AutoCompactController({
-            logger: this.deps.logger.child('auto-compact'),
-            workdir: opts.workingDir,
-            agentKind: 'pi',
-            getThresholdPct: getAutoCompactThresholdPct,
-            compactWhenFull: Boolean(opts.remoteHostId),
-          });
+    // Pi owns automatic threshold and overflow compaction. Cindy only records a
+    // deterministic native failure so Desktop can rebuild before the next send.
+    let nativeAutoCompactNeedsRollover = false;
     // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
     // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。
     let sessionRpcChain: Promise<void> = Promise.resolve();
@@ -3305,37 +3319,6 @@ export class PiAgent extends BaseAgent {
     };
     const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
       runExclusivePiRpc(() => requestPiCompact(instructions));
-    const maybeHostAutoCompact = (): void => {
-      if (closed || ctx.isStreaming) return;
-      if (!autoCompactController?.shouldCompactNow()) return;
-      const snapshot = autoCompactController.getLatestSnapshot();
-      this.deps.logger.info('pi host auto-compact triggered', {
-        threshold: autoCompactController.getCurrentThresholdPct(),
-        ratio: snapshot ? Number(snapshot.ratio.toFixed(3)) : undefined,
-        contextTokens: snapshot?.contextTokens,
-        contextWindow: snapshot?.contextWindow,
-      });
-      ctx.hostAutoCompactInFlight = true;
-      void runPiCompact()
-        .then((result) => {
-          if (result.noop) {
-            ctx.hostAutoCompactInFlight = false;
-            autoCompactController.onCompactCanceled('host_auto_compact_noop');
-          }
-        })
-        .catch((err) => {
-          ctx.hostAutoCompactInFlight = false;
-          const message = err instanceof Error ? err.message : String(err);
-          if (!opts.remoteHostId && isDeterministicHostCompactFailure(message)) {
-            autoCompactController.markNeedsRollover('host_auto_compact_failed');
-          } else {
-            autoCompactController.onCompactCanceled('host_auto_compact_failed');
-          }
-          this.deps.logger.warn('pi host auto-compact failed', {
-            message,
-          });
-        });
-    };
     let sessionTransport: PiTransport | undefined;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
@@ -3840,33 +3823,25 @@ export class PiAgent extends BaseAgent {
             });
           }
           translatePiEvent(event, queue, ctx);
-          if (autoCompactController) {
-            if (event.type === 'compaction_end') {
-              if (isFailedOrAbortedPiCompaction(event)) {
-                const hostAutoFailed = ctx.hostAutoCompactInFlight && event.aborted !== true;
-                const failureText = [
-                  typeof event.errorMessage === 'string' ? event.errorMessage : '',
-                  'Error during compaction',
-                ].join(': ');
-                if (
-                  !opts.remoteHostId &&
-                  hostAutoFailed &&
-                  isDeterministicHostCompactFailure(failureText)
-                ) {
-                  autoCompactController.markNeedsRollover('compaction_failed');
-                } else {
-                  autoCompactController.onCompactCanceled(
-                    event.aborted === true ? 'compaction_aborted' : 'compaction_failed',
-                  );
-                }
-              } else {
-                autoCompactController.onCompactBoundary();
+          if (event.type === 'compaction_end') {
+            const nativeAutomaticFailure =
+              event.aborted !== true &&
+              (event.reason === 'threshold' || event.reason === 'overflow') &&
+              isFailedOrAbortedPiCompaction(event);
+            if (nativeAutomaticFailure && !opts.remoteHostId) {
+              const failureText = [
+                typeof event.errorMessage === 'string' ? event.errorMessage : '',
+                'Error during compaction',
+              ].join(': ');
+              if (isDeterministicHostCompactFailure(failureText)) {
+                nativeAutoCompactNeedsRollover = true;
+                this.deps.logger.info('pi native auto-compact failure latched for rollover', {
+                  reason: event.reason,
+                  contextTokens: ctx.contextTokens,
+                  contextWindow: ctx.contextWindow,
+                });
               }
-              ctx.hostAutoCompactInFlight = false;
-            } else if (event.type === 'message_end' || event.type === 'agent_settled') {
-              autoCompactController.onUsageUpdate(ctx.contextTokens, ctx.contextWindow);
             }
-            if (event.type === 'agent_settled') maybeHostAutoCompact();
           }
         },
         onExit: ({ code, signal }) => {
@@ -4219,10 +4194,10 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      // 上下文接近满时由 host 换干净原生会话(handoff),不再让 PI 先自动压缩。
-      // 自动压缩在大窗口上往往先卡住/超时,用户看不到交接。失败不致命。
+      // Pi owns threshold and overflow compaction. Cindy consumes the native
+      // compaction events and only rebuilds the session after a deterministic failure.
       {
-        const resp = await proc.request({ type: 'set_auto_compaction', enabled: false });
+        const resp = await proc.request({ type: 'set_auto_compaction', enabled: true });
         if (!resp.success) {
           this.deps.logger.warn('pi set_auto_compaction failed (non-fatal)', {
             error: resp.error,
@@ -4401,7 +4376,7 @@ export class PiAgent extends BaseAgent {
         previousProviders,
         retainedRuntimeModel,
         authProviderId,
-        { remote, fileOps },
+        { remote, fileOps, contextWindow: startupContextWindow },
       );
       nativeProviders = previousProviders;
       nativeProviderById.clear();
@@ -4473,7 +4448,7 @@ export class PiAgent extends BaseAgent {
           nativeProviders,
           retainedRuntimeModel,
           authProviderId,
-          { remote, fileOps },
+          { remote, fileOps, contextWindow: startupContextWindow },
         );
         gatewayApiByModel.clear();
         for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
@@ -4779,8 +4754,6 @@ export class PiAgent extends BaseAgent {
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
-        autoCompactController?.onContextWindowChanged(data.contextWindow);
-        maybeHostAutoCompact();
       }
     };
 
@@ -5262,7 +5235,7 @@ export class PiAgent extends BaseAgent {
       getUsageSnapshot(): UsageSnapshot {
         return {
           ...usageSnapshotOf(ctx),
-          ...(autoCompactController?.needsRollover() ? { needsRollover: true } : {}),
+          ...(nativeAutoCompactNeedsRollover ? { needsRollover: true } : {}),
         };
       },
 
@@ -5434,7 +5407,7 @@ export class PiAgent extends BaseAgent {
       },
 
       async compactSession(instructions?: string): Promise<ManualCompactResult> {
-        // 与 host 百分比闸共用 runPiCompact，避免手动/自动双发。
+        // Manual compact shares the session RPC chain with prompts and model controls.
         return runPiCompact(instructions);
       },
 
