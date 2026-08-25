@@ -373,25 +373,32 @@ setTimeout(() => process.exit(0), 20000).unref();
 const fs = require('node:fs');
 const path = require('node:path');
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+let settled = false;
+const publishStopped = () => {
+  if (settled) return;
+  settled = true;
+  const now = Date.now();
+  const status = {
+    version: 1, runId: config.runId, taskId: config.taskId,
+    parentSessionId: config.parentSessionId, runnerInstanceId: 'abort-fixture',
+    state: 'stopped', startedAt: now, updatedAt: now, endedAt: now,
+    tasks: config.tasks.map((task) => ({
+      childId: task.childId, sessionId: task.sessionId, agent: task.agent,
+      status: 'stopped', error: 'stopped before first status', endedAt: now,
+    })),
+  };
+  fs.writeFileSync(path.join(config.runDir, 'status.json'), JSON.stringify(status) + '\\n');
+  process.exit(0);
+};
+process.on('SIGTERM', publishStopped);
 const timer = setInterval(() => {
   let files = [];
   try { files = fs.readdirSync(path.join(config.runDir, 'controls')); } catch {}
   for (const file of files) {
     const control = JSON.parse(fs.readFileSync(path.join(config.runDir, 'controls', file), 'utf8'));
     if (control.action !== 'stop') continue;
-    const now = Date.now();
-    const status = {
-      version: 1, runId: config.runId, taskId: config.taskId,
-      parentSessionId: config.parentSessionId, runnerInstanceId: 'abort-fixture',
-      state: 'stopped', startedAt: now, updatedAt: now, endedAt: now,
-      tasks: config.tasks.map((task) => ({
-        childId: task.childId, sessionId: task.sessionId, agent: task.agent,
-        status: 'stopped', error: 'stopped before first status', endedAt: now,
-      })),
-    };
-    fs.writeFileSync(path.join(config.runDir, 'status.json'), JSON.stringify(status) + '\\n');
     clearInterval(timer);
-    process.exit(0);
+    publishStopped();
   }
 }, 20);
 // Publish readiness only after the stop-control poller is installed. Writing
