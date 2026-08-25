@@ -751,6 +751,67 @@ describe('make_pptx', () => {
     }
   });
 
+  it('拒绝会静默丢弃字段的版式组合', async () => {
+    const client = await connect();
+    const cases = [
+      {
+        name: 'metrics-body',
+        slide: {
+          title: '指标页',
+          layout: 'metrics',
+          body: '这段正文不会被 metrics 版式消费',
+          metrics: [
+            { value: '1', label: '甲' },
+            { value: '2', label: '乙' },
+          ],
+        },
+      },
+      {
+        name: 'metrics-bullets',
+        slide: {
+          title: '指标页',
+          layout: 'metrics',
+          bullets: ['这条要点不会被 metrics 版式消费'],
+          metrics: [
+            { value: '1', label: '甲' },
+            { value: '2', label: '乙' },
+          ],
+        },
+      },
+      {
+        name: 'content-columns',
+        slide: {
+          title: '内容页',
+          layout: 'content',
+          columns: [{ title: '甲' }, { title: '乙' }],
+        },
+      },
+      {
+        name: 'content-metrics',
+        slide: {
+          title: '内容页',
+          layout: 'content',
+          metrics: [
+            { value: '1', label: '甲' },
+            { value: '2', label: '乙' },
+          ],
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = await client.callTool({
+        name: 'make_pptx',
+        arguments: {
+          slides: [testCase.slide],
+          outPath: `${testCase.name}.pptx`,
+        },
+      });
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      await expect(fs.stat(path.join(workdir, `${testCase.name}.pptx`))).rejects.toThrow();
+    }
+  });
+
   it('图片路径越界时整个生成不发生,不留半成品', async () => {
     const client = await connect();
     const result = await callTool(client, 'make_pptx', {
@@ -2040,6 +2101,27 @@ describe('render_pdf', () => {
     expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 
+  it('限制本地资源引用次数并缓存重复引用', async () => {
+    const renderHtmlToPdf = vi.fn(async () => ({
+      buffer: pdfBytes,
+      fontsReady: true,
+    }));
+    await fs.writeFile(path.join(workdir, 'tiny.png'), 'x', 'utf8');
+    const repeatedImages = Array.from({ length: 4_097 }, () => '<img src="./tiny.png">').join('');
+    const client = await connect({ renderHtmlToPdf });
+
+    const result = await callTool(client, 'render_pdf', {
+      html: repeatedImages,
+      outPath: 'too-many-resource-references.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('FILE_TOO_LARGE');
+    expect((result.data as Record<string, string>).hint).toContain('4096');
+    expect(renderHtmlToPdf).not.toHaveBeenCalled();
+  });
+
   it('递归快照 CSS 的本地 @import 并将 URL 形式标记为 text/css', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'theme.css'), 'body { color: #123456; }', 'utf8');
@@ -2079,6 +2161,38 @@ describe('render_pdf', () => {
     expect(rendered).toContain(
       `data:text/css;base64,${Buffer.from(rewrittenCss).toString('base64')}`,
     );
+  });
+
+  it('按 CSS token 跳过 @import 后的注释', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'theme.css'), '.hero { color: #654321; }', 'utf8');
+    await fs.writeFile(
+      path.join(workdir, 'style-with-comment.css'),
+      '@import /* theme */ "./theme.css"; .hero { color: red; }',
+      'utf8',
+    );
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return { buffer: pdfBytes, fontsReady: true };
+      },
+    });
+
+    const result = await callTool(client, 'render_pdf', {
+      html: '<link rel="stylesheet" href="./style-with-comment.css">',
+      outPath: 'import-comment.pdf',
+      template: 'none',
+    });
+
+    expect(result.ok).toBe(true);
+    const rendered = seen[0]!.html!;
+    const stylesheet = rendered.match(/data:text\/css;base64,([^"'&>\s]+)/)?.[1];
+    expect(stylesheet).toBeDefined();
+    const decodedStylesheet = Buffer.from(stylesheet!, 'base64').toString('utf8');
+    expect(decodedStylesheet).toContain(
+      `data:text/css;base64,${Buffer.from('.hero { color: #654321; }').toString('base64')}`,
+    );
+    expect(decodedStylesheet).not.toContain('./theme.css');
   });
 
   it('htmlPath 与 html 必须二选一', async () => {

@@ -55,6 +55,8 @@ const MAX_LOCAL_RESOURCE_BYTES = 8 * 1024 * 1024;
 const MAX_LOCAL_RESOURCE_TOTAL_BYTES = 32 * 1024 * 1024;
 /** 资源展开成 data URI 后的 HTML 硬上限,防止重复引用放大主进程字符串。 */
 const MAX_SNAPSHOT_HTML_BYTES = 64 * 1024 * 1024;
+/** 单次 HTML 快照允许处理的本地资源引用次数,防止重复 token 拖垮主进程。 */
+const MAX_LOCAL_RESOURCE_REFERENCES = 4_096;
 
 const DEFAULT_MARGIN_INCHES = 0.4;
 
@@ -77,7 +79,9 @@ const LOCAL_RESOURCE_MIME_TYPES: Record<string, string> = {
 interface ResourceSnapshotContext {
   root: string;
   totalBytes: number;
+  resourceReferences: number;
   cache: Map<string, string>;
+  lexicalCache: Map<string, string>;
   cssStack: Set<string>;
   directorySnapshots: Map<string, DirectorySnapshot>;
 }
@@ -389,6 +393,17 @@ function isCssWhitespace(value: string | undefined): boolean {
   return value === ' ' || value === '\t' || value === '\r' || value === '\n' || value === '\f';
 }
 
+function skipCssWhitespaceAndComments(css: string, start: number): number {
+  let cursor = start;
+  while (cursor < css.length) {
+    while (isCssWhitespace(css[cursor])) cursor += 1;
+    if (!css.startsWith('/*', cursor)) break;
+    const end = css.indexOf('*/', cursor + 2);
+    cursor = end < 0 ? css.length : end + 2;
+  }
+  return cursor;
+}
+
 function isCssIdentifierContinuation(value: string | undefined): boolean {
   if (value === undefined) return false;
   const codePoint = value.codePointAt(0)!;
@@ -536,7 +551,7 @@ async function rewriteCssResources(
     const importMatch = css.slice(index).match(/^@import\b/i);
     if (importMatch) {
       let cursor = index + importMatch[0].length;
-      while (/\s/.test(css[cursor] ?? '')) cursor += 1;
+      cursor = skipCssWhitespaceAndComments(css, cursor);
       if (css[cursor] === '"' || css[cursor] === "'") {
         const quote = css[cursor]!;
         const start = cursor;
@@ -754,6 +769,17 @@ async function snapshotLocalResource(
   }
   const absPath = resolveLocalResourcePath(baseUrl, reference);
   if (!absPath) return undefined;
+  context.resourceReferences += 1;
+  if (context.resourceReferences > MAX_LOCAL_RESOURCE_REFERENCES) {
+    throw new DocsPathError(
+      'FILE_TOO_LARGE',
+      'HTML 引用的本地资源次数过多',
+      `这份 HTML 的本地图片、字体和样式表引用超过 ${MAX_LOCAL_RESOURCE_REFERENCES} 次。请减少重复引用或改用 data URI。`,
+    );
+  }
+  const lexicalCacheKey = `${path.resolve(absPath)}\0${mimeOverride ?? ''}`;
+  const lexicalCached = context.lexicalCache.get(lexicalCacheKey);
+  if (lexicalCached) return `${lexicalCached}${fragment}`;
   const preparedPath = await prepareInputPath(context.root, absPath);
   const cacheKey = `${path.resolve(preparedPath)}\0${mimeOverride ?? ''}`;
   const cached = context.cache.get(cacheKey);
@@ -805,6 +831,7 @@ async function snapshotLocalResource(
   }
   const snapshot = dataUri(mime, snapshotBytes);
   context.cache.set(cacheKey, snapshot);
+  context.lexicalCache.set(lexicalCacheKey, snapshot);
   return `${snapshot}${fragment}`;
 }
 
@@ -818,7 +845,9 @@ async function inlineLocalResources(
   const context: ResourceSnapshotContext = {
     root,
     totalBytes: 0,
+    resourceReferences: 0,
     cache: new Map(),
+    lexicalCache: new Map(),
     cssStack: new Set(),
     directorySnapshots: new Map(initialDirectorySnapshots),
   };

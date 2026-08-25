@@ -384,6 +384,33 @@ const SlideSchema = z
         message: 'imagePath 只允许用于 content 或 image 版式。',
       });
     }
+
+    const rejectUnused = (field: string, message: string): void => {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message,
+      });
+    };
+    if (slide.layout === 'content') {
+      if (slide.columns) rejectUnused('columns', 'content 版式不接收 columns，请改用 comparison。');
+      if (slide.metrics) rejectUnused('metrics', 'content 版式不接收 metrics，请改用 metrics。');
+    } else if (slide.layout === 'comparison') {
+      if (slide.bullets) rejectUnused('bullets', 'comparison 版式不接收顶层 bullets，请放进 columns。');
+      if (slide.body) rejectUnused('body', 'comparison 版式不接收顶层 body，请放进 columns。');
+      if (slide.metrics) rejectUnused('metrics', 'comparison 版式不接收 metrics，请改用 metrics。');
+    } else if (slide.layout === 'metrics') {
+      if (slide.bullets) rejectUnused('bullets', 'metrics 版式不接收 bullets，请把内容放进 metrics.detail。');
+      if (slide.body) rejectUnused('body', 'metrics 版式不接收 body，请把内容放进 metrics.detail。');
+      if (slide.columns) rejectUnused('columns', 'metrics 版式不接收 columns，请改用 comparison。');
+    } else if (slide.layout === 'image') {
+      if (slide.bullets) rejectUnused('bullets', 'image 版式不接收 bullets，请改用 content。');
+      if (slide.columns) rejectUnused('columns', 'image 版式不接收 columns，请改用 comparison。');
+      if (slide.metrics) rejectUnused('metrics', 'image 版式不接收 metrics，请改用 metrics。');
+    } else {
+      if (slide.columns) rejectUnused('columns', `${slide.layout} 版式不接收 columns，请改用 comparison。`);
+      if (slide.metrics) rejectUnused('metrics', `${slide.layout} 版式不接收 metrics，请改用 metrics。`);
+    }
   });
 
 function slideTextBytes(slide: z.infer<typeof SlideSchema>): number {
