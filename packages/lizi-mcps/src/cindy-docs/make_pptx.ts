@@ -288,7 +288,7 @@ const DESCRIPTION = [
   '',
   '【每页可给】title(标题,必填)、layout(cover 封面 / section 分节 / content 内容 / comparison 双栏对比 / metrics 数据强调 / image 大图,默认 content)、',
   'subtitle(封面副题或分节导语)、bullets(要点数组)、body(整段正文)、',
-  'notes(演讲者备注,只在演讲者视图可见)、imagePath(工作目录内的 png / jpg / gif)。',
+  'notes(演讲者备注,只在演讲者视图可见)、imagePath(content / image 版式可用,工作目录内的 png / jpg / gif)。',
   '单张图片最大 12 MB,整份演示文稿按每次使用累计最多 32 MB;超限时先压缩图片或减少重复大图。',
   '整份最多 100 页、每页最多 20 条普通要点、全部文字合计最大 4 MB;超限时请拆分演示文稿。',
   'comparison 必须给 columns(恰好两栏,每栏含 title + bullets/body);metrics 必须给 metrics(2–4 个 value + label + 可选 detail);image 必须给 imagePath,图片会自动裁切铺满主体区,body 可作题注。',
@@ -375,6 +375,13 @@ const SlideSchema = z
         code: z.ZodIssueCode.custom,
         path: ['imagePath'],
         message: 'image 版式需要 imagePath。',
+      });
+    }
+    if (slide.imagePath && slide.layout !== 'content' && slide.layout !== 'image') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imagePath'],
+        message: 'imagePath 只允许用于 content 或 image 版式。',
       });
     }
   });

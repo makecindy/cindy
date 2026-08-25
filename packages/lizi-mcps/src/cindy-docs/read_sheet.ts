@@ -22,6 +22,7 @@ import {
   resolveSessionRoot,
 } from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
+import { decodeUnicodeText } from './_textEncoding.js';
 import { delimiterForExtension, parseDelimitedWindow } from './csv.js';
 import { READ_SHEET_RUNTIME_PACKAGES } from './readSheetRuntimeDeps.js';
 import type { DocsMcpSessionCtx } from './types.js';
@@ -51,6 +52,7 @@ const DESCRIPTION = [
   '',
   '【返回】rows 是二维数组(每格为字符串、数字、布尔或 null);',
   'xlsx 的公式格返回其缓存的计算结果,日期返回 ISO 字符串。',
+  'csv / tsv 支持 UTF-8，以及带 BOM 的 UTF-16LE / UTF-16BE 导出文件。',
   'xlsx 会先检查文件大小与 ZIP 解压比,再在受限 worker 中解析(15 秒超时);超限会返回 FILE_TOO_LARGE/READ_TIMEOUT。',
   '',
   '【读不到时】文件不在工作目录内会返回 PATH_NOT_ALLOWED,不存在返回 NOT_A_FILE。',
@@ -335,19 +337,18 @@ async function readTextTable(
   startColumn: number,
   maxColumns: number,
 ): Promise<SheetRead> {
-  const text = (
-    await readInputFileWithinLimit(
-      root,
-      absPath,
-      MAX_TEXT_BYTES,
-      (bytes) =>
-        new DocsPathError(
-          'FILE_TOO_LARGE',
-          `文本表格过大: ${bytes} 字节`,
-          `这个文件有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先让用户拆分文件,或改用命令行工具处理。`,
-        ),
-    )
-  ).toString('utf8');
+  const bytes = await readInputFileWithinLimit(
+    root,
+    absPath,
+    MAX_TEXT_BYTES,
+    (size) =>
+      new DocsPathError(
+        'FILE_TOO_LARGE',
+        `文本表格过大: ${size} 字节`,
+        `这个文件有 ${(size / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先让用户拆分文件,或改用命令行工具处理。`,
+      ),
+  );
+  const text = decodeUnicodeText(bytes, '文本表格');
   const parsed = parseDelimitedWindow(text, {
     delimiter: delimiterForExtension(ext),
     startRow,

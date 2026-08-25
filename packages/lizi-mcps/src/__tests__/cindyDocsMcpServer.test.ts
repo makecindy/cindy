@@ -18,6 +18,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -720,6 +721,36 @@ describe('make_pptx', () => {
     expect(slide.match(/<a:normAutofit/g)).toHaveLength(5);
   });
 
+  it('拒绝会静默丢弃 imagePath 的版式组合', async () => {
+    const client = await connect();
+    const layouts = [
+      { layout: 'cover' },
+      { layout: 'section' },
+      { layout: 'comparison', columns: [{ title: '甲' }, { title: '乙' }] },
+      {
+        layout: 'metrics',
+        metrics: [
+          { value: '1', label: '甲' },
+          { value: '2', label: '乙' },
+        ],
+      },
+    ];
+
+    for (const [index, slide] of layouts.entries()) {
+      const result = await client.callTool({
+        name: 'make_pptx',
+        arguments: {
+          slides: [{ title: '带图页面', imagePath: '../../../etc/hosts', ...slide }],
+          outPath: `discarded-image-${index}.pptx`,
+        },
+      });
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      await expect(
+        fs.stat(path.join(workdir, `discarded-image-${index}.pptx`)),
+      ).rejects.toThrow();
+    }
+  });
+
   it('图片路径越界时整个生成不发生,不留半成品', async () => {
     const client = await connect();
     const result = await callTool(client, 'make_pptx', {
@@ -844,6 +875,35 @@ describe('read_sheet', () => {
     expect((await callTool(client, 'read_sheet', { path: 'a.tsv' })).rows).toEqual([
       ['x', 'y'],
       ['1', '2'],
+    ]);
+  });
+
+  it('按 BOM 解码 UTF-16LE CSV 与 UTF-16BE TSV', async () => {
+    const client = await connect();
+    const csvText = 'name,note\r\n甲,季度报告\r\n';
+    await fs.writeFile(
+      path.join(workdir, 'utf16le.csv'),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(csvText, 'utf16le')]),
+    );
+    expect((await callTool(client, 'read_sheet', { path: 'utf16le.csv' })).rows).toEqual([
+      ['name', 'note'],
+      ['甲', '季度报告'],
+    ]);
+
+    const tsvText = '项目\t数值\n乙\t42\n';
+    const utf16Le = Buffer.from(tsvText, 'utf16le');
+    const utf16Be = Buffer.allocUnsafe(utf16Le.length);
+    for (let index = 0; index < utf16Le.length; index += 2) {
+      utf16Be[index] = utf16Le[index + 1]!;
+      utf16Be[index + 1] = utf16Le[index]!;
+    }
+    await fs.writeFile(
+      path.join(workdir, 'utf16be.tsv'),
+      Buffer.concat([Buffer.from([0xfe, 0xff]), utf16Be]),
+    );
+    expect((await callTool(client, 'read_sheet', { path: 'utf16be.tsv' })).rows).toEqual([
+      ['项目', '数值'],
+      ['乙', '42'],
     ]);
   });
 
@@ -1309,6 +1369,34 @@ describe('render_pdf', () => {
     expect(seen[0]!.html).toContain('data:text/css;base64,');
     expect(seen[0]!.html).not.toContain('./chart.png');
     expect(seen[0]!.html).not.toContain('./style.css');
+  });
+
+  it('渲染前拒绝 HTML、CSS 与 base 中的显式 file URL', async () => {
+    const renderHtmlToPdf = vi.fn(async () => ({ buffer: pdfBytes, fontsReady: true }));
+    await fs.writeFile(path.join(workdir, 'chart.png'), 'png-bytes', 'utf8');
+    await fs.writeFile(path.join(workdir, 'style.css'), '.hero { color: red; }', 'utf8');
+    const imageUrl = pathToFileURL(path.join(workdir, 'chart.png')).href;
+    const styleUrl = pathToFileURL(path.join(workdir, 'style.css')).href;
+    const baseUrl = pathToFileURL(`${workdir}${path.sep}`).href;
+    const cases = [
+      `<img src="${imageUrl}">`,
+      `<style>.hero { background: url("${imageUrl}"); }</style>`,
+      `<link rel="stylesheet" href="${styleUrl}">`,
+      `<base href="${baseUrl}"><img src="./chart.png">`,
+    ];
+    const client = await connect({ renderHtmlToPdf });
+
+    for (const [index, html] of cases.entries()) {
+      const result = await callTool(client, 'render_pdf', {
+        html,
+        outPath: `explicit-file-${index}.pdf`,
+        template: 'none',
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+      await expect(fs.stat(path.join(workdir, `explicit-file-${index}.pdf`))).rejects.toThrow();
+    }
+    expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 
   it('HTML 读取后源目录被重绑时拒绝混合目录版本的资源', async () => {

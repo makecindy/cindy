@@ -27,6 +27,7 @@ import {
   resolveSessionRoot,
 } from './_paths.js';
 import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
+import { decodeUnicodeText } from './_textEncoding.js';
 import { applyReportTemplate, extractHtmlTitle } from './pdfTemplate.js';
 import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsThemeName } from './themes.js';
 import type {
@@ -56,30 +57,6 @@ const MAX_LOCAL_RESOURCE_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_SNAPSHOT_HTML_BYTES = 64 * 1024 * 1024;
 
 const DEFAULT_MARGIN_INCHES = 0.4;
-
-function decodeHtmlFile(bytes: Buffer): string {
-  let encoding: 'utf-8' | 'utf-16le' | 'utf-16be' = 'utf-8';
-  let offset = 0;
-  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
-    offset = 3;
-  } else if (bytes[0] === 0xff && bytes[1] === 0xfe) {
-    encoding = 'utf-16le';
-    offset = 2;
-  } else if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    encoding = 'utf-16be';
-    offset = 2;
-  }
-
-  try {
-    return new TextDecoder(encoding, { fatal: true }).decode(bytes.subarray(offset));
-  } catch {
-    throw new DocsPathError(
-      'UNSUPPORTED_ENCODING',
-      `HTML 不是有效的 ${encoding.toUpperCase()} 文本`,
-      '请把 HTML 保存为 UTF-8、带 BOM 的 UTF-16LE 或带 BOM 的 UTF-16BE 后重试，避免乱码 PDF。',
-    );
-  }
-}
 
 const LOCAL_RESOURCE_MIME_TYPES: Record<string, string> = {
   '.avif': 'image/avif',
@@ -191,6 +168,21 @@ function isLocalResourceReference(reference: string): boolean {
   } catch {
     return !/^[a-z][a-z\d+.-]*:/i.test(value);
   }
+}
+
+function assertNotExplicitFileUrl(reference: string): void {
+  const value = reference.trim();
+  if (!value) return;
+  try {
+    if (new URL(value).protocol !== 'file:') return;
+  } catch {
+    return;
+  }
+  throw new DocsPathError(
+    'PATH_NOT_ALLOWED',
+    `HTML 不允许显式 file: URL: ${reference}`,
+    '请改用任务工作目录内的相对路径、data URI 或可访问的 http(s) URL。',
+  );
 }
 
 function resolveLocalResourcePath(baseUrl: URL, reference: string): string | undefined {
@@ -751,6 +743,7 @@ async function snapshotLocalResource(
   reference: string,
   mimeOverride?: string,
 ): Promise<string | undefined> {
+  assertNotExplicitFileUrl(reference);
   if (!isLocalResourceReference(reference)) return undefined;
   let fragment = '';
   try {
@@ -850,6 +843,7 @@ async function inlineLocalResources(
   const rawBaseHref = baseTag ? readHtmlAttribute(baseTag, 'href') : undefined;
   const baseHref = rawBaseHref ? decodeHTMLAttribute(rawBaseHref) : undefined;
   if (baseHref) {
+    assertNotExplicitFileUrl(baseHref);
     try {
       baseUrl = new URL(baseHref, documentUrl);
     } catch {
@@ -1062,7 +1056,7 @@ export function registerRenderPdfTool(
                 ),
             )
           : undefined;
-        const sourceHtml = sourceBytes ? decodeHtmlFile(sourceBytes) : html!;
+        const sourceHtml = sourceBytes ? decodeUnicodeText(sourceBytes, 'HTML') : html!;
         if (!sourcePath) {
           const inlineBytes = Buffer.byteLength(sourceHtml, 'utf8');
           if (inlineBytes > RENDER_PDF_MAX_HTML_BYTES) {
