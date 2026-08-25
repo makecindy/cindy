@@ -8,7 +8,9 @@ import {
   captureSessionRuntimeControlOwnerEpoch,
   clearAllSessionRuntimeControlStates,
   clearSessionRuntimeControlState,
+  deferSessionRuntimeAxisMutation,
   getSessionRuntimeControlSnapshot,
+  isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
@@ -195,6 +197,7 @@ describe('session runtime control state', () => {
         profile: { ...pending, effort: 'max' },
       },
     });
+    expect(isPendingSessionRuntimeRouteExplicit(sessionId, generation)).toBe(true);
   });
 
   it('records an Agent axis-only override when the live profile started from baseline', () => {
@@ -210,6 +213,71 @@ describe('session runtime control state', () => {
       effectiveOverride: { ...current, effort: 'max' },
       pending: null,
     });
+  });
+
+  it('defers an Agent axis-only patch without changing the busy live profile', () => {
+    const sessionId = 'runtime-agent-axis-busy';
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: current,
+      deferred: false,
+    });
+
+    const generation = deferSessionRuntimeAxisMutation({
+      sessionId,
+      source: 'agent',
+      effectiveProfile: current,
+      pendingPatch: { effort: 'max' },
+    });
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      effectiveOverride: current,
+      pending: {
+        generation,
+        source: 'agent',
+        profile: { ...current, effort: 'max' },
+      },
+    });
+    expect(isPendingSessionRuntimeRouteExplicit(sessionId, generation)).toBe(false);
+  });
+
+  it('patches an accepted deferred route while keeping the effective route unchanged', () => {
+    const sessionId = 'runtime-agent-axis-busy-with-route';
+    const effective = { ...current, model: 'gpt-live', providerId: 'openai' };
+    const pending = { ...current, model: 'gpt-next', providerId: 'xd', fastMode: false };
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: effective,
+      deferred: false,
+    });
+    const pendingGeneration = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: pending,
+      deferred: true,
+    });
+
+    const generation = deferSessionRuntimeAxisMutation({
+      sessionId,
+      source: 'agent',
+      effectiveProfile: effective,
+      pendingPatch: { effort: 'max' },
+    });
+
+    expect(generation).toBe(pendingGeneration + 1);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      effectiveOverride: effective,
+      pending: {
+        generation,
+        source: 'agent',
+        profile: { ...pending, effort: 'max' },
+      },
+    });
+    expect(isPendingSessionRuntimeRouteExplicit(sessionId, generation)).toBe(true);
   });
 
   it('updates the live override and deferred route when a user changes one runtime axis', () => {

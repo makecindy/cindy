@@ -879,8 +879,10 @@ import {
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   clearSessionRuntimeControlState,
+  deferSessionRuntimeAxisMutation,
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
+  isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
@@ -10855,6 +10857,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     deferWhileRunning?: boolean;
     applyingPendingGeneration?: number;
     previousProfile?: SessionRuntimeProfile;
+    /** Effective profile observed by the Agent CAS read; axis-only patches use it as the live base. */
+    effectiveProfile?: SessionRuntimeProfile;
     effortExplicit?: boolean;
     fastExplicit?: boolean;
     /** False only for Agent axis-only patches; model/provider routing stays untouched. */
@@ -10896,6 +10900,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             applyingPendingGeneration: pending.generation,
             effortExplicit: pending.profile.effort !== null,
             fastExplicit: true,
+            routeExplicit: isPendingSessionRuntimeRouteExplicit(
+              sessionId,
+              pending.generation,
+            ),
           },
         );
         log.info('pending session runtime settled', {
@@ -11188,7 +11196,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${targetSessionId} not found`,
         };
       }
-      const mergeBase = profiles.control.pending?.profile ?? profiles.effective;
+      const routeExplicit = patch.model !== undefined || patch.providerId !== undefined;
+      const mergeBase = routeExplicit
+        ? (profiles.control.pending?.profile ?? profiles.effective)
+        : profiles.effective;
       const next = mergeSessionRuntimeProfilePatch(mergeBase, patch);
       let response: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
       try {
@@ -11201,9 +11212,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             source: 'agent',
             expectedGeneration,
             deferWhileRunning: true,
+            effectiveProfile: profiles.effective,
             effortExplicit: patch.effort !== undefined,
             fastExplicit: patch.fastMode !== undefined,
-            routeExplicit: patch.model !== undefined || patch.providerId !== undefined,
+            routeExplicit,
           },
         );
       } catch (error) {
@@ -14821,28 +14833,52 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: axes.fastMode,
         };
       }
-      if (routeExplicit && internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
+      const axisPatch: SessionRuntimeAxisPatch = {
+        ...(internalOptions.effortExplicit === true && atomicSelection
+          ? { effort: atomicSelection.effort }
+          : {}),
+        ...(internalOptions.fastExplicit === true && atomicSelection
+          ? { fastMode: atomicSelection.fastMode }
+          : {}),
+      };
+      const pendingAxisPatch = routeExplicit
+        ? axisPatch
+        : await resolvePendingRuntimeAxisPatch(sessionId, axisPatch);
+      if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
         const meta = await maker.getSessionMeta(sessionId);
         if (!meta) return { deferred: false, superseded: true };
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
         }
-        const generation = acceptSessionRuntimeMutation({
-          sessionId,
-          source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
-          previousProfile: internalOptions.previousProfile,
-          deferred: true,
-          profile: {
-            agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
-            model,
-            providerId:
-              effectiveProviderId === undefined
-                ? getSessionProvider(sessionId)
-                : (normalizeSessionProviderId(effectiveProviderId) ?? null),
-            effort: atomicSelection?.effort ?? null,
-            fastMode: atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
-          },
-        });
+        const generation = routeExplicit
+          ? acceptSessionRuntimeMutation({
+              sessionId,
+              source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
+              previousProfile: internalOptions.previousProfile,
+              deferred: true,
+              profile: {
+                agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
+                model,
+                providerId:
+                  effectiveProviderId === undefined
+                    ? getSessionProvider(sessionId)
+                    : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+                effort: atomicSelection?.effort ?? null,
+                fastMode: atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
+              },
+            })
+          : deferSessionRuntimeAxisMutation({
+              sessionId,
+              source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
+              effectiveProfile: internalOptions.effectiveProfile ?? {
+                agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
+                model,
+                providerId: currentProviderId,
+                effort: getSessionEffort(sessionId) as SessionRuntimeProfile['effort'],
+                fastMode: getSessionFastMode(sessionId),
+              },
+              pendingPatch: pendingAxisPatch,
+            });
         await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
           log.debug('deferred session runtime projection broadcast failed', {
             sessionId,
@@ -14865,17 +14901,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         pendingCredentialSwitch: pendingCredentialSwitchHolder?.get(sessionId),
         hadLiveSession: maker.getSession(sessionId) !== undefined,
       };
-      const axisPatch: SessionRuntimeAxisPatch = {
-        ...(internalOptions.effortExplicit === true && atomicSelection
-          ? { effort: atomicSelection.effort }
-          : {}),
-        ...(internalOptions.fastExplicit === true && atomicSelection
-          ? { fastMode: atomicSelection.fastMode }
-          : {}),
-      };
-      const pendingAxisPatch = routeExplicit
-        ? axisPatch
-        : await resolvePendingRuntimeAxisPatch(sessionId, axisPatch);
       const liveSessionBeforeRouteChange = maker.getSession(sessionId);
       const targetProviderId =
         effectiveProviderId === undefined

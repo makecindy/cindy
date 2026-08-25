@@ -58,6 +58,7 @@ interface SessionRuntimeControlState {
   generation: number;
   effectiveOverride: SessionRuntimeProfile | null;
   pending: PendingSessionRuntimeMutation | null;
+  pendingRouteExplicit: boolean;
   fallbackHop: number;
   visitedRoutes: Set<string>;
 }
@@ -76,6 +77,7 @@ function stateFor(sessionId: string): SessionRuntimeControlState {
       generation: 0,
       effectiveOverride: null,
       pending: null,
+      pendingRouteExplicit: true,
       fallbackHop: 0,
       visitedRoutes: new Set(),
     };
@@ -96,6 +98,7 @@ export function recordUserSessionRuntimeMutation(sessionId: string): number {
   state.generation += 1;
   state.effectiveOverride = null;
   state.pending = null;
+  state.pendingRouteExplicit = true;
   state.fallbackHop = 0;
   state.visitedRoutes.clear();
   return state.generation;
@@ -114,6 +117,7 @@ export function recordRecoveredSessionRuntimeMutation(
   state.generation += 1;
   state.effectiveOverride = profile;
   state.pending = null;
+  state.pendingRouteExplicit = true;
   state.fallbackHop = 0;
   state.visitedRoutes.clear();
   return state.generation;
@@ -187,6 +191,39 @@ export function acceptSessionRuntimeAxisMutation(params: {
   return state.generation;
 }
 
+/**
+ * A busy task must leave its current turn untouched. Queue an Agent axis-only
+ * patch at the same boundary as route changes, preserving any route that was
+ * already accepted for that boundary and leaving the effective profile intact.
+ */
+export function deferSessionRuntimeAxisMutation(params: {
+  sessionId: string;
+  source: SessionRuntimeMutationSource;
+  effectiveProfile: SessionRuntimeProfile;
+  pendingPatch: SessionRuntimeAxisPatch;
+}): number {
+  const state = stateFor(params.sessionId);
+  const hadPendingMutation = state.pending !== null;
+  state.generation += 1;
+  state.pending = state.pending
+    ? {
+        ...state.pending,
+        generation: state.generation,
+        profile: { ...state.pending.profile, ...params.pendingPatch },
+      }
+    : {
+        generation: state.generation,
+        source: params.source,
+        profile: { ...params.effectiveProfile, ...params.pendingPatch },
+      };
+  if (!hadPendingMutation) state.pendingRouteExplicit = false;
+  if (params.source === 'agent') {
+    state.fallbackHop = 0;
+    state.visitedRoutes.clear();
+  }
+  return state.generation;
+}
+
 export function resolveCompatibleSessionRuntimeAxisPatch(params: {
   model: CatalogModel;
   profile: SessionRuntimeProfile;
@@ -224,6 +261,7 @@ export function acceptSessionRuntimeMutation(params: {
     profile: params.profile,
   };
   state.pending = params.deferred ? accepted : null;
+  state.pendingRouteExplicit = true;
   if (!params.deferred) state.effectiveOverride = params.profile;
   if (params.source === 'fallback') {
     state.fallbackHop += 1;
@@ -256,6 +294,7 @@ export function settlePendingSessionRuntimeMutation(
   if (!pending || pending.generation !== generation || state.generation !== generation)
     return false;
   state.pending = null;
+  state.pendingRouteExplicit = true;
   state.effectiveOverride = pending.profile;
   return true;
 }
@@ -270,7 +309,17 @@ export function cancelPendingSessionRuntimeMutation(
     return false;
   }
   state.pending = null;
+  state.pendingRouteExplicit = true;
   return true;
+}
+
+export function isPendingSessionRuntimeRouteExplicit(
+  sessionId: string,
+  generation: number,
+): boolean {
+  const state = states.get(sessionId);
+  if (!state?.pending || state.pending.generation !== generation) return true;
+  return state.pendingRouteExplicit;
 }
 
 export function getPendingSessionRuntimeMutation(

@@ -407,17 +407,25 @@ describe('session runtime control wiring', () => {
 
   it('composes later partial runtime changes on the accepted pending profile', () => {
     expect(registerSource).toContain(
-      'const mergeBase = profiles.control.pending?.profile ?? profiles.effective;',
+      'const routeExplicit = patch.model !== undefined || patch.providerId !== undefined;',
+    );
+    expect(registerSource).toContain(
+      'const mergeBase = routeExplicit\n        ? (profiles.control.pending?.profile ?? profiles.effective)\n        : profiles.effective;',
     );
     expect(registerSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
-    expect(registerSource).toContain(
-      'routeExplicit: patch.model !== undefined || patch.providerId !== undefined',
-    );
+    expect(registerSource).toContain('routeExplicit,');
+    expect(registerSource).toContain('effectiveProfile: profiles.effective,');
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
+    expect(setModel).toContain(
+      'if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId))',
+    );
+    expect(setModel).toContain('deferSessionRuntimeAxisMutation({');
+    expect(setModel).toContain('pendingPatch: pendingAxisPatch');
+    expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
     expect(setModel).toContain('const result = routeExplicit');
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
     expect(setModel).toContain('applyEffort: routeExplicit || internalOptions.effortExplicit === true');
