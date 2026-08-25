@@ -71,7 +71,11 @@ const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
-function readCurrentDbClientSnapshot(): { client: DbClient; userId: string } | null {
+function readCurrentDbClientSnapshot(): {
+  client: DbClient;
+  userId: string;
+  clientEpoch: number;
+} | null {
   try {
     return currentDb.getCurrentDbClientSnapshot?.() ?? null;
   } catch {
@@ -1000,11 +1004,13 @@ export function registerSessionIpc(
       const snapshot = readCurrentDbClientSnapshot();
       const db = snapshot?.client.drizzle ?? getDbClient().drizzle;
       const userId = snapshot?.userId ?? readCurrentDbClientUserId();
+      const clientEpoch = snapshot?.clientEpoch ?? 0;
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
+      const fresh = shouldBypassSessionListSingleFlight(options);
       // 支持 Sidebar Filter 的 Active/Archived/All status 过滤。
       //   - 'active' / 'archived' → WHERE status = ?
       //   - 'all' / undefined / 其它非法值 → WHERE status != 'deleted'
@@ -1040,13 +1046,21 @@ export function registerSessionIpc(
           }),
         );
       };
-      // key 用同一快照上的 userId + 归一化参数，避免切账号接到旧库那次查询。
-      const result = userId
-        ? await runSessionListSingleFlight(
-            buildSessionListFlightKey({ userId, cap, statusFilter, includePinned }),
-            loadRows,
-          )
-        : await loadRows();
+      // key 用同一快照上的 userId + clientEpoch + 归一化参数。
+      // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
+      const result =
+        userId && !fresh
+          ? await runSessionListSingleFlight(
+              buildSessionListFlightKey({
+                userId,
+                clientEpoch,
+                cap,
+                statusFilter,
+                includePinned,
+              }),
+              loadRows,
+            )
+          : await loadRows();
       const finishedAt = performance.now();
       const filter = statusFilter ?? 'all';
       const elapsedMs = Math.round(finishedAt - startedAt);
@@ -2209,6 +2223,14 @@ function shouldIncludePinnedSessions(options: unknown): boolean {
     options &&
     typeof options === 'object' &&
     (options as { includePinned?: unknown }).includePinned === true
+  );
+}
+
+function shouldBypassSessionListSingleFlight(options: unknown): boolean {
+  return !!(
+    options &&
+    typeof options === 'object' &&
+    (options as { fresh?: unknown }).fresh === true
   );
 }
 

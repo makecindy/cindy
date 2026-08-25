@@ -34,6 +34,7 @@ afterEach(() => {
 
 const listParams = {
   userId: 'u1',
+  clientEpoch: 1,
   cap: 200,
   statusFilter: 'active' as const,
   includePinned: true,

@@ -1,13 +1,23 @@
 import type { DbClient } from './DbClient.js';
 
-let current: { client: DbClient; userId: string } | null = null;
+export type CurrentDbClientSnapshot = {
+  client: DbClient;
+  userId: string;
+  clientEpoch: number;
+};
+
+let clientEpoch = 0;
+let current: CurrentDbClientSnapshot | null = null;
 
 export function setCurrentDbClient(client: DbClient, userId: string): void {
-  current = { client, userId };
+  clientEpoch += 1;
+  current = { client, userId, clientEpoch };
 }
 
 export function clearCurrentDbClient(client?: DbClient): void {
   if (client && current?.client !== client) return;
+  if (current === null) return;
+  clientEpoch += 1;
   current = null;
 }
 
@@ -45,7 +55,7 @@ export function getCurrentDbClientUserId(): string | null {
   return current?.userId ?? null;
 }
 
-/** 同一引用上读出 client 与 userId，避免分两次读赶上账号切换。 */
-export function getCurrentDbClientSnapshot(): { client: DbClient; userId: string } | null {
+/** 同一引用上读出 client、userId 与 clientEpoch，避免分两次读赶上账号切换。 */
+export function getCurrentDbClientSnapshot(): CurrentDbClientSnapshot | null {
   return current;
 }

@@ -15,21 +15,26 @@ describe('buildSessionListFlightKey', () => {
     expect(
       buildSessionListFlightKey({
         userId: 'u1',
+        clientEpoch: 1,
         cap: 200,
         statusFilter: null,
         includePinned: true,
       }),
-    ).toBe('u1|all|200|pinned');
+    ).toBe('u1|c1|all|200|pinned');
   });
 
-  it('separates filter, cap, pinned, and userId', () => {
+  it('separates filter, cap, pinned, userId, and client epoch', () => {
     const base = {
       userId: 'u1',
+      clientEpoch: 1,
       cap: 200,
       statusFilter: 'active' as const,
       includePinned: true,
     };
-    expect(buildSessionListFlightKey(base)).toBe('u1|active|200|pinned');
+    expect(buildSessionListFlightKey(base)).toBe('u1|c1|active|200|pinned');
+    expect(buildSessionListFlightKey({ ...base, clientEpoch: 2 })).toBe(
+      'u1|c2|active|200|pinned',
+    );
     expect(buildSessionListFlightKey({ ...base, statusFilter: null })).not.toBe(
       buildSessionListFlightKey(base),
     );
@@ -37,7 +42,7 @@ describe('buildSessionListFlightKey', () => {
       buildSessionListFlightKey(base),
     );
     expect(buildSessionListFlightKey({ ...base, includePinned: false })).toBe(
-      'u1|active|200|plain',
+      'u1|c1|active|200|plain',
     );
     expect(buildSessionListFlightKey({ ...base, userId: 'u2' })).not.toBe(
       buildSessionListFlightKey(base),
@@ -114,6 +119,7 @@ describe('runSessionListSingleFlight', () => {
     const u1 = runSessionListSingleFlight(
       buildSessionListFlightKey({
         userId: 'u1',
+        clientEpoch: 1,
         cap: 200,
         statusFilter: 'active',
         includePinned: true,
@@ -124,6 +130,7 @@ describe('runSessionListSingleFlight', () => {
     const u2 = runSessionListSingleFlight(
       buildSessionListFlightKey({
         userId: 'u2',
+        clientEpoch: 1,
         cap: 200,
         statusFilter: 'active',
         includePinned: true,
@@ -135,5 +142,31 @@ describe('runSessionListSingleFlight', () => {
     expect(u2Run).toHaveBeenCalledTimes(1);
     releaseU1('u1');
     await expect(u1).resolves.toBe('u1');
+  });
+
+  it('does not join a later client epoch onto an earlier client flight', async () => {
+    const params = {
+      userId: 'u1',
+      cap: 200,
+      statusFilter: 'active' as const,
+      includePinned: true,
+    };
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const first = runSessionListSingleFlight(
+      buildSessionListFlightKey({ ...params, clientEpoch: 1 }),
+      async () => gate,
+    );
+    const later = vi.fn(async () => 'new-client');
+    const second = runSessionListSingleFlight(
+      buildSessionListFlightKey({ ...params, clientEpoch: 2 }),
+      later,
+    );
+    await expect(second).resolves.toBe('new-client');
+    expect(later).toHaveBeenCalledTimes(1);
+    release('old-client');
+    await expect(first).resolves.toBe('old-client');
   });
 });

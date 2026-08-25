@@ -4235,6 +4235,7 @@ interface ElectronAPI {
       list: (
         limit?: number,
         status?: 'active' | 'archived' | 'all',
+        options?: { includePinned?: boolean; fresh?: boolean },
       ) => Promise<import('@/lib/ccAgent.types').Session[]>;
       create: (body?: {
         id?: string;
