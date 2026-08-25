@@ -28,6 +28,7 @@ import {
   piSubagentRuntimeOwnerId,
   requestStopAllPiSubagentRunsSync,
   readPiSubagentTranscriptPage,
+  PiSubagentRunnerExitUnconfirmedError,
   recordPiSubagentRunnerFailure,
   resumePiSubagentRun,
   stopAllPiSubagentRunsForExit,
@@ -289,9 +290,20 @@ describe('PI durable subagent run store', () => {
     expect(firstTombstone).toBeGreaterThan(publish);
     expect(source.indexOf('recordPiSubagentRunnerFailure(runDir', spawned))
       .toBeGreaterThan(spawned);
+    expect(source.indexOf('instanceof PiSubagentRunnerExitUnconfirmedError', spawned))
+      .toBeGreaterThan(spawned);
+    expect(source.indexOf('instanceof PiSubagentRunnerExitUnconfirmedError', spawned))
+      .toBeLessThan(source.indexOf('recordPiSubagentRunnerFailure(runDir', spawned));
     expect(lastStaging).toBeGreaterThan(firstTombstone);
     expect(lastTombstone).toBeGreaterThan(lastStaging);
     expect(spawned).toBeGreaterThan(lastTombstone);
+  });
+
+  it('keeps unconfirmed runner-exit errors distinguishable from ordinary launch failures', () => {
+    const error = new PiSubagentRunnerExitUnconfirmedError('PI Subagent runner did not become ready');
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(PiSubagentRunnerExitUnconfirmedError);
+    expect(error.name).toBe('PiSubagentRunnerExitUnconfirmedError');
   });
 
   it('reports UUID-contained corrupt runs without trusting disk PIDs', async () => {

@@ -2316,6 +2316,14 @@ function isResumeConfig(value: unknown, runId: string): value is ResumeRunnerCon
     && raw.tasks.length <= 8;
 }
 
+/** Launch/stop gave up waiting for exit; disk must stay non-terminal so sweep can still signal. */
+export class PiSubagentRunnerExitUnconfirmedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PiSubagentRunnerExitUnconfirmedError';
+  }
+}
+
 /** Persist a host-observed runner failure without overwriting a real terminal result. */
 export async function recordPiSubagentRunnerFailure(
   runDir: string,
@@ -2645,8 +2653,10 @@ async function resumeClaimedPiSubagentRun(
       env: launch.env,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await recordPiSubagentRunnerFailure(runDir, message).catch(() => undefined);
+    if (!(error instanceof PiSubagentRunnerExitUnconfirmedError)) {
+      const message = error instanceof Error ? error.message : String(error);
+      await recordPiSubagentRunnerFailure(runDir, message).catch(() => undefined);
+    }
     throw error;
   }
   return runId;

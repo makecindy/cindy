@@ -103,6 +103,7 @@ import {
   piSubagentRunRoot,
   piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
+  PiSubagentRunnerExitUnconfirmedError,
   recordPiSubagentRunnerFailure,
   resumePiSubagentRun,
   stopPiSubagentRunsForAccountBoundary,
@@ -1008,8 +1009,12 @@ export class PiAgent extends BaseAgent {
       };
       const timer = setTimeout(() => {
         timedOut = true;
-        void this.requestSubagentRunnerExit(runner, request.runId).finally(() => {
-          finish(new Error('PI Subagent runner did not become ready'));
+        void this.requestSubagentRunnerExit(runner, request.runId).then((confirmed) => {
+          finish(confirmed
+            ? new Error('PI Subagent runner did not become ready')
+            : new PiSubagentRunnerExitUnconfirmedError(
+              'PI Subagent runner did not become ready',
+            ));
         });
       }, 5_000);
       runner.once('spawn', () => {
@@ -1096,8 +1101,10 @@ export class PiAgent extends BaseAgent {
 
   override async dispose(): Promise<void> {
     this.disposeStarted = true;
-    for (const runner of this.subagentRunners.values()) runner.kill('SIGTERM');
-    this.subagentRunners.clear();
+    const runnerSnapshot = Array.from(this.subagentRunners.entries());
+    await Promise.allSettled(
+      runnerSnapshot.map(([runId, runner]) => this.requestSubagentRunnerExit(runner, runId)),
+    );
     const startupSnapshot = Array.from(this.inFlightStartups);
     await Promise.allSettled(startupSnapshot);
 

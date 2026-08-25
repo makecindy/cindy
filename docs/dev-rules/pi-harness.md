@@ -134,7 +134,8 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
    两份各自正确的测试再次掩盖跨模块矛盾。身份校验必须读未截断命令行（POSIX `ps -ww`
    / Linux `/proc/<pid>/cmdline`）；成功读到的命令行不含本 run 的 `runnerScript` 即
    视为 gone，只有读失败才 unverifiable。紧急停止和就绪超时都先对 runner pid 发 SIGTERM
-   再 SIGKILL，禁止 `kill(-pid)` 把 utility-process 当成独立进程组。
+   再 SIGKILL，禁止 `kill(-pid)` 把 utility-process 当成独立进程组。未确认退出不得写
+   failed 终态，否则 quit / 账号边界 sweep 会跳过仍可能活着的 runner。
 
 ## 5. 已交付(2026-07 里程碑)
 
