@@ -57,7 +57,10 @@ vi.mock('electron', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: h.logDebug, info: h.logInfo, warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
+vi.mock('../localDb/client/current', () => ({
+  getDbClient: () => ({ drizzle: h.fakeDb }),
+  getCurrentDbClientUserId: () => 'test-user',
+}));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));

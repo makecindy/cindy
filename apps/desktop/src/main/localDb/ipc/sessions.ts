@@ -20,8 +20,13 @@ import {
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import { getDbClient } from '../client/current';
+import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import {
+  buildSessionListFlightKey,
+  runSessionListSingleFlight,
+} from './sessionListSingleFlight';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { bindDeletedPiSubagentCleanupCancel } from './piSubagentDeletion';
 import { resolveBusinessSessionId } from '../../sessionIds';
@@ -991,33 +996,42 @@ export function registerSessionIpc(
       //      listSessions 行为一致：'all' 白名单 ['active','archived']）
       const statusFilter: 'active' | 'archived' | null =
         status === 'active' || status === 'archived' ? status : null;
-      // 按 DESKTOP_VISIBLE_SESSION_SOURCES 白名单过滤 — 包含 IM 渠道
-      // (feishu/slack/discord)与本机自动化(scheduler/learn/shared);
-      // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。
-      const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
-      const statusWhere = () =>
-        statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
-      const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
+      const loadRows = async () => {
+        // 按 DESKTOP_VISIBLE_SESSION_SOURCES 白名单过滤 — 包含 IM 渠道
+        // (feishu/slack/discord)与本机自动化(scheduler/learn/shared);
+        // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。
+        const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
+        const statusWhere = () =>
+          statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
+        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
 
-      let mergedRows = rows;
-      if (includePinned) {
-        const pinnedRows = await selectSessionListRows(
-          db,
-          and(sourceFilter, statusWhere(), isNotNull(sessions.pinnedAt)),
-          null,
+        let mergedRows = rows;
+        if (includePinned) {
+          const pinnedRows = await selectSessionListRows(
+            db,
+            and(sourceFilter, statusWhere(), isNotNull(sessions.pinnedAt)),
+            null,
+          );
+          mergedRows = mergeSessionListRows(rows, pinnedRows);
+        }
+
+        return mergedRows.map((r) =>
+          sessionToCamel({
+            ...r.session,
+            messageCount: r.messageCount,
+            latestMessageContent: r.latestMessageContent,
+            latestMessageRole: r.latestMessageRole,
+          }),
         );
-        mergedRows = mergeSessionListRows(rows, pinnedRows);
-      }
-
-      const queryFinishedAt = performance.now();
-      const result = mergedRows.map((r) =>
-        sessionToCamel({
-          ...r.session,
-          messageCount: r.messageCount,
-          latestMessageContent: r.latestMessageContent,
-          latestMessageRole: r.latestMessageRole,
-        }),
-      );
+      };
+      // key 用归一化后的 cap/status/includePinned，并带当前账号，避免切账号接到旧库 flight。
+      const userId = currentDb.getCurrentDbClientUserId?.() ?? null;
+      const result = userId
+        ? await runSessionListSingleFlight(
+            buildSessionListFlightKey({ userId, cap, statusFilter, includePinned }),
+            loadRows,
+          )
+        : await loadRows();
       const finishedAt = performance.now();
       const filter = statusFilter ?? 'all';
       const elapsedMs = Math.round(finishedAt - startedAt);
@@ -1027,8 +1041,8 @@ export function registerSessionIpc(
         cap,
         includePinned,
         rows: result.length,
-        queryElapsedMs: Math.round(queryFinishedAt - startedAt),
-        mapElapsedMs: Math.round(finishedAt - queryFinishedAt),
+        queryElapsedMs: elapsedMs,
+        mapElapsedMs: 0,
         elapsedMs,
       });
       const logScope = readSessionListLogScope() ?? 'unscoped';
