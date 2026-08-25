@@ -775,6 +775,7 @@ export function registerMakePptxTool(
                   y: bodyY,
                   w: slots.body.w,
                   h: Math.max(0.6, slots.body.y + slots.body.h - bodyY),
+                  fit: 'shrink',
                   fontSize: Math.max(13, slots.body.fontSize - 3),
                   color: palette.muted,
                   lineSpacingMultiple: 1.35,

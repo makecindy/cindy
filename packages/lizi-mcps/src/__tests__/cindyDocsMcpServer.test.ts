@@ -667,6 +667,20 @@ describe('make_pptx', () => {
     expect(slide).toContain('<a:normAutofit');
   });
 
+  it('最大合法正文启用文本框缩放,不静默裁切', async () => {
+    const client = await connect();
+    const longBody = '正'.repeat(32_000);
+    const result = await callTool(client, 'make_pptx', {
+      slides: [{ title: '长正文', layout: 'content', body: longBody }],
+      outPath: 'long-body.pptx',
+    });
+
+    expect(result.ok).toBe(true);
+    const slide = await unzip(result.path as string, 'ppt/slides/slide1.xml');
+    expect(slide).toContain(longBody);
+    expect(slide.match(/<a:normAutofit/g)).toHaveLength(2);
+  });
+
   it('最大合法指标值和标签启用文本框缩放,不静默裁切', async () => {
     const client = await connect();
     const longValue = '9'.repeat(1_000);
@@ -1776,12 +1790,13 @@ describe('render_pdf', () => {
     expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 
-  it('递归快照 CSS 的本地 @import', async () => {
+  it('递归快照 CSS 的本地 @import 并将 URL 形式标记为 text/css', async () => {
     const seen: DocsPdfRenderInput[] = [];
     await fs.writeFile(path.join(workdir, 'theme.css'), 'body { color: #123456; }', 'utf8');
+    await fs.writeFile(path.join(workdir, 'theme'), '.hero { color: #654321; }', 'utf8');
     await fs.writeFile(
       path.join(workdir, 'style.css'),
-      '@import "./theme.css"; .hero { color: red; }',
+      '@import "./theme.css"; @import url("./theme"); .hero { color: red; }',
       'utf8',
     );
     await fs.writeFile(
@@ -1804,8 +1819,16 @@ describe('render_pdf', () => {
 
     expect(result.ok).toBe(true);
     const rendered = Buffer.from(seen[0]!.htmlBytes!).toString('utf8');
-    expect(rendered).toContain('data:text/css;base64,');
-    expect(rendered).not.toContain('./theme.css');
+    const quotedTheme = `data:text/css;base64,${Buffer.from(
+      'body { color: #123456; }',
+    ).toString('base64')}`;
+    const urlTheme = `data:text/css;base64,${Buffer.from(
+      '.hero { color: #654321; }',
+    ).toString('base64')}`;
+    const rewrittenCss = `@import url("${quotedTheme}"); @import url("${urlTheme}"); .hero { color: red; }`;
+    expect(rendered).toContain(
+      `data:text/css;base64,${Buffer.from(rewrittenCss).toString('base64')}`,
+    );
   });
 
   it('htmlPath 与 html 必须二选一', async () => {

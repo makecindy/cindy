@@ -423,6 +423,37 @@ function decodeCssResourceReference(value: string): string {
   return decoded;
 }
 
+function parseCssUrlToken(
+  css: string,
+  index: number,
+): { reference: string; end: number } | null {
+  if (!/^url\s*\(/i.test(css.slice(index))) return null;
+  const open = css.indexOf('(', index);
+  let cursor = open + 1;
+  while (isCssWhitespace(css[cursor])) cursor += 1;
+  let reference = '';
+  if (css[cursor] === '"' || css[cursor] === "'") {
+    const quote = css[cursor]!;
+    cursor += 1;
+    const start = cursor;
+    while (cursor < css.length && css[cursor] !== quote) {
+      if (css[cursor] === '\\') cursor = cssEscapeEnd(css, cursor);
+      else cursor += 1;
+    }
+    reference = css.slice(start, cursor);
+    cursor += 1;
+  } else {
+    const start = cursor;
+    while (cursor < css.length && css[cursor] !== ')') {
+      if (css[cursor] === '\\') cursor = cssEscapeEnd(css, cursor);
+      else cursor += 1;
+    }
+    reference = css.slice(start, cursor).trim();
+  }
+  while (isCssWhitespace(css[cursor])) cursor += 1;
+  return css[cursor] === ')' ? { reference, end: cursor + 1 } : null;
+}
+
 async function rewriteCssResources(
   css: string,
   baseUrl: URL,
@@ -478,42 +509,31 @@ async function rewriteCssResources(
         index = Math.min(css.length, cursor + 1);
         continue;
       }
-    }
-    if (/^url\s*\(/i.test(css.slice(index))) {
-      const open = css.indexOf('(', index);
-      let cursor = open + 1;
-      while (/\s/.test(css[cursor] ?? '')) cursor += 1;
-      let reference = '';
-      if (css[cursor] === '"' || css[cursor] === "'") {
-        const quote = css[cursor]!;
-        cursor += 1;
-        const start = cursor;
-        while (cursor < css.length && css[cursor] !== quote) {
-          if (css[cursor] === '\\') cursor = cssEscapeEnd(css, cursor);
-          else cursor += 1;
-        }
-        reference = css.slice(start, cursor);
-        cursor += 1;
-      } else {
-        const start = cursor;
-        while (cursor < css.length && css[cursor] !== ')') {
-          if (css[cursor] === '\\') cursor = cssEscapeEnd(css, cursor);
-          else cursor += 1;
-        }
-        reference = css.slice(start, cursor).trim();
-      }
-      while (/\s/.test(css[cursor] ?? '')) cursor += 1;
-      if (css[cursor] === ')') {
-        const original = css.slice(index, cursor + 1);
+      const importUrl = parseCssUrlToken(css, cursor);
+      if (importUrl) {
         const snapshot = await snapshotLocalResource(
           context,
           baseUrl,
-          decodeCssResourceReference(decodeReference(reference)),
+          decodeCssResourceReference(decodeReference(importUrl.reference)),
+          'text/css',
         );
-        out.push(snapshot ? `url("${snapshot}")` : original);
-        index = cursor + 1;
+        out.push(css.slice(index, cursor));
+        out.push(snapshot ? `url("${snapshot}")` : css.slice(cursor, importUrl.end));
+        index = importUrl.end;
         continue;
       }
+    }
+    const urlToken = parseCssUrlToken(css, index);
+    if (urlToken) {
+      const original = css.slice(index, urlToken.end);
+      const snapshot = await snapshotLocalResource(
+        context,
+        baseUrl,
+        decodeCssResourceReference(decodeReference(urlToken.reference)),
+      );
+      out.push(snapshot ? `url("${snapshot}")` : original);
+      index = urlToken.end;
+      continue;
     }
     out.push(current);
     index += 1;
