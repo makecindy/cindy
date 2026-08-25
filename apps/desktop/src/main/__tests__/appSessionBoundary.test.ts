@@ -33,6 +33,7 @@ import {
 } from '../appSessionState.js';
 import {
   captureSessionRuntimeControlOwnerEpoch,
+  clearAllSessionRuntimeControlStates,
   sessionRuntimeControlOwnerEpochMatches,
 } from '../maker-ipc/sessionRuntimeControl.js';
 
@@ -54,6 +55,7 @@ describe('application session boundary isolation', () => {
     const observedModes: string[] = [];
     setAppSessionCommitBoundaryHook(() => {
       observedModes.push(getActiveAppSession().mode);
+      clearAllSessionRuntimeControlStates();
     });
 
     try {
@@ -66,7 +68,7 @@ describe('application session boundary isolation', () => {
     expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(false);
   });
 
-  it('bumps a same-owner generation without clearing live runtime state', () => {
+  it('keeps the runtime owner epoch across a same-owner generation bump', () => {
     const current = getActiveAppSession();
     const captured = captureSessionRuntimeControlOwnerEpoch();
     const hook = vi.fn();
@@ -81,7 +83,7 @@ describe('application session boundary isolation', () => {
 
       expect(bumped.generation).toBe(current.generation + 1);
       expect(hook).not.toHaveBeenCalled();
-      expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(false);
+      expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(true);
     } finally {
       setAppSessionCommitBoundaryHook(null);
     }

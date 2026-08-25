@@ -6,8 +6,6 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 
-import { activeOwnerScopeKey } from '../appSessionState.js';
-
 export type SessionRuntimeMutationSource = 'agent' | 'fallback';
 
 export interface SessionRuntimeProfile {
@@ -358,7 +356,7 @@ export function clearAllSessionRuntimeControlStates(): void {
 }
 
 export function captureSessionRuntimeControlOwnerEpoch(): string {
-  return `${activeOwnerScopeKey()}\u0000${ownerEpoch}`;
+  return String(ownerEpoch);
 }
 
 export function sessionRuntimeControlOwnerEpochMatches(expected: string): boolean {
