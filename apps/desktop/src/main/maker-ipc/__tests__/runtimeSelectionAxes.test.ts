@@ -81,6 +81,24 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     expect(order).toEqual(['effort', 'fast', 'commit']);
   });
 
+  it('applies only the explicitly requested Fast axis', async () => {
+    const setEffort = vi.fn(async () => {});
+    const setFastMode = vi.fn(async () => {});
+    await applyRuntimeSelectionAxesWithRecovery({
+      session: { agentKind: 'codex', setEffort, setFastMode },
+      effort: 'high',
+      fastMode: true,
+      applyEffort: false,
+      applyFastMode: true,
+      commitControlStores: vi.fn(),
+      restoreControlStores: vi.fn(),
+      terminateSession: vi.fn(),
+    });
+
+    expect(setEffort).not.toHaveBeenCalled();
+    expect(setFastMode).toHaveBeenCalledWith(true);
+  });
+
   it('retires a live session before committing a fixed-effort profile', async () => {
     const order: string[] = [];
     const setEffort = vi.fn(async () => {

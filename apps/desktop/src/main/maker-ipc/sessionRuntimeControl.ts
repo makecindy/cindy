@@ -160,6 +160,33 @@ export function recordUserSessionRuntimeAxisMutation(
   return state.generation;
 }
 
+/**
+ * Agent axis-only patches share the CAS/generation contract with model changes,
+ * but must not route, persist a baseline, or cancel an already accepted route.
+ */
+export function acceptSessionRuntimeAxisMutation(params: {
+  sessionId: string;
+  source: SessionRuntimeMutationSource;
+  profile: SessionRuntimeProfile;
+  pendingPatch: SessionRuntimeAxisPatch;
+}): number {
+  const state = stateFor(params.sessionId);
+  state.generation += 1;
+  state.effectiveOverride = params.profile;
+  if (state.pending) {
+    state.pending = {
+      ...state.pending,
+      generation: state.generation,
+      profile: { ...state.pending.profile, ...params.pendingPatch },
+    };
+  }
+  if (params.source === 'agent') {
+    state.fallbackHop = 0;
+    state.visitedRoutes.clear();
+  }
+  return state.generation;
+}
+
 export function resolveCompatibleSessionRuntimeAxisPatch(params: {
   model: CatalogModel;
   profile: SessionRuntimeProfile;

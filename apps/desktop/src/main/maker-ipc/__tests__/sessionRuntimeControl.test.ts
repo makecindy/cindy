@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
+  acceptSessionRuntimeAxisMutation,
   acceptSessionRuntimeMutation,
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
@@ -157,6 +158,57 @@ describe('session runtime control state', () => {
       },
       fallbackHop: 0,
       visitedRoutes: [],
+    });
+  });
+
+  it('applies an Agent axis patch without replacing its accepted pending route', () => {
+    const sessionId = 'runtime-agent-axis-pending';
+    const live = { ...current, model: 'gpt-live' };
+    const pending = { ...current, model: 'gpt-next', providerId: 'xd', fastMode: false };
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: live,
+      deferred: false,
+    });
+    const pendingGeneration = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: pending,
+      deferred: true,
+    });
+
+    const generation = acceptSessionRuntimeAxisMutation({
+      sessionId,
+      source: 'agent',
+      profile: { ...live, effort: 'max' },
+      pendingPatch: { effort: 'max' },
+    });
+
+    expect(generation).toBe(pendingGeneration + 1);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      effectiveOverride: { ...live, effort: 'max' },
+      pending: {
+        generation,
+        source: 'agent',
+        profile: { ...pending, effort: 'max' },
+      },
+    });
+  });
+
+  it('records an Agent axis-only override when the live profile started from baseline', () => {
+    const generation = acceptSessionRuntimeAxisMutation({
+      sessionId: 'runtime-agent-axis-baseline',
+      source: 'agent',
+      profile: { ...current, effort: 'max' },
+      pendingPatch: { effort: 'max' },
+    });
+
+    expect(getSessionRuntimeControlSnapshot('runtime-agent-axis-baseline')).toMatchObject({
+      generation,
+      effectiveOverride: { ...current, effort: 'max' },
+      pending: null,
     });
   });
 

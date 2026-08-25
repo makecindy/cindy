@@ -31,6 +31,8 @@ export interface ApplyRuntimeSelectionAxesWithRecoveryInput {
   session: RuntimeSelectionAxesSession;
   effort: Effort | null;
   fastMode: boolean;
+  applyEffort?: boolean;
+  applyFastMode?: boolean;
   assertCanCommit?: () => void;
   commitControlStores: () => void;
   restoreControlStores: () => void;
@@ -88,11 +90,13 @@ export async function commitRuntimeAxisAfterPersistence(
 export async function applyRuntimeSelectionAxesWithRecovery(
   input: ApplyRuntimeSelectionAxesWithRecoveryInput,
 ): Promise<void> {
+  const applyEffort = input.applyEffort !== false;
+  const applyFastMode = input.applyFastMode !== false;
   // A fixed-effort model has no representable live setEffort value. Keeping the
   // current Session would leave each harness's mutable effort on the previous
   // model, so retire the idle Session and let the next send rebuild from the
   // committed null-effort runtime profile.
-  if (input.effort === null) {
+  if (applyEffort && input.effort === null) {
     try {
       await input.terminateSession();
     } catch (terminationError) {
@@ -106,9 +110,12 @@ export async function applyRuntimeSelectionAxesWithRecovery(
     return;
   }
   try {
-    await input.session.setEffort(input.effort);
-    input.assertCanCommit?.();
-    if (input.session.agentKind === 'codex') {
+    if (applyEffort) {
+      // The null case returns through the fixed-effort rebuild branch above.
+      await input.session.setEffort(input.effort as Effort);
+      input.assertCanCommit?.();
+    }
+    if (applyFastMode && input.session.agentKind === 'codex') {
       await input.session.setFastMode(input.fastMode);
       input.assertCanCommit?.();
     }

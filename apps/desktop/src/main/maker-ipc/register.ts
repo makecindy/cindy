@@ -874,6 +874,7 @@ import {
   resolveRetainedRuntimeEffort,
 } from './runtimeSelectionAxes.js';
 import {
+  acceptSessionRuntimeAxisMutation,
   acceptSessionRuntimeMutation,
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
@@ -10856,6 +10857,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     previousProfile?: SessionRuntimeProfile;
     effortExplicit?: boolean;
     fastExplicit?: boolean;
+    /** False only for Agent axis-only patches; model/provider routing stays untouched. */
+    routeExplicit?: boolean;
   };
   let applySessionRuntimeSelection: (
     sessionId: string,
@@ -11200,6 +11203,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             deferWhileRunning: true,
             effortExplicit: patch.effort !== undefined,
             fastExplicit: patch.fastMode !== undefined,
+            routeExplicit: patch.model !== undefined || patch.providerId !== undefined,
           },
         );
       } catch (error) {
@@ -14653,7 +14657,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 状态可封住两种次序：本请求先拿锁时终态写等待并在之后清理 override；终态
       // 先拿锁时旧请求看到非 active，不能在 cleanup 后重新建立 pending/override。
       const [runtimeStatus] = await getDbClient()
-        .drizzle.select({ status: sessions.status })
+        .drizzle.select({ status: sessions.status, orcaRole: sessions.orcaRole })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
@@ -14678,6 +14682,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ) {
         return { deferred: false, superseded: true };
       }
+      const routeExplicit = internalOptions.routeExplicit !== false;
       // 同引擎重选是 switch ack 后的第二段写入。另一控制端若在两段之间更新（含
       // set→clear ABA），修订号已变化：旧 SET_MODEL 必须在任何 route/DB 副作用前让位。
       if (
@@ -14729,7 +14734,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         currentProviderId,
       );
       let effectiveProviderId = requestedProviderId;
-      {
+      if (routeExplicit) {
         const dbAgentKind = getSessionDbAgentKind(sessionId);
         if (dbAgentKind) {
           const reroute = persistedProviderKnown
@@ -14783,7 +14788,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const catalogModel = findCatalogModel(provider, model, runtimeAgentKind, {
           exact: true,
         });
-        if (!provider?.connected || !catalogModel) {
+        if ((!provider?.connected && routeExplicit) || !catalogModel) {
           throwIpcError(
             'INVALID_PARAMS',
             `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
@@ -14816,7 +14821,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: axes.fastMode,
         };
       }
-      if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
+      if (routeExplicit && internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
         const meta = await maker.getSessionMeta(sessionId);
         if (!meta) return { deferred: false, superseded: true };
         if (supersededByOwnerBoundary()) {
@@ -14860,6 +14865,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         pendingCredentialSwitch: pendingCredentialSwitchHolder?.get(sessionId),
         hadLiveSession: maker.getSession(sessionId) !== undefined,
       };
+      const axisPatch: SessionRuntimeAxisPatch = {
+        ...(internalOptions.effortExplicit === true && atomicSelection
+          ? { effort: atomicSelection.effort }
+          : {}),
+        ...(internalOptions.fastExplicit === true && atomicSelection
+          ? { fastMode: atomicSelection.fastMode }
+          : {}),
+      };
+      const pendingAxisPatch = routeExplicit
+        ? axisPatch
+        : await resolvePendingRuntimeAxisPatch(sessionId, axisPatch);
+      const liveSessionBeforeRouteChange = maker.getSession(sessionId);
+      const targetProviderId =
+        effectiveProviderId === undefined
+          ? currentProviderId
+          : (normalizeSessionProviderId(effectiveProviderId) ?? null);
+      const rebuildLiveOrcaWorker =
+        routeExplicit &&
+        runtimeStatus.orcaRole === 'worker' &&
+        liveSessionBeforeRouteChange !== undefined &&
+        (liveSessionBeforeRouteChange.model !== model || currentProviderId !== targetProviderId);
       const restoreControlStores = () => {
         if (previousRuntime.hadProviderRoute) {
           setSessionProvider(sessionId, previousRuntime.providerId);
@@ -14932,6 +14958,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         pendingCredentialSwitchHolder?.clear(sessionId);
         if (internalOptions.source === 'user') {
           recordRecoveredSessionRuntimeMutation(sessionId, retainedProfile);
+        } else if (!routeExplicit) {
+          recordRecoveredSessionRuntimeAxisMutation(sessionId, retainedProfile);
         } else {
           acceptSessionRuntimeMutation({
             sessionId,
@@ -14955,35 +14983,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       };
       try {
-        const result = await applyRuntimeSetModelChange({
-          maker,
-          sessionId,
-          model,
-          providerId: effectiveProviderId,
-          ...(atomicSelection?.effort
-            ? {
-                effort: atomicSelection.effort as
-                  | 'minimal'
-                  | 'low'
-                  | 'medium'
-                  | 'high'
-                  | 'xhigh'
-                  | 'max'
-                  | 'ultra',
-              }
-            : {}),
-          isSessionInTurn,
-          registerPendingCredentialSwitch:
-            registerPendingCredentialSwitchForSession,
-          clearPendingCredentialSwitch:
-            clearPendingCredentialSwitchForSession,
-          wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
-          getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
-          // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
-          // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
-          codexAuthInjection: getCodexProxyAuthInjectionState(),
-          logger: log,
-        });
+        const result = routeExplicit
+          ? await applyRuntimeSetModelChange({
+              maker,
+              sessionId,
+              model,
+              providerId: effectiveProviderId,
+              ...(atomicSelection?.effort
+                ? {
+                    effort: atomicSelection.effort as
+                      | 'minimal'
+                      | 'low'
+                      | 'medium'
+                      | 'high'
+                      | 'xhigh'
+                      | 'max'
+                      | 'ultra',
+                  }
+                : {}),
+              forceSessionRebuild: rebuildLiveOrcaWorker,
+              isSessionInTurn,
+              registerPendingCredentialSwitch:
+                registerPendingCredentialSwitchForSession,
+              clearPendingCredentialSwitch:
+                clearPendingCredentialSwitchForSession,
+              // Worker rebuild must publish the accepted runtime profile before queued input
+              // can lazy-create the replacement execution unit.
+              ...(!rebuildLiveOrcaWorker
+                ? { wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch }
+                : {}),
+              getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+              // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
+              // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
+              codexAuthInjection: getCodexProxyAuthInjectionState(),
+              logger: log,
+            })
+          : { status: 'applied' as const };
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
         const response = {
@@ -15013,6 +15048,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               session: sess,
               effort: selectionToCommit.effort,
               fastMode: selectionToCommit.fastMode,
+              applyEffort: routeExplicit || internalOptions.effortExplicit === true,
+              applyFastMode: routeExplicit || internalOptions.fastExplicit === true,
               assertCanCommit: assertRuntimeOwnerCurrent,
               commitControlStores,
               restoreControlStores,
@@ -15105,6 +15142,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           generation = getSessionRuntimeControlSnapshot(sessionId).generation;
+        } else if (!routeExplicit) {
+          const meta = await maker.getSessionMeta(sessionId);
+          generation = acceptSessionRuntimeAxisMutation({
+            sessionId,
+            source: internalOptions.source,
+            profile: {
+              agentKind:
+                maker.getSession(sessionId)?.agentKind ??
+                meta?.agentKind ??
+                'claude-code',
+              model,
+              providerId: getSessionProvider(sessionId),
+              effort: atomicSelection?.effort ?? previousRuntime.effort ?? null,
+              fastMode: atomicSelection?.fastMode ?? previousRuntime.fastMode,
+            },
+            pendingPatch: pendingAxisPatch,
+          });
         } else {
           const meta = await maker.getSessionMeta(sessionId);
           generation = acceptSessionRuntimeMutation({
@@ -15127,6 +15181,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
             },
           });
+        }
+        if (rebuildLiveOrcaWorker && !response.deferred) {
+          wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         if (!response.deferred) {
           try {

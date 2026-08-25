@@ -316,7 +316,7 @@ describe('session runtime control wiring', () => {
     const retainedRecovery = handlerBody(
       setModel,
       'const reconcileRetainedLiveProfile = async (): Promise<void> => {',
-      'try {\n        const result = await applyRuntimeSetModelChange({',
+      'try {\n        const result = routeExplicit',
     );
     const capabilityLookup = retainedRecovery.indexOf(
       'const retainedProviders = await getDesktopProviderService().listProviders({',
@@ -410,5 +410,28 @@ describe('session runtime control wiring', () => {
       'const mergeBase = profiles.control.pending?.profile ?? profiles.effective;',
     );
     expect(registerSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
+    expect(registerSource).toContain(
+      'routeExplicit: patch.model !== undefined || patch.providerId !== undefined',
+    );
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('const result = routeExplicit');
+    expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
+    expect(setModel).toContain('applyEffort: routeExplicit || internalOptions.effortExplicit === true');
+    expect(setModel).toContain('applyFastMode: routeExplicit || internalOptions.fastExplicit === true');
+  });
+
+  it('rebuilds live Orca Workers for model routes while preserving effort-only hot updates', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain("runtimeStatus.orcaRole === 'worker'");
+    expect(setModel).toContain('forceSessionRebuild: rebuildLiveOrcaWorker');
+    expect(setModel).toContain('if (rebuildLiveOrcaWorker && !response.deferred)');
   });
 });

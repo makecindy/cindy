@@ -903,6 +903,12 @@ function orcaUpsertWorker(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
+    const activeTeam = readyDb.prepare(
+      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
+    ).get(teamId);
+    if (!activeTeam) {
+      throw new Error('Orca team ' + teamId + ' is no longer active');
+    }
     if (payload.focused === true) {
       readyDb.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }

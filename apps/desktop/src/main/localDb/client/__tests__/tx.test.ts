@@ -2125,6 +2125,35 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('rejects a worker link persisted after its team has ended in the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'late-worker', { orcaRole: 'worker' });
+      await client.exec(
+        'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ['team-1', 'lead', 'completed', 1, 2, 2],
+      );
+
+      await expect(client.tx('orca.upsertWorker', {
+        id: 'late-worker-link',
+        teamId: 'team-1',
+        sessionId: 'late-worker',
+        status: 'idle',
+        label: 'late',
+        role: 'reviewer',
+        focused: false,
+        now: 3,
+      })).rejects.toThrow('Orca team team-1 is no longer active');
+
+      await expect(
+        client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['late-worker-link']),
+      ).resolves.toBeUndefined();
+    }, { useInlineWorker });
+  });
+
   it('counts terminal workers until their sessions are archived', async () => {
     await withClient(async (client) => {
       await seedSession(client, 'lead');

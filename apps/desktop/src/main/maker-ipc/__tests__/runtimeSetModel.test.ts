@@ -854,6 +854,71 @@ describe('applyRuntimeSetModelChange', () => {
     expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
   });
 
+  it('rebuilds an idle Orca Worker instead of hot-switching its live model', async () => {
+    const sessionId = rememberSession('runtime-set-model-orca-worker-rebuild');
+    setSessionProvider(sessionId, 'xd');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.5',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.4',
+      providerId: 'xd',
+      forceSessionRebuild: true,
+      clearPendingCredentialSwitch: vi.fn(),
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('defers a busy Orca Worker rebuild to the turn boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-orca-worker-defer');
+    setSessionProvider(sessionId, 'xd');
+    const registerPendingCredentialSwitch = vi.fn();
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.5',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => true },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.4',
+      providerId: 'xd',
+      forceSessionRebuild: true,
+      registerPendingCredentialSwitch,
+    })).resolves.toEqual({ status: 'deferred' });
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.4',
+      providerId: 'xd',
+    });
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
   it('falls back to the busy throw when no pending channel is injected', async () => {
     // 老调用方(未注入 registerPendingCredentialSwitch)保持旧 fail-closed 语义。
     const sessionId = rememberSession('runtime-set-model-defer-no-channel');

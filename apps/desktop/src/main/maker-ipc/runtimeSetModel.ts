@@ -49,6 +49,11 @@ export interface ApplyRuntimeSetModelChangeInput {
   model: string;
   providerId?: string | null;
   effort?: Effort;
+  /**
+   * Orca Worker 的 live model/provider 属于执行单元身份，不能热切。即使凭证
+   * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
+   */
+  forceSessionRebuild?: boolean;
   isSessionInTurn?: (sessionId: string) => boolean;
   /**
    * 会话自己正在跑 turn 时的延迟生效登记(PendingCredentialSwitchService.register)。
@@ -139,7 +144,7 @@ export async function applyRuntimeSetModelChange(
         ? pendingTarget.providerId
         : currentProviderId;
   const shouldCloseSession = sess
-    ? shouldCloseSessionForCredentialSwitch({
+    ? input.forceSessionRebuild === true || shouldCloseSessionForCredentialSwitch({
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
         currentProviderId,
