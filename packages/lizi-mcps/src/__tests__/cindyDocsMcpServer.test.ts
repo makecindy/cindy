@@ -667,16 +667,17 @@ describe('make_pptx', () => {
     expect(slide).toContain('<a:normAutofit');
   });
 
-  it('最大合法指标值启用文本框缩放,不静默裁切', async () => {
+  it('最大合法指标值和标签启用文本框缩放,不静默裁切', async () => {
     const client = await connect();
     const longValue = '9'.repeat(1_000);
+    const longLabel = '标'.repeat(1_000);
     const result = await callTool(client, 'make_pptx', {
       slides: [
         {
           title: '指标页',
           layout: 'metrics',
           metrics: [
-            { value: longValue, label: '长指标' },
+            { value: longValue, label: longLabel },
             { value: '2', label: '对照指标' },
           ],
         },
@@ -687,7 +688,8 @@ describe('make_pptx', () => {
     expect(result.ok).toBe(true);
     const slide = await unzip(result.path as string, 'ppt/slides/slide1.xml');
     expect(slide).toContain(longValue);
-    expect(slide.match(/<a:normAutofit/g)).toHaveLength(3);
+    expect(slide).toContain(longLabel);
+    expect(slide.match(/<a:normAutofit/g)).toHaveLength(5);
   });
 
   it('图片路径越界时整个生成不发生,不留半成品', async () => {

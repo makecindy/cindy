@@ -679,6 +679,7 @@ export function registerMakePptxTool(
                 y: y + Math.min(1.36, cardH * 0.48),
                 w: cardW - 0.6,
                 h: 0.42,
+                fit: 'shrink',
                 fontSize: 16,
                 bold: true,
                 color: palette.title,
