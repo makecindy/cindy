@@ -92,6 +92,10 @@ describe('session runtime control wiring', () => {
       expect(body.indexOf('withSendToSessionLock(sessionId')).toBeLessThan(
         body.indexOf(applyCall),
       );
+      expect(body).toContain('await resolvePendingRuntimeAxisPatch(sessionId, livePatch)');
+      expect(body).toContain(
+        'recordUserSessionRuntimeAxisMutation(sessionId, livePatch, pendingPatch)',
+      );
     }
   });
 

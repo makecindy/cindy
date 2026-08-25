@@ -887,11 +887,13 @@ import {
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
+  resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
   sessionRuntimeGenerationMatches,
   sessionRuntimeControlOwnerEpochMatches,
   settlePendingSessionRuntimeMutation,
   type SessionRuntimeMutationSource,
+  type SessionRuntimeAxisPatch,
   type SessionRuntimeProfile,
 } from './sessionRuntimeControl.js';
 import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
@@ -10979,6 +10981,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { baseline, effective, control };
   };
 
+  const resolvePendingRuntimeAxisPatch = async (
+    sessionId: string,
+    patch: SessionRuntimeAxisPatch,
+  ): Promise<SessionRuntimeAxisPatch> => {
+    const pending = getPendingSessionRuntimeMutation(sessionId);
+    if (!pending) return patch;
+    try {
+      const providers = await getDesktopProviderService().listProviders({
+        allowSideEffects: false,
+        catalog: getActiveCatalog(),
+      });
+      const pendingProviderId =
+        pending.profile.providerId ??
+        effectiveSourceIdForModel(
+          providers,
+          null,
+          pending.profile.model,
+          pending.profile.agentKind,
+        );
+      const provider = providers.find((candidate) => candidate.id === pendingProviderId);
+      const model = findCatalogModel(provider, pending.profile.model, pending.profile.agentKind, {
+        exact: true,
+      });
+      if (!model) return {};
+      return resolveCompatibleSessionRuntimeAxisPatch({
+        model,
+        profile: pending.profile,
+        patch,
+      });
+    } catch (error) {
+      log.debug('pending runtime axis capability lookup failed', {
+        sessionId,
+        model: pending.profile.model,
+        providerId: pending.profile.providerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
+  };
+
   const maybeApplySessionRuntimeFallback = async (
     sessionId: string,
     episodeAttempt: number,
@@ -15273,10 +15315,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           'archived or deleted task cannot change runtime effort',
         );
       }
+      const livePatch: SessionRuntimeAxisPatch = {
+        effort: effort as SessionRuntimeProfile['effort'],
+      };
+      const pendingPatch = await resolvePendingRuntimeAxisPatch(sessionId, livePatch);
       const commitEffort = () => {
-        recordUserSessionRuntimeAxisMutation(sessionId, {
-          effort: effort as SessionRuntimeProfile['effort'],
-        });
+        recordUserSessionRuntimeAxisMutation(sessionId, livePatch, pendingPatch);
         // 记下会话 effort:responses-bridge 模型(chatgpt/ / xai/)的 effort 无法经请求体流到 bridge,
         // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(不影响 session 是否在跑)。
         setSessionEffort(sessionId, effort);
@@ -15697,8 +15741,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'archived or deleted task cannot change runtime Fast mode',
           );
         }
+        const livePatch: SessionRuntimeAxisPatch = { fastMode: enabled };
+        const pendingPatch = await resolvePendingRuntimeAxisPatch(sessionId, livePatch);
         const commitFastMode = () => {
-          recordUserSessionRuntimeAxisMutation(sessionId, { fastMode: enabled });
+          recordUserSessionRuntimeAxisMutation(sessionId, livePatch, pendingPatch);
           // 记下会话 Fast 态:responses-bridge 模型(chatgpt/ 前缀)的 fast 无法经请求体流到 bridge,
           // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(与 SET_EFFORT 的 effort 同机制)。
           setSessionFastMode(sessionId, enabled);

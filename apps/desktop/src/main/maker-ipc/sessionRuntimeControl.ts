@@ -36,6 +36,11 @@ export type SessionRuntimeProfilePatch = Partial<
   Pick<SessionRuntimeProfile, 'model' | 'providerId' | 'effort' | 'fastMode'>
 >;
 
+export type SessionRuntimeAxisPatch = Pick<
+  Partial<SessionRuntimeProfile>,
+  'effort' | 'fastMode'
+>;
+
 export function mergeSessionRuntimeProfilePatch(
   base: SessionRuntimeProfile,
   patch: SessionRuntimeProfilePatch,
@@ -134,7 +139,8 @@ export function recordRecoveredSessionRuntimeAxisMutation(
 
 export function recordUserSessionRuntimeAxisMutation(
   sessionId: string,
-  patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,
+  patch: SessionRuntimeAxisPatch,
+  pendingPatch: SessionRuntimeAxisPatch = patch,
 ): number {
   const state = stateFor(sessionId);
   state.generation += 1;
@@ -143,7 +149,7 @@ export function recordUserSessionRuntimeAxisMutation(
     ? {
         ...pending,
         generation: state.generation,
-        profile: { ...pending.profile, ...patch },
+        profile: { ...pending.profile, ...pendingPatch },
       }
     : null;
   state.fallbackHop = 0;
@@ -152,6 +158,28 @@ export function recordUserSessionRuntimeAxisMutation(
     state.effectiveOverride = { ...state.effectiveOverride, ...patch };
   }
   return state.generation;
+}
+
+export function resolveCompatibleSessionRuntimeAxisPatch(params: {
+  model: CatalogModel;
+  profile: SessionRuntimeProfile;
+  patch: SessionRuntimeAxisPatch;
+}): SessionRuntimeAxisPatch {
+  const axes = resolveSessionRuntimeAxes({
+    model: params.model,
+    effort:
+      params.patch.effort !== undefined
+        ? params.patch.effort
+        : params.profile.effort,
+    fastMode: params.patch.fastMode ?? params.profile.fastMode,
+    effortExplicit: false,
+    fastExplicit: false,
+  });
+  if (!axes.ok) return {};
+  return {
+    ...(params.patch.effort !== undefined ? { effort: axes.effort } : {}),
+    ...(params.patch.fastMode !== undefined ? { fastMode: axes.fastMode } : {}),
+  };
 }
 
 export function acceptSessionRuntimeMutation(params: {

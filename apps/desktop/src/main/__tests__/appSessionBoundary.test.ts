@@ -26,6 +26,7 @@ vi.mock('../authBoundaryQuarantine.js', () => ({
 import {
   beginAppSessionBoundary,
   commitActiveAppSession,
+  commitVolatileAppSession,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   setAppSessionCommitBoundaryHook,
@@ -63,5 +64,24 @@ describe('application session boundary isolation', () => {
 
     expect(observedModes).toEqual(['signed-out']);
     expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(false);
+  });
+
+  it('does not create a boundary for a repeated volatile commit to the same owner', () => {
+    const current = getActiveAppSession();
+    const targetMode = current.mode === 'signed-out' ? 'local' : 'signed-out';
+    const hook = vi.fn();
+    setAppSessionCommitBoundaryHook(hook);
+
+    try {
+      const first = commitVolatileAppSession(targetMode);
+      const captured = captureSessionRuntimeControlOwnerEpoch();
+      const repeated = commitVolatileAppSession(targetMode);
+
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(repeated).toEqual(first);
+      expect(sessionRuntimeControlOwnerEpochMatches(captured)).toBe(true);
+    } finally {
+      setAppSessionCommitBoundaryHook(null);
+    }
   });
 });

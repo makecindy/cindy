@@ -15,6 +15,7 @@ import {
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
+  resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
   sessionRuntimeControlOwnerEpochMatches,
   sessionRuntimeGenerationMatches,
@@ -193,6 +194,41 @@ describe('session runtime control state', () => {
     });
   });
 
+  it('keeps pending axes compatible while applying the user patch to the live override', () => {
+    const sessionId = 'runtime-user-axis-incompatible-pending';
+    const effective = { ...current, model: 'gpt-live' };
+    const pending = {
+      ...current,
+      model: 'gpt-fixed',
+      providerId: 'xd',
+      effort: null,
+      fastMode: false,
+    };
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: effective,
+      deferred: false,
+    });
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: pending,
+      deferred: true,
+    });
+
+    recordUserSessionRuntimeAxisMutation(
+      sessionId,
+      { effort: 'ultra', fastMode: true },
+      { effort: null, fastMode: false },
+    );
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      effectiveOverride: { ...effective, effort: 'ultra', fastMode: true },
+      pending: { profile: pending },
+    });
+  });
+
   it('cancels only the unchanged pending generation after settlement fails', () => {
     const sessionId = 'runtime-cancel-pending';
     const effective = { ...current, model: 'gpt-live' };
@@ -358,6 +394,19 @@ describe('session runtime control state', () => {
 });
 
 describe('session runtime fallback selection', () => {
+  it('normalizes a user axis patch against the pending target capabilities', () => {
+    const fixed = provider('xd', [
+      { id: 'gpt-fixed', efforts: [], fast: false },
+    ]).models.codex![0]!;
+    expect(
+      resolveCompatibleSessionRuntimeAxisPatch({
+        model: fixed,
+        profile: { ...current, model: 'gpt-fixed', effort: null, fastMode: false },
+        patch: { effort: 'ultra', fastMode: true },
+      }),
+    ).toEqual({ effort: null, fastMode: false });
+  });
+
   it('skips a failed candidate without consuming a fallback hop or generation', () => {
     const sessionId = 'runtime-failed-candidate';
     const candidate = { ...current, providerId: 'xd' };

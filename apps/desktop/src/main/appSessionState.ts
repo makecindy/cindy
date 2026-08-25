@@ -216,6 +216,9 @@ export function commitVolatileAppSession(
     if (!normalized) throw new Error('cloud app session requires a verified data owner');
     dataOwnerId = normalized;
   }
+  if (previous.mode === mode && previous.dataOwnerId === dataOwnerId) {
+    return { ...previous };
+  }
   appSessionCommitBoundaryHook?.();
   active = {
     mode,
