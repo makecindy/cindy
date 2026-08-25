@@ -205,7 +205,7 @@ export function ProviderManifestConfirmDialog({
               <button
                 type="button"
                 className={cn(
-                  'h-8 rounded-lg border px-3 text-sm font-medium',
+                  'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
                   'text-[var(--confirm-btn-secondary-text)] border-[var(--confirm-btn-secondary-border)]',
                   'hover:bg-[var(--confirm-btn-secondary-hover)]',
                 )}
@@ -223,7 +223,7 @@ export function ProviderManifestConfirmDialog({
                 disabled={busy}
                 onClick={() => onConfirm(phase.preset)}
                 className={cn(
-                  'h-8 rounded-lg px-3 text-sm font-medium',
+                  'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
                   'text-[var(--confirm-btn-primary-text)] bg-[var(--confirm-btn-primary-bg)]',
                   'hover:bg-[var(--confirm-btn-primary-hover)]',
                 )}
