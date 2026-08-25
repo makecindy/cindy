@@ -564,17 +564,6 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
   for (;;) {
     let status;
     try { status = JSON.parse(readFileSync(join(launched.runDir, 'status.json'), 'utf8')); } catch (err) { status = null; }
-    if (Date.now() >= nextHostPoll) {
-      nextHostPoll = Date.now() + 1000;
-      try {
-        await requestRunnerControl(ctx, 'status', launched.runId);
-      } catch (err) {
-        if (err && err.runnerExited) {
-          const message = err instanceof Error ? err.message : String(err);
-          return launched.failureStatus(message);
-        }
-      }
-    }
     if (signal && signal.aborted && !stopWritten) {
       stopWritten = true;
       // Abort must be bounded exactly like the run deadline is. Without its own
@@ -622,6 +611,17 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
         }
       }
       if (status.state === 'completed' || status.state === 'failed' || status.state === 'stopped') return status;
+    }
+    if (Date.now() >= nextHostPoll) {
+      nextHostPoll = Date.now() + 1000;
+      try {
+        await requestRunnerControl(ctx, 'status', launched.runId);
+      } catch (err) {
+        if (err && err.runnerExited) {
+          const message = err instanceof Error ? err.message : String(err);
+          return launched.failureStatus(message);
+        }
+      }
     }
     if (Date.now() >= launched.deadlineAt && !stopWritten) {
       stopWritten = true;

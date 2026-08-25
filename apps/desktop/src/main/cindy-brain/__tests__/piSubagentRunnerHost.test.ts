@@ -93,6 +93,12 @@ describe('piSubagentRunnerHost', () => {
     expect(fork).toHaveBeenCalledTimes(1);
   });
 
+  it('adds Windows taskkill /F only for SIGKILL so SIGTERM can publish stopped', () => {
+    const source = fs.readFileSync(new URL('../piSubagentRunnerHost.ts', import.meta.url), 'utf8');
+    expect(source).toContain("if (signal === 'SIGKILL') args.push('/F')");
+    expect(source).not.toMatch(/taskkill', \['\/PID', String\(pid\), '\/T', '\/F'\]/);
+  });
+
   it('signals SIGTERM to the utility-process pid so the runner can reap children', () => {
     const child = new FakeUtilityProcess();
     const fork = vi.fn(() => child);

@@ -97,7 +97,9 @@ export function spawnPiSubagentRunner(
       killed = true;
       const pid = child.pid;
       if (pid !== undefined && process.platform === 'win32') {
-        const tree = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        const args = ['/PID', String(pid), '/T'];
+        if (signal === 'SIGKILL') args.push('/F');
+        const tree = spawnSync('taskkill', args, {
           windowsHide: true,
           stdio: 'ignore',
           timeout: 5_000,

@@ -552,6 +552,17 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("await requestRunnerControl(ctx, 'status', launched.runId)");
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('err.runnerExited');
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('response.exited === true');
+    const wait = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('async function waitForDurableRun(');
+    const terminal = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(
+      "status.state === 'completed' || status.state === 'failed' || status.state === 'stopped'",
+      wait,
+    );
+    const hostPoll = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(
+      "await requestRunnerControl(ctx, 'status', launched.runId)",
+      wait,
+    );
+    expect(terminal).toBeGreaterThan(wait);
+    expect(hostPoll).toBeGreaterThan(terminal);
   });
 
   it('does not store an English resume prefix as the run title', () => {
