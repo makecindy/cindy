@@ -428,6 +428,52 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('claude.importMessages caps oversized tool_result content at the persistence limit', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      const cap = 8 * 1024;
+      const result = await client.tx('claude.importMessages', {
+        sessionId: 's1',
+        importClientIdPrefix: 'claude-import:',
+        sdkSessionId: 'sdk-1',
+        rows: [
+          {
+            lineNo: 8,
+            partIndex: 0,
+            role: 'tool_result',
+            content: 'z'.repeat(cap * 2),
+            toolUseId: 'tool-2',
+            agentMeta: null,
+            createdAt: 3100,
+          },
+          {
+            lineNo: 9,
+            partIndex: 0,
+            role: 'assistant',
+            content: { text: 'a'.repeat(cap * 2) },
+            toolUseId: null,
+            agentMeta: null,
+            createdAt: 3200,
+          },
+        ],
+      });
+
+      expect(result).toEqual({ changed: 2 });
+      const toolResult = (await client.queryOne(
+        'SELECT content FROM messages WHERE client_id = ?',
+        ['claude-import:8-0'],
+      )) as { content: string };
+      const storedText = JSON.parse(toolResult.content) as string;
+      expect(storedText.length).toBeLessThanOrEqual(cap);
+      expect(storedText).toContain('[tool result truncated');
+      const assistant = (await client.queryOne(
+        'SELECT content FROM messages WHERE client_id = ?',
+        ['claude-import:9-0'],
+      )) as { content: string };
+      expect((JSON.parse(assistant.content) as { text: string }).text.length).toBe(cap * 2);
+    });
+  });
+
   it('claude.importMessages does not rewrite rewound imported messages', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
