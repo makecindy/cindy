@@ -248,6 +248,7 @@ async function getMostRecentSessionAgent(): Promise<AgentKind | null> {
     if (row.agentKind === 'cc' || row.agentKind === 'claude-code') return 'claude-code';
     if (row.agentKind === 'codex') return 'codex';
     if (row.agentKind === 'pi') return 'pi';
+    if (row.agentKind === 'grok-build') return 'grok-build';
     return null;
   } catch (err) {
     log.debug('help recent-agent probe failed', { error: String(err) });
@@ -263,8 +264,8 @@ export async function pickHelpAgent(
   preferredAgent: AgentKind | null,
 ): Promise<AgentKind | null> {
   const candidates: AgentKind[] = preferredAgent
-    ? [...new Set<AgentKind>([preferredAgent, 'claude-code', 'codex', 'pi'])]
-    : ['claude-code', 'codex', 'pi'];
+    ? [...new Set<AgentKind>([preferredAgent, 'claude-code', 'codex', 'pi', 'grok-build'])]
+    : ['claude-code', 'codex', 'pi', 'grok-build'];
   const ordered = candidates.filter((agentKind) => agentSupportsOneShot(agentKind));
   const available = new Set(maker.listAvailableAgents());
   for (const agentKind of ordered) {

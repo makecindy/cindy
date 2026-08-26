@@ -111,6 +111,7 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
+import { buildGrokBuildAgent } from './grok-build-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -2057,11 +2058,18 @@ export function getMaker(): Maker {
       },
     });
 
+    const grokBuildAgent = buildGrokBuildAgent({
+      logger: desktopMakerLogger,
+      reviewAutoPermissionAction,
+      registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
+    });
+
     _maker = new Maker({
       agents: {
         'claude-code': claudeAgent,
         codex: codexAgent,
         ...(piAgent ? { pi: piAgent } : {}),
+        ...(grokBuildAgent ? { 'grok-build': grokBuildAgent } : {}),
       },
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,

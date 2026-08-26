@@ -173,6 +173,15 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'grok-build') {
+    return {
+      model: 'grok-build',
+      effort: 'high',
+      permissionMode: 'auto',
+      planMode: false,
+      providerId: null,
+    };
+  }
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -229,6 +238,7 @@ function makeDefault(): NewMakerDraft {
       pi: defaultVendorPrefs('pi'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
+      'grok-build': defaultVendorPrefs('grok-build'),
     },
     modelChosenByVendor: {},
     defaultTupleCustomized: false,

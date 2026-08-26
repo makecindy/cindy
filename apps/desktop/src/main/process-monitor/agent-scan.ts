@@ -27,7 +27,7 @@ import { runWindowsProcessScanWorker } from './windowsProcessScanWorkerClient.js
 
 const execFileAsync = promisify(execFile);
 
-export type MonitoredAgentKind = 'claude' | 'codex' | 'pi';
+export type MonitoredAgentKind = 'claude' | 'codex' | 'pi' | 'grok-build';
 
 export interface OsProcessRow {
   pid: number;

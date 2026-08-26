@@ -138,7 +138,7 @@ export function normalizeWorkflowProgressEntries(
 }
 
 export interface AgentTaskUpdate {
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -210,7 +210,7 @@ export const PI_SUBAGENT_TOOL_NAME = 'subagent';
  */
 export function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex' | 'pi',
+  source?: 'claude-code' | 'codex' | 'pi' | 'grok-build',
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -225,9 +225,9 @@ export function normalizeAgentTaskUpdate(
     rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'stopped'
       ? rawStatus
       : 'running';
-  const provider = raw.provider === 'codex' || raw.provider === 'claude-code' || raw.provider === 'pi'
+  const provider = raw.provider === 'codex' || raw.provider === 'claude-code' || raw.provider === 'pi' || raw.provider === 'grok-build'
     ? raw.provider
-    : source === 'codex' || source === 'pi'
+    : source === 'codex' || source === 'pi' || source === 'grok-build'
       ? source
       : 'claude-code';
   const usageRaw = raw.usage && typeof raw.usage === 'object' ? raw.usage as Record<string, unknown> : null;
@@ -307,7 +307,7 @@ export function isSameAgentTaskAlias(left: AgentTaskUpdate, right: AgentTaskUpda
 export function applyAgentTaskUpdateEvent(
   prevMap: ReadonlyMap<string, AgentTaskUpdate> | undefined,
   data: unknown,
-  source: 'claude-code' | 'codex' | 'pi' | undefined,
+  source: 'claude-code' | 'codex' | 'pi' | 'grok-build' | undefined,
   nowIso: string,
 ): Map<string, AgentTaskUpdate> | null {
   const update = normalizeAgentTaskUpdate(data, source);
@@ -362,7 +362,7 @@ export function findAgentTaskUpdate(
  */
 export interface AgentTaskCardModel {
   status: AgentTaskStatus;
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   /** Best title, or null when nothing usable was found (caller supplies its own fallback). */
   title: string | null;
   description?: string;
@@ -447,7 +447,7 @@ export function buildAgentTaskCardModel(input: {
       subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
       || subagentSpawnResultIndicatesRunning(toolName, result),
   });
-  const provider: 'claude-code' | 'codex' | 'pi' =
+  const provider: 'claude-code' | 'codex' | 'pi' | 'grok-build' =
     update?.provider
     ?? (toolName?.startsWith('collab:')
       ? 'codex'

@@ -17,7 +17,7 @@ export interface ModelDefinition {
   description: string;
   efforts: readonly Effort[];
   defaultEffort: Effort | null;
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build';
   contextWindow?: number;
   supportsFastMode?: boolean;
   /** 目录展示排序;缺省排末尾(见 getDefaultModelForVendor)。 */
@@ -32,7 +32,7 @@ export interface ModelDefinition {
   newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
 }
 
-function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi'): ModelDefinition {
+function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build'): ModelDefinition {
   return {
     id: m.id,
     label: m.displayName,
@@ -104,12 +104,12 @@ export function getModelById(modelId: string, deviceId?: string): ModelDefinitio
 }
 
 /** vendor → capabilities 缓存的 agent 键(pi 有自己的能力清单)。 */
-function agentKindForVendor(vendorKey: 'cc' | 'codex' | 'pi'): 'claude-code' | 'codex' | 'pi' {
-  return vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : 'claude-code';
+function agentKindForVendor(vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build'): 'claude-code' | 'codex' | 'pi' | 'grok-build' {
+  return vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : vendorKey === 'grok-build' ? 'grok-build' : 'claude-code';
 }
 
 export function getModelsForVendor(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build',
   deviceId?: string,
 ): readonly ModelDefinition[] {
   // 直接读该 vendor 对应 agent 的能力缓存 —— 不经 allCachedModels(后者只聚合 cc/codex 供
@@ -138,8 +138,8 @@ function firstByCatalogOrder(models: readonly ModelDefinition[]): ModelDefinitio
 
 /** vendor → 新对话默认所依据的目录 Agent 标记。 */
 function defaultMarkerAgentForVendor(
-  vendorKey: 'cc' | 'codex' | 'pi',
-): 'claude-code' | 'codex' | 'pi' {
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build',
+): 'claude-code' | 'codex' | 'pi' | 'grok-build' {
   if (vendorKey === 'cc') return 'claude-code';
   return vendorKey;
 }
@@ -155,7 +155,7 @@ function defaultMarkerAgentForVendor(
  * 本函数返回 null、默认行为不变。
  */
 export function newSessionDefaultModelId(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build',
   deviceId?: string,
 ): string | null {
   const agent = defaultMarkerAgentForVendor(vendorKey);
@@ -177,7 +177,7 @@ export function newSessionDefaultModelId(
  * useScheduleForm.ts getScheduleDefaultModel,不要把这里的默认接到 scheduler 上。
  */
 export function getDefaultModelForVendor(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build',
   deviceId?: string,
 ): ModelDefinition {
   const list = getModelsForVendor(vendorKey, deviceId);
@@ -210,15 +210,17 @@ const COLD_START_CODEX_MODEL_ID = 'gpt-5.6-sol';
 const COLD_START_PI_MODEL_ID = 'claude-sonnet-5';
 
 /** 冷启动占位 id 的只读导出（newMakerDraft 的种子默认复用，避免另一处写死）。 */
-export function coldStartModelIdForVendor(vendorKey: 'cc' | 'codex' | 'pi'): string {
-  return vendorKey === 'codex'
-    ? COLD_START_CODEX_MODEL_ID
-    : vendorKey === 'pi'
-      ? COLD_START_PI_MODEL_ID
-      : COLD_START_CC_MODEL_ID;
+export function coldStartModelIdForVendor(vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build'): string {
+  if (vendorKey === 'codex') return COLD_START_CODEX_MODEL_ID;
+  if (vendorKey === 'pi') return COLD_START_PI_MODEL_ID;
+  if (vendorKey === 'grok-build') return 'grok-build';
+  return COLD_START_CC_MODEL_ID;
 }
 
 /** 冷启动占位的展示名(与占位 id 同源,仅首帧短暂可见)。 */
-function coldStartLabelForVendor(vendorKey: 'cc' | 'codex' | 'pi'): string {
-  return vendorKey === 'codex' ? 'GPT-5.6-Sol' : vendorKey === 'pi' ? 'Sonnet 5' : 'Opus 5';
+function coldStartLabelForVendor(vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build'): string {
+  if (vendorKey === 'codex') return 'GPT-5.6-Sol';
+  if (vendorKey === 'pi') return 'Sonnet 5';
+  if (vendorKey === 'grok-build') return 'Grok Build';
+  return 'Opus 5';
 }

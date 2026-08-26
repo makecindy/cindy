@@ -23,8 +23,7 @@ harnesses, models and tools into one agent that finishes real work in your
 projects and apps. Ready from day one, yours to shape over time.
 
 Cindy runs locally on your own machine, using your real files and logged-in
-apps. The first supported harnesses are **Claude Code** and **Codex** — more are
-being added, and a native harness is in the works. Models and harnesses mix
+apps. The first supported harnesses are **Claude Code**, **Codex**, and **Pi**. **Grok Build** is an optional local harness when the `grok` CLI is on PATH. Models and harnesses mix
 freely and can switch mid-task while your workspace, memory, skills and tools
 stay continuous; one task can even be planned, executed in parallel, and
 reviewed by agents on different harness × model combos. She can drive your

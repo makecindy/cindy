@@ -12,13 +12,14 @@ import { effectiveSourceIdForModel } from '@cindy/model-providers/registry';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
-export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi';
+export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi' | 'grok-build';
 export type NewSessionWorkspaceKind = 'project' | 'dialogue';
 
 export const NEW_SESSION_AGENT_OPTIONS: readonly { kind: NewSessionAgentKind; label: string }[] = [
   { kind: 'claude-code', label: 'Claude' },
   { kind: 'codex', label: 'Codex' },
   { kind: 'pi', label: 'Pi' },
+  { kind: 'grok-build', label: 'Grok Build' },
 ];
 
 /**
@@ -325,7 +326,7 @@ type NewSessionDefaultModel = {
   id: string;
   efforts: readonly string[];
   defaultEffort: string | null;
-  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi' | 'grok-build')[];
 };
 
 function isNewSessionDefaultForAgent(

@@ -493,6 +493,8 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
   return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
 }
 
+const HOOK_HIDDEN_VENDORS: MakerVendor[] = ['grok-build'];
+
 /**
  * 选择器的 vendor key → hook prefs 的 agentKind。
  * MakerVendor 还含 'orca' 等本编辑器不支持的值 —— 分段只有 Claude/Codex 两项,该分支
@@ -585,6 +587,7 @@ export function WorkspacePrefsEditor({
           // 默认 agent),重选它 = 钉成显式偏好 —— 与模型字段的 reselectEmitsChange 同语义;
           // 显式同值由下方 nextAgent === prefs.agentKind 去重,不产生空写。
           reselectEmitsChange
+          hiddenVendors={HOOK_HIDDEN_VENDORS}
           onChange={(next) => {
             const nextAgent = toAgentKind(next);
             if (nextAgent === prefs.agentKind) return;

@@ -4,7 +4,7 @@ export interface UsageLimitScheduleCreateIntent {
   kind: 'usage-limit-recovery';
   requestId: string;
   sessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   resetAtMs: number | null;
 }
 

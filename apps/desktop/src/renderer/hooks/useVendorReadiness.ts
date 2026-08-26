@@ -24,20 +24,20 @@ export type Readiness = 'ready' | 'unauthenticated' | 'binary-missing' | 'loadin
  * 两种不同的恢复路径，不能把 Pi 的缺包状态伪装成未授权。
  */
 export function readinessFromBinaryStatus(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build',
   binaryReady: boolean,
 ): Readiness | null {
   return vendorKey !== 'cc' && !binaryReady ? 'binary-missing' : null;
 }
 
-export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
+export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build'): {
   readiness: Readiness;
   revalidate: (opts?: { includeSuspended?: boolean }) => Promise<Readiness>;
 } {
   const [readiness, setReadiness] = useState<Readiness>('loading');
 
   const revalidate = useCallback(async (opts?: { includeSuspended?: boolean }): Promise<Readiness> => {
-    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex';
+    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : vendorKey === 'grok-build' ? 'grok-build' : 'codex';
 
     // 轴 2(codex / pi,正交于来源):本地二进制是运行时前提,缺了连发都发不了 → 优先返回
     // binary-missing。binary 状态走 maker:agent:status(其 authReady 是 codex OAuth 专属,已被
@@ -56,6 +56,22 @@ export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
         }
       } catch {
         // status 查询失败(罕见 IPC 错):保守判未就绪,引导用户去连接,不误放行。
+        setReadiness('unauthenticated');
+        return 'unauthenticated';
+      }
+    }
+
+    // Grok Build auth is grok CLI / XAI_API_KEY, not Cindy catalog providers.
+    if (vendorKey === 'grok-build') {
+      try {
+        const status = (await window.electronAPI.maker.agent.getStatus(agent)) as {
+          binaryReady: boolean;
+          authReady: boolean;
+        };
+        const next: Readiness = status.authReady ? 'ready' : 'unauthenticated';
+        setReadiness(next);
+        return next;
+      } catch {
         setReadiness('unauthenticated');
         return 'unauthenticated';
       }

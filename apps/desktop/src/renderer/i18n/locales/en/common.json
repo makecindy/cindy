@@ -2579,6 +2579,10 @@
         "pi": {
           "label": "Pi",
           "description": "Saves long-session compression summaries to Cindy memory for future Pi sessions."
+        },
+        "grok-build": {
+          "label": "Grok Build",
+          "description": "Grok Build does not expose a Cindy-managed auto-memory channel in this version."
         }
       },
       "agent": {
@@ -3638,7 +3642,8 @@
         "agents": {
           "claude-code": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "grok-build": "Grok Build"
         },
         "groupPermissionLabel": "Permission mode for new group tasks",
         "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
@@ -6800,6 +6805,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "grok-build": "Grok Build",
           "pending": "Next: {{agent}}"
         }
       },
@@ -6916,6 +6922,20 @@
           "bypassPermissions": {
             "label": "Full access",
             "description": "Routine tools run without asking. Installing, updating, or removing Pi extensions still requires confirmation. Highest risk; use only for trusted tasks."
+          }
+        },
+        "grok-build": {
+          "ask": {
+            "label": "Default permissions",
+            "description": "Grok Build tools that write files, run commands, or leave the workspace ask each time via ACP prompts."
+          },
+          "auto": {
+            "label": "Auto-review",
+            "description": "In-workspace writes and safe commands run automatically; out-of-workspace writes and risky commands still ask. Cindy Auto-review intercepts ACP permission requests."
+          },
+          "bypassPermissions": {
+            "label": "Full access",
+            "description": "Grok Build runs with always-approve. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -8374,7 +8394,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "grok-build": "Grok Build"
       },
       "filterGroupBy": {
         "project": "Group by project",
@@ -10441,6 +10462,11 @@
       "codexBinaryMissingDescription": "The Codex component is not ready yet, so this feature cannot be used. Try again later or check the Codex connection in Settings → Providers.",
       "piBinaryMissingTitle": "Pi component not ready",
       "piBinaryMissingDescription": "The Pi component is not ready yet, so this feature cannot be used. Try again later or check the Pi connection in Settings → Providers.",
+      "grokBuildBinaryMissingTitle": "Grok Build is not installed",
+      "grokBuildBinaryMissingDescription": "Cindy did not find a grok CLI on PATH. Install Grok Build and try again. Claude Code, Codex, and Pi are unaffected.",
+      "grokBuildUnauthenticatedTitle": "Grok Build is not signed in",
+      "grokBuildUnauthenticatedDescription": "Sign in with grok login, or set XAI_API_KEY. Cindy never reads ~/.grok/auth.json.",
+      "grokBuildLogin": "Sign in",
       "goToSettings": "Open Settings",
       "remoteCodexBinaryMissingTitle": "Codex component not ready on the remote device",
       "remotePiBinaryMissingTitle": "Pi component not ready on the remote device",

@@ -82,6 +82,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
       'claude-code': availabilityFor('claude-code'),
       codex: availabilityFor('codex'),
       pi: availabilityFor('pi'),
+      'grok-build': availabilityFor('grok-build'),
     },
     resolveDefaultProviderIdForModel: (agent, model) =>
       effectiveSourceIdForModel(views, null, model, agent),

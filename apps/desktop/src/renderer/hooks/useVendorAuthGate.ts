@@ -54,7 +54,9 @@ type CopyKey =
   | 'voice-direct-api-key-unauth'
   | 'codex-voice-unauth'
   | 'codex-binary-missing'
-  | 'pi-binary-missing';
+  | 'pi-binary-missing'
+  | 'grok-build-binary-missing'
+  | 'grok-build-unauth';
 
 function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
   return {
@@ -103,6 +105,20 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
+    'grok-build-binary-missing': {
+      title: t('logic.confirm.grokBuildBinaryMissingTitle'),
+      description: t('logic.confirm.grokBuildBinaryMissingDescription'),
+      confirmText: t('logic.confirm.gotIt'),
+      cancelText: t('logic.confirm.cancel'),
+      settingsTab: 'providers',
+    },
+    'grok-build-unauth': {
+      title: t('logic.confirm.grokBuildUnauthenticatedTitle'),
+      description: t('logic.confirm.grokBuildUnauthenticatedDescription'),
+      confirmText: t('logic.confirm.grokBuildLogin'),
+      cancelText: t('logic.confirm.cancel'),
+      settingsTab: 'providers',
+    },
   };
 }
 
@@ -122,6 +138,8 @@ function pickCopy(
 ): DialogCopy | null {
   if (readiness === 'binary-missing' && vendor === 'codex') return copy['codex-binary-missing'];
   if (readiness === 'binary-missing' && vendor === 'pi') return copy['pi-binary-missing'];
+  if (readiness === 'binary-missing' && vendor === 'grok-build') return copy['grok-build-binary-missing'];
+  if (readiness === 'unauthenticated' && vendor === 'grok-build') return copy['grok-build-unauth'];
   if (readiness !== 'unauthenticated') return null;
   // 无可用来源:cc / codex 走同一条「连接来源」文案(send 门禁,与 agent 类型无关)。
   return copy['no-source'];
@@ -154,6 +172,10 @@ export function deriveRemoteReadiness(
 ): Readiness {
   if (vendor !== 'cc' && input.binaryReady === false) {
     return 'binary-missing';
+  }
+  if (vendor === 'grok-build') {
+    if (input.authReady !== null) return input.authReady ? 'ready' : 'unauthenticated';
+    return 'ready';
   }
   if (input.sourceReady !== null) return input.sourceReady ? 'ready' : 'unauthenticated';
   if (input.authReady !== null) return input.authReady ? 'ready' : 'unauthenticated';
@@ -237,6 +259,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const cc = useVendorReadiness('cc');
   const codex = useVendorReadiness('codex');
   const pi = useVendorReadiness('pi');
+  const grokBuild = useVendorReadiness('grok-build');
 
   const checkAndConfirm = useCallback(
     async (
@@ -271,7 +294,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       const deviceId = options?.deviceId;
       if (deviceId) {
         const providerAgent: ProviderAgentKind =
-          vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : 'claude-code';
+          vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : vendor === 'grok-build' ? 'grok-build' : 'claude-code';
         const [statusRes, providersRes] = await Promise.allSettled([
           window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
           window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
@@ -339,7 +362,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
 
       // 触发一次最新检查——避免 stale state 误放行。
-      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : cc;
+      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : vendor === 'grok-build' ? grokBuild : cc;
       // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
       const readiness = await target.revalidate({
         includeSuspended: options?.existingSessionRoute === true,
@@ -357,11 +380,22 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         autoFocusConfirm: true,
       });
       if (ok) {
+        if (vendor === 'grok-build' && readiness === 'unauthenticated') {
+          try {
+            await window.electronAPI.maker.auth.triggerLogin('grok-build');
+          } catch {
+            // login spawn failed; user can retry
+          }
+          return { proceed: false };
+        }
+        if (vendor === 'grok-build' && readiness === 'binary-missing') {
+          return { proceed: false };
+        }
         navigate(`/settings?tab=${dialogCopy.settingsTab}`);
       }
       return { proceed: false };
     },
-    [cc, codex, pi, confirm, copy, navigate, t],
+    [cc, codex, pi, grokBuild, confirm, copy, navigate, t],
   );
 
   return { checkAndConfirm };

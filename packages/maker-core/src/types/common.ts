@@ -5,7 +5,7 @@
  * 故意保持兼容以便 desktop adapter 层零代码翻译。
  */
 
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'grok-build';
 export type WorkspaceKind = 'project' | 'dialogue';
 
 /**

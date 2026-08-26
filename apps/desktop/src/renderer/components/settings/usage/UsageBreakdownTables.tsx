@@ -28,6 +28,7 @@ const AGENT_RANK: Record<UsageAgentKind, number> = {
   'claude-code': 0,
   codex: 1,
   pi: 2,
+  'grok-build': 3,
 };
 
 const TH_CLASS =

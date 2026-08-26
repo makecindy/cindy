@@ -2570,6 +2570,10 @@
         "pi": {
           "label": "Pi",
           "description": "将长任务的压缩摘要保存到 Cindy 记忆，供后续 Pi 任务继续使用"
+        },
+        "grok-build": {
+          "label": "Grok Build",
+          "description": "当前版本 Grok Build 不提供 Cindy 托管的自动记忆通道。"
         }
       },
       "agent": {
@@ -3629,7 +3633,8 @@
         "agents": {
           "claude-code": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "grok-build": "Grok Build"
         },
         "groupPermissionLabel": "群聊新建任务权限档",
         "groupPermissionDescription": "群里新建任务时统一使用的权限档（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限档只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
@@ -6790,6 +6795,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "grok-build": "Grok Build",
           "pending": "下条：{{agent}}"
         }
       },
@@ -6906,6 +6912,20 @@
           "bypassPermissions": {
             "label": "完全访问",
             "description": "常规工具无需询问直接执行；安装、更新或卸载 Pi 扩展仍需确认。风险最高，只适合可信任务。"
+          }
+        },
+        "grok-build": {
+          "ask": {
+            "label": "默认权限",
+            "description": "Grok Build 写入文件、执行命令或离开工作区的工具每次都通过 ACP 询问。"
+          },
+          "auto": {
+            "label": "自动审批",
+            "description": "工作区内写入和安全命令自动执行；区外写入和高风险命令仍会询问。Cindy 自动审批拦截 ACP 权限请求。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "Grok Build 以 always-approve 运行，不再询问。风险最高，只适合可信任务。"
           }
         }
       }
@@ -8351,7 +8371,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "grok-build": "Grok Build"
       },
       "filterGroupBy": {
         "project": "按项目分组",
@@ -10417,6 +10438,11 @@
       "codexBinaryMissingDescription": "Codex 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Codex 连接状态。",
       "piBinaryMissingTitle": "Pi 组件未就绪",
       "piBinaryMissingDescription": "Pi 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Pi 连接状态。",
+      "grokBuildBinaryMissingTitle": "未安装 Grok Build",
+      "grokBuildBinaryMissingDescription": "Cindy 在 PATH 上没有找到 grok 命令。安装 Grok Build 后再试。Claude Code / Codex / Pi 不受影响。",
+      "grokBuildUnauthenticatedTitle": "Grok Build 尚未登录",
+      "grokBuildUnauthenticatedDescription": "请运行 grok login 登录，或设置 XAI_API_KEY。Cindy 不会读取 ~/.grok/auth.json。",
+      "grokBuildLogin": "去登录",
       "goToSettings": "前往设置",
       "remoteCodexBinaryMissingTitle": "被控端 Codex 组件未就绪",
       "remotePiBinaryMissingTitle": "被控端 Pi 组件未就绪",

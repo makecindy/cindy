@@ -2578,6 +2578,10 @@
         "pi": {
           "label": "Pi",
           "description": "長いセッションの圧縮要約を Cindy メモリに保存し、今後の Pi セッションで利用します"
+        },
+        "grok-build": {
+          "label": "Grok Build",
+          "description": "このバージョンの Grok Build は Cindy 管理の自動メモリを提供しません。"
         }
       },
       "agent": {
@@ -3637,7 +3641,8 @@
         "agents": {
           "claude-code": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "grok-build": "Grok Build"
         },
         "groupPermissionLabel": "グループで新規タスクを作成するときの権限モード",
         "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。"
@@ -6798,6 +6803,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "grok-build": "Grok Build",
           "pending": "次回：{{agent}}"
         }
       },
@@ -6914,6 +6920,20 @@
           "bypassPermissions": {
             "label": "フルアクセス",
             "description": "通常のツールは確認なしで実行しますが、Pi 拡張のインストール、更新、アンインストールには引き続き確認が必要です。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+          }
+        },
+        "grok-build": {
+          "ask": {
+            "label": "デフォルト権限",
+            "description": "ファイル書き込み、コマンド実行、ワークスペース外の操作は ACP 経由で毎回確認します。"
+          },
+          "auto": {
+            "label": "自動レビュー",
+            "description": "ワークスペース内の書き込みと安全なコマンドは自動実行し、境界外と危険な操作は確認します。Cindy の自動レビューが ACP 権限リクエストを処理します。"
+          },
+          "bypassPermissions": {
+            "label": "フルアクセス",
+            "description": "Grok Build は always-approve で実行し、確認しません。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
           }
         }
       }
@@ -8359,7 +8379,8 @@
         "all": "すべて",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "grok-build": "Grok Build"
       },
       "filterGroupBy": {
         "project": "プロジェクトでグループ化",
@@ -10425,6 +10446,11 @@
       "codexBinaryMissingDescription": "Codex コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Codex の接続状態を確認してください。",
       "piBinaryMissingTitle": "Pi コンポーネントの準備ができていません",
       "piBinaryMissingDescription": "Pi コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Pi の接続状態を確認してください。",
+      "grokBuildBinaryMissingTitle": "Grok Build がインストールされていません",
+      "grokBuildBinaryMissingDescription": "PATH 上に grok CLI が見つかりません。Grok Build をインストールして再試行してください。Claude Code / Codex / Pi には影響しません。",
+      "grokBuildUnauthenticatedTitle": "Grok Build に未ログインです",
+      "grokBuildUnauthenticatedDescription": "grok login でサインインするか、XAI_API_KEY を設定してください。Cindy は ~/.grok/auth.json を読みません。",
+      "grokBuildLogin": "サインイン",
       "goToSettings": "設定を開く",
       "remoteCodexBinaryMissingTitle": "リモートデバイスの Codex コンポーネントが未準備です",
       "remotePiBinaryMissingTitle": "リモートデバイスの Pi コンポーネントが未準備です",

@@ -14,7 +14,7 @@
 
 import type { MakerVendor } from './ccAgent.types';
 
-export const SELECTABLE_VENDORS = ['cc', 'codex', 'pi'] as const satisfies readonly MakerVendor[];
+export const SELECTABLE_VENDORS = ['cc', 'codex', 'pi', 'grok-build'] as const satisfies readonly MakerVendor[];
 
 export type SelectableVendor = (typeof SELECTABLE_VENDORS)[number];
 

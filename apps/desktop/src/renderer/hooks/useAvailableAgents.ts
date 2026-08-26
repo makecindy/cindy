@@ -20,7 +20,7 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useAvailableAgents');
 
-type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi';
+type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi' | 'grok-build';
 
 /** runtime agent id → NewMaker vendor(其余保持同名)。 */
 function toVendor(agent: RuntimeAgentKind): MakerVendor {
@@ -47,7 +47,7 @@ async function fetchAvailableAgents(deviceId?: string | null): Promise<RuntimeAg
     if (!dl) throw new Error('device-link IPC not available');
     const raw = await dl.invoke(deviceId, 'maker:list-available-agents', []);
     return Array.isArray(raw) ? (raw.filter((v): v is RuntimeAgentKind =>
-      v === 'claude-code' || v === 'codex' || v === 'pi') as RuntimeAgentKind[]) : [];
+      v === 'claude-code' || v === 'codex' || v === 'pi' || v === 'grok-build') as RuntimeAgentKind[]) : [];
   }
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');

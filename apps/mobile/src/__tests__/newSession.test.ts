@@ -1124,7 +1124,7 @@ describe('new session model', () => {
 
   it('exposes Pi as a first-class agent and preserves Fast for Pi sessions', () => {
     expect(NEW_SESSION_AGENT_OPTIONS.map((option) => option.kind)).toEqual([
-      'claude-code', 'codex', 'pi',
+      'claude-code', 'codex', 'pi', 'grok-build',
     ]);
     const pi = withAgentDefaults({ ...DEFAULT_NEW_SESSION_DRAFT, fastMode: true }, 'pi');
     expect(pi).toMatchObject({ agentKind: 'pi', model: 'gpt-5.4', fastMode: true });

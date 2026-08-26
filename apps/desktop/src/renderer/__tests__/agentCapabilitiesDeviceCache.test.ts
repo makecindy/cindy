@@ -542,15 +542,17 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     const stale = mod.prefetchDeviceCapabilities('dev-1');
     mod.evictDeviceCapabilities('dev-1');
     const fresh = mod.prefetchDeviceCapabilities('dev-1');
-    // 每轮按 ALL_AGENT_KINDS 顺序 push 三个 resolver(cc/codex/pi):
-    // 第一轮(stale)= [0][1][2],第二轮(fresh)= [3][4][5]。
-    resolvers[3](caps('fresh:claude'));
-    resolvers[4](caps('fresh:codex'));
-    resolvers[5](caps('fresh:pi'));
+    // 每轮按 ALL_AGENT_KINDS 顺序 push resolver(cc/codex/pi/grok-build):
+    // 第一轮(stale)= [0][1][2][3],第二轮(fresh)= [4][5][6][7]。
+    resolvers[4](caps('fresh:claude'));
+    resolvers[5](caps('fresh:codex'));
+    resolvers[6](caps('fresh:pi'));
+    resolvers[7](caps('fresh:grok-build'));
     await fresh;
     resolvers[0](caps('stale:claude'));
     resolvers[1](caps('stale:codex'));
     resolvers[2](caps('stale:pi'));
+    resolvers[3](caps('stale:grok-build'));
     await stale;
 
     expect(claudeListener).toHaveBeenNthCalledWith(1, { status: 'loading' });

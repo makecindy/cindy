@@ -501,8 +501,8 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
   describe('同引擎视图:生效引擎是排序优先级,不是隐藏条件', () => {
     /** 注入侧的真实形态:调用方给的是 resolveUnifiedRowConfig / resolveFavoriteRowConfig 的 engine。 */
     const engineOfRow = (
-      overrides: Record<string, 'cc' | 'codex' | 'pi'> = {},
-      pinnedEngine: 'cc' | 'codex' | 'pi' = 'cc',
+      overrides: Record<string, 'cc' | 'codex' | 'pi' | 'grok-build'> = {},
+      pinnedEngine: 'cc' | 'codex' | 'pi' | 'grok-build' = 'cc',
     ) => (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem) =>
       favorite
         ? resolveFavoriteRowConfig({ entry, item: favorite }).engine

@@ -2578,6 +2578,10 @@
         "pi": {
           "label": "Pi",
           "description": "긴 세션의 압축 요약을 Cindy 메모리에 저장해 이후 Pi 세션에서 사용합니다"
+        },
+        "grok-build": {
+          "label": "Grok Build",
+          "description": "이 버전의 Grok Build는 Cindy가 관리하는 자동 메모리를 제공하지 않습니다."
         }
       },
       "agent": {
@@ -3637,7 +3641,8 @@
         "agents": {
           "claude-code": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "grok-build": "Grok Build"
         },
         "groupPermissionLabel": "그룹에서 새 작업을 만들 때의 권한 모드",
         "groupPermissionDescription": "그룹 채팅에서 새 작업을 만들 때 공통으로 사용하는 권한 모드입니다(@bot으로 스레드 열기, /new, /ctr 모두 해당). 기본값은 자동 승인이며, 위의 권한 모드는 개인 채팅에만 적용됩니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요. 변경은 이후에 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 개별 전환합니다."
@@ -6798,6 +6803,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "grok-build": "Grok Build",
           "pending": "다음: {{agent}}"
         }
       },
@@ -6914,6 +6920,20 @@
           "bypassPermissions": {
             "label": "전체 접근",
             "description": "일반 도구는 확인 없이 실행하지만 Pi 확장 설치, 업데이트 또는 제거에는 계속 확인이 필요합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
+          }
+        },
+        "grok-build": {
+          "ask": {
+            "label": "기본 권한",
+            "description": "파일을 쓰거나 명령을 실행하거나 작업 영역을 벗어나는 Grok Build 도구는 ACP 프롬프트로 매번 묻습니다."
+          },
+          "auto": {
+            "label": "자동 검토",
+            "description": "작업 영역 안의 쓰기와 안전한 명령은 자동 실행되고, 영역 밖 쓰기와 위험한 명령은 계속 묻습니다. Cindy 자동 검토가 ACP 권한 요청을 가로챕니다."
+          },
+          "bypassPermissions": {
+            "label": "전체 액세스",
+            "description": "Grok Build가 always-approve로 실행되어 다시 묻지 않습니다. 위험이 가장 높으니 신뢰할 수 있는 작업에만 사용하세요."
           }
         }
       }
@@ -8359,7 +8379,8 @@
         "all": "전체",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "grok-build": "Grok Build"
       },
       "filterGroupBy": {
         "project": "프로젝트별 그룹",
@@ -10425,6 +10446,11 @@
       "codexBinaryMissingDescription": "Codex 구성 요소가 아직 준비되지 않아 이 기능을 사용할 수 없습니다. 잠시 후 다시 시도하거나 설정 → 제공자에서 Codex 연결 상태를 확인하세요.",
       "piBinaryMissingTitle": "Pi 구성 요소가 준비되지 않음",
       "piBinaryMissingDescription": "Pi 구성 요소가 아직 준비되지 않아 이 기능을 사용할 수 없습니다. 잠시 후 다시 시도하거나 설정 → 제공자에서 Pi 연결 상태를 확인하세요.",
+      "grokBuildBinaryMissingTitle": "Grok Build가 설치되지 않았습니다",
+      "grokBuildBinaryMissingDescription": "PATH에서 grok CLI를 찾지 못했습니다. Grok Build를 설치한 뒤 다시 시도하세요. Claude Code / Codex / Pi는 영향을 받지 않습니다.",
+      "grokBuildUnauthenticatedTitle": "Grok Build에 로그인되어 있지 않습니다",
+      "grokBuildUnauthenticatedDescription": "grok login으로 로그인하거나 XAI_API_KEY를 설정하세요. Cindy는 ~/.grok/auth.json을 읽지 않습니다.",
+      "grokBuildLogin": "로그인",
       "goToSettings": "설정 열기",
       "remoteCodexBinaryMissingTitle": "원격 기기의 Codex 구성 요소가 준비되지 않음",
       "remotePiBinaryMissingTitle": "원격 기기의 Pi 구성 요소가 준비되지 않음",
