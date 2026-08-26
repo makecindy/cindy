@@ -278,6 +278,18 @@ describe('splitGroupStore', () => {
     expect(splitGroupStore.getSnapshot()).not.toBe(before);
   });
 
+  it('跨正交分支的比例投影被最小尺寸改变时仍按落点重排 pane', async () => {
+    const { splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-c', 'session-a', 'right');
+    splitGroupStore.addSession('session-b', 'session-a', 'bottom');
+    splitGroupStore.addSession('session-d', 'session-c', 'bottom');
+    splitGroupStore.addSession('session-e', 'session-d', 'bottom');
+    const before = splitGroupStore.getSnapshot();
+
+    expect(splitGroupStore.moveSession('session-a', 'session-c', 'left')).toBe(true);
+    expect(splitGroupStore.getSnapshot()).not.toBe(before);
+  });
+
   it('分支比例夹到下限，并仅切换根方向', async () => {
     const { MIN_SPLIT_CHILD_FRACTION, splitGroupStore } = await loadStore();
     splitGroupStore.addSession('session-b', 'session-a', 'right');

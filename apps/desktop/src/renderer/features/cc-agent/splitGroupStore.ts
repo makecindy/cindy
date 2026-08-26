@@ -135,50 +135,39 @@ function detachPane(root: SplitNode, sessionId: string): DetachedPane {
   return { root, pane: null };
 }
 
-interface PaneRect {
+interface PaneBoundaries {
   sessionId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+  left: symbol;
+  right: symbol;
+  top: symbol;
+  bottom: symbol;
 }
 
-const ADJACENCY_EPSILON = 1e-6;
+const ROOT_BOUNDARIES = {
+  left: Symbol('split-root-left'),
+  right: Symbol('split-root-right'),
+  top: Symbol('split-root-top'),
+  bottom: Symbol('split-root-bottom'),
+};
 
-function collectPaneRects(
+function collectPaneBoundaries(
   root: SplitNode,
-  rect: Omit<PaneRect, 'sessionId'> = { x: 0, y: 0, width: 1, height: 1 },
-): PaneRect[] {
-  if (root.type === 'pane') return [{ ...rect, sessionId: root.sessionId }];
+  boundaries: Omit<PaneBoundaries, 'sessionId'> = ROOT_BOUNDARIES,
+): PaneBoundaries[] {
+  if (root.type === 'pane') return [{ ...boundaries, sessionId: root.sessionId }];
 
+  const divider = Symbol(`split-divider-${root.key}`);
   if (root.direction === 'row') {
-    const firstWidth = rect.width * root.fraction;
     return [
-      ...collectPaneRects(root.first, { ...rect, width: firstWidth }),
-      ...collectPaneRects(root.second, {
-        ...rect,
-        x: rect.x + firstWidth,
-        width: rect.width - firstWidth,
-      }),
+      ...collectPaneBoundaries(root.first, { ...boundaries, right: divider }),
+      ...collectPaneBoundaries(root.second, { ...boundaries, left: divider }),
     ];
   }
 
-  const firstHeight = rect.height * root.fraction;
   return [
-    ...collectPaneRects(root.first, { ...rect, height: firstHeight }),
-    ...collectPaneRects(root.second, {
-      ...rect,
-      y: rect.y + firstHeight,
-      height: rect.height - firstHeight,
-    }),
+    ...collectPaneBoundaries(root.first, { ...boundaries, bottom: divider }),
+    ...collectPaneBoundaries(root.second, { ...boundaries, top: divider }),
   ];
-}
-
-function rangesMatch(startA: number, sizeA: number, startB: number, sizeB: number): boolean {
-  return (
-    Math.abs(startA - startB) <= ADJACENCY_EPSILON &&
-    Math.abs(startA + sizeA - (startB + sizeB)) <= ADJACENCY_EPSILON
-  );
 }
 
 function isPaneAlreadyAtSide(
@@ -187,7 +176,9 @@ function isPaneAlreadyAtSide(
   anchorSessionId: string,
   side: DropSide,
 ): boolean {
-  const panes = collectPaneRects(root);
+  // A divider identity survives renderer minimum-size clamping and gutter sizing. Comparing
+  // these identities avoids treating equal fraction projections in separate branches as a no-op.
+  const panes = collectPaneBoundaries(root);
   const source = panes.find((pane) => pane.sessionId === sessionId);
   const anchor = panes.find((pane) => pane.sessionId === anchorSessionId);
   if (!source || !anchor) return false;
@@ -195,23 +186,27 @@ function isPaneAlreadyAtSide(
   switch (side) {
     case 'left':
       return (
-        Math.abs(source.x + source.width - anchor.x) <= ADJACENCY_EPSILON &&
-        rangesMatch(source.y, source.height, anchor.y, anchor.height)
+        source.right === anchor.left &&
+        source.top === anchor.top &&
+        source.bottom === anchor.bottom
       );
     case 'right':
       return (
-        Math.abs(anchor.x + anchor.width - source.x) <= ADJACENCY_EPSILON &&
-        rangesMatch(source.y, source.height, anchor.y, anchor.height)
+        anchor.right === source.left &&
+        source.top === anchor.top &&
+        source.bottom === anchor.bottom
       );
     case 'top':
       return (
-        Math.abs(source.y + source.height - anchor.y) <= ADJACENCY_EPSILON &&
-        rangesMatch(source.x, source.width, anchor.x, anchor.width)
+        source.bottom === anchor.top &&
+        source.left === anchor.left &&
+        source.right === anchor.right
       );
     case 'bottom':
       return (
-        Math.abs(anchor.y + anchor.height - source.y) <= ADJACENCY_EPSILON &&
-        rangesMatch(source.x, source.width, anchor.x, anchor.width)
+        anchor.bottom === source.top &&
+        source.left === anchor.left &&
+        source.right === anchor.right
       );
   }
 
