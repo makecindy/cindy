@@ -52,6 +52,21 @@ function isXdUtilityModelPaymentRequired(model: string): boolean {
 }
 
 /**
+ * Shared live entitlement predicate for direct utility consumers. Only XD
+ * LiteLLM routes use the Cindy account catalog; Codex and custom BYOK routes
+ * keep their own credential plane. Organization catalogs are not subject to
+ * personal free/paid gating and arrive as not_applicable with every visible
+ * model available, so they never create this deny state.
+ */
+export function isUtilityRoutePaymentRequired(profile: {
+  transport?: string;
+  model: string;
+}): boolean {
+  return profile.transport === 'litellm-chat-completions'
+    && isXdUtilityModelPaymentRequired(profile.model);
+}
+
+/**
  * 实现了 `Agent.oneShot` 的 agent 集合(当前 claude-code / codex)。PiAgent 继承 BaseAgent
  * 的 not-implemented,选中它调 oneShot 会抛错;help 兜底与任务摘要兜底都据此跳过 Pi,避免
  * best-effort 结果被静默丢弃。Pi 实现 oneShot 后把它加入本集合即可。
@@ -243,10 +258,7 @@ async function resolveUtilityTextCandidates(
       attempts.push(skippedAttempt(profile, 'model_unavailable'));
       continue;
     }
-    if (
-      profile.transport === 'litellm-chat-completions'
-      && isXdUtilityModelPaymentRequired(profile.model)
-    ) {
+    if (isUtilityRoutePaymentRequired(profile)) {
       log.debug('utility text candidate skipped: paid XD route unavailable', {
         providerId: routeProviderId,
         profileId: profile.id,
@@ -532,10 +544,7 @@ async function requestDefaultUtilityText(
       }
       // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
       // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
-      if (
-        candidate.transport === 'litellm-chat-completions'
-        && isXdUtilityModelPaymentRequired(candidate.model)
-      ) {
+      if (isUtilityRoutePaymentRequired(candidate.profile)) {
         attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
         continue;
       }
@@ -1206,7 +1215,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         timeoutMs: opts?.timeoutMs,
         reasoningEffort: opts?.reasoningEffort,
         signal: opts?.signal,
-        routeStillAllowed: () => !isXdUtilityModelPaymentRequired(profile.model),
+        routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
     },
   };

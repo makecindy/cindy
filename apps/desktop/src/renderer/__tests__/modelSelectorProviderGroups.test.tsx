@@ -407,6 +407,12 @@ describe('ModelSelector provider groups', () => {
 
     view.unmount();
     modelAccessState.accountTier = 'paid';
+    const paidView = renderSelector();
+    await openDropdown();
+    expect(screen.queryByTestId('cindy-ai-model-group-free-tier-badge')).toBeNull();
+
+    paidView.unmount();
+    modelAccessState.accountTier = 'not_applicable';
     renderSelector();
     await openDropdown();
     expect(screen.queryByTestId('cindy-ai-model-group-free-tier-badge')).toBeNull();

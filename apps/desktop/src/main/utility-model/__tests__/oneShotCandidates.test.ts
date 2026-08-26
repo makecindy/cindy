@@ -92,6 +92,7 @@ import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
 import {
   DEDICATED_AUTO_REVIEW_CANDIDATES,
   getUtilityTextCandidates,
+  isUtilityRoutePaymentRequired,
   requestDedicatedAutoReviewCandidateText,
   requestExplicitUtilityText,
   requestUtilityText,
@@ -183,6 +184,19 @@ describe('utility one-shot candidates', () => {
       ],
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('applies paid availability only to direct XD LiteLLM utility routes', () => {
+    xdPaymentRequiredRoute.mockImplementation((model) => model === 'paid-model');
+
+    expect(isUtilityRoutePaymentRequired({
+      transport: 'litellm-chat-completions',
+      model: 'paid-model',
+    })).toBe(true);
+    expect(isUtilityRoutePaymentRequired({
+      transport: 'codex-responses',
+      model: 'paid-model',
+    })).toBe(false);
   });
 
   it('rechecks paid availability immediately before a previously resolved XD utility dispatch', async () => {

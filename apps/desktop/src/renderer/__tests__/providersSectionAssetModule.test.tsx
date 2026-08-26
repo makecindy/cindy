@@ -225,6 +225,12 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     renderSection();
     await screen.findAllByText('settings.providers.xd.title');
     expect(screen.queryByTestId('cindy-ai-free-tier-badge')).toBeNull();
+
+    cleanup();
+    modelAccessState.accountTier = 'not_applicable';
+    renderSection();
+    await screen.findAllByText('settings.providers.xd.title');
+    expect(screen.queryByTestId('cindy-ai-free-tier-badge')).toBeNull();
   });
 
   it('个人云账号:显示可用余额 + 两个动作,并深链到计费页 / 充值意图', async () => {
