@@ -79,6 +79,14 @@ function createHarness(timeoutMs = 60_000) {
   return { parent, dialog, result, getWindowOptions: () => windowOptions };
 }
 
+function readEmbeddedStylesheet(document: string): string {
+  const match = document.match(
+    /<link rel="stylesheet" href="data:text\/css;base64,([^"]+)">/,
+  );
+  expect(match).not.toBeNull();
+  return Buffer.from(match?.[1] ?? '', 'base64').toString('utf8');
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -153,6 +161,28 @@ describe('Review artifact confirmation window', () => {
     );
     await expect(harness.result).resolves.toBe(true);
     expect(harness.dialog.destroyed).toBe(true);
+  });
+
+  it('keeps consent copy and actions visible while artifact details scroll', () => {
+    const document = buildReviewArtifactConfirmDocument(
+      {
+        ...MODEL,
+        items: Array.from({ length: 20 }, (_, index) => ({
+          kind: 'external-path' as const,
+          label: `artifact-${index}.pdf`,
+          path: `D:\\outside\\${'deeply-nested\\'.repeat(20)}artifact-${index}.pdf`,
+        })),
+      },
+      false,
+    );
+    const stylesheet = readEmbeddedStylesheet(document);
+
+    expect(stylesheet).toContain('height: 100%; overflow: hidden');
+    expect(stylesheet).toContain('height: 100vh; min-height: 0');
+    expect(stylesheet).toContain(
+      'ul { flex: 1; min-height: 0; margin: 0; padding: 0; overflow-y: auto;',
+    );
+    expect(stylesheet).toContain('footer { display: flex; flex: none;');
   });
 
   it('fails closed on cancel, timeout, parent close, and renderer failure', async () => {
