@@ -4,13 +4,47 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  androidGradleTasksForArtifacts,
   readAndroidVersionCode,
   nextSequentialVersionCode,
   replaceVersionCodeInAndroidVersionJson,
+  resolveAndroidArtifactKinds,
   resolveAndroidSigningEnv,
   patchBuildGradleSigning,
   patchGradlePropertiesMemory,
 } from '../../scripts/lib/android-local.mjs';
+
+describe('resolveAndroidArtifactKinds', () => {
+  it('按地区默认:cn/dev 只出 APK,global 同时出 APK + AAB', () => {
+    expect(resolveAndroidArtifactKinds('cn')).toEqual(['apk']);
+    expect(resolveAndroidArtifactKinds('dev')).toEqual(['apk']);
+    expect(resolveAndroidArtifactKinds('global')).toEqual(['apk', 'aab']);
+  });
+
+  it('global 支持显式选择单产物或双产物,返回顺序确定', () => {
+    expect(resolveAndroidArtifactKinds('global', 'apk')).toEqual(['apk']);
+    expect(resolveAndroidArtifactKinds('global', 'aab')).toEqual(['aab']);
+    expect(resolveAndroidArtifactKinds('global', 'aab,apk')).toEqual(['apk', 'aab']);
+  });
+
+  it('拒绝未知/重复/空产物以及非 global AAB', () => {
+    expect(() => resolveAndroidArtifactKinds('global', 'ipa')).toThrow(/仅支持/);
+    expect(() => resolveAndroidArtifactKinds('global', 'apk,apk')).toThrow(/重复/);
+    expect(() => resolveAndroidArtifactKinds('global', true)).toThrow(/必须指定/);
+    expect(() => resolveAndroidArtifactKinds('cn', 'apk,aab')).toThrow(/仅用于 global/);
+  });
+});
+
+describe('androidGradleTasksForArtifacts', () => {
+  it('把产物确定性映射到 release tasks', () => {
+    expect(androidGradleTasksForArtifacts(['apk'])).toEqual(['assembleRelease']);
+    expect(androidGradleTasksForArtifacts(['apk', 'aab'])).toEqual(['assembleRelease', 'bundleRelease']);
+  });
+
+  it('空产物集合 fail closed', () => {
+    expect(() => androidGradleTasksForArtifacts([])).toThrow(/至少需要一种/);
+  });
+});
 
 function withMobileDir(json: unknown, fn: (dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), 'xdt-android-ver-'));

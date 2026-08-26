@@ -6,6 +6,48 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+export const ANDROID_ARTIFACT_KINDS = Object.freeze(['apk', 'aab']);
+
+/**
+ * 解析 Android 构建产物集合。默认按地区选择:cn/dev 只出 APK,global 同时出 APK + AAB;
+ * --artifacts 可显式覆盖,但 AAB 仅允许 global 身份,避免误把国内包当成 Play 产物。
+ * 返回顺序固定为 apk → aab,让 Gradle task / 日志 / 复制顺序保持确定性。
+ * @param {string} authRegion
+ * @param {string|boolean|undefined} rawArtifacts
+ * @returns {Array<'apk'|'aab'>}
+ */
+export function resolveAndroidArtifactKinds(authRegion, rawArtifacts) {
+  const region = String(authRegion ?? '').trim();
+  const source = rawArtifacts == null
+    ? (region === 'global' ? 'apk,aab' : 'apk')
+    : String(rawArtifacts).trim();
+  if (!source || rawArtifacts === true) {
+    throw new Error('--artifacts 必须指定 apk、aab 或 apk,aab');
+  }
+
+  const requested = source.split(',').map((item) => item.trim()).filter(Boolean);
+  if (!requested.length) throw new Error('--artifacts 不能为空');
+  const duplicates = requested.filter((kind, index) => requested.indexOf(kind) !== index);
+  if (duplicates.length) {
+    throw new Error(`--artifacts 含重复产物:${[...new Set(duplicates)].join(', ')}`);
+  }
+  const unknown = requested.filter((kind) => !ANDROID_ARTIFACT_KINDS.includes(kind));
+  if (unknown.length) {
+    throw new Error(`--artifacts 仅支持 ${ANDROID_ARTIFACT_KINDS.join(',')},收到:${unknown.join(',')}`);
+  }
+  if (region !== 'global' && requested.includes('aab')) {
+    throw new Error(`AAB 仅用于 global Google Play 产物,当前 region=${region || '(空)'}`);
+  }
+  return ANDROID_ARTIFACT_KINDS.filter((kind) => requested.includes(kind));
+}
+
+/** @param {Array<'apk'|'aab'>} kinds */
+export function androidGradleTasksForArtifacts(kinds) {
+  const selected = Array.isArray(kinds) ? kinds : [];
+  if (!selected.length) throw new Error('Android 构建至少需要一种产物');
+  return selected.map((kind) => kind === 'apk' ? 'assembleRelease' : 'bundleRelease');
+}
+
 // 签名配置零代码默认值:keystore 路径 / alias / 两个口令全部由 XDT_ANDROID_* 环境变量提供,
 // 缺任一项即抛错(fail-closed)。签名套件本体(CindyMobileCer/Android/,含 signing-info.txt)
 // 在打包机的仓库外目录,口令**绝不**写进代码,只从 env 读。
