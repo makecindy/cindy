@@ -128,10 +128,11 @@ export async function runPendingDbSlimmingAtStartup(
         try {
           discardCancelledDbSlimmingMaintenance(options.userDataDir, options.dbFilePath, request);
         } catch (cleanupError) {
-          options.log.warn('cancelled database cleanup artifacts could not be fully removed', {
+          options.log.error('database cleanup cancellation could not be committed', {
             requestId: request.id,
             error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
           });
+          throw cleanupError;
         }
         options.log.info('database cleanup cancelled before replacement', {
           requestId: request.id,

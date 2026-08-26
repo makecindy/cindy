@@ -200,10 +200,20 @@ function removeBackupFamily(filePath: string): boolean {
 
 function removeAtomicMarker(filePath: string): boolean {
   for (const candidate of [filePath, `${filePath}.bak`]) {
-    try {
-      fs.rmSync(candidate, { force: true });
-    } catch {
-      // A stale marker is harmless; retry on the next startup or IPC call.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        fs.rmSync(candidate, { force: true });
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (attempt >= 3 || !['EBUSY', 'EACCES', 'EPERM'].includes(code ?? '')) break;
+        Atomics.wait(
+          new Int32Array(new SharedArrayBuffer(4)),
+          0,
+          0,
+          20 * (attempt + 1),
+        );
+      }
     }
   }
   return !fs.existsSync(filePath) && !fs.existsSync(`${filePath}.bak`);

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import {
+  discardCancelledDbSlimmingMaintenance,
   estimateDbFilesBytes,
   runDbSlimmingMaintenance,
 } from '../dbSlimmingMaintenance';
@@ -565,6 +566,71 @@ describe('runDbSlimmingMaintenance', () => {
     });
     expect(readDbSlimmingRequest(tmpDir)).toBeNull();
     expect(readMarker(dbFilePath)).toBe('committed-replacement');
+  });
+
+  it('keeps the committed marker until occupied maintenance artifacts are removed', async () => {
+    createMarkerDatabase(dbFilePath, 'committed-replacement');
+    const pending = request({
+      phase: 'committed',
+      beforeBytes: fs.statSync(dbFilePath).size,
+    });
+    writeDbSlimmingRequest(tmpDir, pending);
+    const workPath = `${dbFilePath}.slimming-${REQUEST_ID}.work`;
+    fs.writeFileSync(workPath, 'occupied maintenance artifact');
+
+    const originalRmSync = fs.rmSync.bind(fs);
+    const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation((candidate, options) => {
+      if (String(candidate) === workPath) {
+        throw Object.assign(new Error('maintenance artifact is busy'), { code: 'EBUSY' });
+      }
+      return originalRmSync(candidate, options);
+    });
+
+    const firstOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: pending,
+      now: () => 3_000,
+      log,
+    });
+
+    expect(firstOutcome.result.status).toBe('completed');
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ phase: 'committed' });
+    expect(fs.existsSync(workPath)).toBe(true);
+
+    rmSpy.mockRestore();
+    const persisted = readDbSlimmingRequest(tmpDir)!;
+    const secondOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: persisted,
+      now: () => 4_000,
+      log,
+    });
+
+    expect(secondOutcome.result.status).toBe('completed');
+    expect(fs.existsSync(workPath)).toBe(false);
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+  });
+});
+
+describe('discardCancelledDbSlimmingMaintenance', () => {
+  it('does not complete cancellation while the request marker is occupied', () => {
+    const pending = request();
+    writeDbSlimmingRequest(tmpDir, pending);
+    const requestPath = dbSlimmingRequestPath(tmpDir);
+    const originalRmSync = fs.rmSync.bind(fs);
+    vi.spyOn(fs, 'rmSync').mockImplementation((candidate, options) => {
+      if (String(candidate) === requestPath) {
+        throw Object.assign(new Error('request marker is busy'), { code: 'EBUSY' });
+      }
+      return originalRmSync(candidate, options);
+    });
+
+    expect(() => discardCancelledDbSlimmingMaintenance(tmpDir, dbFilePath, pending)).toThrow(
+      'database slimming request marker could not be cleared',
+    );
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ id: pending.id, phase: 'scheduled' });
   });
 });
 

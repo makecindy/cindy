@@ -166,8 +166,14 @@ export async function runDbSlimmingMaintenance(
         result = completedResult(request, paths, options.dbFilePath, now());
         writeDbSlimmingResult(options.userDataDir, result);
       }
-      cleanupAfterCommit(paths);
-      clearDbSlimmingRequest(options.userDataDir);
+      try {
+        finalizeCommittedCleanup(options.userDataDir, paths);
+      } catch (error) {
+        options.log.warn('database slimming committed cleanup will be retried', {
+          requestId: request.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return { result, originalDatabaseReady: true };
     }
 
@@ -197,10 +203,9 @@ export async function runDbSlimmingMaintenance(
       try {
         writeDbSlimmingRequest(options.userDataDir, request);
         committed = true;
-        cleanupAfterCommit(paths);
-        clearDbSlimmingRequest(options.userDataDir);
+        finalizeCommittedCleanup(options.userDataDir, paths);
       } catch (error) {
-        options.log.warn('database slimming recovery commit marker could not be advanced', {
+        options.log.warn('database slimming recovery cleanup will be retried', {
           requestId: request.id,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -284,14 +289,13 @@ export async function runDbSlimmingMaintenance(
     try {
       writeDbSlimmingRequest(options.userDataDir, request);
       committed = true;
-      cleanupAfterCommit(paths);
-      clearDbSlimmingRequest(options.userDataDir);
+      finalizeCommittedCleanup(options.userDataDir, paths);
     } catch (error) {
       // The replacement and the completed result are already durable. Keep the
-      // on-disk replacement-installed marker so the next startup can finish the
-      // idempotent commit instead of reporting a false failure or rolling back a
-      // database that already passed both integrity checks.
-      options.log.warn('database slimming commit marker could not be advanced', {
+      // on-disk committed marker so the next startup can retry artifact cleanup
+      // instead of reporting a false failure or rolling back a database that
+      // already passed both integrity checks.
+      options.log.warn('database slimming committed cleanup will be retried', {
         requestId: request.id,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -691,8 +695,10 @@ export function discardCancelledDbSlimmingMaintenance(
 ): void {
   const paths = maintenancePaths(dbFilePath, request);
   recoverInterruptedCustomBackupInstall(paths);
-  cleanupUncommittedArtifacts(paths);
-  clearDbSlimmingRequest(userDataDir);
+  if (!cleanupUncommittedArtifacts(paths)) {
+    throw new Error('cancelled database slimming artifacts could not be removed');
+  }
+  clearDbSlimmingRequestOrThrow(userDataDir);
 }
 
 function reportProgress(
@@ -870,12 +876,28 @@ function tableExists(db: Database.Database, tableName: string): boolean {
   );
 }
 
-function cleanupAfterCommit(paths: MaintenancePaths): void {
-  removeDatabaseFamily(paths.work);
-  removeDatabaseFamily(`${paths.work}.vacuum`);
-  removeDatabaseFamily(paths.rollback);
-  if (paths.backupPrevious) removeDatabaseFamily(paths.backupPrevious);
-  if (paths.backupCandidate) removeDatabaseFamily(paths.backupCandidate);
+function finalizeCommittedCleanup(userDataDir: string, paths: MaintenancePaths): void {
+  if (!cleanupAfterCommit(paths)) {
+    throw new Error('database slimming committed artifacts could not be removed');
+  }
+  clearDbSlimmingRequestOrThrow(userDataDir);
+}
+
+function clearDbSlimmingRequestOrThrow(userDataDir: string): void {
+  if (!clearDbSlimmingRequest(userDataDir)) {
+    throw new Error('database slimming request marker could not be cleared');
+  }
+}
+
+function cleanupAfterCommit(paths: MaintenancePaths): boolean {
+  const artifacts = [
+    paths.work,
+    `${paths.work}.vacuum`,
+    paths.rollback,
+    paths.backupPrevious,
+    paths.backupCandidate,
+  ].filter((candidate): candidate is string => candidate !== null);
+  return artifacts.map((candidate) => removeDatabaseFamily(candidate)).every(Boolean);
 }
 
 function recoverInterruptedCustomBackupInstall(paths: MaintenancePaths): void {
@@ -896,28 +918,44 @@ function recoverInterruptedCustomBackupInstall(paths: MaintenancePaths): void {
   }
 }
 
-function cleanupUncommittedArtifacts(paths: MaintenancePaths): void {
-  removeDatabaseFamily(paths.work);
-  removeDatabaseFamily(`${paths.work}.vacuum`);
-  removeDatabaseFamily(paths.rollback);
-  if (paths.backupPrevious) removeDatabaseFamily(paths.backupPrevious);
-  if (paths.backupCandidate) removeDatabaseFamily(paths.backupCandidate);
+function cleanupUncommittedArtifacts(paths: MaintenancePaths): boolean {
+  const artifacts = [
+    paths.work,
+    `${paths.work}.vacuum`,
+    paths.rollback,
+    paths.backupPrevious,
+    paths.backupCandidate,
+  ].filter((candidate): candidate is string => candidate !== null);
+  return artifacts.map((candidate) => removeDatabaseFamily(candidate)).every(Boolean);
 }
 
-function removeDatabaseFamily(filePath: string): void {
-  removeExactFile(filePath);
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) removeExactFile(`${filePath}${suffix}`);
+function removeDatabaseFamily(filePath: string): boolean {
+  return [filePath, ...SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${filePath}${suffix}`)]
+    .map((candidate) => removeExactFile(candidate))
+    .every(Boolean);
 }
 
 function removeSidecars(filePath: string): void {
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) removeExactFile(`${filePath}${suffix}`);
 }
 
-function removeExactFile(filePath: string): void {
-  try {
-    fs.rmSync(filePath, { force: true, maxRetries: 3, retryDelay: 20 });
-  } catch {
-    // The following open/rename operation will fail safely if a lock persists.
+function removeExactFile(filePath: string): boolean {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.rmSync(filePath, { force: true });
+      return !fs.existsSync(filePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 3 || !['EBUSY', 'EACCES', 'EPERM'].includes(code ?? '')) {
+        return !fs.existsSync(filePath);
+      }
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        20 * (attempt + 1),
+      );
+    }
   }
 }
 
