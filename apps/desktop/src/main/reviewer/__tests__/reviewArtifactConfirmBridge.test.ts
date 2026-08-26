@@ -17,12 +17,17 @@ const MODEL = {
 
 function createTarget(id = 7, sendResult = true) {
   const sent: ReviewArtifactConfirmRequest[] = [];
+  const dismissed: string[] = [];
   let destroyed: (() => void) | null = null;
   const target: ReviewArtifactConfirmTarget = {
     id,
     send: (payload) => {
       sent.push(payload);
       return sendResult;
+    },
+    dismiss: (requestId) => {
+      dismissed.push(requestId);
+      return true;
     },
     onDestroyed: (callback) => {
       destroyed = callback;
@@ -31,7 +36,7 @@ function createTarget(id = 7, sendResult = true) {
       };
     },
   };
-  return { target, sent, destroy: () => destroyed?.() };
+  return { target, sent, dismissed, destroy: () => destroyed?.() };
 }
 
 describe('ReviewArtifactConfirmBridge', () => {
@@ -74,6 +79,8 @@ describe('ReviewArtifactConfirmBridge', () => {
     await expect(closed).resolves.toBe(false);
 
     const timedOutBridge = new ReviewArtifactConfirmBridge({ timeoutMs: 1 });
-    await expect(timedOutBridge.request(createTarget().target, MODEL)).resolves.toBe(false);
+    const timedOutTarget = createTarget();
+    await expect(timedOutBridge.request(timedOutTarget.target, MODEL)).resolves.toBe(false);
+    expect(timedOutTarget.dismissed).toEqual([timedOutTarget.sent[0].requestId]);
   });
 });

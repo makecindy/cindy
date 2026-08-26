@@ -1,4 +1,5 @@
 export const REVIEW_ARTIFACT_CONFIRM_REQUEST_CHANNEL = 'maker:review:artifact-confirm-request';
+export const REVIEW_ARTIFACT_CONFIRM_DISMISS_CHANNEL = 'maker:review:artifact-confirm-dismiss';
 export const REVIEW_ARTIFACT_CONFIRM_RESOLVE_CHANNEL = 'maker:review:artifact-confirm-resolve';
 
 export interface ReviewArtifactConfirmItem {
@@ -19,5 +20,9 @@ export interface ReviewArtifactConfirmDialogModel {
 }
 
 export interface ReviewArtifactConfirmRequest extends ReviewArtifactConfirmDialogModel {
+  requestId: string;
+}
+
+export interface ReviewArtifactConfirmDismiss {
   requestId: string;
 }

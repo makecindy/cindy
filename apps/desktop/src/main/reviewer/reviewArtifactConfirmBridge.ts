@@ -10,6 +10,7 @@ const DEFAULT_TIMEOUT_MS = 90_000;
 export interface ReviewArtifactConfirmTarget {
   id: number;
   send(payload: ReviewArtifactConfirmRequest): boolean;
+  dismiss(requestId: string): boolean;
   onDestroyed(callback: () => void): () => void;
 }
 
@@ -20,6 +21,7 @@ export interface ReviewArtifactConfirmBridgeOptions {
 
 interface PendingConfirmation {
   ownerId: number;
+  dismiss(): boolean;
   resolve(confirmed: boolean): void;
   timeoutId: ReturnType<typeof setTimeout>;
   stopWatchingOwner(): void;
@@ -42,11 +44,12 @@ export class ReviewArtifactConfirmBridge {
           requestId,
           ownerId: target.id,
         });
-        this.settle(requestId, false);
+        this.settle(requestId, false, true);
       }, this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
       const entry: PendingConfirmation = {
         ownerId: target.id,
+        dismiss: () => target.dismiss(requestId),
         resolve,
         timeoutId,
         stopWatchingOwner: () => {},
@@ -105,12 +108,23 @@ export class ReviewArtifactConfirmBridge {
     return this.pending.size;
   }
 
-  private settle(requestId: string, confirmed: boolean): void {
+  private settle(requestId: string, confirmed: boolean, dismissRenderer = false): void {
     const entry = this.pending.get(requestId);
     if (!entry) return;
     this.pending.delete(requestId);
     clearTimeout(entry.timeoutId);
     entry.stopWatchingOwner();
+    if (dismissRenderer) {
+      try {
+        entry.dismiss();
+      } catch (error) {
+        this.options.log?.warn('review artifact confirmation dismissal failed', {
+          requestId,
+          ownerId: entry.ownerId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     entry.resolve(confirmed);
   }
 }

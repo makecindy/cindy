@@ -1,5 +1,6 @@
 import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../../shared/iosSimulatorIpc.js';
 import {
+  REVIEW_ARTIFACT_CONFIRM_DISMISS_CHANNEL,
   REVIEW_ARTIFACT_CONFIRM_REQUEST_CHANNEL,
   REVIEW_ARTIFACT_CONFIRM_RESOLVE_CHANNEL,
 } from '../../shared/reviewArtifactConfirm.js';
@@ -806,6 +807,7 @@ export const MAKER_SEND = {
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
   REVIEW_ARTIFACT_CONFIRM_REQUEST: REVIEW_ARTIFACT_CONFIRM_REQUEST_CHANNEL,
+  REVIEW_ARTIFACT_CONFIRM_DISMISS: REVIEW_ARTIFACT_CONFIRM_DISMISS_CHANNEL,
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */

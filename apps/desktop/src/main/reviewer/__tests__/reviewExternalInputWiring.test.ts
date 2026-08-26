@@ -156,6 +156,14 @@ describe('Review external input wiring', () => {
     expect(registerSource).toContain(
       'void cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }).catch',
     );
+    const wireSessionStart = registerSource.indexOf('export function wireSessionToIpc');
+    const wireSessionEnd = registerSource.indexOf(
+      'export const wireSessionToIpcExternal',
+      wireSessionStart,
+    );
+    expect(registerSource.slice(wireSessionStart, wireSessionEnd)).not.toContain(
+      'ensureReviewOwnerLivenessReady()',
+    );
     expect(reviewStartSource.indexOf('const request = readStartReviewRequest(raw);')).toBeLessThan(
       reviewStartSource.indexOf('await deps.waitUntilReady(request.sourceSessionId);'),
     );

@@ -3864,16 +3864,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     beforeProviderStart: async (turnGeneration) => {
       if (session.remoteHostId) return;
       silentStopTurnLeaseGate.supersede(session.id);
-      try {
-        await ensureReviewOwnerLivenessReady();
-      } catch (error) {
-        // Exact instance liveness improves stale-lease recovery, but a local
-        // probe endpoint failure must not prevent an ordinary task turn.
-        log.warn('failed to prepare session turn owner liveness', {
-          sessionId: session.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      // Keep Review's exact-instance liveness listener lazy. PID-only turn
+      // leases remain fail-closed until this process actually starts Review.
       await sessionTurnLeaseTracker.markTurnStarted(
         session.id,
         providerTurnLeaseId(session.instanceId, turnGeneration),
@@ -5864,6 +5856,11 @@ async function confirmReviewExternalArtifacts(
       send: (payload) => {
         if (sender.isDestroyed()) return false;
         sender.send(MAKER_PUSH.REVIEW_ARTIFACT_CONFIRM_REQUEST, payload);
+        return true;
+      },
+      dismiss: (requestId) => {
+        if (sender.isDestroyed()) return false;
+        sender.send(MAKER_PUSH.REVIEW_ARTIFACT_CONFIRM_DISMISS, { requestId });
         return true;
       },
       onDestroyed: (callback) => {

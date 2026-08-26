@@ -7,7 +7,9 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
   resolve: vi.fn(),
   unsubscribe: vi.fn(),
+  unsubscribeDismiss: vi.fn(),
   listener: null as ((payload: unknown) => void) | null,
+  dismissListener: null as ((payload: unknown) => void) | null,
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -33,7 +35,9 @@ beforeEach(() => {
   mocks.confirm.mockReset();
   mocks.resolve.mockReset().mockResolvedValue({ handled: true });
   mocks.unsubscribe.mockReset();
+  mocks.unsubscribeDismiss.mockReset();
   mocks.listener = null;
+  mocks.dismissListener = null;
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -41,6 +45,10 @@ beforeEach(() => {
         onReviewArtifactConfirmRequest: (listener: (payload: unknown) => void) => {
           mocks.listener = listener;
           return mocks.unsubscribe;
+        },
+        onReviewArtifactConfirmDismiss: (listener: (payload: unknown) => void) => {
+          mocks.dismissListener = listener;
+          return mocks.unsubscribeDismiss;
         },
         resolveReviewArtifactConfirm: mocks.resolve,
       },
@@ -88,5 +96,29 @@ describe('ReviewArtifactConfirmDialogHost', () => {
     const view = render(<ReviewArtifactConfirmDialogHost />);
     view.unmount();
     expect(mocks.unsubscribe).toHaveBeenCalledOnce();
+    expect(mocks.unsubscribeDismiss).toHaveBeenCalledOnce();
+  });
+
+  it('dismisses an open or queued confirmation when Main expires the request', async () => {
+    mocks.confirm.mockImplementation((_options: unknown, signal: AbortSignal) => {
+      return new Promise<boolean>((resolve) => {
+        signal.addEventListener('abort', () => resolve(false), { once: true });
+      });
+    });
+    render(<ReviewArtifactConfirmDialogHost />);
+
+    await act(async () => {
+      mocks.listener?.(REQUEST);
+      await Promise.resolve();
+    });
+    const signal = mocks.confirm.mock.calls[0][1] as AbortSignal;
+
+    await act(async () => {
+      mocks.dismissListener?.({ requestId: REQUEST.requestId });
+      await Promise.resolve();
+    });
+
+    expect(signal.aborted).toBe(true);
+    expect(mocks.resolve).not.toHaveBeenCalled();
   });
 });

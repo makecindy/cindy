@@ -5041,6 +5041,11 @@ interface ElectronAPI {
         payload: import('../shared/reviewArtifactConfirm').ReviewArtifactConfirmRequest,
       ) => void,
     ) => () => void;
+    onReviewArtifactConfirmDismiss: (
+      callback: (
+        payload: import('../shared/reviewArtifactConfirm').ReviewArtifactConfirmDismiss,
+      ) => void,
+    ) => () => void;
     resolveReviewArtifactConfirm: (
       requestId: string,
       confirmed: boolean,
