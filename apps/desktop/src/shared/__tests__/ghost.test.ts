@@ -1022,7 +1022,7 @@ describe('ghost · Manifest v3 直接能力声明', () => {
     );
   });
 
-  it('拒绝 v3 slots、缺 minCindyVersion 和 false 布尔能力', () => {
+  it('拒绝 v3 slots、缺 minCindyVersion 和 false 布尔能力，但不设置统一版本下限', () => {
     const base = {
       schemaVersion: 3,
       minCindyVersion: '0.1.61',
@@ -1033,7 +1033,7 @@ describe('ghost · Manifest v3 直接能力声明', () => {
     };
     expect(validateGhostManifest({ ...base, slots: [] }).ok).toBe(false);
     expect(validateGhostManifest({ ...base, minCindyVersion: undefined }).ok).toBe(false);
-    expect(validateGhostManifest({ ...base, minCindyVersion: '0.1.60' }).ok).toBe(false);
+    expect(validateGhostManifest({ ...base, minCindyVersion: '0.1.60' }).ok).toBe(true);
     expect(validateGhostManifest({ ...base, notify: false }).ok).toBe(false);
   });
 

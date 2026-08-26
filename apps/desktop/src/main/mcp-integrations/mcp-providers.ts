@@ -62,6 +62,8 @@ import {
 } from './remoteChatHistory.js';
 
 export interface DesktopMcpProvidersDeps {
+  /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
+  getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
   lspPool: LspServerPool;
   /** 按会话控制启用状态的 plugin registry。 */
@@ -546,6 +548,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       name: 'cindy',
       instance: createCindyGhostsMcpServer(
         getCindyGhostsMcpDeps(ctx, {
+          getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,

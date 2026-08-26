@@ -98,10 +98,15 @@ async function testScaffoldWriter(request: ForgeScaffoldWriteRequest) {
 }
 
 function scaffoldGhostDir(
-  input: Parameters<typeof scaffoldGhostDirRaw>[0],
+  input: Omit<Parameters<typeof scaffoldGhostDirRaw>[0], 'minCindyVersion'> & {
+    minCindyVersion?: string;
+  },
   options: Omit<NonNullable<Parameters<typeof scaffoldGhostDirRaw>[1]>, 'writeScaffold'> = {},
 ) {
-  return scaffoldGhostDirRaw(input, { ...options, writeScaffold: testScaffoldWriter });
+  return scaffoldGhostDirRaw(
+    { minCindyVersion: '1.2.3', ...input },
+    { ...options, writeScaffold: testScaffoldWriter },
+  );
 }
 
 function packGhostDir(
@@ -1267,6 +1272,7 @@ describe('scaffoldGhostDir', () => {
         template: 'plain',
         id: 'bigint-parent',
         name: 'BigInt parent',
+        minCindyVersion: '1.2.3',
       },
       {
         sessionWorkdir: workDir,
@@ -1314,7 +1320,7 @@ describe('scaffoldGhostDir', () => {
       ) as Record<string, unknown>;
       expect(manifestJson.icon).toBe('assets/icon.png');
       expect(manifestJson.schemaVersion).toBe(3);
-      expect(manifestJson.minCindyVersion).toBe('0.1.61');
+      expect(manifestJson.minCindyVersion).toBe('1.2.3');
       expect(manifestJson).not.toHaveProperty('slots');
       const iconBytes = await fs.promises.readFile(path.join(dir, 'assets/icon.png'));
       expect(iconBytes.subarray(0, 8)).toEqual(
