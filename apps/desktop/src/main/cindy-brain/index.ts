@@ -406,6 +406,7 @@ import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
 } from '../cindy-media/providerMediaRuntime.js';
+import { loadPluginMediaAvailability } from './pluginMediaCatalogFallback.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
 import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
@@ -3642,16 +3643,14 @@ async function getGhostConfigurableMediaModels(
     // carried image-provider models. Video providers are host-owned (the video
     // registry executes them), so add their local projection explicitly and do
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
-    let availability: Awaited<ReturnType<typeof listExecutableMediaModels>>;
-    try {
-      availability = await listExecutableMediaModels();
-    } catch (error) {
-      if (type !== 'video') throw error;
-      availability = { models: [], unavailable: [], candidateCount: 0 };
-    }
     const mode = type === 'image' ? 'image_generation' : 'video_generation';
     const videoRegistry = type === 'video' ? getVideoProviderRegistry() : null;
     const localVideoModels = type === 'video' ? listLocalProviderVideoModels() : [];
+    const availability = await loadPluginMediaAvailability(
+      type,
+      localVideoModels.length,
+      () => listExecutableMediaModels(),
+    );
     const allModels = [...availability.models, ...localVideoModels].filter(
       (model, index, models) =>
         models.findIndex(
