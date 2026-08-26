@@ -4,9 +4,16 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ArtifactPreview,
+  generatedFileVisibleSignature,
+  generatedFilesCheckKey,
   getDocumentCoverThemeStyle,
   isConfirmedRemoteGeneratedFile,
+  isGeneratedFileStatable,
   isLocalGeneratedFileInTurn,
+  mergeGeneratedFileStatResults,
+  planGeneratedFilesVisibility,
+  retainVisibleGeneratedFiles,
+  reuseGeneratedFilesIfUnchanged,
 } from '../components/chat/GeneratedFilesCard';
 import type { DocumentArtifactMetadata, GeneratedFileRef } from '../lib/generatedFiles';
 
@@ -19,6 +26,11 @@ const toolFile: GeneratedFileRef = {
   source: 'tool',
 };
 const commandFile: GeneratedFileRef = { ...toolFile, source: 'command' };
+const extraToolFile: GeneratedFileRef = {
+  path: 'C:\\work\\notes.ts',
+  name: 'notes.ts',
+  source: 'tool',
+};
 const confirmedDocumentFile: GeneratedFileRef = {
   ...toolFile,
   name: 'report.docx',
@@ -111,6 +123,170 @@ describe('remote generated-file visibility', () => {
     expect(isConfirmedRemoteGeneratedFile('directory')).toBe(false);
     expect(isConfirmedRemoteGeneratedFile('nonfile')).toBe(false);
     expect(isConfirmedRemoteGeneratedFile('unknown')).toBe(false);
+  });
+});
+
+describe('generatedFileVisibleSignature', () => {
+  it('stays stable when only the object identity changes', () => {
+    expect(generatedFileVisibleSignature({ ...toolFile })).toBe(
+      generatedFileVisibleSignature(toolFile),
+    );
+  });
+
+  it('changes when the path, source, or artifact changes', () => {
+    const base = generatedFileVisibleSignature(toolFile);
+    expect(generatedFileVisibleSignature({ ...toolFile, path: 'C:\\work\\other.md' })).not.toBe(
+      base,
+    );
+    expect(generatedFileVisibleSignature(commandFile)).not.toBe(base);
+    expect(generatedFileVisibleSignature(confirmedDocumentFile)).not.toBe(base);
+  });
+});
+
+describe('generatedFilesCheckKey', () => {
+  it('ignores in-flight files until the turn is sealed', () => {
+    const readyOnly = generatedFilesCheckKey([toolFile], START, null);
+    const withInFlight = generatedFilesCheckKey(
+      [toolFile, { ...extraToolFile, ready: false }],
+      START,
+      null,
+    );
+    expect(withInFlight).toBe(readyOnly);
+    expect(
+      generatedFilesCheckKey([toolFile, { ...extraToolFile, ready: false }], START, END),
+    ).not.toBe(readyOnly);
+  });
+
+  it('changes when a file becomes ready', () => {
+    const pending = generatedFilesCheckKey([{ ...toolFile, ready: false }], START, null);
+    const ready = generatedFilesCheckKey([toolFile], START, null);
+    expect(ready).not.toBe(pending);
+  });
+});
+
+describe('isGeneratedFileStatable', () => {
+  it('waits for in-flight tool results while the turn is open', () => {
+    expect(isGeneratedFileStatable({ ...toolFile, ready: false }, null)).toBe(false);
+    expect(isGeneratedFileStatable({ ...toolFile, ready: false }, END)).toBe(true);
+    expect(isGeneratedFileStatable(toolFile, null)).toBe(true);
+  });
+});
+
+describe('planGeneratedFilesVisibility', () => {
+  it('does not stat in-flight files and keeps the first paint empty', () => {
+    expect(
+      planGeneratedFilesVisibility({
+        previousVisible: null,
+        candidates: [{ ...toolFile, ready: false }],
+        turnEndMs: null,
+        envChanged: false,
+        turnWindowChanged: false,
+      }),
+    ).toEqual({ visible: null, toStat: [] });
+  });
+
+  it('only stats newly ready files', () => {
+    const plan = planGeneratedFilesVisibility({
+      previousVisible: [toolFile],
+      candidates: [toolFile, extraToolFile],
+      turnEndMs: null,
+      envChanged: false,
+      turnWindowChanged: false,
+    });
+    expect(plan.visible).toBeDefined();
+    expect(plan.toStat).toEqual([extraToolFile]);
+  });
+
+  it('restats every statable file when the turn window changes', () => {
+    const plan = planGeneratedFilesVisibility({
+      previousVisible: [toolFile],
+      candidates: [toolFile, extraToolFile],
+      turnEndMs: END,
+      envChanged: false,
+      turnWindowChanged: true,
+    });
+    expect(plan.toStat).toEqual([toolFile, extraToolFile]);
+  });
+
+  it('clears the card and restats when the session origin changes', () => {
+    expect(
+      planGeneratedFilesVisibility({
+        previousVisible: [toolFile],
+        candidates: [toolFile],
+        turnEndMs: null,
+        envChanged: true,
+        turnWindowChanged: false,
+      }),
+    ).toEqual({ visible: null, toStat: [toolFile] });
+  });
+});
+
+describe('mergeGeneratedFileStatResults', () => {
+  it('keeps previously confirmed files and appends newly confirmed ones', () => {
+    expect(
+      mergeGeneratedFileStatResults({
+        previousVisible: [toolFile],
+        candidates: [toolFile, extraToolFile],
+        checked: [extraToolFile],
+        confirmedPaths: new Set([extraToolFile.path]),
+        turnWindowChanged: false,
+      }),
+    ).toEqual([toolFile, extraToolFile]);
+  });
+
+  it('drops previously confirmed files that fail a turn-window restat', () => {
+    expect(
+      mergeGeneratedFileStatResults({
+        previousVisible: [toolFile, extraToolFile],
+        candidates: [toolFile, extraToolFile],
+        checked: [toolFile, extraToolFile],
+        confirmedPaths: new Set([extraToolFile.path]),
+        turnWindowChanged: true,
+      }),
+    ).toEqual([extraToolFile]);
+  });
+});
+
+describe('retainVisibleGeneratedFiles', () => {
+  it('keeps the first paint empty until the existence check finishes', () => {
+    expect(retainVisibleGeneratedFiles(null, [toolFile])).toBeNull();
+  });
+
+  it('keeps already-confirmed chips when the next list still contains them', () => {
+    const previous = [toolFile];
+    expect(retainVisibleGeneratedFiles(previous, [{ ...toolFile }, extraToolFile])).toBe(previous);
+  });
+
+  it('upgrades a visible chip when its artifact metadata arrives', () => {
+    const previous = [toolFile];
+    expect(retainVisibleGeneratedFiles(previous, [confirmedDocumentFile, extraToolFile])).toEqual([
+      confirmedDocumentFile,
+    ]);
+  });
+
+  it('drops chips whose paths disappeared from the next candidate list', () => {
+    expect(retainVisibleGeneratedFiles([toolFile, extraToolFile], [extraToolFile])).toEqual([
+      extraToolFile,
+    ]);
+  });
+
+  it('returns the previous reference when the visible set is unchanged', () => {
+    const previous = [toolFile];
+    expect(retainVisibleGeneratedFiles(previous, previous)).toBe(previous);
+  });
+});
+
+describe('reuseGeneratedFilesIfUnchanged', () => {
+  it('returns the previous list when signatures match in order', () => {
+    const previous = [toolFile, extraToolFile];
+    expect(reuseGeneratedFilesIfUnchanged(previous, [{ ...toolFile }, { ...extraToolFile }])).toBe(
+      previous,
+    );
+  });
+
+  it('returns the next list when a newly confirmed file appears', () => {
+    const next = [toolFile, extraToolFile];
+    expect(reuseGeneratedFilesIfUnchanged([toolFile], next)).toBe(next);
   });
 });
 

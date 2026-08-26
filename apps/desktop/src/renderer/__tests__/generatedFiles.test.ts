@@ -138,6 +138,37 @@ describe('collectGeneratedFiles', () => {
     expect(extractDocumentArtifactMetadata('make_docx', input)).toBeDefined();
   });
 
+  it('marks in-flight tool_use files as not ready until the result arrives', () => {
+    const inflight = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+      ],
+      WORKDIR,
+    );
+    expect(inflight).toHaveLength(1);
+    expect(inflight[0].ready).toBe(false);
+
+    const settled = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+      ],
+      WORKDIR,
+    );
+    expect(settled).toHaveLength(1);
+    expect(settled[0].ready).toBeUndefined();
+  });
+
   it('collects Write (claude) and write (pi) created files', () => {
     const files = collectGeneratedFiles(
       [

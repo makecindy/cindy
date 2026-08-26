@@ -252,7 +252,7 @@ import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
 import { TurnChangesCard } from './TurnChangesCard';
-import { GeneratedFilesCard } from './GeneratedFilesCard';
+import { GeneratedFilesCard, generatedFilesCheckKey } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
   extractAnchorCardId,
@@ -2123,6 +2123,39 @@ export function buildRenderItems(
   return { items, singleResultMap };
 }
 
+type GeneratedFilesRenderItemRef = Extract<RenderItem, { type: 'generated_files' }>;
+
+/**
+ * 产物卡内容没变时沿用上一轮 item。buildRenderItems 每次都 new 一个 files
+ * 数组,不收口的话 memo 住的 GeneratedFilesCard 仍会因 props 引用变化而重渲。
+ */
+export function reuseGeneratedFilesRenderItems(
+  items: RenderItem[],
+  cache: Map<string, GeneratedFilesRenderItemRef>,
+): RenderItem[] {
+  const seen = new Set<string>();
+  let swapped = false;
+  const next = items.map((item) => {
+    if (item.type !== 'generated_files') return item;
+    seen.add(item.key);
+    const previous = cache.get(item.key);
+    if (
+      previous &&
+      generatedFilesCheckKey(previous.files, previous.turnStartMs, previous.turnEndMs) ===
+        generatedFilesCheckKey(item.files, item.turnStartMs, item.turnEndMs)
+    ) {
+      if (previous !== item) swapped = true;
+      return previous;
+    }
+    cache.set(item.key, item);
+    return item;
+  });
+  for (const key of cache.keys()) {
+    if (!seen.has(key)) cache.delete(key);
+  }
+  return swapped ? next : items;
+}
+
 // ---------------------------------------------------------------------------
 // Work-group pass(buildRenderItems 之后的第二层后处理)
 // ---------------------------------------------------------------------------
@@ -3198,25 +3231,29 @@ export function MessageStream({
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
-  const { items: ungroupedRenderItems, singleResultMap } = useMemo(
-    () =>
-      buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
-        historyWindowIncomplete:
-          !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
-        turnChangeSets,
-        workingDir,
-      }),
-    [
-      messages,
-      taskUpdates,
-      ghostCardSnapshot,
-      historyLoaded,
-      hasMoreMessages,
-      historyWindowHasIsland,
+  const generatedFilesItemCacheRef = useRef(
+    new Map<string, Extract<RenderItem, { type: 'generated_files' }>>(),
+  );
+  const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
+    const built = buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+      historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
       turnChangeSets,
       workingDir,
-    ],
-  );
+    });
+    return {
+      items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),
+      singleResultMap: built.singleResultMap,
+    };
+  }, [
+    messages,
+    taskUpdates,
+    ghostCardSnapshot,
+    historyLoaded,
+    hasMoreMessages,
+    historyWindowHasIsland,
+    turnChangeSets,
+    workingDir,
+  ]);
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
     [visibleMessages],

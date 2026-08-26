@@ -31,6 +31,7 @@ import {
   pickDeleteCompensationAnchorKey,
   isPlanCardVisibleInViewport,
   planSessionBelongsToLatestUserTurn,
+  reuseGeneratedFilesRenderItems,
   shouldBlockAssistantFork,
   type RenderItem,
 } from '../components/chat/MessageStream';
@@ -492,6 +493,35 @@ describe('buildRenderItems — key stability', () => {
       turnChangeSets: [exactFile],
     }).items.filter((item): item is Extract<RenderItem, { type: 'generated_files' }> => item.type === 'generated_files');
     expect(deduped).toHaveLength(0);
+  });
+
+  it('reuses the generated-files item when only unrelated messages change', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('write-1', 'Write', { file_path: 'C:/work/report.md', content: 'x' }),
+      mkResult('write-result', 'tu-write-1'),
+      mkAssistant('a1', 'done'),
+    ];
+    const first = buildRenderItems(messages, undefined, undefined, { workingDir: 'C:/work' });
+    const cache = new Map();
+    const reusedOnce = reuseGeneratedFilesRenderItems(first.items, cache);
+    const second = buildRenderItems(
+      [...messages.slice(0, -1), { ...messages[3], content: 'done plus more' }],
+      undefined,
+      undefined,
+      { workingDir: 'C:/work' },
+    );
+    const reusedTwice = reuseGeneratedFilesRenderItems(second.items, cache);
+    const firstCard = reusedOnce.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const secondCard = reusedTwice.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    expect(firstCard).toBeDefined();
+    expect(secondCard).toBe(firstCard);
   });
 
   it('streaming token append to an assistant message keeps the same item key', () => {

@@ -34,6 +34,11 @@ export interface GeneratedFileRef {
    * 'command' = 命令文本启发式候选,渲染前还需 mtime 时间窗校验。
    */
   source: 'tool' | 'command';
+  /**
+   * false = 创建它的 tool_use 还在跑(有 toolUseId、结果未到),文件多半没落盘。
+   * 缺省 / true = 可以做存在性检查。历史消息没有 toolUseId 时按已完成处理。
+   */
+  ready?: boolean;
   /** 文档工具返回的轻量交付信息；普通源码文件没有此字段。 */
   artifact?: DocumentArtifactMetadata;
   /** true 仅表示同一 tool_use 有结构化 ok:true 结果，可用本轮 mtime 证明成功覆盖。 */
@@ -729,6 +734,7 @@ export function collectGeneratedFiles(
     const toolName = msg.toolName ?? '';
     if (!toolName) continue;
 
+    const toolReady = !msg.toolUseId || resultByToolUseId.has(msg.toolUseId);
     const addPath = (rawPath: string, source: GeneratedFileRef['source']): void => {
       const abs = canonicalizeWindowsShape(resolveToolFilePath(rawPath, workingDir));
       const key = dedupeKeyForPath(abs);
@@ -736,9 +742,15 @@ export function collectGeneratedFiles(
       const prev = byKey.get(key);
       if (prev) {
         if (prev.source === 'command' && source === 'tool') prev.source = 'tool';
+        if (toolReady) delete prev.ready;
         return;
       }
-      byKey.set(key, { path: abs, name: basename(abs), source });
+      byKey.set(key, {
+        path: abs,
+        name: basename(abs),
+        source,
+        ...(toolReady ? {} : { ready: false }),
+      });
     };
 
     for (const rawPath of createdPathsFromToolUse(toolName, msg.toolInput)) {
@@ -759,6 +771,7 @@ export function collectGeneratedFiles(
         if (existing) {
           existing.artifact = artifact;
           if (artifactConfirmed) existing.artifactConfirmed = true;
+          if (toolReady) delete existing.ready;
         } else {
           byKey.set(key, {
             path: abs,
@@ -766,6 +779,7 @@ export function collectGeneratedFiles(
             source: 'tool',
             artifact,
             ...(artifactConfirmed ? { artifactConfirmed: true } : {}),
+            ...(toolReady ? {} : { ready: false }),
           });
         }
       }
