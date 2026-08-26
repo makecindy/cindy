@@ -5,6 +5,7 @@ import {
   UI_ACTION_TRIGGER_PREFIX,
 } from '@cindy/maker-shared/synthetic-trigger';
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
+import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 
@@ -474,6 +475,35 @@ describe('normalizeRemoteMessages', () => {
       secondaryBody: 'file contents',
       toolSettled: true,
     });
+  });
+
+  it('renders and copies compacted tool results without exposing the internal marker', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'tool-compacted',
+        role: 'tool_use',
+        content: {
+          toolUseId: 'tu_compacted',
+          toolName: 'Read',
+          input: { file_path: '/repo/a.ts' },
+        },
+      }),
+      message({
+        id: 'result-compacted',
+        role: 'tool_result',
+        toolUseId: 'tu_compacted',
+        content: {
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 128 * 1024,
+          compactedAt: 500,
+        },
+      }),
+    ]);
+
+    expect(item.secondaryBody).toBe('完整工具输出已释放（原始大小 128 KB）');
+    expect(buildMobileMessageCopyText(item)).toContain('完整工具输出已释放（原始大小 128 KB）');
+    expect(buildMobileMessageCopyText(item)).not.toContain('tool_result_compacted');
   });
 
   it('marks tools settled by result arrival, including hidden orca empty results', () => {

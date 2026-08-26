@@ -1,8 +1,6 @@
 import { createLogger } from '../logger.js';
 import type { DbClient } from './client/DbClient.js';
 
-export const TOOL_RESULT_COMPACTION_MIN_BYTES = 16 * 1024;
-
 const log = createLogger('localDb/toolResultCompaction');
 
 export async function compactSessionToolResultsBestEffort(options: {
@@ -13,7 +11,6 @@ export async function compactSessionToolResultsBestEffort(options: {
     const result = await options.client.tx('toolResults.compactSession', {
       sessionId: options.sessionId,
       now: Date.now(),
-      minContentBytes: TOOL_RESULT_COMPACTION_MIN_BYTES,
     });
     if (result.compactedRows > 0) {
       log.info('task tool results compacted', {

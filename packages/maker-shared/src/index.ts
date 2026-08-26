@@ -49,6 +49,7 @@ export * from './subagentObservation.js';
 export * from './subagentWorkspace.js';
 export * from './systemCard.js';
 export * from './toolUseDescriptor.js';
+export * from './toolResultCompaction.js';
 export * from './thinkingText.js';
 export * from './turnContinuation.js';
 export * from './updateChannel.js';

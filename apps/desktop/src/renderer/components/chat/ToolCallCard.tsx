@@ -19,8 +19,11 @@ import { useChatSessionFile } from './ChatSessionFileContext';
 import { Collapse } from '@/components/ui/collapse';
 import { Tip } from '@/components/ui/tooltip';
 import { DiffView } from './DiffView';
-import { formatBytes, TextLightbox } from './TextLightbox';
-import { parseToolResultCompactionMarker } from '@/lib/toolResultCompaction';
+import { TextLightbox } from './TextLightbox';
+import {
+  formatToolResultCompactionBytes,
+  parseToolResultCompactionMarker,
+} from '@cindy/maker-shared/tool-result-compaction';
 
 // text-lightbox F1: only these 4 tools get the preview entry chip-row.
 // Bash/Grep/Glob etc. are explicitly out of scope per the spec's 非目标 list.
@@ -90,7 +93,9 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
   const [expanded, setExpanded] = useState(false);
   const compactedToolResult = parseToolResultCompactionMarker(toolResult);
   const displayedToolResult = compactedToolResult
-    ? t('chat.toolResultCompacted', { size: formatBytes(compactedToolResult.originalBytes) })
+    ? t('chat.toolResultCompacted', {
+        size: formatToolResultCompactionBytes(compactedToolResult.originalBytes),
+      })
     : toolResult;
   // 会话文件来源:remote 时文件 chip 点击走远程分流(取回缓存副本),不直打本机 fs。
   const fileCtx = useChatSessionFile();

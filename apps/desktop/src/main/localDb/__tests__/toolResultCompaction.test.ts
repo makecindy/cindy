@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../client/DbClient.js';
-import {
-  compactSessionToolResultsBestEffort,
-  TOOL_RESULT_COMPACTION_MIN_BYTES,
-} from '../toolResultCompaction.js';
+import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 
 function createClient(tx: ReturnType<typeof vi.fn>): DbClient {
   return { tx } as unknown as DbClient;
@@ -16,7 +13,7 @@ describe('tool result compaction trigger', () => {
     vi.restoreAllMocks();
   });
 
-  it('runs one explicit-session compaction with the 16 KiB threshold', async () => {
+  it('runs one explicit-session compaction without a size threshold', async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 7, 26, 8);
     vi.setSystemTime(now);
@@ -27,12 +24,10 @@ describe('tool result compaction trigger', () => {
       sessionId: 'session-1',
     });
 
-    expect(TOOL_RESULT_COMPACTION_MIN_BYTES).toBe(16 * 1024);
     expect(tx).toHaveBeenCalledTimes(1);
     expect(tx).toHaveBeenCalledWith('toolResults.compactSession', {
       sessionId: 'session-1',
       now,
-      minContentBytes: TOOL_RESULT_COMPACTION_MIN_BYTES,
     });
   });
 

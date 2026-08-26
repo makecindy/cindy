@@ -232,16 +232,20 @@ describe('db worker tx handlers', () => {
             ],
           );
           await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [status, 's1']);
+          const [expected] = await client.query<{ compactedRows: number; originalBytes: number }>(
+            `SELECT COUNT(*) AS compactedRows,
+                    SUM(length(CAST(content AS BLOB))) AS originalBytes
+               FROM messages
+              WHERE session_id = 's1'
+                AND role = 'tool_result'`,
+          );
+          expect(expected.compactedRows).toBe(9);
 
           const result = await client.tx('toolResults.compactSession', {
             sessionId: 's1',
             now: 500,
-            minContentBytes: 16 * 1024,
           });
-          expect(result).toEqual({
-            compactedRows: 2,
-            originalBytes: Buffer.byteLength(largeText) + Buffer.byteLength(jsonText),
-          });
+          expect(result).toEqual(expected);
 
           const rows = await client.query<{ id: string; content: string }>(
             `SELECT id, content
@@ -259,6 +263,9 @@ describe('db worker tx handlers', () => {
             originalBytes: Buffer.byteLength(jsonText),
             compactedAt: 500,
           });
+          expect(
+            rows.filter((row) => row.id !== 'historical-large' && row.content.includes('tool_result_compacted')),
+          ).toHaveLength(9);
           expect(rows.find((row) => row.id === 'historical-large')?.content).toBe(largeText);
         },
         { useInlineWorker },
@@ -267,7 +274,115 @@ describe('db worker tx handlers', () => {
   );
 
   it.each([false, true])(
-    'skips remote, shared, Orca, and restored sessions while compacting persisted rows from an active-turn marker (inline=%s)',
+    'compacts every tool result without parsing content or resolving its source (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        const largeText = 'x'.repeat(20 * 1024);
+        const imageUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+        const mediaContent = JSON.stringify({
+          ok: true,
+          output: largeText,
+          xdt_image_urls: [imageUrl],
+        });
+        const malformedStructured = `{"xdt_image_urls":["${imageUrl}"],"output":"${largeText}`;
+        const mediaLikePlainText = `source mentions xdt_image_urls but is not structured\n${largeText}`;
+        const cases = [
+          ['plain', largeText, 'tool-1'],
+          ['missing-id', largeText, null],
+          ['orphan', largeText, 'missing'],
+          ['structured', JSON.stringify({ ok: true, output: largeText }), 'tool-2'],
+          ['media', mediaContent, 'tool-3'],
+          ['malformed', malformedStructured, 'tool-4'],
+          ['media-like-text', mediaLikePlainText, 'tool-5'],
+          ['data-url', `data:image/png;base64,${largeText}`, 'tool-6'],
+          ['utf8-bytes', '测'.repeat(6 * 1024), 'tool-7'],
+        ] as const;
+        for (const [index, [id, content, toolUseId]] of cases.entries()) {
+          await client.exec(
+            `INSERT INTO messages
+              (id, client_id, session_id, role, content, tool_use_id, created_at)
+             VALUES (?, ?, 's1', 'tool_result', ?, ?, ?)`,
+            [id, id, content, toolUseId, index + 1],
+          );
+        }
+        await client.exec(
+          `INSERT INTO messages
+            (id, client_id, session_id, role, content, tool_use_id, created_at)
+           VALUES
+            ('small', 'small', 's1', 'tool_result', 'small', NULL, 99),
+            ('empty', 'empty', 's1', 'tool_result', '', NULL, 100),
+            ('compacted', 'compacted', 's1', 'tool_result', ?, NULL, 101)`,
+          [
+            JSON.stringify({
+              type: 'tool_result_compacted',
+              version: 1,
+              originalBytes: 123,
+              compactedAt: 100,
+            }),
+          ],
+        );
+
+        await client.exec("UPDATE sessions SET status = 'archived' WHERE id = 's1'");
+        await expect(
+          client.tx('toolResults.compactSession', {
+            sessionId: 's1',
+            now: 500,
+          }),
+        ).resolves.toEqual({
+          compactedRows: cases.length + 2,
+          originalBytes: cases.map(([, content]) => content)
+            .reduce((sum, content) => sum + Buffer.byteLength(content), Buffer.byteLength('small')),
+        });
+
+        const rows = await client.query<{ id: string; content: string }>(
+          "SELECT id, content FROM messages WHERE role = 'tool_result' ORDER BY created_at",
+        );
+        for (const [id, originalContent] of cases) {
+          expect(JSON.parse(rows.find((row) => row.id === id)!.content)).toEqual({
+            type: 'tool_result_compacted',
+            version: 1,
+            originalBytes: Buffer.byteLength(originalContent),
+            compactedAt: 500,
+          });
+        }
+        expect(JSON.parse(rows.find((row) => row.id === 'small')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: Buffer.byteLength('small'),
+          compactedAt: 500,
+        });
+        expect(JSON.parse(rows.find((row) => row.id === 'empty')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 0,
+          compactedAt: 500,
+        });
+        const compactedBeforeRetry = rows.map((row) => row.content);
+        expect(JSON.parse(rows.find((row) => row.id === 'compacted')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 123,
+          compactedAt: 100,
+        });
+
+        await expect(
+          client.tx('toolResults.compactSession', {
+            sessionId: 's1',
+            now: 600,
+          }),
+        ).resolves.toEqual({ compactedRows: 0, originalBytes: 0 });
+        await expect(
+          client.query<{ content: string }>(
+            "SELECT content FROM messages WHERE role = 'tool_result' ORDER BY created_at",
+          ),
+        ).resolves.toEqual(compactedBeforeRetry.map((content) => ({ content })));
+      }, { useInlineWorker });
+    },
+  );
+
+  it.each([false, true])(
+    'skips non-authoritative and restored sessions while compacting local Orca and active-turn rows (inline=%s)',
     async (useInlineWorker) => {
       await withClient(async (client) => {
         for (const id of ['remote', 'shared', 'orca', 'turn', 'restored']) {
@@ -294,20 +409,24 @@ describe('db worker tx handlers', () => {
         );
         await client.exec("UPDATE sessions SET status = 'active' WHERE id = 'restored'");
 
-        for (const sessionId of ['remote', 'shared', 'orca', 'restored']) {
+        for (const sessionId of ['remote', 'shared', 'restored']) {
           await expect(
             client.tx('toolResults.compactSession', {
               sessionId,
               now: 2,
-              minContentBytes: 16 * 1024,
             }),
           ).resolves.toEqual({ compactedRows: 0, originalBytes: 0 });
         }
         await expect(
           client.tx('toolResults.compactSession', {
+            sessionId: 'orca',
+            now: 2,
+          }),
+        ).resolves.toEqual({ compactedRows: 1, originalBytes: 70 * 1024 + 2 });
+        await expect(
+          client.tx('toolResults.compactSession', {
             sessionId: 'turn',
             now: 2,
-            minContentBytes: 16 * 1024,
           }),
         ).resolves.toEqual({ compactedRows: 1, originalBytes: 70 * 1024 + 2 });
         const rows = await client.query<{ id: string; content: string }>(
@@ -321,7 +440,7 @@ describe('db worker tx handlers', () => {
               return false;
             }
           }).map((row) => row.id),
-        ).toEqual(['message-turn']);
+        ).toEqual(['message-orca', 'message-turn']);
       }, { useInlineWorker });
     },
   );
@@ -2615,15 +2734,18 @@ async function withTwoClients(fn: (clients: [DbClient, DbClient]) => Promise<voi
   const clients: DbClient[] = [];
   try {
     for (let index = 0; index < 2; index += 1) {
-      clients.push(
-        await createDbClient({
-          userId: `test-user-${index}`,
-          dbPath,
-          drizzleDir,
-          betterSqliteModulePath: require.resolve('better-sqlite3'),
-          workerScriptPath,
-        }),
-      );
+      const client = await createDbClient({
+        userId: `test-user-${index}`,
+        dbPath,
+        drizzleDir,
+        betterSqliteModulePath: require.resolve('better-sqlite3'),
+        workerScriptPath,
+      });
+      clients.push(client);
+      // createDbClient starts its Worker lazily. Finish each startup before
+      // opening the next connection so this helper tests transaction
+      // contention rather than concurrent WAL initialization.
+      await client.queryOne('SELECT 1 AS ready');
     }
     await fn(clients as [DbClient, DbClient]);
   } finally {

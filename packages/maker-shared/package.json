@@ -67,6 +67,7 @@
     "./thinking-text": "./src/thinkingText.ts",
     "./turn-continuation": "./src/turnContinuation.ts",
     "./tool-use-descriptor": "./src/toolUseDescriptor.ts",
+    "./tool-result-compaction": "./src/toolResultCompaction.ts",
     "./update-channel": "./src/updateChannel.ts",
     "./url-text-boundary": "./src/urlTextBoundary.ts",
     "./usage-format": "./src/usageFormat.ts",

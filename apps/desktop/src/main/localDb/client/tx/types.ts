@@ -403,7 +403,6 @@ export interface SessionsSetStatusResultItem {
 export interface CompactSessionToolResultsArgs {
   sessionId: string;
   now: number;
-  minContentBytes: number;
 }
 
 export interface CompactSessionToolResultsResult {

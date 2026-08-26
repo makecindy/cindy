@@ -815,21 +815,17 @@ function compactSessionToolResults(readyDb, args) {
   const payload = asRecord(args, 'toolResults.compactSession args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
-  const minContentBytes = expectNumber(payload.minContentBytes, 'minContentBytes');
-  if (minContentBytes < 1) {
-    throw Object.assign(new Error('minContentBytes must be positive'), { code: 'INVALID_ARGS' });
-  }
 
   const selectSession = readyDb.prepare(
-    "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') AND source = 'desktop' AND remote_host_id IS NULL AND orca_role IS NULL LIMIT 1",
+    "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') AND source = 'desktop' AND remote_host_id IS NULL LIMIT 1",
   );
-  // Keep this predicate in sync with worker/opHandlers/tx.ts. String content is
-  // stored verbatim, so invalid JSON is the normal plain-text representation.
-  const selectCandidates = readyDb.prepare(
-    "SELECT result.id, result.agent_meta AS agentMeta, length(CAST(result.content AS BLOB)) AS originalBytes, EXISTS (SELECT 1 FROM messages AS tool WHERE tool.session_id = result.session_id AND tool.role = 'tool_use' AND tool.tool_use_id = result.tool_use_id AND json_valid(tool.content) AND (json_extract(tool.content, '$.toolName') IN ('Task', 'Agent', 'subagent') OR json_extract(tool.content, '$.toolName') LIKE 'collab:%')) AS isAgentTask FROM messages AS result WHERE result.session_id = ? AND result.role = 'tool_result' AND length(CAST(result.content AS BLOB)) > ? AND (NOT json_valid(result.content) OR (json_type(result.content) = 'text' AND CASE WHEN json_valid(json_extract(result.content, '$')) THEN json_type(json_extract(result.content, '$')) NOT IN ('object', 'array') ELSE 1 END)) AND instr(result.content, 'cindy-media://') = 0 AND instr(result.content, 'xdt-image://') = 0 AND instr(result.content, 'xdt-video://') = 0 AND instr(result.content, 'xdt-audio://') = 0 AND instr(result.content, 'xdt-model://') = 0 AND instr(result.content, 'data:image/') = 0 AND instr(result.content, 'data:video/') = 0 AND instr(result.content, 'data:audio/') = 0 ORDER BY result.rowid ASC",
+  // Keep this aggregate + bulk update path in sync with worker/opHandlers/tx.ts.
+  // The fixed-prefix guard only prevents re-compacting an existing marker.
+  const summarizeCandidates = readyDb.prepare(
+    "SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes FROM messages WHERE session_id = ? AND role = 'tool_result' AND content NOT GLOB '{\\\"type\\\":\\\"tool_result_compacted\\\",\\\"version\\\":1,*'",
   );
-  const compactMessage = readyDb.prepare(
-    "UPDATE messages SET content = ? WHERE id = ? AND session_id = ? AND role = 'tool_result'",
+  const compactMessages = readyDb.prepare(
+    "UPDATE messages SET content = json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?) WHERE session_id = ? AND role = 'tool_result' AND content NOT GLOB '{\\\"type\\\":\\\"tool_result_compacted\\\",\\\"version\\\":1,*'",
   );
 
   return readyDb.transaction(() => {
@@ -837,44 +833,13 @@ function compactSessionToolResults(readyDb, args) {
     if (!session) {
       return { compactedRows: 0, originalBytes: 0 };
     }
-    const candidates = selectCandidates.all(session.id, minContentBytes);
-
-    let compactedRows = 0;
-    let originalBytes = 0;
-    for (const candidate of candidates) {
-      if (candidate.isAgentTask === 1 || isSubagentToolResult(candidate.agentMeta)) {
-        continue;
-      }
-      const marker = JSON.stringify({
-        type: 'tool_result_compacted',
-        version: 1,
-        originalBytes: candidate.originalBytes,
-        compactedAt: now,
-      });
-      const changed = compactMessage.run(marker, candidate.id, session.id).changes;
-      if (changed > 0) {
-        compactedRows += 1;
-        originalBytes += candidate.originalBytes;
-      }
-    }
-
-    return { compactedRows, originalBytes };
+    const summary = summarizeCandidates.get(session.id);
+    const compactedRows = compactMessages.run(now, session.id).changes;
+    return {
+      compactedRows,
+      originalBytes: compactedRows > 0 ? summary.originalBytes : 0,
+    };
   })();
-}
-
-function isSubagentToolResult(agentMeta) {
-  if (!agentMeta) return false;
-  let parsed;
-  try {
-    parsed = JSON.parse(agentMeta);
-  } catch {
-    return true;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return true;
-  const parentUuid = parsed.parentUuid;
-  if (typeof parentUuid !== 'string') return false;
-  const trimmed = parentUuid.trim();
-  return /^(?:toolu|call)[_-]/iu.test(trimmed) || /^[A-Za-z][A-Za-z0-9_-]*_x*\\d+(?:_dup\\d+)?$/u.test(trimmed);
 }
 
 // 单事务插 session 行 + 全量 messages, 任一行非法整体回滚零写入;
