@@ -2363,6 +2363,15 @@ export class AgentInputCoordinator {
       latest.activeTurn.delivery === 'steer' &&
       !this.deps.isTurnRunning(sessionId)
     ) {
+      const observedError = this.boundObservedTerminalError(sessionId, latest.activeTurn);
+      if (observedError) {
+        latest.activeTurn.pendingTerminalEvent = {
+          type: 'error',
+          message: observedError.message,
+          signals: observedError.signals,
+        };
+        this.settlePendingTerminalEventAfterPersist(sessionId, latest.activeTurn);
+      } else {
       log.info('steer accepted but turn already settled; synthesizing closure', {
         sessionId,
         clientId: item.clientId,
@@ -2377,6 +2386,7 @@ export class AgentInputCoordinator {
         latest.recovery = priorRecovery;
       }
       this.emit(sessionId);
+      }
     }
     // steer accepted/removed may change the queue head while an older
     // SESSION_RUNNING timer is still armed. Rebind its policy now even though

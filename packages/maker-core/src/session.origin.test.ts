@@ -405,6 +405,44 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('keeps an in-flight N+1 start-failure after handle running releases the reservation', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const originalSend = handle.send.bind(handle);
+    handle.send = async (...args) => {
+      setTurnRunning(true);
+      return originalSend(...args);
+    };
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('keeps an in-flight N+1 start-failure before a leftover N error', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       dispatchEvent: {

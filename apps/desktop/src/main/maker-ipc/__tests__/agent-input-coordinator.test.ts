@@ -6522,6 +6522,38 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
+  it('recovers a missed same-generation error when steer persist settles on an idle turn', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setResumableTurnErrorCandidate((signals) => signals.reason === 'empty-response');
+    const sid = 'steer-idle-missed-error-snapshot';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'error',
+      generation: 0,
+      message: 'Authorization: Bearer secret-token',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(true);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.recovery).toEqual({ kind: 'active-turn', item: second });
+    expect(projection.error).toBe('Authorization: [REDACTED]');
+    expect(JSON.stringify(projection)).not.toContain('secret-token');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
   it('does not settle a deferred persist done against a later-generation error snapshot', async () => {
     const h = createHarness();
     h.setAgentKind('codex');

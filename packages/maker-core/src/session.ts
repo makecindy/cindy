@@ -2051,7 +2051,9 @@ export class Session {
     if (this.isForegroundRunningStatus(event)) {
       this.sawCurrentTurnRunning = true;
     }
-    const inFlightGeneration = this.sendReservation?.generation;
+    const inFlightGeneration =
+      this.sendReservation?.generation ??
+      (this.isUnacceptedCurrentSend() ? this.unacceptedSendGeneration : null);
     const belongsToInFlightSend =
       this.insideProviderSendSync &&
       this.inFlightSendOwnsBlockedWait &&
