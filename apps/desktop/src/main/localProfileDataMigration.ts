@@ -24,7 +24,7 @@ export interface LocalProfileDataMigrationFs {
   readFile(file: string): Promise<string>;
   createFileExclusive(file: string, contents: string): Promise<boolean>;
   copyFile(source: string, target: string): Promise<void>;
-  rename(source: string, target: string): Promise<void>;
+  link(source: string, target: string): Promise<void>;
   removeIfExists(file: string): Promise<void>;
 }
 
@@ -66,7 +66,7 @@ const realFs: LocalProfileDataMigrationFs = {
     }
   },
   copyFile: (source, target) => fs.promises.copyFile(source, target),
-  rename: (source, target) => fs.promises.rename(source, target),
+  link: (source, target) => fs.promises.link(source, target),
   removeIfExists: (file) => fs.promises.rm(file, { force: true }),
 };
 
@@ -79,6 +79,64 @@ function migrationMarkerPath(deps: LocalProfileDataMigrationDeps): string {
     deps.userDataDir,
     `${deps.dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
+}
+
+export type LocalProfileMigrationReservation =
+  | 'claimed'
+  | 'already-owned'
+  | 'owned-by-other'
+  | 'failed';
+
+/**
+ * Reserve local-v1 synchronously at the cloud-owner commit edge. This is a
+ * machine-level marker, not user content, so the auth commit can persist the
+ * ownership decision before any later renderer/database hook runs.
+ */
+export function reserveLocalProfileDataOwner(
+  ownerId: string,
+  userDataDir: string,
+  dbFilePrefix: string,
+): LocalProfileMigrationReservation {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_PROFILE_DATA_OWNER_ID) return 'failed';
+  const marker = path.join(
+    userDataDir,
+    `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
+  );
+  const contents = `${JSON.stringify({ ownerId: normalizedOwnerId, claimedAt: Date.now() })}\n`;
+  let handle: number | undefined;
+  let created = false;
+  try {
+    handle = fs.openSync(marker, 'wx', 0o600);
+    created = true;
+    fs.writeSync(handle, contents, undefined, 'utf8');
+    return 'claimed';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') {
+      if (created) {
+        try {
+          fs.unlinkSync(marker);
+        } catch {
+          // Best-effort cleanup; the caller will fail closed on the next attempt.
+        }
+      }
+      return 'failed';
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(marker, 'utf8')) as { ownerId?: unknown };
+      return parsed.ownerId === normalizedOwnerId ? 'already-owned' : 'owned-by-other';
+    } catch {
+      return 'failed';
+    }
+  } finally {
+    if (handle !== undefined) {
+      try {
+        fs.closeSync(handle);
+      } catch {
+        // The marker contents are already written; close failure is non-fatal.
+      }
+    }
+  }
 }
 
 interface LocalProfileMigrationMarker {
@@ -121,7 +179,7 @@ async function copyDatabaseAtomically(
   deps: LocalProfileDataMigrationDeps,
   sourceDb: string,
   targetDb: string,
-): Promise<void> {
+): Promise<boolean> {
   await cleanupTemps(deps, targetDb);
   const dbTmp = `${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`;
   await deps.fs.removeIfExists(dbTmp);
@@ -138,15 +196,27 @@ async function copyDatabaseAtomically(
     sidecars.push({ tmp, final });
   }
 
-  // The target database is absent by contract. Remove stale sidecars from an
-  // interrupted attempt before putting the new set in place.
-  for (const suffix of DB_SIDECAR_SUFFIXES) {
-    await deps.fs.removeIfExists(`${targetDb}${suffix}`);
-  }
+  // Commit every file with a no-replace hard-link. `rename` would replace a
+  // target created by another shared-userData process between the existence
+  // check and this commit edge.
   for (const sidecar of sidecars) {
-    await deps.fs.rename(sidecar.tmp, sidecar.final);
+    try {
+      await deps.fs.link(sidecar.tmp, sidecar.final);
+      await deps.fs.removeIfExists(sidecar.tmp);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
+      await deps.fs.removeIfExists(sidecar.tmp);
+    }
   }
-  await deps.fs.rename(dbTmp, targetDb);
+  try {
+    await deps.fs.link(dbTmp, targetDb);
+    await deps.fs.removeIfExists(dbTmp);
+  } catch (error) {
+    await deps.fs.removeIfExists(dbTmp);
+    if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+    throw error;
+  }
+  return true;
 }
 
 /**
@@ -177,8 +247,8 @@ export async function adoptLocalProfileDatabase(
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
     }
-    await copyDatabaseAtomically(deps, sourceDb, targetDb);
-    return { status: 'adopted', sourceDb, targetDb };
+    const adopted = await copyDatabaseAtomically(deps, sourceDb, targetDb);
+    return adopted ? { status: 'adopted', sourceDb, targetDb } : { status: 'target-exists' };
   } catch (error) {
     await cleanupTemps(deps, targetDb).catch(() => undefined);
     return {

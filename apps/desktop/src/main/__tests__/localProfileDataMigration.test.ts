@@ -7,6 +7,7 @@ import {
   adoptLocalProfileDatabase,
   LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
+  reserveLocalProfileDataOwner,
   type LocalProfileDataMigrationDeps,
 } from '../localProfileDataMigration.js';
 
@@ -42,7 +43,7 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
           }
         },
         copyFile: (source, target) => fs.copyFile(source, target),
-        rename: (source, target) => fs.rename(source, target),
+        link: (source, target) => fs.link(source, target),
         removeIfExists: (file) => fs.rm(file, { force: true }),
       },
     },
@@ -54,6 +55,14 @@ afterEach(async () => {
 });
 
 describe('adoptLocalProfileDatabase', () => {
+  it('reserves the first cloud owner synchronously and rejects a different owner', async () => {
+    const { root } = await fixture();
+
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('already-owned');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
   it('reserves an empty local namespace for the first cloud owner', async () => {
     const { root, deps } = await fixture();
 
@@ -119,6 +128,20 @@ describe('adoptLocalProfileDatabase', () => {
       status: 'claimed-by-other-owner',
     });
     await expect(fs.access(path.join(root, 'cindy-owner-b.db'))).rejects.toThrow();
+  });
+
+  it('does not replace a target when same-owner adoption races across processes', async () => {
+    const { root, deps } = await fixture();
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+
+    const results = await Promise.all([
+      adoptLocalProfileDatabase('owner-a', deps),
+      adoptLocalProfileDatabase('owner-a', deps),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual(['adopted', 'target-exists']);
+    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
+      'local-db',
+    );
   });
 
   it('cleans interrupted temporary files before retrying', async () => {

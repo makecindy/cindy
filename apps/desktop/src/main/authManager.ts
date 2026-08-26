@@ -44,6 +44,7 @@ import {
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
 import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
@@ -116,6 +117,7 @@ import {
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
 import { migrateLocalNativeProviderAuthBindings } from './maker-host/nativeProviderAuthBinding.js';
+import { reserveLocalProfileDataOwner } from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import {
@@ -1104,6 +1106,14 @@ function commitCloudAppSession(ownerId: string): void {
     commitVolatileAppSession('cloud', ownerId);
   } else {
     commitActiveAppSession('cloud', ownerId);
+    const reservation = reserveLocalProfileDataOwner(
+      ownerId,
+      app.getPath('userData'),
+      BRAND_IDENTITY.dbFilePrefix,
+    );
+    if (reservation === 'owned-by-other' || reservation === 'failed') {
+      log.warn('local profile data reservation did not complete', { ownerId, reservation });
+    }
   }
 }
 
