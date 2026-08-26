@@ -6554,6 +6554,46 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
+  it('does not success-settle a steer leftover when a later generation already replaced it', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'steer-idle-superseded-generation';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    const third = makeItem('q-3', 'third');
+    const persistStarted = deferred<void>();
+    const persistSucceeded = deferred<void>();
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    const steerPromise = h.coordinator.steer(sid, second, { removeFromQueue: true });
+    await persistStarted.promise;
+
+    h.setTurnGeneration(1);
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'done',
+      generation: 1,
+    });
+
+    persistSucceeded.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    h.coordinator.enqueue(sid, third);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
   it('does not settle a deferred persist done against a later-generation error snapshot', async () => {
     const h = createHarness();
     h.setAgentKind('codex');

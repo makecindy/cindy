@@ -2364,6 +2364,12 @@ export class AgentInputCoordinator {
       !this.deps.isTurnRunning(sessionId)
     ) {
       const observedError = this.boundObservedTerminalError(sessionId, latest.activeTurn);
+      const boundGeneration = latest.activeTurn.vendorTurnGeneration;
+      const currentGeneration = this.deps.getTurnGeneration?.(sessionId);
+      const boundGenerationSuperseded =
+        typeof boundGeneration === 'number' &&
+        typeof currentGeneration === 'number' &&
+        currentGeneration !== boundGeneration;
       if (observedError) {
         latest.activeTurn.pendingTerminalEvent = {
           type: 'error',
@@ -2371,6 +2377,15 @@ export class AgentInputCoordinator {
           signals: observedError.signals,
         };
         this.settlePendingTerminalEventAfterPersist(sessionId, latest.activeTurn);
+      } else if (boundGenerationSuperseded) {
+        // N's error callback was missed and the probe now only has N+1.
+        // Do not treat this as a successful leftover settlement.
+        log.warn('steer idle short-circuit skipped; bound generation superseded', {
+          sessionId,
+          clientId: item.clientId,
+          boundGeneration,
+          currentGeneration,
+        });
       } else {
       log.info('steer accepted but turn already settled; synthesizing closure', {
         sessionId,
