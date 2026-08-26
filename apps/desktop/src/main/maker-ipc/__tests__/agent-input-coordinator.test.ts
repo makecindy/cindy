@@ -7507,6 +7507,64 @@ describe('AgentInputCoordinator steer transaction', () => {
     }
   });
 
+  it('keeps a pending Stop abort boundary when a later-generation terminal arrives', async () => {
+    const h = createHarness();
+    const sid = 'stop-abort-ignores-later-generation-terminal';
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind: 'codex' },
+    });
+    const second = makeItem('q-2', 'second', {
+      createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind: 'codex' },
+    });
+    const abort = deferred<void>();
+    h.setAgentKind('codex');
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    await flush();
+    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+
+    h.setTurnGeneration(1);
+    h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 1 });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 1,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+
+    h.coordinator.onTurnEvent(sid, 'error', 'later turn failed', undefined, {
+      sessionTurnGeneration: 1,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 0 });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 0,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
   it('does not settle leftover activeTurn from a later-generation done callback', async () => {
     vi.useFakeTimers();
     try {

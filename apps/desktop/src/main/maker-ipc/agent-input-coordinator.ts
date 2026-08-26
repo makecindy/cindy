@@ -3187,9 +3187,8 @@ export class AgentInputCoordinator {
     }
     const active = state.activeTurn;
     state.staleLiveIdleSinceMs = null;
-    this.clearAbortReconcileRetry(state);
-    state.queueAbortPending = false;
-    state.abortBoundaryToken = null;
+    // Ownership first. A later-generation terminal must not tear down the
+    // pending Stop abort boundary that can still reclaim the leftover turn.
     if (
       active &&
       this.shouldIgnoreUnownedTerminal(
@@ -3208,6 +3207,9 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       return;
     }
+    this.clearAbortReconcileRetry(state);
+    state.queueAbortPending = false;
+    state.abortBoundaryToken = null;
     if (type === 'error') {
       if (
         active &&
