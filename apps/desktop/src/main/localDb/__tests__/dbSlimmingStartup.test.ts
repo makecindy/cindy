@@ -236,7 +236,7 @@ describe('runPendingDbSlimmingAtStartup', () => {
     });
   });
 
-  it('does not continue reader startup when the in-use result cannot be persisted', async () => {
+  it('keeps the request scheduled when the reader in-use result cannot be persisted', async () => {
     const pending = request();
     writeDbSlimmingRequest(tmpDir, pending);
     const resultPathPrefix = `${path.join(tmpDir, 'db-slimming-result.json')}.`;
@@ -249,19 +249,22 @@ describe('runPendingDbSlimmingAtStartup', () => {
     });
     const runMaintenance = vi.fn();
 
-    await expect(
-      runPendingDbSlimmingAtStartup({
-        userDataDir: tmpDir,
-        dbFilePath,
-        ownerId: pending.ownerId,
-        leaseKind: 'reader',
-        loadVectorExtension: vi.fn(() => true),
-        log,
-        runMaintenance,
-      }),
-    ).rejects.toThrow('database slimming in-use result could not be persisted');
+    const outcome = await runPendingDbSlimmingAtStartup({
+      userDataDir: tmpDir,
+      dbFilePath,
+      ownerId: pending.ownerId,
+      leaseKind: 'reader',
+      loadVectorExtension: vi.fn(() => true),
+      log,
+      runMaintenance,
+    });
 
     expect(runMaintenance).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      handled: true,
+      originalDatabaseReady: true,
+      result: { status: 'failed', reason: 'database-in-use' },
+    });
     expect(readDbSlimmingRequest(tmpDir)).toEqual(pending);
     expect(readDbSlimmingResult(tmpDir)).toBeNull();
   });

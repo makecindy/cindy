@@ -94,16 +94,17 @@ export async function runPendingDbSlimmingAtStartup(
       reason: 'database-in-use',
       originalDatabaseRestored: true,
     };
+    let resultPersisted = false;
     try {
       writeDbSlimmingResult(options.userDataDir, result);
+      resultPersisted = true;
     } catch (error) {
       options.log.warn('database slimming in-use result could not be persisted', {
         requestId: request.id,
         error: error instanceof Error ? error.message : String(error),
       });
-      throw new Error('database slimming in-use result could not be persisted', { cause: error });
     }
-    if (!clearDbSlimmingRequest(options.userDataDir)) {
+    if (resultPersisted && !clearDbSlimmingRequest(options.userDataDir)) {
       options.log.error('database slimming in-use request marker could not be cleared', {
         requestId: request.id,
       });
