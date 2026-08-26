@@ -1600,6 +1600,62 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
+  /**
+   * Main-owned priority enqueue used by Orca lead interrupts. The caller must
+   * finish durable queue restoration before entering this method. Validation,
+   * host acceptance stamping, de-duplication and the head insertion are one
+   * synchronous critical section, so a terminal wake-up can only observe the
+   * new item at the front or not observe it at all.
+   *
+   * Unlike resume(), this never clears a user-paused queue. A paused worker
+   * keeps the reserved message at the head until the user explicitly resumes.
+   */
+  reserveNextInput(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    opts?: { onDuplicate?: () => void; onReserved?: () => void },
+  ): { projection: AgentInputProjection; reserved: boolean } {
+    const state = this.getState(sessionId);
+    item = captureOriginalSyntheticTrigger(item);
+    if (this.isDuplicateEnqueueClientId(state, item.clientId)) {
+      log.info('priority enqueue ignored: duplicate clientId', {
+        sessionId,
+        clientId: item.clientId,
+      });
+      opts?.onDuplicate?.();
+      return { projection: this.getProjection(sessionId), reserved: false };
+    }
+
+    item = stampHostAcceptedAt(item, state.clearBoundaryMs);
+    this.rememberEnqueuedClientId(state, item.clientId);
+    this.cancelPreparedAutoResume(sessionId, state);
+    this.deps.onAutomaticEnqueue?.(sessionId);
+    state.autoResumePending = null;
+    state.autoResumeAttemptToken = null;
+    markPendingTerminalSupersededByUser(state.activeTurn);
+    this.abandonActiveTurnRecoveryForUserAction(state);
+    this.clearErrorUnlessQueueHeadBlocked(state);
+    this.prependQueueHeadIfMissing(state, item);
+    if (
+      state.credentialSwitchWait &&
+      state.pendingQueue[0]?.clientId !== state.credentialSwitchWait.clientId
+    ) {
+      this.clearCredentialSwitchWait(state);
+    }
+
+    // Start the interrupt request before publishing or scheduling drain. The
+    // callback may capture a promise, but must not await it. This fences the
+    // old turn before the reserved message can become a newly accepted turn.
+    opts?.onReserved?.();
+
+    // Always publish/persist the reservation before any drain microtask. This
+    // is deliberately one emit even when an idle worker can dispatch at once.
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'priority-enqueue');
+    this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'priority-enqueue');
+    return { projection: this.getProjection(sessionId), reserved: true };
+  }
+
   async compact(
     sessionId: string,
     createOpts: AgentInputCreateOpts,
@@ -2853,6 +2909,73 @@ export class AgentInputCoordinator {
     return true;
   }
 
+  /**
+   * Atomically replace a consecutive set of pending rows with one survivor.
+   * The survivor keeps the first row's identity and queue position; removed
+   * rows are discarded through the normal callback settlement path. The
+   * caller-supplied builder also performs domain authorization inside this
+   * synchronous critical section. A null result means the live queue changed
+   * or authorization no longer holds, and leaves every field untouched.
+   */
+  mergeQueuedMessagesAtomically(
+    sessionId: string,
+    clientIds: readonly string[],
+    buildReplacement: (
+      targets: readonly AgentInputQueuedMessage[],
+    ) => AgentInputQueuedMessage | null,
+  ): { merged: boolean; projection: AgentInputProjection } {
+    const state = this.getState(sessionId);
+    if (clientIds.length < 2 || new Set(clientIds).size !== clientIds.length) {
+      return { merged: false, projection: this.getProjection(sessionId) };
+    }
+    if (clientIds.some((id) => state.steeringQueueClientIds.includes(id))) {
+      return { merged: false, projection: this.getProjection(sessionId) };
+    }
+    const firstIndex = state.pendingQueue.findIndex((item) => item.clientId === clientIds[0]);
+    if (firstIndex < 0) {
+      return { merged: false, projection: this.getProjection(sessionId) };
+    }
+    const targets = clientIds.map((id, offset) => state.pendingQueue[firstIndex + offset]) as Array<
+      AgentInputQueuedMessage | undefined
+    >;
+    if (targets.some((item, offset) => item?.clientId !== clientIds[offset])) {
+      return { merged: false, projection: this.getProjection(sessionId) };
+    }
+    const presentTargets = targets as AgentInputQueuedMessage[];
+    const replacement = buildReplacement(presentTargets);
+    const survivor = presentTargets[0];
+    if (
+      !replacement ||
+      !survivor ||
+      replacement.clientId !== survivor.clientId ||
+      replacement.chatMessage.clientId !== survivor.clientId
+    ) {
+      return { merged: false, projection: this.getProjection(sessionId) };
+    }
+    if (survivor.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
+    else replacement.hostAcceptedAtMs = survivor.hostAcceptedAtMs;
+
+    const removed = presentTargets.slice(1);
+    state.pendingQueue = [
+      ...state.pendingQueue.slice(0, firstIndex),
+      replacement,
+      ...state.pendingQueue.slice(firstIndex + presentTargets.length),
+    ];
+    const removedIds = new Set(removed.map((item) => item.clientId));
+    state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter(
+      (id) => !removedIds.has(id),
+    );
+    state.queueEditLocks = state.queueEditLocks.filter((id) => !removedIds.has(id));
+    for (const item of removed) {
+      this.removePendingCompactWaitClientId(state, item.clientId);
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+    }
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'merge-queued-messages');
+    this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'merge-queued-messages');
+    return { merged: true, projection: this.getProjection(sessionId) };
+  }
+
   move(sessionId: string, clientId: string, targetIndex: number): AgentInputProjection {
     const state = this.getState(sessionId);
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
@@ -3485,10 +3608,7 @@ export class AgentInputCoordinator {
     return this.deps.isTurnRunning(sessionId) === true;
   }
 
-  private tryReconcileStaleDispatchBoundary(
-    sessionId: string,
-    state: SessionInputState,
-  ): boolean {
+  private tryReconcileStaleDispatchBoundary(sessionId: string, state: SessionInputState): boolean {
     if (
       state.abortBoundaryToken ||
       state.queueAbortPending ||
@@ -3508,7 +3628,8 @@ export class AgentInputCoordinator {
 
     const leftoverActiveTurn = state.activeTurn !== null;
     const trackerBusy = this.deps.isTurnRunning(sessionId);
-    const reclaimLeftover = leftoverActiveTurn && this.canReclaimLeftoverActiveTurn(sessionId, state);
+    const reclaimLeftover =
+      leftoverActiveTurn && this.canReclaimLeftoverActiveTurn(sessionId, state);
     if (leftoverActiveTurn && !reclaimLeftover) {
       state.staleLiveIdleSinceMs = null;
       return false;
