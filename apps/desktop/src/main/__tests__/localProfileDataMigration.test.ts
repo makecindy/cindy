@@ -9,6 +9,8 @@ import {
   LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
   reserveLocalProfileDataOwner,
+  reserveLocalProfileDataOwnerDetailed,
+  releaseLocalProfileDataOwner,
   type LocalProfileDataMigrationDeps,
 } from '../localProfileDataMigration.js';
 
@@ -63,6 +65,30 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
     expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('already-owned');
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
+  it.each(['', '{'])('recovers an interrupted owner marker containing %j', async (contents) => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    await fs.writeFile(marker, contents);
+
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
+  it('releases only the marker created by the matching claim token', async () => {
+    const { root } = await fixture();
+    const reservation = reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+    expect(reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy')).toEqual({
+      status: 'already-owned',
+    });
+    expect(releaseLocalProfileDataOwner('owner-a', root, 'cindy', 'wrong-token')).toBe(false);
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+    expect(releaseLocalProfileDataOwner('owner-a', root, 'cindy', reservation.claimToken!)).toBe(
+      true,
+    );
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('claimed');
   });
 
   it('reserves an empty local namespace for the first cloud owner', async () => {

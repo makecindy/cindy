@@ -242,7 +242,7 @@ describe('Ghost skill projection boundary state', () => {
   });
 
   it('runs owner-commit rollback before publishing the failed pending state', async () => {
-    const rollbackPhases: string[] = [];
+    const rollbackStates: Array<{ phase: string; commitApplied: boolean }> = [];
     await expect(
       withGhostSkillProjectionOwnerCommit({
         previousOwnerId: null,
@@ -251,13 +251,40 @@ describe('Ghost skill projection boundary state', () => {
         commit: () => {
           throw new Error('local commit failed');
         },
-        onCommitFailure: () => {
-          rollbackPhases.push((readPersistedState() as { phase: string }).phase);
+        onCommitFailure: ({ commitApplied }) => {
+          rollbackStates.push({
+            phase: (readPersistedState() as { phase: string }).phase,
+            commitApplied,
+          });
         },
       }),
     ).rejects.toThrow('local commit failed');
 
-    expect(rollbackPhases).toEqual(['pending']);
+    expect(rollbackStates).toEqual([{ phase: 'pending', commitApplied: false }]);
+  });
+
+  it('reports a durable commit when stable-state publication fails afterward', async () => {
+    const originalFsync = fs.fsyncSync.bind(fs);
+    let fsyncCalls = 0;
+    const stableFileFsyncCall = process.platform === 'win32' ? 3 : 5;
+    vi.spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+      fsyncCalls += 1;
+      if (fsyncCalls === stableFileFsyncCall) throw new Error('stable fsync failed');
+      return originalFsync(fd);
+    });
+    const failures: boolean[] = [];
+
+    await expect(
+      withGhostSkillProjectionOwnerCommit({
+        previousOwnerId: null,
+        nextOwnerId: 'owner-a',
+        prepareTransition: async () => {},
+        commit: () => undefined,
+        onCommitFailure: ({ commitApplied }) => failures.push(commitApplied),
+      }),
+    ).rejects.toThrow('stable fsync failed');
+
+    expect(failures).toEqual([true]);
   });
 
   it('requires a teardown hook whenever owner state is missing or mismatched', async () => {

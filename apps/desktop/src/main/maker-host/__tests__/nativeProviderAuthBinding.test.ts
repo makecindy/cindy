@@ -30,6 +30,8 @@ import {
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
   reserveLegacyNativeProviderAuthOwner,
+  reserveLegacyNativeProviderAuthOwnerDetailed,
+  releaseLegacyNativeProviderAuthOwner,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
 } from '../nativeProviderAuthBinding.js';
@@ -84,6 +86,21 @@ describe('local → cloud native provider binding migration', () => {
 
     session.dataOwnerId = 'owner-b';
     expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('releases only the native reservation created by the matching claim token', () => {
+    const reservation = reserveLegacyNativeProviderAuthOwnerDetailed('owner-a');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+    expect(reserveLegacyNativeProviderAuthOwnerDetailed('owner-a')).toEqual({
+      status: 'already-owned',
+    });
+    expect(releaseLegacyNativeProviderAuthOwner('owner-a', 'wrong-token')).toBe(false);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+    session.dataOwnerId = 'owner-a';
+    expect(releaseLegacyNativeProviderAuthOwner('owner-a', reservation.claimToken!)).toBe(true);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('claimed');
   });
 
   it('persists the local claim when the first cloud owner has no credential to migrate', () => {

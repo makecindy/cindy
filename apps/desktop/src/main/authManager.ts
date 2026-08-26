@@ -936,7 +936,11 @@ async function withCloudOwnerCommit<T>(opts: {
         }
         return result;
       },
-      onCommitFailure: () => {
+      onCommitFailure: ({ commitApplied: boundaryCommitApplied }) => {
+        // The cloud session/token commit is already durable at this point. A
+        // later projection-state publication failure must keep the first-owner
+        // reservations so another account cannot inherit the same local data.
+        if (boundaryCommitApplied) return;
         const rollback = rollbackReservation as unknown as (() => void) | null;
         rollbackReservation = null;
         if (rollback) rollback();

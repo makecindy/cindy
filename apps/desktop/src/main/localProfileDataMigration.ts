@@ -197,6 +197,122 @@ export interface LocalProfileMigrationReservationDetails {
   claimToken?: string;
 }
 
+interface LocalProfileMigrationMarker {
+  ownerId: string;
+  claimToken?: string;
+}
+
+function parseLocalProfileMigrationMarker(raw: string): LocalProfileMigrationMarker | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<LocalProfileMigrationMarker>;
+    if (typeof parsed.ownerId !== 'string' || !parsed.ownerId.trim()) return null;
+    if (
+      parsed.claimToken !== undefined &&
+      (typeof parsed.claimToken !== 'string' || !parsed.claimToken)
+    ) {
+      return null;
+    }
+    return {
+      ownerId: parsed.ownerId.trim(),
+      ...(parsed.claimToken ? { claimToken: parsed.claimToken } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function syncMarkerDirectory(marker: string): void {
+  if (process.platform === 'win32') return;
+  const dirFd = fs.openSync(path.dirname(marker), 'r');
+  try {
+    fs.fsyncSync(dirFd);
+  } finally {
+    fs.closeSync(dirFd);
+  }
+}
+
+function publishLocalProfileMigrationMarker(
+  marker: string,
+  contents: string,
+): 'claimed' | 'exists' {
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  const tmp = `${marker}.${randomUUID()}.tmp`;
+  let handle: number | undefined;
+  try {
+    handle = fs.openSync(tmp, 'wx', 0o600);
+    const bytes = Buffer.from(contents, 'utf8');
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = fs.writeSync(handle, bytes, offset, bytes.length - offset);
+      if (written <= 0) throw new Error('short write while publishing local profile owner marker');
+      offset += written;
+    }
+    fs.fsyncSync(handle);
+    fs.closeSync(handle);
+    handle = undefined;
+    try {
+      fs.linkSync(tmp, marker);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return 'exists';
+      throw error;
+    }
+    syncMarkerDirectory(marker);
+    return 'claimed';
+  } finally {
+    if (handle !== undefined) {
+      try {
+        fs.closeSync(handle);
+      } catch {
+        // Best-effort close before removing the private candidate.
+      }
+    }
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // A random private candidate cannot affect ownership decisions.
+    }
+  }
+}
+
+function restoreClaimedMarker(candidate: string, marker: string): boolean {
+  try {
+    fs.linkSync(candidate, marker);
+    fs.unlinkSync(candidate);
+    syncMarkerDirectory(marker);
+    return true;
+  } catch {
+    // Never replace a newer marker. Keeping the claimed candidate is safer
+    // than deleting ownership evidence that this attempt did not own.
+    return false;
+  }
+}
+
+function reclaimInvalidLocalProfileMarker(marker: string, inspectedRaw: string): boolean {
+  const candidate = `${marker}.reclaim.${randomUUID()}`;
+  try {
+    fs.renameSync(marker, candidate);
+  } catch {
+    return false;
+  }
+  let movedRaw = '';
+  try {
+    movedRaw = fs.readFileSync(candidate, 'utf8');
+  } catch {
+    // An unreadable entry that we atomically claimed is safe to discard.
+  }
+  if (movedRaw !== inspectedRaw || parseLocalProfileMigrationMarker(movedRaw)) {
+    restoreClaimedMarker(candidate, marker);
+    return false;
+  }
+  try {
+    fs.unlinkSync(candidate);
+    syncMarkerDirectory(marker);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Reserve local-v1 synchronously at the cloud-owner commit edge. This is a
  * machine-level marker, not user content, so the auth commit can persist the
@@ -221,41 +337,26 @@ export function reserveLocalProfileDataOwnerDetailed(
     claimToken,
     claimedAt: Date.now(),
   })}\n`;
-  let handle: number | undefined;
-  let created = false;
-  try {
-    handle = fs.openSync(marker, 'wx', 0o600);
-    created = true;
-    fs.writeSync(handle, contents, undefined, 'utf8');
-    return { status: 'claimed', claimToken };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') {
-      if (created) {
-        try {
-          fs.unlinkSync(marker);
-        } catch {
-          // Best-effort cleanup; the caller will fail closed on the next attempt.
-        }
-      }
-      return { status: 'failed' };
-    }
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(marker, 'utf8')) as { ownerId?: unknown };
-      return parsed.ownerId === normalizedOwnerId
-        ? { status: 'already-owned' }
-        : { status: 'owned-by-other' };
-    } catch {
-      return { status: 'failed' };
-    }
-  } finally {
-    if (handle !== undefined) {
-      try {
-        fs.closeSync(handle);
-      } catch {
-        // The marker contents are already written; close failure is non-fatal.
+      if (publishLocalProfileMigrationMarker(marker, contents) === 'claimed') {
+        return { status: 'claimed', claimToken };
       }
+      const raw = fs.readFileSync(marker, 'utf8');
+      const parsed = parseLocalProfileMigrationMarker(raw);
+      if (parsed) {
+        return parsed.ownerId === normalizedOwnerId
+          ? { status: 'already-owned' }
+          : { status: 'owned-by-other' };
+      }
+      if (reclaimInvalidLocalProfileMarker(marker, raw)) continue;
+      return { status: 'failed' };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') continue;
+      return { status: 'failed' };
     }
   }
+  return { status: 'failed' };
 }
 
 export function reserveLocalProfileDataOwner(
@@ -278,21 +379,21 @@ export function releaseLocalProfileDataOwner(
     userDataDir,
     `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
+  const candidate = `${marker}.release.${randomUUID()}`;
   try {
-    const parsed = JSON.parse(
-      fs.readFileSync(marker, 'utf8'),
-    ) as Partial<LocalProfileMigrationMarker>;
-    if (parsed.ownerId !== normalizedOwnerId || parsed.claimToken !== claimToken) return false;
-    fs.unlinkSync(marker);
+    fs.renameSync(marker, candidate);
+    const parsed = parseLocalProfileMigrationMarker(fs.readFileSync(candidate, 'utf8'));
+    if (!parsed || parsed.ownerId !== normalizedOwnerId || parsed.claimToken !== claimToken) {
+      return false;
+    }
+    fs.unlinkSync(candidate);
+    syncMarkerDirectory(marker);
     return true;
   } catch {
     return false;
+  } finally {
+    if (fs.existsSync(candidate)) restoreClaimedMarker(candidate, marker);
   }
-}
-
-interface LocalProfileMigrationMarker {
-  ownerId: string;
-  claimToken?: string;
 }
 
 async function readMigrationMarker(
@@ -300,13 +401,11 @@ async function readMigrationMarker(
 ): Promise<LocalProfileMigrationMarker | null> {
   const marker = migrationMarkerPath(deps);
   if (!(await deps.fs.pathExists(marker))) return null;
-  const parsed = JSON.parse(await deps.fs.readFile(marker)) as unknown;
-  const ownerId =
-    parsed && typeof parsed === 'object' ? (parsed as { ownerId?: unknown }).ownerId : null;
-  if (typeof ownerId !== 'string' || !ownerId.trim()) {
+  const parsed = parseLocalProfileMigrationMarker(await deps.fs.readFile(marker));
+  if (!parsed) {
     throw new Error('local profile migration marker is invalid');
   }
-  return { ownerId: ownerId.trim() };
+  return parsed;
 }
 
 async function claimMigrationMarker(

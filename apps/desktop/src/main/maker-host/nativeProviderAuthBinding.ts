@@ -249,20 +249,27 @@ export function reserveLegacyNativeProviderAuthOwner(
 export function releaseLegacyNativeProviderAuthOwner(ownerId: string, claimToken: string): boolean {
   const normalizedOwnerId = ownerId.trim();
   if (!normalizedOwnerId || !claimToken) return false;
-  const read = readBindingsOrFail();
-  if (!read.ok) return false;
-  const bindings = read.bindings;
-  if (bindings.legacyClaimOwner !== normalizedOwnerId || bindings.legacyClaimToken !== claimToken) {
-    return false;
-  }
-  const next = { ...bindings };
-  delete next.legacyClaimOwner;
-  delete next.legacyClaimToken;
+  const leaseHandle = acquireLegacyClaimLease();
+  if (leaseHandle === null) return false;
   try {
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const bindings = read.bindings;
+    if (
+      bindings.legacyClaimOwner !== normalizedOwnerId ||
+      bindings.legacyClaimToken !== claimToken
+    ) {
+      return false;
+    }
+    const next = { ...bindings };
+    delete next.legacyClaimOwner;
+    delete next.legacyClaimToken;
     writeBindings(next);
     return true;
   } catch {
     return false;
+  } finally {
+    releaseLegacyClaimLease(leaseHandle);
   }
 }
 

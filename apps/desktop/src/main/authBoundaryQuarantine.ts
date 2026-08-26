@@ -54,7 +54,7 @@ interface OwnerCommitOptions<T> {
   nextOwnerId: string | null;
   prepareTransition?: (context: { ownerChanged: boolean }) => Promise<void>;
   prepareCommit?: () => Promise<void>;
-  onCommitFailure?: () => void | Promise<void>;
+  onCommitFailure?: (context: { commitApplied: boolean }) => void | Promise<void>;
   commit: () => T | Promise<T>;
 }
 
@@ -335,6 +335,7 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
     const ownerChanged = previousOwnerId !== nextOwnerId;
     const transitionId = crypto.randomUUID();
     const prepareTransition = options.prepareTransition;
+    let commitApplied = false;
 
     if (requiresTransition) {
       if (!prepareTransition) {
@@ -370,6 +371,7 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
       }
       await options.prepareCommit?.();
       const result = await options.commit();
+      commitApplied = true;
       if (requiresTransition) {
         writeState({
           version: 1,
@@ -384,7 +386,7 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
       return result;
     } catch (error) {
       try {
-        await options.onCommitFailure?.();
+        await options.onCommitFailure?.({ commitApplied });
       } catch (rollbackError) {
         log.error('Ghost skill projection owner commit rollback failed', rollbackError);
       }

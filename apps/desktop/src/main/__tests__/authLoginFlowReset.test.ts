@@ -320,6 +320,7 @@ describe('auth login-flow reset', () => {
     expect(source).toContain(
       'const rollback = rollbackReservation as unknown as (() => void) | null;',
     );
+    expect(source).toContain('if (boundaryCommitApplied) return;');
   });
 
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {
