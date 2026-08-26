@@ -91,7 +91,7 @@ describe('SystemCard Review', () => {
     ).toBeTruthy();
     const markdown = screen.getByTestId('review-markdown');
     expect(markdown.textContent).toContain('reviewed snapshot');
-    expect(markdown.getAttribute('data-allow-privileged-links')).toBe('true');
+    expect(markdown.getAttribute('data-allow-privileged-links')).toBe('false');
     expect(screen.getByText('chat.systemCard.review.openTask')).toBeTruthy();
   });
 
