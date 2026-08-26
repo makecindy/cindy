@@ -40,6 +40,12 @@
     "details": "エラー詳細"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "データベースのクリーンアップが中断されました",
+      "interruptedDescription": "データベースのクリーンアップが予期せず中断されました。Cindy を再起動してください。保存されたメンテナンス状態に基づいて安全に復旧します。",
+      "recoveryFailedTitle": "ローカルデータベースを安全に復旧できませんでした",
+      "recoveryFailedDescription": "データベースのクリーンアップから復旧できませんでした。元のデータが上書きされないように、Cindy はローカルデータベースを開く処理を停止しました。"
+    },
     "updateReady": {
       "title": "続行にはアップデートが必要です",
       "description": "ローカルデータは新しいバージョンの Cindy によって更新されているため、現在のバージョンでは開けません。新しいバージョンのダウンロードは完了しています。再起動してインストールすると復旧します。",

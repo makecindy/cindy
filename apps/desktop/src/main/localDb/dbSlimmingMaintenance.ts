@@ -483,7 +483,17 @@ function assertMaintenanceSpace(
 }
 
 function openSourceDatabase(dbFilePath: string): Database.Database {
-  const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+  let db: Database.Database;
+  try {
+    db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+  } catch (error) {
+    throw new DbSlimmingMaintenanceError(
+      'cleanup-failed',
+      'source database could not be opened',
+      false,
+      { cause: error },
+    );
+  }
   try {
     db.pragma('busy_timeout = 5000');
     db.pragma('wal_checkpoint(TRUNCATE)');

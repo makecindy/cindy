@@ -40,6 +40,12 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "Database Cleanup Was Interrupted",
+      "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
+      "recoveryFailedTitle": "The Local Database Couldn't Be Recovered Safely",
+      "recoveryFailedDescription": "Database cleanup recovery failed. Cindy stopped opening the local database to avoid overwriting the original data."
+    },
     "updateReady": {
       "title": "Update required to continue",
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. The new version is downloaded and ready — restart to install it and get back in.",

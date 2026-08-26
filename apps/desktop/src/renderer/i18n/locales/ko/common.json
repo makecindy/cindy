@@ -40,6 +40,12 @@
     "details": "오류 정보"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "데이터베이스 정리가 중단되었습니다",
+      "interruptedDescription": "데이터베이스 정리가 예기치 않게 중단되었습니다. Cindy를 다시 시작하면 저장된 유지 관리 상태를 바탕으로 안전하게 복구합니다.",
+      "recoveryFailedTitle": "로컬 데이터베이스를 안전하게 복구할 수 없습니다",
+      "recoveryFailedDescription": "데이터베이스 정리 복구에 실패했습니다. 원본 데이터를 덮어쓰지 않도록 Cindy가 로컬 데이터베이스 열기를 중단했습니다."
+    },
     "updateReady": {
       "title": "계속하려면 업데이트가 필요합니다",
       "description": "로컬 데이터가 더 새로운 버전의 Cindy에 의해 업그레이드되어 현재 버전에서는 열 수 없습니다. 새 버전 다운로드가 완료되었으니 재시작하여 설치하면 복구됩니다.",

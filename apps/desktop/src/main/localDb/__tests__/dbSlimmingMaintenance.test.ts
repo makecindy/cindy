@@ -689,6 +689,30 @@ describe('runDbSlimmingMaintenance', () => {
     expect(readDbSlimmingRequest(tmpDir)).toBeNull();
   });
 
+  it('fails closed when the scheduled source database is missing', async () => {
+    const pending = request();
+    writeDbSlimmingRequest(tmpDir, pending);
+
+    const outcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: pending,
+      now: () => 3_000,
+      log,
+    });
+
+    expect(outcome).toMatchObject({
+      originalDatabaseReady: false,
+      result: {
+        status: 'failed',
+        reason: 'recovery-failed',
+        originalDatabaseRestored: false,
+      },
+    });
+    expect(fs.existsSync(dbFilePath)).toBe(false);
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ id: pending.id, phase: 'scheduled' });
+  });
+
   it('fails closed when an installed replacement has lost its original backup', async () => {
     createMarkerDatabase(dbFilePath, 'compacted-replacement');
 

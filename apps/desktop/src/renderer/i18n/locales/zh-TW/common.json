@@ -40,6 +40,12 @@
     "details": "錯誤詳情"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "資料庫清理中斷",
+      "interruptedDescription": "資料庫清理異常中斷。請重新啟動 Cindy，系統會根據維護記錄安全復原。",
+      "recoveryFailedTitle": "無法安全復原本地資料庫",
+      "recoveryFailedDescription": "資料庫清理復原失敗，Cindy 已停止開啟本地資料庫，以避免覆寫原始資料。"
+    },
     "updateReady": {
       "title": "需要更新後才能繼續",
       "description": "本地資料已由更新版本的 Cindy 升級，當前版本無法開啟。新版本已下載就緒，重啟安裝後即可恢復使用。",

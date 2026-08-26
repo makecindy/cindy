@@ -40,6 +40,12 @@
     "details": "错误详情"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "数据库清理中断",
+      "interruptedDescription": "数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。",
+      "recoveryFailedTitle": "本地数据库无法安全恢复",
+      "recoveryFailedDescription": "数据库清理恢复失败，Cindy 已停止打开本地数据库以避免覆盖原始数据。"
+    },
     "updateReady": {
       "title": "需要更新后才能继续",
       "description": "本地数据已由更新版本的 Cindy 升级，当前版本无法打开。新版本已下载就绪，重启安装后即可恢复使用。",

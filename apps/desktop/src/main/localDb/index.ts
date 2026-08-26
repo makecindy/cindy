@@ -69,6 +69,7 @@ import { deferReleaseUntilDbSlimmingWorkerTermination } from './dbSlimmingWorker
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
+import { t } from '../i18n';
 
 const log = createLogger('localDb');
 
@@ -223,18 +224,22 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    const message = '数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。';
+    const message = t('localDbFatal.databaseCleanup.interruptedDescription');
     log.error('database cleanup startup failed unexpectedly', { detail });
     releaseSchemaLeasesAfterFailure(error);
-    showFatalDialog('数据库清理中断', message, 'MIGRATE_FAILED');
+    showFatalDialog(t('localDbFatal.databaseCleanup.interruptedTitle'), message, 'MIGRATE_FAILED');
     return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
   }
   if (maintenance.handled && startupLease.kind === 'writer') {
     resetSqliteVecState();
   }
   if (!maintenance.originalDatabaseReady) {
-    const message = '数据库清理恢复失败，Cindy 已停止打开本地数据库以避免覆盖原始数据。';
-    showFatalDialog('本地数据库无法安全恢复', message, 'DB_CORRUPT_NO_BACKUP');
+    const message = t('localDbFatal.databaseCleanup.recoveryFailedDescription');
+    showFatalDialog(
+      t('localDbFatal.databaseCleanup.recoveryFailedTitle'),
+      message,
+      'DB_CORRUPT_NO_BACKUP',
+    );
     releaseSchemaLeasesAfterFailure();
     return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message } };
   }

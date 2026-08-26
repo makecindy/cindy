@@ -81,9 +81,22 @@ describe('runDbSlimmingMaintenanceInWorker', () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS);
 
-    expect(await resultError).toMatchObject({
+    const error = await resultError;
+    expect(error).toBeInstanceOf(DbSlimmingWorkerTerminationUnconfirmedError);
+    expect(error).toMatchObject({
       message: 'database cleanup process termination was not confirmed',
     });
+    if (!(error instanceof DbSlimmingWorkerTerminationUnconfirmedError)) {
+      throw new Error('expected an unconfirmed termination error');
+    }
+    const releaseWriterLease = vi.fn();
+    expect(deferReleaseUntilDbSlimmingWorkerTermination(error, releaseWriterLease)).toBe(true);
+    await Promise.resolve();
+    expect(releaseWriterLease).not.toHaveBeenCalled();
+
+    child.emit('exit', 1);
+    await error.terminationConfirmed;
+    expect(releaseWriterLease).toHaveBeenCalledTimes(1);
   });
 
   it('times out safely while only disposable copies have been touched', async () => {
@@ -245,6 +258,42 @@ describe('runDbSlimmingMaintenanceInWorker', () => {
 
     await expect(resultPromise).rejects.toBeInstanceOf(DbSlimmingCancelledError);
     expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds the writer lease when cancellation cannot confirm termination', async () => {
+    const child = new FakeUtilityProcess();
+    child.kill.mockImplementation(() => {
+      throw new Error('termination request failed');
+    });
+    const controller = new AbortController();
+    const resultPromise = runDbSlimmingMaintenanceInWorker(
+      {
+        userDataDir: 'C:\\user-data',
+        dbFilePath: 'C:\\user-data\\owner.db',
+        request: createRequest(),
+        signal: controller.signal,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      },
+      () => child,
+    );
+    const resultError = resultPromise.catch((error: unknown) => error);
+
+    child.emit('message', { type: 'ready' });
+    controller.abort();
+
+    const error = await resultError;
+    expect(error).toBeInstanceOf(DbSlimmingWorkerTerminationUnconfirmedError);
+    if (!(error instanceof DbSlimmingWorkerTerminationUnconfirmedError)) {
+      throw new Error('expected an unconfirmed termination error');
+    }
+    const releaseWriterLease = vi.fn();
+    expect(deferReleaseUntilDbSlimmingWorkerTermination(error, releaseWriterLease)).toBe(true);
+    await Promise.resolve();
+    expect(releaseWriterLease).not.toHaveBeenCalled();
+
+    child.emit('exit', 1);
+    await error.terminationConfirmed;
+    expect(releaseWriterLease).toHaveBeenCalledTimes(1);
   });
 
   it('ignores cancellation after the replacement safety boundary', async () => {

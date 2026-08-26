@@ -174,6 +174,8 @@ export function runDbSlimmingMaintenanceInWorker(
     const terminationConfirmed = new Promise<void>((resolveTermination) => {
       confirmTermination = resolveTermination;
     });
+    const terminationUnconfirmedError = (cause: unknown): Error =>
+      new DbSlimmingWorkerTerminationUnconfirmedError(terminationConfirmed, { cause });
     const estimatedAfterBytes = Math.max(
       16 * 1024 * 1024,
       options.request.beforeBytes - (options.request.estimatedMessageBytes ?? options.request.beforeBytes / 2),
@@ -230,11 +232,7 @@ export function runDbSlimmingMaintenanceInWorker(
         if (settled || exited) return;
         const cause = timeoutError ?? new Error('database cleanup cancellation did not stop');
         timeoutError = null;
-        rejectWithoutAssumingDatabaseSafety(
-          commitSent
-            ? new DbSlimmingWorkerTerminationUnconfirmedError(terminationConfirmed, { cause })
-            : new Error('database cleanup process termination was not confirmed', { cause }),
-        );
+        rejectWithoutAssumingDatabaseSafety(terminationUnconfirmedError(cause));
       }, DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS);
       terminationTimer.unref?.();
     };
@@ -248,13 +246,7 @@ export function runDbSlimmingMaintenanceInWorker(
         child.kill();
       } catch (killError) {
         timeoutError = null;
-        rejectWithoutAssumingDatabaseSafety(
-          commitSent
-            ? new DbSlimmingWorkerTerminationUnconfirmedError(terminationConfirmed, {
-                cause: killError,
-              })
-            : new Error('database cleanup process could not be terminated', { cause: killError }),
-        );
+        rejectWithoutAssumingDatabaseSafety(terminationUnconfirmedError(killError));
         return;
       }
       armTerminationConfirmation();
@@ -277,9 +269,7 @@ export function runDbSlimmingMaintenanceInWorker(
       try {
         child.kill();
       } catch (error) {
-        rejectWithoutAssumingDatabaseSafety(
-          error instanceof Error ? error : new Error(String(error)),
-        );
+        rejectWithoutAssumingDatabaseSafety(terminationUnconfirmedError(error));
         return;
       }
       armTerminationConfirmation();
