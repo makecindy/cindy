@@ -42,6 +42,15 @@ export interface DbSlimmingRequestRecord {
   rollbackFailureReason?: DbSlimmingFailureReason;
 }
 
+/** The marker was readable, but its JSON or validated record shape is invalid. */
+export class InvalidDbSlimmingRequestMarkerError extends Error {
+  constructor(cause?: unknown) {
+    super('invalid database slimming request marker');
+    this.name = 'InvalidDbSlimmingRequestMarkerError';
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
 /** Persisted result keeps the privileged backup path out of the Renderer contract. */
 export type DbSlimmingResultRecord =
   | (Extract<DbSlimmingResult, { status: 'completed' }> & {
@@ -76,9 +85,14 @@ function dbSlimmingBackupIndexPath(userDataDir: string): string {
 export function readDbSlimmingRequest(userDataDir: string): DbSlimmingRequestRecord | null {
   const raw = readAtomicFileSync(dbSlimmingRequestPath(userDataDir));
   if (raw === null) return null;
-  const value: unknown = JSON.parse(raw);
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new InvalidDbSlimmingRequestMarkerError(error);
+  }
   if (!isDbSlimmingRequestRecord(value)) {
-    throw new Error('invalid database slimming request marker');
+    throw new InvalidDbSlimmingRequestMarkerError();
   }
   return value;
 }

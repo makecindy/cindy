@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
   utilityProcess: { fork: vi.fn() },
@@ -11,9 +11,12 @@ vi.mock('../sqliteVecLoader', () => ({
 }));
 
 const {
+  DB_SLIMMING_WORKER_READY_TIMEOUT_MS,
+  DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS,
   DbSlimmingCancelledError,
   DbSlimmingWorkerPreReplacementError,
   DbSlimmingWorkerStartupError,
+  dbSlimmingWorkerInactivityTimeoutMs,
   runDbSlimmingMaintenanceInWorker,
 } = await import('../dbSlimmingWorkerClient');
 
@@ -48,6 +51,96 @@ function createRequest() {
 describe('runDbSlimmingMaintenanceInWorker', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('allows proportionally more inactivity time for a 20 GiB database', () => {
+    expect(dbSlimmingWorkerInactivityTimeoutMs(20 * 1024 ** 3)).toBe(45 * 60_000);
+  });
+
+  it('times out when the utility process never becomes ready or reports an exit', async () => {
+    vi.useFakeTimers();
+    const child = new FakeUtilityProcess();
+    const resultPromise = runDbSlimmingMaintenanceInWorker(
+      {
+        userDataDir: 'C:\\user-data',
+        dbFilePath: 'C:\\user-data\\owner.db',
+        request: createRequest(),
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      },
+      () => child,
+    );
+    const resultError = resultPromise.catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(DB_SLIMMING_WORKER_READY_TIMEOUT_MS);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS);
+
+    expect(await resultError).toMatchObject({
+      message: 'database cleanup process termination was not confirmed',
+    });
+  });
+
+  it('times out safely while only disposable copies have been touched', async () => {
+    vi.useFakeTimers();
+    const child = new FakeUtilityProcess();
+    const request = createRequest();
+    const resultPromise = runDbSlimmingMaintenanceInWorker(
+      {
+        userDataDir: 'C:\\user-data',
+        dbFilePath: 'C:\\user-data\\owner.db',
+        request,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      },
+      () => child,
+    );
+    const resultError = resultPromise.catch((error: unknown) => error);
+
+    child.emit('message', { type: 'ready' });
+    child.emit('message', {
+      type: 'progress',
+      progress: { phase: 'cleaning', progress: 52, cancellable: true },
+    });
+    await vi.advanceTimersByTimeAsync(dbSlimmingWorkerInactivityTimeoutMs(request.beforeBytes));
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    child.emit('exit', 1);
+
+    expect(await resultError).toBeInstanceOf(DbSlimmingWorkerPreReplacementError);
+  });
+
+  it('fails closed when the utility process stalls after the commit boundary', async () => {
+    vi.useFakeTimers();
+    const child = new FakeUtilityProcess();
+    const request = createRequest();
+    const resultPromise = runDbSlimmingMaintenanceInWorker(
+      {
+        userDataDir: 'C:\\user-data',
+        dbFilePath: 'C:\\user-data\\owner.db',
+        request,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      },
+      () => child,
+    );
+    const resultError = resultPromise.catch((error: unknown) => error);
+
+    child.emit('message', { type: 'ready' });
+    child.emit('message', {
+      type: 'progress',
+      progress: { phase: 'finalizing', progress: 96, cancellable: false },
+    });
+    child.emit('message', { type: 'commit-ready' });
+    await vi.advanceTimersByTimeAsync(dbSlimmingWorkerInactivityTimeoutMs(request.beforeBytes));
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    child.emit('exit', 1);
+
+    const error = await resultError;
+    expect(error).toMatchObject({
+      message: expect.stringContaining('timed out while committing'),
+    });
+    expect(error).not.toBeInstanceOf(DbSlimmingWorkerPreReplacementError);
   });
 
   it('starts the utility process, forwards progress and waits for the final commit handshake', async () => {

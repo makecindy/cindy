@@ -62,6 +62,45 @@ const log = {
 };
 
 describe('runPendingDbSlimmingAtStartup', () => {
+  it('discards a marker only when its JSON is confirmed invalid', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'db-slimming-request.json'), '{invalid', 'utf8');
+
+    await expect(
+      runPendingDbSlimmingAtStartup({
+        userDataDir: tmpDir,
+        dbFilePath,
+        ownerId: 'owner-1',
+        leaseKind: 'writer',
+        loadVectorExtension: vi.fn(() => true),
+        log,
+      }),
+    ).resolves.toEqual({ handled: false, originalDatabaseReady: true });
+
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+  });
+
+  it('preserves the marker and fails closed when the marker cannot be read', async () => {
+    const pending = request();
+    writeDbSlimmingRequest(tmpDir, pending);
+    const readError = Object.assign(new Error('marker is temporarily locked'), { code: 'EACCES' });
+
+    await expect(
+      runPendingDbSlimmingAtStartup({
+        userDataDir: tmpDir,
+        dbFilePath,
+        ownerId: pending.ownerId,
+        leaseKind: 'writer',
+        loadVectorExtension: vi.fn(() => true),
+        log,
+        readRequest: () => {
+          throw readError;
+        },
+      }),
+    ).rejects.toBe(readError);
+
+    expect(readDbSlimmingRequest(tmpDir)).toEqual(pending);
+  });
+
   it('leaves another owner request untouched and never opens that owner database', async () => {
     const pending = request();
     writeDbSlimmingRequest(tmpDir, pending);
@@ -161,6 +200,39 @@ describe('runPendingDbSlimmingAtStartup', () => {
       status: 'failed',
       reason: 'database-in-use',
     });
+  });
+
+  it.each([
+    ['swap-prepared', undefined],
+    ['replacement-installed', undefined],
+    ['rollback-completed', 'replacement-failed'],
+    ['committed', undefined],
+  ] as const)('preserves a %s recovery marker when only a reader lease is available', async (
+    phase,
+    rollbackFailureReason,
+  ) => {
+    const pending = request({
+      phase,
+      ...(rollbackFailureReason ? { rollbackFailureReason } : {}),
+    });
+    writeDbSlimmingRequest(tmpDir, pending);
+    const runMaintenance = vi.fn();
+
+    await expect(
+      runPendingDbSlimmingAtStartup({
+        userDataDir: tmpDir,
+        dbFilePath,
+        ownerId: pending.ownerId,
+        leaseKind: 'reader',
+        loadVectorExtension: vi.fn(() => true),
+        log,
+        runMaintenance,
+      }),
+    ).rejects.toThrow('database slimming recovery requires the writer lease');
+
+    expect(runMaintenance).not.toHaveBeenCalled();
+    expect(readDbSlimmingRequest(tmpDir)).toEqual(pending);
+    expect(readDbSlimmingResult(tmpDir)).toBeNull();
   });
 
   it('propagates an unrecoverable maintenance outcome so startup can fail closed', async () => {

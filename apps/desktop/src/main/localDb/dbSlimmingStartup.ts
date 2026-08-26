@@ -15,6 +15,7 @@ import {
 import { beginDbSlimmingStartupProgress } from './dbSlimmingStartupState';
 import {
   clearDbSlimmingRequest,
+  InvalidDbSlimmingRequestMarkerError,
   readDbSlimmingRequest,
   writeDbSlimmingResult,
 } from './maintenanceStore';
@@ -33,6 +34,7 @@ export interface RunPendingDbSlimmingAtStartupOptions {
   loadVectorExtension: (db: Database.Database) => boolean;
   log: DbSlimmingStartupLog;
   now?: () => number;
+  readRequest?: typeof readDbSlimmingRequest;
   runMaintenance?: (
     options: RunDbSlimmingMaintenanceOptions,
   ) => Promise<RunDbSlimmingMaintenanceOutcome>;
@@ -56,8 +58,14 @@ export async function runPendingDbSlimmingAtStartup(
 ): Promise<PendingDbSlimmingStartupOutcome> {
   let request: ReturnType<typeof readDbSlimmingRequest> = null;
   try {
-    request = readDbSlimmingRequest(options.userDataDir);
+    request = (options.readRequest ?? readDbSlimmingRequest)(options.userDataDir);
   } catch (error) {
+    if (!(error instanceof InvalidDbSlimmingRequestMarkerError)) {
+      options.log.error('database slimming request marker could not be read', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     options.log.error('invalid database slimming request marker was discarded', {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -70,6 +78,13 @@ export async function runPendingDbSlimmingAtStartup(
   }
 
   if (options.leaseKind !== 'writer') {
+    if (request.phase !== 'scheduled') {
+      options.log.error('database slimming recovery requires the writer lease', {
+        requestId: request.id,
+        phase: request.phase,
+      });
+      throw new Error('database slimming recovery requires the writer lease');
+    }
     const result: DbSlimmingResultRecord = {
       id: request.id,
       ownerId: request.ownerId,
