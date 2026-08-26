@@ -1515,6 +1515,11 @@ export function registerSessionIpc(
     const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
       bumpUpdatedAt: !isSettingsOnly,
     });
+    if (p.clearedAt !== undefined) {
+      setObj.summary = null;
+      setObj.listPreview = null;
+      setObj.listPreviewRole = null;
+    }
     // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
     // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
     // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
@@ -1537,14 +1542,7 @@ export function registerSessionIpc(
       noteSessionClearBoundary(sid, p.clearedAt as string | null);
       // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
       // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
-      // 这里一并清空,待 clear 后新一轮 turn-done 重新生成。
-      await db
-        .update(sessions)
-        .set({ summary: null, listPreview: null, listPreviewRole: null })
-        .where(eq(sessions.id, sid));
-      // 广播 summary:null,让已挂载的 sidebar 立即清掉旧摘要(codex review)——renderer 的
-      // clearSession 乐观 patch 只带 sdkSessionId/clearedAt、不含 summary,本 update handler
-      // 也不另发 patched;不广播则卡片/rail 会继续显示 clear 前摘要直到一次全量 refresh。
+      // 与 clearedAt 同一句 UPDATE 置空，避免崩溃后非 NULL 缓存绕过 clear 边界。
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
       }

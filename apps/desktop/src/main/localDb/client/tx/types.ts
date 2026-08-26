@@ -21,6 +21,7 @@ export type DbTxName =
   | 'sessions.setStatus'
   | 'session.agentSwitchFallback'
   | 'context.rebuild'
+  | 'message.insert'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -314,6 +315,20 @@ export interface ContextRebuildArgs {
   updatedAt: number;
   /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
   expectedClearedAt?: number | null;
+}
+
+export interface MessageInsertArgs {
+  id: string;
+  clientId: string;
+  sessionId: string;
+  role: string;
+  content: string;
+  toolUseId: string | null;
+  agentMeta: string | null;
+  agentKind: string | null;
+  createdAt: number;
+  guarded: boolean;
+  expectedClearBoundaryMs?: number | null;
 }
 
 /**
@@ -774,6 +789,7 @@ export type DbTxArgsByName = {
   'sessions.setStatus': SessionsSetStatusArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
   'context.rebuild': ContextRebuildArgs;
+  'message.insert': MessageInsertArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -820,6 +836,7 @@ export type DbTxResultByName = {
   'sessions.setStatus': SessionsSetStatusResultItem[];
   'session.agentSwitchFallback': undefined;
   'context.rebuild': undefined;
+  'message.insert': { changes: number };
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

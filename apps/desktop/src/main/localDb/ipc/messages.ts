@@ -13,10 +13,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { getDbClient } from '../client/current';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
-import {
-  invalidateSessionListMessageCount,
-  persistSessionListPreview,
-} from '../sessionListProjection';
+import { persistSessionListPreview } from '../sessionListProjection';
 import {
   messageToCamel,
   messageCreateToRow,
@@ -1479,35 +1476,20 @@ export async function createMessage(
       : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
   try {
-    if (guarded) {
-      // Keep the session compare and message insert in one SQLite statement.
-      // A separate SELECT would allow /clear to win between the check and the
-      // INSERT on the DB worker.
-      const inserted = await dbClient.exec(
-        `INSERT INTO messages (
-           id, client_id, session_id, role, content, tool_use_id,
-           agent_meta, agent_kind, created_at
-         )
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
-           FROM sessions AS s
-          WHERE s.id = ?
-            AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1)
-         ON CONFLICT(session_id, client_id) DO NOTHING`,
-        [
-          insertRow.id,
-          insertRow.clientId,
-          insertRow.sessionId,
-          insertRow.role,
-          insertRow.content,
-          insertRow.toolUseId,
-          insertRow.agentMeta,
-          insertRow.agentKind,
-          insertRow.createdAt,
-          sessionId,
-          expected,
-        ],
-      );
-      if (inserted.changes === 0) {
+    const inserted = await dbClient.tx('message.insert', {
+      id: insertRow.id,
+      clientId: insertRow.clientId,
+      sessionId,
+      role: insertRow.role,
+      content: insertRow.content,
+      toolUseId: insertRow.toolUseId ?? null,
+      agentMeta: insertRow.agentMeta ?? null,
+      agentKind: insertRow.agentKind ?? null,
+      createdAt: insertRow.createdAt,
+      guarded,
+      expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+    });
+    if (guarded && inserted.changes === 0) {
         const [existingAfterGuard] = await db
           .select()
           .from(messages)
@@ -1537,9 +1519,6 @@ export async function createMessage(
         }
         throw new Error('Message insert skipped without a clear-boundary change');
       }
-    } else {
-      await db.insert(messages).values(insertRow);
-    }
   } catch (err) {
     const after = await db
       .select()
@@ -1628,12 +1607,6 @@ export async function createMessage(
   // 的 makerChatStore push 到 in-memory state, 让消息流实时刷新。
   // Renderer 自己调 createMessage IPC 时也会触发这个 broadcast, 但因为它已经
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
-  void invalidateSessionListMessageCount(sessionId).catch((err) => {
-    log.warn('session list message count invalidate failed', {
-      sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  });
   if (opts?.shouldBroadcast?.() !== false) {
     broadcastMessageRow(sessionId, msg, opts?.broadcastOwnerScope);
     await maybeBroadcastSessionListPreview(sessionId, row, opts?.broadcastOwnerScope);

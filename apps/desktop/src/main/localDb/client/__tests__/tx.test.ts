@@ -519,6 +519,41 @@ describe('db worker tx handlers', () => {
   });
 
   it.each([false, true])(
+    'message.insert invalidates list_message_count in the same transaction (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          await client.exec(
+            'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+            ['keep me', 'user', 7, 's1'],
+          );
+          await expect(
+            client.tx('message.insert', {
+              id: 'm1',
+              clientId: 'c1',
+              sessionId: 's1',
+              role: 'user',
+              content: JSON.stringify({ text: 'hi' }),
+              toolUseId: null,
+              agentMeta: null,
+              agentKind: 'cc',
+              createdAt: 1,
+              guarded: false,
+            }),
+          ).resolves.toEqual({ changes: 1 });
+          await expect(
+            client.queryOne('SELECT list_preview, list_message_count FROM sessions WHERE id = ?', [
+              's1',
+            ]),
+          ).resolves.toEqual({ list_preview: 'keep me', list_message_count: null });
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
     'import and treeRehydrate invalidate list projection only when messages change (inline=%s)',
     async (useInlineWorker) => {
       await withClient(
