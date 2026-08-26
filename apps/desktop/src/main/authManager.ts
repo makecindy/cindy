@@ -1178,6 +1178,40 @@ function reserveCloudOwnerData(ownerId: string): () => void {
   }
 }
 
+function repairStableCloudOwnerDataReservations(ownerId: string): void {
+  let profileReservation: ReturnType<typeof reserveLocalProfileDataOwnerDetailed>['status'] =
+    'failed';
+  let nativeReservation: ReturnType<typeof reserveLegacyNativeProviderAuthOwnerDetailed>['status'] =
+    'failed';
+  try {
+    profileReservation = reserveLocalProfileDataOwnerDetailed(
+      ownerId,
+      app.getPath('userData'),
+      BRAND_IDENTITY.dbFilePrefix,
+    ).status;
+  } catch (error) {
+    log.warn('stable cloud owner local profile reservation repair failed', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    nativeReservation = reserveLegacyNativeProviderAuthOwnerDetailed(ownerId).status;
+  } catch (error) {
+    log.warn('stable cloud owner native provider reservation repair failed', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (profileReservation === 'failed' || nativeReservation === 'failed') {
+    log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
+      ownerId,
+      profileReservation,
+      nativeReservation,
+    });
+  }
+}
+
 function commitCloudAppSession(ownerId: string): void {
   if (isPassiveSharedUserDataInstance()) {
     commitVolatileAppSession('cloud', ownerId);
@@ -2568,13 +2602,11 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
         commit: () => commitCloudAppSession(currentUser!.id),
       });
     } else {
-      const rollbackReservation = reserveCloudOwnerData(currentUser.id);
-      try {
-        commitCloudAppSession(currentUser.id);
-      } catch (error) {
-        rollbackReservation();
-        throw error;
-      }
+      // This owner is already durably authenticated. Repair missing first-owner
+      // reservations best-effort, but never turn malformed local metadata into
+      // a renderer-visible logout while main remains signed in.
+      repairStableCloudOwnerDataReservations(currentUser.id);
+      commitCloudAppSession(currentUser.id);
     }
     migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);
     await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');

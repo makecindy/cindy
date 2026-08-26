@@ -314,13 +314,19 @@ describe('auth login-flow reset', () => {
     expect(prepareBody.indexOf('reserveCloudOwnerData')).toBeLessThan(
       prepareBody.indexOf('await opts.prepareCommit?.();'),
     );
-    expect(source).toContain(
-      'const rollbackReservation = reserveCloudOwnerData(currentUser.id);',
-    );
+    expect(source).toContain('repairStableCloudOwnerDataReservations(currentUser.id);');
     expect(source).toContain(
       'const rollback = rollbackReservation as unknown as (() => void) | null;',
     );
     expect(source).toContain('if (boundaryCommitApplied) return;');
+
+    const repairStart = source.indexOf('function repairStableCloudOwnerDataReservations(');
+    const repairEnd = source.indexOf('\n}\n\nfunction commitCloudAppSession(', repairStart);
+    const repairBody = source.slice(repairStart, repairEnd);
+    expect(repairBody).toContain('reserveLocalProfileDataOwnerDetailed(');
+    expect(repairBody).toContain('reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)');
+    expect(repairBody).toContain('remains authenticated with local adoption fail-closed');
+    expect(repairBody).not.toContain('throw new Error');
   });
 
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {

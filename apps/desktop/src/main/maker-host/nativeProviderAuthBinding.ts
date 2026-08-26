@@ -8,6 +8,7 @@ import {
   isAppSessionBoundaryPending,
   LOCAL_DATA_OWNER_ID,
 } from '../appSessionState.js';
+import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 import {
   isConnectionSourceKind,
   NATIVE_PROVIDER_CONNECTION_SOURCE,
@@ -127,11 +128,13 @@ function writeBindings(value: BindingFile): void {
     fs.closeSync(handle);
     handle = undefined;
     fs.renameSync(tmp, file);
-    const finalHandle = fs.openSync(file, 'r');
-    try {
-      fs.fsyncSync(finalHandle);
-    } finally {
-      fs.closeSync(finalHandle);
+    if (process.platform !== 'win32') {
+      const finalHandle = fs.openSync(file, 'r');
+      try {
+        fs.fsyncSync(finalHandle);
+      } finally {
+        fs.closeSync(finalHandle);
+      }
     }
     syncParentDirectory(file);
   } finally {
@@ -150,16 +153,7 @@ function writeBindings(value: BindingFile): void {
   }
 }
 
-const LEGACY_CLAIM_LEASE_SUFFIX = '.legacy-claim-lease';
-
-interface LegacyClaimLeaseRecord {
-  pid: number;
-  leaseId: string;
-}
-
-interface HeldLegacyClaimLease {
-  leaseId: string;
-}
+const BINDING_MUTATION_LOCK_DB_SUFFIX = '.mutation-lock.db';
 
 function syncParentDirectory(file: string): void {
   if (process.platform === 'win32') return;
@@ -171,139 +165,32 @@ function syncParentDirectory(file: string): void {
   }
 }
 
-function legacyClaimLeasePath(): string {
-  return `${bindingPath()}${LEGACY_CLAIM_LEASE_SUFFIX}`;
-}
-
-function isProcessAlive(pid: number): boolean {
+function withNativeBindingMutationLock<T>(fallback: T, operation: () => T): T {
+  const lockDbPath = `${bindingPath()}${BINDING_MUTATION_LOCK_DB_SUFFIX}`;
+  fs.mkdirSync(path.dirname(lockDbPath), { recursive: true });
+  let lockDb: ReturnType<typeof createBetterSqliteDatabase> | null = null;
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException | null)?.code !== 'ESRCH';
-  }
-}
-
-function parseLegacyClaimLease(raw: string): LegacyClaimLeaseRecord | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<LegacyClaimLeaseRecord>;
-    if (Number.isInteger(parsed.pid) && typeof parsed.leaseId === 'string' && parsed.leaseId) {
-      return parsed as LegacyClaimLeaseRecord;
-    }
+    lockDb = createBetterSqliteDatabase(lockDbPath);
+    lockDb.pragma('busy_timeout = 30000');
+    lockDb.exec(
+      'CREATE TABLE IF NOT EXISTS binding_mutation_lock (id INTEGER PRIMARY KEY CHECK (id = 1))',
+    );
+    lockDb.exec('BEGIN IMMEDIATE');
   } catch {
-    // A valid lease is published atomically; malformed content remains fail-closed.
+    lockDb?.close();
+    return fallback;
   }
-  return null;
-}
-
-function restoreClaimedLease(candidate: string, lease: string): void {
-  try {
-    fs.linkSync(candidate, lease);
-    fs.unlinkSync(candidate);
-    syncParentDirectory(lease);
-  } catch {
-    // A newer lease may already occupy the path. Keep the claimed candidate
-    // instead of deleting ownership evidence that this process does not own.
-  }
-}
-
-function removeLegacyClaimLeaseIfMatches(lease: string, expectedLeaseId: string): boolean {
-  const candidate = `${lease}.reclaim.${randomUUID()}`;
-  try {
-    fs.renameSync(lease, candidate);
-  } catch {
-    return false;
-  }
-  const moved = parseLegacyClaimLease(readFileOrEmpty(candidate));
-  if (moved?.leaseId !== expectedLeaseId) {
-    restoreClaimedLease(candidate, lease);
-    return false;
-  }
-  try {
-    fs.unlinkSync(candidate);
-    syncParentDirectory(lease);
-    return true;
-  } catch {
-    restoreClaimedLease(candidate, lease);
-    return false;
-  }
-}
-
-function readFileOrEmpty(file: string): string {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-function waitForLeaseRetry(): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-}
-
-function acquireLegacyClaimLease(): HeldLegacyClaimLease | null {
-  const lease = legacyClaimLeasePath();
-  fs.mkdirSync(path.dirname(lease), { recursive: true });
-  for (;;) {
-    const tmp = `${lease}.${randomUUID()}.tmp`;
-    const leaseId = randomUUID();
-    let tmpHandle: number | undefined;
-    try {
-      tmpHandle = fs.openSync(tmp, 'wx', 0o600);
-      const contents = Buffer.from(JSON.stringify({ pid: process.pid, leaseId }), 'utf8');
-      let offset = 0;
-      while (offset < contents.length) {
-        const written = fs.writeSync(tmpHandle, contents, offset, contents.length - offset);
-        if (written <= 0) throw new Error('short write while publishing native binding lease');
-        offset += written;
-      }
-      fs.fsyncSync(tmpHandle);
-      fs.closeSync(tmpHandle);
-      tmpHandle = undefined;
-      fs.linkSync(tmp, lease);
-      try {
-        syncParentDirectory(lease);
-      } catch (error) {
-        removeLegacyClaimLeaseIfMatches(lease, leaseId);
-        throw error;
-      }
-      return { leaseId };
-    } catch (error) {
-      try {
-        if (tmpHandle !== undefined) fs.closeSync(tmpHandle);
-      } catch {
-        // Best-effort close before removing a failed claim lease.
-      }
-      if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') return null;
-      const current = parseLegacyClaimLease(readFileOrEmpty(lease));
-      if (!current) return null;
-      if (!isProcessAlive(current.pid)) {
-        if (removeLegacyClaimLeaseIfMatches(lease, current.leaseId)) continue;
-        waitForLeaseRetry();
-        continue;
-      }
-      waitForLeaseRetry();
-    } finally {
-      try {
-        fs.unlinkSync(tmp);
-      } catch {
-        // Best-effort cleanup of the private candidate file.
-      }
-    }
-  }
-}
-
-function releaseLegacyClaimLease(held: HeldLegacyClaimLease): void {
-  removeLegacyClaimLeaseIfMatches(legacyClaimLeasePath(), held.leaseId);
-}
-
-function withLegacyClaimLease<T>(fallback: T, operation: () => T): T {
-  const held = acquireLegacyClaimLease();
-  if (!held) return fallback;
   try {
     return operation();
   } finally {
-    releaseLegacyClaimLease(held);
+    try {
+      // The transaction exists only to hold SQLite's cross-process writer
+      // lock while the JSON read-modify-write runs; no lock-db state is changed.
+      lockDb.exec('ROLLBACK');
+    } catch {
+      // Closing the connection still releases SQLite's OS-level lock.
+    }
+    lockDb.close();
   }
 }
 
@@ -323,7 +210,7 @@ export function reserveLegacyNativeProviderAuthOwnerDetailed(
   if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) {
     return { status: 'failed' };
   }
-  return withLegacyClaimLease<LegacyNativeProviderAuthReservationDetails>(
+  return withNativeBindingMutationLock<LegacyNativeProviderAuthReservationDetails>(
     { status: 'failed' },
     () => {
       try {
@@ -358,7 +245,7 @@ export function reserveLegacyNativeProviderAuthOwner(
 export function releaseLegacyNativeProviderAuthOwner(ownerId: string, claimToken: string): boolean {
   const normalizedOwnerId = ownerId.trim();
   if (!normalizedOwnerId || !claimToken) return false;
-  return withLegacyClaimLease(false, () => {
+  return withNativeBindingMutationLock(false, () => {
     try {
       const read = readBindingsOrFail();
       if (!read.ok) return false;
@@ -407,7 +294,7 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
 export function bindNativeProviderAuth(provider: NativeProviderId): void {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
-  const written = withLegacyClaimLease(false, () => {
+  const written = withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
     if (read.ok) {
       const bindings = read.bindings;
@@ -507,7 +394,7 @@ export function unbindNativeProviderAuth(
   // 不写也是安全的:文件读不出来时 isNativeProviderAuthBound 已经一律 false(用户看到的就是
   // 未连接),claimDetectedNativeProviderAuth 也已在同一条件下拒绝认领 —— 撤销标记要挡的那
   // 件事,此刻本来就发生不了。凭证删除在调用方,不受这里影响。
-  withLegacyClaimLease(undefined, () => {
+  withNativeBindingMutationLock(undefined, () => {
     const read = readBindingsOrFail();
     if (!read.ok) return;
     const bindings = read.bindings;
@@ -544,7 +431,7 @@ export function migrateLegacyNativeProviderAuthBindings(
 ): void {
   // 同 claimDetectedNativeProviderAuth:一次性迁移也是写路径,归属读不出来就不能推进
   // (还会把 legacyClaimOwner 名额一起消费掉,损失不可逆)。
-  withLegacyClaimLease(undefined, () => {
+  withNativeBindingMutationLock(undefined, () => {
     const read = readBindingsOrFail();
     if (!read.ok) return;
     const bindings = read.bindings;
@@ -592,7 +479,7 @@ export function migrateLocalNativeProviderAuthBindings(ownerId: string): boolean
   // different owner transition.
   if (isAppSessionBoundaryPending()) return false;
 
-  return withLegacyClaimLease(false, () => {
+  return withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
     if (!read.ok) return false;
     const bindings = read.bindings;
@@ -654,7 +541,7 @@ export function claimDetectedNativeProviderAuth(
   // Callers reached from an async settle (Codex reconcile) additionally pin an
   // owner+generation snapshot; this guard is the floor every caller gets.
   if (isAppSessionBoundaryPending()) return false;
-  return withLegacyClaimLease(false, () => {
+  return withNativeBindingMutationLock(false, () => {
     // 归属文件读不出来 = 归属不明,一律不认领:这条路径是**写**路径,把损坏当空会把共享
     // keychain 里可能属于别人的凭证判给当前账号,并覆盖掉原有归属(PR #548 review)。
     const read = readBindingsOrFail();
@@ -692,7 +579,7 @@ export function restoreNativeProviderAuthForRecovery(
 ): boolean {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner || owner !== expectedOwner || isAppSessionBoundaryPending()) return false;
-  return withLegacyClaimLease(false, () => {
+  return withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
     if (!read.ok) return false;
     const bindings = read.bindings;

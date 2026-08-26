@@ -3,6 +3,8 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createBetterSqliteDatabase } from '../../localDb/betterSqliteFactory.js';
+
 const userDataDir = '/tmp/native-provider-auth-binding-test';
 const session = { dataOwnerId: 'owner-a' as string | null, boundaryPending: false };
 
@@ -37,7 +39,7 @@ import {
 } from '../nativeProviderAuthBinding.js';
 
 const bindingFile = path.join(userDataDir, 'native-provider-auth.json');
-const bindingLeaseFile = `${bindingFile}.legacy-claim-lease`;
+const bindingLockDb = `${bindingFile}.mutation-lock.db`;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -83,29 +85,39 @@ describe('local → cloud native provider binding migration', () => {
 
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
 
-    expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r');
-    if (process.platform !== 'win32') {
+    if (process.platform === 'win32') {
+      expect(openSpy).not.toHaveBeenCalledWith(bindingFile, 'r');
+    } else {
+      expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r');
       expect(openSpy).toHaveBeenCalledWith(userDataDir, 'r');
     }
     expect(fsyncSpy).toHaveBeenCalled();
   });
 
-  it('reclaims and releases only the exact lease instance it inspected', () => {
-    fs.mkdirSync(userDataDir, { recursive: true });
-    fs.writeFileSync(bindingLeaseFile, JSON.stringify({ pid: 2147483647, leaseId: 'stale-lease' }));
-    const unlinkSpy = vi.spyOn(fs, 'unlinkSync');
-
+  it('uses a crash-released SQLite transaction lock instead of a reclaimable lease file', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
 
-    expect(unlinkSpy.mock.calls.some(([file]) => file === bindingLeaseFile)).toBe(false);
-    expect(fs.existsSync(bindingLeaseFile)).toBe(false);
+    expect(fs.existsSync(bindingLockDb)).toBe(true);
+    expect(fs.existsSync(`${bindingFile}.legacy-claim-lease`)).toBe(false);
   });
 
-  it('reads every binding mutation while holding the shared cross-process lease', () => {
+  it('reads every binding mutation while holding the shared SQLite writer lock', () => {
     const originalReadFileSync = fs.readFileSync.bind(fs);
     const leaseObserved: boolean[] = [];
     vi.spyOn(fs, 'readFileSync').mockImplementation(((file, ...args: unknown[]) => {
-      if (file === bindingFile) leaseObserved.push(fs.existsSync(bindingLeaseFile));
+      if (file === bindingFile) {
+        const contender = createBetterSqliteDatabase(bindingLockDb);
+        contender.pragma('busy_timeout = 1');
+        try {
+          contender.exec('BEGIN IMMEDIATE');
+          contender.exec('ROLLBACK');
+          leaseObserved.push(false);
+        } catch (error) {
+          leaseObserved.push((error as { code?: string }).code === 'SQLITE_BUSY');
+        } finally {
+          contender.close();
+        }
+      }
       return originalReadFileSync(file as fs.PathOrFileDescriptor, ...(args as []));
     }) as typeof fs.readFileSync);
 
