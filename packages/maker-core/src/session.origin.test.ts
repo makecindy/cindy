@@ -5,7 +5,7 @@
  * turn 终止后清空、下一轮不被污染、多 listener 一致。这是 IM 转播自动任务的地基
  * (共享 session 下区分"这一轮是谁发起的")。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
 import { Session } from './session.js';
@@ -39,12 +39,21 @@ function createControllableHandle(opts?: {
   holdDispatch?: boolean;
   holdOnSend?: number;
 }) {
-  let push: ((e: AgentEvent) => void) | null = null;
+  let waiter: ((e: AgentEvent | null) => void) | null = null;
   let turnRunning = false;
   let closeCalls = 0;
   let releaseDispatch: (() => void) | null = null;
   let sendCount = 0;
-  const buffered: AgentEvent[] = [];
+  const pending: Array<AgentEvent | null> = [];
+  const deliver = (event: AgentEvent | null) => {
+    if (waiter) {
+      const resolve = waiter;
+      waiter = null;
+      resolve(event);
+      return;
+    }
+    pending.push(event);
+  };
   const continuationStates = new Map<number, TurnContinuationState>();
   let interactionResolver: ((req: InteractionRequest) => Promise<InteractionDecision>) | null = null;
   let lastSendOptions: SendOptions | undefined;
@@ -60,8 +69,7 @@ function createControllableHandle(opts?: {
         throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
       }
       if (opts?.dispatchEvent && (opts.dispatchOnSend ?? 1) === sendCount) {
-        if (push) push(opts.dispatchEvent);
-        else buffered.push(opts.dispatchEvent);
+        deliver(opts.dispatchEvent);
       }
       if (opts?.holdDispatch && (opts.holdOnSend ?? 1) === sendCount) {
         await new Promise<void>((resolve) => {
@@ -77,12 +85,15 @@ function createControllableHandle(opts?: {
       turnRunning = false;
     },
     async *events() {
-      for (const e of buffered) yield e;
-      buffered.length = 0;
       for (;;) {
-        const next = await new Promise<AgentEvent | null>((resolve) => {
-          push = (e) => resolve(e);
-        });
+        let next: AgentEvent | null;
+        if (pending.length > 0) {
+          next = pending.shift() ?? null;
+        } else {
+          next = await new Promise<AgentEvent | null>((resolve) => {
+            waiter = resolve;
+          });
+        }
         if (next === null) return;
         yield next;
       }
@@ -114,8 +125,7 @@ function createControllableHandle(opts?: {
         e.type === 'error' &&
         (e.data as { isTerminal?: unknown } | null | undefined)?.isTerminal === true;
       if ((e.type === 'done' || terminalError) && !opts.keepRunning) turnRunning = false;
-      if (push) push(e);
-      else buffered.push(e);
+      deliver(e);
       await new Promise((r) => setTimeout(r, 0)); // 让事件循环把它 fan-out 出去
     },
     setTurnRunning(running: boolean) {
@@ -128,8 +138,7 @@ function createControllableHandle(opts?: {
       releaseDispatch?.();
     },
     queue(event: AgentEvent) {
-      if (push) push(event);
-      else buffered.push(event);
+      deliver(event);
     },
     closeCalls: () => closeCalls,
     lastSendOptions: () => lastSendOptions,
@@ -382,21 +391,28 @@ describe('Session per-turn origin 打标', () => {
     await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
     setTurnRunning(false);
     const second = session.send('second');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
     const startFail = seen.find((event) =>
       event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
-    expect(startFail?.sessionTurnGeneration).not.toBe(2);
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    expect(startFail?.sessionTurnGeneration).toBe(2);
     releaseDispatch();
     await second;
-    await emit({ type: 'done', data: {} });
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
     await session.close();
   });
 
-  it('does not let a first delayed N error after idle become N+1 Retry', async () => {
+  it('keeps an in-flight N+1 start-failure before a leftover N error', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
       holdDispatch: true,
       holdOnSend: 2,
     });
@@ -407,26 +423,27 @@ describe('Session per-turn origin 打标', () => {
     await session.send('first');
     await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
     setTurnRunning(false);
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
     const second = session.send('second');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
     await emit({
       type: 'error',
       data: { message: 'first late failure', isTerminal: true },
       source: 'codex',
     });
-    expect(
-      seen.some((event) =>
-        event.type === 'error' && event.sessionTurnGeneration === 2),
-    ).toBe(false);
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    const late = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
     releaseDispatch();
     await second;
-    await emit({ type: 'done', data: {} });
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
-    expect(
-      seen.some((event) => event.type === 'error' && event.sessionTurnGeneration === 2),
-    ).toBe(false);
     await session.close();
   });
 

@@ -2051,16 +2051,25 @@ export class Session {
     if (this.isForegroundRunningStatus(event)) {
       this.sawCurrentTurnRunning = true;
     }
+    const inFlightGeneration = this.sendReservation?.generation;
+    const belongsToInFlightSend =
+      this.insideProviderSendSync &&
+      this.inFlightSendOwnsBlockedWait &&
+      typeof inFlightGeneration === 'number' &&
+      inFlightGeneration === this.turnGeneration &&
+      this.turnControlState?.generation === inFlightGeneration;
     if (observedGeneration > waitStartGeneration) {
-      // A wait that started on N can adopt N+1 progress, but the first
-      // unobserved N error must not ride that adoption into N+1.
+      // A wait that started on N can adopt N+1 progress, but a queued N
+      // error must not ride that adoption into N+1. Errors emitted by the
+      // active handle.send() stay on the in-flight generation.
       if (
         isTerminalAgentErrorEvent(event) &&
         this.pendingPriorGeneration !== null &&
         this.pendingPriorGeneration < this.turnGeneration &&
         this.lastObservedTerminalKind !== 'error' &&
         !this.sawCurrentTurnRunning &&
-        this.isUnacceptedCurrentSend()
+        this.isUnacceptedCurrentSend() &&
+        !belongsToInFlightSend
       ) {
         const prior = this.pendingPriorGeneration;
         this.pendingPriorGeneration = null;
@@ -2068,7 +2077,11 @@ export class Session {
         return prior;
       }
       this.staleTerminalQueuedGeneration = null;
-      if (this.isNewTurnProgressEvent(event) || this.isForegroundRunningStatus(event)) {
+      if (
+        this.isNewTurnProgressEvent(event) ||
+        this.isForegroundRunningStatus(event) ||
+        belongsToInFlightSend
+      ) {
         this.pendingPriorGeneration = null;
       }
       return observedGeneration;
@@ -2081,7 +2094,9 @@ export class Session {
       isTerminalAgentErrorEvent(event) &&
       prior !== null &&
       !this.sawCurrentTurnRunning &&
-      this.isUnacceptedCurrentSend();
+      this.isUnacceptedCurrentSend() &&
+      !belongsToInFlightSend &&
+      (event.data as { reason?: string } | undefined)?.reason !== 'session_event_loop_crashed';
     if (prior !== null && (leftoverDoneOrIdle || leftoverUnobservedPriorError) && waitStartGeneration !== 0) {
       if (event.type === 'done' || leftoverUnobservedPriorError) {
         this.pendingPriorGeneration = null;
@@ -2091,7 +2106,13 @@ export class Session {
       }
       return prior;
     }
-    const leftoverTail = this.isLeftoverTailEvent(event);
+    const leftoverTail =
+      this.isLeftoverTailEvent(event) &&
+      !(
+        belongsToInFlightSend &&
+        isTerminalAgentErrorEvent(event) &&
+        this.staleTerminalQueuedGeneration === null
+      );
     if (leftoverTail && this.staleTerminalQueuedGeneration !== null) {
       const stamped = this.staleTerminalQueuedGeneration;
       if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
@@ -2110,6 +2131,7 @@ export class Session {
     // N already observed a terminal error. A later error/done in the N+1
     // unaccepted send window is leftover N, not an in-flight N+1 start-failure.
     if (
+      !belongsToInFlightSend &&
       waitStartGeneration > 0 &&
       waitStartGeneration < this.turnGeneration &&
       this.lastObservedTerminalGeneration === waitStartGeneration &&
@@ -2119,13 +2141,6 @@ export class Session {
       this.staleTerminalQueuedGeneration = null;
       return waitStartGeneration;
     }
-    const inFlightGeneration = this.sendReservation?.generation;
-    const belongsToInFlightSend =
-      this.insideProviderSendSync &&
-      this.inFlightSendOwnsBlockedWait &&
-      typeof inFlightGeneration === 'number' &&
-      inFlightGeneration === this.turnGeneration &&
-      this.turnControlState?.generation === inFlightGeneration;
     if (belongsToInFlightSend) {
       this.inFlightSendOwnsBlockedWait = false;
       this.staleTerminalQueuedGeneration = null;
@@ -2235,7 +2250,8 @@ export class Session {
           this.pendingPriorGeneration !== null &&
           this.pendingPriorGeneration < this.turnGeneration &&
           isTerminalAgentErrorEvent(event) &&
-          !this.sawCurrentTurnRunning
+          !this.sawCurrentTurnRunning &&
+          resolvedGeneration !== this.turnGeneration
         )
       );
     const terminalBoundaryObserved =
