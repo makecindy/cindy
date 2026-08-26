@@ -1012,6 +1012,12 @@ function orcaReleaseWorkerCreationReservation(readyDb, args) {
   );
 }
 
+function invalidateSessionListProjection(readyDb, sessionId) {
+  readyDb.prepare(
+    'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+  ).run(sessionId);
+}
+
 function codexImportMessages(readyDb, args) {
   const payload = asRecord(args, 'codex.importMessages args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -1061,6 +1067,7 @@ function codexImportMessages(readyDb, args) {
         createdAt,
       }).changes;
     }
+    if (count > 0) invalidateSessionListProjection(readyDb, sessionId);
     return count;
   })();
   return { changed };
@@ -1111,6 +1118,7 @@ function claudeImportMessages(readyDb, args) {
         createdAt: expectNumber(row.createdAt, 'row.createdAt'),
       }).changes;
     }
+    if (count > 0) invalidateSessionListProjection(readyDb, sessionId);
     return count;
   })();
   return { changed };
@@ -1321,7 +1329,7 @@ function sessionTreeRehydrate(readyDb, args) {
       }
       upsert.run(row.id, row.clientId, sessionId, row.role, content, row.toolUseId, agentMeta, row.agentKind, row.createdAt);
     }
-    readyDb.prepare('UPDATE sessions SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ? WHERE id = ?').run(contextTokens, contextWindow, now, sessionId);
+    readyDb.prepare('UPDATE sessions SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ?, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?').run(contextTokens, contextWindow, now, sessionId);
     return captured;
   })();
   return { messageCount: rows.length, hiddenClientIds };

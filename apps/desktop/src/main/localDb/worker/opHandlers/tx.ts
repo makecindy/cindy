@@ -596,6 +596,12 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
+function invalidateSessionListProjection(db: Database.Database, sessionId: string): void {
+  db.prepare(
+    'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+  ).run(sessionId);
+}
+
 function codexImportMessages(db: Database.Database, args: unknown): { changed: number } {
   const payload = asRecord(args, 'codex.importMessages args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -654,6 +660,7 @@ function codexImportMessages(db: Database.Database, args: unknown): { changed: n
         createdAt,
       }).changes;
     }
+    if (changed > 0) invalidateSessionListProjection(db, sessionId);
     return changed;
   });
   return { changed: transaction() as number };
@@ -704,6 +711,7 @@ function claudeImportMessages(db: Database.Database, args: unknown): { changed: 
         createdAt: expectNumber(row.createdAt, 'row.createdAt'),
       }).changes;
     }
+    if (changed > 0) invalidateSessionListProjection(db, sessionId);
     return changed;
   });
   return { changed: transaction() as number };
@@ -1010,7 +1018,8 @@ function sessionTreeRehydrate(
     }
     db.prepare(
       `UPDATE sessions
-          SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ?
+          SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ?,
+              list_preview = NULL, list_preview_role = NULL, list_message_count = NULL
         WHERE id = ?`,
     ).run(contextTokens, contextWindow, now, sessionId);
     return hiddenClientIds;
