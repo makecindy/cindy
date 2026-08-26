@@ -3367,15 +3367,20 @@ export class AgentInputCoordinator {
             );
             return;
           }
+          // Planned-upgrade suppression consumed: fall through to the normal
+          // successful done settlement. Returning here would leave leftover
+          // activeTurn for 250ms reconcile, which then re-synthesizes Retry
+          // because the marker is already gone.
+        } else {
+          log.warn('ignored turn-done while leftover activeTurn does not match observed error', {
+            sessionId,
+            clientId: active.item?.clientId,
+            boundGeneration: active.vendorTurnGeneration ?? null,
+            observedGeneration: observed.generation ?? null,
+          });
+          this.emit(sessionId);
+          return;
         }
-        log.warn('ignored turn-done while leftover activeTurn does not match observed error', {
-          sessionId,
-          clientId: active.item?.clientId,
-          boundGeneration: active.vendorTurnGeneration ?? null,
-          observedGeneration: observed.generation ?? null,
-        });
-        this.emit(sessionId);
-        return;
       }
     }
     state.activeTurn = null;
@@ -3880,6 +3885,10 @@ export class AgentInputCoordinator {
       return true;
     }
     if (reclaimLeftover) {
+      const observed = this.readObservedCurrentTurnTerminal(sessionId);
+      if (observed?.kind === 'error') {
+        this.consumeSuppressedObservedError(sessionId, observed);
+      }
       const boundGeneration = state.activeTurn?.vendorTurnGeneration ?? null;
       const instanceId = readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
       if (typeof boundGeneration === 'number' && instanceId) {

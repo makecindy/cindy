@@ -7013,6 +7013,9 @@ describe('AgentInputCoordinator steer transaction', () => {
         generation: 0,
         reason: 'remote_daemon_closed',
       });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-upgrade-done'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
 
       h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
         sessionTurnGeneration: 0,
@@ -7023,7 +7026,8 @@ describe('AgentInputCoordinator steer transaction', () => {
       const projection = latestProjection(h.projections);
       expect(projection.recovery).toBeNull();
       expect(projection.error).toBeNull();
-      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(projection.pendingQueue.map((q) => q.clientId)).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
