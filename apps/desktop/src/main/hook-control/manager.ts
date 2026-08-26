@@ -217,8 +217,12 @@ export interface HookControlManagerDeps {
    * Slack / Telegram / X 进入「已连接 ∧ live 已绑定」时通知, 供本机偏好做一次
    * 迁移导入并镜像到 /model 卡。未绑定的 welcome 不得触发(空 prefs.get 会关掉
    * 一次性迁移窗口)。可重入, 调用方自行去重。
+   * 中立渠道换绑时带上前后 bindingId, 供调用方清掉上一身份的本机行。
    */
-  onHookReadyForPrefsMirror?: (provider: HookProvider) => void;
+  onHookReadyForPrefsMirror?: (
+    provider: HookProvider,
+    change?: { previousBindingId: string | null; bindingId: string | null },
+  ) => void;
   notifyTelegramBehavior?: (view: TelegramHookBehaviorState) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
@@ -1411,7 +1415,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         // 这一刻 lane.binding 可能还是旧值, 用刚确认的 bindingId。
         primeTelegramEmojiReactions(view.bindingId ?? null);
-        onHookReadyForPrefsMirror?.('telegram');
+        onHookReadyForPrefsMirror?.('telegram', {
+          previousBindingId: lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null,
+          bindingId: view.bindingId ?? null,
+        });
       } else if (
         view.state === 'revoked' ||
         view.state === 'none' ||
@@ -1420,7 +1427,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         resetTelegramEmojiReactions();
       }
     } else if (lane.config.provider === 'x' && view.state === 'confirmed') {
-      onHookReadyForPrefsMirror?.('x');
+      onHookReadyForPrefsMirror?.('x', {
+        previousBindingId: lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null,
+        bindingId: view.bindingId ?? null,
+      });
     }
     try {
       if (

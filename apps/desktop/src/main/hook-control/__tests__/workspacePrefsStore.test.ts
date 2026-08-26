@@ -20,6 +20,7 @@ import {
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
   markWorkspacePrefMirrored,
+  resetChannelWorkspacePrefs,
   replaceChannelWorkspacePrefs,
   resolveWorkspacePrefOverrides,
   setWorkspacePref,
@@ -101,6 +102,17 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('telegram', null, 'chat').model).toBe('local-first');
     expect(getWorkspacePref('telegram', null, 'repo').model).toBe('server-repo');
     expect(isWorkspacePrefsMigrated('telegram')).toBe(true);
+  });
+
+  it('换绑清空该渠道本机行并重开迁移，其它渠道不动', () => {
+    setWorkspacePref('telegram', null, 'chat', { model: 'old-binding' });
+    setWorkspacePref('x', null, 'chat', { model: 'keep-x' });
+    importWorkspacePrefsIfNeeded('telegram', []);
+    expect(isWorkspacePrefsMigrated('telegram')).toBe(true);
+    resetChannelWorkspacePrefs('telegram');
+    expect(listWorkspacePrefs('telegram')).toEqual([]);
+    expect(isWorkspacePrefsMigrated('telegram')).toBe(false);
+    expect(getWorkspacePref('x', null, 'chat').model).toBe('keep-x');
   });
 
   it('server 全量快照不复活本机墓碑，也不丢掉未镜像的本机实值', () => {
