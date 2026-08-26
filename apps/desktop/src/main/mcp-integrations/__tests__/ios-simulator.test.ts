@@ -82,6 +82,7 @@ import {
   getIOSSimulatorPluginStatus,
   getIOSSimulatorMcpDeps,
   reconcilePersistedIOSSimulatorOwnership,
+  reconcileOrphanedIOSSimulatorArtifactCopies,
   pruneStaleIOSSimulatorBuildCaches,
   touchIOSSimulatorBuildCacheLastUsed,
   type IOSSimulatorAppLifecycleAdapter,
@@ -192,6 +193,76 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
       await expect(stat(trash)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('reconcileOrphanedIOSSimulatorArtifactCopies', () => {
+  it('reclaims stale UUID app copies without deleting fresh or unmanaged entries', async () => {
+    const projectsRoot = await mkdtemp(path.join(os.tmpdir(), 'cindy-artifact-reconcile-'));
+    try {
+      const artifactsRoot = path.join(projectsRoot, 'cache-key', 'artifacts');
+      await mkdir(artifactsRoot, { recursive: true });
+      const now = Date.now();
+      const stalePath = path.join(artifactsRoot, `${crypto.randomUUID()}.app`);
+      const freshPath = path.join(artifactsRoot, `${crypto.randomUUID()}.app`);
+      const unmanagedPath = path.join(artifactsRoot, 'not-a-managed-copy.app');
+      const managedTrashPath = path.join(
+        artifactsRoot,
+        `.trash-artifact-${crypto.randomUUID()}.app-${crypto.randomUUID()}`,
+      );
+      const unmanagedTrashPrefixPath = path.join(artifactsRoot, '.trash-artifact-not-managed');
+      await Promise.all([
+        mkdir(stalePath),
+        mkdir(freshPath),
+        mkdir(unmanagedPath),
+        mkdir(managedTrashPath),
+        mkdir(unmanagedTrashPrefixPath),
+      ]);
+      const staleTime = new Date(now - 8 * 24 * 60 * 60 * 1000);
+      await utimes(stalePath, staleTime, staleTime);
+
+      await expect(
+        reconcileOrphanedIOSSimulatorArtifactCopies(
+          projectsRoot,
+          7 * 24 * 60 * 60 * 1000,
+          () => now,
+        ),
+      ).resolves.toBe(true);
+      await expect(stat(stalePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(managedTrashPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(freshPath)).resolves.toBeDefined();
+      await expect(stat(unmanagedPath)).resolves.toBeDefined();
+      await expect(stat(unmanagedTrashPrefixPath)).resolves.toBeDefined();
+    } finally {
+      await rm(projectsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rechecks live cache use before atomically moving an orphan copy', async () => {
+    const projectsRoot = await mkdtemp(path.join(os.tmpdir(), 'cindy-artifact-reconcile-race-'));
+    try {
+      const artifactsRoot = path.join(projectsRoot, 'cache-key', 'artifacts');
+      await mkdir(artifactsRoot, { recursive: true });
+      const now = Date.now();
+      const stalePath = path.join(artifactsRoot, `${crypto.randomUUID()}.app`);
+      await mkdir(stalePath);
+      const staleTime = new Date(now - 8 * 24 * 60 * 60 * 1000);
+      await utimes(stalePath, staleTime, staleTime);
+      let checks = 0;
+
+      await expect(
+        reconcileOrphanedIOSSimulatorArtifactCopies(
+          projectsRoot,
+          7 * 24 * 60 * 60 * 1000,
+          () => now,
+          () => ++checks >= 2,
+        ),
+      ).resolves.toBe(true);
+      expect(checks).toBe(2);
+      await expect(stat(stalePath)).resolves.toBeDefined();
+    } finally {
+      await rm(projectsRoot, { recursive: true, force: true });
     }
   });
 });
@@ -446,6 +517,17 @@ describe('iOS Simulator host', () => {
       const evidencePath = path.join(root, 'ios-simulator', 'pending-create-evidence.json');
       await mkdir(path.dirname(evidencePath), { recursive: true });
       await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
+      const staleArtifact = path.join(
+        root,
+        'ios-simulator',
+        'projects',
+        'orphaned-cache',
+        'artifacts',
+        `${crypto.randomUUID()}.app`,
+      );
+      await mkdir(staleArtifact, { recursive: true });
+      const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60_000);
+      await utimes(staleArtifact, staleTime, staleTime);
       const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
       let finishRecovery: (value: {
         recovered: readonly string[];
@@ -475,6 +557,7 @@ describe('iOS Simulator host', () => {
 
         finishRecovery({ recovered: [], complete: true });
         await expect(recovering).resolves.toBeUndefined();
+        await expect(stat(staleArtifact)).rejects.toMatchObject({ code: 'ENOENT' });
         expect(competingRegistry.acquireWriterSync()).toBe(true);
         // A completed sweep retires the breadcrumb, so the next startup has no
         // reason to touch CoreSimulator at all.
@@ -495,6 +578,19 @@ describe('iOS Simulator host', () => {
       const registryPath = path.join(root, 'ios-simulator', 'ownership-registry.json');
       const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
       const createLifecycle = vi.fn();
+      const artifactsRoot = path.join(
+        root,
+        'ios-simulator',
+        'projects',
+        'orphaned-cache',
+        'artifacts',
+      );
+      const staleArtifact = path.join(artifactsRoot, `${crypto.randomUUID()}.app`);
+      const freshArtifact = path.join(artifactsRoot, `${crypto.randomUUID()}.app`);
+      await mkdir(staleArtifact, { recursive: true });
+      await mkdir(freshArtifact, { recursive: true });
+      const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60_000);
+      await utimes(staleArtifact, staleTime, staleTime);
       try {
         await expect(
           reconcilePersistedIOSSimulatorOwnership({ createLifecycle }),
@@ -503,6 +599,8 @@ describe('iOS Simulator host', () => {
         // No lifecycle means no xcrun/xcodebuild child process, so macOS never
         // raises an Xcode consent prompt detached from a user action.
         expect(createLifecycle).not.toHaveBeenCalled();
+        await expect(stat(staleArtifact)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(freshArtifact)).resolves.toBeDefined();
         expect(competingRegistry.acquireWriterSync()).toBe(true);
       } finally {
         competingRegistry.releaseWriterSync();
@@ -1102,6 +1200,47 @@ describe('iOS Simulator host', () => {
 
       await expect(stat(staleBundle)).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(stat(freshBundle)).resolves.toBeDefined();
+    } finally {
+      await host.dispose();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('removes stale orphaned immutable app copies during ownership reconciliation', async () => {
+    const projectRoot = path.join(
+      app.getPath('userData'),
+      'ios-simulator',
+      'projects',
+      `orphan-artifact-reconcile-${crypto.randomUUID()}`,
+    );
+    const artifactsRoot = path.join(projectRoot, 'artifacts');
+    const staleArtifact = path.join(artifactsRoot, `${crypto.randomUUID()}.app`);
+    const freshArtifact = path.join(artifactsRoot, `${crypto.randomUUID()}.app`);
+    await mkdir(staleArtifact, { recursive: true });
+    await mkdir(freshArtifact, { recursive: true });
+    const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60_000);
+    await utimes(staleArtifact, staleTime, staleTime);
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(),
+        shutdownExact: vi.fn(),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const host = createIOSSimulatorHost({
+      actor,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => localSession(id)),
+    });
+
+    try {
+      await host.reconcileOwnership();
+
+      await expect(stat(staleArtifact)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(freshArtifact)).resolves.toBeDefined();
     } finally {
       await host.dispose();
       await rm(projectRoot, { recursive: true, force: true });
@@ -9724,6 +9863,14 @@ describe('iOS Simulator host', () => {
     });
     const sourceApp = path.join(worktree, 'Demo.app');
     await mkdir(sourceApp, { recursive: true });
+    const orphanArtifact = path.join(
+      userData,
+      'ios-simulator',
+      'projects',
+      'orphan-cache',
+      'artifacts',
+      `${crypto.randomUUID()}.app`,
+    );
     const derivedDataPaths: string[] = [];
     const containerPaths: Array<string | undefined> = [];
     let markPruneStarted: () => void = () => undefined;
@@ -9821,6 +9968,12 @@ describe('iOS Simulator host', () => {
         ),
       ).resolves.toMatchObject({ ok: true });
       await pruneStarted;
+      // The startup sweep ran before this crashed-process copy existed. The
+      // next lifecycle-owned prune must still reconcile it even though the
+      // parent cache key is otherwise fresh and ownership is already latched.
+      await mkdir(orphanArtifact, { recursive: true });
+      const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60_000);
+      await utimes(orphanArtifact, staleTime, staleTime);
       // The lifecycle-owned sweep is still blocked, but a different cache key
       // can build and return without waiting for recursive stale-cache removal.
       await expect(
@@ -9845,6 +9998,9 @@ describe('iOS Simulator host', () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(disposeSettled).toBe(false);
       releasePrune();
+      await vi.waitFor(async () => {
+        await expect(stat(orphanArtifact)).rejects.toMatchObject({ code: 'ENOENT' });
+      });
       await disposing;
     } finally {
       releasePrune();
