@@ -8,6 +8,7 @@ import type { DbClient } from '../../client/DbClient';
 import { archiveCutoffForAge, createLocalDbMaintenanceIpcHandlers } from '../maintenance';
 import {
   readDbSlimmingRequest,
+  writeDbSlimmingRequest,
   writeDbSlimmingResult,
 } from '../../maintenanceStore';
 
@@ -208,6 +209,34 @@ describe('local database maintenance IPC', () => {
     expect(harness.confirmWithoutBackup).not.toHaveBeenCalled();
     expect(harness.relaunch).not.toHaveBeenCalled();
     expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+  });
+
+  it('does not overwrite another owner pending recovery marker', async () => {
+    const harness = createHarness();
+    const pending = {
+      version: 1 as const,
+      id: '9c5c7e99-6a6a-4d21-9152-4034a4959490',
+      ownerId: 'owner-2',
+      createdAt: 1_000,
+      scannedAt: 900,
+      archivedBeforeMs: 800,
+      archiveAgeMonths: '7-days' as const,
+      deletedTaskCount: 1,
+      archivedTaskCount: 2,
+      messageCount: 3,
+      beforeBytes: 4_096,
+      backupEnabled: true,
+      phase: 'replacement-installed' as const,
+    };
+    writeDbSlimmingRequest(tmpDir, pending);
+    const scan = await harness.handlers.scan({ archiveAgeMonths: '7-days' });
+
+    await expect(
+      harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: true }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+
+    expect(readDbSlimmingRequest(tmpDir)).toEqual(pending);
+    expect(harness.relaunch).not.toHaveBeenCalled();
   });
 
   it('never exposes the privileged backup path to Renderer', async () => {

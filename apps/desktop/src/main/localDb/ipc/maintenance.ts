@@ -23,6 +23,7 @@ import {
 import {
   clearDbSlimmingResult,
   publicDbSlimmingResult,
+  readDbSlimmingRequest,
   readDbSlimmingResult,
   type DbSlimmingResultRecord,
   writeDbSlimmingRequest,
@@ -266,6 +267,21 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           throwIpcError('PRECONDITION_FAILED', 'database path is unavailable');
         }
         const userDataDir = deps.getUserDataDir();
+        let existingRequest: ReturnType<typeof readDbSlimmingRequest>;
+        try {
+          existingRequest = readDbSlimmingRequest(userDataDir);
+        } catch {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'database maintenance request marker is unavailable',
+          );
+        }
+        if (existingRequest) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'database maintenance recovery is already pending',
+          );
+        }
         clearDbSlimmingResult(userDataDir);
         resultCache.delete(owner.ownerId);
         writeDbSlimmingRequest(userDataDir, {

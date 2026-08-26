@@ -576,6 +576,16 @@ function compactWorkingCopy(
 
     const activeDb = db;
     const messagesFtsDeleteTriggerSql = triggerSql(activeDb, 'messages_fts_delete');
+    const sessionColumns = new Set(
+      (
+        activeDb.prepare("PRAGMA table_info('sessions')").all() as Array<{ name: string }>
+      ).map((column) => column.name),
+    );
+    const listProjectionColumns = [
+      'list_preview',
+      'list_preview_role',
+      'list_message_count',
+    ].filter((column) => sessionColumns.has(column));
     reportProgress(options, 'cleaning', 44, true);
     const cleanup = activeDb.transaction(() => {
       // message_id/session_id are UNINDEXED FTS columns. Letting the trigger run
@@ -621,13 +631,13 @@ function compactWorkingCopy(
         `DELETE FROM messages
           WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
       );
-      activeDb.exec(
-        `UPDATE sessions
-            SET list_preview = NULL,
-                list_preview_role = NULL,
-                list_message_count = NULL
-          WHERE id IN (SELECT id FROM temp.db_slimming_targets)`,
-      );
+      if (listProjectionColumns.length > 0) {
+        activeDb.exec(
+          `UPDATE sessions
+              SET ${listProjectionColumns.map((column) => `${column} = NULL`).join(', ')}
+            WHERE id IN (SELECT id FROM temp.db_slimming_targets)`,
+        );
+      }
       if (messagesFtsDeleteTriggerSql) activeDb.exec(messagesFtsDeleteTriggerSql);
     });
     cleanup();

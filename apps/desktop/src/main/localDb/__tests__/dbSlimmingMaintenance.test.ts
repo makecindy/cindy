@@ -195,6 +195,26 @@ function createCleanupFixture(): void {
   db.close();
 }
 
+function createLegacyCleanupFixture(): void {
+  const db = createBetterSqliteDatabase(dbFilePath);
+  db.pragma('foreign_keys = ON');
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      content TEXT NOT NULL
+    );
+    INSERT INTO sessions (id, status, updated_at) VALUES ('archived-old', 'archived', 500);
+    INSERT INTO messages (id, session_id, content) VALUES ('message-old', 'archived-old', 'old');
+  `);
+  db.close();
+}
+
 function createMarkerDatabase(filePath: string, marker: string): void {
   const db = createBetterSqliteDatabase(filePath);
   db.exec('CREATE TABLE marker (value TEXT NOT NULL)');
@@ -312,6 +332,36 @@ describe('runDbSlimmingMaintenance', () => {
         list_preview_role: 'assistant',
         list_message_count: 1,
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('cleans a pre-0097 database before list projection columns are migrated', async () => {
+    createLegacyCleanupFixture();
+    const beforeBytes = estimateDbFilesBytes(dbFilePath);
+
+    const outcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: request({ beforeBytes }),
+      now: () => 3_000,
+      log,
+    });
+
+    expect(outcome.result).toMatchObject({
+      status: 'completed',
+      archivedTaskCount: 1,
+      messageCount: 1,
+    });
+    const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+    try {
+      expect(db.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 0 });
+      expect(
+        (db.prepare("PRAGMA table_info('sessions')").all() as Array<{ name: string }>).map(
+          (column) => column.name,
+        ),
+      ).not.toContain('list_preview');
     } finally {
       db.close();
     }
