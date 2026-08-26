@@ -115,25 +115,45 @@ describe('useProviderAccountUsage', () => {
     expect(hook.result.current.states.codex?.result).toBe(secondSnapshot);
   });
 
-  it('hides the previous snapshot immediately after the provider catalog identity changes', async () => {
+  it('keeps the previous snapshot while re-requesting after a catalog revision change', async () => {
     const pendingRefresh = deferred<ProviderAccountUsageResult>();
     getProviderAccountUsage
       .mockResolvedValueOnce(firstSnapshot)
       .mockReturnValueOnce(pendingRefresh.promise);
     const hook = renderHook(
       ({ revision }) => useProviderAccountUsage('openrouter', ['codex'], revision),
-      { initialProps: { revision: {} } },
+      { initialProps: { revision: 'openrouter:1:codex=openrouter-key-usage-v1' } },
     );
     await waitFor(() => expect(hook.result.current.states.codex?.result).toBe(firstSnapshot));
 
-    hook.rerender({ revision: {} });
+    // 同一 providerId 下换 revision（如目录刷新）只触发重新请求，已显示的余额保留、
+    // 只置 refreshing——对齐手动 refresh 的行为（PR #3472 review）。
+    hook.rerender({ revision: 'openrouter:0:codex=openrouter-key-usage-v1' });
     await waitFor(() => expect(getProviderAccountUsage).toHaveBeenCalledTimes(2));
     expect(hook.result.current.states.codex).toEqual({
-      result: null,
+      result: firstSnapshot,
       refreshing: true,
     });
 
     await act(async () => pendingRefresh.resolve(secondSnapshot));
-    expect(hook.result.current.states.codex?.result).toBe(secondSnapshot);
+    expect(hook.result.current.states.codex).toEqual({
+      result: secondSnapshot,
+      refreshing: false,
+    });
+  });
+
+  it('clears the snapshot when the agents set changes', async () => {
+    getProviderAccountUsage.mockResolvedValue(firstSnapshot);
+    const hook = renderHook(
+      ({ agents }) =>
+        useProviderAccountUsage('openrouter', agents, 'openrouter:1:codex=openrouter-key-usage-v1'),
+      { initialProps: { agents: ['codex'] as ('codex' | 'pi')[] } },
+    );
+    await waitFor(() => expect(hook.result.current.states.codex?.result).toBe(firstSnapshot));
+
+    hook.rerender({ agents: ['codex', 'pi'] });
+    expect(hook.result.current.states.codex?.result).toBeNull();
+    expect(hook.result.current.states.pi?.result).toBeNull();
+    await waitFor(() => expect(hook.result.current.states.pi?.result).toBe(firstSnapshot));
   });
 });

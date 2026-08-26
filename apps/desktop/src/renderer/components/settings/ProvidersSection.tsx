@@ -1511,7 +1511,20 @@ function CustomProviderHeader({
   const accountUsageAgents = provider.agents.filter(
     (agent) => provider.routing[agent]?.accountUsage !== undefined,
   );
-  const accountUsage = useProviderAccountUsage(provider.id, accountUsageAgents, provider);
+  // 稳定字符串而非整个 ProviderView：目录每次重建都会换对象引用，但账户查询身份
+  // 只跟 provider、连接态和各 runtime 的集成端点走（PR #3472 review）。
+  const accountUsageRevision = [
+    provider.id,
+    provider.connected ? '1' : '0',
+    ...accountUsageAgents.map(
+      (agent) => `${agent}=${provider.routing[agent]?.accountUsage?.integrationId ?? ''}`,
+    ),
+  ].join('');
+  const accountUsage = useProviderAccountUsage(
+    provider.id,
+    accountUsageAgents,
+    accountUsageRevision,
+  );
   const accountUsageRuntimes = accountUsageAgents.map((agent) => {
     const state = accountUsage.states[agent];
     return {

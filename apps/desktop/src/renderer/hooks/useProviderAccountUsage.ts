@@ -21,9 +21,12 @@ export function useProviderAccountUsage(
     () => (agentsKey ? (agentsKey.split('\0') as AgentKind[]) : []),
     [agentsKey],
   );
+  // 身份只跟「换供应商 / 换 runtime 集合」走。catalogRevision 变化只触发重新请求
+  // （保留旧快照、置 refreshing，对齐手动 refresh），不换身份——否则每次 PROVIDER_CHANGED
+  // 重建 ProviderView 都会把已显示的余额清空成「正在更新…」（PR #3472 review）。
   const identity = useMemo(
     () => Symbol('provider-account-usage-identity'),
-    [agentsKey, catalogRevision, providerId],
+    [agentsKey, providerId],
   );
   const [scopedStates, setScopedStates] = useState<{
     identity: symbol;
