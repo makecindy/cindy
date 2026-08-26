@@ -468,7 +468,13 @@ function messageInsert(readyDb, args) {
       ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
     }
     if (changes > 0) {
-      readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+      if (role === 'user' || role === 'assistant') {
+        readyDb.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+        ).run(sessionId);
+      } else {
+        readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+      }
     }
     return { changes };
   })();

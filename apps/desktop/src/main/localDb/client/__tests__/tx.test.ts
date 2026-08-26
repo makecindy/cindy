@@ -519,15 +519,23 @@ describe('db worker tx handlers', () => {
   });
 
   it.each([false, true])(
-    'message.insert invalidates list_message_count in the same transaction (inline=%s)',
+    'message.insert invalidates list projection in the same transaction (inline=%s)',
     async (useInlineWorker) => {
       await withClient(
         async (client) => {
           await seedSession(client, 's1');
-          await client.exec(
-            'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
-            ['keep me', 'user', 7, 's1'],
-          );
+          const seedCache = () =>
+            client.exec(
+              'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+              ['keep me', 'user', 7, 's1'],
+            );
+          const readCache = () =>
+            client.queryOne(
+              'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+              ['s1'],
+            );
+
+          await seedCache();
           await expect(
             client.tx('message.insert', {
               id: 'm1',
@@ -542,11 +550,32 @@ describe('db worker tx handlers', () => {
               guarded: false,
             }),
           ).resolves.toEqual({ changes: 1 });
+          await expect(readCache()).resolves.toEqual({
+            list_preview: null,
+            list_preview_role: null,
+            list_message_count: null,
+          });
+
+          await seedCache();
           await expect(
-            client.queryOne('SELECT list_preview, list_message_count FROM sessions WHERE id = ?', [
-              's1',
-            ]),
-          ).resolves.toEqual({ list_preview: 'keep me', list_message_count: null });
+            client.tx('message.insert', {
+              id: 'm2',
+              clientId: 'c2',
+              sessionId: 's1',
+              role: 'tool_result',
+              content: '[]',
+              toolUseId: 't1',
+              agentMeta: null,
+              agentKind: 'cc',
+              createdAt: 2,
+              guarded: false,
+            }),
+          ).resolves.toEqual({ changes: 1 });
+          await expect(readCache()).resolves.toEqual({
+            list_preview: 'keep me',
+            list_preview_role: 'user',
+            list_message_count: null,
+          });
         },
         { useInlineWorker },
       );

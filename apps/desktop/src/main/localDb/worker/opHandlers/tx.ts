@@ -311,7 +311,13 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
         .changes;
     }
     if (changes > 0) {
-      db.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+      if (role === 'user' || role === 'assistant') {
+        db.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+        ).run(sessionId);
+      } else {
+        db.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+      }
     }
     return { changes };
   });
