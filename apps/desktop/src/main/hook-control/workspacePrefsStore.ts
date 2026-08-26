@@ -32,6 +32,10 @@ export interface WorkspacePrefsEntry {
   effort: string | null;
   agentKind: string | null;
   permissionMode: string | null;
+  /** 本地写入代次。镜像回执必须对上这个值才能清墓碑 / 去掉 dirty。 */
+  rev?: number;
+  /** 尚未成功镜像的本地写入。缺省：墓碑视为 dirty，旧实值行视为已同步。 */
+  dirty?: boolean;
 }
 
 interface StoreFile {
@@ -71,7 +75,10 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
     isNullablePrefField(r.model) &&
     isNullablePrefField(r.effort) &&
     isNullablePrefField(r.agentKind) &&
-    isNullablePrefField(r.permissionMode)
+    isNullablePrefField(r.permissionMode) &&
+    (r.rev === undefined ||
+      (typeof r.rev === 'number' && Number.isInteger(r.rev) && r.rev >= 0 && r.rev <= 1_000_000_000)) &&
+    (r.dirty === undefined || typeof r.dirty === 'boolean')
   );
 }
 
@@ -128,6 +135,15 @@ function isBlankRow(row: Pick<WorkspacePrefsEntry, 'model' | 'effort' | 'agentKi
   return row.model === null && row.effort === null && row.agentKind === null && row.permissionMode === null;
 }
 
+function rowRev(row: WorkspacePrefsEntry): number {
+  return typeof row.rev === 'number' && Number.isInteger(row.rev) && row.rev >= 0 ? row.rev : 0;
+}
+
+function isDirtyRow(row: WorkspacePrefsEntry): boolean {
+  if (typeof row.dirty === 'boolean') return row.dirty;
+  return isBlankRow(row);
+}
+
 export function isWorkspacePrefsMigrated(channel: HookPrefsChannel): boolean {
   return readStore(filePath()).migrated[channel] === true;
 }
@@ -166,7 +182,7 @@ export function setWorkspacePref(
   teamId: string | null,
   workspace: string,
   patch: HookPrefsPatch,
-): HookWorkspacePrefs[] {
+): { prefs: HookWorkspacePrefs[]; rev: number } {
   const fp = filePath();
   const store = readStore(fp);
   const current =
@@ -180,41 +196,63 @@ export function setWorkspacePref(
       agentKind: null,
       permissionMode: null,
     } satisfies WorkspacePrefsEntry);
+  const rev = rowRev(current) + 1;
   const nextRow: WorkspacePrefsEntry = {
     ...current,
     ...(patch.model !== undefined ? { model: patch.model } : {}),
     ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
     ...(patch.agentKind !== undefined ? { agentKind: patch.agentKind } : {}),
     ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
+    rev,
+    dirty: true,
   };
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
-  // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null，
-  // 避免 /model 卡全量快照把尚未镜像的清空救活。镜像成功后由
-  // dropBlankWorkspacePref 清掉，让之后的卡片写入能进本机。
+  // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
+  // 镜像回执必须对上 rev，才允许 markWorkspacePrefMirrored 清墓碑或去掉 dirty。
   const entries = [...rest, nextRow];
   if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
-  return entries.filter((e) => e.channel === channel).map(toHookPrefs);
+  return { prefs: entries.filter((e) => e.channel === channel).map(toHookPrefs), rev };
 }
 
-/**
- * 某键的 all-null 已成功镜像到 server 后，丢掉墓碑。
- * 实值行和非本键不受影响；没有墓碑时是 no-op。
- */
-export function dropBlankWorkspacePref(
+export function peekWorkspacePrefRev(
   channel: HookPrefsChannel,
   teamId: string | null,
   workspace: string,
+): number | null {
+  const current = readStore(filePath()).entries.find((e) => sameKey(e, channel, teamId, workspace));
+  return current ? rowRev(current) : null;
+}
+
+/**
+ * 确认某次本地写入已镜像到 server：代次必须仍是 expectedRev。
+ * 墓碑对上就丢掉；实值对上就清 dirty，之后卡片删除才能落地。
+ */
+export function markWorkspacePrefMirrored(
+  channel: HookPrefsChannel,
+  teamId: string | null,
+  workspace: string,
+  expectedRev: number,
 ): void {
   const fp = filePath();
   const store = readStore(fp);
   const current = store.entries.find((e) => sameKey(e, channel, teamId, workspace));
-  if (!current || !isBlankRow(current)) return;
+  if (!current || rowRev(current) !== expectedRev) return;
+  if (isBlankRow(current)) {
+    writeStore(fp, {
+      ...store,
+      entries: store.entries.filter((e) => !sameKey(e, channel, teamId, workspace)),
+    });
+    return;
+  }
+  if (!isDirtyRow(current)) return;
   writeStore(fp, {
     ...store,
-    entries: store.entries.filter((e) => !sameKey(e, channel, teamId, workspace)),
+    entries: store.entries.map((e) =>
+      sameKey(e, channel, teamId, workspace) ? { ...e, dirty: false } : e,
+    ),
   });
 }
 
@@ -238,6 +276,8 @@ export function replaceChannelWorkspacePrefs(
       effort: isNullablePrefField(pref.effort) ? pref.effort : null,
       agentKind: isNullablePrefField(pref.agentKind) ? pref.agentKind : null,
       permissionMode: isNullablePrefField(pref.permissionMode) ? pref.permissionMode : null,
+      rev: 0,
+      dirty: false,
     };
     if (isBlankRow(row)) continue;
     incoming.push(row);
@@ -267,6 +307,8 @@ function asStoreRow(channel: HookPrefsChannel, pref: HookWorkspacePrefs): Worksp
     effort: isNullablePrefField(pref.effort) ? pref.effort : null,
     agentKind: isNullablePrefField(pref.agentKind) ? pref.agentKind : null,
     permissionMode: isNullablePrefField(pref.permissionMode) ? pref.permissionMode : null,
+    rev: 0,
+    dirty: false,
   };
 }
 
@@ -300,8 +342,8 @@ export function importWorkspacePrefsIfNeeded(
 
 /**
  * /model 卡主动推送的全量快照：尚未镜像的本机墓碑优先（未同步的清空不能被救活），
- * 快照里已经没有该键时丢掉墓碑（删除已落地，允许之后的卡片写入）；
- * 其余以快照为准；快照里没有的本机实值行保留（可能还没镜像上去）。
+ * 快照里已经没有该键时丢掉墓碑；已同步的本机实值若快照省略该键，视为卡片删除；
+ * 尚未镜像的本机实值保留。快照里的实值覆盖已同步行。
  */
 export function applyIncomingServerWorkspacePrefs(
   channel: HookPrefsChannel,
@@ -326,7 +368,12 @@ export function applyIncomingServerWorkspacePrefs(
       if (serverByKey.has(key)) nextChannel.push(localRow);
       continue;
     }
-    nextChannel.push(serverByKey.get(key) ?? localRow);
+    const serverRow = serverByKey.get(key);
+    if (serverRow) {
+      nextChannel.push({ ...serverRow, rev: rowRev(localRow), dirty: false });
+      continue;
+    }
+    if (isDirtyRow(localRow)) nextChannel.push(localRow);
   }
   for (const [key, serverRow] of serverByKey) {
     if (seen.has(key)) continue;

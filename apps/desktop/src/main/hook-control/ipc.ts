@@ -45,11 +45,12 @@ import {
 } from './workspaceProviderSourceStore.js';
 import {
   applyIncomingServerWorkspacePrefs,
-  dropBlankWorkspacePref,
   importWorkspacePrefsIfNeeded,
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
+  markWorkspacePrefMirrored,
   markWorkspacePrefsMigrated,
+  peekWorkspacePrefRev,
   setWorkspacePref,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
@@ -320,6 +321,8 @@ async function mirrorWorkspacePrefs(channel: HookPrefsChannel): Promise<void> {
       importWorkspacePrefsIfNeeded(channel, remote.prefs);
     }
     for (const row of listWorkspacePrefs(channel)) {
+      const teamId = row.teamId ?? null;
+      const rev = peekWorkspacePrefRev(channel, teamId, row.workspace);
       const patch = {
         model: row.model,
         effort: row.effort,
@@ -327,11 +330,11 @@ async function mirrorWorkspacePrefs(channel: HookPrefsChannel): Promise<void> {
         permissionMode: row.permissionMode,
       };
       if (channel === 'slack') {
-        await m.setWorkspacePrefs(row.workspace, patch, row.teamId ?? null);
+        await m.setWorkspacePrefs(row.workspace, patch, teamId);
       } else {
         await m.setProviderWorkspacePrefs(channel, row.workspace, patch);
       }
-      dropBlankWorkspacePref(channel, row.teamId ?? null, row.workspace);
+      if (rev !== null) markWorkspacePrefMirrored(channel, teamId, row.workspace, rev);
     }
     if (channel === 'slack') broadcastPrefs(slackLocalPrefsView());
     else broadcastProviderPrefs(providerLocalPrefsView(channel));
@@ -913,8 +916,9 @@ export function registerHookControlIpc(): void {
     requireHookControl();
     const { manager: m } = ensureInstances();
     const parsed = parseWorkspacePrefsWrite(payload);
+    let writeRev: number;
     try {
-      setWorkspacePref('slack', parsed.teamId, parsed.workspace, parsed.patch);
+      writeRev = setWorkspacePref('slack', parsed.teamId, parsed.workspace, parsed.patch).rev;
     } catch (err) {
       log.warn(
         `local slack workspace prefs write failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -925,7 +929,7 @@ export function registerHookControlIpc(): void {
     broadcastPrefs(view);
     void m
       .setWorkspacePrefs(parsed.workspace, parsed.patch, parsed.teamId)
-      .then(() => dropBlankWorkspacePref('slack', parsed.teamId, parsed.workspace))
+      .then(() => markWorkspacePrefMirrored('slack', parsed.teamId, parsed.workspace, writeRev))
       .catch((err: unknown) => {
         log.warn(
           `slack workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -946,8 +950,9 @@ export function registerHookControlIpc(): void {
     const { manager: m } = ensureInstances();
     const provider = requireNeutralProvider(payload);
     const parsed = parseWorkspacePrefsWrite(payload);
+    let writeRev: number;
     try {
-      setWorkspacePref(provider, parsed.teamId, parsed.workspace, parsed.patch);
+      writeRev = setWorkspacePref(provider, parsed.teamId, parsed.workspace, parsed.patch).rev;
     } catch (err) {
       log.warn(
         `local ${provider} workspace prefs write failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -958,7 +963,7 @@ export function registerHookControlIpc(): void {
     broadcastProviderPrefs(view);
     void m
       .setProviderWorkspacePrefs(provider, parsed.workspace, parsed.patch)
-      .then(() => dropBlankWorkspacePref(provider, parsed.teamId, parsed.workspace))
+      .then(() => markWorkspacePrefMirrored(provider, parsed.teamId, parsed.workspace, writeRev))
       .catch((err: unknown) => {
         log.warn(
           `${provider} workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,

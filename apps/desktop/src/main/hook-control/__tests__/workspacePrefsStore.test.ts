@@ -15,11 +15,11 @@ vi.mock('../../im/ownerScopedStorage.js', () => ({
 
 import {
   applyIncomingServerWorkspacePrefs,
-  dropBlankWorkspacePref,
   getWorkspacePref,
   importWorkspacePrefsIfNeeded,
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
+  markWorkspacePrefMirrored,
   replaceChannelWorkspacePrefs,
   resolveWorkspacePrefOverrides,
   setWorkspacePref,
@@ -132,21 +132,38 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('slack', null, 'other').model).toBe('from-card');
   });
 
-  it('dropBlank 只丢掉墓碑，不动实值行', () => {
-    setWorkspacePref('slack', null, 'chat', { model: 'keep' });
-    dropBlankWorkspacePref('slack', null, 'chat');
-    expect(getWorkspacePref('slack', null, 'chat').model).toBe('keep');
+  it('过期镜像回执不能清掉更新的墓碑', () => {
+    const live = setWorkspacePref('slack', null, 'chat', { model: 'opus' });
+    const cleared = setWorkspacePref('slack', null, 'chat', {
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+    });
+    markWorkspacePrefMirrored('slack', null, 'chat', live.rev);
+    expect(listWorkspacePrefs('slack')).toEqual([
+      {
+        workspace: 'chat',
+        model: null,
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+        teamId: null,
+      },
+    ]);
+    markWorkspacePrefMirrored('slack', null, 'chat', cleared.rev);
+    expect(listWorkspacePrefs('slack')).toEqual([]);
   });
 
   it('镜像确认后丢掉墓碑，后续卡片写入可以进本机', () => {
-    setWorkspacePref('slack', null, 'repo', {
+    const written = setWorkspacePref('slack', null, 'repo', {
       model: null,
       effort: null,
       agentKind: null,
       permissionMode: null,
     });
     expect(listWorkspacePrefs('slack').map((e) => e.workspace)).toEqual(['repo']);
-    dropBlankWorkspacePref('slack', null, 'repo');
+    markWorkspacePrefMirrored('slack', null, 'repo', written.rev);
     expect(listWorkspacePrefs('slack')).toEqual([]);
 
     applyIncomingServerWorkspacePrefs('slack', [
@@ -196,6 +213,24 @@ describe('workspacePrefsStore', () => {
       },
     ]);
     expect(getWorkspacePref('slack', null, 'repo').model).toBe('from-card');
+  });
+
+  it('已同步实值在卡片快照省略该键时删除；未镜像实值保留', () => {
+    const synced = setWorkspacePref('slack', null, 'repo', { model: 'old-local' });
+    markWorkspacePrefMirrored('slack', null, 'repo', synced.rev);
+    setWorkspacePref('slack', null, 'chat', { model: 'dirty-local' });
+    applyIncomingServerWorkspacePrefs('slack', [
+      {
+        workspace: 'other',
+        model: 'from-card',
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+      },
+    ]);
+    expect(getWorkspacePref('slack', null, 'repo').model).toBeNull();
+    expect(listWorkspacePrefs('slack').map((e) => e.workspace).sort()).toEqual(['chat', 'other']);
+    expect(getWorkspacePref('slack', null, 'chat').model).toBe('dirty-local');
   });
 
   it('replaceChannel 只替换该渠道，并丢掉空白/非法别名', () => {
