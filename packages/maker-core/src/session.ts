@@ -455,6 +455,12 @@ export class Session {
   private terminalErrorDrainGeneration: number | null = null;
   private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private sendReservation: SendReservation | null = null;
+  /**
+   * N+1 send that has reserved a generation but not yet accepted.
+   * Survives `releaseSendReservationIfObserved()` clearing the reservation
+   * after the handle flips running; leftover N tails must not adopt as N+1.
+   */
+  private unacceptedSendGeneration: number | null = null;
   /** True while runEventLoop is blocked in iterator.next(). */
   private eventLoopAwaiting = false;
   /** The blocked next() that was pending when the current send entered handle.send. */
@@ -751,6 +757,7 @@ export class Session {
     const reservedTurnGeneration = this.turnGeneration;
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
+    this.unacceptedSendGeneration = reservedTurnGeneration;
     this.terminalObservedDuringReservation = null;
     onTurnReserved?.(reservedTurnGeneration);
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
@@ -767,6 +774,9 @@ export class Session {
     const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
       if (!reservation.cancelled && this.sendReservation === reservation) return null;
       if (this.sendReservation === reservation) this.sendReservation = null;
+      if (this.unacceptedSendGeneration === reservedTurnGeneration) {
+        this.unacceptedSendGeneration = null;
+      }
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
@@ -871,6 +881,7 @@ export class Session {
       // and report the turn as undispatched.
       turnDispatched = true;
       reservation.accepted = true;
+      this.unacceptedSendGeneration = null;
       // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
       // error 会清掉它（见 armTurnStallWatchdog）。
       this.armTurnStallWatchdog();
@@ -878,6 +889,9 @@ export class Session {
     } catch (e) {
       if (this.sendReservation === reservation) {
         this.sendReservation = null;
+      }
+      if (this.unacceptedSendGeneration === reservedTurnGeneration) {
+        this.unacceptedSendGeneration = null;
       }
       if (e instanceof TurnDispatchUnconfirmedError) {
         dispatchUnconfirmed = true;
@@ -898,6 +912,9 @@ export class Session {
       cleanupExternalAbort();
       if (this.sendReservation === reservation) {
         this.sendReservation = null;
+      }
+      if (this.unacceptedSendGeneration === reservedTurnGeneration) {
+        this.unacceptedSendGeneration = null;
       }
       // 装了 origin 但本次 send 没真正成为运行中的 turn(handle.send 抛错 / dispatch
       // 后被取消)→ **还原**到 dispatch 前的 origin(而非强制清 null)。
@@ -1283,6 +1300,7 @@ export class Session {
       closeSucceeded = true;
     } finally {
       this.sendReservation = null;
+      this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
       this.turnControlState = null;
@@ -1324,6 +1342,7 @@ export class Session {
       detachSucceeded = true;
     } finally {
       this.sendReservation = null;
+      this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
       this.turnControlState = null;
@@ -2213,12 +2232,12 @@ export class Session {
     } else if (
       isTerminal &&
       !isBackgroundEvent &&
-      this.sendReservation !== null &&
-      this.sendReservation.generation === this.turnGeneration &&
+      this.isUnacceptedCurrentSend() &&
       (!isCurrentGeneration || preDispatchReservation)
     ) {
       // N 的终态在 N+1 reservation / handle.send 窗口到达：先记在窗口快照里，
       // 等拒绝回滚再提升。成功派发的 N+1 不得继承这份证据。
+      // Reservation 可能已因 handle running 被释放，仍按未接受 generation 记。
       this.rememberReservationWindowPriorTerminal(event, listenerEvent);
     }
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
@@ -2629,6 +2648,7 @@ export class Session {
     this.clearTurnStallWatchdog();
     this.cancelSendReservation(this.sendReservation);
     this.sendReservation = null;
+    this.unacceptedSendGeneration = null;
     this.currentTurnOrigin = null;
     this.currentTurnAttemptToken = null;
     this.turnControlState = null;
@@ -2711,13 +2731,17 @@ export class Session {
     // Hold leftover paired done only while N+1 is not yet accepted.
     // After accept, a no-progress done is N+1's result-only terminal when N's
     // paired done was lost; lastObserved staying `error` must not swallow it.
-    // Pending handle.send / accepting reservation still fence the old tail.
+    // Pending handle.send / accepting reservation still fence the old tail,
+    // including after reservation is released because the handle flipped running.
+    return this.isUnacceptedCurrentSend();
+  }
+
+  private isUnacceptedCurrentSend(): boolean {
     const reservation = this.sendReservation;
-    return Boolean(
-      reservation &&
-      reservation.generation === this.turnGeneration &&
-      !reservation.accepted,
-    );
+    if (reservation && reservation.generation === this.turnGeneration) {
+      return !reservation.accepted;
+    }
+    return this.unacceptedSendGeneration === this.turnGeneration;
   }
 
   private isForegroundRunningStatus(event: AgentEvent): boolean {

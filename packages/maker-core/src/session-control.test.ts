@@ -798,6 +798,119 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 
+  it('does not adopt a late paired done after handle.send flips running and releases reservation', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    stub.handle.isTurnRunning = () => true;
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondError = waitForSessionEvent(session, 'error');
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'n+1 failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await secondError;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 2,
+      message: 'n+1 failed',
+      reason: 'empty-response',
+    });
+  });
+
+  it('does not let a leftover error rewrite an accepted later success after reservation release', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    stub.handle.isTurnRunning = () => true;
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
   it('binds an accepted result-only done when the prior paired done was lost', async () => {
     const stub = createHandle();
     const session = createSession(stub, 'codex');
