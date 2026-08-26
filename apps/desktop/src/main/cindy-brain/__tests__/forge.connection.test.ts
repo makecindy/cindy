@@ -19,7 +19,8 @@ describe('FORGE_GUIDE · Cindy Connection 凭证章节', () => {
       'POST / PUT / PATCH / DELETE',
       '显式调用 `ghost_forge_install` 安装',
       '要求用户手输相同 id',
-      '手动导入不签发',
+      '个人身份与手动导入默认不签发',
+      '仅 `ghostId` 精确等于 `mivo-canvas` 的组织成员本地安装可解析 audience',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
