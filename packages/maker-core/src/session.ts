@@ -465,6 +465,8 @@ export class Session {
   private eventLoopAwaiting = false;
   /** The blocked next() that was pending when the current send entered handle.send. */
   private inFlightSendOwnsBlockedWait = false;
+  /** Last resolve() returned the in-flight send generation. */
+  private lastResolvedInFlightSend = false;
   /** True from handle.send() start until that send settles. */
   private insideProviderSendSync = false;
   /** Keep a leftover status/done tail on the generation that started it. */
@@ -2060,6 +2062,7 @@ export class Session {
     const inFlightGeneration =
       this.sendReservation?.generation ??
       (this.isUnacceptedCurrentSend() ? this.unacceptedSendGeneration : null);
+    this.lastResolvedInFlightSend = false;
     const belongsToInFlightSend =
       this.insideProviderSendSync &&
       this.inFlightSendOwnsBlockedWait &&
@@ -2159,6 +2162,7 @@ export class Session {
     if (belongsToInFlightSend) {
       this.inFlightSendOwnsBlockedWait = false;
       this.staleTerminalQueuedGeneration = null;
+      this.lastResolvedInFlightSend = true;
       if (
         this.isNewTurnProgressEvent(event) ||
         event.type === 'done' ||
@@ -2193,6 +2197,7 @@ export class Session {
     if (event.sessionInstanceId === undefined) {
       event.sessionInstanceId = this.instanceId;
     }
+    this.lastResolvedInFlightSend = false;
     if (event.sessionTurnGeneration === undefined) {
       event.sessionTurnGeneration = this.resolveSessionTurnGeneration(
         queuedGeneration,
@@ -2208,6 +2213,15 @@ export class Session {
     const isCurrentGeneration =
       resolvedGeneration === this.turnGeneration &&
       observedGeneration === this.turnGeneration;
+    // In-flight start-failure is stamped N+1 from an older wait. Snapshot and
+    // probe must still settle the current send even when observed stays on N.
+    const settleAsCurrentGeneration =
+      isCurrentGeneration ||
+      (
+        this.lastResolvedInFlightSend &&
+        resolvedGeneration === this.turnGeneration &&
+        (this.agentKind === 'codex' || this.agentKind === 'pi')
+      );
     this.observeTurnControl(event, resolvedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
@@ -2271,7 +2285,7 @@ export class Session {
         )
       );
     const terminalBoundaryObserved =
-      isCurrentGeneration && isTerminal && !isBackgroundEvent && !preDispatchReservation;
+      settleAsCurrentGeneration && isTerminal && !isBackgroundEvent && !preDispatchReservation;
     if (terminalBoundaryObserved && !lateErrorAfterDoneSnapshot && !reservationWindowLeftover) {
       this.terminalEventObservedGeneration = this.turnGeneration;
       this.lastObservedTerminalGeneration = this.turnGeneration;
@@ -2323,7 +2337,7 @@ export class Session {
       isTerminal &&
       !isBackgroundEvent &&
       this.isUnacceptedCurrentSend() &&
-      (!isCurrentGeneration || preDispatchReservation)
+      (!settleAsCurrentGeneration || preDispatchReservation)
     ) {
       // N 的终态在 N+1 reservation / handle.send 窗口到达：先记在窗口快照里，
       // 等拒绝回滚再提升。成功派发的 N+1 不得继承这份证据。
