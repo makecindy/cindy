@@ -3,10 +3,10 @@
  * current organization and intact organization-market installs are the two
  * dynamic bases. A named local-install exception exists only for ghostId
  * `mivo-canvas`: organization members may resolve after the org gate when the
- * installed manifest declares an exact oidc-token host. An intact organization
- * market record, including installed:false, still takes the digest path and
- * must not skip via this exception. The Host derives the audience from
- * current identity + plugin id.
+ * installed manifest's exact oidc-token host is only `mivo-canvas.dsworks.cn`.
+ * An intact organization market record, including installed:false, still takes
+ * the digest path and must not skip via this exception. The Host derives the
+ * audience from current identity + plugin id.
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
@@ -39,6 +39,8 @@ const ORG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const PLUGIN_SLUG_RE = /^[a-z][a-z0-9-]{0,31}$/;
 /** Named local-install Connection exception. Must stay an exact id, not a prefix. */
 const LOCAL_OIDC_ALLOWLIST_GHOST_ID = 'mivo-canvas';
+/** Local exception may inject the org JWT only to this exact BFF host. */
+const LOCAL_OIDC_ALLOWLIST_HOST = 'mivo-canvas.dsworks.cn';
 
 /**
  * Host-owned Connection audiences that plugins must never mint.
@@ -171,6 +173,13 @@ export function loadConnectionAudienceResolver(
           const allowlisted = readManifest();
           if (!allowlisted) return reject('plugin-not-installed');
           if (allowlisted.id !== ghostId) return reject('plugin-id-mismatch');
+          const allowlistedHosts = declaredOidcTokenHosts(allowlisted);
+          if (
+            allowlistedHosts.length !== 1 ||
+            allowlistedHosts[0] !== LOCAL_OIDC_ALLOWLIST_HOST
+          ) {
+            return reject('oidc-host-not-allowlisted');
+          }
           return finish(allowlisted);
         }
         return reject('market-installation-missing');

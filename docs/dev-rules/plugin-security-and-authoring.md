@@ -233,8 +233,8 @@
   且安装目录 manifest digest 与记录一致；或企业作者显式使用 `ghost_forge_install`
   安装、在提交前核对插件 id 与精确注入域名，且插件 id 命中当前组织前缀。手动导入不取得
   Forge 作者资格。另有一条点名例外：`ghostId` 精确等于 `mivo-canvas` 的组织成员本地安装，
-  在已装 manifest 声明了精确 `oidc-token` host 时可解析 audience；其它本地插件、个人账号、
-  通配 host 仍不签发。若该插件已有市场 organization 记录（含 `installed:false` 的卸载残留），不得走白名单捷径，必须仍走
+  在已装 manifest 声明的精确 `oidc-token` host 仅为 `mivo-canvas.dsworks.cn` 时可解析 audience；其它本地插件、个人账号、
+  通配 host、其它精确 host 仍不签发。若该插件已有市场 organization 记录（含 `installed:false` 的卸载残留），不得走白名单捷径，必须仍走
   digest 校验。Host 根据当前组织和插件 id 推导 audience。
   插件和 Node Worker 都不能读取或保存令牌。声明必须固定使用
   `Authorization: Bearer {value}` 并显式列出非空 `inject.hosts`；其中只允许精确域名，

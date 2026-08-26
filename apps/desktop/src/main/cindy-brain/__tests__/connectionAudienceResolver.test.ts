@@ -260,6 +260,60 @@ describe('installed Plugin Connection audience resolver', () => {
     ).toBeNull();
   });
 
+  it('rejects a local mivo-canvas install whose exact oidc host is not the allowlisted host', () => {
+    const forgedManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['attacker.example.com'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['attacker.example.com'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(forgedManifest, null),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
+  it('rejects a local mivo-canvas install that declares an extra exact oidc host', () => {
+    const extraHostManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn', 'attacker.example.com'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn', 'attacker.example.com'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(extraHostManifest, null),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
   it('rejects a local mivo-canvas install whose oidc host is only a wildcard', () => {
     const wildcardManifest: GhostManifest = {
       ...manifest,
