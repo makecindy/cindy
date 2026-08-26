@@ -2078,6 +2078,18 @@ export class Session {
       }
       return waitStartGeneration;
     }
+    // N already observed a terminal error. A later error/done in the N+1
+    // unaccepted send window is leftover N, not an in-flight N+1 start-failure.
+    if (
+      waitStartGeneration > 0 &&
+      waitStartGeneration < this.turnGeneration &&
+      this.lastObservedTerminalGeneration === waitStartGeneration &&
+      this.lastObservedTerminalKind === 'error' &&
+      (event.type === 'done' || isTerminalAgentErrorEvent(event))
+    ) {
+      this.staleTerminalQueuedGeneration = null;
+      return waitStartGeneration;
+    }
     const inFlightGeneration = this.sendReservation?.generation;
     const belongsToInFlightSend =
       this.insideProviderSendSync &&
@@ -2180,9 +2192,16 @@ export class Session {
     // A late leftover error must not replace N+1's result-only success,
     // nor fan-out as a current-generation failure to lifecycle / IPC listeners.
     const lateErrorAfterDoneSnapshot = event.type === 'error' && sameGenerationDone;
+    const reservationWindowLeftover =
+      isTerminal &&
+      !isBackgroundEvent &&
+      this.isUnacceptedCurrentSend() &&
+      this.lastObservedTerminalKind === 'error' &&
+      this.lastObservedTerminalGeneration !== null &&
+      this.lastObservedTerminalGeneration < this.turnGeneration;
     const terminalBoundaryObserved =
       isCurrentGeneration && isTerminal && !isBackgroundEvent && !preDispatchReservation;
-    if (terminalBoundaryObserved && !lateErrorAfterDoneSnapshot) {
+    if (terminalBoundaryObserved && !lateErrorAfterDoneSnapshot && !reservationWindowLeftover) {
       this.terminalEventObservedGeneration = this.turnGeneration;
       this.lastObservedTerminalGeneration = this.turnGeneration;
       this.lastObservedTerminalKind = event.type === 'error' ? 'error' : 'done';
@@ -2240,12 +2259,16 @@ export class Session {
       // Reservation 可能已因 handle running 被释放，仍按未接受 generation 记。
       this.rememberReservationWindowPriorTerminal(event, listenerEvent);
     }
-    if (isCurrentGeneration && isTerminal && !isBackgroundEvent && !lateErrorAfterDoneSnapshot) {
+    if (isCurrentGeneration && isTerminal && !isBackgroundEvent && !lateErrorAfterDoneSnapshot && !reservationWindowLeftover) {
       this.clearTurnControl(resolvedGeneration);
     }
     const isLeftoverProductTerminal =
       !isBackgroundEvent &&
-      (resolvedGeneration < this.turnGeneration || lateErrorAfterDoneSnapshot) &&
+      (
+        resolvedGeneration < this.turnGeneration ||
+        lateErrorAfterDoneSnapshot ||
+        reservationWindowLeftover
+      ) &&
       (isTerminal || this.isIdleStatusEvent(event));
     if (isTerminal && !isBackgroundEvent && !isLeftoverProductTerminal) {
       try {
