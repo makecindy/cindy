@@ -575,6 +575,53 @@ describe('runDbSlimmingMaintenance', () => {
     expect(readMarker(dbFilePath)).toBe('original');
   });
 
+  it('keeps a pre-replacement request until occupied working artifacts are removed', async () => {
+    createLegacyCleanupFixture();
+    const pending = request({ beforeBytes: estimateDbFilesBytes(dbFilePath) });
+    writeDbSlimmingRequest(tmpDir, pending);
+    const workPath = `${dbFilePath}.slimming-${REQUEST_ID}.work`;
+    const originalRmSync = fs.rmSync.bind(fs);
+    const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation((candidate, options) => {
+      if (String(candidate) === workPath) {
+        throw Object.assign(new Error('working artifact is busy'), { code: 'EBUSY' });
+      }
+      return originalRmSync(candidate, options);
+    });
+
+    const firstOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: pending,
+      now: () => 3_000,
+      log,
+      beforeReplacement: vi.fn(async () => {
+        throw new Error('stop before replacement');
+      }),
+    });
+
+    expect(firstOutcome.result).toMatchObject({
+      status: 'failed',
+      reason: 'cleanup-failed',
+      originalDatabaseRestored: true,
+    });
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ id: pending.id, phase: 'scheduled' });
+    expect(fs.existsSync(workPath)).toBe(true);
+
+    rmSpy.mockRestore();
+    const persisted = readDbSlimmingRequest(tmpDir)!;
+    const secondOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: persisted,
+      now: () => 4_000,
+      log,
+    });
+
+    expect(secondOutcome.result.status).toBe('completed');
+    expect(fs.existsSync(workPath)).toBe(false);
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+  });
+
   it('fails closed when an installed replacement has lost its original backup', async () => {
     createMarkerDatabase(dbFilePath, 'compacted-replacement');
 

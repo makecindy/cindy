@@ -236,6 +236,36 @@ describe('runPendingDbSlimmingAtStartup', () => {
     });
   });
 
+  it('does not continue reader startup when the in-use result cannot be persisted', async () => {
+    const pending = request();
+    writeDbSlimmingRequest(tmpDir, pending);
+    const resultPathPrefix = `${path.join(tmpDir, 'db-slimming-result.json')}.`;
+    const originalWriteFileSync = fs.writeFileSync.bind(fs);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((candidate, data, options) => {
+      if (String(candidate).startsWith(resultPathPrefix)) {
+        throw Object.assign(new Error('result marker is unavailable'), { code: 'EACCES' });
+      }
+      return originalWriteFileSync(candidate, data, options);
+    });
+    const runMaintenance = vi.fn();
+
+    await expect(
+      runPendingDbSlimmingAtStartup({
+        userDataDir: tmpDir,
+        dbFilePath,
+        ownerId: pending.ownerId,
+        leaseKind: 'reader',
+        loadVectorExtension: vi.fn(() => true),
+        log,
+        runMaintenance,
+      }),
+    ).rejects.toThrow('database slimming in-use result could not be persisted');
+
+    expect(runMaintenance).not.toHaveBeenCalled();
+    expect(readDbSlimmingRequest(tmpDir)).toEqual(pending);
+    expect(readDbSlimmingResult(tmpDir)).toBeNull();
+  });
+
   it.each([
     ['swap-prepared', undefined],
     ['replacement-installed', undefined],

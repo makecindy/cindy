@@ -134,7 +134,7 @@ export async function runDbSlimmingMaintenance(
         });
         return { result, originalDatabaseReady: true };
       }
-      if (!finalizeRollbackCleanup(options.userDataDir, paths)) {
+      if (!finalizeFailedCleanup(options.userDataDir, paths)) {
         options.log.warn('database slimming rollback cleanup will be retried', {
           requestId: request.id,
         });
@@ -366,13 +366,15 @@ export async function runDbSlimmingMaintenance(
     }
     if (originalDatabaseReady) {
       if (rollbackMarkerDurable) {
-        if (resultPersisted && !finalizeRollbackCleanup(options.userDataDir, paths)) {
+        if (resultPersisted && !finalizeFailedCleanup(options.userDataDir, paths)) {
           options.log.warn('database slimming rollback cleanup will be retried', {
             requestId: request.id,
           });
         }
-      } else if (resultPersisted) {
-        if (clearDbSlimmingRequest(options.userDataDir)) cleanupUncommittedArtifacts(paths);
+      } else if (resultPersisted && !finalizeFailedCleanup(options.userDataDir, paths)) {
+        options.log.warn('database slimming failed cleanup will be retried', {
+          requestId: request.id,
+        });
       }
     }
     options.log.error('database slimming failed', {
@@ -889,7 +891,7 @@ function finalizeCommittedCleanup(userDataDir: string, paths: MaintenancePaths):
   clearDbSlimmingRequestOrThrow(userDataDir);
 }
 
-function finalizeRollbackCleanup(userDataDir: string, paths: MaintenancePaths): boolean {
+function finalizeFailedCleanup(userDataDir: string, paths: MaintenancePaths): boolean {
   return cleanupUncommittedArtifacts(paths) && clearDbSlimmingRequest(userDataDir);
 }
 
