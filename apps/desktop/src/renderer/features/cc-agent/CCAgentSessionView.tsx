@@ -3174,13 +3174,19 @@ export function CCAgentSessionView({
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
             });
       if (slashDispatch.handled) {
-        if (slashDispatch.accepted && sessionId) {
-          void dispatchDeferredUiAssignment(sessionId, undefined, {
-            waitForLeadHistory: false,
-          }).catch((err) => {
-            log.error('recover deferred Worker assignment after slash command failed', err);
-            toast.error(t('newChat.collaboration.assignmentFailed'));
-          });
+        if (slashDispatch.accepted) {
+          // Desktop commands can wait in Main long enough for draft hydration to
+          // restore the click-time command. Re-consume only that snapshot after
+          // acceptance; the callback preserves anything typed in the meantime.
+          opts?.onDeferredAccepted?.();
+          if (sessionId) {
+            void dispatchDeferredUiAssignment(sessionId, undefined, {
+              waitForLeadHistory: false,
+            }).catch((err) => {
+              log.error('recover deferred Worker assignment after slash command failed', err);
+              toast.error(t('newChat.collaboration.assignmentFailed'));
+            });
+          }
         }
         return slashDispatch.accepted;
       }
