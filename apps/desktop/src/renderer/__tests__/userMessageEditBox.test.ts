@@ -101,7 +101,7 @@ describe('UserMessageEditBox — idle 发送', () => {
     expect(props.onRequestStop).not.toHaveBeenCalled();
   });
 
-  it('编辑重发受理后请求跟底;入队失败或等待期间上翻则不跟底', async () => {
+  it('编辑重发在派发时就请求跟底，不等受理，等待期间上翻也不撤票', async () => {
     const acceptedId = `edit-follow-ok-${Date.now()}`;
     commitMock.mockResolvedValueOnce(true);
     const accepted = renderBox({ sessionId: acceptedId });
@@ -116,22 +116,23 @@ describe('UserMessageEditBox — idle 发送', () => {
     const failed = renderBox({ sessionId: failedId });
     fireEvent.click(failed.sendBtn);
     await waitFor(() => expect(failed.props.onSent).toHaveBeenCalledTimes(1));
-    expect(readFollowLatestRequestKey(failedId)).toBe(0);
+    expect(readFollowLatestRequestKey(failedId)).toBe(1);
     failed.unmount();
     vi.clearAllMocks();
 
-    const cancelledId = `edit-follow-cancel-${Date.now()}`;
+    const dispatchedId = `edit-follow-dispatch-${Date.now()}`;
     let release: (value: boolean) => void = () => {};
     commitMock.mockImplementationOnce(
       () => new Promise<boolean>((resolve) => { release = resolve; }),
     );
-    const cancelled = renderBox({ sessionId: cancelledId });
-    fireEvent.click(cancelled.sendBtn);
+    const dispatched = renderBox({ sessionId: dispatchedId });
+    fireEvent.click(dispatched.sendBtn);
     await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
-    bumpSendFollowCancelGeneration(cancelledId);
+    expect(readFollowLatestRequestKey(dispatchedId)).toBe(1);
+    bumpSendFollowCancelGeneration(dispatchedId);
     await act(async () => { release(true); });
-    await waitFor(() => expect(cancelled.props.onSent).toHaveBeenCalledTimes(1));
-    expect(readFollowLatestRequestKey(cancelledId)).toBe(0);
+    await waitFor(() => expect(dispatched.props.onSent).toHaveBeenCalledTimes(1));
+    expect(readFollowLatestRequestKey(dispatchedId)).toBe(1);
   });
 
   it('被拦消息重发成功后请求跟底', async () => {
