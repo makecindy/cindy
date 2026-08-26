@@ -48,11 +48,17 @@ function formatCurrency(value: string | number, currency: string, locale: string
       return (formatter.format as unknown as (input: string) => string)(value);
     }
     if (!Number.isFinite(value)) return `${String(value)} ${currency}`;
-    return new Intl.NumberFormat(locale, {
+    const formatter = new Intl.NumberFormat(locale, {
       style: 'currency',
       currency,
       maximumFractionDigits: 4,
-    }).format(value);
+    });
+    // 非零但按 4 位小数四舍五入为零时（如 $0.00003 的 OpenRouter 用量）不能显示成
+    // $0.0000——那会把「有用量」呈现成「零用量」，改用 "<" 阈值明确表达。
+    if (value !== 0 && Math.abs(value) < 0.00005) {
+      return `<${formatter.format(0.0001)}`;
+    }
+    return formatter.format(value);
   } catch {
     return `${String(value)} ${currency}`;
   }
@@ -234,13 +240,16 @@ function RuntimeUsage({
             <AlertTriangle size={14} className="shrink-0 text-[var(--error-fg)]" aria-hidden />
             <span>{t(errorKey(result.error))}</span>
           </p>
-          <button
-            type="button"
-            onClick={() => onRefresh(runtime.agent)}
-            className="rounded-full border border-[var(--border-default)] px-3 py-1 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-          >
-            {t('providerAccountUsage.retry')}
-          </button>
+          {/* no-credentials 下重试必然失败，错误文案已指引去上方补密钥，不再给出死按钮。 */}
+          {result.error !== 'no-credentials' && (
+            <button
+              type="button"
+              onClick={() => onRefresh(runtime.agent)}
+              className="rounded-full border border-[var(--border-default)] px-3 py-1 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            >
+              {t('providerAccountUsage.retry')}
+            </button>
+          )}
         </div>
       ) : result.status === 'ready' ? (
         <>

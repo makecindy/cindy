@@ -262,4 +262,50 @@ describe('ProviderAccountUsageModule', () => {
     fireEvent.click(retry);
     expect(onRefresh).toHaveBeenCalledWith('pi');
   });
+
+  it('hides the retry button when credentials are missing', () => {
+    render(
+      <ProviderAccountUsageModule
+        runtimes={[
+          {
+            agent: 'codex',
+            result: { status: 'unavailable', error: 'no-credentials' },
+            refreshing: false,
+          },
+        ]}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('providerAccountUsage.error.no-credentials')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'providerAccountUsage.retry' })).toBeNull();
+  });
+
+  it('marks tiny non-zero usage instead of rounding it down to zero', () => {
+    const tinyUsage: ProviderAccountUsageResult = {
+      status: 'ready',
+      stale: false,
+      snapshot: {
+        kind: 'openrouter-key-usage',
+        fetchedAt: 1_700_000_000_000,
+        limit: null,
+        limitRemaining: null,
+        limitReset: null,
+        usage: 0.00003,
+        usageDaily: 0,
+        usageWeekly: 0.5,
+        usageMonthly: 1,
+      },
+    };
+    render(
+      <ProviderAccountUsageModule
+        runtimes={[{ agent: 'codex', result: tinyUsage, refreshing: false }]}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    // 总额 0.00003 四舍五入为 $0.0000 时显示成阈值形式；恰好为零的日用量仍显示 $0.00。
+    expect(screen.getByText('<$0.0001')).toBeTruthy();
+    expect(screen.getByText('$0.00')).toBeTruthy();
+  });
 });
