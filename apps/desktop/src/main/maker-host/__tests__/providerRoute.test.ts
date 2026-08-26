@@ -170,13 +170,30 @@ describe('Pi per-model protocol routing', () => {
 });
 
 describe('provider route mutation epoch', () => {
-  it('advances one process-wide epoch without retaining every provider id', () => {
-    const generationBefore = getProviderRouteMutationGeneration('openrouter');
+  it('isolates per-provider epochs so unrelated mutations do not bump them', () => {
+    const openrouterBefore = getProviderRouteMutationGeneration('openrouter');
+    const randomBefore = getProviderRouteMutationGeneration('random-provider');
     const finishMutation = beginProviderRouteMutation('random-provider');
 
-    expect(getProviderRouteMutationGeneration('openrouter')).not.toBe(generationBefore);
+    // 账户用量服务把世代写进缓存键：无关供应商的 mutation 推高本供应商世代会让
+    // 在途请求误判 superseded、五分钟缓存白白失效（PR #3472 review）。
+    expect(getProviderRouteMutationGeneration('openrouter')).toBe(openrouterBefore);
+    expect(getProviderRouteMutationGeneration('random-provider')).toBe(randomBefore + 1);
 
     finishMutation();
+  });
+
+  it('advances the epoch of the mutated provider itself', () => {
+    const generationBefore = getProviderRouteMutationGeneration('openrouter');
+    const finishMutation = beginProviderRouteMutation('openrouter');
+
+    expect(getProviderRouteMutationGeneration('openrouter')).toBe(generationBefore + 1);
+
+    finishMutation();
+  });
+
+  it('returns 0 for provider ids that never mutated, without retaining them', () => {
+    expect(getProviderRouteMutationGeneration('never-mutated-provider')).toBe(0);
   });
 });
 

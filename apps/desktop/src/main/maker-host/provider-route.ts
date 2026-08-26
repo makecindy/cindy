@@ -51,7 +51,14 @@ import { getSessionProvider } from './session-provider-store.js';
 type CustomProviderKeyReader = (providerId: string, agent: AgentKind) => string | null;
 let customProviderKeyReader: CustomProviderKeyReader = () => null;
 const providerRouteMutationCounts = new Map<string, number>();
-let providerRouteMutationGeneration = 0;
+/**
+ * 按供应商的 mutation 世代：只有该供应商自己的 mutation 会推高它的值。
+ * 账户用量服务（provider-account-usage）把世代写进缓存键并做在途请求校验——若用全局
+ * 世代，任意无关供应商的保存都会让其它供应商的在途请求被判 `superseded`、五分钟缓存
+ * 白白失效。世代条目只在 beginProviderRouteMutation（host 侧保存/删除流程的真实
+ * provider id）时写入；查询未知 id 返回 0 且不落条目，不保留 renderer 可控的任意 id。
+ */
+const providerRouteMutationGenerations = new Map<string, number>();
 
 /** host 启动期接通真实 safeStorage 读取（按 `provider_key_<id>_<agent>`，per-runtime 独立密钥）。 */
 export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): void {
@@ -67,7 +74,10 @@ export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): voi
  */
 export function beginProviderRouteMutation(providerId: string): () => void {
   providerId = runtimeCustomProviderId(providerId);
-  providerRouteMutationGeneration += 1;
+  providerRouteMutationGenerations.set(
+    providerId,
+    (providerRouteMutationGenerations.get(providerId) ?? 0) + 1,
+  );
   providerRouteMutationCounts.set(
     providerId,
     (providerRouteMutationCounts.get(providerId) ?? 0) + 1,
@@ -82,9 +92,9 @@ export function beginProviderRouteMutation(providerId: string): () => void {
   };
 }
 
-/** Process-wide epoch used to reject late reads without retaining attacker-controlled ids. */
-export function getProviderRouteMutationGeneration(_providerId: string): number {
-  return providerRouteMutationGeneration;
+/** Per-provider mutation epoch used to reject late reads (see the map's doc comment). */
+export function getProviderRouteMutationGeneration(providerId: string): number {
+  return providerRouteMutationGenerations.get(runtimeCustomProviderId(providerId)) ?? 0;
 }
 
 export function isProviderRouteMutationInProgress(providerId: string): boolean {
