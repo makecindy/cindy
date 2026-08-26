@@ -38,6 +38,7 @@ import {
   ensureCredentialsReadyForModelsRefresh,
   modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
+  shouldPreservePaymentRequiredRoutes,
   withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
 } from './modelsSyncRefresh.js';
@@ -176,12 +177,15 @@ let lastAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = nu
 
 function applyGatewayModels(
   models: ModelAccessGatewayModel[],
-  authenticatedUserId?: string,
-  authoritative = false,
+  options: {
+    authenticatedUserId?: string;
+    authoritative?: boolean;
+    preservePaymentRequiredRoutes?: boolean;
+  } = {},
 ): void {
   // 同一次 /models 响应建立 XD 模型与价格投影。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
-  const pricing = replaceGatewayModelPricing(models, authenticatedUserId);
+  const pricing = replaceGatewayModelPricing(models, options.authenticatedUserId);
   // 分母只算会产生报价的条目:免费/无价条目按设计不出报价,不该把健康目录
   // 也报成覆盖不足。此时覆盖缺口只剩一种成因——币种声明与目录冲突被丢弃,
   // 这在 #587 之前是全程静默的,这行日志让现场可判。
@@ -214,7 +218,10 @@ function applyGatewayModels(
     });
   }
   resetExecutableMediaModelCache();
-  setXdGatewayModels(models, { authoritative });
+  setXdGatewayModels(models, {
+    authoritative: options.authoritative ?? false,
+    preservePaymentRequiredRoutes: options.preservePaymentRequiredRoutes,
+  });
 }
 
 async function runModelsSync(
@@ -263,12 +270,12 @@ async function runModelsSync(
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
-    applyGatewayModels([], authenticatedUserId, true);
+    applyGatewayModels([], { authenticatedUserId, authoritative: true });
     lastModelsSyncSucceededAttempt = myAttempt;
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
-  applyGatewayModels(models, authenticatedUserId, true);
+  applyGatewayModels(models, { authenticatedUserId, authoritative: true });
   try {
     const availability = await listExecutableMediaModels([], {
       includeDisabled: true,
@@ -349,9 +356,14 @@ function getSync(): CredentialsSync {
         broadcastStatus(status);
         // 凭据就绪(下发/轮换成功)→ 拉取网关模型目录(XD 模型列表的权威来源)。
         if (status.state === 'ok') scheduleModelsSync();
-        // 凭据明确不可用时,旧模型清单也不再具备可用性证明。syncing 期间先保留
-        // 已成功拉到的清单,最终成功会覆盖、失败会走这里清空。
-        else if (['failed', 'disabled', 'unsupported', 'idle'].includes(status.state)) {
+        // failed 是同一账号下的临时同步失败，credentialsSync 明确保留本地 key；隐藏
+        // 过期营销列表的同时必须保留最近一次付费拒绝，避免已有会话绕过路由守卫。
+        // disabled / unsupported / idle 是真实能力边界，清空模型和拒绝快照。
+        else if (status.state === 'failed') {
+          applyGatewayModels([], {
+            preservePaymentRequiredRoutes: shouldPreservePaymentRequiredRoutes(status),
+          });
+        } else if (['disabled', 'unsupported', 'idle'].includes(status.state)) {
           applyGatewayModels([]);
         }
       },

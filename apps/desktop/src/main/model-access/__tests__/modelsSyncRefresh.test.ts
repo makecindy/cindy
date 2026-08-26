@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ModelAccessStatus } from '../../../shared/modelAccess.js';
 
 import {
   buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
   modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
+  shouldPreservePaymentRequiredRoutes,
   withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
   XD_MODELS_SYNC_TIMEOUT_MS,
@@ -23,13 +25,13 @@ describe('parseModelsSyncPayload', () => {
     modalities: { input: ['text'], output: ['text'] },
   };
 
-  it('does not downgrade a v4 sync request to a v1 response', () => {
+  it('does not downgrade a v5 sync request to a v1 response', () => {
     expect(parseModelsSyncPayload({ schemaVersion: 1, models: [baseModel] })).toMatchObject({
       ok: false,
     });
   });
 
-  it('does not downgrade a v4 sync request to a v2 response', () => {
+  it('does not downgrade a v5 sync request to a v2 response', () => {
     const model = {
       ...baseModel,
       newSessionDefault: ['claude-code', 'codex'] as const,
@@ -166,6 +168,22 @@ describe('modelsWithoutStalePaymentUpsell', () => {
     ])).toEqual([
       { id: 'available', currency: 'CNY', agents: [], availability: 'available' },
     ]);
+  });
+});
+
+describe('shouldPreservePaymentRequiredRoutes', () => {
+  const status = (state: ModelAccessStatus['state']): ModelAccessStatus => ({
+    state,
+    source: null,
+    endpoint: null,
+    accountTier: null,
+  });
+
+  it('只在同账号凭据临时失败时保留付费拒绝快照', () => {
+    expect(shouldPreservePaymentRequiredRoutes(status('failed'))).toBe(true);
+    expect(shouldPreservePaymentRequiredRoutes(status('disabled'))).toBe(false);
+    expect(shouldPreservePaymentRequiredRoutes(status('unsupported'))).toBe(false);
+    expect(shouldPreservePaymentRequiredRoutes(status('idle'))).toBe(false);
   });
 });
 

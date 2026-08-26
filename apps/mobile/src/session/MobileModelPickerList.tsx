@@ -269,6 +269,7 @@ export function MobileModelPickerList({
             configEnabled &&
             !!onOpenOptions &&
             !rowDisabled &&
+            !paymentRequired &&
             (row.model.efforts.length > 0 || fastEditable) &&
             (selected || !!modelMemory);
           return (

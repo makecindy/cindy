@@ -1,7 +1,7 @@
 import {
   isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
-  MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   parseListModelsResponse,
   type MediaCapability,
@@ -25,7 +25,7 @@ const MEDIA_MODEL_REQUEST_TIMEOUT_MS = 20_000;
 const MEDIA_GUIDE_PREFLIGHT_TIMEOUT_MS = 5_000;
 const CINDY_AI_PROVIDER_ID = 'xd';
 const MEDIA_MODELS_PATH =
-  `${MODEL_ACCESS_MODELS_PATH}?schemaVersion=${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}` as const;
+  `${MODEL_ACCESS_MODELS_PATH}?schemaVersion=${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}` as const;
 
 export type MediaGuideCompatibilityErrorCode =
   | 'CLIENT_UPGRADE_REQUIRED'
@@ -201,11 +201,11 @@ async function fetchGatewayMediaModels(): Promise<ModelCatalogEntry[]> {
     typeof payload !== 'object' ||
     payload === null ||
     !('schemaVersion' in payload) ||
-    payload.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+    payload.schemaVersion !== MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION
   ) {
     throw new MediaModelCatalogError(
       '媒体模型目录当前不可用，请稍后重试或使用其他工具。',
-      `expected schemaVersion ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
+      `expected schemaVersion ${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}`,
     );
   }
   const parsed = parseListModelsResponse(payload);

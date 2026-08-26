@@ -26,6 +26,11 @@ export function modelsWithoutStalePaymentUpsell(
   return models.filter((model) => model.availability !== 'requires_payment');
 }
 
+/** 同账号凭据临时失败会保留本地 key，因此必须继续保留最近一次明确的付费拒绝。 */
+export function shouldPreservePaymentRequiredRoutes(status: ModelAccessStatus): boolean {
+  return status.state === 'failed';
+}
+
 /**
  * Validate the actual `/models` wire envelope before it can replace the last-known-good snapshot.
  * The client-owned parser is the version boundary: it can validate every published contract,

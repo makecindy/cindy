@@ -36,12 +36,14 @@ import {
 } from '../mediaModels.js';
 
 const payload = {
-  schemaVersion: 4 as const,
+  schemaVersion: 5 as const,
+  accountTier: 'free' as const,
   models: [
     {
       id: 'image-without-guide',
       name: 'Image Without Guide',
       mode: 'image_generation',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       agents: [],
       modalities: { input: ['text'], output: ['image'] },
@@ -50,6 +52,7 @@ const payload = {
       id: 'image-with-guide',
       name: 'Image With Guide',
       mode: 'image_generation',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       agents: [],
       modalities: { input: ['text', 'image'], output: ['image'] },
@@ -58,6 +61,7 @@ const payload = {
       id: 'video-without-guide',
       name: 'Video Without Guide',
       mode: 'video_generation',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       agents: [],
       modalities: { input: ['text', 'image'], output: ['video'] },
@@ -66,6 +70,7 @@ const payload = {
       id: 'guide-only-chat',
       name: 'Guide Only Chat',
       mode: 'chat',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       contextWindow: 200_000,
       agents: ['codex' as const],
@@ -137,6 +142,28 @@ describe('listAvailableMediaModels', () => {
 
     readModelDisableOverridesMock.mockReturnValueOnce({ disabledProviders: { xd: true } });
     await expect(listAvailableMediaModels()).resolves.toEqual([]);
+  });
+
+  it('v5 目录不会把需要付费的媒体模型暴露为可用模型', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      ...payload,
+      models: [
+        payload.models[1],
+        {
+          ...payload.models[0],
+          id: 'paid-image',
+          availability: 'requires_payment',
+        },
+      ],
+    });
+
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-with-guide', availability: 'available' },
+    ]);
+    expect(serverApiFetchMock).toHaveBeenCalledWith(
+      '/api/model-access/models?schemaVersion=5',
+      expect.any(Object),
+    );
   });
 
   it('namespaced modelId 唯一时继承旧裸 ID 的停用项', async () => {
