@@ -4,13 +4,30 @@ import {
   collectGeneratedFiles,
   extractCommandOutputPathCandidates,
   extractDocumentArtifactMetadata,
+  isExplicitFailedToolResult,
 } from '../lib/generatedFiles';
 
 const WORKDIR = '/work';
+}
 
 function toolUse(toolName: string, toolInput: unknown) {
   return { role: 'tool_use', toolName, toolInput };
 }
+
+describe('isExplicitFailedToolResult', () => {
+  it('fails closed on structured error envelopes', () => {
+    expect(isExplicitFailedToolResult(JSON.stringify({ ok: false }))).toBe(true);
+    expect(isExplicitFailedToolResult(JSON.stringify({ success: false }))).toBe(true);
+    expect(isExplicitFailedToolResult(JSON.stringify({ status: 'error' }))).toBe(true);
+    expect(isExplicitFailedToolResult('<tool_use_error>denied</tool_use_error>')).toBe(true);
+  });
+
+  it('does not treat ordinary success text as a failure', () => {
+    expect(isExplicitFailedToolResult('Wrote a.md')).toBe(false);
+    expect(isExplicitFailedToolResult(JSON.stringify({ ok: true }))).toBe(false);
+    expect(isExplicitFailedToolResult(undefined)).toBe(false);
+  });
+});
 
 describe('collectGeneratedFiles', () => {
   it('turns a top-level cindy docs tool result into artifact metadata', () => {
