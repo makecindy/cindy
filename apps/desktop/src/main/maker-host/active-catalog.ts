@@ -1489,8 +1489,18 @@ export function isXdGatewayPaymentRequiredRoute(modelId: string, agent: AgentKin
 export function getXdGatewayModelAccessSnapshot(): {
   authoritative: boolean;
   models: readonly XdGatewayModelInfo[];
+  paymentRequiredModelIds: readonly string[];
 } {
-  return { authoritative: xdGatewayModelsAuthoritative, models: xdGatewayModels };
+  const claudeCodeRoutePrefix = 'claude-code\n';
+  return {
+    authoritative: xdGatewayModelsAuthoritative,
+    models: xdGatewayModels,
+    paymentRequiredModelIds: [...xdGatewayPaymentRequiredRoutes].flatMap((route) =>
+      route.startsWith(claudeCodeRoutePrefix)
+        ? [route.slice(claudeCodeRoutePrefix.length)]
+        : [],
+    ),
+  };
 }
 
 /** 新一轮 `/models` 未完成或失败后撤销负向证明，但保留 LKG 供 UI 展示。 */
