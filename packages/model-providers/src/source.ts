@@ -264,7 +264,28 @@ function backfillPresetMetadata(
       changed = true;
       return { ...model, contextWindow: bundledContextWindow };
     });
-    runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
+    let nextRuntime = runtimeChanged ? { ...runtime, models } : runtime;
+    if (
+      runtime.accountUsage === undefined
+      && bundledRuntime.accountUsage !== undefined
+      && (primary.authMethod ?? 'apiKey') === 'apiKey'
+    ) {
+      try {
+        const primaryUrl = new URL(runtime.baseUrl);
+        const bundledUrl = new URL(bundledRuntime.baseUrl);
+        if (
+          primaryUrl.protocol === 'https:'
+          && bundledUrl.protocol === 'https:'
+          && primaryUrl.origin === bundledUrl.origin
+        ) {
+          nextRuntime = { ...nextRuntime, accountUsage: bundledRuntime.accountUsage };
+          changed = true;
+        }
+      } catch {
+        // Invalid runtime URLs are rejected during preset sanitization; keep merge fail closed.
+      }
+    }
+    runtimes[agent] = nextRuntime;
   }
   // Pi runtime 是 2026-08 后新增的预设能力槽。旧远端目录没有表达“显式禁用 Pi”的
   // 字段，缺席只代表旧 schema；对随包已核实的官方预设回填整段，避免远端 LKG 把

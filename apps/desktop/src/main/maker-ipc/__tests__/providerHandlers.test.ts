@@ -5,6 +5,10 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelRefresh.js';
+import type {
+  ProviderAccountUsageRequest,
+  ProviderAccountUsageResult,
+} from '../../../shared/providerAccountUsage.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
@@ -87,6 +91,9 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
+    readAccountUsage: vi.fn(
+      async (): Promise<ProviderAccountUsageResult> => ({ status: 'unsupported' }),
+    ),
     rediscoverModels: vi.fn(async () => null),
     refreshBuiltinModels: vi.fn(async () => {}),
     requestModelsAutoRefresh: vi.fn(async () => {}),
@@ -867,6 +874,20 @@ describe('provider:models-auto-refresh handler', () => {
 });
 
 describe('provider:custom:* CRUD handlers', () => {
+  it.each(['../escape', 'Uppercase', 'a'.repeat(41)])(
+    'rejects an invalid delete provider id before starting a route mutation: %s',
+    async (providerId) => {
+      const harness = new IpcHarness();
+      const deps = makeDeps();
+      registerProviderHandlers(harness, deps);
+
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, providerId),
+      ).rejects.toThrow(/INVALID_PARAMS/);
+      expect(deps.beginRouteMutation).not.toHaveBeenCalled();
+    },
+  );
+
   it('rejects credential-mutating CRUD before parsing or touching secrets for an untrusted sender', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {
@@ -2374,6 +2395,57 @@ describe('provider:test-connection handler', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, { kind: 'saved', providerId: 'ghost', agent: 'codex' }),
     ).rejects.toThrow(/INVALID_PARAMS/);
+  });
+});
+
+describe('provider:account-usage:get handler', () => {
+  it('accepts only a trusted, narrow provider/runtime request', async () => {
+    const harness = new IpcHarness();
+    const readAccountUsage = vi.fn(
+      async (_input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult> => ({
+        status: 'unsupported',
+      }),
+    );
+    const assertTrustedSender = vi.fn();
+    registerProviderHandlers(harness, makeDeps({ readAccountUsage, assertTrustedSender }));
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE_GET, {
+      providerId: 'openrouter',
+      agent: 'codex',
+      forceRefresh: true,
+    })).resolves.toEqual({ status: 'unsupported' });
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(readAccountUsage).toHaveBeenCalledWith({
+      providerId: 'openrouter',
+      agent: 'codex',
+      forceRefresh: true,
+    });
+  });
+
+  it('rejects extra network fields, invalid runtimes and an unwired trust guard', async () => {
+    const invalidInputs = [
+      { providerId: 'openrouter', agent: 'codex', url: 'https://attacker.example' },
+      { providerId: 'openrouter', agent: 'gemini' },
+      { providerId: '../openrouter', agent: 'codex' },
+      { providerId: 'openrouter', agent: 'codex', forceRefresh: 'yes' },
+    ];
+    for (const input of invalidInputs) {
+      const harness = new IpcHarness();
+      const deps = makeDeps();
+      registerProviderHandlers(harness, deps);
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE_GET, input))
+        .rejects.toThrow(/INVALID_PARAMS/);
+      expect(deps.readAccountUsage).not.toHaveBeenCalled();
+    }
+
+    const unwired = new IpcHarness();
+    const deps = makeDeps({ assertTrustedSender: undefined });
+    registerProviderHandlers(unwired, deps);
+    await expect(unwired.invoke(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE_GET, {
+      providerId: 'openrouter',
+      agent: 'codex',
+    })).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(deps.readAccountUsage).not.toHaveBeenCalled();
   });
 });
 

@@ -17,6 +17,7 @@ import type {
   CustomProviderConfig,
   Effort,
   Provider,
+  ProviderAccountUsageCapability,
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
   RoutingDescriptor,
@@ -232,6 +233,7 @@ function toRouting(
   modelsUrl?: string,
   wireProtocol?: "anthropic-messages" | "openai-responses" | "openai-chat",
   piCatalogProviderId?: string,
+  accountUsage?: ProviderAccountUsageCapability,
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
@@ -259,6 +261,7 @@ function toRouting(
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
   if (piCatalogProviderId) r.piCatalogProviderId = piCatalogProviderId;
+  if (accountUsage) r.accountUsage = { ...accountUsage };
   return r;
 }
 
@@ -298,6 +301,7 @@ export function buildUserProvider(
       rt.modelsUrl,
       rt.wireProtocol,
       rt.piCatalogProviderId,
+      rt.accountUsage,
     );
     models[agent] = rt.models.map((m) =>
       toCatalogModel(m, config.id, agent, options.modelRegistry),

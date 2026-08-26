@@ -154,11 +154,26 @@ export type OAuthProviderDescriptor =
   | OAuthAuthorizationCodeDescriptor
   | OAuthDeviceCodeDescriptor;
 
+export const PROVIDER_ACCOUNT_USAGE_INTEGRATION_IDS = [
+  'deepseek-balance-v1',
+  'openrouter-key-usage-v1',
+] as const;
+
+export type ProviderAccountUsageIntegrationId =
+  (typeof PROVIDER_ACCOUNT_USAGE_INTEGRATION_IDS)[number];
+
+/** Versioned, non-secret capability written by an official provider preset. */
+export interface ProviderAccountUsageCapability {
+  integrationId: ProviderAccountUsageIntegrationId;
+}
+
 /**
  * 路由描述符（per provider × runtime）。喂给 host 侧通用路由器，决定请求的
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /** Display-only account usage capability; Main revalidates it before every network request. */
+  accountUsage?: ProviderAccountUsageCapability;
   /**
    * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
    * Codex 的 openai-chat / anthropic-messages 会分别进入对应的本地 Responses bridge。
@@ -558,6 +573,8 @@ export interface ProviderRuntimeModelConfig {
  * 形状对齐 `CustomProviderRuntimeConfig`：选中预设 = 把这段数据灌进创建表单，用户只补 API key。
  */
 export interface ProviderPresetRuntime {
+  /** Stable integration identity copied into newly created provider runtimes. */
+  accountUsage?: ProviderAccountUsageCapability;
   /** 上游 wire protocol；缺省由 runtime agent 推导（Codex=Responses，Claude=Messages）。 */
   wireProtocol?: ProviderWireProtocol;
   /** 该 runtime 的兼容端点 base URL（cc=Anthropic 兼容 / codex=OpenAI Responses 兼容）。 */
@@ -652,6 +669,8 @@ export interface Catalog {
  * 两种端点，则两个 runtime 各有独立的 baseURL / 模型 / headers（见 CustomProviderConfig.runtimes）。
  */
 export interface CustomProviderRuntimeConfig {
+  /** Stable integration identity copied from an official preset; not a user-defined fetch URL. */
+  accountUsage?: ProviderAccountUsageCapability;
   /** 上游 wire protocol；缺省由 runtime agent 推导（Codex=Responses，Claude=Messages）。 */
   wireProtocol?: ProviderWireProtocol;
   /** 该 runtime 的兼容上游 base URL（cc=Anthropic 端点 / codex=OpenAI 端点）。 */

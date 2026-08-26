@@ -10864,6 +10864,51 @@
       "undo": "다운그레이드 취소"
     }
   },
+  "providerAccountUsage": {
+    "refresh": "잔액 및 사용량 새로고침",
+    "retry": "사용량 조회 다시 시도",
+    "updating": "잔액 및 사용량 업데이트 중…",
+    "updatedAt": "{{time}} 업데이트",
+    "stale": "이전 스냅샷 표시 중",
+    "openDashboard": "제공자 사용량 대시보드 열기",
+    "deepSeek": {
+      "granted": "지급 잔액",
+      "toppedUp": "충전 잔액",
+      "unavailable": "DeepSeek에서 잔액 세부 정보를 가져올 수 없습니다. 제공자 사용량 대시보드를 열거나 나중에 다시 시도하세요.",
+      "empty": "DeepSeek에서 잔액 항목을 반환하지 않았습니다. 제공자 사용량 대시보드에서 계정을 확인하세요."
+    },
+    "openRouter": {
+      "limit": "키 할당량",
+      "remaining": "남은 할당량",
+      "usedPercent": "사용한 키 할당량",
+      "noKeyQuota": "키 할당량이 설정되지 않음",
+      "reset": "재설정: {{value}}",
+      "noReset": "재설정 주기 없음"
+    },
+    "usage": {
+      "total": "총 사용량",
+      "daily": "오늘",
+      "weekly": "이번 주",
+      "monthly": "이번 달"
+    },
+    "reset": {
+      "daily": "매일",
+      "weekly": "매주",
+      "monthly": "매월"
+    },
+    "error": {
+      "no-credentials": "이 런타임에서 사용할 수 있는 API 키가 없습니다. 제공자를 편집해 키를 추가하세요.",
+      "updating": "제공자를 업데이트하고 있습니다. 잠시 후 다시 시도하세요.",
+      "superseded": "사용량을 불러오는 동안 제공자가 변경되었습니다. 다시 시도하세요.",
+      "auth": "제공자가 이 API 키를 거부했습니다. 키를 확인하거나 교체한 후 다시 시도하세요.",
+      "rate-limited": "제공자가 사용량 조회를 제한하고 있습니다. 잠시 후 다시 시도하세요.",
+      "network": "제공자에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
+      "server": "제공자가 지금 사용량을 반환할 수 없습니다. 나중에 다시 시도하세요.",
+      "invalid-response": "제공자가 예상하지 못한 사용량 데이터를 반환했습니다. 나중에 다시 시도하세요.",
+      "throttled": "사용량을 방금 새로고침했습니다. 잠시 후 다시 시도하세요.",
+      "unknown": "제공자 사용량을 불러올 수 없습니다. 나중에 다시 시도하세요."
+    }
+  },
   "fileAccess": {
     "epermGuidance": {
       "title": "macOS 폴더 접근이 거부되었습니다",

@@ -370,6 +370,25 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
 });
 
 describe('custom-provider-store CRUD (per-runtime)', () => {
+  it('persists and restores a supported account-usage integration marker', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'usage-provider',
+      name: 'Usage Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          models: [{ id: 'model', name: 'Model' }],
+          accountUsage: { integrationId: 'openrouter-key-usage-v1' },
+        },
+      },
+    });
+
+    expect((await getCustomProvider('usage-provider'))?.runtimes.codex?.accountUsage).toEqual({
+      integrationId: 'openrouter-key-usage-v1',
+    });
+  });
+
   it('creates, lists, gets, updates, deletes', async () => {
     mountDb();
     expect(await listCustomProviders()).toEqual([]);

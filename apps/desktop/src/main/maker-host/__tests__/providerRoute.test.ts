@@ -21,6 +21,7 @@ import {
   buildLocalHandlerHeaders,
   buildRouteDecision,
   getSessionRoutingDescriptor,
+  getProviderRouteMutationGeneration,
   resolveSessionRoute,
   resolveSessionRouteDecision,
   resolveImplicitLocalBridgeRoute,
@@ -165,6 +166,17 @@ describe('Pi per-model protocol routing', () => {
       wireProtocol: 'openai-responses',
       requestPath: '/tenant/responses',
     });
+  });
+});
+
+describe('provider route mutation epoch', () => {
+  it('advances one process-wide epoch without retaining every provider id', () => {
+    const generationBefore = getProviderRouteMutationGeneration('openrouter');
+    const finishMutation = beginProviderRouteMutation('random-provider');
+
+    expect(getProviderRouteMutationGeneration('openrouter')).not.toBe(generationBefore);
+
+    finishMutation();
   });
 });
 
@@ -1144,7 +1156,9 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       headerOverride: { authorization: 'Bearer old-key' },
     });
 
+    const generationBefore = getProviderRouteMutationGeneration('openrouter');
     const finishMutation = beginProviderRouteMutation('openrouter');
+    expect(getProviderRouteMutationGeneration('openrouter')).toBeGreaterThan(generationBefore);
     try {
       // Secret writes are synchronous and may become visible before the catalog refresh awaits.
       setCustomProviderKeyReader(() => 'new-key');

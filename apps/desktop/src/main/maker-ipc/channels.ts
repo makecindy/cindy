@@ -549,6 +549,11 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_MODELS_FETCH: 'maker:provider:models-fetch',
   /**
+   * 本机设置页查询已绑定 runtime 的余额/密钥用量。Renderer 只传 providerId + agent；
+   * Main 固定集成、端点与鉴权头。含本机凭证事实，不进 device-link allowlist。
+   */
+  PROVIDER_ACCOUNT_USAGE_GET: 'maker:provider:account-usage:get',
+  /**
    * 通用 OAuth 供应商（目录 auth.oauth 描述符驱动、非 bespoke 四家）的登录 / 登出 / 取消。
    * 入参 = providerId；login 走 generic-oauth Runner（PKCE 浏览器流），成功后拉动态模型
    * 发现（若描述符声明）并广播 PROVIDER_CHANGED。bespoke 供应商（anthropic/openai/xai）

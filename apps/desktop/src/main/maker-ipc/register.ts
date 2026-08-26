@@ -784,8 +784,12 @@ import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descripto
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
+import { createProviderAccountUsageService } from '../maker-host/provider-account-usage.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
   beginProviderRouteMutation,
+  getProviderRouteMutationGeneration,
+  isProviderRouteMutationInProgress,
   isUserProviderSession,
   setPendingCredentialSwitchReader,
 } from '../maker-host/provider-route.js';
@@ -820,12 +824,14 @@ import {
 } from '../maker-host/custom-provider-store.js';
 import {
   readCustomProviderHeadersForMutation,
+  readCustomProviderKey,
   readCustomProviderKeyForMutation,
   removeCustomProviderHeaders,
   removeCustomProviderKey,
   storeCustomProviderHeaders,
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
+import { getDeviceId } from '../authManager.js';
 import {
   getSessionEffort,
   getSessionFastMode,
@@ -6590,6 +6596,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     userDataDir: app.getPath('userData'),
   });
 
+  const providerAccountUsage = createProviderAccountUsageService({
+    getConfig: (providerId) => getCustomProvider(providerId),
+    readKey: (providerId, agent) => readCustomProviderKey(providerId, agent),
+    getOwnerStamp: () => {
+      const owner = getActiveAppSession();
+      return { dataOwnerId: owner.dataOwnerId, generation: owner.generation };
+    },
+    getDeviceId,
+    getRouteMutationGeneration: getProviderRouteMutationGeneration,
+    isRouteMutationInProgress: isProviderRouteMutationInProgress,
+    fetchImpl: outboundFetch,
+    now: () => Date.now(),
+  });
+
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
@@ -6602,6 +6622,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listPresets: () => getActiveCatalog().presets ?? [],
     testConnection: (input) => testProviderConnection(input),
     fetchModels: (spec) => fetchProviderModels(spec),
+    readAccountUsage: (input) => providerAccountUsage.read(input),
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),

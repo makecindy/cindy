@@ -10878,6 +10878,51 @@
       "undo": "Undo downgrade"
     }
   },
+  "providerAccountUsage": {
+    "refresh": "Refresh Balance and Usage",
+    "retry": "Retry Usage Check",
+    "updating": "Updating balance and usage…",
+    "updatedAt": "Updated {{time}}",
+    "stale": "Showing an older snapshot",
+    "openDashboard": "Open Provider Usage Dashboard",
+    "deepSeek": {
+      "granted": "Granted Balance",
+      "toppedUp": "Topped-Up Balance",
+      "unavailable": "DeepSeek says balance details are unavailable. Open the provider dashboard or retry later.",
+      "empty": "DeepSeek returned no balance entries. Open the provider dashboard to review this account."
+    },
+    "openRouter": {
+      "limit": "Key Quota",
+      "remaining": "Remaining Quota",
+      "usedPercent": "Key Quota Used",
+      "noKeyQuota": "No key quota is set",
+      "reset": "Reset: {{value}}",
+      "noReset": "No Reset Schedule"
+    },
+    "usage": {
+      "total": "Total Usage",
+      "daily": "Today",
+      "weekly": "This Week",
+      "monthly": "This Month"
+    },
+    "reset": {
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly"
+    },
+    "error": {
+      "no-credentials": "No API key is available for this runtime. Edit the provider to add one.",
+      "updating": "The provider is being updated. Try again in a moment.",
+      "superseded": "The provider changed while usage was loading. Try again.",
+      "auth": "The provider rejected this API key. Check or replace it, then retry.",
+      "rate-limited": "The provider is rate limiting usage checks. Try again later.",
+      "network": "Cindy could not reach the provider. Check your connection and retry.",
+      "server": "The provider could not return usage right now. Retry later.",
+      "invalid-response": "The provider returned an unexpected usage response. Retry later.",
+      "throttled": "Usage was refreshed recently. Try again in a moment.",
+      "unknown": "Cindy could not load provider usage. Retry later."
+    }
+  },
   "fileAccess": {
     "epermGuidance": {
       "title": "macOS folder access denied",

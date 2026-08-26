@@ -1124,6 +1124,7 @@ export function AddProviderWizard({
           ...(rt.headers ? { headers: rt.headers } : {}),
           ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
           ...(rt.piCatalogProviderId ? { piCatalogProviderId: rt.piCatalogProviderId } : {}),
+          ...(rt.accountUsage ? { accountUsage: { ...rt.accountUsage } } : {}),
         };
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();

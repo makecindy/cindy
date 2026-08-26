@@ -10856,6 +10856,51 @@
       "undo": "撤銷降級"
     }
   },
+  "providerAccountUsage": {
+    "refresh": "重新整理餘額和用量",
+    "retry": "重試用量查詢",
+    "updating": "正在更新餘額和用量…",
+    "updatedAt": "更新於 {{time}}",
+    "stale": "正在顯示舊快照",
+    "openDashboard": "開啟供應商用量儀表板",
+    "deepSeek": {
+      "granted": "贈送餘額",
+      "toppedUp": "儲值餘額",
+      "unavailable": "DeepSeek 暫時沒有提供餘額明細。請開啟供應商用量儀表板，或稍後重試。",
+      "empty": "DeepSeek 沒有傳回餘額明細。請開啟供應商用量儀表板檢查帳戶。"
+    },
+    "openRouter": {
+      "limit": "金鑰配額",
+      "remaining": "剩餘配額",
+      "usedPercent": "已用金鑰配額",
+      "noKeyQuota": "未設定金鑰配額",
+      "reset": "重設：{{value}}",
+      "noReset": "無重設週期"
+    },
+    "usage": {
+      "total": "總用量",
+      "daily": "今日用量",
+      "weekly": "本週用量",
+      "monthly": "本月用量"
+    },
+    "reset": {
+      "daily": "每日",
+      "weekly": "每週",
+      "monthly": "每月"
+    },
+    "error": {
+      "no-credentials": "這個執行環境沒有可用的 API 金鑰。請編輯供應商並新增金鑰。",
+      "updating": "供應商正在更新，請稍後重試。",
+      "superseded": "載入用量期間供應商發生了變更，請重試。",
+      "auth": "供應商拒絕了這個 API 金鑰。請檢查或更換金鑰後重試。",
+      "rate-limited": "供應商限制了用量查詢頻率，請稍後重試。",
+      "network": "Cindy 無法連線供應商。請檢查網路後重試。",
+      "server": "供應商暫時無法傳回用量，請稍後重試。",
+      "invalid-response": "供應商傳回了無法識別的用量資料，請稍後重試。",
+      "throttled": "剛剛重新整理過用量，請稍後重試。",
+      "unknown": "Cindy 無法載入供應商用量。請稍後重試。"
+    }
+  },
   "fileAccess": {
     "epermGuidance": {
       "title": "macOS 資料夾訪問被拒絕",

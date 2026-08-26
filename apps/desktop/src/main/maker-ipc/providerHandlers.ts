@@ -35,6 +35,10 @@ import type {
   ModelPriceOverrideView,
 } from '../../shared/modelPriceOverride.js';
 import type { MoneyCurrency } from '../../shared/regionalMoney.js';
+import type {
+  ProviderAccountUsageRequest,
+  ProviderAccountUsageResult,
+} from '../../shared/providerAccountUsage.js';
 import {
   MAX_PROVIDER_ORDER_ID_LENGTH,
   MAX_PROVIDER_ORDER_ITEMS,
@@ -82,6 +86,7 @@ const log = createLogger('maker-ipc:provider');
 const VALID_AGENTS: readonly string[] = ['claude-code', 'codex', 'pi'];
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const CUSTOM_PROVIDER_ID_PATTERN = /^[a-z0-9_-]{1,40}$/;
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
 
 type ProviderOAuthRendererSender = {
@@ -235,6 +240,8 @@ export interface ProviderHandlerDeps {
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** Main-owned fixed account-usage integrations; Renderer contributes no endpoint or headers. */
+  readAccountUsage(input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
@@ -411,6 +418,27 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     };
   }
   return null;
+}
+
+function parseAccountUsageInput(input: unknown): ProviderAccountUsageRequest | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const value = input as Record<string, unknown>;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !['providerId', 'agent', 'forceRefresh'].includes(key))) return null;
+  if (
+    typeof value.providerId !== 'string'
+    || !/^(?:custom:xai|[a-z0-9_-]{1,40})$/.test(value.providerId)
+    || typeof value.agent !== 'string'
+    || !VALID_AGENTS.includes(value.agent)
+    || (value.forceRefresh !== undefined && typeof value.forceRefresh !== 'boolean')
+  ) {
+    return null;
+  }
+  return {
+    providerId: value.providerId,
+    agent: value.agent as AgentKind,
+    ...(value.forceRefresh === true ? { forceRefresh: true } : {}),
+  };
 }
 
 /** 校验 PROVIDER_MODELS_FETCH 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
@@ -1416,8 +1444,8 @@ export function registerProviderHandlers(
 
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, async (event, providerId: unknown) => {
     assertTrustedProviderMutationSender(event);
-    if (typeof providerId !== 'string' || providerId.length === 0) {
-      throwIpcError('INVALID_PARAMS', 'providerId required');
+    if (typeof providerId !== 'string' || !CUSTOM_PROVIDER_ID_PATTERN.test(providerId)) {
+      throwIpcError('INVALID_PARAMS', 'invalid providerId');
     }
     const runtimeProviderId = runtimeCustomProviderId(providerId);
     const ownerAtIngress = captureProviderOwnerSession();
@@ -1515,6 +1543,15 @@ export function registerProviderHandlers(
       // resolveSavedProbeSpec 的解析错误（provider 不存在 / 无该 runtime）→ INVALID_PARAMS。
       throwIpcError('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
     }
+  });
+
+  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE_GET, async (event, input: unknown) => {
+    // This query carries a Main-only stored key to a fixed vendor endpoint. It is intentionally
+    // local-only and must never be callable from WebViews, child frames, or synthetic remotes.
+    assertTrustedProviderMutationSender(event);
+    const parsed = parseAccountUsageInput(input);
+    if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid provider account-usage input');
+    return deps.readAccountUsage(parsed);
   });
 
   // 获取模型列表：查询型结构化返回（同上例外条款）；仅网络/上游失败在结果 code 里，不抛。

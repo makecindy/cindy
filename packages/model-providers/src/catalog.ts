@@ -12,7 +12,11 @@
 
 import { parseModelRegistry } from './modelAccessValidator.js';
 
-import { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+import {
+  PI_MODEL_APIS,
+  PI_REASONING_EFFORTS,
+  PROVIDER_ACCOUNT_USAGE_INTEGRATION_IDS,
+} from './types.js';
 import type {
   Catalog,
   Provider,
@@ -35,6 +39,18 @@ const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat']
 
 function isWireProtocol(value: unknown): value is (typeof WIRE_PROTOCOLS)[number] {
   return typeof value === 'string' && (WIRE_PROTOCOLS as readonly string[]).includes(value);
+}
+
+function isProviderAccountUsageCapability(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const capability = value as Record<string, unknown>;
+  return (
+    Object.keys(capability).length === 1
+    && typeof capability.integrationId === 'string'
+    && (PROVIDER_ACCOUNT_USAGE_INTEGRATION_IDS as readonly string[]).includes(
+      capability.integrationId,
+    )
+  );
 }
 
 function isWireProtocolAllowedForAgent(
@@ -635,6 +651,14 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
     }
     if (next.requestPath !== undefined && !isProviderRequestPath(next.requestPath)) {
       const { requestPath: _drop, ...rest } = next;
+      next = rest;
+      changed = true;
+    }
+    if (
+      next.accountUsage !== undefined
+      && !isProviderAccountUsageCapability(next.accountUsage)
+    ) {
+      const { accountUsage: _drop, ...rest } = next;
       next = rest;
       changed = true;
     }

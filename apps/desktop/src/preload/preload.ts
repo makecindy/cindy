@@ -5460,6 +5460,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { releaseOwner?: boolean; ownerId?: string },
     ): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
+    getProviderAccountUsage: (
+      input: import('../shared/providerAccountUsage').ProviderAccountUsageRequest,
+    ): Promise<import('../shared/providerAccountUsage').ProviderAccountUsageResult> =>
+      ipcRenderer.invoke('maker:provider:account-usage:get', input),
     onProviderOAuthProgress: fanOutMakerProviderOAuthProgress,
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。

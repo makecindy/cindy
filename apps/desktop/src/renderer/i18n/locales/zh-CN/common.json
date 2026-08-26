@@ -10856,6 +10856,51 @@
       "undo": "撤销降级"
     }
   },
+  "providerAccountUsage": {
+    "refresh": "刷新余额和用量",
+    "retry": "重试用量查询",
+    "updating": "正在更新余额和用量…",
+    "updatedAt": "更新于 {{time}}",
+    "stale": "正在显示旧快照",
+    "openDashboard": "打开供应商用量仪表盘",
+    "deepSeek": {
+      "granted": "赠送余额",
+      "toppedUp": "充值余额",
+      "unavailable": "DeepSeek 暂时没有提供余额明细。请打开供应商用量仪表盘，或稍后重试。",
+      "empty": "DeepSeek 没有返回余额明细。请打开供应商用量仪表盘检查账户。"
+    },
+    "openRouter": {
+      "limit": "密钥配额",
+      "remaining": "剩余配额",
+      "usedPercent": "已用密钥配额",
+      "noKeyQuota": "未设置密钥配额",
+      "reset": "重置：{{value}}",
+      "noReset": "无重置周期"
+    },
+    "usage": {
+      "total": "总用量",
+      "daily": "今日用量",
+      "weekly": "本周用量",
+      "monthly": "本月用量"
+    },
+    "reset": {
+      "daily": "每日",
+      "weekly": "每周",
+      "monthly": "每月"
+    },
+    "error": {
+      "no-credentials": "这个运行时没有可用的 API 密钥。请编辑供应商并添加密钥。",
+      "updating": "供应商正在更新，请稍后重试。",
+      "superseded": "加载用量期间供应商发生了变化，请重试。",
+      "auth": "供应商拒绝了这个 API 密钥。请检查或更换密钥后重试。",
+      "rate-limited": "供应商限制了用量查询频率，请稍后重试。",
+      "network": "Cindy 无法连接供应商。请检查网络后重试。",
+      "server": "供应商暂时无法返回用量，请稍后重试。",
+      "invalid-response": "供应商返回了无法识别的用量数据，请稍后重试。",
+      "throttled": "刚刚刷新过用量，请稍后重试。",
+      "unknown": "Cindy 无法加载供应商用量。请稍后重试。"
+    }
+  },
   "fileAccess": {
     "epermGuidance": {
       "title": "macOS 文件夹访问被拒绝",

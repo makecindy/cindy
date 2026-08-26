@@ -94,6 +94,7 @@ import type {
   AgentKind,
   CustomProviderConfig,
   PiModelApi,
+  ProviderAccountUsageCapability,
   ProviderPreset,
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
@@ -188,6 +189,8 @@ interface RuntimeFields extends RuntimeFillDraft {
   modelsUrl: string;
   /** 隐藏字段：从 Pi 官方目录生成该 runtime；编辑保存必须无损保留。 */
   piCatalogProviderId?: string;
+  /** Hidden versioned capability from an official preset; never contains a URL or credential. */
+  accountUsage?: ProviderAccountUsageCapability;
 }
 
 /** 每个 runtime Tab 的「测试连接」状态（idle → testing → ok/fail）。 */
@@ -209,6 +212,7 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
     piCatalogProviderId: undefined,
+    accountUsage: undefined,
   };
 }
 
@@ -234,6 +238,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
             : [{ name: '', value: '' }],
         modelsUrl: rc.modelsUrl ?? '',
         piCatalogProviderId: rc.piCatalogProviderId,
+        accountUsage: rc.accountUsage,
         headersState: rc.headersState,
       };
     }
@@ -774,6 +779,7 @@ export function CustomProviderDialog({
                 : [{ name: '', value: '' }],
             modelsUrl: rc.modelsUrl ?? '',
             piCatalogProviderId: rc.piCatalogProviderId,
+            accountUsage: rc.accountUsage,
           };
         }
         return next;
@@ -1576,6 +1582,7 @@ export function CustomProviderDialog({
         ...(a === 'pi' && rf.piCatalogProviderId
           ? { piCatalogProviderId: rf.piCatalogProviderId }
           : {}),
+        ...(rf.accountUsage ? { accountUsage: { ...rf.accountUsage } } : {}),
       };
       if (a === 'pi' && initial?.runtimes.pi?.piCatalogProviderId) {
         const savedPiCatalogProviderId = piCatalogProviderIdAfterRouteEdit(

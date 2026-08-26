@@ -45,6 +45,7 @@ import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import {
@@ -71,6 +72,10 @@ import {
 import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
+import {
+  ProviderAccountUsageModule,
+  type ProviderAccountUsageRuntimeView,
+} from './ProviderAccountUsageModule';
 import {
   requestXaiSubscriptionRefresh,
   useXaiSubscriptionUsage,
@@ -1503,6 +1508,18 @@ function CustomProviderHeader({
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
+  const accountUsageAgents = provider.agents.filter(
+    (agent) => provider.routing[agent]?.accountUsage !== undefined,
+  );
+  const accountUsage = useProviderAccountUsage(provider.id, accountUsageAgents, provider);
+  const accountUsageRuntimes = accountUsageAgents.map((agent) => {
+    const state = accountUsage.states[agent];
+    return {
+      agent,
+      result: state?.result ?? null,
+      refreshing: state?.refreshing ?? true,
+    } satisfies ProviderAccountUsageRuntimeView;
+  });
   const [loggingIn, setLoggingIn] = useState(false);
   const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
@@ -1604,6 +1621,14 @@ function CustomProviderHeader({
         )
       }
       detail={loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined}
+      assetModule={
+        accountUsageRuntimes.length > 0 ? (
+          <ProviderAccountUsageModule
+            runtimes={accountUsageRuntimes}
+            onRefresh={accountUsage.refresh}
+          />
+        ) : undefined
+      }
     />
   );
 }

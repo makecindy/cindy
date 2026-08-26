@@ -519,6 +519,29 @@ describe('providerViewToCustomProviderConfig Pi catalog metadata', () => {
 });
 
 describe('providerViewToCustomProviderConfig', () => {
+  it('preserves the account-usage integration when rebuilding an editable config', () => {
+    const provider = {
+      id: 'openrouter',
+      name: 'OpenRouter',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          upstream: 'https://openrouter.ai/api/v1',
+          authStrategy: 'api-key-header',
+          accountUsage: { integrationId: 'openrouter-key-usage-v1' },
+        },
+      },
+      models: { codex: [] },
+      connected: true,
+    } as ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).runtimes.codex?.accountUsage).toEqual({
+      integrationId: 'openrouter-key-usage-v1',
+    });
+  });
+
   it('restores the stored id for a legacy custom xai runtime projection', () => {
     const provider = {
       id: 'custom:xai',

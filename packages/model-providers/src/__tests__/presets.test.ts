@@ -45,6 +45,31 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('preserves supported account-usage integrations and strips unknown ids', () => {
+    const supported = {
+      ...VALID_PRESET,
+      runtimes: {
+        'claude-code': {
+          ...VALID_PRESET.runtimes['claude-code'],
+          accountUsage: { integrationId: 'openrouter-key-usage-v1' as const },
+        },
+      },
+    };
+    expect(sanitizePresets([supported])).toEqual([supported]);
+
+    const [unknown] = sanitizePresets([{
+      ...supported,
+      id: 'unknown-account-usage',
+      runtimes: {
+        'claude-code': {
+          ...supported.runtimes['claude-code'],
+          accountUsage: { integrationId: 'arbitrary-fetcher-v1' },
+        },
+      },
+    }]);
+    expect(unknown?.runtimes['claude-code']?.accountUsage).toBeUndefined();
+  });
+
   it('materializes the legacy Pi Messages protocol only for the exact Claude endpoint', () => {
     const legacy = {
       ...VALID_PRESET,
@@ -406,6 +431,45 @@ describe('parseCatalog presets 容错', () => {
 });
 
 describe('mergeWithBundled presets 兜底', () => {
+  it('backfills bundled account-usage markers only for API-key runtimes on the same official origin', () => {
+    const bundledOpenRouter = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'openrouter');
+    expect(bundledOpenRouter?.runtimes.codex?.accountUsage).toEqual({
+      integrationId: 'openrouter-key-usage-v1',
+    });
+
+    const remote = {
+      ...bundledOpenRouter!,
+      runtimes: {
+        ...bundledOpenRouter!.runtimes,
+        codex: {
+          ...bundledOpenRouter!.runtimes.codex!,
+          accountUsage: undefined,
+        },
+      },
+    };
+    const backfilled = mergeWithBundled(minimalCatalog({ presets: [remote] }));
+    expect(backfilled.presets?.find((preset) => preset.id === 'openrouter')?.runtimes.codex?.accountUsage)
+      .toEqual({ integrationId: 'openrouter-key-usage-v1' });
+
+    const rerouted = mergeWithBundled(minimalCatalog({
+      presets: [{
+        ...remote,
+        runtimes: {
+          ...remote.runtimes,
+          codex: { ...remote.runtimes.codex!, baseUrl: 'https://proxy.example/v1' },
+        },
+      }],
+    }));
+    expect(rerouted.presets?.find((preset) => preset.id === 'openrouter')?.runtimes.codex?.accountUsage)
+      .toBeUndefined();
+
+    const noAuth = mergeWithBundled(minimalCatalog({
+      presets: [{ ...remote, authMethod: 'none' as const }],
+    }));
+    expect(noAuth.presets?.find((preset) => preset.id === 'openrouter')?.runtimes.codex?.accountUsage)
+      .toBeUndefined();
+  });
+
   it('远端 xAI 目录缺少 Pi 时不在 bundled 合并层复活静态成员', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
     const remoteXai = {
@@ -427,9 +491,17 @@ describe('mergeWithBundled presets 兜底', () => {
     expect(xai?.models.pi).toBeUndefined();
   });
 
-  it('远端 presets 与 bundled 按 id 合并：远端同 id 优先，bundled 缺项不丢', () => {
+  it('远端 presets 与 bundled 按 id 合并：远端字段优先，受控元数据与 bundled 缺项不丢', () => {
     const merged = mergeWithBundled(minimalCatalog({ presets: [VALID_PRESET] }));
-    expect(merged.presets?.find((preset) => preset.id === 'openrouter')).toEqual(VALID_PRESET);
+    expect(merged.presets?.find((preset) => preset.id === 'openrouter')).toEqual({
+      ...VALID_PRESET,
+      runtimes: {
+        'claude-code': {
+          ...VALID_PRESET.runtimes['claude-code'],
+          accountUsage: { integrationId: 'openrouter-key-usage-v1' },
+        },
+      },
+    });
     expect(merged.presets?.map((preset) => preset.id)).toEqual(
       BUNDLED_CATALOG.presets?.map((preset) => preset.id),
     );

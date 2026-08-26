@@ -4901,6 +4901,9 @@ interface ElectronAPI {
       providerId: string,
       options?: { releaseOwner?: boolean; ownerId?: string },
     ) => Promise<{ ok: true }>;
+    getProviderAccountUsage: (
+      input: import('../shared/providerAccountUsage').ProviderAccountUsageRequest,
+    ) => Promise<import('../shared/providerAccountUsage').ProviderAccountUsageResult>;
     onProviderOAuthProgress: (
       cb: (progress: {
         providerId: string;
