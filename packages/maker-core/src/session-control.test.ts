@@ -7,6 +7,7 @@ import type {
   InteractionDecision,
   InteractionRequest,
   InteractionResolver,
+  SendOrigin,
 } from './types/events.js';
 
 function createLogger() {
@@ -1078,6 +1079,70 @@ describe('Session current-generation terminal observation', () => {
     const secondDone = waitForSessionEvent(session, 'done');
     stub.push({ type: 'done', data: {} });
     await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
+  it('keeps N+1 origin and attempt token after a leftover paired done in the reservation window', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push({ ...event });
+    });
+    const firstOrigin: SendOrigin = { kind: 'scheduler', scheduleId: 'n', scheduleName: 'n' };
+    const nextOrigin: SendOrigin = { kind: 'scheduler', scheduleId: 'n1', scheduleName: 'n1' };
+
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first', { origin: firstOrigin })).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+    const secondSend = session.send('second', {
+      origin: nextOrigin,
+      turnAttemptToken: 7,
+    });
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    expect(session.getTurnGeneration()).toBe(2);
+
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    expect(
+      seen.some((event) => event.type === 'done' && event.sessionTurnGeneration === 2),
+    ).toBe(false);
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    const secondText = waitForSessionEvent(session, 'text');
+    stub.push({ type: 'text', data: { text: 'n+1', isFinal: false } });
+    await secondText;
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+
+    const n1Events = seen.filter((event) => event.sessionTurnGeneration === 2);
+    expect(n1Events.some((event) => event.type === 'text')).toBe(true);
+    expect(n1Events.some((event) => event.type === 'done')).toBe(true);
+    expect(n1Events.every((event) => event.turnOrigin)).toEqual(true);
+    expect(n1Events.map((event) => event.turnOrigin)).toEqual(
+      n1Events.map(() => nextOrigin),
+    );
+    expect(n1Events.every((event) => event.turnAttemptToken === 7)).toBe(true);
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 

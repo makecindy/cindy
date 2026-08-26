@@ -2314,7 +2314,7 @@ export class Session {
     // 它只结束当前 SDK turn，产品层 Agent 仍在执行；其余到达 Session 的 done /
     // 终止型 error 才代表产品 turn 已结束，必须清 origin，避免后续 standalone
     // auto-compact 等后台 turn 继承 goal/scheduler origin。
-    if (isCurrentGeneration && isTerminal) {
+    if (isCurrentGeneration && isTerminal && !isLeftoverProductTerminal) {
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
       // 终态之后不再计 stall 额度。
