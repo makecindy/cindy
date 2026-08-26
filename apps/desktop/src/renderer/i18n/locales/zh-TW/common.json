@@ -3469,6 +3469,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "連線 {{provider}} 後可編輯（先在上方開啟對應開關並等待連線成功）。",
+        "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",
         "serverUnsupported": "伺服器版本過舊或暫時無應答，無法讀取偏好。",
         "retry": "重試",

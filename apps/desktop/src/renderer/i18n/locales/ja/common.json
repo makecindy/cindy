@@ -3477,6 +3477,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
+        "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピュータに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
         "serverUnsupported": "サーバーのバージョンが古いか応答がないため、設定を読み込めません。",
         "retry": "再試行",

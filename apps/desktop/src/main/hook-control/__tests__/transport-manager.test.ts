@@ -2770,7 +2770,7 @@ describe('Telegram provider capability, binding and prefs', () => {
       serializeHookMessage(makeProviderPrefsState({ ...prefs, replyTo: set.payload.requestId })),
     );
     await expect(writePromise).resolves.toEqual(prefs);
-    expect(notified).toEqual([prefs, prefs]);
+    expect(notified).toEqual([]); // 回执不再广播, /model 卡主动推送才通知
 
     const behavior = {
       provider: 'telegram' as const,
@@ -3111,7 +3111,7 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
       serializeHookMessage(makePrefsState({ replyTo: get.payload.requestId, ...PREFS_VIEW })),
     );
     await expect(promise).resolves.toEqual(PREFS_VIEW);
-    expect(notified).toEqual([PREFS_VIEW]); // 回执同样广播(多窗口同步)
+    expect(notified).toEqual([]); // 回执不再广播, 避免 server 快照盖掉本机正本
   });
 
   it('setWorkspacePrefs: 帧只含已定义 patch 字段(undefined 不进帧, null 保留)', async () => {
