@@ -56,16 +56,17 @@ export const GHOST_SCHEME = 'cindy-ghost';
 
 /**
  * 意识沙箱的 session 分区前缀。无 `persist:` 前缀 = 纯内存分区,熄灯即蒸发。
- * 面板 webview 与离屏沙箱窗口共用同一分区规则(同一意识 = 同一间房)。
+ * Renderer 只用它声明待附加的意识 id；Main 验明当前 owner 后会覆盖成真正的
+ * owner-scoped partition，不能把这里的 claim 当成最终 Electron session 边界。
  */
 export const GHOST_PARTITION_PREFIX = 'cindy-ghost-';
 
-/** 某段意识的 session 分区名。 */
+/** Renderer 的意识 WebView attach claim；Main 放行前会覆盖成 owner 分区。 */
 export function ghostPartition(id: string): string {
   return `${GHOST_PARTITION_PREFIX}${id}`;
 }
 
-/** 从分区名解析意识 id;不是意识分区(或 id 非法)返回 null。 */
+/** 从 Renderer claim 解析意识 id；不是合法 claim 返回 null。 */
 export function parseGhostPartition(partition: unknown): string | null {
   if (typeof partition !== 'string' || !partition.startsWith(GHOST_PARTITION_PREFIX)) return null;
   const id = partition.slice(GHOST_PARTITION_PREFIX.length);

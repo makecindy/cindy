@@ -83,7 +83,7 @@ describe('AgentTaskCard codex subagent live state', () => {
     expect(text).toContain('chat.agentTask.provider.codex');
     expect(text).toContain('chat.agentTask.status.running');
     // tokens / 工具调用数 / 耗时三项都由 update.usage 驱动,与 Claude 卡同一渲染路径。
-    expect(text).toContain('chat.agentTask.tokens');
+    expect(text).toContain('chat.agentTask.tokens:{"count":"143.6k"}');
     expect(text).toContain('chat.agentTask.toolUses');
     expect(text).toContain('2m 50s');
   });

@@ -43,7 +43,7 @@ import * as authManager from '../authManager';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
-import { getCurrentUserId } from '../localDb';
+import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
 import { serverApiFetch } from '../serverApiClient';
 import {
@@ -397,7 +397,10 @@ function closeOwnershipFileLock(): void {
 }
 
 function getOwnershipLock(): OwnershipLock | null {
-  const userId = getCurrentUserId();
+  // Worker takeover closes the main-side localDb connection and clears
+  // localDb.getCurrentUserId(). The lifecycle DbClient owner remains authoritative
+  // until logout/account switch, so the ownership lock must follow that identity.
+  const userId = getCurrentDbClientUserId();
   if (!userId) {
     closeOwnershipFileLock();
     return null;

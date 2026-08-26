@@ -67,6 +67,7 @@ import {
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
   type ActiveAppSession,
+  type AppSessionMode,
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import {
@@ -205,7 +206,7 @@ import {
   readLegacyEncryptedValue,
   type LegacyMigrationRead,
 } from './legacyMigrationRead.js';
-import { GHOST_SCHEME, ghostExternalLinkUrls, parseGhostPartition } from '../../shared/ghost.js';
+import { GHOST_SCHEME, ghostExternalLinkUrls } from '../../shared/ghost.js';
 import { GhostPipeDispatcher } from './pipeDispatcher.js';
 import { GhostCardService, parseCardHeightReport } from './cardService.js';
 import { GhostCardActionDispatcher } from './cardActionDispatch.js';
@@ -334,6 +335,8 @@ import {
 } from './subscriptionGateway.js';
 import { GhostExternalLinkGate, GhostPreviewGate, resolveGhostPanelMedia } from './previewGate.js';
 import { runGhostExternalLinkNavigation } from './ghostExternalLinkNavigation.js';
+import { runGhostPreviewNavigation } from './ghostPreviewNavigation.js';
+import { resolveGhostWebviewPartitionClaim } from './ghostWebviewPartition.js';
 import {
   ghostSecretSaved,
   readGhostSecret,
@@ -7681,31 +7684,23 @@ export function handleGhostPreviewNavigation(
   url: string,
   hostContents: WebContents,
   guestContents: WebContents,
+  isOwnerActive: () => boolean,
 ): void {
-  void getGhostPreviewGate()
-    .request({
-      ghostId,
-      url,
-      isPanelFocused: () => !guestContents.isDestroyed() && guestContents.isFocused(),
-    })
-    .then((outcome) => {
-      if (!outcome.ok) {
-        log.debug('ghost preview rejected', { ghostId, reason: outcome.reason });
-        return;
-      }
-      if (hostContents.isDestroyed()) return;
-      sendGhostContentsPush(hostContents, GHOST_PREVIEW_MEDIA_CHANNEL, {
-        ghostId,
-        src: outcome.src,
-        kind: outcome.kind,
-      });
-    })
-    .catch((err) => {
-      log.warn('ghost preview failed', {
-        ghostId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+  void runGhostPreviewNavigation(
+    { ghostId, url, hostContents, guestContents },
+    {
+      request: (request) => getGhostPreviewGate().request(request),
+      isOwnerActive,
+      send: (outcome) => {
+        sendGhostContentsPush(hostContents, GHOST_PREVIEW_MEDIA_CHANNEL, {
+          ghostId,
+          src: outcome.src,
+          kind: outcome.kind,
+        });
+      },
+      logger: log,
+    },
+  );
 }
 
 let externalLinkGateSingleton: GhostExternalLinkGate | null = null;
@@ -7733,6 +7728,7 @@ export function handleGhostExternalLinkNavigation(
   url: string,
   hostContents: WebContents,
   guestContents: WebContents,
+  isOwnerActive: () => boolean,
 ): void {
   void runGhostExternalLinkNavigation(
     { ghostId, url, hostContents, guestContents },
@@ -7743,6 +7739,7 @@ export function handleGhostExternalLinkNavigation(
       openExternal: (targetUrl) => shell.openExternal(targetUrl),
       translate: t,
       logger: log,
+      isOwnerActive,
     },
   );
 }
@@ -7756,10 +7753,19 @@ export function handleGhostExternalLinkNavigation(
  * 把协议 handler 挂好(必须先于 webview 首次加载)。任何一条不满足返回
  * null(闸口拒附加)。
  */
-export function resolveGhostWebviewAttach(partition: unknown, src: unknown): InstalledGhost | null {
-  const id = parseGhostPartition(partition);
-  if (!id || typeof src !== 'string') return null;
-  const ghost = findAvailableGhost(id);
+export function resolveGhostWebviewAttach(
+  partitionClaim: unknown,
+  src: unknown,
+): {
+  ghost: InstalledGhost;
+  partition: string;
+  owner: { mode: AppSessionMode; dataOwnerId: string };
+} | null {
+  if (typeof src !== 'string') return null;
+  const owner = getActiveAppSession();
+  const resolvedPartition = resolveGhostWebviewPartitionClaim(partitionClaim, owner);
+  if (!resolvedPartition) return null;
+  const ghost = findAvailableGhost(resolvedPartition.ghostId);
   if (!ghost || !ghost.enabled) return null;
   const allowedPaths = ghostWebviewEntryPaths(ghost.manifest);
   if (allowedPaths.length === 0) return null;
@@ -7769,10 +7775,14 @@ export function resolveGhostWebviewAttach(partition: unknown, src: unknown): Ins
   } catch {
     return null;
   }
-  if (url.protocol !== `${GHOST_SCHEME}:` || url.host !== id) return null;
+  if (url.protocol !== `${GHOST_SCHEME}:` || url.host !== resolvedPartition.ghostId) return null;
   if (!allowedPaths.includes(url.pathname)) return null;
-  ensureGhostProtocolRegistered(ghost);
-  return ghost;
+  ensureGhostProtocolRegistered(ghost, owner);
+  return {
+    ghost,
+    partition: resolvedPartition.partition,
+    owner: { mode: owner.mode, dataOwnerId: owner.dataOwnerId! },
+  };
 }
 
 /** 播种进行中提示广播(renderer 显示/收起非阻塞胶囊;与退出 overlay 同款视觉)。 */

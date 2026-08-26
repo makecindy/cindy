@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { CircleAlert, LayoutGrid, MoonStar } from 'lucide-react';
 import type { WebviewTag } from 'electron';
 
+import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { GHOST_SCHEME, ghostPartition, type InstalledGhost } from '../../shared/ghost';
 import {
@@ -159,14 +160,17 @@ function CrashedHint({
 function SettingsWebviewBody({
   ghost,
   appearance,
+  dataOwnerId,
 }: {
   ghost: InstalledGhost;
   appearance: 'settings' | 'plugin';
+  dataOwnerId: string | null;
 }): ReactNode {
   const [crashed, setCrashed] = useState(false);
   const [generation, setGeneration] = useState(0);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const { manifest } = ghost;
+  const partitionClaim = ghostPartition(manifest.id);
   const settingsHtml = manifest.settingsHtml;
   const fixedHeight = manifest.settingsHeight;
   const buildSettingsThemeCss =
@@ -174,7 +178,7 @@ function SettingsWebviewBody({
   // 首帧贴的快照(仅 mount 时决定一次;版本/主题/DPR 现场比对,宽度等布局后
   // 由下方 layout effect 补验)。失配 = null,走透明占位 + 淡入的老路径。
   const [snapshot, setSnapshot] = useState<GhostSettingsSnapshot | null>(() => {
-    const snap = loadGhostSettingsSnapshot(manifest.id);
+    const snap = loadGhostSettingsSnapshot(dataOwnerId, manifest.id);
     if (!snap) return null;
     const ctx = {
       version: manifest.version,
@@ -187,9 +191,9 @@ function SettingsWebviewBody({
   // 版本——换版后界面可能全变,旧高度不可信;主题/DPR 不影响布局高,不卡)
   // → 占位高。前两级命中时首帧即终态,零跳变。固定高度声明时本状态不参与。
   const [autoHeight, setAutoHeight] = useState(() => {
-    const cached = lastMeasuredHeights.get(manifest.id);
+    const cached = lastMeasuredHeights.get(`${dataOwnerId ?? ''}:${manifest.id}`);
     if (cached !== undefined) return cached;
-    const snap = loadGhostSettingsSnapshot(manifest.id);
+    const snap = loadGhostSettingsSnapshot(dataOwnerId, manifest.id);
     return snap && snap.version === manifest.version ? snap.height : AUTO_HEIGHT_PLACEHOLDER;
   });
 
@@ -211,7 +215,7 @@ function SettingsWebviewBody({
     const host = hostRef.current;
     if (!host) return;
     const webview = document.createElement('webview') as WebviewTag;
-    webview.setAttribute('partition', ghostPartition(manifest.id));
+    webview.setAttribute('partition', partitionClaim);
     webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${settingsHtml}`);
     // 先透明占位:guest 装载与主题注入完成前不露面(一次性淡入,非常驻动画)。
     // 有快照时快照图盖在上层,这段透明期用户看到的就是"成品画面"。
@@ -262,7 +266,7 @@ function SettingsWebviewBody({
             if (disposed) return;
             const rect = host.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return;
-            saveGhostSettingsSnapshot(manifest.id, {
+            saveGhostSettingsSnapshot(dataOwnerId, manifest.id, {
               dataUrl: image.toDataURL(),
               width: rect.width,
               height: rect.height,
@@ -314,7 +318,7 @@ function SettingsWebviewBody({
         .then((h: unknown) => {
           if (disposed || typeof h !== 'number' || !Number.isFinite(h)) return;
           const clamped = Math.max(AUTO_HEIGHT_MIN, Math.min(AUTO_HEIGHT_MAX, Math.ceil(h)));
-          lastMeasuredHeights.set(manifest.id, clamped);
+          lastMeasuredHeights.set(`${dataOwnerId ?? ''}:${manifest.id}`, clamped);
           setAutoHeight((cur) => (cur === clamped ? cur : clamped));
         })
         .catch(() => {})
@@ -404,6 +408,8 @@ function SettingsWebviewBody({
     manifest.resolvedLocale,
     settingsHtml,
     fixedHeight,
+    dataOwnerId,
+    partitionClaim,
   ]);
 
   if (crashed) {
@@ -455,6 +461,8 @@ export function GhostSettingsWebview({
   appearance?: 'settings' | 'plugin';
 }): ReactNode {
   const { t } = useTranslation();
+  const { mode, dataOwnerId } = useAuth();
+  const ownerKey = `${mode}:${dataOwnerId ?? ''}`;
   const { manifest } = ghost;
   if (!manifest.settingsHtml) return null;
   return (
@@ -478,7 +486,12 @@ export function GhostSettingsWebview({
         </p>
       </div>
       {ghost.enabled ? (
-        <SettingsWebviewBody ghost={ghost} appearance={appearance} />
+        <SettingsWebviewBody
+          key={ownerKey}
+          ghost={ghost}
+          appearance={appearance}
+          dataOwnerId={dataOwnerId}
+        />
       ) : (
         <AsleepHint appearance={appearance} />
       )}
