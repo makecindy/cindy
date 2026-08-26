@@ -417,8 +417,12 @@ export function generatedFileVisibleSignature(file: GeneratedFileRef): string {
 }
 
 /** 未完成的 tool_use 在本轮还没封口时不 stat:文件多半还没落盘。 */
-export function isGeneratedFileStatable(file: GeneratedFileRef, turnEndMs: number | null): boolean {
-  return file.ready !== false || turnEndMs !== null;
+export function isGeneratedFileStatable(
+  file: GeneratedFileRef,
+  turnEndMs: number | null,
+  turnSealed = false,
+): boolean {
+  return file.ready !== false || turnEndMs !== null || turnSealed;
 }
 
 /**
@@ -429,12 +433,14 @@ export function generatedFilesCheckKey(
   files: readonly GeneratedFileRef[],
   turnStartMs: number | null,
   turnEndMs: number | null,
+  turnSealed = false,
 ): string {
   return [
     String(turnStartMs ?? ''),
     String(turnEndMs ?? ''),
+    turnSealed ? '1' : '0',
     ...files
-      .filter((file) => isGeneratedFileStatable(file, turnEndMs))
+      .filter((file) => isGeneratedFileStatable(file, turnEndMs, turnSealed))
       .map((file) => generatedFileVisibleSignature(file)),
   ].join('\0');
 }
@@ -501,9 +507,11 @@ export function planGeneratedFilesVisibility(input: {
   envChanged: boolean;
   turnWindowChanged: boolean;
   forceRestat?: boolean;
+  turnSealed?: boolean;
 }): { visible: GeneratedFileRef[] | null; toStat: GeneratedFileRef[] } {
+  const turnSealed = input.turnSealed === true;
   const statable = input.candidates.filter((file) =>
-    isGeneratedFileStatable(file, input.turnEndMs),
+    isGeneratedFileStatable(file, input.turnEndMs, turnSealed),
   );
   if (input.envChanged) {
     return { visible: null, toStat: statable };
@@ -512,7 +520,8 @@ export function planGeneratedFilesVisibility(input: {
   const hasIncomingReplacement = statable.some((file) => !previousPaths.has(file.path));
   const visible = retainVisibleGeneratedFiles(input.previousVisible, input.candidates, {
     // 有新候选在 stat 时暂留旧 chip，避免 A→C 中间卸卡；单纯删除没有替补则立刻撤。
-    dropMissing: input.turnEndMs !== null || !hasIncomingReplacement,
+    // 最新一轮没有后续 user 边界时 turnEndMs 仍是 null，要用封口信号触发复核。
+    dropMissing: input.turnEndMs !== null || turnSealed || !hasIncomingReplacement,
   });
   if (input.turnWindowChanged || input.forceRestat) {
     return { visible, toStat: statable };
@@ -550,16 +559,18 @@ function generatedFilesCardPropsEqual(
     files: readonly GeneratedFileRef[];
     turnStartMs: number | null;
     turnEndMs: number | null;
+    turnSealed?: boolean;
   },
   next: {
     files: readonly GeneratedFileRef[];
     turnStartMs: number | null;
     turnEndMs: number | null;
+    turnSealed?: boolean;
   },
 ): boolean {
   return (
-    generatedFilesCheckKey(prev.files, prev.turnStartMs, prev.turnEndMs) ===
-    generatedFilesCheckKey(next.files, next.turnStartMs, next.turnEndMs)
+    generatedFilesCheckKey(prev.files, prev.turnStartMs, prev.turnEndMs, prev.turnSealed) ===
+    generatedFilesCheckKey(next.files, next.turnStartMs, next.turnEndMs, next.turnSealed)
   );
 }
 
@@ -567,10 +578,12 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   files,
   turnStartMs,
   turnEndMs,
+  turnSealed = false,
 }: {
   files: readonly GeneratedFileRef[];
   turnStartMs: number | null;
   turnEndMs: number | null;
+  turnSealed?: boolean;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
@@ -580,26 +593,28 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   const [existing, setExisting] = useState<GeneratedFileRef[] | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [remoteVerdictGen, setRemoteVerdictGen] = useState(0);
-  const checkKey = generatedFilesCheckKey(files, turnStartMs, turnEndMs);
+  const checkKey = generatedFilesCheckKey(files, turnStartMs, turnEndMs, turnSealed);
   const filesRef = useRef(files);
   filesRef.current = files;
   const visibleRef = useRef<GeneratedFileRef[] | null>(null);
   const checkEnvRef = useRef({ remoteOrigin, workingDir: fileCtx.workingDir });
-  const turnWindowRef = useRef({ turnStartMs, turnEndMs });
+  const turnWindowRef = useRef({ turnStartMs, turnEndMs, turnSealed });
   const remoteVerdictGenRef = useRef(remoteVerdictGen);
 
   useEffect(() => {
     if (!remoteOrigin) return;
     const watched = new Set(
       files
-        .filter((file) => file.source === 'tool' && isGeneratedFileStatable(file, turnEndMs))
+        .filter(
+          (file) => file.source === 'tool' && isGeneratedFileStatable(file, turnEndMs, turnSealed),
+        )
         .map((file) => remotePathVerdictKey(remoteOrigin, fileCtx.workingDir, file.path)),
     );
     if (watched.size === 0) return;
     return subscribeRemotePathVerdictChange((key) => {
       if (watched.has(key)) setRemoteVerdictGen((generation) => generation + 1);
     });
-  }, [remoteOrigin, fileCtx.workingDir, checkKey, files, turnEndMs]);
+  }, [remoteOrigin, fileCtx.workingDir, checkKey, files, turnEndMs, turnSealed]);
 
   useEffect(() => {
     let cancelled = false;
@@ -609,10 +624,11 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       checkEnvRef.current.workingDir !== fileCtx.workingDir;
     const turnWindowChanged =
       turnWindowRef.current.turnStartMs !== turnStartMs ||
-      turnWindowRef.current.turnEndMs !== turnEndMs;
+      turnWindowRef.current.turnEndMs !== turnEndMs ||
+      turnWindowRef.current.turnSealed !== turnSealed;
     const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen;
     checkEnvRef.current = { remoteOrigin, workingDir: fileCtx.workingDir };
-    turnWindowRef.current = { turnStartMs, turnEndMs };
+    turnWindowRef.current = { turnStartMs, turnEndMs, turnSealed };
     remoteVerdictGenRef.current = remoteVerdictGen;
 
     const plan = planGeneratedFilesVisibility({
@@ -622,6 +638,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       envChanged,
       turnWindowChanged,
       forceRestat,
+      turnSealed,
     });
     visibleRef.current = plan.visible;
     if (plan.visible === null) {
@@ -685,7 +702,15 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     return () => {
       cancelled = true;
     };
-  }, [checkKey, remoteOrigin, turnStartMs, turnEndMs, fileCtx.workingDir, remoteVerdictGen]);
+  }, [
+    checkKey,
+    remoteOrigin,
+    turnStartMs,
+    turnEndMs,
+    turnSealed,
+    fileCtx.workingDir,
+    remoteVerdictGen,
+  ]);
 
   if (!existing || existing.length === 0) return null;
 

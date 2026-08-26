@@ -193,6 +193,13 @@ describe('isGeneratedFileStatable', () => {
     expect(isGeneratedFileStatable({ ...toolFile, ready: false }, END)).toBe(true);
     expect(isGeneratedFileStatable(toolFile, null)).toBe(true);
   });
+
+  it('treats a sealed latest turn like a closed time window', () => {
+    expect(isGeneratedFileStatable({ ...toolFile, ready: false }, null, true)).toBe(true);
+    const openKey = generatedFilesCheckKey([toolFile], START, null, false);
+    const sealedKey = generatedFilesCheckKey([toolFile], START, null, true);
+    expect(sealedKey).not.toBe(openKey);
+  });
 });
 
 describe('planGeneratedFilesVisibility', () => {

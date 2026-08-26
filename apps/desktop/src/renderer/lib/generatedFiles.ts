@@ -788,9 +788,14 @@ export function collectGeneratedFiles(
         const existing = byKey.get(key);
         const artifactConfirmed = parseToolResult(resultContent)?.ok === true;
         if (existing) {
-          existing.artifact = artifact;
-          if (artifactConfirmed) existing.artifactConfirmed = true;
-          if (toolReady) delete existing.ready;
+          // 同路径第二次文档工具还在跑时，保留第一次已确认的交付，不要用未落地预览覆盖。
+          if (!toolReady || toolFailed) {
+            /* keep existing */
+          } else {
+            existing.artifact = artifact;
+            if (artifactConfirmed) existing.artifactConfirmed = true;
+            delete existing.ready;
+          }
         } else {
           byKey.set(key, {
             path: abs,

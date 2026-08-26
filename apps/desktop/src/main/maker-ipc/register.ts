@@ -4345,7 +4345,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       } else if (event.type === 'tool_result_full') {
         const r = onToolResultFullEvent(
           session.id,
-          event.data as { toolUseId?: unknown; fullText?: unknown },
+          event.data as { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
         );

@@ -493,6 +493,8 @@ type GeneratedFilesRenderItem = {
   files: GeneratedFileRef[];
   turnStartMs: number | null;
   turnEndMs: number | null;
+  /** 最新一轮没有后续 user 边界时 turnEndMs 仍为空，用封口信号触发完成后复核。 */
+  turnSealed?: boolean;
 };
 
 /** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
@@ -1727,12 +1729,23 @@ export function buildRenderItems(
       }
     }
     const boundaryTimestamp = Date.parse(messages[hi]?.createdAt ?? '');
+    const hasFollowingUser = hi < messages.length;
+    const turnSealed =
+      hasFollowingUser ||
+      slice.some(
+        (message) =>
+          message.turnCompleted === true ||
+          (message.turnMoney?.amount ?? 0) > 0 ||
+          (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
+          message.turnUsageDetails !== undefined,
+      );
     items.push({
       type: 'generated_files',
       key: `genfiles-${messages[lo].clientId}`,
       files: generatedFiles,
       turnStartMs,
       turnEndMs: Number.isFinite(boundaryTimestamp) ? boundaryTimestamp : null,
+      turnSealed,
     });
   };
   let i = 0;
@@ -2141,8 +2154,12 @@ export function reuseGeneratedFilesRenderItems(
     const previous = cache.get(item.key);
     if (
       previous &&
-      generatedFilesCheckKey(previous.files, previous.turnStartMs, previous.turnEndMs) ===
-        generatedFilesCheckKey(item.files, item.turnStartMs, item.turnEndMs)
+      generatedFilesCheckKey(
+        previous.files,
+        previous.turnStartMs,
+        previous.turnEndMs,
+        previous.turnSealed,
+      ) === generatedFilesCheckKey(item.files, item.turnStartMs, item.turnEndMs, item.turnSealed)
     ) {
       if (previous !== item) swapped = true;
       return previous;
@@ -5907,6 +5924,7 @@ export function MessageStream({
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
+                          turnSealed={item.turnSealed === true}
                         />
                       );
                     }

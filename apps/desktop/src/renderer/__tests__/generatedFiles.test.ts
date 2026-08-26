@@ -174,6 +174,35 @@ describe('collectGeneratedFiles', () => {
     expect(files).toEqual([]);
   });
 
+  it('does not drop a created path when the later delete is wrapped as a tool_use_error', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'new.txt', content: 'hi' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+        {
+          role: 'tool_use',
+          toolName: 'file_change',
+          toolUseId: 'd1',
+          toolInput: {
+            changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'd1',
+          content: '<tool_use_error>delete new.txt</tool_use_error>',
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
   it('drops a created path that the same turn later deletes', () => {
     const files = collectGeneratedFiles(
       [
@@ -199,6 +228,45 @@ describe('collectGeneratedFiles', () => {
       WORKDIR,
     );
     expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('keeps a confirmed document preview while a second write is still in flight', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'make_xlsx',
+          toolUseId: 'x1',
+          toolInput: {
+            outPath: 'documents/progress.xlsx',
+            sheets: [{ name: '旧表', header: ['A'] }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'x1',
+          content: JSON.stringify({ ok: true }),
+        },
+        {
+          role: 'tool_use',
+          toolName: 'make_xlsx',
+          toolUseId: 'x2',
+          toolInput: {
+            outPath: 'documents/progress.xlsx',
+            sheets: [{ name: '新表', header: ['B'] }],
+          },
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files).toHaveLength(1);
+    expect(files[0].artifactConfirmed).toBe(true);
+    expect(files[0].ready).not.toBe(false);
+    expect(files[0].artifact?.preview).toMatchObject({
+      kind: 'sheet',
+      hasHeader: true,
+      rows: [['A']],
+    });
   });
 
   it('keeps a created path when the later delete result is an explicit failure', () => {
