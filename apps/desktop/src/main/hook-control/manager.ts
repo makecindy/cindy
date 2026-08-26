@@ -217,11 +217,17 @@ export interface HookControlManagerDeps {
    * Slack / Telegram / X 进入「已连接 ∧ live 已绑定」时通知, 供本机偏好做一次
    * 迁移导入并镜像到 /model 卡。未绑定的 welcome 不得触发(空 prefs.get 会关掉
    * 一次性迁移窗口)。可重入, 调用方自行去重。
-   * 中立渠道换绑时带上前后 bindingId, 供调用方清掉上一身份的本机行。
+   * 换绑时带上前后身份, 供调用方清掉上一身份的本机行。
+   * Telegram / X 用 bindingId；Slack 用 slackUserId（同 team 换用户也算换绑）。
    */
   onHookReadyForPrefsMirror?: (
     provider: HookProvider,
-    change?: { previousBindingId: string | null; bindingId: string | null },
+    change?: {
+      previousBindingId?: string | null;
+      bindingId?: string | null;
+      previousSlackUserId?: string | null;
+      slackUserId?: string | null;
+    },
   ) => void;
   notifyTelegramBehavior?: (view: TelegramHookBehaviorState) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
@@ -976,8 +982,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     return multiTeamKnown() ? activeBindings().length > 0 : binding?.state === 'confirmed';
   }
 
-  function maybeMirrorSlackPrefs(): void {
-    if (slackBoundForPrefsMirror()) onHookReadyForPrefsMirror?.('slack');
+  function maybeMirrorSlackPrefs(change?: {
+    previousSlackUserId?: string | null;
+    slackUserId?: string | null;
+  }): void {
+    if (slackBoundForPrefsMirror()) onHookReadyForPrefsMirror?.('slack', change);
   }
 
   /** 只在 provider 构建期 gate 真翻转时通知 host 失效 Codex MCP 缓存。 */
@@ -1419,11 +1428,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           previousBindingId: lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null,
           bindingId: view.bindingId ?? null,
         });
-      } else if (
-        view.state === 'revoked' ||
-        view.state === 'none' ||
-        view.state === 'superseded'
-      ) {
+      } else if (view.state === 'revoked' || view.state === 'none' || view.state === 'superseded') {
         resetTelegramEmojiReactions();
       }
     } else if (lane.config.provider === 'x' && view.state === 'confirmed') {
@@ -1920,6 +1925,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       openAuthorizeOnNextPending = false;
       pendingBind = null;
       const teamId = payload.teamId ?? null;
+      let slackIdentityChange:
+        { previousSlackUserId: string | null; slackUserId: string | null } | undefined;
       if (teamId !== null && payload.slackUserId !== null) {
         const row: HookTeamBindingView = {
           teamId,
@@ -1929,6 +1936,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           displaced: false,
         };
         const idx = multiBindings.findIndex((b) => b.teamId === teamId);
+        slackIdentityChange = {
+          previousSlackUserId: idx >= 0 ? multiBindings[idx].slackUserId : null,
+          slackUserId: payload.slackUserId,
+        };
         // 「添加 workspace」流落在已绑定的活跃 team 上: Slack 授权页右上角的
         // workspace 下拉默认停在当前登录的 workspace, 用户没切换就点了允许 ——
         // 结果只是刷新原绑定, 列表不变。若不提示, 用户看到的是"点了添加却毫无
@@ -1957,7 +1968,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // teamId 缺失属异常(multi server 恒下发): 不猜行, 等随后的 bind.state 对齐
       notifySlackToolProviderEnabledIfChanged();
       notifyStatus(toView());
-      maybeMirrorSlackPrefs();
+      maybeMirrorSlackPrefs(slackIdentityChange);
       return;
     }
     if (state === 'revoked') {
@@ -2157,6 +2168,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 离线期间被另一台设备顶掉」的冷启动场景(实时被顶走 revoked 事件)。
       const snap = msg.payload.bindings;
       const snapIds = new Set(snap.map((e) => e.teamId));
+      const previousUsers = new Map(multiBindings.map((row) => [row.teamId, row.slackUserId]));
       const next: HookTeamBindingView[] = snap.map((e) => ({
         teamId: e.teamId,
         teamName: e.teamName,
@@ -2166,6 +2178,15 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }));
       for (const row of multiBindings) {
         if (!snapIds.has(row.teamId)) next.push({ ...row, displaced: true });
+      }
+      let slackIdentityChange: { previousSlackUserId: string; slackUserId: string } | undefined;
+      for (const row of next) {
+        if (row.displaced) continue;
+        const previousSlackUserId = previousUsers.get(row.teamId);
+        if (previousSlackUserId && previousSlackUserId !== row.slackUserId) {
+          slackIdentityChange = { previousSlackUserId, slackUserId: row.slackUserId };
+          break;
+        }
       }
       multiBindings = next;
       persistBindingsCache();
@@ -2188,7 +2209,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
       }
       notifyStatus(toView());
-      maybeMirrorSlackPrefs();
+      maybeMirrorSlackPrefs(slackIdentityChange);
       log.info(`bind.state: ${snap.length} bindings`);
       return;
     }
@@ -2285,8 +2306,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         pending.resolve(view);
         return;
       }
-      const currentBindingId =
-        lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
+      const currentBindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
       if (msg.payload.bindingId !== currentBindingId) {
         log.warn('stale provider prefs push for a different binding, dropped');
         return;
@@ -2344,6 +2364,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return;
       }
       const authorizeUrl = msg.payload.authorizeUrl ?? null;
+      const previousSlackUserId = binding?.slackUserId ?? null;
       binding = {
         state: msg.payload.state,
         slackUserId: msg.payload.slackUserId,
@@ -2433,7 +2454,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         log.info(`slack hook auto-disabled on bind.update=${msg.payload.state}`);
       }
       notifyStatus(toView());
-      if (msg.payload.state === 'confirmed') maybeMirrorSlackPrefs();
+      if (msg.payload.state === 'confirmed') {
+        maybeMirrorSlackPrefs({
+          previousSlackUserId,
+          slackUserId: msg.payload.slackUserId,
+        });
+      }
       log.info(`bind.update: ${msg.payload.state}`);
       return;
     }
@@ -2870,7 +2896,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       for (const lane of lanes) {
         if (lane.transport !== null && lane.status === 'connected') {
           attempted = true;
-          sent = lane.transport.send(makeHello(buildHello(lane.config.helloFeatures, false, lane.config.provider))) && sent;
+          sent =
+            lane.transport.send(
+              makeHello(buildHello(lane.config.helloFeatures, false, lane.config.provider)),
+            ) && sent;
         }
       }
       return attempted && sent;

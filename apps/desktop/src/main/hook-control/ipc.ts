@@ -572,14 +572,18 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         broadcastProviderPrefs(providerLocalPrefsView(view.provider));
       },
       onHookReadyForPrefsMirror: (provider, change) => {
-        if (
-          (provider === 'telegram' || provider === 'x') &&
-          change?.previousBindingId &&
-          change.bindingId &&
-          change.previousBindingId !== change.bindingId
-        ) {
-          resetChannelWorkspacePrefs(provider);
-        }
+        const rebound =
+          Boolean(
+            change?.previousBindingId &&
+              change.bindingId &&
+              change.previousBindingId !== change.bindingId,
+          ) ||
+          Boolean(
+            change?.previousSlackUserId &&
+              change.slackUserId &&
+              change.previousSlackUserId !== change.slackUserId,
+          );
+        if (rebound) resetChannelWorkspacePrefs(provider);
         void mirrorWorkspacePrefs(provider);
       },
       notifyTelegramBehavior: broadcastTelegramBehavior,
