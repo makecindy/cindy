@@ -104,6 +104,23 @@ interface AgentsCacheEntry {
 }
 const agentsCache = new Map<string, AgentsCacheEntry>();
 const inFlight = new Map<string, Promise<ReadonlySet<MakerVendor>>>();
+/**
+ * 每个 roster 缓存 key 的失效代际。收到 roster push 后递增，使 push 之前发起的
+ * 在途请求不能把旧的 agent 集合重新写回缓存或覆盖当前 hook 状态。
+ */
+const agentsCacheGeneration = new Map<string, number>();
+
+function currentAgentsCacheGeneration(key: string): number {
+  return agentsCacheGeneration.get(key) ?? 0;
+}
+
+function invalidateAgentsCache(key: string): number {
+  const generation = currentAgentsCacheGeneration(key) + 1;
+  agentsCacheGeneration.set(key, generation);
+  agentsCache.delete(key);
+  inFlight.delete(key);
+  return generation;
+}
 
 function cacheKeyOf(deviceId?: string | null): string {
   return deviceId ?? '';
@@ -113,10 +130,15 @@ function loadAvailableAgents(deviceId?: string | null): Promise<ReadonlySet<Make
   const key = cacheKeyOf(deviceId);
   const pending = inFlight.get(key);
   if (pending) return pending;
+  const requestGeneration = currentAgentsCacheGeneration(key);
   const promise = fetchAvailableAgents(deviceId)
     .then((agents) => {
       const vendors: ReadonlySet<MakerVendor> = new Set(agents.map(toVendor));
-      agentsCache.set(key, { vendors, fetchedAt: Date.now() });
+      // A roster push can invalidate this request while the IPC call is pending. Do not
+      // let that pre-change response become the authoritative cache entry.
+      if (currentAgentsCacheGeneration(key) === requestGeneration) {
+        agentsCache.set(key, { vendors, fetchedAt: Date.now() });
+      }
       return vendors;
     })
     .finally(() => {
@@ -151,9 +173,11 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     setAvailableVendors(hit?.vendors ?? new Set());
     setLoaded(hit !== undefined);
     const run = (): void => {
+      const key = cacheKeyOf(deviceId);
+      const requestGeneration = currentAgentsCacheGeneration(key);
       loadAvailableAgents(deviceId)
         .then((vendors) => {
-          if (cancelled) return;
+          if (cancelled || currentAgentsCacheGeneration(key) !== requestGeneration) return;
           setAvailableVendors(vendors);
           setLoaded(true);
         })
@@ -178,8 +202,7 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
       // Main has completed a runtime registration; bypass focus throttling so
       // the picker reflects the new agent in the same process immediately.
       const key = cacheKeyOf(deviceId);
-      agentsCache.delete(key);
-      inFlight.delete(key);
+      invalidateAgentsCache(key);
       if (deviceId) refreshRemoteCapabilitiesOnce(deviceId);
       else refreshLocalCapabilitiesOnce();
       run();
@@ -207,6 +230,13 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
 
 /** 测试用 —— 清进程内缓存与在途请求(其它代码不应调用)。 */
 export function __resetAvailableAgentsCacheForTest(): void {
+  for (const key of new Set([
+    ...agentsCache.keys(),
+    ...inFlight.keys(),
+    ...agentsCacheGeneration.keys(),
+  ])) {
+    invalidateAgentsCache(key);
+  }
   agentsCache.clear();
   inFlight.clear();
 }
