@@ -291,7 +291,7 @@ describe('turn-done list preview refresh', () => {
       'const preview = extractMessagePreview(row.content, row.role);',
     );
     expect(broadcastBlock).toContain(
-      'await persistSessionListPreview(sessionId, preview, row.role);',
+      'await persistSessionListPreview(sessionId, preview, row.role, row.createdAt);',
     );
     expect(broadcastBlock).toContain('patch: { preview }');
     expect(broadcastBlock).not.toContain('if (!preview) return;');

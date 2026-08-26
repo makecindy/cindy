@@ -48,9 +48,8 @@ describe('performMessageDeletion', () => {
     expect(deletionBlock).toContain(
       'preview = extractMessagePreview(latest?.content, latest?.role);',
     );
-    expect(deletionBlock).toContain(
-      'await persistSessionListPreview(sessionId, preview, latest?.role ?? null);',
-    );
+    expect(deletionBlock).toContain('await persistSessionListPreview(');
+    expect(deletionBlock).toContain('latest?.createdAt');
     expect(deletionBlock).not.toContain('.where(eq(messages.sessionId, sessionId))');
   });
 

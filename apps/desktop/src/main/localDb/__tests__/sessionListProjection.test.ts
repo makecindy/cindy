@@ -174,39 +174,22 @@ describe('sessionToCamel list preview cache', () => {
 });
 
 describe('session list projection backfill SQL', () => {
-  it('fills only NULL columns and leaves already-cached values alone', () => {
+  it('recomputes NULL columns from messages and ignores stale payload values', () => {
     const db = openPreviewDb();
     db.prepare(
-      `INSERT INTO sessions (id, list_preview, list_preview_role, list_message_count)
-       VALUES (?, NULL, NULL, NULL), (?, 'keep me', 'user', NULL), (?, NULL, NULL, 7)`,
+      `INSERT INTO sessions (id, cleared_at, list_preview, list_preview_role, list_message_count)
+       VALUES (?, NULL, NULL, NULL, NULL), (?, NULL, 'keep me', 'user', NULL), (?, NULL, NULL, NULL, 7)`,
     ).run('s1', 's2', 's3');
+    db.prepare(
+      `INSERT INTO messages (id, session_id, role, content, created_at)
+       VALUES (?, 's1', 'assistant', ?, 2), (?, 's1', 'user', ?, 1), (?, 's2', 'assistant', ?, 1)`,
+    ).run('m1', JSON.stringify('hello'), 'm0', JSON.stringify({ text: 'older' }), 'm2', JSON.stringify('stale'));
 
     db.prepare(SESSION_LIST_PROJECTION_BACKFILL_SQL).run(
       JSON.stringify([
-        {
-          id: 's1',
-          preview: 'hello',
-          role: 'assistant',
-          count: 3,
-          hasPreview: 1,
-          hasCount: 1,
-        },
-        {
-          id: 's2',
-          preview: 'overwrite?',
-          role: 'assistant',
-          count: 9,
-          hasPreview: 1,
-          hasCount: 1,
-        },
-        {
-          id: 's3',
-          preview: 'new preview',
-          role: 'user',
-          count: 99,
-          hasPreview: 1,
-          hasCount: 1,
-        },
+        { id: 's1', preview: 'stale payload', role: 'user', count: 99, hasPreview: 1, hasCount: 1 },
+        { id: 's2', preview: 'overwrite?', role: 'assistant', count: 9, hasPreview: 1, hasCount: 1 },
+        { id: 's3', preview: 'new preview', role: 'user', count: 99, hasPreview: 1, hasCount: 1 },
       ]),
     );
 
@@ -217,35 +200,38 @@ describe('session list projection backfill SQL', () => {
         )
         .all(),
     ).toEqual([
-      { id: 's1', list_preview: 'hello', list_preview_role: 'assistant', list_message_count: 3 },
-      { id: 's2', list_preview: 'keep me', list_preview_role: 'user', list_message_count: 9 },
-      { id: 's3', list_preview: 'new preview', list_preview_role: 'user', list_message_count: 7 },
+      { id: 's1', list_preview: 'hello', list_preview_role: 'assistant', list_message_count: 2 },
+      { id: 's2', list_preview: 'keep me', list_preview_role: 'user', list_message_count: 1 },
+      { id: 's3', list_preview: null, list_preview_role: null, list_message_count: 7 },
     ]);
     db.close();
   });
 
-  it('can write count without touching a NULL preview', () => {
+  it('does not write a pre-clear preview when cleared_at moved after list computed', () => {
     const db = openPreviewDb();
     db.prepare(
-      'INSERT INTO sessions (id, list_preview, list_preview_role, list_message_count) VALUES (?, NULL, NULL, NULL)',
+      `INSERT INTO sessions (id, cleared_at, list_preview, list_preview_role, list_message_count)
+       VALUES (?, 50, NULL, NULL, NULL)`,
     ).run('s1');
+    db.prepare(
+      `INSERT INTO messages (id, session_id, role, content, created_at)
+       VALUES (?, 's1', 'assistant', ?, 10), (?, 's1', 'user', ?, 80)`,
+    ).run('old', JSON.stringify('hidden'), 'fresh', JSON.stringify({ text: 'after clear' }));
+
     db.prepare(SESSION_LIST_PROJECTION_BACKFILL_SQL).run(
-      JSON.stringify([
-        {
-          id: 's1',
-          preview: null,
-          role: null,
-          count: 4,
-          hasPreview: 0,
-          hasCount: 1,
-        },
-      ]),
+      JSON.stringify([{ id: 's1', preview: 'hidden', role: 'assistant', count: 2 }]),
     );
     expect(
       db
-        .prepare('SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?')
+        .prepare(
+          'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+        )
         .get('s1'),
-    ).toEqual({ list_preview: null, list_preview_role: null, list_message_count: 4 });
+    ).toEqual({
+      list_preview: 'after clear',
+      list_preview_role: 'user',
+      list_message_count: 2,
+    });
     db.close();
   });
 

@@ -175,7 +175,7 @@ async function maybeBroadcastSessionListPreview(
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   const preview = extractMessagePreview(row.content, row.role);
   try {
-    await persistSessionListPreview(sessionId, preview, row.role);
+    await persistSessionListPreview(sessionId, preview, row.role, row.createdAt);
   } catch (err) {
     log.warn('session list preview persist failed (swallowed)', {
       sessionId,
@@ -961,7 +961,12 @@ export async function commitMessageDeletion(
   try {
     const latest = await latestVisiblePreviewRow(sessionId);
     preview = extractMessagePreview(latest?.content, latest?.role);
-    await persistSessionListPreview(sessionId, preview, latest?.role ?? null);
+    await persistSessionListPreview(
+      sessionId,
+      preview,
+      latest?.role ?? null,
+      latest?.createdAt,
+    );
   } catch (error) {
     // 删除已经原子提交；message.delete 事务已把 list_preview / role / count 置 NULL，
     // 投影刷新失败不能把成功操作伪装成失败。广播保守空值，list 回落子查询。

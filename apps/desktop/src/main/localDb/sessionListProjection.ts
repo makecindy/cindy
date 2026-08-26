@@ -2,7 +2,7 @@
  * sessions:list 的投影回填：写路径把 preview / count 落到 sessions 可空列。
  * SQL 片段见 sessionListProjection.sql.ts。
  */
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current.js';
 import { sessions } from './schema.js';
@@ -48,12 +48,31 @@ export async function persistSessionListPreview(
   sessionId: string,
   preview: string | null,
   role: string | null,
+  visibleCreatedAt?: number | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
+  if (preview == null) {
+    await db
+      .update(sessions)
+      .set({ listPreview: null, listPreviewRole: null })
+      .where(eq(sessions.id, sessionId));
+    return;
+  }
+  const createdAt =
+    typeof visibleCreatedAt === 'number' && Number.isFinite(visibleCreatedAt)
+      ? Math.floor(visibleCreatedAt)
+      : null;
   await db
     .update(sessions)
     .set({ listPreview: preview, listPreviewRole: role })
-    .where(eq(sessions.id, sessionId));
+    .where(
+      and(
+        eq(sessions.id, sessionId),
+        createdAt == null
+          ? isNull(sessions.clearedAt)
+          : or(isNull(sessions.clearedAt), sql`${sessions.clearedAt} < ${createdAt}`),
+      ),
+    );
 }
 
 export async function incrementSessionListMessageCount(sessionId: string): Promise<void> {
