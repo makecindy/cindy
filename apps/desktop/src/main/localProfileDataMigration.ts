@@ -19,6 +19,7 @@ import {
   restrictDbFilePermissions,
 } from './localDb/betterSqliteFactory.js';
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
+import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
 
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
 export const LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX = '.local-profile-migration.json';
@@ -32,6 +33,7 @@ const DB_SIDECAR_SUFFIXES = ['-wal', '-shm'] as const;
 export interface LocalProfileDataMigrationFs {
   pathExists(file: string): Promise<boolean>;
   readFile(file: string): Promise<string>;
+  readDir(directory: string): Promise<string[]>;
   backupDatabase(source: string, target: string): Promise<void>;
   link(source: string, target: string): Promise<void>;
   removeIfExists(file: string): Promise<void>;
@@ -60,6 +62,7 @@ const realFs: LocalProfileDataMigrationFs = {
     }
   },
   readFile: (file) => fs.promises.readFile(file, 'utf8'),
+  readDir: (directory) => fs.promises.readdir(directory),
   backupDatabase: async (source, target) => {
     const db = createBetterSqliteDatabase(source, { readonly: true, fileMustExist: true });
     try {
@@ -165,6 +168,12 @@ export interface LocalProfileMigrationReservationDetails {
   claimToken?: string;
 }
 
+export type PendingLocalProfileReservationRecovery =
+  | 'none'
+  | 'finalized'
+  | 'released'
+  | 'failed';
+
 interface LocalProfileMigrationMarker {
   ownerId: string;
   claimToken?: string;
@@ -240,6 +249,19 @@ function publishLocalProfileMigrationMarker(
       // A random private candidate cannot affect ownership decisions.
     }
   }
+}
+
+function replaceLocalProfileMigrationMarker(marker: string, contents: string): void {
+  atomicWriteFileSync(marker, contents);
+  if (process.platform !== 'win32') {
+    const finalHandle = fs.openSync(marker, 'r');
+    try {
+      fs.fsyncSync(finalHandle);
+    } finally {
+      fs.closeSync(finalHandle);
+    }
+  }
+  syncMarkerDirectory(marker);
 }
 
 function reserveLocalProfileDataOwnerWhileLocked(
@@ -339,10 +361,65 @@ export function releaseLocalProfileDataOwner(
   });
 }
 
+/**
+ * Settle a durable pre-commit claim before another cloud-owner transition.
+ * A token belonging to the currently committed owner is finalized in place;
+ * any other token is an interrupted reservation and is released. Markers
+ * without a token are already committed and are never changed here.
+ */
+export function recoverPendingLocalProfileDataOwner(
+  committedOwnerId: string | null,
+  userDataDir: string,
+  dbFilePrefix: string,
+): PendingLocalProfileReservationRecovery {
+  const normalizedCommittedOwnerId = committedOwnerId?.trim() || null;
+  const marker = path.join(
+    userDataDir,
+    `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
+  );
+  return withLocalProfileMigrationLock<PendingLocalProfileReservationRecovery>(
+    marker,
+    'failed',
+    () => {
+      try {
+        const parsed = parseLocalProfileMigrationMarker(fs.readFileSync(marker, 'utf8'));
+        if (!parsed) {
+          fs.unlinkSync(marker);
+          syncMarkerDirectory(marker);
+          return 'released';
+        }
+        if (!parsed.claimToken) return 'none';
+        if (parsed.ownerId === normalizedCommittedOwnerId) {
+          replaceLocalProfileMigrationMarker(
+            marker,
+            `${JSON.stringify({ ownerId: parsed.ownerId, claimedAt: Date.now() })}\n`,
+          );
+          return 'finalized';
+        }
+        fs.unlinkSync(marker);
+        syncMarkerDirectory(marker);
+        return 'released';
+      } catch (error) {
+        return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'none' : 'failed';
+      }
+    },
+  );
+}
+
 async function cleanupTemps(deps: LocalProfileDataMigrationDeps, targetDb: string): Promise<void> {
-  await deps.fs.removeIfExists(`${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`);
-  for (const suffix of DB_SIDECAR_SUFFIXES) {
-    await deps.fs.removeIfExists(`${targetDb}${suffix}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`);
+  const directory = path.dirname(targetDb);
+  const targetName = path.basename(targetDb);
+  const prefixes = [
+    `${targetName}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`,
+    ...DB_SIDECAR_SUFFIXES.map(
+      (suffix) => `${targetName}${suffix}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`,
+    ),
+  ];
+  const entries = await deps.fs.readDir(directory);
+  for (const entry of entries) {
+    if (prefixes.some((prefix) => entry === prefix || entry.startsWith(`${prefix}.`))) {
+      await deps.fs.removeIfExists(path.join(directory, entry));
+    }
   }
 }
 

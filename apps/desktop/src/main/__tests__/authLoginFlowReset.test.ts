@@ -309,16 +309,25 @@ describe('auth login-flow reset', () => {
     const prepareBody = source.slice(prepareStart, prepareEnd);
 
     expect(prepareBody).toContain(
-      'rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId);',
+      'rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);',
     );
     expect(prepareBody.indexOf('reserveCloudOwnerData')).toBeLessThan(
       prepareBody.indexOf('await opts.prepareCommit?.();'),
     );
     expect(source).toContain('repairStableCloudOwnerDataReservations(currentUser.id);');
-    expect(source).toContain(
-      'const rollback = rollbackReservation as unknown as (() => void) | null;',
+    expect(source).toContain('if (reservation && !reservation.finalize())');
+    expect(source).toContain('if (!reservation.rollback())');
+    expect(source).toContain('if (boundaryCommitApplied || commitApplied) return;');
+
+    const failureStart = source.indexOf(
+      'onCommitFailure: ({ commitApplied: boundaryCommitApplied }) => {',
+      cloudStart,
     );
-    expect(source).toContain('if (boundaryCommitApplied) return;');
+    const failureEnd = source.indexOf('\n      },\n    });', failureStart);
+    const failureBody = source.slice(failureStart, failureEnd);
+    expect(failureBody.indexOf('if (!reservation.rollback())')).toBeLessThan(
+      failureBody.indexOf('rollbackReservation = null;'),
+    );
 
     const repairStart = source.indexOf('function repairStableCloudOwnerDataReservations(');
     const repairEnd = source.indexOf('\n}\n\nfunction commitCloudAppSession(', repairStart);

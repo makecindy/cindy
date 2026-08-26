@@ -31,6 +31,7 @@ import {
   isNativeProviderAuthSelfAuthorized,
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
+  recoverPendingLegacyNativeProviderAuthOwner,
   reserveLegacyNativeProviderAuthOwner,
   reserveLegacyNativeProviderAuthOwnerDetailed,
   releaseLegacyNativeProviderAuthOwner,
@@ -170,6 +171,42 @@ describe('local → cloud native provider binding migration', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
     session.dataOwnerId = 'owner-a';
     expect(releaseLegacyNativeProviderAuthOwner('owner-a', reservation.claimToken!)).toBe(true);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('claimed');
+  });
+
+  it('finalizes a pending native reservation for the committed owner', () => {
+    const reservation = reserveLegacyNativeProviderAuthOwnerDetailed('owner-a');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner('owner-a')).toBe('finalized');
+    expect(releaseLegacyNativeProviderAuthOwner('owner-a', reservation.claimToken!)).toBe(false);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('recovers an interrupted native reservation before a different owner commits', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('released');
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('claimed');
+  });
+
+  it('keeps a pending native reservation recoverable after a binding write failure', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('binding write failed'), { code: 'EIO' });
+    });
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('failed');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      legacyClaimOwner: 'owner-a',
+      legacyClaimToken: expect.any(String),
+    });
+
+    renameSpy.mockRestore();
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('released');
     session.dataOwnerId = 'owner-b';
     expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('claimed');
   });

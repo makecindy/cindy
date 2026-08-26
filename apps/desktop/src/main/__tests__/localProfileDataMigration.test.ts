@@ -10,6 +10,7 @@ import {
   LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX,
   LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
+  recoverPendingLocalProfileDataOwner,
   reserveLocalProfileDataOwner,
   reserveLocalProfileDataOwnerDetailed,
   releaseLocalProfileDataOwner,
@@ -34,6 +35,7 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
             () => false,
           ),
         readFile: (file) => fs.readFile(file, 'utf8'),
+        readDir: (directory) => fs.readdir(directory),
         backupDatabase: (source, target) => fs.copyFile(source, target),
         link: (source, target) => fs.link(source, target),
         removeIfExists: (file) => fs.rm(file, { force: true }),
@@ -95,6 +97,44 @@ describe('adoptLocalProfileDatabase', () => {
     expect(releaseLocalProfileDataOwner('owner-a', root, 'cindy', reservation.claimToken!)).toBe(
       true,
     );
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('claimed');
+  });
+
+  it('finalizes a pending claim for the committed owner', async () => {
+    const { root } = await fixture();
+    const reservation = reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+
+    expect(recoverPendingLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('finalized');
+    expect(releaseLocalProfileDataOwner('owner-a', root, 'cindy', reservation.claimToken!)).toBe(
+      false,
+    );
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
+  it('recovers an interrupted pending claim before a different owner commits', async () => {
+    const { root } = await fixture();
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+
+    expect(recoverPendingLocalProfileDataOwner(null, root, 'cindy')).toBe('released');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('claimed');
+  });
+
+  it('keeps a pending claim recoverable when the migration lock is temporarily busy', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    const lockDb = createBetterSqliteDatabase(`${marker}${LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX}`);
+    lockDb.exec('BEGIN IMMEDIATE');
+    try {
+      expect(recoverPendingLocalProfileDataOwner(null, root, 'cindy')).toBe('failed');
+      await expect(fs.readFile(marker, 'utf8')).resolves.toContain('owner-a');
+    } finally {
+      lockDb.exec('ROLLBACK');
+      lockDb.close();
+    }
+
+    expect(recoverPendingLocalProfileDataOwner(null, root, 'cindy')).toBe('released');
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('claimed');
   });
 
@@ -326,12 +366,23 @@ describe('adoptLocalProfileDatabase', () => {
     const target = path.join(root, 'cindy-owner-a.db');
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
     await fs.writeFile(`${target}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`, 'stale');
+    await fs.writeFile(`${target}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.attempt-a`, 'stale-copy');
     await fs.writeFile(`${target}-wal${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`, 'stale-wal');
+    await fs.writeFile(
+      `${target}-shm${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.attempt-b`,
+      'stale-shm-copy',
+    );
 
     await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
       status: 'adopted',
     });
     await expect(fs.access(`${target}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`)).rejects.toThrow();
+    await expect(
+      fs.access(`${target}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.attempt-a`),
+    ).rejects.toThrow();
     await expect(fs.access(`${target}-wal${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`)).rejects.toThrow();
+    await expect(
+      fs.access(`${target}-shm${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.attempt-b`),
+    ).rejects.toThrow();
   });
 });

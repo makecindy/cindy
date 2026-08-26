@@ -118,10 +118,12 @@ import {
 } from './ownerNamespaceMigration.js';
 import {
   migrateLocalNativeProviderAuthBindings,
+  recoverPendingLegacyNativeProviderAuthOwner,
   releaseLegacyNativeProviderAuthOwner,
   reserveLegacyNativeProviderAuthOwnerDetailed,
 } from './maker-host/nativeProviderAuthBinding.js';
 import {
+  recoverPendingLocalProfileDataOwner,
   releaseLocalProfileDataOwner,
   reserveLocalProfileDataOwnerDetailed,
 } from './localProfileDataMigration.js';
@@ -896,7 +898,7 @@ async function withCloudOwnerCommit<T>(opts: {
   let result!: T;
   let committed = false;
   let commitApplied = false;
-  let rollbackReservation: (() => void) | null = null;
+  let rollbackReservation: CloudOwnerDataReservation | null = null;
   try {
     result = await withGhostSkillProjectionOwnerCommit({
       previousOwnerId: opts.previousOwnerId,
@@ -922,12 +924,17 @@ async function withCloudOwnerCommit<T>(opts: {
         }
       },
       prepareCommit: async () => {
-        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId);
+        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);
         await opts.prepareCommit?.();
       },
       commit: async () => {
         const result = await opts.commit();
         commitApplied = true;
+        const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+        if (reservation && !reservation.finalize()) {
+          throw new Error('cloud owner data reservation finalization remains pending');
+        }
+        rollbackReservation = null;
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
@@ -940,18 +947,20 @@ async function withCloudOwnerCommit<T>(opts: {
         // The cloud session/token commit is already durable at this point. A
         // later projection-state publication failure must keep the first-owner
         // reservations so another account cannot inherit the same local data.
-        if (boundaryCommitApplied) return;
-        const rollback = rollbackReservation as unknown as (() => void) | null;
+        if (boundaryCommitApplied || commitApplied) return;
+        const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+        if (!reservation) return;
+        if (!reservation.rollback()) {
+          throw new Error('cloud owner data reservation rollback remains pending');
+        }
         rollbackReservation = null;
-        if (rollback) rollback();
       },
     });
     committed = true;
   } finally {
     if (!committed && !commitApplied) {
-      const rollback = rollbackReservation as unknown as (() => void) | null;
-      rollbackReservation = null;
-      if (rollback) rollback();
+      const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+      if (reservation?.rollback()) rollbackReservation = null;
     }
     const release = releaseBoundary as (() => void) | null;
     release?.();
@@ -1128,9 +1137,30 @@ async function recoverAccountFreeOwnerAtStartup(
   });
 }
 
-function reserveCloudOwnerData(ownerId: string): () => void {
+interface CloudOwnerDataReservation {
+  rollback(): boolean;
+  finalize(): boolean;
+}
+
+function recoverCloudOwnerDataReservations(committedOwnerId: string | null): boolean {
+  const profileRecovery = recoverPendingLocalProfileDataOwner(
+    committedOwnerId,
+    app.getPath('userData'),
+    BRAND_IDENTITY.dbFilePrefix,
+  );
+  const nativeRecovery = recoverPendingLegacyNativeProviderAuthOwner(committedOwnerId);
+  return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
+}
+
+function reserveCloudOwnerData(
+  ownerId: string,
+  previousOwnerId: string | null,
+): CloudOwnerDataReservation {
   const rollbackActions: Array<() => void> = [];
   try {
+    if (!recoverCloudOwnerDataReservations(previousOwnerId)) {
+      throw new Error('pending cloud owner data reservation recovery failed');
+    }
     const profileReservation = reserveLocalProfileDataOwnerDetailed(
       ownerId,
       app.getPath('userData'),
@@ -1169,8 +1199,12 @@ function reserveCloudOwnerData(ownerId: string): () => void {
         nativeReservation: nativeReservation.status,
       });
     }
-    return () => {
-      for (const rollback of rollbackActions.reverse()) rollback();
+    return {
+      rollback: () => {
+        for (const rollback of rollbackActions.reverse()) rollback();
+        return recoverCloudOwnerDataReservations(previousOwnerId);
+      },
+      finalize: () => recoverCloudOwnerDataReservations(ownerId),
     };
   } catch (error) {
     for (const rollback of rollbackActions.reverse()) rollback();
@@ -1183,6 +1217,11 @@ function repairStableCloudOwnerDataReservations(ownerId: string): void {
     'failed';
   let nativeReservation: ReturnType<typeof reserveLegacyNativeProviderAuthOwnerDetailed>['status'] =
     'failed';
+
+  if (!recoverCloudOwnerDataReservations(ownerId)) {
+    log.error('stable cloud owner reservation recovery failed', { ownerId });
+    return;
+  }
   try {
     profileReservation = reserveLocalProfileDataOwnerDetailed(
       ownerId,

@@ -223,6 +223,12 @@ export interface LegacyNativeProviderAuthReservationDetails {
   claimToken?: string;
 }
 
+export type PendingLegacyNativeProviderAuthRecovery =
+  | 'none'
+  | 'finalized'
+  | 'released'
+  | 'failed';
+
 /** Reserve the one-shot native-provider namespace at the verified cloud commit edge. */
 export function reserveLegacyNativeProviderAuthOwnerDetailed(
   ownerId: string,
@@ -284,6 +290,38 @@ export function releaseLegacyNativeProviderAuthOwner(ownerId: string, claimToken
       return true;
     } catch {
       return false;
+    }
+  });
+}
+
+/**
+ * Settle a durable pre-commit legacy-namespace claim. The token belonging to
+ * the currently committed cloud owner is finalized; a token for any other
+ * owner is an interrupted reservation and is released. Tokenless ownership is
+ * already committed and remains untouched.
+ */
+export function recoverPendingLegacyNativeProviderAuthOwner(
+  committedOwnerId: string | null,
+): PendingLegacyNativeProviderAuthRecovery {
+  const normalizedCommittedOwnerId = committedOwnerId?.trim() || null;
+  return withNativeBindingMutationLock<PendingLegacyNativeProviderAuthRecovery>('failed', () => {
+    try {
+      const read = readBindingsOrFail();
+      if (!read.ok) return 'failed';
+      const bindings = read.bindings;
+      if (!bindings.legacyClaimToken) return 'none';
+      const next = { ...bindings };
+      if (bindings.legacyClaimOwner === normalizedCommittedOwnerId) {
+        delete next.legacyClaimToken;
+        writeBindings(next);
+        return 'finalized';
+      }
+      delete next.legacyClaimOwner;
+      delete next.legacyClaimToken;
+      writeBindings(next);
+      return 'released';
+    } catch {
+      return 'failed';
     }
   });
 }
