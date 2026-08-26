@@ -3190,6 +3190,24 @@ export class AgentInputCoordinator {
     this.clearAbortReconcileRetry(state);
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
+    if (
+      active &&
+      this.shouldIgnoreUnownedTerminal(
+        active,
+        meta,
+        this.readObservedCurrentTurnTerminal(sessionId),
+      )
+    ) {
+      log.warn('ignored terminal that does not belong to leftover activeTurn', {
+        sessionId,
+        type,
+        clientId: active.item?.clientId ?? null,
+        boundGeneration: active.vendorTurnGeneration ?? null,
+        eventGeneration: meta?.sessionTurnGeneration ?? null,
+      });
+      this.emit(sessionId);
+      return;
+    }
     if (type === 'error') {
       if (
         active &&
@@ -3770,6 +3788,21 @@ export class AgentInputCoordinator {
     if (typeof observed.generation !== 'number') return false;
     if (typeof active.vendorTurnGeneration !== 'number') return false;
     return observed.generation === active.vendorTurnGeneration;
+  }
+
+  private shouldIgnoreUnownedTerminal(
+    active: ActiveTurn,
+    meta: { sessionTurnGeneration?: number } | undefined,
+    observed: ReturnType<AgentInputCoordinator['readObservedCurrentTurnTerminal']>,
+  ): boolean {
+    if (typeof active.vendorTurnGeneration !== 'number') return false;
+    if (typeof meta?.sessionTurnGeneration === 'number') {
+      return meta.sessionTurnGeneration !== active.vendorTurnGeneration;
+    }
+    if (observed && observed.kind !== 'none' && typeof observed.generation === 'number') {
+      return observed.generation !== active.vendorTurnGeneration;
+    }
+    return false;
   }
 
   private canReclaimLeftoverActiveTurn(sessionId: string, state: SessionInputState): boolean {

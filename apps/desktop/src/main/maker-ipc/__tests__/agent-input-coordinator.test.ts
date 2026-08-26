@@ -7418,6 +7418,121 @@ describe('AgentInputCoordinator steer transaction', () => {
     }
   });
 
+  it('does not settle leftover activeTurn from a later-generation done callback', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-direct-next-turn-done-mismatch';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-direct-send'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 2,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles leftover activeTurn when the matching generation done arrives after a later turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-late-matching-done-after-direct-send';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-direct-send'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 2,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-direct-send',
+      });
+      expect(latestProjection(h.projections).recovery).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not recover leftover activeTurn from a later-generation error callback', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-direct-next-turn-error-mismatch';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-direct-send'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 2,
+        message: 'later turn failed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'error', 'later turn failed', undefined, {
+        sessionTurnGeneration: 2,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('routes a leftover terminal error through recovery even when the tracker stays busy', async () => {
     vi.useFakeTimers();
     try {
