@@ -65,6 +65,7 @@ import {
   buildSharedDbCompatibilityMessage,
 } from './sharedDbCompatibilityMessage';
 import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalDialogPolicy';
+import { runPendingDbSlimmingAtStartup } from './dbSlimmingStartup';
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
@@ -105,6 +106,10 @@ export function getCurrentUserId(): string | null {
 
 function dbPath(userId: string): string {
   return path.join(app.getPath('userData'), `${BRAND_IDENTITY.dbFilePrefix}-${userId}.db`);
+}
+
+export function getDbPathForUser(userId: string): string {
+  return dbPath(userId);
 }
 
 export type EnsureReadyResult =
@@ -200,6 +205,24 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       exists: fs.existsSync(filePath),
     }),
   );
+
+  const maintenance = await runPendingDbSlimmingAtStartup({
+    userDataDir: app.getPath('userData'),
+    dbFilePath: filePath,
+    ownerId: userId,
+    leaseKind: startupLease.kind,
+    loadVectorExtension: (maintenanceDb) => loadSqliteVec(maintenanceDb).loaded,
+    log,
+  });
+  if (maintenance.handled && startupLease.kind === 'writer') {
+    resetSqliteVecState();
+  }
+  if (!maintenance.originalDatabaseReady) {
+    const message = '数据库瘦身恢复失败，Cindy 已停止打开本地数据库以避免覆盖原始数据。';
+    showFatalDialog('本地数据库无法安全恢复', message, 'DB_CORRUPT_NO_BACKUP');
+    releaseSchemaLeasesAfterFailure();
+    return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message } };
+  }
 
   try {
     _db = openWithPragmas(filePath);

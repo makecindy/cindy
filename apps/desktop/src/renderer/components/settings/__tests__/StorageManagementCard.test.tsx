@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { toast } = vi.hoisted(() => ({
@@ -39,13 +39,39 @@ function storageApi() {
   };
 }
 
+function maintenanceApi() {
+  return {
+    getLastResult: vi.fn(async () => null),
+    scan: vi.fn(async (input: { archiveAgeMonths: 1 | 3 | 6 }) => ({
+      scanId: 'scan-1',
+      archiveAgeMonths: input.archiveAgeMonths,
+      scannedAt: 1_000,
+      archivedBeforeMs: 500,
+      deletedTaskCount: 1,
+      archivedTaskCount: 2,
+      messageCount: 3,
+      estimatedMessageBytes: 100,
+      databaseBytes: 1_000,
+      temporaryBytesRequired: 2_000,
+      databaseVolumeFreeBytes: 10_000,
+    })),
+    chooseBackupDirectory: vi.fn(async () => ({
+      selected: true as const,
+      grantId: 'directory-grant',
+      displayPath: 'D:\\Backups',
+    })),
+    schedule: vi.fn(async () => ({ scheduled: true as const })),
+    openLastBackupDirectory: vi.fn(async () => ({ opened: true })),
+  };
+}
+
 beforeEach(() => {
   toast.success.mockReset();
   toast.error.mockReset();
   toast.info.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { cindyMediaStorage: storageApi() },
+    value: { cindyMediaStorage: storageApi(), localDb: { maintenance: maintenanceApi() } },
   });
 });
 
@@ -154,6 +180,111 @@ describe('StorageManagementCard fixed cache directories', () => {
     await waitFor(() => {
       expect(window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir).toHaveBeenCalledWith();
       expect(toast.success).toHaveBeenCalledWith('settings.about.storage.chatAttachmentsCleared');
+    });
+  });
+});
+
+describe('StorageManagementCard database slimming', () => {
+  it('offers only 1, 3, and 6 months, defaults to 3 months, and scans that threshold', async () => {
+    render(<StorageManagementCard />);
+
+    const threshold = screen.getByRole('combobox');
+    expect(threshold.textContent).toContain(
+      'settings.about.storage.dbSlimmingArchiveAgeOption3',
+    );
+    fireEvent.click(threshold);
+    const options = screen.getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      'settings.about.storage.dbSlimmingArchiveAgeOption1',
+      'settings.about.storage.dbSlimmingArchiveAgeOption3',
+      'settings.about.storage.dbSlimmingArchiveAgeOption6',
+    ]);
+    fireEvent.click(options[1]!);
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
+    const scanButton = screen.getByRole('button', {
+      name: 'settings.about.storage.dbSlimmingScanButton',
+    });
+    fireEvent.click(scanButton);
+
+    await waitFor(() => {
+      expect(window.electronAPI.localDb.maintenance.scan).toHaveBeenCalledWith({
+        archiveAgeMonths: 3,
+      });
+    });
+    await waitFor(() => expect(scanButton.getAttribute('aria-busy')).toBeNull());
+  });
+
+  it('shows a disabled busy state while a database scan is running', async () => {
+    let resolveScan!: (value: Awaited<ReturnType<ReturnType<typeof maintenanceApi>['scan']>>) => void;
+    vi.mocked(window.electronAPI.localDb.maintenance.scan).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveScan = resolve;
+        }),
+    );
+    render(<StorageManagementCard />);
+
+    const scanButton = screen.getByRole('button', {
+      name: 'settings.about.storage.dbSlimmingScanButton',
+    });
+    fireEvent.click(scanButton);
+
+    await waitFor(() => {
+      expect(scanButton.getAttribute('aria-busy')).toBe('true');
+      expect((scanButton as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    await act(async () => {
+      resolveScan({
+        scanId: 'scan-busy',
+        archiveAgeMonths: 3,
+        scannedAt: 1_000,
+        archivedBeforeMs: 500,
+        deletedTaskCount: 1,
+        archivedTaskCount: 2,
+        messageCount: 3,
+        estimatedMessageBytes: 100,
+        databaseBytes: 1_000,
+        temporaryBytesRequired: 2_000,
+        databaseVolumeFreeBytes: 10_000,
+      });
+    });
+    await waitFor(() => expect((scanButton as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('passes only main-issued scan and directory grants when scheduling a restart', async () => {
+    render(<StorageManagementCard />);
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.about.storage.dbSlimmingChooseDirectoryButton',
+      }),
+    );
+    await waitFor(() => {
+      expect(window.electronAPI.localDb.maintenance.chooseBackupDirectory).toHaveBeenCalledWith();
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }),
+    );
+    await screen.findByText('settings.about.storage.dbSlimmingReportTasks');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingConfirmButton' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.about.storage.dbSlimmingRestartButton',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(window.electronAPI.localDb.maintenance.schedule).toHaveBeenCalledWith({
+        scanId: 'scan-1',
+        backupEnabled: true,
+        backupDirectoryGrantId: 'directory-grant',
+      });
     });
   });
 });

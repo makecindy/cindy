@@ -4851,6 +4851,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       userId: string,
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
       ipcRenderer.invoke('local-db:ensure-ready', userId),
+    maintenance: {
+      scan: (
+        input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
+      ): Promise<import('../shared/localDbMaintenance').DbSlimmingScanResult> =>
+        ipcRenderer.invoke('local-db:maintenance:scan', input),
+      chooseBackupDirectory: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingBackupDirectorySelection
+      > => ipcRenderer.invoke('local-db:maintenance:choose-backup-directory'),
+      schedule: (
+        input: import('../shared/localDbMaintenance').DbSlimmingScheduleInput,
+      ): Promise<import('../shared/localDbMaintenance').DbSlimmingScheduleResult> =>
+        ipcRenderer.invoke('local-db:maintenance:schedule', input),
+      getLastResult: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingResult | null
+      > => ipcRenderer.invoke('local-db:maintenance:last-result'),
+      openLastBackupDirectory: (): Promise<{ opened: boolean }> =>
+        ipcRenderer.invoke('local-db:maintenance:open-last-backup-directory'),
+    },
     sessions: {
       list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:list', limit, status, options),

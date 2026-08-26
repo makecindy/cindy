@@ -1794,6 +1794,18 @@
         "ko": "로컬 모델"
       },
       "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。"
+    },
+    {
+      "id": "database-slimming",
+      "status": "proposed",
+      "en": "Slim database",
+      "translations": {
+        "zh-CN": "数据库瘦身",
+        "zh-TW": "資料庫瘦身",
+        "ja": "データベースを圧縮",
+        "ko": "데이터베이스 슬리밍"
+      },
+      "note": "设置 → 存储空间内主动备份、清理非活跃任务消息并压缩本地数据库的功能名称。先登记为 proposed，待实际使用后再固化。"
     }
   ]
 }
