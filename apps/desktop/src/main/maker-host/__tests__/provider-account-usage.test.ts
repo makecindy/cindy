@@ -106,10 +106,12 @@ describe('provider account usage parsers', () => {
 
 describe('provider account usage service', () => {
   function harness(initialConfig: CustomProviderConfig) {
-    let currentConfig: CustomProviderConfig | null = initialConfig;
+    const configs = new Map<string, CustomProviderConfig | null>([['provider', initialConfig]]);
+    const keys = new Map<string, string | null>([['provider', 'secret-key']]);
+    const routeGenerations = new Map<string, number>();
+    const mutationsInProgress = new Set<string>();
     let configReadCount = 0;
     let failConfigReadsFrom = Number.POSITIVE_INFINITY;
-    let key: string | null = 'secret-key';
     let owner = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
     let ownerStampReadCount = 0;
     let scheduledOwnerSwitch: {
@@ -117,19 +119,17 @@ describe('provider account usage service', () => {
       owner: typeof owner;
       key: string | null;
     } | null = null;
-    let routeGeneration = 1;
-    let mutationInProgress = false;
     let now = 10_000;
     const fetchImpl = vi.fn<typeof fetch>();
     const service = createProviderAccountUsageService({
-      getConfig: async () => {
+      getConfig: async (providerId) => {
         configReadCount += 1;
         if (configReadCount >= failConfigReadsFrom) {
           throw new Error('local provider read failed with secret-key');
         }
-        return currentConfig;
+        return configs.get(providerId) ?? null;
       },
-      readKey: () => key,
+      readKey: (providerId) => keys.get(providerId) ?? null,
       getOwnerStamp: () => {
         ownerStampReadCount += 1;
         const stamp = { ...owner };
@@ -138,23 +138,25 @@ describe('provider account usage service', () => {
           scheduledOwnerSwitch = null;
           queueMicrotask(() => {
             owner = next.owner;
-            key = next.key;
+            keys.set('provider', next.key);
           });
         }
         return stamp;
       },
       getDeviceId: () => 'device-a',
-      getRouteMutationGeneration: () => routeGeneration,
-      isRouteMutationInProgress: () => mutationInProgress,
+      getRouteMutationGeneration: (providerId) => routeGenerations.get(providerId) ?? 0,
+      isRouteMutationInProgress: (providerId) => mutationsInProgress.has(providerId),
       fetchImpl,
       now: () => now,
     });
     return {
       service,
       fetchImpl,
-      setConfig(value: CustomProviderConfig | null) { currentConfig = value; },
+      setConfig(value: CustomProviderConfig | null, providerId = 'provider') {
+        configs.set(providerId, value);
+      },
       failConfigReadsStartingAt(readNumber: number) { failConfigReadsFrom = readNumber; },
-      setKey(value: string | null) { key = value; },
+      setKey(value: string | null, providerId = 'provider') { keys.set(providerId, value); },
       setOwner(value: typeof owner) { owner = value; },
       switchOwnerAfterStampReads(reads: number, value: typeof owner, nextKey: string | null) {
         scheduledOwnerSwitch = {
@@ -163,8 +165,13 @@ describe('provider account usage service', () => {
           key: nextKey,
         };
       },
-      setRouteGeneration(value: number) { routeGeneration = value; },
-      setMutationInProgress(value: boolean) { mutationInProgress = value; },
+      setRouteGeneration(value: number, providerId = 'provider') {
+        routeGenerations.set(providerId, value);
+      },
+      setMutationInProgress(value: boolean, providerId = 'provider') {
+        if (value) mutationsInProgress.add(providerId);
+        else mutationsInProgress.delete(providerId);
+      },
       advance(ms: number) { now += ms; },
     };
   }
@@ -388,6 +395,68 @@ describe('provider account usage service', () => {
       },
     }));
     expect(await pending).toEqual({ status: 'unavailable', error: 'superseded' });
+  });
+
+  it('keeps the cache and in-flight reads of a provider across an unrelated mutation', async () => {
+    // 供应商 B 是另一个 providerId，有自己的配置/key/世代——它的 mutation 不得误伤 A。
+    const h = harness(config('openrouter-key-usage-v1', 'https://openrouter.ai/api/v1'));
+    h.setConfig(config('deepseek-balance-v1', 'https://api.deepseek.com'), 'provider-b');
+    h.setKey('b-key', 'provider-b');
+    let release!: (value: Response) => void;
+    h.fetchImpl.mockReturnValue(new Promise<Response>((resolve) => { release = resolve; }));
+    const pending = h.service.read({ providerId: 'provider', agent: 'codex' });
+    await vi.waitFor(() => expect(h.fetchImpl).toHaveBeenCalledTimes(1));
+
+    // B 的 mutation 进行中（in-progress + 世代推进）：A 的在途读取不得判 superseded。
+    h.setMutationInProgress(true, 'provider-b');
+    h.setRouteGeneration(1, 'provider-b');
+    release(jsonResponse({
+      data: {
+        limit: 10,
+        limit_remaining: 9,
+        limit_reset: 'monthly',
+        usage: 1,
+        usage_daily: 1,
+        usage_weekly: 1,
+        usage_monthly: 1,
+      },
+    }));
+    expect(await pending).toMatchObject({ status: 'ready', stale: false });
+
+    // B 的 mutation 结束后，A 的五分钟缓存仍命中，不再请求上游。
+    h.setMutationInProgress(false, 'provider-b');
+    h.setRouteGeneration(2, 'provider-b');
+    expect(await h.service.read({ providerId: 'provider', agent: 'codex' }))
+      .toMatchObject({ status: 'ready', stale: false });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the cached snapshot when only the runtime model list changes', async () => {
+    const h = harness(config('openrouter-key-usage-v1', 'https://openrouter.ai/api/v1'));
+    h.fetchImpl.mockResolvedValue(jsonResponse({
+      data: {
+        limit: 10,
+        limit_remaining: 8,
+        limit_reset: 'monthly',
+        usage: 2,
+        usage_daily: 1,
+        usage_weekly: 2,
+        usage_monthly: 2,
+      },
+    }));
+    await h.service.read({ providerId: 'provider', agent: 'codex' });
+
+    // 模型清单编辑不影响账户查询端点，不得把已缓存的余额作废。
+    const updated = config('openrouter-key-usage-v1', 'https://openrouter.ai/api/v1');
+    updated.runtimes.codex!.models = [
+      { id: 'model', name: 'Model' },
+      { id: 'model-2', name: 'Model 2' },
+    ];
+    h.setConfig(updated);
+
+    expect(await h.service.read({ providerId: 'provider', agent: 'codex' }))
+      .toMatchObject({ status: 'ready', stale: false });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('rejects oversized bodies and reports credential/mutation states without fetching', async () => {

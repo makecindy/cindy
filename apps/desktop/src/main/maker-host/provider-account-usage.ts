@@ -334,6 +334,10 @@ export function createProviderAccountUsageService(deps: ProviderAccountUsageServ
     return {
       kind: 'ready',
       identity: {
+        // 缓存身份只覆盖会真正改变请求的因素：归属、设备、provider×agent、集成端点
+        // （origin 已在上方校验等于官方 origin）、本 provider 的 mutation 世代与 key 指纹。
+        // 不哈希整份 runtime——模型清单 / headers 变化不影响账户查询端点，编进 key 会让
+        // 每次目录刷新都把五分钟缓存整体作废（PR #3472 review）。
         cacheKey: identityDigest([
           ownerBefore.dataOwnerId,
           ownerBefore.generation,
@@ -341,8 +345,8 @@ export function createProviderAccountUsageService(deps: ProviderAccountUsageServ
           providerId,
           input.agent,
           integrationId,
+          runtimeUrl.origin,
           routeGeneration,
-          runtime,
           createHash('sha256').update(key).digest('hex'),
         ]),
         providerId,
