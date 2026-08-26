@@ -247,10 +247,14 @@ function broadcastProviderPrefs(view: ProviderPrefsView): void {
 }
 
 function slackAccountBound(view: SlackHookView): boolean {
-  if (view.serverMultiTeam) {
-    return view.enabled && view.bindings.some((b) => !b.displaced);
-  }
-  return view.binding?.state === 'confirmed';
+  if (!view.enabled) return false;
+  // 明确未绑定（在线 revoke / none）才关掉编辑。
+  if (view.binding?.state === 'none') return false;
+  if (view.binding?.state === 'confirmed') return true;
+  if (view.bindings.some((b) => !b.displaced)) return true;
+  // 单绑定冷启动：live binding 要等 bind.update，掉线重启时仍是 null。
+  // 开关开着且没有 none，视为上次已绑定，允许离线编辑。
+  return true;
 }
 
 function slackLocalPrefsView(): HookPrefsView {

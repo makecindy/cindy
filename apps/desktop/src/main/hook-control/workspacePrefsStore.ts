@@ -343,7 +343,7 @@ export function importWorkspacePrefsIfNeeded(
 /**
  * /model 卡主动推送的全量快照：尚未镜像的本机墓碑优先（未同步的清空不能被救活），
  * 快照里已经没有该键时丢掉墓碑；已同步的本机实值若快照省略该键，视为卡片删除；
- * 尚未镜像的本机实值保留。快照里的实值覆盖已同步行。
+ * 尚未镜像的本机实值无论快照有没有同键都保留。快照里的实值只覆盖已同步行。
  */
 export function applyIncomingServerWorkspacePrefs(
   channel: HookPrefsChannel,
@@ -370,7 +370,9 @@ export function applyIncomingServerWorkspacePrefs(
     }
     const serverRow = serverByKey.get(key);
     if (serverRow) {
-      nextChannel.push({ ...serverRow, rev: rowRev(localRow), dirty: false });
+      // 未镜像的本机实值不能被「别的目录」触发的全量快照盖掉。
+      if (isDirtyRow(localRow)) nextChannel.push(localRow);
+      else nextChannel.push({ ...serverRow, rev: rowRev(localRow), dirty: false });
       continue;
     }
     if (isDirtyRow(localRow)) nextChannel.push(localRow);

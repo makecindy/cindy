@@ -215,6 +215,28 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('slack', null, 'repo').model).toBe('from-card');
   });
 
+  it('全量快照含同一键时，未镜像实值仍保留，不被 server 旧值盖掉', () => {
+    setWorkspacePref('slack', null, 'chat', { model: 'offline-edit' });
+    applyIncomingServerWorkspacePrefs('slack', [
+      {
+        workspace: 'chat',
+        model: 'stale-server',
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+      },
+      {
+        workspace: 'other',
+        model: 'from-card',
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+      },
+    ]);
+    expect(getWorkspacePref('slack', null, 'chat').model).toBe('offline-edit');
+    expect(getWorkspacePref('slack', null, 'other').model).toBe('from-card');
+  });
+
   it('已同步实值在卡片快照省略该键时删除；未镜像实值保留', () => {
     const synced = setWorkspacePref('slack', null, 'repo', { model: 'old-local' });
     markWorkspacePrefMirrored('slack', null, 'repo', synced.rev);
