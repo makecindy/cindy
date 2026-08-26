@@ -115,6 +115,7 @@ import {
   claimLegacyOwnerNamespace,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
+import { migrateLocalNativeProviderAuthBindings } from './maker-host/nativeProviderAuthBinding.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import {
@@ -1103,6 +1104,25 @@ function commitCloudAppSession(ownerId: string): void {
     commitVolatileAppSession('cloud', ownerId);
   } else {
     commitActiveAppSession('cloud', ownerId);
+  }
+}
+
+/**
+ * Complete the one-way local → cloud native-provider ownership handoff after
+ * the durable owner boundary is stable. The binding layer keeps this
+ * fail-closed for other cloud owners and corrupted state.
+ */
+function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  try {
+    if (migrateLocalNativeProviderAuthBindings(ownerId)) {
+      log.info('migrated local native provider bindings to first cloud owner', { ownerId });
+    }
+  } catch (error) {
+    log.warn('local native provider binding migration failed', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -2471,6 +2491,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     } else {
       commitCloudAppSession(currentUser.id);
     }
+    migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);
     await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');
     return snapshotAuthState();
   }
@@ -2754,6 +2775,7 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
+    migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     scheduleCanaryFlagSync({
       token: refreshData.accessToken,
       expectedAuthEpoch: epochAtStart,
@@ -2928,6 +2950,7 @@ async function completeLogin(
       pendingAuthRealm = null;
     },
   });
+  migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
   scheduleCanaryFlagSync({
     token: outcome.accessToken,
     expectedAuthEpoch: loginEpoch,
@@ -3520,6 +3543,7 @@ export async function refresh(): Promise<boolean> {
             commitCloudAppSession(currentUser.id);
           },
         });
+        migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
         persistedRefreshTokenNeedsIdentityCheck = false;
         getProviderSecretStore().reconcileOwner(nextUser.id);
         if (accountSwitched) {
@@ -3577,6 +3601,7 @@ export async function refresh(): Promise<boolean> {
           commitCloudAppSession(currentUser.id);
         },
       });
+      migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
       notifyRenderer();

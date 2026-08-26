@@ -2,7 +2,11 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+  LOCAL_DATA_OWNER_ID,
+} from '../appSessionState.js';
 import {
   isConnectionSourceKind,
   NATIVE_PROVIDER_CONNECTION_SOURCE,
@@ -292,6 +296,55 @@ export function migrateLegacyNativeProviderAuthBindings(
     }
   }
   writeBindings(next);
+}
+
+/**
+ * Move native Harness credentials that were claimed by the account-free local
+ * session to the first verified cloud owner.
+ *
+ * Local mode uses a stable synthetic owner (`local-v1`) so provider reads can
+ * still be owner-scoped before login. Once a real Cindy account is verified,
+ * those same machine-level Claude/Codex credentials must follow that first
+ * cloud owner; otherwise the normal owner equality check correctly (but
+ * unexpectedly) hides them after login. This path is intentionally narrower
+ * than a generic claim: it only rewrites slots explicitly owned by local-v1,
+ * and an existing legacy claim owned by another account remains fail-closed.
+ */
+export function migrateLocalNativeProviderAuthBindings(ownerId: string): boolean {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) return false;
+  if (getActiveAppSession().dataOwnerId !== normalizedOwnerId) return false;
+  // This helper is called after the durable cloud commit. Keep the same floor
+  // as other binding writers for callers that accidentally invoke it during a
+  // different owner transition.
+  if (isAppSessionBoundaryPending()) return false;
+
+  const read = readBindingsOrFail();
+  if (!read.ok) return false;
+  const bindings = read.bindings;
+
+  // A prior cloud owner winning the legacy claim is authoritative. Do not let
+  // a later account inherit any local residue that was not moved at the time.
+  if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== normalizedOwnerId) {
+    return false;
+  }
+
+  const next: BindingFile = { ...bindings };
+  let migrated = false;
+  for (const provider of ['anthropic', 'openai'] as const) {
+    if (bindings.revoked && provider in bindings.revoked) continue;
+    if (bindings[provider] !== LOCAL_DATA_OWNER_ID) continue;
+    next[provider] = normalizedOwnerId;
+    migrated = true;
+  }
+  if (!migrated) return false;
+
+  // Reserve the one-shot legacy claim for this first cloud owner. This also
+  // prevents a later account from claiming another local credential that
+  // appears after the initial login.
+  if (!('legacyClaimOwner' in next)) next.legacyClaimOwner = normalizedOwnerId;
+  writeBindings(next);
+  return true;
 }
 
 /**

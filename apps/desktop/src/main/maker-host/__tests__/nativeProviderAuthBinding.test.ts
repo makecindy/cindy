@@ -11,6 +11,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../appSessionState.js', () => ({
+  LOCAL_DATA_OWNER_ID: 'local-v1',
   getActiveAppSession: () => ({
     mode: session.dataOwnerId ? 'cloud' : 'signed-out',
     dataOwnerId: session.dataOwnerId,
@@ -26,6 +27,7 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
@@ -66,6 +68,70 @@ describe('native provider auth legacy binding', () => {
     migrateLegacyNativeProviderAuthBindings('owner-b', { xai: true });
 
     expect(isNativeProviderAuthBound('xai')).toBe(false);
+  });
+});
+
+describe('local → cloud native provider binding migration', () => {
+  it('moves local-mode Harness bindings to the first cloud owner and preserves source metadata', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'local-v1',
+      sources: { openai: 'native-harness-inherited' },
+    });
+
+    session.dataOwnerId = 'owner-a';
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(true);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'owner-a',
+      legacyClaimOwner: 'owner-a',
+      sources: { openai: 'native-harness-inherited' },
+    });
+    expect(isNativeProviderAuthBound('openai')).toBe(true);
+  });
+
+  it('does not let a later cloud owner migrate local residue after another owner won the claim', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    const current = JSON.parse(fs.readFileSync(bindingFile, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ ...current, openai: 'local-v1', legacyClaimOwner: 'owner-a' }),
+    );
+
+    session.dataOwnerId = 'owner-b';
+    expect(migrateLocalNativeProviderAuthBindings('owner-b')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'local-v1',
+      legacyClaimOwner: 'owner-a',
+    });
+    expect(isNativeProviderAuthBound('openai')).toBe(false);
+  });
+
+  it('keeps explicitly revoked local credentials suppressed', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    unbindNativeProviderAuth('openai', { revoked: true });
+
+    session.dataOwnerId = 'owner-a';
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      revoked: { openai: 'local-v1' },
+    });
+    expect(isNativeProviderAuthBound('openai')).toBe(false);
+  });
+
+  it('does not write for a different active owner or while the session boundary is pending', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    session.dataOwnerId = 'owner-a';
+    session.boundaryPending = true;
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    session.boundaryPending = false;
+    expect(migrateLocalNativeProviderAuthBindings('owner-b')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'local-v1',
+    });
   });
 });
 
