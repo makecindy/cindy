@@ -40,6 +40,10 @@ CREATE TABLE sessions (
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
+  source TEXT NOT NULL DEFAULT 'desktop',
+  remote_host_id TEXT,
+  active_turn_started_at INTEGER,
+  last_turn_ended_at INTEGER,
   workspace_kind TEXT NOT NULL DEFAULT 'project',
   codex_history_has_product_prompt INTEGER,
   codex_plan_json TEXT,
@@ -181,6 +185,146 @@ describe('db worker tx handlers', () => {
       fs.rmSync(workerBundleDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    { useInlineWorker: false, status: 'archived' as const },
+    { useInlineWorker: true, status: 'archived' as const },
+    { useInlineWorker: false, status: 'deleted' as const },
+    { useInlineWorker: true, status: 'deleted' as const },
+  ])(
+    'compacts one explicit $status session without scanning history (inline=$useInlineWorker)',
+    async ({ useInlineWorker, status }) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          await seedSession(client, 'historical');
+          await client.exec("UPDATE sessions SET status = 'archived' WHERE id = 'historical'");
+          const largeText = 'x'.repeat(70 * 1024);
+          const jsonText = JSON.stringify('y'.repeat(70 * 1024));
+          await client.exec(
+            `INSERT INTO messages
+              (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at)
+             VALUES
+              ('large', 'large', 's1', 'tool_result', ?, 'tool-1', NULL, 1),
+              ('json-text', 'json-text', 's1', 'tool_result', ?, 'tool-2', NULL, 2),
+              ('small', 'small', 's1', 'tool_result', ?, 'tool-3', NULL, 3),
+              ('structured', 'structured', 's1', 'tool_result', ?, 'tool-4', NULL, 4),
+              ('structured-text', 'structured-text', 's1', 'tool_result', ?, 'tool-5', NULL, 5),
+              ('subagent', 'subagent', 's1', 'tool_result', ?, 'tool-6', ?, 6),
+              ('invalid-meta', 'invalid-meta', 's1', 'tool_result', ?, 'tool-7', '{', 7),
+              ('media-text', 'media-text', 's1', 'tool_result', ?, 'tool-8', NULL, 8),
+              ('agent-task-use', 'agent-task-use', 's1', 'tool_use', ?, 'collab-tool', NULL, 9),
+              ('agent-task-result', 'agent-task-result', 's1', 'tool_result', ?, 'collab-tool', NULL, 10),
+              ('historical-large', 'historical-large', 'historical', 'tool_result', ?, 'tool-historical', NULL, 11)`,
+            [
+              largeText,
+              jsonText,
+              JSON.stringify('small'),
+              JSON.stringify({ type: 'image', data: 'x'.repeat(70 * 1024) }),
+              JSON.stringify(JSON.stringify({ xdt_image_urls: ['x'.repeat(70 * 1024)] })),
+              largeText,
+              JSON.stringify({ parentUuid: 'toolu_123' }),
+              largeText,
+              `![image](cindy-media://blobs/${'a'.repeat(64)}.png)\n${'x'.repeat(70 * 1024)}`,
+              JSON.stringify({ toolUseId: 'collab-tool', toolName: 'collab:wait', input: {} }),
+              largeText,
+              largeText,
+            ],
+          );
+          await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [status, 's1']);
+
+          const result = await client.tx('toolResults.compactSession', {
+            sessionId: 's1',
+            now: 500,
+            minContentBytes: 16 * 1024,
+          });
+          expect(result).toEqual({
+            compactedRows: 2,
+            originalBytes: Buffer.byteLength(largeText) + Buffer.byteLength(jsonText),
+          });
+
+          const rows = await client.query<{ id: string; content: string }>(
+            `SELECT id, content
+               FROM messages WHERE role = 'tool_result' ORDER BY created_at`,
+          );
+          expect(JSON.parse(rows[0].content)).toEqual({
+            type: 'tool_result_compacted',
+            version: 1,
+            originalBytes: Buffer.byteLength(largeText),
+            compactedAt: 500,
+          });
+          expect(JSON.parse(rows[1].content)).toEqual({
+            type: 'tool_result_compacted',
+            version: 1,
+            originalBytes: Buffer.byteLength(jsonText),
+            compactedAt: 500,
+          });
+          expect(rows.find((row) => row.id === 'historical-large')?.content).toBe(largeText);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'skips remote, shared, Orca, and restored sessions while compacting persisted rows from an active-turn marker (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        for (const id of ['remote', 'shared', 'orca', 'turn', 'restored']) {
+          await seedSession(client, id);
+          await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", [id]);
+          await client.exec(
+            `INSERT INTO messages
+              (id, client_id, session_id, role, content, tool_use_id, created_at)
+             VALUES (?, ?, ?, 'tool_result', ?, ?, 1)`,
+            [
+              `message-${id}`,
+              `client-${id}`,
+              id,
+              JSON.stringify('x'.repeat(70 * 1024)),
+              `tool-${id}`,
+            ],
+          );
+        }
+        await client.exec("UPDATE sessions SET remote_host_id = 'host-1' WHERE id = 'remote'");
+        await client.exec("UPDATE sessions SET source = 'shared' WHERE id = 'shared'");
+        await client.exec("UPDATE sessions SET orca_role = 'lead' WHERE id = 'orca'");
+        await client.exec(
+          "UPDATE sessions SET active_turn_started_at = 10, last_turn_ended_at = 9 WHERE id = 'turn'",
+        );
+        await client.exec("UPDATE sessions SET status = 'active' WHERE id = 'restored'");
+
+        for (const sessionId of ['remote', 'shared', 'orca', 'restored']) {
+          await expect(
+            client.tx('toolResults.compactSession', {
+              sessionId,
+              now: 2,
+              minContentBytes: 16 * 1024,
+            }),
+          ).resolves.toEqual({ compactedRows: 0, originalBytes: 0 });
+        }
+        await expect(
+          client.tx('toolResults.compactSession', {
+            sessionId: 'turn',
+            now: 2,
+            minContentBytes: 16 * 1024,
+          }),
+        ).resolves.toEqual({ compactedRows: 1, originalBytes: 70 * 1024 + 2 });
+        const rows = await client.query<{ id: string; content: string }>(
+          'SELECT id, content FROM messages ORDER BY id',
+        );
+        expect(
+          rows.filter((row) => {
+            try {
+              return JSON.parse(row.content)?.type === 'tool_result_compacted';
+            } catch {
+              return false;
+            }
+          }).map((row) => row.id),
+        ).toEqual(['message-turn']);
+      }, { useInlineWorker });
+    },
+  );
 
   it('codex.importMessages skips likely local duplicates and upserts imported rows', async () => {
     await withClient(async (client) => {

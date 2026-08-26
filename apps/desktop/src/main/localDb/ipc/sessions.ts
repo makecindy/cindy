@@ -73,6 +73,7 @@ import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
+import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
@@ -101,6 +102,17 @@ function readCurrentDbClientUserId(): string | null {
   }
 }
 
+function compactTerminalSessionToolResults(
+  client: DbClient,
+  sessionId: string,
+  status: unknown,
+): void {
+  if (status !== 'archived' && status !== 'deleted') return;
+  void compactSessionToolResultsBestEffort({
+    client,
+    sessionId,
+  });
+}
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
 type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
@@ -1412,7 +1424,8 @@ export function registerSessionIpc(
     const sid = requireString(id, 'id');
     const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
-    const db = getDbClient().drizzle;
+    const dbClient = getDbClient();
+    const db = dbClient.drizzle;
     // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
     // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
     const update = async () => {
@@ -1653,6 +1666,7 @@ export function registerSessionIpc(
     scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
     notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
     cleanupSessionTerminalArtifacts(sid, p.status);
+    compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;
     };
     return p.workingDir === undefined ? update() : withSessionRouteLock(sid, update);
@@ -1730,7 +1744,8 @@ export async function patchSessionMetaInDb(
     throwIpcError('INVALID_PARAMS', 'title must be a string');
   }
 
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
@@ -1782,6 +1797,7 @@ export async function patchSessionMetaInDb(
       m.maybeGenerateSessionTaskSummary(sessionId, { force: true }),
     );
   }
+  compactTerminalSessionToolResults(dbClient, sessionId, patch.status);
   return updated;
 }
 
@@ -1909,6 +1925,9 @@ export async function setSessionsStatusInDb(
     }
     return rows;
   });
+  for (const item of applied) {
+    compactTerminalSessionToolResults(dbClient, item.sessionId, item.status);
+  }
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
       sessionId: item.sessionId,

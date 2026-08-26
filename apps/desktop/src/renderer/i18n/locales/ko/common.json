@@ -7535,6 +7535,7 @@
       "promptSend": "보내기",
       "promptCancel": "취소"
     },
+    "toolResultCompacted": "전체 도구 출력이 정리되었습니다(원래 크기 {{size}})",
     "agentActionRow": {
       "noContent": "표시할 내용이 없음",
       "fileChange": {

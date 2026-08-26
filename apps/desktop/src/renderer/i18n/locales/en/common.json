@@ -7538,6 +7538,7 @@
       "promptSend": "Send",
       "promptCancel": "Cancel"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "Nothing to display",
       "fileChange": {

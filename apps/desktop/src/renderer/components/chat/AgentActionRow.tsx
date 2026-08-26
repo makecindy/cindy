@@ -76,9 +76,10 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { formatBytes, TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import { parseToolResultCompactionMarker } from '@/lib/toolResultCompaction';
 
 /**
  * 点击走「文件类」交互(diff / 文稿 / 图片 lightbox)的工具:CC 大写 + pi 小写
@@ -682,6 +683,10 @@ export function AgentActionRow({
   status = 'done',
 }: AgentActionRowProps) {
   const { t } = useTranslation();
+  const compactedToolResult = parseToolResultCompactionMarker(toolResult);
+  const displayedToolResult = compactedToolResult
+    ? t('chat.toolResultCompacted', { size: formatBytes(compactedToolResult.originalBytes) })
+    : toolResult;
   // 会话文件来源:remote 时 Read 图片走远程媒体改写、文件打开走远程分流。
   const fileCtx = useChatSessionFile();
   const toolName = message.toolName ?? '';
@@ -750,8 +755,8 @@ export function AgentActionRow({
     descriptor.command
       ? descriptor.command
       : null;
-  const userFacingToolResult = toolResult
-    ? (humanizeDocumentToolResult(toolName, toolResult) ?? toolResult)
+  const userFacingToolResult = displayedToolResult
+    ? (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
     : null;
   const stats = useMemo(() => statsForToolCall(toolName, inp), [toolName, inp]);
   const isFilePathTool = FILE_PATH_TOOLS.has(toolName);
