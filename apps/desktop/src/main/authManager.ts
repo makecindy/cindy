@@ -404,7 +404,7 @@ function createAuthClient(
  * delete 兜底,防 ambient env 污染),线上零影响。env 由解析后的 profileKind
  * 不是 isolated-sandbox 且 passive 落地,覆盖正式目录与非隔离 custom 共库。
  */
-function isPassiveSharedUserDataInstance(): boolean {
+export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
@@ -2605,7 +2605,9 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       // This owner is already durably authenticated. Repair missing first-owner
       // reservations best-effort, but never turn malformed local metadata into
       // a renderer-visible logout while main remains signed in.
-      repairStableCloudOwnerDataReservations(currentUser.id);
+      if (!isPassiveSharedUserDataInstance()) {
+        repairStableCloudOwnerDataReservations(currentUser.id);
+      }
       commitCloudAppSession(currentUser.id);
     }
     migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);

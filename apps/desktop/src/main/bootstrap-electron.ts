@@ -7846,6 +7846,7 @@ app.on('ready', async () => {
       }
       const user = authManager.getAuthState().user;
       if (user == null || user.id !== userId) return;
+      if (authManager.isPassiveSharedUserDataInstance()) return;
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
       // 全量兜底,绝不 throw,失败不阻塞登录(ensureReady 照常建新库)。
       await runLegacyUserDataMigrationForUser(user.id);

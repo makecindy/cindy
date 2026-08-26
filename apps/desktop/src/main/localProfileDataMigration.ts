@@ -12,6 +12,7 @@
 import fs from 'original-fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import {
   createBetterSqliteDatabase,
@@ -21,15 +22,16 @@ import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
 export const LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX = '.local-profile-migration.json';
-export const LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX = '.local-profile-migration-lease';
+export const LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX = '.mutation-lock.sqlite';
+
+const LOCAL_PROFILE_MIGRATION_LOCK_TIMEOUT_MS = 30_000;
+const LOCAL_PROFILE_MIGRATION_LOCK_RETRY_MS = 25;
 
 const DB_SIDECAR_SUFFIXES = ['-wal', '-shm'] as const;
 
 export interface LocalProfileDataMigrationFs {
   pathExists(file: string): Promise<boolean>;
   readFile(file: string): Promise<string>;
-  createFileExclusive(file: string, contents: string): Promise<boolean>;
-  rename(source: string, target: string): Promise<void>;
   backupDatabase(source: string, target: string): Promise<void>;
   link(source: string, target: string): Promise<void>;
   removeIfExists(file: string): Promise<void>;
@@ -58,31 +60,6 @@ const realFs: LocalProfileDataMigrationFs = {
     }
   },
   readFile: (file) => fs.promises.readFile(file, 'utf8'),
-  createFileExclusive: async (file, contents) => {
-    const tmp = `${file}.${randomUUID()}.tmp`;
-    let handle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
-    try {
-      handle = await fs.promises.open(tmp, 'wx', 0o600);
-      await handle.writeFile(contents, 'utf8');
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await fs.promises.link(tmp, file);
-      try {
-        syncMarkerDirectory(file);
-      } catch (error) {
-        await fs.promises.rm(file, { force: true }).catch(() => undefined);
-        throw error;
-      }
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
-      throw error;
-    } finally {
-      await handle?.close().catch(() => undefined);
-      await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
-    }
-  },
   backupDatabase: async (source, target) => {
     const db = createBetterSqliteDatabase(source, { readonly: true, fileMustExist: true });
     try {
@@ -92,7 +69,6 @@ const realFs: LocalProfileDataMigrationFs = {
       db.close();
     }
   },
-  rename: (source, target) => fs.promises.rename(source, target),
   link: (source, target) => fs.promises.link(source, target),
   removeIfExists: (file) => fs.promises.rm(file, { force: true }),
 };
@@ -108,103 +84,76 @@ function migrationMarkerPath(deps: LocalProfileDataMigrationDeps): string {
   );
 }
 
-function migrationLeasePath(targetDb: string): string {
-  return `${targetDb}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`;
+type LocalProfileMigrationLockDb = ReturnType<typeof createBetterSqliteDatabase>;
+
+type LocalProfileMigrationLockAttempt =
+  | { status: 'acquired'; db: LocalProfileMigrationLockDb }
+  | { status: 'busy' }
+  | { status: 'failed'; error: unknown };
+
+function migrationLockPath(marker: string): string {
+  return `${marker}${LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX}`;
 }
 
-interface LocalProfileMigrationLease {
-  ownerId: string;
-  leaseId: string;
-  pid: number;
-  claimedAt: number;
-}
-
-function isProcessAlive(pid: number): boolean {
+function tryAcquireLocalProfileMigrationLock(marker: string): LocalProfileMigrationLockAttempt {
+  const lockDbPath = migrationLockPath(marker);
+  let db: LocalProfileMigrationLockDb | null = null;
   try {
-    process.kill(pid, 0);
-    return true;
+    fs.mkdirSync(path.dirname(lockDbPath), { recursive: true });
+    db = createBetterSqliteDatabase(lockDbPath);
+    db.pragma('busy_timeout = 0');
+    db.exec('BEGIN IMMEDIATE');
+    return { status: 'acquired', db };
   } catch (error) {
-    return (error as NodeJS.ErrnoException | null)?.code !== 'ESRCH';
-  }
-}
-
-function parseMigrationLease(raw: string): LocalProfileMigrationLease | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<LocalProfileMigrationLease>;
-    if (
-      typeof parsed.ownerId === 'string' &&
-      typeof parsed.leaseId === 'string' &&
-      Number.isInteger(parsed.pid) &&
-      typeof parsed.claimedAt === 'number'
-    ) {
-      return parsed as LocalProfileMigrationLease;
+    try {
+      db?.close();
+    } catch {
+      // Preserve the acquisition error; close is best effort on a failed open.
     }
-  } catch {
-    // A torn record is recoverable because production lease publication is atomic.
+    const code = (error as { code?: string } | null)?.code;
+    return code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED'
+      ? { status: 'busy' }
+      : { status: 'failed', error };
   }
-  return null;
 }
 
-async function removeMigrationLeaseIfMatches(
-  deps: LocalProfileDataMigrationDeps,
-  lease: string,
-  expectedLeaseId: string | null,
-): Promise<boolean> {
-  const candidate = `${lease}.reclaim.${randomUUID()}`;
+function releaseLocalProfileMigrationLock(db: LocalProfileMigrationLockDb): void {
   try {
-    // Rename claims the exact directory entry that was inspected. If another
-    // process reclaimed or replaced it first, this fails without touching the
-    // replacement lease.
-    await deps.fs.rename(lease, candidate);
+    db.exec('ROLLBACK');
   } catch {
-    return false;
+    // Closing the connection still releases SQLite's OS-level lock.
   }
-
-  const current = parseMigrationLease(await deps.fs.readFile(candidate).catch(() => ''));
-  const matches =
-    expectedLeaseId === null ? current === null : current?.leaseId === expectedLeaseId;
-  if (matches) {
-    await deps.fs.removeIfExists(candidate);
-    return true;
-  }
-
-  // Put a lease we did not own back only when the destination is still vacant;
-  // never replace a newer lease that won the race while we inspected this one.
-  try {
-    await deps.fs.link(candidate, lease);
-    await deps.fs.removeIfExists(candidate);
-  } catch {
-    // A newer lease may already occupy the path; keep the candidate for the
-    // next cleanup pass rather than deleting another process's lease.
-  }
-  return false;
+  db.close();
 }
 
-async function acquireMigrationLease(
-  deps: LocalProfileDataMigrationDeps,
-  lease: string,
-  ownerId: string,
-): Promise<string | null> {
-  const leaseId = randomUUID();
-  const contents = `${JSON.stringify({
-    ownerId,
-    leaseId,
-    pid: process.pid,
-    claimedAt: Date.now(),
-  } satisfies LocalProfileMigrationLease)}\n`;
+function withLocalProfileMigrationLock<T>(marker: string, fallback: T, operation: () => T): T {
+  const attempt = tryAcquireLocalProfileMigrationLock(marker);
+  if (attempt.status !== 'acquired') return fallback;
+  try {
+    return operation();
+  } finally {
+    releaseLocalProfileMigrationLock(attempt.db);
+  }
+}
+
+async function acquireLocalProfileMigrationLock(
+  marker: string,
+): Promise<LocalProfileMigrationLockDb> {
+  const deadline = performance.now() + LOCAL_PROFILE_MIGRATION_LOCK_TIMEOUT_MS;
   for (;;) {
-    if (await deps.fs.createFileExclusive(lease, contents)) return leaseId;
-
-    const current = parseMigrationLease(await deps.fs.readFile(lease).catch(() => ''));
-
-    if (current && isProcessAlive(current.pid)) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-      continue;
+    const attempt = tryAcquireLocalProfileMigrationLock(marker);
+    if (attempt.status === 'acquired') return attempt.db;
+    if (attempt.status === 'failed') {
+      throw new Error(
+        `failed to acquire local profile migration lock: ${
+          attempt.error instanceof Error ? attempt.error.message : String(attempt.error)
+        }`,
+      );
     }
-    if (await removeMigrationLeaseIfMatches(deps, lease, current?.leaseId ?? null)) {
-      continue;
+    if (performance.now() >= deadline) {
+      throw new Error('timed out acquiring local profile migration lock');
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    await new Promise<void>((resolve) => setTimeout(resolve, LOCAL_PROFILE_MIGRATION_LOCK_RETRY_MS));
   }
 }
 
@@ -293,43 +242,43 @@ function publishLocalProfileMigrationMarker(
   }
 }
 
-function restoreClaimedMarker(candidate: string, marker: string): boolean {
-  try {
-    fs.linkSync(candidate, marker);
-    fs.unlinkSync(candidate);
-    syncMarkerDirectory(marker);
-    return true;
-  } catch {
-    // Never replace a newer marker. Keeping the claimed candidate is safer
-    // than deleting ownership evidence that this attempt did not own.
-    return false;
+function reserveLocalProfileDataOwnerWhileLocked(
+  normalizedOwnerId: string,
+  marker: string,
+): LocalProfileMigrationReservationDetails {
+  const claimToken = randomUUID();
+  const contents = `${JSON.stringify({
+    ownerId: normalizedOwnerId,
+    claimToken,
+    claimedAt: Date.now(),
+  })}\n`;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const raw = fs.readFileSync(marker, 'utf8');
+      const parsed = parseLocalProfileMigrationMarker(raw);
+      if (parsed) {
+        return parsed.ownerId === normalizedOwnerId
+          ? { status: 'already-owned' }
+          : { status: 'owned-by-other' };
+      }
+      // Every current writer holds the SQLite lock, so an invalid marker can
+      // be removed without ever vacating an unverified replacement entry.
+      fs.unlinkSync(marker);
+      syncMarkerDirectory(marker);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
+        return { status: 'failed' };
+      }
+    }
+    try {
+      if (publishLocalProfileMigrationMarker(marker, contents) === 'claimed') {
+        return { status: 'claimed', claimToken };
+      }
+    } catch {
+      return { status: 'failed' };
+    }
   }
-}
-
-function reclaimInvalidLocalProfileMarker(marker: string, inspectedRaw: string): boolean {
-  const candidate = `${marker}.reclaim.${randomUUID()}`;
-  try {
-    fs.renameSync(marker, candidate);
-  } catch {
-    return false;
-  }
-  let movedRaw = '';
-  try {
-    movedRaw = fs.readFileSync(candidate, 'utf8');
-  } catch {
-    // An unreadable entry that we atomically claimed is safe to discard.
-  }
-  if (movedRaw !== inspectedRaw || parseLocalProfileMigrationMarker(movedRaw)) {
-    restoreClaimedMarker(candidate, marker);
-    return false;
-  }
-  try {
-    fs.unlinkSync(candidate);
-    syncMarkerDirectory(marker);
-    return true;
-  } catch {
-    return false;
-  }
+  return { status: 'failed' };
 }
 
 /**
@@ -350,32 +299,9 @@ export function reserveLocalProfileDataOwnerDetailed(
     userDataDir,
     `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
-  const claimToken = randomUUID();
-  const contents = `${JSON.stringify({
-    ownerId: normalizedOwnerId,
-    claimToken,
-    claimedAt: Date.now(),
-  })}\n`;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      if (publishLocalProfileMigrationMarker(marker, contents) === 'claimed') {
-        return { status: 'claimed', claimToken };
-      }
-      const raw = fs.readFileSync(marker, 'utf8');
-      const parsed = parseLocalProfileMigrationMarker(raw);
-      if (parsed) {
-        return parsed.ownerId === normalizedOwnerId
-          ? { status: 'already-owned' }
-          : { status: 'owned-by-other' };
-      }
-      if (reclaimInvalidLocalProfileMarker(marker, raw)) continue;
-      return { status: 'failed' };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') continue;
-      return { status: 'failed' };
-    }
-  }
-  return { status: 'failed' };
+  return withLocalProfileMigrationLock(marker, { status: 'failed' }, () =>
+    reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker),
+  );
 }
 
 export function reserveLocalProfileDataOwner(
@@ -398,44 +324,19 @@ export function releaseLocalProfileDataOwner(
     userDataDir,
     `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
-  const candidate = `${marker}.release.${randomUUID()}`;
-  try {
-    fs.renameSync(marker, candidate);
-    const parsed = parseLocalProfileMigrationMarker(fs.readFileSync(candidate, 'utf8'));
-    if (!parsed || parsed.ownerId !== normalizedOwnerId || parsed.claimToken !== claimToken) {
+  return withLocalProfileMigrationLock(marker, false, () => {
+    try {
+      const parsed = parseLocalProfileMigrationMarker(fs.readFileSync(marker, 'utf8'));
+      if (!parsed || parsed.ownerId !== normalizedOwnerId || parsed.claimToken !== claimToken) {
+        return false;
+      }
+      fs.unlinkSync(marker);
+      syncMarkerDirectory(marker);
+      return true;
+    } catch {
       return false;
     }
-    fs.unlinkSync(candidate);
-    syncMarkerDirectory(marker);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (fs.existsSync(candidate)) restoreClaimedMarker(candidate, marker);
-  }
-}
-
-async function readMigrationMarker(
-  deps: LocalProfileDataMigrationDeps,
-): Promise<LocalProfileMigrationMarker | null> {
-  const marker = migrationMarkerPath(deps);
-  if (!(await deps.fs.pathExists(marker))) return null;
-  const parsed = parseLocalProfileMigrationMarker(await deps.fs.readFile(marker));
-  if (!parsed) {
-    throw new Error('local profile migration marker is invalid');
-  }
-  return parsed;
-}
-
-async function claimMigrationMarker(
-  ownerId: string,
-  deps: LocalProfileDataMigrationDeps,
-): Promise<'claimed' | 'owned-by-other'> {
-  const marker = migrationMarkerPath(deps);
-  const contents = `${JSON.stringify({ ownerId, claimedAt: Date.now() })}\n`;
-  if (await deps.fs.createFileExclusive(marker, contents)) return 'claimed';
-  const existing = await readMigrationMarker(deps);
-  return existing?.ownerId === ownerId ? 'claimed' : 'owned-by-other';
+  });
 }
 
 async function cleanupTemps(deps: LocalProfileDataMigrationDeps, targetDb: string): Promise<void> {
@@ -443,6 +344,14 @@ async function cleanupTemps(deps: LocalProfileDataMigrationDeps, targetDb: strin
   for (const suffix of DB_SIDECAR_SUFFIXES) {
     await deps.fs.removeIfExists(`${targetDb}${suffix}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`);
   }
+}
+
+async function targetDatabaseFileGroupExists(
+  deps: LocalProfileDataMigrationDeps,
+  targetDb: string,
+): Promise<boolean> {
+  const targets = [targetDb, ...DB_SIDECAR_SUFFIXES.map((suffix) => `${targetDb}${suffix}`)];
+  return (await Promise.all(targets.map((target) => deps.fs.pathExists(target)))).some(Boolean);
 }
 
 async function copyDatabaseAtomically(
@@ -485,22 +394,23 @@ export async function adoptLocalProfileDatabase(
 
   const sourceDb = dbPath(deps, LOCAL_PROFILE_DATA_OWNER_ID);
   const targetDb = dbPath(deps, normalizedOwnerId);
-  const lease = migrationLeasePath(targetDb);
-  let leaseId: string | null = null;
+  const marker = migrationMarkerPath(deps);
+  let lockDb: LocalProfileMigrationLockDb | null = null;
   try {
-    const markerClaim = await claimMigrationMarker(normalizedOwnerId, deps);
-    if (markerClaim === 'owned-by-other') return { status: 'claimed-by-other-owner' };
+    lockDb = await acquireLocalProfileMigrationLock(marker);
+    const reservation = reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker);
+    if (reservation.status === 'owned-by-other') return { status: 'claimed-by-other-owner' };
+    if (reservation.status === 'failed') {
+      throw new Error('failed to reserve local profile owner');
+    }
     // Reserve the local namespace even when it is currently empty. Otherwise a
     // later account could create or adopt local content after the first account
     // has already crossed the login boundary.
     if (!(await deps.fs.pathExists(sourceDb))) return { status: 'no-local-db' };
-    // Serialize the complete database-file-group adoption across processes. The
-    // owner marker deliberately allows same-owner readers, so it cannot itself
-    // protect the snapshot; this lease keeps one process from cleaning or
-    // publishing another process's temporary database.
-    leaseId = await acquireMigrationLease(deps, lease, normalizedOwnerId);
-    if (!leaseId) return { status: 'target-exists' };
-    if (await deps.fs.pathExists(targetDb)) {
+    // The same crash-released SQLite writer lock serializes marker repair and
+    // the complete snapshot publication. No PID identity or reclaimable lease
+    // file is involved, so a crashed process cannot block adoption forever.
+    if (await targetDatabaseFileGroupExists(deps, targetDb)) {
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
     }
@@ -513,7 +423,7 @@ export async function adoptLocalProfileDatabase(
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    if (leaseId) await removeMigrationLeaseIfMatches(deps, lease, leaseId).catch(() => false);
+    if (lockDb) releaseLocalProfileMigrationLock(lockDb);
   }
 }
 

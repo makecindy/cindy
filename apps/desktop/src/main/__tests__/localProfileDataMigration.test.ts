@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   adoptLocalProfileDatabase,
   createProductionLocalProfileDataMigrationDeps,
+  LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX,
   LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX,
-  LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
   reserveLocalProfileDataOwner,
   reserveLocalProfileDataOwnerDetailed,
@@ -34,21 +34,6 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
             () => false,
           ),
         readFile: (file) => fs.readFile(file, 'utf8'),
-        createFileExclusive: async (file, contents) => {
-          try {
-            const handle = await fs.open(file, 'wx');
-            try {
-              await handle.writeFile(contents, 'utf8');
-            } finally {
-              await handle.close();
-            }
-            return true;
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-            throw error;
-          }
-        },
-        rename: (source, target) => fs.rename(source, target),
         backupDatabase: (source, target) => fs.copyFile(source, target),
         link: (source, target) => fs.link(source, target),
         removeIfExists: (file) => fs.rm(file, { force: true }),
@@ -75,6 +60,24 @@ describe('adoptLocalProfileDatabase', () => {
     const { root } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
     await fs.writeFile(marker, contents);
+
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
+  it('does not reclaim an invalid marker while another process holds the migration lock', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const lockDb = createBetterSqliteDatabase(`${marker}${LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX}`);
+    await fs.writeFile(marker, '{');
+    lockDb.exec('BEGIN IMMEDIATE');
+    try {
+      expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('failed');
+      await expect(fs.readFile(marker, 'utf8')).resolves.toBe('{');
+    } finally {
+      lockDb.exec('ROLLBACK');
+      lockDb.close();
+    }
 
     expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
@@ -133,8 +136,13 @@ describe('adoptLocalProfileDatabase', () => {
       'local-db',
     );
     await expect(
-      fs.access(path.join(root, `cindy-owner-a.db${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`)),
-    ).rejects.toThrow();
+      fs.access(
+        path.join(
+          root,
+          `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}${LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX}`,
+        ),
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it('captures committed WAL data through SQLite online backup while the source stays open', async () => {
@@ -181,6 +189,19 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
       'cloud-db',
     );
+  });
+
+  it('does not publish into an existing cloud database file group', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(`${target}-wal`, 'cloud-wal');
+
+    await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toEqual({
+      status: 'target-exists',
+    });
+    await expect(fs.access(target)).rejects.toThrow();
+    await expect(fs.readFile(`${target}-wal`, 'utf8')).resolves.toBe('cloud-wal');
   });
 
   it('assigns the retained local source to only the first cloud owner', async () => {
@@ -272,31 +293,32 @@ describe('adoptLocalProfileDatabase', () => {
     ).toEqual([]);
   });
 
-  it('reclaims a lease left by a dead process before retrying adoption', async () => {
+  it('ignores a stale legacy lease even when its PID has been recycled', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');
+    const legacyLease = `${target}.local-profile-migration-lease`;
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
     await fs.writeFile(
-      `${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`,
-      JSON.stringify({ ownerId: 'owner-a', leaseId: 'stale', pid: 2147483647, claimedAt: 1 }),
+      legacyLease,
+      JSON.stringify({ ownerId: 'owner-a', leaseId: 'stale', pid: process.pid, claimedAt: 1 }),
     );
 
     await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
       status: 'adopted',
     });
-    await expect(fs.access(`${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`)).rejects.toThrow();
+    await expect(fs.access(legacyLease)).resolves.toBeUndefined();
   });
 
-  it('recovers a torn lease record left by a crashed process', async () => {
+  it('fails promptly when the SQLite migration lock cannot be opened', async () => {
     const { root, deps } = await fixture();
-    const target = path.join(root, 'cindy-owner-a.db');
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
-    await fs.writeFile(`${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`, '{');
+    await fs.mkdir(`${marker}${LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX}`, { recursive: true });
 
-    await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
-      status: 'adopted',
+    await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toEqual({
+      status: 'failed',
+      error: expect.stringContaining('failed to acquire local profile migration lock'),
     });
-    await expect(fs.access(`${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`)).rejects.toThrow();
   });
 
   it('cleans interrupted temporary files before retrying', async () => {
