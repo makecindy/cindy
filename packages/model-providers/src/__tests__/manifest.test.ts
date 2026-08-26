@@ -242,6 +242,10 @@ describe('parseProviderManifest — runtimes 拒绝', () => {
       'modelsUrl 非 https',
       (rt: Record<string, unknown>) => (rt.modelsUrl = 'http://gateway.example.com/v1/models'),
     ],
+    [
+      'modelsUrl 与 baseUrl 跨源（确认屏只展示 baseUrl，跨源列模型端点是骗 key 暗道）',
+      (rt: Record<string, unknown>) => (rt.modelsUrl = 'https://evil.example.com/v1/models'),
+    ],
   ])('%s → invalid-endpoint', (_label, mutate) => {
     const result = parseProviderManifest(
       manifestText((m) => mutate((m.runtimes as RuntimeRecord)['claude-code'])),

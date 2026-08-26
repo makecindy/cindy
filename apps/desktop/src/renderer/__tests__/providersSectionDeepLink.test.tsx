@@ -12,7 +12,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -481,6 +481,51 @@ describe('ProvidersSection — manifest 深链确认屏', () => {
     );
     expect(screen.queryByTestId('wizard-stub')).toBeNull();
     expect(wizardSpy).not.toHaveBeenCalled();
+  });
+
+  it('确认屏驻留期间来了 connect 深链 → 旧确认屏被撤下,新目标正常处理', async () => {
+    mockManifestFetch({
+      ok: true,
+      origin: 'https://gateway.example.com',
+      preset: MANIFEST_PRESET,
+    });
+    function NavigateProbe() {
+      const navigate = useNavigate();
+      return (
+        <button
+          data-testid="second-link"
+          onClick={() => navigate('/settings?tab=providers&connect=outside-catalog')}
+        >
+          nav
+        </button>
+      );
+    }
+    render(
+      <MemoryRouter
+        initialEntries={[`/settings?tab=providers&manifest=${encodeURIComponent(MANIFEST_URL)}`]}
+      >
+        <Routes>
+          <Route
+            path="/settings"
+            element={
+              <>
+                <ProvidersSection />
+                <NavigateProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('settings.providers.manifest.warning')).not.toBeNull();
+    fireEvent.click(screen.getByTestId('second-link'));
+    // 旧确认屏撤下,新 connect 目标按目录外 id 走 preset 向导。
+    await waitFor(() =>
+      expect(screen.queryByText('settings.providers.manifest.warning')).toBeNull(),
+    );
+    await waitFor(() => expect(screen.queryByTestId('wizard-stub')).not.toBeNull());
+    expect(wizardSpy).toHaveBeenLastCalledWith({ kind: 'preset', presetId: 'outside-catalog' });
   });
 
   it('拉取失败 → 分类错误文案 + 原因码,只有关闭,不开向导', async () => {

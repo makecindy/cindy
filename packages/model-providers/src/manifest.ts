@@ -181,9 +181,18 @@ function parseManifestRuntime(
     if (RUNTIME_FIELD_FORBIDDEN.has(key)) return { ok: false, reason: 'forbidden-runtime-field' };
     if (!RUNTIME_FIELD_WHITELIST.has(key)) return { ok: false, reason: 'unknown-runtime-field' };
   }
-  if (!parseStrictHttpsEndpoint(rt.baseUrl)) return { ok: false, reason: 'invalid-endpoint' };
-  if (rt.modelsUrl !== undefined && !parseStrictHttpsEndpoint(rt.modelsUrl)) {
-    return { ok: false, reason: 'invalid-endpoint' };
+  const baseUrl = parseStrictHttpsEndpoint(rt.baseUrl);
+  if (!baseUrl) return { ok: false, reason: 'invalid-endpoint' };
+  if (rt.modelsUrl !== undefined) {
+    const modelsUrl = parseStrictHttpsEndpoint(rt.modelsUrl);
+    // modelsUrl 必须与 baseUrl 同源:外部 manifest 可以把 baseUrl 写成可信 API、
+    // modelsUrl 指向第三方域名,确认屏只展示 baseUrl,跨源 modelsUrl 就成了骗取
+    // API key 的暗道。下游 buildModelsFetchRequest 在使用时会忽略跨源 modelsUrl
+    // (回退 baseUrl 推导),但那是静默回退——外部输入在校验层直接整条拒绝,
+    // 不让"确认屏展示的"与"实际会请求的"有任何分叉空间。
+    if (!modelsUrl || modelsUrl.origin !== baseUrl.origin) {
+      return { ok: false, reason: 'invalid-endpoint' };
+    }
   }
   if (rt.wireProtocol !== undefined && !isWireProtocolAllowedForAgent(agent, rt.wireProtocol)) {
     return { ok: false, reason: 'invalid-runtimes' };

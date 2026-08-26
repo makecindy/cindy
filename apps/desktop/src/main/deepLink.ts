@@ -289,16 +289,34 @@ export function getDeepLinkMainWindow(): BrowserWindow | null {
 }
 
 /**
+ * 日志脱敏:manifest URL 可能携带签名 / 访问令牌类 query(如预签名存储直链),
+ * 不能整串进持久化日志。统一剥掉 query / hash,只留 origin + path——对定位问题
+ * 足够,对凭证安全必要。解析失败分支同样处理:未解析的原始 URL 里一样可能带
+ * `?manifest=<含 token 的编码 URL>`。
+ */
+export function redactDeepLinkForLog(url: string): string {
+  const cut = url.search(/[?#]/);
+  return cut >= 0 ? `${url.slice(0, cut)}…` : url;
+}
+
+function loggableDeepLinkPayload(payload: DeepLinkPayload): DeepLinkPayload {
+  if (payload.type === 'settings' && payload.manifest !== undefined) {
+    return { ...payload, manifest: redactDeepLinkForLog(payload.manifest) };
+  }
+  return payload;
+}
+
+/**
  * 处理一条入站 URL。会内部解析、根据 mainWindow 状态选择直接发送 or 缓存。
  * 即使解析失败也只 log 不抛,避免污染调用方(open-url / second-instance / argv)。
  */
 export function handleIncomingDeepLink(url: string, source: string): void {
   const payload = parseDeepLink(url);
   if (!payload) {
-    log.warn('ignoring unparseable url', { url, source });
+    log.warn('ignoring unparseable url', { url: redactDeepLinkForLog(url), source });
     return;
   }
-  log.info('received deep link', { source, payload });
+  log.info('received deep link', { source, payload: loggableDeepLinkPayload(payload) });
   dispatchDeepLink(payload);
 }
 

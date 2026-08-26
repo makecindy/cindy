@@ -2135,6 +2135,9 @@ export function ProvidersSection() {
     // 不用一次性 ref:消费后立即删参(下方 replace)即防重放;组件常驻期间
     // 再次带参导航(如二次深链)仍应生效(review 反馈)。
     if (connect) {
+      // 新目标到来即撤下可能仍在展示的旧 manifest 确认屏:否则旧对话框继续盖在
+      // 新流程上,其「继续」还会用旧 manifest 顶掉刚打开的向导(review 反馈)。
+      setManifestRequest(null);
       const target = byId.get(connect);
       if (listProviders.some((p) => p.id === connect)) {
         setSelectedId(connect);
@@ -2152,6 +2155,8 @@ export function ProvidersSection() {
       manifestRequestSeqRef.current += 1;
       setManifestRequest({ id: manifestRequestSeqRef.current, url: manifest });
     } else {
+      // wizard=1 同理:新导航撤下旧 manifest 确认屏,再开向导目录。
+      setManifestRequest(null);
       setWizard({});
     }
     const next = new URLSearchParams(searchParams);

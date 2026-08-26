@@ -42,6 +42,7 @@ import {
   focusMainWindow,
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
+  redactDeepLinkForLog,
 } from '../deepLink';
 
 describe('user-initiated main-window focus', () => {
@@ -296,6 +297,20 @@ describe('parseDeepLink', () => {
         `cindy://settings/providers?manifest=${encodeURIComponent(`https://g.example.com/${'a'.repeat(2048)}`)}`,
       ),
     ).toBeNull();
+  });
+
+  it('redacts query/hash from deep link URLs before they reach persistent logs', () => {
+    // manifest URL 可能带签名 / token 类 query;日志只留 origin+path。
+    expect(
+      redactDeepLinkForLog('cindy://settings/providers?manifest=https%3A%2F%2Fx.example%2Fm.json%3Ftoken%3Dsecret'),
+    ).toBe('cindy://settings/providers…');
+    expect(redactDeepLinkForLog('https://x.example/m.json?token=secret')).toBe(
+      'https://x.example/m.json…',
+    );
+    expect(redactDeepLinkForLog('cindy://settings/providers#frag')).toBe(
+      'cindy://settings/providers…',
+    );
+    expect(redactDeepLinkForLog('cindy://session/abc')).toBe('cindy://session/abc');
   });
 
   it('rejects settings deep links carrying both connect and manifest', () => {
