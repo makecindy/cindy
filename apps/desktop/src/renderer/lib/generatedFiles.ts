@@ -728,18 +728,19 @@ export function collectGeneratedFiles(
   // (`vitest run src/x.test.ts`)会被 mtime 窗口放行,把编码会话的改动文件全
   // 误收进卡。read 不排除:agent 生成后回读验证是常见动作,不该反杀真产物。
   const editedKeys = new Set<string>();
-  const deletedKeys = new Set<string>();
   for (const msg of messages) {
     if (msg.role !== 'tool_use' || !msg.toolName) continue;
+    const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
+    if (msg.toolUseId && resultContent === undefined) continue;
+    if (isExplicitFailedToolResult(resultContent)) continue;
     const d = describeToolUse(msg.toolName, msg.toolInput);
     if (d.kind === 'file' && d.action === 'edit' && d.filePath) {
       editedKeys.add(dedupeKeyForPath(resolveToolFilePath(d.filePath, workingDir)));
     } else if (d.kind === 'fileChange') {
       for (const c of d.changes) {
-        if (!c.path) continue;
-        const key = dedupeKeyForPath(resolveToolFilePath(c.path, workingDir));
-        if (c.action !== 'add') editedKeys.add(key);
-        if (c.action === 'delete' || c.action === 'move') deletedKeys.add(key);
+        if (c.action !== 'add' && c.path) {
+          editedKeys.add(dedupeKeyForPath(resolveToolFilePath(c.path, workingDir)));
+        }
       }
     }
   }
@@ -757,7 +758,6 @@ export function collectGeneratedFiles(
       if (toolFailed) return;
       const abs = canonicalizeWindowsShape(resolveToolFilePath(rawPath, workingDir));
       const key = dedupeKeyForPath(abs);
-      if (deletedKeys.has(key)) return;
       if (source === 'command' && editedKeys.has(key)) return;
       const prev = byKey.get(key);
       if (prev) {
@@ -785,23 +785,21 @@ export function collectGeneratedFiles(
       if (outputPath) {
         const abs = canonicalizeWindowsShape(resolveToolFilePath(outputPath, workingDir));
         const key = dedupeKeyForPath(abs);
-        if (!deletedKeys.has(key)) {
-          const existing = byKey.get(key);
-          const artifactConfirmed = parseToolResult(resultContent)?.ok === true;
-          if (existing) {
-            existing.artifact = artifact;
-            if (artifactConfirmed) existing.artifactConfirmed = true;
-            if (toolReady) delete existing.ready;
-          } else {
-            byKey.set(key, {
-              path: abs,
-              name: basename(abs),
-              source: 'tool',
-              artifact,
-              ...(artifactConfirmed ? { artifactConfirmed: true } : {}),
-              ...(toolReady ? {} : { ready: false }),
-            });
-          }
+        const existing = byKey.get(key);
+        const artifactConfirmed = parseToolResult(resultContent)?.ok === true;
+        if (existing) {
+          existing.artifact = artifact;
+          if (artifactConfirmed) existing.artifactConfirmed = true;
+          if (toolReady) delete existing.ready;
+        } else {
+          byKey.set(key, {
+            path: abs,
+            name: basename(abs),
+            source: 'tool',
+            artifact,
+            ...(artifactConfirmed ? { artifactConfirmed: true } : {}),
+            ...(toolReady ? {} : { ready: false }),
+          });
         }
       }
     }
@@ -811,7 +809,13 @@ export function collectGeneratedFiles(
         addPath(rawPath, 'command');
       }
     }
+    if (descriptor.kind === 'fileChange' && toolReady && !toolFailed) {
+      for (const change of descriptor.changes) {
+        if ((change.action === 'delete' || change.action === 'move') && change.path) {
+          byKey.delete(dedupeKeyForPath(resolveToolFilePath(change.path, workingDir)));
+        }
+      }
+    }
   }
-  for (const key of deletedKeys) byKey.delete(key);
   return [...byKey.values()];
 }

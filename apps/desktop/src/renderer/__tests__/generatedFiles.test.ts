@@ -8,7 +8,6 @@ import {
 } from '../lib/generatedFiles';
 
 const WORKDIR = '/work';
-}
 
 function toolUse(toolName: string, toolInput: unknown) {
   return { role: 'tool_use', toolName, toolInput };
@@ -186,6 +185,49 @@ describe('collectGeneratedFiles', () => {
       WORKDIR,
     );
     expect(files).toEqual([]);
+  });
+
+  it('keeps a path that is deleted and then recreated later in the same turn', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'new.txt', content: 'old' }),
+        toolUse('file_change', {
+          changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-old' }],
+        }),
+        toolUse('Write', { file_path: 'new.txt', content: 'new' }),
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('keeps a created path when the later delete result is an explicit failure', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'new.txt', content: 'hi' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+        {
+          role: 'tool_use',
+          toolName: 'file_change',
+          toolUseId: 'd1',
+          toolInput: {
+            changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'd1',
+          content: JSON.stringify({ ok: false, status: 'failed' }),
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
   });
 
   it('marks in-flight tool_use files as not ready until the result arrives', () => {

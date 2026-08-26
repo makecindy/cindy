@@ -146,6 +146,23 @@ describe('generatedFileVisibleSignature', () => {
         artifact: { format: 'docx', theme: 'dark' },
       }),
     ).not.toBe(generatedFileVisibleSignature(confirmedDocumentFile));
+    expect(
+      generatedFileVisibleSignature({
+        ...toolFile,
+        artifact: {
+          format: 'xlsx',
+          preview: { kind: 'sheet', hasHeader: false, rows: [['a,b', 'c']] },
+        },
+      }),
+    ).not.toBe(
+      generatedFileVisibleSignature({
+        ...toolFile,
+        artifact: {
+          format: 'xlsx',
+          preview: { kind: 'sheet', hasHeader: false, rows: [['a', 'b,c']] },
+        },
+      }),
+    );
   });
 });
 

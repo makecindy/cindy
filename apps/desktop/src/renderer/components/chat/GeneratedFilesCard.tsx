@@ -393,12 +393,7 @@ export function isLocalGeneratedFileInTurn(
 
 function artifactVisibleSignature(artifact: DocumentArtifactMetadata | undefined): string {
   if (!artifact) return '';
-  const preview =
-    artifact.preview?.kind === 'sheet'
-      ? `sheet:${artifact.preview.hasHeader ? '1' : '0'}:${artifact.preview.rows.map((row) => row.join(',')).join(';')}`
-      : artifact.preview?.kind === 'slide'
-        ? `slide:${artifact.preview.title ?? ''}:${artifact.preview.subtitle ?? ''}`
-        : '';
+  const preview = artifact.preview ? JSON.stringify(artifact.preview) : '';
   return [
     artifact.format,
     artifact.title ?? '',
