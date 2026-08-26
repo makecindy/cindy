@@ -17,7 +17,6 @@ import { useEffect, useState } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
-import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import {
   evictDeviceCapabilities,
   prefetchDeviceCapabilities,
@@ -61,6 +60,8 @@ interface MakerApiShape {
 }
 interface DeviceLinkShape {
   invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
+  onPresenceChanged?: (cb: (snapshot: { deviceId: string; online: boolean }) => void) => () => void;
+  onStatusChanged?: (cb: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => () => void;
   onRemotePush?: (
     cb: (payload: { deviceId: string; channel: string; payload: unknown }) => void,
   ) => () => void;
@@ -112,20 +113,84 @@ const inFlight = new Map<string, Promise<ReadonlySet<MakerVendor>>>();
 const agentsCacheGeneration = new Map<string, number>();
 /** 同一 roster push 会同步通知多个 mounted consumer；同一 tick 只失效一次。 */
 const agentsCacheInvalidationScheduled = new Set<string>();
+const rosterListeners = new Map<string, Set<() => void>>();
+let localRosterSourceInstalled = false;
+let remoteRosterSourceInstalled = false;
+let relayStatus: 'stopped' | 'connecting' | 'online' | null = null;
+const deviceOnline = new Map<string, boolean>();
 
 function currentAgentsCacheGeneration(key: string): number {
   return agentsCacheGeneration.get(key) ?? 0;
 }
 
-function invalidateAgentsCache(key: string): number {
-  if (agentsCacheInvalidationScheduled.has(key)) return currentAgentsCacheGeneration(key);
+function invalidateAgentsCache(key: string): boolean {
+  if (agentsCacheInvalidationScheduled.has(key)) return false;
   agentsCacheInvalidationScheduled.add(key);
   queueMicrotask(() => agentsCacheInvalidationScheduled.delete(key));
   const generation = currentAgentsCacheGeneration(key) + 1;
   agentsCacheGeneration.set(key, generation);
   agentsCache.delete(key);
   inFlight.delete(key);
-  return generation;
+  return true;
+}
+
+function remoteRosterKeys(): Set<string> {
+  const keys = new Set([
+    ...agentsCache.keys(),
+    ...inFlight.keys(),
+    ...rosterListeners.keys(),
+  ]);
+  keys.delete('');
+  return keys;
+}
+
+function notifyRosterChanged(deviceId?: string): void {
+  const key = cacheKeyOf(deviceId);
+  if (!invalidateAgentsCache(key)) return;
+  if (deviceId) refreshRemoteCapabilitiesOnce(deviceId);
+  else refreshLocalCapabilitiesOnce();
+  for (const listener of rosterListeners.get(key) ?? []) listener();
+}
+
+function ensureRosterSource(key: string): void {
+  if (key === '') {
+    if (localRosterSourceInstalled) return;
+    const api = getMakerApi();
+    if (!api?.onAgentsChanged) return;
+    localRosterSourceInstalled = true;
+    api.onAgentsChanged(() => notifyRosterChanged());
+    return;
+  }
+  if (remoteRosterSourceInstalled) return;
+  const dl = getDeviceLink();
+  if (!dl) return;
+  remoteRosterSourceInstalled = true;
+  dl.onRemotePush?.((push) => {
+    if (push.channel === 'maker:agents:changed') notifyRosterChanged(push.deviceId);
+  });
+  dl.onPresenceChanged?.((snapshot) => {
+    const wasOnline = deviceOnline.get(snapshot.deviceId);
+    deviceOnline.set(snapshot.deviceId, snapshot.online);
+    if (snapshot.online && wasOnline !== true) notifyRosterChanged(snapshot.deviceId);
+  });
+  dl.onStatusChanged?.(({ status }) => {
+    const wasOnline = relayStatus;
+    relayStatus = status;
+    if (status === 'online' && wasOnline !== 'online') {
+      for (const deviceId of remoteRosterKeys()) notifyRosterChanged(deviceId);
+    }
+  });
+}
+
+function subscribeRosterChanges(key: string, listener: () => void): () => void {
+  const bucket = rosterListeners.get(key) ?? new Set<() => void>();
+  bucket.add(listener);
+  rosterListeners.set(key, bucket);
+  ensureRosterSource(key);
+  return () => {
+    bucket.delete(listener);
+    if (bucket.size === 0) rosterListeners.delete(key);
+  };
 }
 
 function cacheKeyOf(deviceId?: string | null): string {
@@ -166,7 +231,6 @@ export interface UseAvailableAgentsResult {
  */
 export function useAvailableAgents(deviceId?: string | null): UseAvailableAgentsResult {
   const cached = agentsCache.get(cacheKeyOf(deviceId));
-  const reconnectEpoch = useDeviceLinkReconnectEpoch(deviceId ?? undefined);
   // 初值取缓存:同一 deviceId 已经查过时,新实例挂载即出值,不再走一遍「空集合 → loaded」
   // 的闪帧。useState 的 lazy 初值只在首次 render 取一次,后续由下面的 effect 维护。
   const [availableVendors, setAvailableVendors] = useState<ReadonlySet<MakerVendor>>(
@@ -180,13 +244,6 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     setAvailableVendors(hit?.vendors ?? new Set());
     setLoaded(hit !== undefined);
     const key = cacheKeyOf(deviceId);
-    if (deviceId && reconnectEpoch > 0) {
-      // Reconnection can happen while the one-shot roster push is in flight. The
-      // subscription is rehydrated elsewhere, but that edge-triggered push is not
-      // replayed, so force a fresh roster and capability snapshot for this device.
-      invalidateAgentsCache(key);
-      refreshRemoteCapabilitiesOnce(deviceId);
-    }
     const run = (): void => {
       const requestGeneration = currentAgentsCacheGeneration(key);
       loadAvailableAgents(deviceId)
@@ -205,6 +262,7 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
         });
     };
     run();
+    const offRosterChanged = subscribeRosterChanges(key, run);
     // 会话期间 Pi 二进制可能被按需下载补齐:窗口重新聚焦时再拉一次,让入口及时出现。
     // 节流:补齐是分钟级的事,秒级来回切窗口不必反复打 IPC(远程还要过隧道)。
     const onFocus = (): void => {
@@ -212,32 +270,13 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
       if (fresh && Date.now() - fresh.fetchedAt < REFETCH_MIN_INTERVAL_MS) return;
       run();
     };
-    const onAgentsChanged = (): void => {
-      // Main has completed a runtime registration; bypass focus throttling so
-      // the picker reflects the new agent in the same process immediately.
-      const key = cacheKeyOf(deviceId);
-      invalidateAgentsCache(key);
-      if (deviceId) refreshRemoteCapabilitiesOnce(deviceId);
-      else refreshLocalCapabilitiesOnce();
-      run();
-    };
     window.addEventListener('focus', onFocus);
-    const makerApi = !deviceId ? getMakerApi() : null;
-    const offAgentsChanged = makerApi && typeof makerApi.onAgentsChanged === 'function'
-      ? makerApi.onAgentsChanged(onAgentsChanged)
-      : undefined;
-    const deviceLink = deviceId ? getDeviceLink() : null;
-    const offRemoteAgentsChanged = deviceLink?.onRemotePush?.((push) => {
-      if (push.deviceId !== deviceId || push.channel !== 'maker:agents:changed') return;
-      onAgentsChanged();
-    });
     return () => {
       cancelled = true;
       window.removeEventListener('focus', onFocus);
-      offAgentsChanged?.();
-      offRemoteAgentsChanged?.();
+      offRosterChanged();
     };
-  }, [deviceId, reconnectEpoch]);
+  }, [deviceId]);
 
   return { availableVendors, loaded };
 }
