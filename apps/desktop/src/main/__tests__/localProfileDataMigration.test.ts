@@ -87,6 +87,7 @@ describe('adoptLocalProfileDatabase', () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
     await fs.writeFile(path.join(root, 'cindy-local-v1.db-wal'), 'local-wal');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db-shm'), 'local-shm');
 
     await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
       status: 'adopted',
@@ -141,6 +142,35 @@ describe('adoptLocalProfileDatabase', () => {
     expect(results.map((result) => result.status).sort()).toEqual(['adopted', 'target-exists']);
     await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
       'local-db',
+    );
+  });
+
+  it('does not publish WAL sidecars when the main target loses the race', async () => {
+    const { root, deps } = await fixture();
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db-wal'), 'local-wal');
+    const racingDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async (source, target) => {
+          if (target === path.join(root, 'cindy-owner-a.db')) {
+            await fs.writeFile(target, 'cloud-db');
+            const error = Object.assign(new Error('target already exists'), { code: 'EEXIST' });
+            throw error;
+          }
+          return deps.fs.link(source, target);
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', racingDeps)).resolves.toEqual({
+      status: 'target-exists',
+    });
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db-wal'))).rejects.toThrow();
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db-shm'))).rejects.toThrow();
+    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
+      'cloud-db',
     );
   });
 

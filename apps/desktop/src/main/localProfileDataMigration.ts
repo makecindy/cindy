@@ -196,9 +196,21 @@ async function copyDatabaseAtomically(
     sidecars.push({ tmp, final });
   }
 
-  // Commit every file with a no-replace hard-link. `rename` would replace a
-  // target created by another shared-userData process between the existence
-  // check and this commit edge.
+  // Establish ownership of the main database before publishing any WAL
+  // sidecar. A process that loses this no-replace commit must leave no
+  // sidecars behind for the winner's database file group.
+  try {
+    await deps.fs.link(dbTmp, targetDb);
+    await deps.fs.removeIfExists(dbTmp);
+  } catch (error) {
+    await deps.fs.removeIfExists(dbTmp);
+    if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+    throw error;
+  }
+
+  // Commit sidecars only after the main database link has won. A sidecar that
+  // already exists belongs to the process that won the main-file race; never
+  // replace it.
   for (const sidecar of sidecars) {
     try {
       await deps.fs.link(sidecar.tmp, sidecar.final);
@@ -207,14 +219,6 @@ async function copyDatabaseAtomically(
       if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
       await deps.fs.removeIfExists(sidecar.tmp);
     }
-  }
-  try {
-    await deps.fs.link(dbTmp, targetDb);
-    await deps.fs.removeIfExists(dbTmp);
-  } catch (error) {
-    await deps.fs.removeIfExists(dbTmp);
-    if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
-    throw error;
   }
   return true;
 }
