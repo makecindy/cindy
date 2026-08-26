@@ -1110,26 +1110,13 @@ export async function rewindPersistedUserMessageAfterClear(
   if (!row) return;
 
   const rewoundAt = Date.now();
-  const updated = await dbClient.exec(
-    `UPDATE messages
-        SET rewind_at = ?
-      WHERE session_id = ?
-        AND client_id = ?
-        AND role = 'user'
-        AND rewind_at IS NULL`,
-    [rewoundAt, sessionId, clientId],
-  );
+  const updated = await dbClient.tx('message.rewindUserAfterClear', {
+    sessionId,
+    clientId,
+    rewoundAt,
+  });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
-  try {
-    await persistSessionListPreview(sessionId, null, null);
-  } catch (err) {
-    log.warn('clear-race session list preview invalidate failed', {
-      sessionId,
-      clientId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 
   const mediaCleanup = await Promise.allSettled(
     [...new Set([row.id, row.clientId])].map((refId) =>

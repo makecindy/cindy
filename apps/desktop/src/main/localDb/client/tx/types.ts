@@ -24,6 +24,7 @@ export type DbTxName =
   | 'message.insert'
   | 'message.updateContent'
   | 'message.leaseMutate'
+  | 'message.rewindUserAfterClear'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -347,6 +348,12 @@ export interface MessageLeaseMutateArgs {
   content?: string;
   agentMeta?: string | null;
   createdAt?: number;
+}
+
+export interface MessageRewindUserAfterClearArgs {
+  sessionId: string;
+  clientId: string;
+  rewoundAt: number;
 }
 
 /**
@@ -810,6 +817,7 @@ export type DbTxArgsByName = {
   'message.insert': MessageInsertArgs;
   'message.updateContent': MessageUpdateContentArgs;
   'message.leaseMutate': MessageLeaseMutateArgs;
+  'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -859,6 +867,7 @@ export type DbTxResultByName = {
   'message.insert': { changes: number };
   'message.updateContent': { changes: number };
   'message.leaseMutate': { changes: number };
+  'message.rewindUserAfterClear': { changes: number };
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

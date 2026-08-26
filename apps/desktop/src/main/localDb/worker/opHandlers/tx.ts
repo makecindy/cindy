@@ -86,6 +86,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return messageUpdateContent(db, txArgs);
     case 'message.leaseMutate':
       return messageLeaseMutate(db, txArgs);
+    case 'message.rewindUserAfterClear':
+      return messageRewindUserAfterClear(db, txArgs);
     case 'message.delete':
       return messageDelete(db, txArgs);
     case 'im.deleteBindings':
@@ -393,6 +395,35 @@ function messageLeaseMutate(db: Database.Database, args: unknown): { changes: nu
     }
     if (changes > 0) {
       db.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+    }
+    return { changes };
+  });
+  return transaction();
+}
+
+function messageRewindUserAfterClear(
+  db: Database.Database,
+  args: unknown,
+): { changes: number } {
+  const payload = asRecord(args, 'message.rewindUserAfterClear args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const transaction = db.transaction(() => {
+    const changes = db
+      .prepare(
+        `UPDATE messages
+            SET rewind_at = ?
+          WHERE session_id = ?
+            AND client_id = ?
+            AND role = 'user'
+            AND rewind_at IS NULL`,
+      )
+      .run(rewoundAt, sessionId, clientId).changes;
+    if (changes > 0) {
+      db.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+      ).run(sessionId);
     }
     return { changes };
   });
