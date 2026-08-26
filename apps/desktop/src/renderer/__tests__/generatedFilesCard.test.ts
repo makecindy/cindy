@@ -140,6 +140,12 @@ describe('generatedFileVisibleSignature', () => {
     );
     expect(generatedFileVisibleSignature(commandFile)).not.toBe(base);
     expect(generatedFileVisibleSignature(confirmedDocumentFile)).not.toBe(base);
+    expect(
+      generatedFileVisibleSignature({
+        ...confirmedDocumentFile,
+        artifact: { format: 'docx', theme: 'dark' },
+      }),
+    ).not.toBe(generatedFileVisibleSignature(confirmedDocumentFile));
   });
 });
 
@@ -219,6 +225,54 @@ describe('planGeneratedFilesVisibility', () => {
       }),
     ).toEqual({ visible: null, toStat: [toolFile] });
   });
+
+  it('drops a confirmed chip immediately when it disappears with no replacement', () => {
+    expect(
+      planGeneratedFilesVisibility({
+        previousVisible: [toolFile],
+        candidates: [],
+        turnEndMs: null,
+        envChanged: false,
+        turnWindowChanged: false,
+      }),
+    ).toEqual({ visible: [], toStat: [] });
+  });
+
+  it('holds the old chip when candidates churn mid-stream', () => {
+    const plan = planGeneratedFilesVisibility({
+      previousVisible: [toolFile],
+      candidates: [extraToolFile],
+      turnEndMs: null,
+      envChanged: false,
+      turnWindowChanged: false,
+    });
+    expect(plan.visible).toEqual([toolFile]);
+    expect(plan.toStat).toEqual([extraToolFile]);
+  });
+
+  it('drops held chips once the turn is sealed', () => {
+    const plan = planGeneratedFilesVisibility({
+      previousVisible: [toolFile],
+      candidates: [extraToolFile],
+      turnEndMs: END,
+      envChanged: false,
+      turnWindowChanged: false,
+    });
+    expect(plan.visible).toEqual([]);
+    expect(plan.toStat).toEqual([extraToolFile]);
+  });
+
+  it('restats confirmed files when the remote verdict cache changes', () => {
+    const plan = planGeneratedFilesVisibility({
+      previousVisible: [toolFile],
+      candidates: [toolFile],
+      turnEndMs: null,
+      envChanged: false,
+      turnWindowChanged: false,
+      forceRestat: true,
+    });
+    expect(plan.toStat).toEqual([toolFile]);
+  });
 });
 
 describe('mergeGeneratedFileStatResults', () => {
@@ -232,6 +286,30 @@ describe('mergeGeneratedFileStatResults', () => {
         turnWindowChanged: false,
       }),
     ).toEqual([toolFile, extraToolFile]);
+  });
+
+  it('swaps a held chip for the newly confirmed replacement in one update', () => {
+    expect(
+      mergeGeneratedFileStatResults({
+        previousVisible: [toolFile],
+        candidates: [extraToolFile],
+        checked: [extraToolFile],
+        confirmedPaths: new Set([extraToolFile.path]),
+        turnWindowChanged: false,
+      }),
+    ).toEqual([extraToolFile]);
+  });
+
+  it('replaces a held chip once the new candidate is confirmed', () => {
+    expect(
+      mergeGeneratedFileStatResults({
+        previousVisible: [toolFile],
+        candidates: [extraToolFile],
+        checked: [extraToolFile],
+        confirmedPaths: new Set([extraToolFile.path]),
+        turnWindowChanged: false,
+      }),
+    ).toEqual([extraToolFile]);
   });
 
   it('drops previously confirmed files that fail a turn-window restat', () => {
@@ -264,10 +342,16 @@ describe('retainVisibleGeneratedFiles', () => {
     ]);
   });
 
-  it('drops chips whose paths disappeared from the next candidate list', () => {
+  it('holds chips whose paths disappeared until the caller asks to drop them', () => {
     expect(retainVisibleGeneratedFiles([toolFile, extraToolFile], [extraToolFile])).toEqual([
+      toolFile,
       extraToolFile,
     ]);
+    expect(
+      retainVisibleGeneratedFiles([toolFile, extraToolFile], [extraToolFile], {
+        dropMissing: true,
+      }),
+    ).toEqual([extraToolFile]);
   });
 
   it('returns the previous reference when the visible set is unchanged', () => {

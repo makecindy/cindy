@@ -37,7 +37,9 @@ import { classifyMarkdownHref, toLocalFileUrl } from '@/lib/localPathResolver';
 import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import {
   fetchChatFileWithToasts,
+  remotePathVerdictKey,
   revealRemoteChatFile,
+  subscribeRemotePathVerdictChange,
   type RemotePathVerdict,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
@@ -389,17 +391,33 @@ export function isLocalGeneratedFileInTurn(
   return typeof ts === 'number' && ts >= lowerBound && (turnEndMs === null || ts < turnEndMs);
 }
 
+function artifactVisibleSignature(artifact: DocumentArtifactMetadata | undefined): string {
+  if (!artifact) return '';
+  const preview =
+    artifact.preview?.kind === 'sheet'
+      ? `sheet:${artifact.preview.hasHeader ? '1' : '0'}:${artifact.preview.rows.map((row) => row.join(',')).join(';')}`
+      : artifact.preview?.kind === 'slide'
+        ? `slide:${artifact.preview.title ?? ''}:${artifact.preview.subtitle ?? ''}`
+        : '';
+  return [
+    artifact.format,
+    artifact.title ?? '',
+    artifact.subtitle ?? '',
+    artifact.theme ?? '',
+    artifact.cover === undefined ? '' : artifact.cover ? '1' : '0',
+    artifact.summary?.kind ?? '',
+    String(artifact.summary?.value ?? ''),
+    preview,
+  ].join('\t');
+}
+
 /** 决定 chip 是否换样的字段;故意不含数组引用。 */
 export function generatedFileVisibleSignature(file: GeneratedFileRef): string {
   return [
     file.path,
     file.source,
     file.artifactConfirmed ? '1' : '0',
-    file.artifact?.format ?? '',
-    file.artifact?.title ?? '',
-    file.artifact?.subtitle ?? '',
-    file.artifact?.summary?.kind ?? '',
-    String(file.artifact?.summary?.value ?? ''),
+    artifactVisibleSignature(file.artifact),
   ].join('\t');
 }
 
@@ -427,22 +445,29 @@ export function generatedFilesCheckKey(
 }
 
 /**
- * 文件列表增量更新时,先留下已经确认过、新列表里还在的 chip。
- * 新路径等这次 stat 完成后再出现;被拿掉的路径立刻消失。
+ * 文件列表增量更新时,先留下已经确认过的 chip。
+ * 流式中候选从 A 换成 C 时先留着 A,等 C 的 stat 完成再替换,避免整卡先卸再挂。
+ * 本轮封口或环境变了才允许立刻丢掉已消失的路径。
  * 首屏 previous 为 null,保持「检查完成前不展示」。
  */
 export function retainVisibleGeneratedFiles(
   previous: GeneratedFileRef[] | null,
   nextCandidates: readonly GeneratedFileRef[],
+  options?: { dropMissing?: boolean },
 ): GeneratedFileRef[] | null {
   if (!previous || previous.length === 0) return previous;
+  const dropMissing = options?.dropMissing === true;
   const nextByPath = new Map(nextCandidates.map((file) => [file.path, file]));
   const kept: GeneratedFileRef[] = [];
   let changed = false;
   for (const file of previous) {
     const next = nextByPath.get(file.path);
     if (!next) {
-      changed = true;
+      if (dropMissing) {
+        changed = true;
+        continue;
+      }
+      kept.push(file);
       continue;
     }
     if (generatedFileVisibleSignature(next) !== generatedFileVisibleSignature(file)) {
@@ -480,6 +505,7 @@ export function planGeneratedFilesVisibility(input: {
   turnEndMs: number | null;
   envChanged: boolean;
   turnWindowChanged: boolean;
+  forceRestat?: boolean;
 }): { visible: GeneratedFileRef[] | null; toStat: GeneratedFileRef[] } {
   const statable = input.candidates.filter((file) =>
     isGeneratedFileStatable(file, input.turnEndMs),
@@ -487,8 +513,13 @@ export function planGeneratedFilesVisibility(input: {
   if (input.envChanged) {
     return { visible: null, toStat: statable };
   }
-  const visible = retainVisibleGeneratedFiles(input.previousVisible, input.candidates);
-  if (input.turnWindowChanged) {
+  const previousPaths = new Set((input.previousVisible ?? []).map((file) => file.path));
+  const hasIncomingReplacement = statable.some((file) => !previousPaths.has(file.path));
+  const visible = retainVisibleGeneratedFiles(input.previousVisible, input.candidates, {
+    // 有新候选在 stat 时暂留旧 chip，避免 A→C 中间卸卡；单纯删除没有替补则立刻撤。
+    dropMissing: input.turnEndMs !== null || !hasIncomingReplacement,
+  });
+  if (input.turnWindowChanged || input.forceRestat) {
     return { visible, toStat: statable };
   }
   const confirmedPaths = new Set((input.previousVisible ?? []).map((file) => file.path));
@@ -553,12 +584,27 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   // 已确认的路径不重复 IPC,工作目录 / 远端来源变了才整卡重来。
   const [existing, setExisting] = useState<GeneratedFileRef[] | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [remoteVerdictGen, setRemoteVerdictGen] = useState(0);
   const checkKey = generatedFilesCheckKey(files, turnStartMs, turnEndMs);
   const filesRef = useRef(files);
   filesRef.current = files;
   const visibleRef = useRef<GeneratedFileRef[] | null>(null);
   const checkEnvRef = useRef({ remoteOrigin, workingDir: fileCtx.workingDir });
   const turnWindowRef = useRef({ turnStartMs, turnEndMs });
+  const remoteVerdictGenRef = useRef(remoteVerdictGen);
+
+  useEffect(() => {
+    if (!remoteOrigin) return;
+    const watched = new Set(
+      files
+        .filter((file) => file.source === 'tool' && isGeneratedFileStatable(file, turnEndMs))
+        .map((file) => remotePathVerdictKey(remoteOrigin, fileCtx.workingDir, file.path)),
+    );
+    if (watched.size === 0) return;
+    return subscribeRemotePathVerdictChange((key) => {
+      if (watched.has(key)) setRemoteVerdictGen((generation) => generation + 1);
+    });
+  }, [remoteOrigin, fileCtx.workingDir, checkKey, files, turnEndMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -569,8 +615,10 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     const turnWindowChanged =
       turnWindowRef.current.turnStartMs !== turnStartMs ||
       turnWindowRef.current.turnEndMs !== turnEndMs;
+    const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen;
     checkEnvRef.current = { remoteOrigin, workingDir: fileCtx.workingDir };
     turnWindowRef.current = { turnStartMs, turnEndMs };
+    remoteVerdictGenRef.current = remoteVerdictGen;
 
     const plan = planGeneratedFilesVisibility({
       previousVisible: envChanged ? null : visibleRef.current,
@@ -578,6 +626,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       turnEndMs,
       envChanged,
       turnWindowChanged,
+      forceRestat,
     });
     visibleRef.current = plan.visible;
     if (plan.visible === null) {
@@ -641,7 +690,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     return () => {
       cancelled = true;
     };
-  }, [checkKey, remoteOrigin, turnStartMs, turnEndMs, fileCtx.workingDir]);
+  }, [checkKey, remoteOrigin, turnStartMs, turnEndMs, fileCtx.workingDir, remoteVerdictGen]);
 
   if (!existing || existing.length === 0) return null;
 

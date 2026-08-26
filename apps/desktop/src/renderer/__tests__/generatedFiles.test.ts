@@ -138,6 +138,39 @@ describe('collectGeneratedFiles', () => {
     expect(extractDocumentArtifactMetadata('make_docx', input)).toBeDefined();
   });
 
+  it('does not list a file whose tool result is an explicit failure', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w-fail',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'w-fail',
+          content: JSON.stringify({ ok: false, errorCode: 'FILE_EXISTS' }),
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files).toEqual([]);
+  });
+
+  it('drops a created path that the same turn later deletes', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'new.txt', content: 'hi' }),
+        toolUse('file_change', {
+          changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+        }),
+      ],
+      WORKDIR,
+    );
+    expect(files).toEqual([]);
+  });
+
   it('marks in-flight tool_use files as not ready until the result arrives', () => {
     const inflight = collectGeneratedFiles(
       [
