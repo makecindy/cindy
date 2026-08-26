@@ -21,6 +21,29 @@ describe('Node runtime packaging contract', () => {
     expect(forge).toContain('[FuseV1Options.OnlyLoadAppFromAsar]: true');
   });
 
+  it('Pi Subagent 与正式包的 RunAsNode=false 契约使用同一受支持入口', () => {
+    const forge = fs.readFileSync(path.join(desktopRoot, 'forge.config.ts'), 'utf8');
+    const piHost = fs.readFileSync(path.join(desktopRoot, 'src/main/maker-host/pi-host.ts'), 'utf8');
+    const runtime = fs.readFileSync(path.join(desktopRoot, 'src/main/cindy-brain/piSubagentRunnerHost.ts'), 'utf8');
+    const repoRoot = path.resolve(desktopRoot, '..', '..');
+    const subagentSource = fs.readFileSync(
+      path.join(repoRoot, 'packages/maker-core/src/agents/pi/cindy-subagent-source.ts'),
+      'utf8',
+    );
+    const piAgent = fs.readFileSync(
+      path.join(repoRoot, 'packages/maker-core/src/agents/pi/index.ts'),
+      'utf8',
+    );
+
+    expect(forge).toContain("entry: 'src/main/cindy-brain/piSubagentRunnerProcess.ts'");
+    expect(forge).toContain('[FuseV1Options.RunAsNode]: false');
+    expect(runtime).toContain('utilityProcess.fork');
+    expect(piHost).toContain('spawnPiSubagentRunner,');
+    expect(subagentSource).not.toContain('ELECTRON_RUN_AS_NODE');
+    expect(subagentSource).not.toContain('CINDY_PI_SUBAGENT_NODE');
+    expect(piAgent).not.toContain('[CINDY_SUBAGENT_ENV.nodeExecutable]');
+  });
+
   it('scaffold worker is parentPort-only and does not reopen RunAsNode', () => {
     const worker = fs.readFileSync(
       path.join(desktopRoot, 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts'),

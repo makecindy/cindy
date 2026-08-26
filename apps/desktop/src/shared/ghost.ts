@@ -1,9 +1,7 @@
 import {
   GHOST_LOCALES,
-  GHOST_MANIFEST_V3_MIN_CINDY_VERSION,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
-  compareCindyVersions,
   isValidCindyVersion,
   type GhostLocale,
   type GhostManifestLocales,
@@ -43,7 +41,7 @@ export const GHOST_MANIFEST_MAX_BYTES = 256 * 1024;
 export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
 
 /** ghost.json 的 description / whenToUse 字符上限，正本在 plugin-protocol。 */
-export { GHOST_MANIFEST_SUMMARY_MAX_CHARS, GHOST_MANIFEST_V3_MIN_CINDY_VERSION };
+export { GHOST_MANIFEST_SUMMARY_MAX_CHARS };
 
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
@@ -56,16 +54,17 @@ export const GHOST_SCHEME = 'cindy-ghost';
 
 /**
  * 意识沙箱的 session 分区前缀。无 `persist:` 前缀 = 纯内存分区,熄灯即蒸发。
- * 面板 webview 与离屏沙箱窗口共用同一分区规则(同一意识 = 同一间房)。
+ * Renderer 只用它声明待附加的意识 id；Main 验明当前 owner 后会覆盖成真正的
+ * owner-scoped partition，不能把这里的 claim 当成最终 Electron session 边界。
  */
 export const GHOST_PARTITION_PREFIX = 'cindy-ghost-';
 
-/** 某段意识的 session 分区名。 */
+/** Renderer 的意识 WebView attach claim；Main 放行前会覆盖成 owner 分区。 */
 export function ghostPartition(id: string): string {
   return `${GHOST_PARTITION_PREFIX}${id}`;
 }
 
-/** 从分区名解析意识 id;不是意识分区(或 id 非法)返回 null。 */
+/** 从 Renderer claim 解析意识 id；不是合法 claim 返回 null。 */
 export function parseGhostPartition(partition: unknown): string | null {
   if (typeof partition !== 'string' || !partition.startsWith(GHOST_PARTITION_PREFIX)) return null;
   const id = partition.slice(GHOST_PARTITION_PREFIX.length);
@@ -3729,15 +3728,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   }
   if (raw.minCindyVersion !== undefined && !isValidCindyVersion(raw.minCindyVersion)) {
     return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
-  }
-  if (
-    prepared.schemaVersion === 3 &&
-    compareCindyVersions(raw.minCindyVersion as string, GHOST_MANIFEST_V3_MIN_CINDY_VERSION) === -1
-  ) {
-    return {
-      ok: false,
-      reason: `schemaVersion 3 的 minCindyVersion 不能低于 ${GHOST_MANIFEST_V3_MIN_CINDY_VERSION}`,
-    };
   }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。

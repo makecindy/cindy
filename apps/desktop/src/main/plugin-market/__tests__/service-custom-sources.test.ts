@@ -2185,9 +2185,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
         allowSourceReplacement: true,
       }),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
-    expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
-      manifestCap: ghostManifest('server-plugin'),
-    });
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
     expect(h.ledger.installationForGhost('server-plugin')).toMatchObject({
       pluginId: item.id,
       source: 'market',

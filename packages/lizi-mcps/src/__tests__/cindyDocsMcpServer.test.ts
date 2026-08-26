@@ -1183,10 +1183,16 @@ describe('路径边界与覆盖语义', () => {
     }
   });
 
-  it('经 symlink 指向工作目录外也被拒', async () => {
+  it('经目录链接指向工作目录外也被拒', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));
     created.push(outside);
-    await fs.symlink(outside, path.join(workdir, 'link'), 'dir');
+    // Windows junction 不需要开发者模式，仍会让 realpath 穿到工作目录外；POSIX
+    // 使用目录 symlink。两端都保留真实文件系统的路径逃逸回归覆盖。
+    await fs.symlink(
+      outside,
+      path.join(workdir, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     const client = await connect();
     const result = await callTool(client, 'make_docx', {
       markdown: '# x',

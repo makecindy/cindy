@@ -220,6 +220,10 @@ test("desktop resources include both open-source and restricted disclosures", ()
     read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
     /LiteLLM mascot SVG path \(adapted\).*Copyright \(c\) 2026 Berri AI/s,
   );
+  assert.match(
+    read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
+    /oh-my-pi Windows Git PATH helpers \(adapted\).*Copyright \(c\) 2025 Mario Zechner.*Copyright \(c\) 2025-2026 Can Bölük/s,
+  );
   assert.doesNotMatch(
     read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
     /LiteLLM mascot SVG path \(adapted\) adapted/,

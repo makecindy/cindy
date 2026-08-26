@@ -4194,8 +4194,8 @@ export function MessageStream({
   // shouldUnpinOnUpIntent),本回调只负责翻转:ref 与 state 同步更新(F2 不
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
-    bumpSendFollowCancelGeneration(sessionId);
     if (!isNearBottomRef.current) return;
+    bumpSendFollowCancelGeneration(sessionId);
     isNearBottomRef.current = false;
     setIsNearBottom(false);
   }, [sessionId]);

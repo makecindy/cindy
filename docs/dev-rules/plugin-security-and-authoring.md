@@ -50,7 +50,8 @@
 
 ### 1.1 Manifest v3 直接能力声明
 
-- 新插件统一使用 `schemaVersion: 3`，并填写不低于 `0.1.61` 的 `minCindyVersion`。
+- 新插件统一使用 `schemaVersion: 3`，并填写插件实际依赖的首个 Cindy 正式版本作为
+  `minCindyVersion`。Manifest schema 不设置统一的 Cindy 版本下限；具体版本只属于插件包元数据。
   v3 **没有** `slots`；
   `tools`、`card`、`panel`、`mainView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
   `preview` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。

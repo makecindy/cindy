@@ -143,12 +143,15 @@ import {
 } from '@/lib/remoteDataOwnerPushFence';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
+  parseIssueEnvHarness,
+  parseIssueEnvModelId,
   parseIssueEnvRegion,
   parseOptionalGithubUserIdentity,
   parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
   type IssueSubmissionIdentity,
 } from '@/lib/issueConfirmPayload';
+import type { IssueHarness } from '../../shared/issueRuntimeMetadata';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
 import { normalizeTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails';
 import {
@@ -779,6 +782,8 @@ export interface PendingIssueConfirm {
     platform: string;
     arch: string;
     osVersion: string;
+    harness?: IssueHarness;
+    modelId?: string;
     region?: CindyRegion;
   };
   /**
@@ -4788,7 +4793,7 @@ export function handleStreamEvent(
       : null;
   const isCodexReconnectProgress =
     event.type === 'error' &&
-    event.source === 'codex' &&
+    (event.source === 'codex' || event.source === 'pi') &&
     !isTerminalErrorData(event.data) &&
     reconnectAttempt !== null &&
     !isCodexUserActionableRetryError(event.data);
@@ -7470,11 +7475,16 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // ephemeral 卡片(同 permission 语义,无 persistId 不落库),直接写 state,
       // 不走 handleStreamEvent —— 它不属于 agent 事件流。
       const draft = request.draft as PendingIssueConfirm['draft'] | undefined;
-      // region 必须先 Omit 掉再重建成 unknown:交叉类型做不到这件事
+      // 公开 runtime metadata 必须先 Omit 掉再重建成 unknown:交叉类型做不到这件事
       // (`CindyRegion & unknown` 仍是 `CindyRegion`),那样写会让 TS 以为 IPC 传来的
       // region 已经是合法值,下面的白名单校验看着像在校验、实际没有类型层面的约束。
       const rawEnv = request.env as
-        (Omit<PendingIssueConfirm['env'], 'region'> & { region?: unknown }) | undefined;
+        | (Omit<PendingIssueConfirm['env'], 'region' | 'harness' | 'modelId'> & {
+            region?: unknown;
+            harness?: unknown;
+            modelId?: unknown;
+          })
+        | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
       if (!draft || !rawEnv || !submissionIdentity) return;
       // 新版 Main:平台默认 + 可选 GitHub 身份。旧版 Main:只传已经固定的单一
@@ -7487,8 +7497,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         submissionIdentity.kind === 'platform'
           ? parseIssueSuggestedPublicName(request.suggestedPublicName)
           : undefined;
-      // region 过一遍白名单:非法值宁可不展示区域,也不能把 CN 版说成默认版。
-      const env = { ...rawEnv, region: parseIssueEnvRegion(rawEnv.region) };
+      // IPC 值过白名单/单行化：非法值宁可不展示，也不能污染公开确认内容。
+      const env = {
+        ...rawEnv,
+        region: parseIssueEnvRegion(rawEnv.region),
+        harness: parseIssueEnvHarness(rawEnv.harness),
+        modelId: parseIssueEnvModelId(rawEnv.modelId),
+      };
       setState(sessionId, (s) => ({
         ...s,
         pendingIssueConfirm: {

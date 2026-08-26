@@ -13,9 +13,12 @@ import {
 import {
   buildDesktopDevVerdictFromFailure,
   buildDesktopDevVerdictFromWhoami,
+  desktopRestartArgvConflictMessage,
+  normalizeDesktopRestartArgv,
   printDesktopDevVerdict,
   resolveIsolatedArg,
   restartContextFromArgv,
+  SHARED_USERDATA_ARG,
 } from './desktop-dev-verdict.mjs';
 import { collectDesktopWhoamiReport } from './desktop-whoami.mjs';
 
@@ -979,7 +982,9 @@ export function applyDesktopStartupConfigForPhase(options) {
 }
 
 async function main() {
-  let argv = process.argv.slice(2);
+  let argv = normalizeDesktopRestartArgv(process.argv.slice(2), process.env);
+  const sharedArgvConflict = desktopRestartArgvConflictMessage(argv, process.env);
+  if (sharedArgvConflict) throw new Error(sharedArgvConflict);
   const rawIsolatedArg = argv.find((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
   const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir, foldCaseOption(rootDir));
   if (rawIsolatedArg && isolatedArg && isolatedArg !== rawIsolatedArg) {
@@ -1050,6 +1055,9 @@ async function main() {
     throw new Error(
       '--preserve-running reuses the current Cindy login via shared userData and cannot be combined with --isolated or XDT_ISOLATED=1',
     );
+  }
+  if (startupConfig && argv.includes(SHARED_USERDATA_ARG)) {
+    console.log('==> Shared userData mode: dev keeps the legacy shared profile behavior instead of an isolated sandbox.');
   }
   if (startupConfig) {
     console.log(`==> Desktop region: ${startupConfig.region}`);

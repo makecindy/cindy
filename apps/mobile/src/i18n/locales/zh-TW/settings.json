@@ -85,6 +85,21 @@
     "authServer": "Auth Server",
     "authRegion": "登入區域"
   },
+  "devServerEnvironment": {
+    "title": "伺服器環境",
+    "description": "僅影響 CindyDev 連線的業務伺服器",
+    "accessibility": "切換伺服器環境",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "切換至 {{environment}}？",
+    "confirmBody": "切換會登出目前帳號並重新啟動 App。",
+    "cancel": "取消",
+    "switchAction": "切換",
+    "switching": "切換中",
+    "switchFailed": "切換伺服器環境失敗，請再試一次。"
+  },
   "updateInfo": {
     "embedded": "隨整包",
     "embeddedFallback": "隨整包（熱更未生效）",

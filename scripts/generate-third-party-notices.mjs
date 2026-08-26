@@ -665,6 +665,18 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
     }),
   );
 
+  entries.push(
+    bundledComponent({
+      name: "oh-my-pi Windows Git PATH helpers (adapted)",
+      version: "326d24bd40d9858e24e1036ae739c27c72eeb543",
+      license: "MIT",
+      url: "https://github.com/can1357/oh-my-pi/tree/326d24bd40d9858e24e1036ae739c27c72eeb543",
+      licenseText: MIT_TEXT(
+        "MIT License\n\nCopyright (c) 2025 Mario Zechner\nCopyright (c) 2025-2026 Can Bölük",
+      ),
+    }),
+  );
+
   // Electron(devDependency 但二进制随包分发)
   let electronVersion = "bundled";
   let electronLicense = null;

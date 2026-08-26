@@ -90,6 +90,7 @@ describe('session runtime control wiring', () => {
       'setAppSessionCommitBoundaryHook(() => {',
       '// ── Custom protocol registration',
     );
+    expect(body).toContain('ghostPanelWindowsController.closeForOwnerChange();');
     expect(body).toContain('clearAllSessionProviders();');
     expect(body).toContain('clearAllSessionRuntimeAxes();');
     expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(

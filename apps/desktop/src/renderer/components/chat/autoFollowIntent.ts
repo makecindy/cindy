@@ -486,16 +486,15 @@ export function bumpSendFollowCancelGeneration(sessionId: string | null | undefi
 export function shouldBumpSendFollowCancelOnScroll({
   wasNearBottom,
   effectiveNearBottom,
-  scrollDelta,
-  directionDeadZonePx,
 }: {
   wasNearBottom: boolean;
   effectiveNearBottom: boolean;
   scrollDelta: number;
   directionDeadZonePx: number;
 }): boolean {
-  if (wasNearBottom && !effectiveNearBottom) return true;
-  return !effectiveNearBottom && scrollDelta < -directionDeadZonePx;
+  // Only leaving the tail cancels a pending follow. Continued up-scroll while
+  // already away is leftover reading inertia and must not void the next send.
+  return wasNearBottom && !effectiveNearBottom;
 }
 
 export function shouldCommitFollowLatestRequest({

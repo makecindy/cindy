@@ -18,6 +18,11 @@ import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+function isWindowsFileSymlinkPrivilegeError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return process.platform === 'win32' && (code === 'EPERM' || code === 'EACCES');
+}
+
 interface FakeWindowOptions {
   webPreferences?: Record<string, unknown>;
   show?: boolean;
@@ -195,18 +200,28 @@ describe('渲染窗的安全配置', () => {
     expect(win.shown).toBe(false);
   });
 
-  it('本地资源路径含 symlink 时 fail closed,不把 file URL 交给 Chromium', async () => {
+  it('本地资源路径含 symlink 时 fail closed,不把 file URL 交给 Chromium', async ({
+    skip,
+  }) => {
     const sourceDir = path.join(tempRoot, 'source');
     const outsideDir = path.join(tempRoot, 'outside');
     await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
     await fs.writeFile(path.join(sourceDir, 'src.html'), '<p>x</p>');
     await fs.writeFile(path.join(outsideDir, 'secret.png'), 'secret');
     const link = path.join(sourceDir, 'secret.png');
-    await fs.symlink(
-      path.join(outsideDir, 'secret.png'),
-      link,
-      process.platform === 'win32' ? 'file' : undefined,
-    );
+    try {
+      await fs.symlink(
+        path.join(outsideDir, 'secret.png'),
+        link,
+        process.platform === 'win32' ? 'file' : undefined,
+      );
+    } catch (error) {
+      if (isWindowsFileSymlinkPrivilegeError(error)) {
+        skip();
+        return;
+      }
+      throw error;
+    }
     await renderHtmlToPdf({
       ...BASE_INPUT,
       htmlBytes: await fs.readFile(path.join(sourceDir, 'src.html')),
@@ -295,7 +310,7 @@ describe('渲染主流程', () => {
     await expect(fs.stat(source)).resolves.toBeTruthy();
   });
 
-  it('主文档快照完成后源路径被换成外部链接也不会改变待打印内容', async () => {
+  it('主文档快照完成后源路径被换成外部链接也不会改变待打印内容', async ({ skip }) => {
     const source = path.join(tempRoot, 'src.html');
     const outside = path.join(tempRoot, 'outside.html');
     const moved = path.join(tempRoot, 'src-original.html');
@@ -303,7 +318,15 @@ describe('渲染主流程', () => {
     await fs.writeFile(outside, '<p>outside</p>', 'utf-8');
     const snapshot = await fs.readFile(source);
     await fs.rename(source, moved);
-    await fs.symlink(outside, source, process.platform === 'win32' ? 'file' : undefined);
+    try {
+      await fs.symlink(outside, source, process.platform === 'win32' ? 'file' : undefined);
+    } catch (error) {
+      if (isWindowsFileSymlinkPrivilegeError(error)) {
+        skip();
+        return;
+      }
+      throw error;
+    }
     let loadedContent = '';
     FakeBrowserWindow.loadBehavior = async (_win, file) => {
       loadedContent = await fs.readFile(file, 'utf-8');

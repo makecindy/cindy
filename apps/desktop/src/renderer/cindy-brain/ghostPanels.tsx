@@ -19,6 +19,7 @@ import { GhostChipPanelBody, GhostPanelError } from './ghostPanelBody';
 import { ghostInstallErrorKey } from './installErrorKey';
 import { pruneGhostSettingsSnapshots } from './ghostSettingsSnapshot';
 import { useGhostRuntimeState } from './runtimeStates';
+import { getDataOwnerGeneration } from '../contexts/dataOwnerGeneration';
 
 /**
  * 意识面板接入布局引擎。
@@ -173,7 +174,10 @@ export function syncGhostPanelRegistrations(ghosts: InstalledGhost[]): void {
   // 顺手清设置区快照缓存的孤儿(卸载的意识不该在 localStorage 留位图);
   // 本函数是"已装清单"的唯一同步点(启动 + ghosts:changed),挂这里最省。
   // 注意用全量清单(含沉睡)——沉睡只是不注册面板,快照仍然有效。
-  pruneGhostSettingsSnapshots(ghosts.map((g) => g.manifest.id));
+  pruneGhostSettingsSnapshots(
+    getDataOwnerGeneration().dataOwnerId,
+    ghosts.map((g) => g.manifest.id),
+  );
   // 气泡状态对齐(与快照 prune 不同:停用/失格的要强制还原,不只清卸载)——
   // 气泡是"面板不可见 + 唯一恢复入口",失格后必须回停靠,不留死角。
   reconcileGhostPanelBubbles(ghosts);
