@@ -140,6 +140,8 @@ describe('isInterruptedTurnError', () => {
       'socket hang up',
       'Request timed out',
       'API Error: The operation timed out.',
+      'The operation timed out.',
+      'OpenAI Responses stream ended before a terminal response event',
       'Connection error',
       'upstream unreachable',
       '502 Bad Gateway',
@@ -173,6 +175,7 @@ describe('isInterruptedTurnError', () => {
       ['请求非法', { sdkError: 'invalid_request', message: 'prompt too long' }],
       ['codex thread', { message: 'thread not found' }],
       ['加密内容失效', { message: 'invalid encrypted content' }],
+      ['Pi auto-retry 耗尽后交给用户点重试', { reason: 'pi-gateway-drop', message: 'The operation timed out.' }],
     ] as Array<[string, Parameters<typeof isInterruptedTurnError>[0]]>) {
       expect(isInterruptedTurnError(signals), `${label} 不该自动重连`).toBe(false);
     }

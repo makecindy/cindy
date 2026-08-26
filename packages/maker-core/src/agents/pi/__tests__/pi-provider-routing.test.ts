@@ -96,6 +96,19 @@ const noopLogger: Logger = {
   child: () => noopLogger,
 };
 
+function testSubagentRunnerHost() {
+  const handle = {
+    pid: 4321,
+    killed: false,
+    once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+      if (event === 'spawn') queueMicrotask(listener);
+      return handle;
+    },
+    kill: () => true,
+  };
+  return handle as never;
+}
+
 describe('Pi provider-aware model routing', () => {
   let agentHome = '';
 
@@ -289,6 +302,7 @@ describe('Pi provider-aware model routing', () => {
       logger: noopLogger,
       capabilityAdditions: { availableModels },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiGatewayModelApi: () => 'openai-responses',
       registerPiProxySession: (_sessionId, token, resolveProviderId, options) => {
         if (options?.scope !== 'subagent-route') resolveProxyProviderId = resolveProviderId;
@@ -414,7 +428,15 @@ describe('Pi provider-aware model routing', () => {
     ]);
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty('api');
     expect(JSON.parse(readFileSync(path.join(configHome, 'settings.json'), 'utf8')))
-      .toEqual({ transport: 'sse' });
+      .toEqual({
+        transport: 'sse',
+        retry: {
+          enabled: true,
+          maxRetries: 6,
+          baseDelayMs: 2000,
+          provider: { maxRetries: 0 },
+        },
+      });
     const runtimeText = readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8');
     expect(runtimeText).not.toContain('proxySessionToken');
     expect(proxyRegistrations.filter((registration) => registration.scope === 'subagent-route'))
@@ -573,6 +595,7 @@ describe('Pi provider-aware model routing', () => {
         }],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [
           {
@@ -647,6 +670,7 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [
           {
@@ -813,6 +837,7 @@ describe('Pi provider-aware model routing', () => {
         }],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [{
           id: 'xai',
@@ -865,6 +890,7 @@ describe('Pi provider-aware model routing', () => {
         }],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [{
           id: 'xai',
@@ -2357,6 +2383,7 @@ describe('Pi provider-aware model routing', () => {
       availableModels,
     },
     resolvePiAgentHome: () => agentHome,
+    spawnPiSubagentRunner: testSubagentRunnerHost,
     resolvePiGatewayModelApi: () => 'anthropic-messages',
     resolvePiNativeProviders,
   });
@@ -3757,6 +3784,63 @@ describe('Pi provider-aware model routing', () => {
       .toContain((capturedRemoteEnvs[0]!.CINDY_PI_MODELS_JSON_HASH ?? '').slice(0, 16));
     expect(capturedRemoteEnvs[1]!.PI_CODING_AGENT_DIR)
       .toContain((capturedRemoteEnvs[1]!.CINDY_PI_MODELS_JSON_HASH ?? '').slice(0, 16));
+  });
+
+  it('includes settings.json in the remote launch identity so retry config restarts the child', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const written = new Map<string, string>();
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    const base = byomDeps(async () => ({ providers: [], env: {} }));
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async (_hostId, opts) => {
+        capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+        return remoteStub;
+      },
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async (filePath, content) => {
+          written.set(filePath, content);
+        },
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-settings-hash',
+      workingDir: cwd,
+      model: 'local-model',
+      remoteHostId: 'remote-host',
+    });
+    await handle.close();
+
+    const modelsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('models.json'))?.[1];
+    const settingsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('settings.json'))?.[1];
+    expect(modelsJson).toBeTruthy();
+    expect(settingsJson).toBeTruthy();
+    const modelsOnlyHash = createHash('sha256').update(modelsJson!).digest('hex');
+    const launchHash = createHash('sha256')
+      .update(modelsJson!)
+      .update('\n')
+      .update(settingsJson!)
+      .digest('hex');
+    expect(launchHash).not.toBe(modelsOnlyHash);
+    expect(capturedRemoteEnvs).toHaveLength(1);
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_MODELS_JSON_HASH).toBe(launchHash);
+    expect(capturedRemoteEnvs[0]!.PI_CODING_AGENT_DIR).toContain(launchHash.slice(0, 16));
   });
 
   it('inlines remote text attachments and rejects local path mentions before dispatch', async () => {

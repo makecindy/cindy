@@ -57,7 +57,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
-Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、启动时 RPC
+Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.maxRetries=6`
+（`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
 `set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
 下一次发送前换窗。设置页的 Pi 百分比在每次启动或恢复 Pi 任务时冻结，并写入该任务 `settings.json` 的
@@ -67,10 +68,11 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
-放任 pi 默认(未写 settings.json):`retry.*`(agent 级 3 次退避、provider 级 0)、
-`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、`compaction.keepRecentTokens`、
-`defaultProjectTrust`。Cindy 会在每次 startSession 覆写 `transport` 与 `compaction.reserveTokens`；
+放任 pi 默认(未写 settings.json):`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、
+`compaction.keepRecentTokens`、`defaultProjectTrust`。Cindy 会在每次 startSession 覆写
+`transport`、`retry.maxRetries=6`（provider 级保持 0）与 `compaction.reserveTokens`；
 未配置 Pi 百分比时不写 `reserveTokens`，沿用 Pi 默认 16384。
+
 
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 
@@ -128,6 +130,22 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
    extension(`cindy-bridge` / `cindy-subagent`)源码字节必须进入 launch identity:
    `CINDY_PI_EXTENSION_BUNDLE_HASH` 只由源码确定,禁止随机数或时间戳;字节不变可 reattach,
    字节变化必须 restart。
+11. **正式包后台脚本启动边界**:Desktop 正式包保持 `RunAsNode=false`,因此 Main 的
+   `process.execPath` 是 Cindy 应用程序,**不是 Node 可执行文件**。Pi Subagent 的 durable
+   runner 必须经 host 注入的 `spawnPiSubagentRunner` 交给 Desktop
+   `utilityProcess.fork` 固定入口执行;扩展与 maker-core 不得再拼
+   `ELECTRON_RUN_AS_NODE=1` 或把 `process.execPath` 写入子代理 env。开发版 / Vitest 里
+   `process.execPath` 恰好可执行 JavaScript 不构成生产证据。打包契约测试必须同时断言
+   `RunAsNode=false`、固定 utility-process 入口在 forge 清单中、Pi host 使用该入口，避免
+   两份各自正确的测试再次掩盖跨模块矛盾。身份校验必须读未截断命令行（POSIX `ps -ww`
+   / Linux `/proc/<pid>/cmdline`）；成功读到的命令行不含本 run 的 `runnerScript` 即
+   视为 gone，只有读失败才 unverifiable。紧急停止和就绪超时都先对 runner pid 发 SIGTERM
+   再 SIGKILL，禁止 `kill(-pid)` 把 utility-process 当成独立进程组。未确认退出不得写
+   failed 终态（控制协议要带回 unconfirmed），否则 quit / 账号边界 sweep 会跳过仍可能活着的 runner。
+   真正 spawn 前必须再读一次账号边界，并把在途 launch 纳入 teardown 收敛。Host 只用
+   realpath 校验包含关系，传给 runner 的 argv 必须与 `config.runDir` 同一套原始绝对路径。
+   dispose 未确认 runner 退出必须失败；Host 观察到的退出要能通过控制协议通知前台等待，不能只靠 status.json。
+   Windows 上 SIGTERM 不得带 taskkill /F；前台若已读到终态必须先返回，不得被 Host 退出通知盖成失败。
 
 ## 5. 已交付(2026-07 里程碑)
 
