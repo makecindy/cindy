@@ -519,6 +519,12 @@ export default function NewRemoteSessionScreen() {
   const [availableAgentKinds, setAvailableAgentKinds] =
     useState<ReadonlySet<NewSessionAgentKind> | null>(null);
   const [availableAgentRefreshNonce, setAvailableAgentRefreshNonce] = useState(0);
+  const [availableAgentRosterRefreshNonce, setAvailableAgentRosterRefreshNonce] = useState(0);
+  const rosterRecoveryIdentityRef = useRef<{
+    deviceId: string;
+    connectionEpoch: number;
+    presenceVersion: number;
+  } | null>(null);
   // worktree 开关(project 模式 + 已选目录时显示):勾选值存工作端(get-new-maker-defaults
   // 播种 / 显式点击写穿),资格由 worktree:detect-cwd 探测(目录变化即重探,seq 防竞态)。
   const [worktreeProbe, setWorktreeProbe] = useState<NewSessionWorktreeProbeSnapshot | null>(null);
@@ -1849,7 +1855,26 @@ export default function NewRemoteSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId, maker, openLink, availableAgentRefreshNonce]);
+  }, [selectedDeviceId, maker, openLink, availableAgentRosterRefreshNonce]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) {
+      rosterRecoveryIdentityRef.current = null;
+      return;
+    }
+    const previous = rosterRecoveryIdentityRef.current;
+    rosterRecoveryIdentityRef.current = { deviceId: selectedDeviceId, connectionEpoch, presenceVersion };
+    if (!previous || previous.deviceId !== selectedDeviceId) return;
+    if (
+      previous.connectionEpoch === connectionEpoch
+      && previous.presenceVersion === presenceVersion
+    ) return;
+    // Roster pushes are edge-triggered and are not replayed by topic rehydration.
+    // Refresh both the runtime roster and the selected agent capabilities after a
+    // relay/target recovery, even when the screen stayed mounted and focused.
+    setAvailableAgentRefreshNonce((value) => value + 1);
+    setAvailableAgentRosterRefreshNonce((value) => value + 1);
+  }, [connectionEpoch, presenceVersion, selectedDeviceId]);
 
   useEffect(() => {
     if (!selectedDeviceId) return;
@@ -1888,6 +1913,7 @@ export default function NewRemoteSessionScreen() {
       if (deviceId !== selectedDeviceId) return;
       evictAgentCapabilitiesForDevice(deviceId);
       setAvailableAgentRefreshNonce((value) => value + 1);
+      setAvailableAgentRosterRefreshNonce((value) => value + 1);
     });
   }, [onAgentsChanged, selectedDeviceId]);
 

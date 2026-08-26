@@ -15,6 +15,8 @@ vi.mock('../useAgentCapabilities', () => ({
 }));
 
 type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi';
+type PresenceListener = (snapshot: { deviceId: string; online: boolean }) => void;
+type StatusListener = (payload: { status: 'stopped' | 'connecting' | 'online' }) => void;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -35,6 +37,27 @@ function installMakerApi() {
   };
   (window as unknown as { electronAPI: { maker: typeof api } }).electronAPI = { maker: api };
   return { api, listeners };
+}
+
+function installDeviceLinkApi() {
+  const presenceListeners = new Set<PresenceListener>();
+  const statusListeners = new Set<StatusListener>();
+  const api = {
+    invoke: vi.fn<(deviceId: string, channel: string, args: unknown[]) => Promise<unknown>>(),
+    onPresenceChanged: vi.fn((listener: PresenceListener) => {
+      presenceListeners.add(listener);
+      return () => presenceListeners.delete(listener);
+    }),
+    onStatusChanged: vi.fn((listener: StatusListener) => {
+      statusListeners.add(listener);
+      return () => statusListeners.delete(listener);
+    }),
+    onRemotePush: vi.fn(() => () => {}),
+  };
+  (window as unknown as { electronAPI: { deviceLink: typeof api } }).electronAPI = {
+    deviceLink: api,
+  };
+  return { api, presenceListeners, statusListeners };
 }
 
 describe('useAvailableAgents roster cache', () => {
@@ -73,5 +96,34 @@ describe('useAvailableAgents roster cache', () => {
       await second.promise;
     });
     await waitFor(() => expect(remounted.result.current.availableVendors.has('pi')).toBe(true));
+  });
+
+  it('refetches a remote roster after the selected device reconnects', async () => {
+    const first = deferred<RuntimeAgentKind[]>();
+    const second = deferred<RuntimeAgentKind[]>();
+    const { api, presenceListeners } = installDeviceLinkApi();
+    api.invoke.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const { useAvailableAgents } = await import('../useAvailableAgents');
+    const { result } = renderHook(() => useAvailableAgents('device-1'));
+
+    await waitFor(() => expect(api.invoke).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      first.resolve(['claude-code', 'codex']);
+      await first.promise;
+    });
+    expect(result.current.availableVendors.has('pi')).toBe(false);
+
+    act(() => {
+      for (const listener of presenceListeners) listener({ deviceId: 'device-1', online: false });
+      for (const listener of presenceListeners) listener({ deviceId: 'device-1', online: true });
+    });
+    await waitFor(() => expect(api.invoke).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      second.resolve(['claude-code', 'codex', 'pi']);
+      await second.promise;
+    });
+    await waitFor(() => expect(result.current.availableVendors.has('pi')).toBe(true));
   });
 });

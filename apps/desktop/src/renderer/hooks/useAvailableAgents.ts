@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
+import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import {
   evictDeviceCapabilities,
   prefetchDeviceCapabilities,
@@ -160,6 +161,7 @@ export interface UseAvailableAgentsResult {
  */
 export function useAvailableAgents(deviceId?: string | null): UseAvailableAgentsResult {
   const cached = agentsCache.get(cacheKeyOf(deviceId));
+  const reconnectEpoch = useDeviceLinkReconnectEpoch(deviceId ?? undefined);
   // 初值取缓存:同一 deviceId 已经查过时,新实例挂载即出值,不再走一遍「空集合 → loaded」
   // 的闪帧。useState 的 lazy 初值只在首次 render 取一次,后续由下面的 effect 维护。
   const [availableVendors, setAvailableVendors] = useState<ReadonlySet<MakerVendor>>(
@@ -172,8 +174,15 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     const hit = agentsCache.get(cacheKeyOf(deviceId));
     setAvailableVendors(hit?.vendors ?? new Set());
     setLoaded(hit !== undefined);
+    const key = cacheKeyOf(deviceId);
+    if (deviceId && reconnectEpoch > 0) {
+      // Reconnection can happen while the one-shot roster push is in flight. The
+      // subscription is rehydrated elsewhere, but that edge-triggered push is not
+      // replayed, so force a fresh roster and capability snapshot for this device.
+      invalidateAgentsCache(key);
+      refreshRemoteCapabilitiesOnce(deviceId);
+    }
     const run = (): void => {
-      const key = cacheKeyOf(deviceId);
       const requestGeneration = currentAgentsCacheGeneration(key);
       loadAvailableAgents(deviceId)
         .then((vendors) => {
@@ -223,7 +232,7 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
       offAgentsChanged?.();
       offRemoteAgentsChanged?.();
     };
-  }, [deviceId]);
+  }, [deviceId, reconnectEpoch]);
 
   return { availableVendors, loaded };
 }
