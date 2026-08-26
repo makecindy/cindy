@@ -2171,17 +2171,18 @@ export class Session {
     // its handle idle. Only runEventLoop's generation adoption may transfer
     // ownership to the new attempt.
     const preDispatchReservation = this.isPreDispatchReservation();
+    const sameGenerationError =
+      this.terminalEventObservedGeneration === this.turnGeneration &&
+      this.terminalEventObservedKind === 'error';
+    const sameGenerationDone =
+      this.terminalEventObservedGeneration === this.turnGeneration &&
+      this.terminalEventObservedKind === 'done';
+    // A late leftover error must not replace N+1's result-only success,
+    // nor fan-out as a current-generation failure to lifecycle / IPC listeners.
+    const lateErrorAfterDoneSnapshot = event.type === 'error' && sameGenerationDone;
     const terminalBoundaryObserved =
       isCurrentGeneration && isTerminal && !isBackgroundEvent && !preDispatchReservation;
-    if (terminalBoundaryObserved) {
-      const sameGenerationError =
-        this.terminalEventObservedGeneration === this.turnGeneration &&
-        this.terminalEventObservedKind === 'error';
-      const sameGenerationDone =
-        this.terminalEventObservedGeneration === this.turnGeneration &&
-        this.terminalEventObservedKind === 'done';
-      // A late leftover error must not replace N+1's result-only success.
-      if (!(event.type === 'error' && sameGenerationDone)) {
+    if (terminalBoundaryObserved && !lateErrorAfterDoneSnapshot) {
       this.terminalEventObservedGeneration = this.turnGeneration;
       this.lastObservedTerminalGeneration = this.turnGeneration;
       this.lastObservedTerminalKind = event.type === 'error' ? 'error' : 'done';
@@ -2197,7 +2198,6 @@ export class Session {
           this.terminalEventObservedErrorSignals = null;
         }
         this.clearTerminalErrorDrain();
-      }
       }
     } else if (
       this.agentKind === 'codex' &&
@@ -2240,12 +2240,12 @@ export class Session {
       // Reservation 可能已因 handle running 被释放，仍按未接受 generation 记。
       this.rememberReservationWindowPriorTerminal(event, listenerEvent);
     }
-    if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
+    if (isCurrentGeneration && isTerminal && !isBackgroundEvent && !lateErrorAfterDoneSnapshot) {
       this.clearTurnControl(resolvedGeneration);
     }
     const isLeftoverProductTerminal =
       !isBackgroundEvent &&
-      resolvedGeneration < this.turnGeneration &&
+      (resolvedGeneration < this.turnGeneration || lateErrorAfterDoneSnapshot) &&
       (isTerminal || this.isIdleStatusEvent(event));
     if (isTerminal && !isBackgroundEvent && !isLeftoverProductTerminal) {
       try {

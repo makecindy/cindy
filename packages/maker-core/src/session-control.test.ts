@@ -911,6 +911,101 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 
+  it('does not fan-out a late leftover error after the current generation recorded done', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push({ ...event });
+    });
+    const onTerminal = vi.fn();
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal,
+    });
+
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+    const terminalsAfterDone = onTerminal.mock.calls.length;
+    const seenAfterDone = seen.length;
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+    expect(seen.slice(seenAfterDone).some((event) => event.type === 'error')).toBe(false);
+    expect(onTerminal.mock.calls.length).toBe(terminalsAfterDone);
+    expect(
+      onTerminal.mock.calls.some((call) => call[0]?.event?.type === 'error'
+        && (call[0]?.event?.data as { message?: string } | undefined)?.message === 'late prior error'),
+    ).toBe(false);
+  });
+
+  it('still fans out a current-generation terminal error when no done snapshot exists', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push({ ...event });
+    });
+    const onTerminal = vi.fn();
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal,
+    });
+
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'current turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'current turn failed',
+      reason: 'empty-response',
+    });
+    expect(seen.some((event) => event.type === 'error')).toBe(true);
+    expect(onTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      turnGeneration: 1,
+      isCurrentGeneration: true,
+      event: expect.objectContaining({ type: 'error' }),
+    }));
+  });
+
   it('binds an accepted result-only done when the prior paired done was lost', async () => {
     const stub = createHandle();
     const session = createSession(stub, 'codex');
