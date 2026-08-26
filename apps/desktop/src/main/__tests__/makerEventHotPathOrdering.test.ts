@@ -70,7 +70,9 @@ describe('maker:event hot path ordering', () => {
     expect(observerStart).toBeGreaterThanOrEqual(0);
     expect(observerEnd).toBeGreaterThan(observerStart);
     expect(observerSource).toContain('await verdictForModelRoute(');
-    expect(observerSource).toContain("if (verdict.kind === 'reroute')");
+    expect(observerSource).toContain(
+      "if (verdict.kind === 'reroute' && verdict.reason === 'payment-required')",
+    );
     expect(observerSource).toContain("verdict.reason === 'payment-required'");
     expectOrder(
       observerSource,
@@ -79,7 +81,7 @@ describe('maker:event hot path ordering', () => {
     );
     expectOrder(
       observerSource,
-      "if (verdict.kind === 'reroute')",
+      "if (verdict.kind === 'reroute' && verdict.reason === 'payment-required')",
       'sessionTurnLeaseTracker.markTurnStarted(',
     );
   });

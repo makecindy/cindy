@@ -132,6 +132,7 @@ describe('checkModelRoute', () => {
     expect(checkModelRoute(locked, 'claude-code', 'paid-model', null)).toEqual({
       kind: 'reroute',
       providerId: 'anthropic',
+      reason: 'payment-required',
     });
 
     const isPaymentRequiredTombstone = (providerId: string | null, modelId: string) =>

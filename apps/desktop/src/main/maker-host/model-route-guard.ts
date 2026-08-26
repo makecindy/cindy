@@ -44,7 +44,12 @@ import {
 
 export type ModelRouteVerdict =
   | { kind: 'pass' }
-  | { kind: 'reroute'; providerId: string }
+  | {
+      kind: 'reroute';
+      providerId: string;
+      /** 运行中会话的发送终检只强制付费边界；其它 reroute 保持既有 best-effort 语义。 */
+      reason?: 'payment-required';
+    }
   | {
       kind: 'reject';
       reason:
@@ -285,7 +290,7 @@ function checkDisableAxisRoute(
     const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
     const alternativeProvider = alternative ? views.find((p) => p.id === alternative) : undefined;
     return alternative && alternativeProvider && !copyPaymentRequired(alternativeProvider, modelId, agent)
-      ? { kind: 'reroute', providerId: alternative }
+      ? { kind: 'reroute', providerId: alternative, reason: 'payment-required' }
       : { kind: 'reject', reason: 'payment-required' };
   }
   if (copyRetired(wouldRoute, modelId, agent)) {
