@@ -202,6 +202,40 @@ describe('runPendingDbSlimmingAtStartup', () => {
     });
   });
 
+  it('does not consume a reader-lease request while its marker is occupied', async () => {
+    const pending = request();
+    writeDbSlimmingRequest(tmpDir, pending);
+    const requestPath = path.join(tmpDir, 'db-slimming-request.json');
+    const originalRmSync = fs.rmSync.bind(fs);
+    vi.spyOn(fs, 'rmSync').mockImplementation((candidate, options) => {
+      if (String(candidate) === requestPath) {
+        throw Object.assign(new Error('request marker is busy'), { code: 'EBUSY' });
+      }
+      return originalRmSync(candidate, options);
+    });
+    const runMaintenance = vi.fn();
+
+    await expect(
+      runPendingDbSlimmingAtStartup({
+        userDataDir: tmpDir,
+        dbFilePath,
+        ownerId: pending.ownerId,
+        leaseKind: 'reader',
+        loadVectorExtension: vi.fn(() => true),
+        log,
+        runMaintenance,
+      }),
+    ).rejects.toThrow('database slimming request marker could not be cleared');
+
+    expect(runMaintenance).not.toHaveBeenCalled();
+    expect(readDbSlimmingRequest(tmpDir)).toEqual(pending);
+    expect(readDbSlimmingResult(tmpDir)).toMatchObject({
+      id: pending.id,
+      status: 'failed',
+      reason: 'database-in-use',
+    });
+  });
+
   it.each([
     ['swap-prepared', undefined],
     ['replacement-installed', undefined],

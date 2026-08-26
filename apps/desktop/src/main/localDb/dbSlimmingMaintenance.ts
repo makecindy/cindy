@@ -134,8 +134,11 @@ export async function runDbSlimmingMaintenance(
         });
         return { result, originalDatabaseReady: true };
       }
-      cleanupUncommittedArtifacts(paths);
-      clearDbSlimmingRequest(options.userDataDir);
+      if (!finalizeRollbackCleanup(options.userDataDir, paths)) {
+        options.log.warn('database slimming rollback cleanup will be retried', {
+          requestId: request.id,
+        });
+      }
       return { result, originalDatabaseReady: true };
     }
 
@@ -363,8 +366,11 @@ export async function runDbSlimmingMaintenance(
     }
     if (originalDatabaseReady) {
       if (rollbackMarkerDurable) {
-        cleanupUncommittedArtifacts(paths);
-        if (resultPersisted) clearDbSlimmingRequest(options.userDataDir);
+        if (resultPersisted && !finalizeRollbackCleanup(options.userDataDir, paths)) {
+          options.log.warn('database slimming rollback cleanup will be retried', {
+            requestId: request.id,
+          });
+        }
       } else if (resultPersisted) {
         if (clearDbSlimmingRequest(options.userDataDir)) cleanupUncommittedArtifacts(paths);
       }
@@ -881,6 +887,10 @@ function finalizeCommittedCleanup(userDataDir: string, paths: MaintenancePaths):
     throw new Error('database slimming committed artifacts could not be removed');
   }
   clearDbSlimmingRequestOrThrow(userDataDir);
+}
+
+function finalizeRollbackCleanup(userDataDir: string, paths: MaintenancePaths): boolean {
+  return cleanupUncommittedArtifacts(paths) && clearDbSlimmingRequest(userDataDir);
 }
 
 function clearDbSlimmingRequestOrThrow(userDataDir: string): void {

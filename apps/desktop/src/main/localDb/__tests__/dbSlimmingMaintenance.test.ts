@@ -516,6 +516,65 @@ describe('runDbSlimmingMaintenance', () => {
     expect(readMarker(backupPath)).toBe('older-slimming-backup');
   });
 
+  it('keeps the rollback marker until occupied maintenance artifacts are removed', async () => {
+    const rollbackPath = `${dbFilePath}.slimming-${REQUEST_ID}.rollback`;
+    const workPath = `${dbFilePath}.slimming-${REQUEST_ID}.work`;
+    createMarkerDatabase(rollbackPath, 'original');
+    fs.writeFileSync(dbFilePath, 'not a sqlite database');
+    const pending = request({
+      phase: 'replacement-installed',
+      beforeBytes: fs.statSync(dbFilePath).size,
+    });
+    writeDbSlimmingRequest(tmpDir, pending);
+
+    const originalRmSync = fs.rmSync.bind(fs);
+    const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation((candidate, options) => {
+      if (String(candidate) === workPath) {
+        throw Object.assign(new Error('rollback artifact is busy'), { code: 'EBUSY' });
+      }
+      return originalRmSync(candidate, options);
+    });
+
+    const firstOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: pending,
+      now: () => 3_000,
+      log,
+    });
+
+    expect(firstOutcome.result).toMatchObject({
+      status: 'failed',
+      reason: 'integrity-check-failed',
+      originalDatabaseRestored: true,
+    });
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({
+      phase: 'rollback-completed',
+      rollbackFailureReason: 'integrity-check-failed',
+    });
+    expect(fs.existsSync(workPath)).toBe(true);
+    expect(readMarker(dbFilePath)).toBe('original');
+
+    rmSpy.mockRestore();
+    const persisted = readDbSlimmingRequest(tmpDir)!;
+    const secondOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: persisted,
+      now: () => 4_000,
+      log,
+    });
+
+    expect(secondOutcome.result).toMatchObject({
+      status: 'failed',
+      reason: 'integrity-check-failed',
+      originalDatabaseRestored: true,
+    });
+    expect(fs.existsSync(workPath)).toBe(false);
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+    expect(readMarker(dbFilePath)).toBe('original');
+  });
+
   it('fails closed when an installed replacement has lost its original backup', async () => {
     createMarkerDatabase(dbFilePath, 'compacted-replacement');
 
