@@ -4125,7 +4125,7 @@ function listLocalProviderMediaModels() {
           name: model.name,
           providerId: provider.id,
           mode: 'image_generation' as const,
-          modalities: { input, output: [...model.modalities.output] },
+          modalities: { input, output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
       ];
