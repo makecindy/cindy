@@ -9,11 +9,12 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import type { ReviewAttachmentInput } from '../reviewer/reviewEvidence.js';
-import type {
-  ReviewFailureCode,
-  ReviewRunMeta,
-  ReviewRunOwner,
-  ReviewTargetKind,
+import {
+  isStaleReviewFailureCode,
+  type ReviewFailureCode,
+  type ReviewRunMeta,
+  type ReviewRunOwner,
+  type ReviewTargetKind,
 } from '../../shared/reviewRun.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
@@ -137,7 +138,7 @@ export interface PreparedReviewLaunch {
   reviewerCreateOpts: MakerSessionCreateOpts;
   /** Fail closed if evidence changed after extraction but before provider start. */
   verifyBeforeStart(): Promise<ReviewFailureReason | null>;
-  /** Return a user-facing failure reason instead of publishing a stale result. */
+  /** Return why a completed result no longer represents the current source state. */
   verifyBeforePublish(): Promise<ReviewFailureReason | null>;
 }
 
@@ -529,7 +530,14 @@ export function registerReviewStartHandler(
           }
           const staleReason = await launch.verifyBeforePublish();
           if (staleReason) {
-            await updateSourceCard('failed', '', staleReason.message, staleReason.code);
+            if (isStaleReviewFailureCode(staleReason.code)) {
+              // Keep the persisted status readable by older clients. The stable
+              // reason code distinguishes an out-of-date completed result from
+              // a Reviewer execution failure in current clients.
+              await updateSourceCard('failed', result, staleReason.message, staleReason.code);
+            } else {
+              await updateSourceCard('failed', '', staleReason.message, staleReason.code);
+            }
             await closeReviewer();
             return;
           }

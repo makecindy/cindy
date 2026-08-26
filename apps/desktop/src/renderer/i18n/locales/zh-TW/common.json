@@ -7725,6 +7725,7 @@
       "review": {
         "running": "正在審查當前成果",
         "completed": "審查完成",
+        "stale": "審查已完成 · 結果已過期",
         "failed": "審查未完成",
         "openTask": "開啟審查任務",
         "readOnlyHint": "獨立任務 · 無開發記憶 · 只讀",

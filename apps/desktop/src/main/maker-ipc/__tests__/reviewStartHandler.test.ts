@@ -764,7 +764,7 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(deps.readReviewerResult).not.toHaveBeenCalled();
   });
 
-  it('publishes no stale result when final freshness verification fails', async () => {
+  it('preserves a completed result as stale when final freshness verification fails', async () => {
     const harness = new IpcHarness();
     const reviewer = new FakeReviewer();
     const staleReason = {
@@ -785,7 +785,7 @@ describe('maker:review:start IPC lifecycle', () => {
 
     expect(deps.updateSourceCard).toHaveBeenCalledWith(
       expect.objectContaining({
-        result: '',
+        result: 'P1: real finding',
         meta: expect.objectContaining({ status: 'failed', failureCode: staleReason.code }),
       }),
     );

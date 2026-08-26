@@ -7737,6 +7737,7 @@
       "review": {
         "running": "Reviewing current work",
         "completed": "Review complete",
+        "stale": "Review complete · result out of date",
         "failed": "Review did not complete",
         "openTask": "Open review task",
         "readOnlyHint": "Independent task · no development memory · read-only",
