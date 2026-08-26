@@ -90,7 +90,11 @@ describe('buildUnionRows', () => {
       },
     } as ProviderView;
     const rows = buildUnionRows(threeAgent);
-    expect(rows.find((row) => row.id === 'shared')?.avail).toEqual(['claude-code', 'codex', 'pi']);
+    expect(rows.find((row) => row.id === 'shared')?.avail).toEqual([
+      'claude-code',
+      'codex',
+      'pi',
+    ]);
     expect(countModelsByAgent(threeAgent)).toEqual([
       { agent: 'claude-code', on: 2, total: 2 },
       { agent: 'codex', on: 2, total: 2 },
@@ -183,10 +187,7 @@ describe('countModelsByAgent', () => {
       ...provider,
       models: {
         ...provider.models,
-        codex: [
-          ...(provider.models.codex ?? []),
-          { ...model('discovered'), defaultEnabled: false },
-        ],
+        codex: [...(provider.models.codex ?? []), { ...model('discovered'), defaultEnabled: false }],
       },
     } as ProviderView;
     expect(countModelsByAgent(withDiscovered)).toEqual([
@@ -272,12 +273,7 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     expect(rows.find((r) => r.id === 'seedance-fast')).toBeTruthy();
     // 同 id 去重:'shared' 只保留 agent 清单那行(可见性开关照常)。
     expect(rows.filter((r) => r.id === 'shared')).toHaveLength(1);
-    expect(
-      isCapabilityRow(
-        rows.find((r) => r.id === 'shared')!,
-        false,
-      ),
-    ).toBe(false);
+    expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
   });
 
   it('向量清单也合成能力行,可停用(否则停用轴有实现无入口)', () => {
@@ -308,18 +304,8 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
       },
     } as ProviderView;
     const rows = buildUnionRows(withImage);
-    expect(
-      isCapabilityRow(
-        rows.find((r) => r.id === 'gpt-image-2')!,
-        false,
-      ),
-    ).toBe(true);
-    expect(
-      isCapabilityRow(
-        rows.find((r) => r.id === 'shared')!,
-        false,
-      ),
-    ).toBe(false);
+    expect(isCapabilityRow(rows.find((r) => r.id === 'gpt-image-2')!, false)).toBe(true);
+    expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
   });
 });
 

@@ -15,28 +15,18 @@
  * 不含 ScrollView —— 由 SheetSurface 的滚动区承载。行显示逻辑在 modelPickerRows.ts
  * (纯逻辑可单测),本组件只做渲染。
  */
-import {
-  Alert,
-  Pressable,
-  StyleSheet,
-  View,
-  type StyleProp,
-  type ViewStyle,
-} from "react-native";
-import { useTranslation } from "react-i18next";
-import { Text } from "@/components/AppText";
-import { Check, Lock, SlidersHorizontal, Zap } from "lucide-react-native";
+import { Alert, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { Text } from '@/components/AppText';
+import { Check, Lock, SlidersHorizontal, Zap } from 'lucide-react-native';
 
-import type {
-  MobileAgentCapabilities,
-  MobileModelOption,
-} from "@/session/agentCapabilities";
-import type { DeviceApiKeyStatus } from "@/device-link/deviceModelMetaCache";
-import type { AgentKind } from "@cindy/model-providers/types";
-import { MobileModelIconMark } from "@/session/MobileProviderMark";
-import type { MobileModelMemoryAccessors } from "@/session/draftModelMemory";
-import { useDraftModelMemoryVersion } from "@/session/draftModelMemory";
-import { useSessionModelMirrorVersion } from "@/session/sessionModelMirror";
+import type { MobileAgentCapabilities, MobileModelOption } from '@/session/agentCapabilities';
+import type { DeviceApiKeyStatus } from '@/device-link/deviceModelMetaCache';
+import type { AgentKind } from '@cindy/model-providers/types';
+import { MobileModelIconMark } from '@/session/MobileProviderMark';
+import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
+import { useDraftModelMemoryVersion } from '@/session/draftModelMemory';
+import { useSessionModelMirrorVersion } from '@/session/sessionModelMirror';
 import {
   budgetDisabledHint,
   budgetRowDisabled,
@@ -46,22 +36,10 @@ import {
   rowEffortOf,
   rowFastEditable,
   rowFastOn,
-} from "@/session/modelPickerRows";
-import type { ProviderModelRow } from "@/session/providerModelSections";
-import {
-  iconSize,
-  iconStroke,
-  useTheme,
-  useThemedStyles,
-  type ThemeColors,
-} from "@/theme";
-import {
-  fontWeight,
-  lineHeight,
-  radius,
-  spacing,
-  typeScale,
-} from "@/theme/tokens";
+} from '@/session/modelPickerRows';
+import type { ProviderModelRow } from '@/session/providerModelSections';
+import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** 行内配置入口的目标(providerId null = flat 行)。 */
 export interface ModelOptionsOpenTarget {
@@ -108,9 +86,9 @@ export interface MobileModelPickerListProps {
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
     optionRow: {
-      alignItems: "center",
+      alignItems: 'center',
       borderRadius: radius.pill,
-      flexDirection: "row",
+      flexDirection: 'row',
       gap: spacing.sm,
       minHeight: 48,
       paddingHorizontal: spacing.sm,
@@ -126,15 +104,15 @@ const makeStyles = (c: ThemeColors) =>
       minWidth: 0,
     },
     optionTitleRow: {
-      alignItems: "center",
-      flexDirection: "row",
+      alignItems: 'center',
+      flexDirection: 'row',
       minWidth: 0,
     },
     paidBadge: {
-      alignItems: "center",
+      alignItems: 'center',
       backgroundColor: c.surfaceChip,
       borderRadius: radius.pill,
-      flexDirection: "row",
+      flexDirection: 'row',
       gap: spacing.xs,
       marginLeft: spacing.xs,
       paddingHorizontal: spacing.sm,
@@ -146,8 +124,8 @@ const makeStyles = (c: ThemeColors) =>
       fontWeight: fontWeight.medium,
     },
     optionMetaRow: {
-      alignItems: "center",
-      flexDirection: "row",
+      alignItems: 'center',
+      flexDirection: 'row',
       gap: spacing.xs,
       minWidth: 0,
     },
@@ -183,10 +161,10 @@ const makeStyles = (c: ThemeColors) =>
       fontWeight: fontWeight.semibold,
     },
     optionsButton: {
-      alignItems: "center",
+      alignItems: 'center',
       borderRadius: radius.pill,
       height: 32,
-      justifyContent: "center",
+      justifyContent: 'center',
       width: 32,
     },
     empty: {
@@ -194,7 +172,7 @@ const makeStyles = (c: ThemeColors) =>
       fontSize: typeScale.footnote,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.md,
-      textAlign: "center",
+      textAlign: 'center',
     },
   });
 
@@ -210,25 +188,24 @@ export function MobileModelPickerList({
   onSelectProviderRow,
   onSelectFlatModel,
   rowStyle,
-  testID = "modelPicker.option",
+  testID = 'modelPicker.option',
   agentKind,
   capabilities,
-  selectedEffort = "",
+  selectedEffort = '',
   selectedFastMode = false,
   modelMemory,
-  apiKeyStatus = "unknown",
+  apiKeyStatus = 'unknown',
   onOpenOptions,
   onSelectedRowLayout,
 }: MobileModelPickerListProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const resolvedEmptyHint = emptyHint ?? t("models.picker.emptyDefault");
-  const resolvedLoadingHint = loadingHint ?? t("models.picker.loadingDefault");
+  const resolvedEmptyHint = emptyHint ?? t('models.picker.emptyDefault');
+  const resolvedLoadingHint = loadingHint ?? t('models.picker.loadingDefault');
   // 非选中行的记忆写入(二级浮窗里改)不经 props 回流 —— 订阅两个记忆 store 的版本号,
   // 任一变化即重渲染行 effort/Fast 标签(对齐桌面 ModelSelector 的 storeVersion)。
-  const storeVersion =
-    useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
+  const storeVersion = useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
   void storeVersion;
 
   const hasFastModeCap = capabilities?.hasFastMode === true;
@@ -238,13 +215,11 @@ export function MobileModelPickerList({
     return (
       <>
         {providerRows.map((row) => {
-          const selected =
-            row.model.id === activeModelId &&
-            row.provider.id === activeSourceId;
+          const selected = row.model.id === activeModelId && row.provider.id === activeSourceId;
           // 对齐桌面 ModelSelector:订阅制来源(Claude.ai / ChatGPT 等)的模型带「订阅」徽标。
-          const isSubscription = row.provider.access?.kind === "subscription";
+          const isSubscription = row.provider.access?.kind === 'subscription';
           const rowDisabled = budgetRowDisabled(row.model.id, apiKeyStatus);
-          const paymentRequired = row.model.availability === "requires_payment";
+          const paymentRequired = row.model.availability === 'requires_payment';
           const fastEditable =
             configEnabled &&
             rowFastEditable({
@@ -278,24 +253,17 @@ export function MobileModelPickerList({
             ? effortLabelFor(row.model, rowEffort, capabilities ?? null)
             : null;
           const rowAccessibilityLabel = modelRowAccessibilityLabel({
-            baseLabel: t(
-              paymentRequired
-                ? "models.picker.paymentRequiredAccessibility"
-                : "models.picker.selectProviderModelAccessibility",
-              {
-                provider: row.provider.name,
-                model: row.model.displayName,
-              },
-            ),
-            subscriptionLabel: isSubscription
-              ? t("models.picker.subscriptionBadge")
-              : null,
+            baseLabel: t(paymentRequired
+              ? 'models.picker.paymentRequiredAccessibility'
+              : 'models.picker.selectProviderModelAccessibility', {
+              provider: row.provider.name,
+              model: row.model.displayName,
+            }),
+            subscriptionLabel: isSubscription ? t('models.picker.subscriptionBadge') : null,
             effortLabel: fullEffortLabel
-              ? t("models.options.reasoningEffortAccessibility", {
-                  label: fullEffortLabel,
-                })
+              ? t('models.options.reasoningEffortAccessibility', { label: fullEffortLabel })
               : null,
-            fastLabel: fastOn ? t("models.options.fastMode") : null,
+            fastLabel: fastOn ? t('models.options.fastMode') : null,
           });
           // 行内配置入口:置灰行不给;有 effort 档或 fast 可编辑才有意义;非选中行还要有记忆可写
           // (无记忆场景写不进任何地方 → 不显示,避免假开关)。
@@ -310,10 +278,7 @@ export function MobileModelPickerList({
             <Pressable
               accessibilityLabel={rowAccessibilityLabel}
               accessibilityRole="button"
-              accessibilityState={{
-                selected,
-                disabled: disabled || rowDisabled,
-              }}
+              accessibilityState={{ selected, disabled: disabled || rowDisabled }}
               disabled={disabled || rowDisabled}
               key={`${row.provider.id}::${row.model.id}`}
               onLayout={
@@ -324,8 +289,8 @@ export function MobileModelPickerList({
               onPress={() => {
                 if (paymentRequired) {
                   Alert.alert(
-                    t("models.picker.paymentRequiredTitle"),
-                    t("models.picker.paymentRequiredDescription"),
+                    t('models.picker.paymentRequiredTitle'),
+                    t('models.picker.paymentRequiredDescription'),
                   );
                   return;
                 }
@@ -349,19 +314,11 @@ export function MobileModelPickerList({
               />
               <View style={styles.optionMain}>
                 <View style={styles.optionTitleRow}>
-                  <Text numberOfLines={1} style={styles.optionText}>
-                    {row.model.displayName}
-                  </Text>
+                  <Text numberOfLines={1} style={styles.optionText}>{row.model.displayName}</Text>
                   {paymentRequired ? (
                     <View style={styles.paidBadge}>
-                      <Lock
-                        color={colors.textSecondary}
-                        size={iconSize.xs}
-                        strokeWidth={iconStroke.regular}
-                      />
-                      <Text style={styles.paidBadgeText}>
-                        {t("models.picker.paymentRequiredBadge")}
-                      </Text>
+                      <Lock color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                      <Text style={styles.paidBadgeText}>{t('models.picker.paymentRequiredBadge')}</Text>
                     </View>
                   ) : null}
                 </View>
@@ -370,13 +327,11 @@ export function MobileModelPickerList({
                     {isSubscription ? (
                       <View style={styles.subscriptionBadge}>
                         <Text
-                          accessibilityLabel={t(
-                            "models.picker.subscriptionBadge",
-                          )}
+                          accessibilityLabel={t('models.picker.subscriptionBadge')}
                           numberOfLines={1}
                           style={styles.subscriptionBadgeText}
                         >
-                          {t("models.picker.subscriptionBadgeCompact")}
+                          {t('models.picker.subscriptionBadgeCompact')}
                         </Text>
                       </View>
                     ) : null}
@@ -386,61 +341,30 @@ export function MobileModelPickerList({
                         numberOfLines={1}
                         style={styles.effortLabel}
                       >
-                        {compactEffortLabelFor(
-                          row.model,
-                          rowEffort,
-                          capabilities ?? null,
-                        )}
+                        {compactEffortLabelFor(row.model, rowEffort, capabilities ?? null)}
                       </Text>
                     ) : null}
                     {fastOn ? (
-                      <Zap
-                        color={colors.textTertiary}
-                        size={iconSize.sm}
-                        strokeWidth={iconStroke.regular}
-                      />
+                      <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                     ) : null}
                   </View>
                 ) : null}
                 {rowDisabled ? (
-                  <Text numberOfLines={1} style={styles.disabledHint}>
-                    {budgetDisabledHint()}
-                  </Text>
+                  <Text numberOfLines={1} style={styles.disabledHint}>{budgetDisabledHint()}</Text>
                 ) : null}
               </View>
-              {selected ? (
-                <Check
-                  color={colors.textPrimary}
-                  size={iconSize.lg}
-                  strokeWidth={iconStroke.medium}
-                />
-              ) : null}
+              {selected ? <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} /> : null}
               {hasOptions ? (
                 <Pressable
-                  accessibilityLabel={t(
-                    "models.picker.configureAccessibility",
-                    { model: row.model.displayName },
-                  )}
+                  accessibilityLabel={t('models.picker.configureAccessibility', { model: row.model.displayName })}
                   accessibilityRole="button"
                   disabled={disabled}
                   hitSlop={6}
-                  onPress={() =>
-                    onOpenOptions({
-                      providerId: row.provider.id,
-                      modelId: row.model.id,
-                    })
-                  }
-                  style={({ pressed }) => [
-                    styles.optionsButton,
-                    pressed && { opacity: 0.65 },
-                  ]}
+                  onPress={() => onOpenOptions({ providerId: row.provider.id, modelId: row.model.id })}
+                  style={({ pressed }) => [styles.optionsButton, pressed && { opacity: 0.65 }]}
                   testID={`${testID}.optionsButton`}
                 >
-                  <SlidersHorizontal
-                    color={colors.textTertiary}
-                    size={iconSize.md}
-                    strokeWidth={iconStroke.regular}
-                  />
+                  <SlidersHorizontal color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
                 </Pressable>
               ) : null}
             </Pressable>
@@ -457,8 +381,7 @@ export function MobileModelPickerList({
           const selected = option.id === activeModelId;
           // 扁平回退(旧被控端):无供应商结构 → 无来源 mark、无 per-provider fast 判定,
           // fast 支持退化为 capabilities gate × 模型自述;非选中行无记忆可写 → 仅选中行可配置。
-          const fastEditable =
-            configEnabled && hasFastModeCap && option.supportsFastMode === true;
+          const fastEditable = configEnabled && hasFastModeCap && option.supportsFastMode === true;
           const hasOptions =
             configEnabled &&
             !!onOpenOptions &&
@@ -478,18 +401,12 @@ export function MobileModelPickerList({
             ? effortLabelFor(option, rowEffort, capabilities ?? null)
             : null;
           const rowAccessibilityLabel = modelRowAccessibilityLabel({
-            baseLabel: t("models.picker.selectModelAccessibility", {
-              model: option.label,
-            }),
+            baseLabel: t('models.picker.selectModelAccessibility', { model: option.label }),
             effortLabel: fullEffortLabel
-              ? t("models.options.reasoningEffortAccessibility", {
-                  label: fullEffortLabel,
-                })
+              ? t('models.options.reasoningEffortAccessibility', { label: fullEffortLabel })
               : null,
             fastLabel:
-              fastEditable && selected && selectedFastMode
-                ? t("models.options.fastMode")
-                : null,
+              fastEditable && selected && selectedFastMode ? t('models.options.fastMode') : null,
           });
           return (
             <Pressable
@@ -514,9 +431,7 @@ export function MobileModelPickerList({
             >
               <View style={styles.optionMain}>
                 <View style={styles.optionTitleRow}>
-                  <Text numberOfLines={1} style={styles.optionText}>
-                    {option.label}
-                  </Text>
+                  <Text numberOfLines={1} style={styles.optionText}>{option.label}</Text>
                 </View>
                 {rowEffort || (fastEditable && selected && selectedFastMode) ? (
                   <View style={styles.optionMetaRow}>
@@ -526,53 +441,27 @@ export function MobileModelPickerList({
                         numberOfLines={1}
                         style={styles.effortLabel}
                       >
-                        {compactEffortLabelFor(
-                          option,
-                          rowEffort,
-                          capabilities ?? null,
-                        )}
+                        {compactEffortLabelFor(option, rowEffort, capabilities ?? null)}
                       </Text>
                     ) : null}
                     {fastEditable && selected && selectedFastMode ? (
-                      <Zap
-                        color={colors.textTertiary}
-                        size={iconSize.sm}
-                        strokeWidth={iconStroke.regular}
-                      />
+                      <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                     ) : null}
                   </View>
                 ) : null}
               </View>
-              {selected ? (
-                <Check
-                  color={colors.textPrimary}
-                  size={iconSize.lg}
-                  strokeWidth={iconStroke.medium}
-                />
-              ) : null}
+              {selected ? <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} /> : null}
               {hasOptions ? (
                 <Pressable
-                  accessibilityLabel={t(
-                    "models.picker.configureAccessibility",
-                    { model: option.label },
-                  )}
+                  accessibilityLabel={t('models.picker.configureAccessibility', { model: option.label })}
                   accessibilityRole="button"
                   disabled={disabled}
                   hitSlop={6}
-                  onPress={() =>
-                    onOpenOptions({ providerId: null, modelId: option.id })
-                  }
-                  style={({ pressed }) => [
-                    styles.optionsButton,
-                    pressed && { opacity: 0.65 },
-                  ]}
+                  onPress={() => onOpenOptions({ providerId: null, modelId: option.id })}
+                  style={({ pressed }) => [styles.optionsButton, pressed && { opacity: 0.65 }]}
                   testID={`${testID}.optionsButton`}
                 >
-                  <SlidersHorizontal
-                    color={colors.textTertiary}
-                    size={iconSize.md}
-                    strokeWidth={iconStroke.regular}
-                  />
+                  <SlidersHorizontal color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
                 </Pressable>
               ) : null}
             </Pressable>
@@ -582,9 +471,5 @@ export function MobileModelPickerList({
     );
   }
 
-  return (
-    <Text style={styles.empty}>
-      {loading ? resolvedLoadingHint : resolvedEmptyHint}
-    </Text>
-  );
+  return <Text style={styles.empty}>{loading ? resolvedLoadingHint : resolvedEmptyHint}</Text>;
 }
