@@ -38,10 +38,12 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 interface Harness {
   dispatcher: GhostPipeDispatcher;
   deps: {
+    canAcceptCalls: ReturnType<typeof vi.fn>;
     getGhost: ReturnType<typeof vi.fn>;
     runtimeStateOf: ReturnType<typeof vi.fn>;
     spawn: ReturnType<typeof vi.fn>;
     sendToGhost: ReturnType<typeof vi.fn>;
+    recordUsage: ReturnType<typeof vi.fn>;
     log: {
       info: ReturnType<typeof vi.fn>;
       warn: ReturnType<typeof vi.fn>;
@@ -54,10 +56,13 @@ function makeHarness(opts: {
   ghost?: InstalledGhost | null;
   state?: GhostRuntimeState;
   timeoutMs?: number;
+  recordUsage?: (ghostId: string) => Promise<void>;
+  canAcceptCalls?: () => boolean;
   ownerScope?: PipeDispatcherDeps['ownerScope'];
 } = {}): Harness {
   const sent: GhostPipeToolCall[] = [];
   const deps = {
+    canAcceptCalls: vi.fn(opts.canAcceptCalls ?? (() => true)),
     getGhost: vi.fn(() => (opts.ghost === undefined ? fakeGhost() : opts.ghost)),
     runtimeStateOf: vi.fn(() => opts.state ?? 'running'),
     spawn: vi.fn(async () => ({ ok: true as const })),
@@ -65,6 +70,7 @@ function makeHarness(opts: {
       sent.push(payload);
       return true;
     }),
+    recordUsage: vi.fn(opts.recordUsage ?? (async () => undefined)),
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -178,6 +184,7 @@ describe('按需拉起', () => {
     h.deps.spawn.mockResolvedValue({ ok: false, reason: '入口加载失败' });
     const r = await h.dispatcher.callGhostTool(CALL);
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+    expect(h.deps.recordUsage).not.toHaveBeenCalled();
   });
 
   it('电子脑离线(send 失败)→ GHOST_CRASHED 立即收卷', async () => {
@@ -216,6 +223,127 @@ describe('按需拉起', () => {
     await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
     expect(h.deps.sendToGhost).not.toHaveBeenCalled();
     expect(invalidated).toHaveBeenCalledWith('art');
+  });
+});
+
+describe('本地调用计数', () => {
+  it('资格审通过后只记一次，资格失败不记', async () => {
+    const accepted = makeHarness();
+    accepted.deps.sendToGhost.mockReturnValue(false);
+    await expect(accepted.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+    });
+    expect(accepted.deps.recordUsage).toHaveBeenCalledTimes(1);
+    expect(accepted.deps.recordUsage).toHaveBeenCalledWith('art');
+
+    const rejected = makeHarness({ ghost: null });
+    await rejected.dispatcher.callGhostTool(CALL);
+    expect(rejected.deps.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('写入未完成或失败都不阻塞派发，也不改变原调用结果', async () => {
+    let rejectUsage!: (error: Error) => void;
+    const usagePending = new Promise<void>((_resolve, reject) => {
+      rejectUsage = reject;
+    });
+    const h = makeHarness({ recordUsage: () => usagePending });
+
+    const call = h.dispatcher.callGhostTool(CALL);
+    expect(h.sent).toHaveLength(1);
+    h.dispatcher.handleToolResult('art', {
+      type: 'tool-result',
+      callId: h.sent[0].callId,
+      ok: true,
+      result: { done: true },
+    });
+    await expect(call).resolves.toEqual({ ok: true, result: { done: true } });
+
+    rejectUsage(new Error('database unavailable'));
+    await vi.waitFor(() =>
+      expect(h.deps.log.warn).toHaveBeenCalledWith('failed to record ghost usage', {
+        ghostId: 'art',
+        error: 'database unavailable',
+      }),
+    );
+  });
+
+  it('记录依赖同步抛错时仍继续派发', async () => {
+    const h = makeHarness({
+      recordUsage: () => {
+        throw new Error('database unavailable');
+      },
+    });
+    h.deps.sendToGhost.mockReturnValue(false);
+
+    await expect(h.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+    });
+    expect(h.deps.log.warn).toHaveBeenCalledWith('failed to record ghost usage', {
+      ghostId: 'art',
+      error: 'database unavailable',
+    });
+  });
+
+  it('退出门禁关闭后不再受理、拉起、计数或派发', async () => {
+    const h = makeHarness({ state: 'off' });
+    h.dispatcher.stopAcceptingCalls();
+
+    await expect(h.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+      message: expect.stringContaining('未受理'),
+    });
+    expect(h.deps.getGhost).not.toHaveBeenCalled();
+    expect(h.deps.spawn).not.toHaveBeenCalled();
+    expect(h.deps.recordUsage).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+  });
+
+  it('账号边界期间拒绝，边界结束后恢复受理', async () => {
+    let boundaryPending = true;
+    const h = makeHarness({ canAcceptCalls: () => !boundaryPending });
+    h.deps.sendToGhost.mockReturnValue(false);
+
+    await expect(h.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('切换账号'),
+    });
+    expect(h.deps.recordUsage).not.toHaveBeenCalled();
+
+    boundaryPending = false;
+    await expect(h.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+    });
+    expect(h.deps.recordUsage).toHaveBeenCalledTimes(1);
+    expect(h.deps.sendToGhost).toHaveBeenCalledTimes(1);
+  });
+
+  it('调用在 spawn 期间跨过账号边界时，spawn 返回后不计数也不派发', async () => {
+    let settleSpawn!: (result: { ok: true }) => void;
+    let boundaryPending = false;
+    const h = makeHarness({ state: 'off', canAcceptCalls: () => !boundaryPending });
+    h.deps.spawn.mockImplementation(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          settleSpawn = resolve;
+        }),
+    );
+
+    const call = h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.deps.spawn).toHaveBeenCalledTimes(1));
+    boundaryPending = true;
+    settleSpawn({ ok: true });
+
+    await expect(call).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+      message: expect.stringContaining('未受理'),
+    });
+    expect(h.deps.recordUsage).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
   });
 });
 

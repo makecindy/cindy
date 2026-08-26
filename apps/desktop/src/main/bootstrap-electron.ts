@@ -315,6 +315,7 @@ import {
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
 import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from './localDb/client/current';
+import { drainGhostUsageWrites } from './localDb/ghostUsage';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -856,11 +857,14 @@ import {
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
 import {
+  beginGhostShutdown,
+  finishGhostShutdown,
   getGhostCindySlot,
   getGhostManager,
   getGhostSessionActivityTracker,
   interruptGhostCallsForAccountBoundary,
   isGhostAvailableForActiveSession,
+  noteGhostDbClientStartupOutcome,
   reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
   registerGhostIpc,
@@ -1341,6 +1345,7 @@ const lifecycleDbClientManager = createLifecycleDbClientManager({
   createInprocClient: () => createInprocDbClient(),
   setCurrentDbClient,
   clearCurrentDbClient,
+  beforeDispose: drainGhostUsageBeforeDbClose,
   log: dbClientLog,
 });
 
@@ -1353,6 +1358,13 @@ async function ensureLifecycleDbClient(userId: string) {
     // worker 自行裸 require('better-sqlite3') 解析到错误目录。
     betterSqliteModulePath: resolveBetterSqliteModuleEntry(),
   });
+}
+
+async function drainGhostUsageBeforeDbClose(reason: string): Promise<void> {
+  const result = await drainGhostUsageWrites();
+  if (result.timedOut || result.failedCount > 0) {
+    dbClientLog.warn('[DbClient] ghost usage drain incomplete', { reason, ...result });
+  }
 }
 
 const AUTH_BOUNDARY_WAIT_TIMEOUT_MS = 10_000;
@@ -7868,6 +7880,10 @@ app.on('ready', async () => {
       // attempt 全部撞 "DbClient not ready",scheduler/embedding 永不启动 → renderer
       // 卡在 IPC 等待 → 白屏。
       const dbClientTakeover = await ensureLifecycleDbClient(userId);
+      noteGhostDbClientStartupOutcome(
+        userId,
+        dbClientTakeover.mode !== 'failed' && dbClientTakeover.mode !== 'skipped',
+      );
       logStartupPhase('db-client-takeover');
       if (dbClientTakeover.mode === 'failed' || dbClientTakeover.mode === 'skipped') {
         dbClientLog.warn('[DbClient] lifecycle client unavailable; skip db-client startup hooks', {
@@ -8462,6 +8478,10 @@ onQuit(
 //                           codex 子进程之后, 这里并发跑最坏是 log noise。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
+// Ghost 调用入口必须在 sync phase 封闭：async phase 有总预算，超时后会继续进入
+// post-async；只依赖 shutdown-maker 完成无法保证 DbClient drain 后没有新 usage 写入。
+onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');
+onQuit('ghost-skill-links', finishGhostShutdown, 'async');
 /**
  * Launch fence raised by the quit sweep, held across the whole async phase.
  *
@@ -8770,7 +8790,7 @@ onQuit('ios-simulator-exit-abort', abortIOSSimulatorOperationsForExit, 'sync');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
+onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');
 onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
 onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');
 

@@ -642,6 +642,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       // 本身由 sendToGhost 内联模拟(先经 fs 槽写盘,再 handleToolResult 交卷)。
       let dispatcher!: GhostPipeDispatcher;
       dispatcher = new GhostPipeDispatcher({
+        canAcceptCalls: () => true,
         getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
         runtimeStateOf: () => 'running',
         spawn: async () => ({ ok: true }),
@@ -657,6 +658,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
           })();
           return true;
         },
+        recordUsage: async () => undefined,
         timeoutMs: 5_000,
       });
       callGhostToolMock.mockImplementation((request: unknown) =>

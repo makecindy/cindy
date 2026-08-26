@@ -680,6 +680,13 @@
       "when": 1787721235534,
       "tag": "0096_stabilize_messages_fts_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "6",
+      "when": 1787735395175,
+      "tag": "0097_long_black_tarantula",
+      "breakpoints": true
     }
   ]
 }

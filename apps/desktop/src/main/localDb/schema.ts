@@ -1264,6 +1264,28 @@ export const dailyModelUsage = sqliteTable(
   }),
 );
 
+/**
+ * Ghost 顶层工具调用的本地日聚合。
+ *
+ * 只保存插件身份、用户本地自然日与调用次数；不保存工具名、参数、结果或会话信息。
+ * 上线后从零累计，不回填历史调用。
+ */
+export const ghostUsageDaily = sqliteTable(
+  'ghost_usage_daily',
+  {
+    ghostId: text('ghost_id').notNull(),
+    /** 用户本地时区 YYYY-MM-DD。 */
+    localDay: text('local_day').notNull(),
+    callCount: integer('call_count').notNull().default(0),
+    /** 最后一次聚合写入的 unix ms。 */
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ghostId, t.localDay] }),
+    byLocalDay: index('ghost_usage_daily_day_idx').on(t.localDay),
+  }),
+);
+
 /** Skill 使用分析的原始 transcript 扫描缓存。 */
 export const skillUsageSources = sqliteTable(
   'skill_usage_sources',
