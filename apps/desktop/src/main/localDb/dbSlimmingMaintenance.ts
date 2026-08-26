@@ -621,6 +621,13 @@ function compactWorkingCopy(
         `DELETE FROM messages
           WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
       );
+      activeDb.exec(
+        `UPDATE sessions
+            SET list_preview = NULL,
+                list_preview_role = NULL,
+                list_message_count = NULL
+          WHERE id IN (SELECT id FROM temp.db_slimming_targets)`,
+      );
       if (messagesFtsDeleteTriggerSql) activeDb.exec(messagesFtsDeleteTriggerSql);
     });
     cleanup();

@@ -60,6 +60,27 @@ export class DbSlimmingWorkerPreReplacementError extends Error {
   }
 }
 
+/** The caller may fail visibly, but must keep exclusive database access until exit. */
+export class DbSlimmingWorkerTerminationUnconfirmedError extends Error {
+  constructor(
+    readonly terminationConfirmed: Promise<void>,
+    options?: ErrorOptions,
+  ) {
+    super('database cleanup process termination was not confirmed', options);
+    this.name = 'DbSlimmingWorkerTerminationUnconfirmedError';
+  }
+}
+
+/** Keeps an external exclusivity guard alive until the utility process really exits. */
+export function deferReleaseUntilDbSlimmingWorkerTermination(
+  error: unknown,
+  release: () => void,
+): boolean {
+  if (!(error instanceof DbSlimmingWorkerTerminationUnconfirmedError)) return false;
+  void error.terminationConfirmed.then(release);
+  return true;
+}
+
 /** Allows large databases proportionally more silent native-call time without permitting a hang forever. */
 export function dbSlimmingWorkerInactivityTimeoutMs(beforeBytes: number): number {
   const databaseBytes = Number.isFinite(beforeBytes) ? Math.max(0, beforeBytes) : 0;
@@ -140,6 +161,7 @@ export function runDbSlimmingMaintenanceInWorker(
     let exited = false;
     let cancelRequested = false;
     let terminationRequested = false;
+    let commitSent = false;
     let timeoutError: Error | null = null;
     let cancellable = options.request.phase === 'scheduled';
     let lastProgress = 0;
@@ -148,6 +170,10 @@ export function runDbSlimmingMaintenanceInWorker(
     let terminationTimer: NodeJS.Timeout | null = null;
     const vacuumPath = `${options.dbFilePath}.slimming-${options.request.id}.work.vacuum`;
     const inactivityTimeoutMs = dbSlimmingWorkerInactivityTimeoutMs(options.request.beforeBytes);
+    let confirmTermination!: () => void;
+    const terminationConfirmed = new Promise<void>((resolveTermination) => {
+      confirmTermination = resolveTermination;
+    });
     const estimatedAfterBytes = Math.max(
       16 * 1024 * 1024,
       options.request.beforeBytes - (options.request.estimatedMessageBytes ?? options.request.beforeBytes / 2),
@@ -180,7 +206,7 @@ export function runDbSlimmingMaintenanceInWorker(
           );
           return;
         }
-        if (cancellable) {
+        if (!commitSent) {
           reject(
             new DbSlimmingWorkerPreReplacementError(
               'database cleanup process stopped before replacement',
@@ -205,7 +231,9 @@ export function runDbSlimmingMaintenanceInWorker(
         const cause = timeoutError ?? new Error('database cleanup cancellation did not stop');
         timeoutError = null;
         rejectWithoutAssumingDatabaseSafety(
-          new Error('database cleanup process termination was not confirmed', { cause }),
+          commitSent
+            ? new DbSlimmingWorkerTerminationUnconfirmedError(terminationConfirmed, { cause })
+            : new Error('database cleanup process termination was not confirmed', { cause }),
         );
       }, DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS);
       terminationTimer.unref?.();
@@ -221,7 +249,11 @@ export function runDbSlimmingMaintenanceInWorker(
       } catch (killError) {
         timeoutError = null;
         rejectWithoutAssumingDatabaseSafety(
-          new Error('database cleanup process could not be terminated', { cause: killError }),
+          commitSent
+            ? new DbSlimmingWorkerTerminationUnconfirmedError(terminationConfirmed, {
+                cause: killError,
+              })
+            : new Error('database cleanup process could not be terminated', { cause: killError }),
         );
         return;
       }
@@ -299,6 +331,7 @@ export function runDbSlimmingMaintenanceInWorker(
       if (typed.type === 'commit-ready') {
         if (cancelRequested) return;
         cancellable = false;
+        commitSent = true;
         armWatchdog(inactivityTimeoutMs, 'committing the cleaned database');
         child.postMessage({ type: 'commit' });
         return;
@@ -325,6 +358,7 @@ export function runDbSlimmingMaintenanceInWorker(
     });
     child.on('exit', (code) => {
       exited = true;
+      confirmTermination();
       const pendingTimeout = timeoutError;
       timeoutError = null;
       if (cancelRequested) {

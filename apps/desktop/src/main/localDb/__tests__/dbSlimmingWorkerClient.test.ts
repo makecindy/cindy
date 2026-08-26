@@ -16,7 +16,9 @@ const {
   DbSlimmingCancelledError,
   DbSlimmingWorkerPreReplacementError,
   DbSlimmingWorkerStartupError,
+  DbSlimmingWorkerTerminationUnconfirmedError,
   dbSlimmingWorkerInactivityTimeoutMs,
+  deferReleaseUntilDbSlimmingWorkerTermination,
   runDbSlimmingMaintenanceInWorker,
 } = await import('../dbSlimmingWorkerClient');
 
@@ -134,13 +136,23 @@ describe('runDbSlimmingMaintenanceInWorker', () => {
     child.emit('message', { type: 'commit-ready' });
     await vi.advanceTimersByTimeAsync(dbSlimmingWorkerInactivityTimeoutMs(request.beforeBytes));
     expect(child.kill).toHaveBeenCalledTimes(1);
-    child.emit('exit', 1);
+    await vi.advanceTimersByTimeAsync(DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS);
 
     const error = await resultError;
-    expect(error).toMatchObject({
-      message: expect.stringContaining('timed out while committing'),
-    });
-    expect(error).not.toBeInstanceOf(DbSlimmingWorkerPreReplacementError);
+    expect(error).toBeInstanceOf(DbSlimmingWorkerTerminationUnconfirmedError);
+    if (!(error instanceof DbSlimmingWorkerTerminationUnconfirmedError)) {
+      throw new Error('expected an unconfirmed termination error');
+    }
+    const releaseWriterLease = vi.fn();
+    expect(
+      deferReleaseUntilDbSlimmingWorkerTermination(error, releaseWriterLease),
+    ).toBe(true);
+    await Promise.resolve();
+    expect(releaseWriterLease).not.toHaveBeenCalled();
+
+    child.emit('exit', 1);
+    await error.terminationConfirmed;
+    expect(releaseWriterLease).toHaveBeenCalledTimes(1);
   });
 
   it('starts the utility process, forwards progress and waits for the final commit handshake', async () => {

@@ -65,6 +65,7 @@ import {
 } from './sharedDbCompatibilityMessage';
 import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalDialogPolicy';
 import { runPendingDbSlimmingAtStartup } from './dbSlimmingStartup';
+import { deferReleaseUntilDbSlimmingWorkerTermination } from './dbSlimmingWorkerClient';
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
@@ -189,9 +190,14 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   readerLeaseAcquiredThisCall = startupLease.kind === 'reader' && startupLease.newlyAcquired;
   if (startupLease.kind === 'writer') startupWriterLease = startupLease.lease;
 
-  const releaseSchemaLeasesAfterFailure = (): void => {
-    startupWriterLease?.release();
-    startupWriterLease = null;
+  const releaseSchemaLeasesAfterFailure = (error?: unknown): void => {
+    if (startupWriterLease) {
+      const heldWriterLease = startupWriterLease;
+      if (!deferReleaseUntilDbSlimmingWorkerTermination(error, () => heldWriterLease.release())) {
+        heldWriterLease.release();
+      }
+      startupWriterLease = null;
+    }
     if (readerLeaseAcquiredThisCall) {
       schemaMigrationReaderLeaseLifecycle.release();
     }
@@ -219,7 +225,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     const detail = error instanceof Error ? error.message : String(error);
     const message = '数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。';
     log.error('database cleanup startup failed unexpectedly', { detail });
-    releaseSchemaLeasesAfterFailure();
+    releaseSchemaLeasesAfterFailure(error);
     showFatalDialog('数据库清理中断', message, 'MIGRATE_FAILED');
     return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
   }

@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
+    "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
     "SESSION_RUNNING": "當前任務正在執行，請稍後再試。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後新建 Pi 任務。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任務中執行，本次來源切換未生效（本任務仍使用原來源）。等它結束後再試。",

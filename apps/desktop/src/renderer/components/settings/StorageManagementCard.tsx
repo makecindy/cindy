@@ -24,6 +24,7 @@ import * as Select from '@radix-ui/react-select';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { getAllDraftAttachmentUrls } from '@/lib/composerDraftStore';
 import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
@@ -494,9 +495,11 @@ function DatabaseSlimmingSection() {
       completed = true;
     } catch (error) {
       toast.error(
-        error instanceof Error
-          ? error.message
-          : t('settings.about.storage.dbSlimmingScanFailed'),
+        t(
+          mapIpcErrorToI18nKey(error, {
+            fallback: 'settings.about.storage.dbSlimmingScanFailed',
+          }),
+        ),
       );
     } finally {
       busyRef.current = false;

@@ -69,6 +69,9 @@ function createCleanupFixture(): void {
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
       sdk_session_id TEXT,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
@@ -120,9 +123,13 @@ function createCleanupFixture(): void {
   const insertSession = db.prepare(`
     INSERT INTO sessions (
       id, title, status, updated_at, total_token_usage, total_cost_usd,
-      sdk_session_id, context_tokens, context_window, summary, codex_plan_json,
+      sdk_session_id, list_preview, list_preview_role, list_message_count,
+      context_tokens, context_window, summary, codex_plan_json,
       codex_history_has_product_prompt, active_turn_started_at, last_turn_ended_at
-    ) VALUES (?, ?, ?, ?, 7, 1.5, 'native-id', 100, 200, 'summary', '{}', 1, 10, 20)
+    ) VALUES (
+      ?, ?, ?, ?, 7, 1.5, 'native-id', 'stale preview', 'assistant', 1,
+      100, 200, 'summary', '{}', 1, 10, 20
+    )
   `);
   for (const [id, status, updatedAt] of [
     ['deleted-old', 'deleted', 500],
@@ -270,7 +277,8 @@ describe('runDbSlimmingMaintenance', () => {
       expect(
         db.prepare(`
           SELECT title, status, updated_at, total_token_usage, total_cost_usd,
-                 sdk_session_id, context_tokens, context_window, cleared_at,
+                 sdk_session_id, list_preview, list_preview_role, list_message_count,
+                 context_tokens, context_window, cleared_at,
                  summary, codex_plan_json, codex_history_has_product_prompt,
                  active_turn_started_at, last_turn_ended_at
             FROM sessions WHERE id = 'archived-boundary'
@@ -282,6 +290,9 @@ describe('runDbSlimmingMaintenance', () => {
         total_token_usage: 7,
         total_cost_usd: 1.5,
         sdk_session_id: 'native-id',
+        list_preview: null,
+        list_preview_role: null,
+        list_message_count: null,
         context_tokens: 100,
         context_window: 200,
         cleared_at: null,
@@ -290,6 +301,16 @@ describe('runDbSlimmingMaintenance', () => {
         codex_history_has_product_prompt: 1,
         active_turn_started_at: 10,
         last_turn_ended_at: 20,
+      });
+      expect(
+        db.prepare(`
+          SELECT list_preview, list_preview_role, list_message_count
+            FROM sessions WHERE id = 'active-old'
+        `).get(),
+      ).toEqual({
+        list_preview: 'stale preview',
+        list_preview_role: 'assistant',
+        list_message_count: 1,
       });
     } finally {
       db.close();
