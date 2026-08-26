@@ -113,10 +113,35 @@ function writeBindings(value: BindingFile): void {
   const file = bindingPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
+  let handle: number | undefined;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
+    handle = fs.openSync(tmp, 'wx', 0o600);
+    const bytes = Buffer.from(JSON.stringify(value, null, 2), 'utf8');
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = fs.writeSync(handle, bytes, offset, bytes.length - offset);
+      if (written <= 0) throw new Error('short write while publishing native provider bindings');
+      offset += written;
+    }
+    fs.fsyncSync(handle);
+    fs.closeSync(handle);
+    handle = undefined;
     fs.renameSync(tmp, file);
+    const finalHandle = fs.openSync(file, 'r');
+    try {
+      fs.fsyncSync(finalHandle);
+    } finally {
+      fs.closeSync(finalHandle);
+    }
+    syncParentDirectory(file);
   } finally {
+    if (handle !== undefined) {
+      try {
+        fs.closeSync(handle);
+      } catch {
+        // Best-effort close before removing the private candidate.
+      }
+    }
     try {
       fs.unlinkSync(tmp);
     } catch {
@@ -126,6 +151,25 @@ function writeBindings(value: BindingFile): void {
 }
 
 const LEGACY_CLAIM_LEASE_SUFFIX = '.legacy-claim-lease';
+
+interface LegacyClaimLeaseRecord {
+  pid: number;
+  leaseId: string;
+}
+
+interface HeldLegacyClaimLease {
+  leaseId: string;
+}
+
+function syncParentDirectory(file: string): void {
+  if (process.platform === 'win32') return;
+  const dirHandle = fs.openSync(path.dirname(file), 'r');
+  try {
+    fs.fsyncSync(dirHandle);
+  } finally {
+    fs.closeSync(dirHandle);
+  }
+}
 
 function legacyClaimLeasePath(): string {
   return `${bindingPath()}${LEGACY_CLAIM_LEASE_SUFFIX}`;
@@ -140,25 +184,90 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function acquireLegacyClaimLease(): number | null {
+function parseLegacyClaimLease(raw: string): LegacyClaimLeaseRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<LegacyClaimLeaseRecord>;
+    if (Number.isInteger(parsed.pid) && typeof parsed.leaseId === 'string' && parsed.leaseId) {
+      return parsed as LegacyClaimLeaseRecord;
+    }
+  } catch {
+    // A valid lease is published atomically; malformed content remains fail-closed.
+  }
+  return null;
+}
+
+function restoreClaimedLease(candidate: string, lease: string): void {
+  try {
+    fs.linkSync(candidate, lease);
+    fs.unlinkSync(candidate);
+    syncParentDirectory(lease);
+  } catch {
+    // A newer lease may already occupy the path. Keep the claimed candidate
+    // instead of deleting ownership evidence that this process does not own.
+  }
+}
+
+function removeLegacyClaimLeaseIfMatches(lease: string, expectedLeaseId: string): boolean {
+  const candidate = `${lease}.reclaim.${randomUUID()}`;
+  try {
+    fs.renameSync(lease, candidate);
+  } catch {
+    return false;
+  }
+  const moved = parseLegacyClaimLease(readFileOrEmpty(candidate));
+  if (moved?.leaseId !== expectedLeaseId) {
+    restoreClaimedLease(candidate, lease);
+    return false;
+  }
+  try {
+    fs.unlinkSync(candidate);
+    syncParentDirectory(lease);
+    return true;
+  } catch {
+    restoreClaimedLease(candidate, lease);
+    return false;
+  }
+}
+
+function readFileOrEmpty(file: string): string {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function waitForLeaseRetry(): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+}
+
+function acquireLegacyClaimLease(): HeldLegacyClaimLease | null {
   const lease = legacyClaimLeasePath();
   fs.mkdirSync(path.dirname(lease), { recursive: true });
   for (;;) {
     const tmp = `${lease}.${randomUUID()}.tmp`;
+    const leaseId = randomUUID();
     let tmpHandle: number | undefined;
     try {
       tmpHandle = fs.openSync(tmp, 'wx', 0o600);
-      fs.writeSync(
-        tmpHandle,
-        JSON.stringify({ pid: process.pid, leaseId: randomUUID() }),
-        undefined,
-        'utf8',
-      );
+      const contents = Buffer.from(JSON.stringify({ pid: process.pid, leaseId }), 'utf8');
+      let offset = 0;
+      while (offset < contents.length) {
+        const written = fs.writeSync(tmpHandle, contents, offset, contents.length - offset);
+        if (written <= 0) throw new Error('short write while publishing native binding lease');
+        offset += written;
+      }
       fs.fsyncSync(tmpHandle);
       fs.closeSync(tmpHandle);
       tmpHandle = undefined;
       fs.linkSync(tmp, lease);
-      return fs.openSync(lease, 'r');
+      try {
+        syncParentDirectory(lease);
+      } catch (error) {
+        removeLegacyClaimLeaseIfMatches(lease, leaseId);
+        throw error;
+      }
+      return { leaseId };
     } catch (error) {
       try {
         if (tmpHandle !== undefined) fs.closeSync(tmpHandle);
@@ -166,17 +275,14 @@ function acquireLegacyClaimLease(): number | null {
         // Best-effort close before removing a failed claim lease.
       }
       if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') return null;
-      try {
-        const current = JSON.parse(fs.readFileSync(lease, 'utf8')) as { pid?: unknown };
-        if (typeof current.pid === 'number' && !isProcessAlive(current.pid)) {
-          fs.unlinkSync(lease);
-          continue;
-        }
-      } catch {
-        // A valid lease is published atomically; malformed content is treated
-        // as an unavailable claim rather than being guessed at.
+      const current = parseLegacyClaimLease(readFileOrEmpty(lease));
+      if (!current) return null;
+      if (!isProcessAlive(current.pid)) {
+        if (removeLegacyClaimLeaseIfMatches(lease, current.leaseId)) continue;
+        waitForLeaseRetry();
+        continue;
       }
-      return null;
+      waitForLeaseRetry();
     } finally {
       try {
         fs.unlinkSync(tmp);
@@ -187,15 +293,17 @@ function acquireLegacyClaimLease(): number | null {
   }
 }
 
-function releaseLegacyClaimLease(handle: number): void {
+function releaseLegacyClaimLease(held: HeldLegacyClaimLease): void {
+  removeLegacyClaimLeaseIfMatches(legacyClaimLeasePath(), held.leaseId);
+}
+
+function withLegacyClaimLease<T>(fallback: T, operation: () => T): T {
+  const held = acquireLegacyClaimLease();
+  if (!held) return fallback;
   try {
-    fs.closeSync(handle);
+    return operation();
   } finally {
-    try {
-      fs.unlinkSync(legacyClaimLeasePath());
-    } catch {
-      // Best-effort cleanup; a future reservation will fail closed if the lease remains.
-    }
+    releaseLegacyClaimLease(held);
   }
 }
 
@@ -215,29 +323,30 @@ export function reserveLegacyNativeProviderAuthOwnerDetailed(
   if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) {
     return { status: 'failed' };
   }
-  const leaseHandle = acquireLegacyClaimLease();
-  if (leaseHandle === null) return { status: 'failed' };
-  try {
-    const read = readBindingsOrFail();
-    if (!read.ok) return { status: 'failed' };
-    const bindings = read.bindings;
-    if ('legacyClaimOwner' in bindings) {
-      return bindings.legacyClaimOwner === normalizedOwnerId
-        ? { status: 'already-owned' }
-        : { status: 'owned-by-other' };
-    }
-    const claimToken = randomUUID();
-    writeBindings({
-      ...bindings,
-      legacyClaimOwner: normalizedOwnerId,
-      legacyClaimToken: claimToken,
-    });
-    return { status: 'claimed', claimToken };
-  } catch {
-    return { status: 'failed' };
-  } finally {
-    releaseLegacyClaimLease(leaseHandle);
-  }
+  return withLegacyClaimLease<LegacyNativeProviderAuthReservationDetails>(
+    { status: 'failed' },
+    () => {
+      try {
+        const read = readBindingsOrFail();
+        if (!read.ok) return { status: 'failed' };
+        const bindings = read.bindings;
+        if ('legacyClaimOwner' in bindings) {
+          return bindings.legacyClaimOwner === normalizedOwnerId
+            ? { status: 'already-owned' }
+            : { status: 'owned-by-other' };
+        }
+        const claimToken = randomUUID();
+        writeBindings({
+          ...bindings,
+          legacyClaimOwner: normalizedOwnerId,
+          legacyClaimToken: claimToken,
+        });
+        return { status: 'claimed', claimToken };
+      } catch {
+        return { status: 'failed' };
+      }
+    },
+  );
 }
 
 export function reserveLegacyNativeProviderAuthOwner(
@@ -249,28 +358,26 @@ export function reserveLegacyNativeProviderAuthOwner(
 export function releaseLegacyNativeProviderAuthOwner(ownerId: string, claimToken: string): boolean {
   const normalizedOwnerId = ownerId.trim();
   if (!normalizedOwnerId || !claimToken) return false;
-  const leaseHandle = acquireLegacyClaimLease();
-  if (leaseHandle === null) return false;
-  try {
-    const read = readBindingsOrFail();
-    if (!read.ok) return false;
-    const bindings = read.bindings;
-    if (
-      bindings.legacyClaimOwner !== normalizedOwnerId ||
-      bindings.legacyClaimToken !== claimToken
-    ) {
+  return withLegacyClaimLease(false, () => {
+    try {
+      const read = readBindingsOrFail();
+      if (!read.ok) return false;
+      const bindings = read.bindings;
+      if (
+        bindings.legacyClaimOwner !== normalizedOwnerId ||
+        bindings.legacyClaimToken !== claimToken
+      ) {
+        return false;
+      }
+      const next = { ...bindings };
+      delete next.legacyClaimOwner;
+      delete next.legacyClaimToken;
+      writeBindings(next);
+      return true;
+    } catch {
       return false;
     }
-    const next = { ...bindings };
-    delete next.legacyClaimOwner;
-    delete next.legacyClaimToken;
-    writeBindings(next);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    releaseLegacyClaimLease(leaseHandle);
-  }
+  });
 }
 
 /** Return true only when the native OAuth credential is explicitly bound to this owner. */
@@ -300,54 +407,58 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
 export function bindNativeProviderAuth(provider: NativeProviderId): void {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
-  const read = readBindingsOrFail();
-  if (read.ok) {
-    const bindings = read.bindings;
-    // 显式授权 = 用户重新表达了「我要连它」，撤销标记就此作废。
-    if (bindings.revoked && provider in bindings.revoked) {
-      const revoked = { ...bindings.revoked };
-      delete revoked[provider];
-      bindings.revoked = revoked;
+  const written = withLegacyClaimLease(false, () => {
+    const read = readBindingsOrFail();
+    if (read.ok) {
+      const bindings = read.bindings;
+      // 显式授权 = 用户重新表达了「我要连它」，撤销标记就此作废。
+      if (bindings.revoked && provider in bindings.revoked) {
+        const revoked = { ...bindings.revoked };
+        delete revoked[provider];
+        bindings.revoked = revoked;
+      }
+      // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
+      writeBindings({
+        ...bindings,
+        selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+        sources: {
+          ...bindings.sources,
+          [provider]: 'explicit-provider-oauth',
+        },
+        [provider]: owner,
+      });
+      return true;
     }
-    // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
+    // 归属信息有损:用户正在显式授权,不写等于让他连不上,所以必须写;但写法要保守。
+    //
+    //   · badRevoked —— 各 provider 的归属仍然可信,原样保留。直接重写成「只有本次授权的这
+    //     一家」会抹掉别人的 owner,那份凭证下一次就被自动认领给当前账号,等于用一次修复换
+    //     来一个新的越权口子。
+    //   · unreadable —— 连 legacyClaimOwner 带各家 owner 一起没了,无可保留;同样不能就这么
+    //     写一份「只有我」的干净文件,那会让其余 provider 的残留凭证在文件恢复可读后立刻可被
+    //     认领(PR #548 review)。
+    //
+    // 两种情形共用同一条保守收尾:凡是归属无从确认的 provider,一律按「撤销过」对待,自动继承
+    // 就此关闭 —— 无从得知谁被撤销过时,丢弃标记等于给所有残留凭证放行。用户对它们各自显式
+    // 授权即可恢复。
+    const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
+    const suppressed: Partial<Record<NativeProviderId, string>> = {};
+    for (const other of NATIVE_PROVIDER_IDS) {
+      if (other !== provider) suppressed[other] = owner;
+    }
     writeBindings({
-      ...bindings,
-      selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+      ...salvaged,
+      revoked: suppressed,
+      selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
       sources: {
-        ...bindings.sources,
+        ...salvaged.sources,
         [provider]: 'explicit-provider-oauth',
       },
       [provider]: owner,
     });
-    return;
-  }
-  // 归属信息有损:用户正在显式授权,不写等于让他连不上,所以必须写;但写法要保守。
-  //
-  //   · badRevoked —— 各 provider 的归属仍然可信,原样保留。直接重写成「只有本次授权的这
-  //     一家」会抹掉别人的 owner,那份凭证下一次就被自动认领给当前账号,等于用一次修复换
-  //     来一个新的越权口子。
-  //   · unreadable —— 连 legacyClaimOwner 带各家 owner 一起没了,无可保留;同样不能就这么
-  //     写一份「只有我」的干净文件,那会让其余 provider 的残留凭证在文件恢复可读后立刻可被
-  //     认领(PR #548 review)。
-  //
-  // 两种情形共用同一条保守收尾:凡是归属无从确认的 provider,一律按「撤销过」对待,自动继承
-  // 就此关闭 —— 无从得知谁被撤销过时,丢弃标记等于给所有残留凭证放行。用户对它们各自显式
-  // 授权即可恢复。
-  const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
-  const suppressed: Partial<Record<NativeProviderId, string>> = {};
-  for (const other of NATIVE_PROVIDER_IDS) {
-    if (other !== provider) suppressed[other] = owner;
-  }
-  writeBindings({
-    ...salvaged,
-    revoked: suppressed,
-    selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
-    sources: {
-      ...salvaged.sources,
-      [provider]: 'explicit-provider-oauth',
-    },
-    [provider]: owner,
+    return true;
   });
+  if (!written) throw new Error('cannot acquire native provider binding lease');
 }
 
 /**
@@ -396,28 +507,30 @@ export function unbindNativeProviderAuth(
   // 不写也是安全的:文件读不出来时 isNativeProviderAuthBound 已经一律 false(用户看到的就是
   // 未连接),claimDetectedNativeProviderAuth 也已在同一条件下拒绝认领 —— 撤销标记要挡的那
   // 件事,此刻本来就发生不了。凭证删除在调用方,不受这里影响。
-  const read = readBindingsOrFail();
-  if (!read.ok) return;
-  const bindings = read.bindings;
-  const owner = getActiveAppSession().dataOwnerId;
-  const marking = opts?.revoked === true && !!owner;
-  const hadSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
-  if (!(provider in bindings) && !marking && !hadSelfAuthorized) return;
-  delete bindings[provider];
-  // 授权来路随绑定一起作废:登出之后这份凭证若还在本机,它对 Cindy 就重新是「外部已有的
-  // 凭证」，继承语义（及其文案）重新成立。
-  if (hadSelfAuthorized) {
-    const selfAuthorized = { ...bindings.selfAuthorized };
-    delete selfAuthorized[provider];
-    bindings.selfAuthorized = selfAuthorized;
-  }
-  if (bindings.sources?.[provider] !== undefined) {
-    const sources = { ...bindings.sources };
-    delete sources[provider];
-    bindings.sources = sources;
-  }
-  if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
-  writeBindings(bindings);
+  withLegacyClaimLease(undefined, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return;
+    const bindings = read.bindings;
+    const owner = getActiveAppSession().dataOwnerId;
+    const marking = opts?.revoked === true && !!owner;
+    const hadSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
+    if (!(provider in bindings) && !marking && !hadSelfAuthorized) return;
+    delete bindings[provider];
+    // 授权来路随绑定一起作废:登出之后这份凭证若还在本机,它对 Cindy 就重新是「外部已有的
+    // 凭证」，继承语义（及其文案）重新成立。
+    if (hadSelfAuthorized) {
+      const selfAuthorized = { ...bindings.selfAuthorized };
+      delete selfAuthorized[provider];
+      bindings.selfAuthorized = selfAuthorized;
+    }
+    if (bindings.sources?.[provider] !== undefined) {
+      const sources = { ...bindings.sources };
+      delete sources[provider];
+      bindings.sources = sources;
+    }
+    if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
+    writeBindings(bindings);
+  });
 }
 
 /**
@@ -431,29 +544,31 @@ export function migrateLegacyNativeProviderAuthBindings(
 ): void {
   // 同 claimDetectedNativeProviderAuth:一次性迁移也是写路径,归属读不出来就不能推进
   // (还会把 legacyClaimOwner 名额一起消费掉,损失不可逆)。
-  const read = readBindingsOrFail();
-  if (!read.ok) return;
-  const bindings = read.bindings;
-  if (bindings.legacyClaimOwner) return;
+  withLegacyClaimLease(undefined, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return;
+    const bindings = read.bindings;
+    if (bindings.legacyClaimOwner) return;
 
-  const next: BindingFile = { ...bindings, legacyClaimOwner: ownerId };
-  for (const provider of NATIVE_PROVIDER_IDS) {
-    // 显式登出过的 provider 一律跳过:这条一次性迁移同样不能把用户弃用掉的残留凭证
-    // 认领回来(PR #548 review)。
-    if (bindings.revoked && provider in bindings.revoked) continue;
-    if (available[provider] && !next[provider]) {
-      next[provider] = ownerId;
-      next.sources = {
-        ...next.sources,
-        [provider]: NATIVE_PROVIDER_CONNECTION_SOURCE[provider],
-      };
-      // xAI 的旧 safeStorage blob 也是 Cindy 自己完成的 OAuth，不是本机 CLI 继承。
-      if (provider === 'xai') {
-        next.selfAuthorized = { ...next.selfAuthorized, xai: ownerId };
+    const next: BindingFile = { ...bindings, legacyClaimOwner: ownerId };
+    for (const provider of NATIVE_PROVIDER_IDS) {
+      // 显式登出过的 provider 一律跳过:这条一次性迁移同样不能把用户弃用掉的残留凭证
+      // 认领回来(PR #548 review)。
+      if (bindings.revoked && provider in bindings.revoked) continue;
+      if (available[provider] && !next[provider]) {
+        next[provider] = ownerId;
+        next.sources = {
+          ...next.sources,
+          [provider]: NATIVE_PROVIDER_CONNECTION_SOURCE[provider],
+        };
+        // xAI 的旧 safeStorage blob 也是 Cindy 自己完成的 OAuth，不是本机 CLI 继承。
+        if (provider === 'xai') {
+          next.selfAuthorized = { ...next.selfAuthorized, xai: ownerId };
+        }
       }
     }
-  }
-  writeBindings(next);
+    writeBindings(next);
+  });
 }
 
 /**
@@ -477,32 +592,34 @@ export function migrateLocalNativeProviderAuthBindings(ownerId: string): boolean
   // different owner transition.
   if (isAppSessionBoundaryPending()) return false;
 
-  const read = readBindingsOrFail();
-  if (!read.ok) return false;
-  const bindings = read.bindings;
+  return withLegacyClaimLease(false, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const bindings = read.bindings;
 
-  // A prior cloud owner winning the legacy claim is authoritative. Do not let
-  // a later account inherit any local residue that was not moved at the time.
-  if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== normalizedOwnerId) {
-    return false;
-  }
+    // A prior cloud owner winning the legacy claim is authoritative. Do not let
+    // a later account inherit any local residue that was not moved at the time.
+    if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== normalizedOwnerId) {
+      return false;
+    }
 
-  const next: BindingFile = { ...bindings };
-  let migrated = false;
-  for (const provider of ['anthropic', 'openai'] as const) {
-    if (bindings.revoked && provider in bindings.revoked) continue;
-    if (bindings[provider] !== LOCAL_DATA_OWNER_ID) continue;
-    next[provider] = normalizedOwnerId;
-    migrated = true;
-  }
+    const next: BindingFile = { ...bindings };
+    let migrated = false;
+    for (const provider of ['anthropic', 'openai'] as const) {
+      if (bindings.revoked && provider in bindings.revoked) continue;
+      if (bindings[provider] !== LOCAL_DATA_OWNER_ID) continue;
+      next[provider] = normalizedOwnerId;
+      migrated = true;
+    }
 
-  // Reserve the one-shot legacy claim for this first cloud owner. This also
-  // prevents a later account from claiming another local credential that
-  // appears after the initial login.
-  if (!('legacyClaimOwner' in next)) next.legacyClaimOwner = normalizedOwnerId;
-  if (!migrated && 'legacyClaimOwner' in bindings) return false;
-  writeBindings(next);
-  return migrated;
+    // Reserve the one-shot legacy claim for this first cloud owner. This also
+    // prevents a later account from claiming another local credential that
+    // appears after the initial login.
+    if (!('legacyClaimOwner' in next)) next.legacyClaimOwner = normalizedOwnerId;
+    if (!migrated && 'legacyClaimOwner' in bindings) return false;
+    writeBindings(next);
+    return migrated;
+  });
 }
 
 /**
@@ -537,27 +654,29 @@ export function claimDetectedNativeProviderAuth(
   // Callers reached from an async settle (Codex reconcile) additionally pin an
   // owner+generation snapshot; this guard is the floor every caller gets.
   if (isAppSessionBoundaryPending()) return false;
-  // 归属文件读不出来 = 归属不明,一律不认领:这条路径是**写**路径,把损坏当空会把共享
-  // keychain 里可能属于别人的凭证判给当前账号,并覆盖掉原有归属(PR #548 review)。
-  const read = readBindingsOrFail();
-  if (!read.ok) return false;
-  const bindings = read.bindings;
-  // Key-presence, not truthiness: a corrupted/empty-string slot must count as
-  // "claimed by unknown" and fail closed, never as re-claimable (matches
-  // unbindNativeProviderAuth's `in` pattern).
-  if (provider in bindings) return false;
-  if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== owner) return false;
-  // 被显式登出过就绝不自动认领,且**不比对 owner**:凭证在共享的系统 keychain / CLI 里,
-  // 换个账号它仍是登出那个账号的凭证 —— 按 owner 比对等于给下一个账号开了继承别人凭证
-  // 的口子。解除只有「用户再次显式授权」一条路(PR #548 review)。
-  if (bindings.revoked && provider in bindings.revoked) return false;
-  if (!hasCredential()) return false;
-  writeBindings({
-    ...bindings,
-    sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
-    [provider]: owner,
+  return withLegacyClaimLease(false, () => {
+    // 归属文件读不出来 = 归属不明,一律不认领:这条路径是**写**路径,把损坏当空会把共享
+    // keychain 里可能属于别人的凭证判给当前账号,并覆盖掉原有归属(PR #548 review)。
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const bindings = read.bindings;
+    // Key-presence, not truthiness: a corrupted/empty-string slot must count as
+    // "claimed by unknown" and fail closed, never as re-claimable (matches
+    // unbindNativeProviderAuth's `in` pattern).
+    if (provider in bindings) return false;
+    if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== owner) return false;
+    // 被显式登出过就绝不自动认领,且**不比对 owner**:凭证在共享的系统 keychain / CLI 里,
+    // 换个账号它仍是登出那个账号的凭证 —— 按 owner 比对等于给下一个账号开了继承别人凭证
+    // 的口子。解除只有「用户再次显式授权」一条路(PR #548 review)。
+    if (bindings.revoked && provider in bindings.revoked) return false;
+    if (!hasCredential()) return false;
+    writeBindings({
+      ...bindings,
+      sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
+      [provider]: owner,
+    });
+    return true;
   });
-  return true;
 }
 
 /**
@@ -573,16 +692,18 @@ export function restoreNativeProviderAuthForRecovery(
 ): boolean {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner || owner !== expectedOwner || isAppSessionBoundaryPending()) return false;
-  const read = readBindingsOrFail();
-  if (!read.ok) return false;
-  const bindings = read.bindings;
-  if (bindings.revoked && provider in bindings.revoked) return false;
-  if (!hasCredential()) return false;
-  if (provider in bindings) return bindings[provider] === expectedOwner;
-  writeBindings({
-    ...bindings,
-    sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
-    [provider]: expectedOwner,
+  return withLegacyClaimLease(false, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const bindings = read.bindings;
+    if (bindings.revoked && provider in bindings.revoked) return false;
+    if (!hasCredential()) return false;
+    if (provider in bindings) return bindings[provider] === expectedOwner;
+    writeBindings({
+      ...bindings,
+      sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
+      [provider]: expectedOwner,
+    });
+    return true;
   });
-  return true;
 }

@@ -104,8 +104,8 @@ describe('Ghost skill projection boundary state', () => {
       previousOwnerId: 'owner-a',
       nextOwnerId: null,
       transitionId: 'transition-b',
-        updatedAt: 124,
-      });
+      updatedAt: 124,
+    });
     expect(
       __testing.normalizeRecord({
         version: 1,
@@ -280,7 +280,9 @@ describe('Ghost skill projection boundary state', () => {
         nextOwnerId: 'owner-a',
         prepareTransition: async () => {},
         commit: () => undefined,
-        onCommitFailure: ({ commitApplied }) => failures.push(commitApplied),
+        onCommitFailure: ({ commitApplied }) => {
+          failures.push(commitApplied);
+        },
       }),
     ).rejects.toThrow('stable fsync failed');
 
@@ -322,9 +324,9 @@ describe('Ghost skill projection boundary state', () => {
     });
 
     await expect(withGhostSkillProjectionReconcile('owner-a', async () => 42)).resolves.toBe(42);
-    await expect(
-      withGhostSkillProjectionReconcile('owner-b', async () => 42),
-    ).rejects.toThrow('not stable');
+    await expect(withGhostSkillProjectionReconcile('owner-b', async () => 42)).rejects.toThrow(
+      'not stable',
+    );
   });
 
   it('fails closed when the durable quarantine record is malformed', async () => {
@@ -337,9 +339,9 @@ describe('Ghost skill projection boundary state', () => {
     fs.writeFileSync(__testing.quarantinePath(), '{not-json', 'utf8');
 
     expect(isGhostSkillProjectionBoundaryStableForOwner('owner-a')).toBe(false);
-    await expect(
-      withGhostSkillProjectionReconcile('owner-a', async () => 42),
-    ).rejects.toThrow('quarantined');
+    await expect(withGhostSkillProjectionReconcile('owner-a', async () => 42)).rejects.toThrow(
+      'quarantined',
+    );
   });
 
   it('skips teardown for an exact stable same-owner commit', async () => {
@@ -391,10 +393,12 @@ describe('Ghost skill projection boundary state', () => {
     const before = fs.readFileSync(__testing.filePath(), 'utf8');
     process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
 
-    await expect(withGhostSkillProjectionReadOnlyOwner('owner-a', async () => 42)).resolves.toBe(42);
-    await expect(
-      withGhostSkillProjectionReadOnlyOwner('owner-b', async () => 42),
-    ).rejects.toThrow('another active session');
+    await expect(withGhostSkillProjectionReadOnlyOwner('owner-a', async () => 42)).resolves.toBe(
+      42,
+    );
+    await expect(withGhostSkillProjectionReadOnlyOwner('owner-b', async () => 42)).rejects.toThrow(
+      'another active session',
+    );
     await expect(
       withGhostSkillProjectionOwnerCommit({
         previousOwnerId: 'owner-a',

@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import originalFs from 'original-fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   adoptLocalProfileDatabase,
+  createProductionLocalProfileDataMigrationDeps,
   LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX,
   LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
@@ -13,6 +15,7 @@ import {
   releaseLocalProfileDataOwner,
   type LocalProfileDataMigrationDeps,
 } from '../localProfileDataMigration.js';
+import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 
 const roots: string[] = [];
 
@@ -46,7 +49,7 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
           }
         },
         rename: (source, target) => fs.rename(source, target),
-        copyFile: (source, target) => fs.copyFile(source, target),
+        backupDatabase: (source, target) => fs.copyFile(source, target),
         link: (source, target) => fs.link(source, target),
         removeIfExists: (file) => fs.rm(file, { force: true }),
       },
@@ -55,6 +58,7 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -111,7 +115,7 @@ describe('adoptLocalProfileDatabase', () => {
     ).resolves.toContain('owner-a');
   });
 
-  it('adopts local-v1 database and sidecars without deleting the local source', async () => {
+  it('adopts a standalone snapshot without deleting the local source', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
     await fs.writeFile(path.join(root, 'cindy-local-v1.db-wal'), 'local-wal');
@@ -123,15 +127,47 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
       'local-db',
     );
-    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db-wal'), 'utf8')).resolves.toBe(
-      'local-wal',
-    );
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db-wal'))).rejects.toThrow();
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db-shm'))).rejects.toThrow();
     await expect(fs.readFile(path.join(root, 'cindy-local-v1.db'), 'utf8')).resolves.toBe(
       'local-db',
     );
     await expect(
       fs.access(path.join(root, `cindy-owner-a.db${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`)),
     ).rejects.toThrow();
+  });
+
+  it('captures committed WAL data through SQLite online backup while the source stays open', async () => {
+    const { root } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const sourceDb = createBetterSqliteDatabase(source);
+    const openSpy = vi.spyOn(originalFs, 'openSync');
+    try {
+      sourceDb.pragma('journal_mode = WAL');
+      sourceDb.exec('CREATE TABLE items (value TEXT NOT NULL)');
+      sourceDb.prepare('INSERT INTO items (value) VALUES (?)').run('from-wal');
+      await expect(fs.access(`${source}-wal`)).resolves.toBeUndefined();
+
+      const deps = createProductionLocalProfileDataMigrationDeps(root, 'cindy');
+      await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
+        status: 'adopted',
+      });
+      if (process.platform !== 'win32') {
+        expect(openSpy).toHaveBeenCalledWith(root, 'r');
+      }
+
+      const targetDb = createBetterSqliteDatabase(path.join(root, 'cindy-owner-a.db'), {
+        readonly: true,
+        fileMustExist: true,
+      });
+      try {
+        expect(targetDb.prepare('SELECT value FROM items').pluck().get()).toBe('from-wal');
+      } finally {
+        targetDb.close();
+      }
+    } finally {
+      sourceDb.close();
+    }
   });
 
   it('never overwrites an existing cloud database', async () => {
@@ -176,12 +212,8 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
       'local-db',
     );
-    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db-wal'), 'utf8')).resolves.toBe(
-      'local-wal',
-    );
-    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db-shm'), 'utf8')).resolves.toBe(
-      'local-shm',
-    );
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db-wal'))).rejects.toThrow();
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db-shm'))).rejects.toThrow();
   });
 
   it('does not publish WAL sidecars when the main target loses the race', async () => {
@@ -213,30 +245,31 @@ describe('adoptLocalProfileDatabase', () => {
     );
   });
 
-  it('removes the published database group when a sidecar link fails', async () => {
+  it('does not publish a database when the online backup fails', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
-    await fs.writeFile(path.join(root, 'cindy-local-v1.db-wal'), 'local-wal');
     const failingDeps: LocalProfileDataMigrationDeps = {
       ...deps,
       fs: {
         ...deps.fs,
-        link: async (source, destination) => {
-          if (destination === `${target}-wal`) {
-            throw Object.assign(new Error('sidecar link failed'), { code: 'EIO' });
-          }
-          return deps.fs.link(source, destination);
+        backupDatabase: async (_source, destination) => {
+          await fs.writeFile(destination, 'partial-snapshot');
+          throw Object.assign(new Error('online backup failed'), { code: 'EIO' });
         },
       },
     };
 
     await expect(adoptLocalProfileDatabase('owner-a', failingDeps)).resolves.toMatchObject({
       status: 'failed',
-      error: 'sidecar link failed',
+      error: 'online backup failed',
     });
     await expect(fs.access(target)).rejects.toThrow();
-    await expect(fs.access(`${target}-wal`)).rejects.toThrow();
+    expect(
+      (await fs.readdir(root)).filter((entry) =>
+        entry.includes(LOCAL_PROFILE_MIGRATION_TMP_SUFFIX),
+      ),
+    ).toEqual([]);
   });
 
   it('reclaims a lease left by a dead process before retrying adoption', async () => {

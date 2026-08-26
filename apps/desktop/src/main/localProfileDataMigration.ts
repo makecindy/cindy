@@ -13,6 +13,10 @@ import fs from 'original-fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
+import {
+  createBetterSqliteDatabase,
+  restrictDbFilePermissions,
+} from './localDb/betterSqliteFactory.js';
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
@@ -26,7 +30,7 @@ export interface LocalProfileDataMigrationFs {
   readFile(file: string): Promise<string>;
   createFileExclusive(file: string, contents: string): Promise<boolean>;
   rename(source: string, target: string): Promise<void>;
-  copyFile(source: string, target: string): Promise<void>;
+  backupDatabase(source: string, target: string): Promise<void>;
   link(source: string, target: string): Promise<void>;
   removeIfExists(file: string): Promise<void>;
 }
@@ -64,6 +68,12 @@ const realFs: LocalProfileDataMigrationFs = {
       await handle.close();
       handle = undefined;
       await fs.promises.link(tmp, file);
+      try {
+        syncMarkerDirectory(file);
+      } catch (error) {
+        await fs.promises.rm(file, { force: true }).catch(() => undefined);
+        throw error;
+      }
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
@@ -73,7 +83,15 @@ const realFs: LocalProfileDataMigrationFs = {
       await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
   },
-  copyFile: (source, target) => fs.promises.copyFile(source, target),
+  backupDatabase: async (source, target) => {
+    const db = createBetterSqliteDatabase(source, { readonly: true, fileMustExist: true });
+    try {
+      await db.backup(target);
+      restrictDbFilePermissions(target);
+    } finally {
+      db.close();
+    }
+  },
   rename: (source, target) => fs.promises.rename(source, target),
   link: (source, target) => fs.promises.link(source, target),
   removeIfExists: (file) => fs.promises.rm(file, { force: true }),
@@ -143,7 +161,8 @@ async function removeMigrationLeaseIfMatches(
   }
 
   const current = parseMigrationLease(await deps.fs.readFile(candidate).catch(() => ''));
-  const matches = expectedLeaseId === null ? current === null : current?.leaseId === expectedLeaseId;
+  const matches =
+    expectedLeaseId === null ? current === null : current?.leaseId === expectedLeaseId;
   if (matches) {
     await deps.fs.removeIfExists(candidate);
     return true;
@@ -434,54 +453,23 @@ async function copyDatabaseAtomically(
   await cleanupTemps(deps, targetDb);
   const attemptId = randomUUID();
   const dbTmp = `${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.${attemptId}`;
-  const tempFiles = [dbTmp];
-  const sidecars: Array<{ tmp: string; final: string }> = [];
-  const publishedFiles: string[] = [];
   try {
-    await deps.fs.copyFile(sourceDb, dbTmp);
-    for (const suffix of DB_SIDECAR_SUFFIXES) {
-      const source = `${sourceDb}${suffix}`;
-      if (!(await deps.fs.pathExists(source))) continue;
-      const final = `${targetDb}${suffix}`;
-      const tmp = `${final}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.${attemptId}`;
-      await deps.fs.copyFile(source, tmp);
-      tempFiles.push(tmp);
-      sidecars.push({ tmp, final });
-    }
-
-    // Establish ownership of the main database before publishing any WAL
-    // sidecar. A process that loses this no-replace commit must leave no
-    // sidecars behind for the winner's database file group.
+    // SQLite's online backup API takes one coherent snapshot even while another
+    // process is writing the WAL. The resulting standalone database therefore
+    // needs no source -wal/-shm files and can be published as one atomic entry.
+    await deps.fs.backupDatabase(sourceDb, dbTmp);
     await deps.fs.link(dbTmp, targetDb);
-    publishedFiles.push(targetDb);
-    // Commit sidecars only after the main database link has won. A sidecar that
-    // already exists belongs to the process that won the main-file race; never
-    // replace it.
-    for (const sidecar of sidecars) {
-      try {
-        await deps.fs.link(sidecar.tmp, sidecar.final);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
-        continue;
-      }
-      publishedFiles.push(sidecar.final);
-    }
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
-    await Promise.all(
-      publishedFiles
-        .reverse()
-        .map((file) => deps.fs.removeIfExists(file).catch(() => undefined)),
-    );
     throw error;
   } finally {
-    await Promise.all(tempFiles.map((file) => deps.fs.removeIfExists(file)));
+    await deps.fs.removeIfExists(dbTmp);
   }
 }
 
 /**
- * Copy local-v1's closed database into the verified cloud owner's database.
+ * Snapshot local-v1's database into the verified cloud owner's database.
  * This function is deliberately pure with respect to application state: the
  * caller must invoke it after owner verification and before opening the target
  * DbClient. It never deletes or overwrites the local source.
@@ -508,8 +496,8 @@ export async function adoptLocalProfileDatabase(
     if (!(await deps.fs.pathExists(sourceDb))) return { status: 'no-local-db' };
     // Serialize the complete database-file-group adoption across processes. The
     // owner marker deliberately allows same-owner readers, so it cannot itself
-    // protect the copy; this lease keeps one process from cleaning or publishing
-    // another process's temporary database/WAL files.
+    // protect the snapshot; this lease keeps one process from cleaning or
+    // publishing another process's temporary database.
     leaseId = await acquireMigrationLease(deps, lease, normalizedOwnerId);
     if (!leaseId) return { status: 'target-exists' };
     if (await deps.fs.pathExists(targetDb)) {

@@ -37,8 +37,10 @@ import {
 } from '../nativeProviderAuthBinding.js';
 
 const bindingFile = path.join(userDataDir, 'native-provider-auth.json');
+const bindingLeaseFile = `${bindingFile}.legacy-claim-lease`;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   session.dataOwnerId = 'owner-a';
   session.boundaryPending = false;
   fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -75,6 +77,45 @@ describe('native provider auth legacy binding', () => {
 });
 
 describe('local → cloud native provider binding migration', () => {
+  it('flushes the binding file and parent directory before reporting a reservation', () => {
+    const openSpy = vi.spyOn(fs, 'openSync');
+    const fsyncSpy = vi.spyOn(fs, 'fsyncSync');
+
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r');
+    if (process.platform !== 'win32') {
+      expect(openSpy).toHaveBeenCalledWith(userDataDir, 'r');
+    }
+    expect(fsyncSpy).toHaveBeenCalled();
+  });
+
+  it('reclaims and releases only the exact lease instance it inspected', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingLeaseFile, JSON.stringify({ pid: 2147483647, leaseId: 'stale-lease' }));
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync');
+
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    expect(unlinkSpy.mock.calls.some(([file]) => file === bindingLeaseFile)).toBe(false);
+    expect(fs.existsSync(bindingLeaseFile)).toBe(false);
+  });
+
+  it('reads every binding mutation while holding the shared cross-process lease', () => {
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    const leaseObserved: boolean[] = [];
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((file, ...args: unknown[]) => {
+      if (file === bindingFile) leaseObserved.push(fs.existsSync(bindingLeaseFile));
+      return originalReadFileSync(file as fs.PathOrFileDescriptor, ...(args as []));
+    }) as typeof fs.readFileSync);
+
+    bindNativeProviderAuth('anthropic');
+    unbindNativeProviderAuth('anthropic', { revoked: true });
+
+    expect(leaseObserved.length).toBeGreaterThanOrEqual(2);
+    expect(leaseObserved.every(Boolean)).toBe(true);
+  });
+
   it('reserves the first cloud owner even when no local provider slot exists', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
     expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
