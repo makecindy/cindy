@@ -316,8 +316,17 @@ function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWor
   }
 }
 
+function channelLiveBound(channel: HookPrefsChannel): boolean {
+  const snap = ensureInstances().manager.snapshot();
+  if (channel === 'slack') {
+    return snap.binding?.state === 'confirmed' || snap.bindings.some((b) => !b.displaced);
+  }
+  return snap[channel].binding?.state === 'confirmed';
+}
+
 async function mirrorWorkspacePrefs(channel: HookPrefsChannel): Promise<void> {
   const { manager: m } = ensureInstances();
+  if (!channelLiveBound(channel)) return;
   try {
     if (!isWorkspacePrefsMigrated(channel)) {
       const remote =

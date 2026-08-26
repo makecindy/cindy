@@ -214,8 +214,9 @@ export interface HookControlManagerDeps {
   notifyPrefs?: (view: HookPrefsView) => void;
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
   /**
-   * Slack / Telegram / X hook 已握手(且绑定可用)时通知, 供本机偏好做一次
-   * 迁移导入并镜像到 /model 卡。可重入, 调用方自行去重。
+   * Slack / Telegram / X 进入「已连接 ∧ live 已绑定」时通知, 供本机偏好做一次
+   * 迁移导入并镜像到 /model 卡。未绑定的 welcome 不得触发(空 prefs.get 会关掉
+   * 一次性迁移窗口)。可重入, 调用方自行去重。
    */
   onHookReadyForPrefsMirror?: (provider: HookProvider) => void;
   notifyTelegramBehavior?: (view: TelegramHookBehaviorState) => void;
@@ -964,6 +965,15 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   /** (multi-team)当前可用(未 displaced)的绑定行。 */
   function activeBindings(): HookTeamBindingView[] {
     return multiBindings.filter((b) => !b.displaced);
+  }
+
+  /** Slack 偏好镜像只认 live confirmed, 不含离线乐观绑定。 */
+  function slackBoundForPrefsMirror(): boolean {
+    return multiTeamKnown() ? activeBindings().length > 0 : binding?.state === 'confirmed';
+  }
+
+  function maybeMirrorSlackPrefs(): void {
+    if (slackBoundForPrefsMirror()) onHookReadyForPrefsMirror?.('slack');
   }
 
   /** 只在 provider 构建期 gate 真翻转时通知 host 失效 Codex MCP 缓存。 */
@@ -1937,6 +1947,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // teamId 缺失属异常(multi server 恒下发): 不猜行, 等随后的 bind.state 对齐
       notifySlackToolProviderEnabledIfChanged();
       notifyStatus(toView());
+      maybeMirrorSlackPrefs();
       return;
     }
     if (state === 'revoked') {
@@ -2167,6 +2178,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
       }
       notifyStatus(toView());
+      maybeMirrorSlackPrefs();
       log.info(`bind.state: ${snap.length} bindings`);
       return;
     }
@@ -2411,6 +2423,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         log.info(`slack hook auto-disabled on bind.update=${msg.payload.state}`);
       }
       notifyStatus(toView());
+      if (msg.payload.state === 'confirmed') maybeMirrorSlackPrefs();
       log.info(`bind.update: ${msg.payload.state}`);
       return;
     }
@@ -2684,7 +2697,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         notifySlackToolProviderEnabledIfChanged();
         notifyStatus(toView());
-        onHookReadyForPrefsMirror?.('slack');
+        maybeMirrorSlackPrefs();
       },
       onStatus: (s, err) => {
         // 构造期 / dispose / 重建后的尾随回调不再处理

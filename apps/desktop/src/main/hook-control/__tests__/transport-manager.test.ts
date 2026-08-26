@@ -3186,6 +3186,63 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
     sock.close(); // server 掉线
     await expect(promise).rejects.toBeInstanceOf(HookNotConnectedError);
   });
+
+  it('Slack welcome 未绑定不触发镜像；bind.update(confirmed) 才触发', async () => {
+    const { wss, url } = await startServer();
+    const store = memoryStore({ url });
+    const mirrored: string[] = [];
+    const manager = makeManager(store, {
+      onHookReadyForPrefsMirror: (provider) => mirrored.push(provider),
+    });
+    cleanups.push(() => manager.dispose());
+    const { sock } = await connect(manager, wss);
+    expect(mirrored).toEqual([]);
+
+    sock.send(
+      serializeHookMessage(
+        makeBindUpdate({
+          state: 'confirmed',
+          slackUserId: 'U1',
+          slackUserName: 'tester',
+          message: null,
+        }),
+      ),
+    );
+    await expect.poll(() => manager.snapshot().binding?.state, { timeout: 3000 }).toBe('confirmed');
+    expect(mirrored).toEqual(['slack']);
+  });
+
+  it('Slack 已绑定后重连 welcome 会再镜像', async () => {
+    const { wss, url } = await startServer();
+    const store = memoryStore({ url });
+    const mirrored: string[] = [];
+    const manager = makeManager(store, {
+      onHookReadyForPrefsMirror: (provider) => mirrored.push(provider),
+    });
+    cleanups.push(() => manager.dispose());
+    const { sock } = await connect(manager, wss);
+    sock.send(
+      serializeHookMessage(
+        makeBindUpdate({
+          state: 'confirmed',
+          slackUserId: 'U1',
+          slackUserName: 'tester',
+          message: null,
+        }),
+      ),
+    );
+    await expect.poll(() => manager.snapshot().binding?.state, { timeout: 3000 }).toBe('confirmed');
+    expect(mirrored).toEqual(['slack']);
+
+    sock.close();
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    await expect.poll(() => manager.snapshot().status, { timeout: 3000 }).not.toBe('connected');
+    const [sock2] = await connPromise;
+    sock2.send(serializeHookMessage(makeWelcome({ serverName: 'mock', features: [] })));
+    await expect.poll(() => manager.snapshot().status, { timeout: 3000 }).toBe('connected');
+    await expect.poll(() => mirrored.length, { timeout: 3000 }).toBe(2);
+    expect(mirrored).toEqual(['slack', 'slack']);
+  });
 });
 
 describe('provider-specific not-connected 映射(issue #279)', () => {
@@ -3476,6 +3533,19 @@ describe('多 workspace 绑定(multi-team)', () => {
     });
     // 本地缓存随快照落盘
     expect(store.get().bindingsCache).toEqual([T1, T2]);
+  });
+
+  it('multi-team welcome 未绑定不镜像；bind.state 出现活跃行才镜像', async () => {
+    const mirrored: string[] = [];
+    const { sock } = await connectMulti({
+      managerOverrides: {
+        onHookReadyForPrefsMirror: (provider) => mirrored.push(provider),
+      },
+    });
+    expect(mirrored).toEqual([]);
+    sock.send(serializeHookMessage(makeBindState({ bindings: [T1] })));
+    await expect.poll(() => mirrored.length, { timeout: 3000 }).toBe(1);
+    expect(mirrored).toEqual(['slack']);
   });
 
   it('addBinding: 发空 bind.start, pending 落 pendingBind 并弹浏览器; confirmed(teamId) upsert 行 + 清 pendingBind', async () => {
