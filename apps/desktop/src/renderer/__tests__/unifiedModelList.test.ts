@@ -11,6 +11,7 @@ import {
   buildUnionRows,
   countModelsByAgent,
   getHiddenAgents,
+  hasPaymentRequiredDisabledRow,
   isCapabilityRow,
   isRowDisabled,
   isRowDiverged,
@@ -268,6 +269,28 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     const rows = buildUnionRows(withDisabled);
     expect(isRowDisabled(rows[0])).toBe(true);
     expect(isRowDisabled(rows[1])).toBe(false);
+  });
+
+  it('付费锁定的停用行阻止整组 reset，避免批量入口改写其历史 override', () => {
+    const withLockedDisabled = {
+      ...provider,
+      models: {
+        ...provider.models,
+        codex: [
+          ...(provider.models.codex ?? []),
+          { ...model('paid-disabled'), availability: 'requires_payment', disabled: true },
+        ],
+      },
+    } as ProviderView;
+    const rows = buildUnionRows(withLockedDisabled);
+
+    expect(hasPaymentRequiredDisabledRow(rows)).toBe(true);
+    expect(
+      hasPaymentRequiredDisabledRow(
+        rows,
+        (row) => row.id === 'paid-disabled' ? false : isRowDisabled(row),
+      ),
+    ).toBe(false);
   });
 
   it('专属媒体清单(imageModels/videoModels)合成能力行:可停用、与 agent 清单同 id 去重', () => {

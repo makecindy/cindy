@@ -15,10 +15,10 @@
  * 不含 ScrollView —— 由 SheetSurface 的滚动区承载。行显示逻辑在 modelPickerRows.ts
  * (纯逻辑可单测),本组件只做渲染。
  */
-import { Alert, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
-import { Check, Lock, SlidersHorizontal, Zap } from 'lucide-react-native';
+import { Check, SlidersHorizontal, Zap } from 'lucide-react-native';
 
 import type { MobileAgentCapabilities, MobileModelOption } from '@/session/agentCapabilities';
 import type { DeviceApiKeyStatus } from '@/device-link/deviceModelMetaCache';
@@ -107,21 +107,6 @@ const makeStyles = (c: ThemeColors) =>
       alignItems: 'center',
       flexDirection: 'row',
       minWidth: 0,
-    },
-    paidBadge: {
-      alignItems: 'center',
-      backgroundColor: c.surfaceChip,
-      borderRadius: radius.pill,
-      flexDirection: 'row',
-      gap: spacing.xs,
-      marginLeft: spacing.xs,
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 2,
-    },
-    paidBadgeText: {
-      color: c.textSecondary,
-      fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
     },
     optionMetaRow: {
       alignItems: 'center',
@@ -219,7 +204,6 @@ export function MobileModelPickerList({
           // 对齐桌面 ModelSelector:订阅制来源(Claude.ai / ChatGPT 等)的模型带「订阅」徽标。
           const isSubscription = row.provider.access?.kind === 'subscription';
           const rowDisabled = budgetRowDisabled(row.model.id, apiKeyStatus);
-          const paymentRequired = row.model.availability === 'requires_payment';
           const fastEditable =
             configEnabled &&
             rowFastEditable({
@@ -253,9 +237,7 @@ export function MobileModelPickerList({
             ? effortLabelFor(row.model, rowEffort, capabilities ?? null)
             : null;
           const rowAccessibilityLabel = modelRowAccessibilityLabel({
-            baseLabel: t(paymentRequired
-              ? 'models.picker.paymentRequiredAccessibility'
-              : 'models.picker.selectProviderModelAccessibility', {
+            baseLabel: t('models.picker.selectProviderModelAccessibility', {
               provider: row.provider.name,
               model: row.model.displayName,
             }),
@@ -271,7 +253,6 @@ export function MobileModelPickerList({
             configEnabled &&
             !!onOpenOptions &&
             !rowDisabled &&
-            !paymentRequired &&
             (row.model.efforts.length > 0 || fastEditable) &&
             (selected || !!modelMemory);
           return (
@@ -286,21 +267,12 @@ export function MobileModelPickerList({
                   ? (e) => onSelectedRowLayout(e.nativeEvent.layout.y)
                   : undefined
               }
-              onPress={() => {
-                if (paymentRequired) {
-                  Alert.alert(
-                    t('models.picker.paymentRequiredTitle'),
-                    t('models.picker.paymentRequiredDescription'),
-                  );
-                  return;
-                }
-                onSelectProviderRow(row);
-              }}
+              onPress={() => onSelectProviderRow(row)}
               style={({ pressed }) => [
                 styles.optionRow,
                 rowStyle,
                 selected && styles.optionRowSelected,
-                (rowDisabled || paymentRequired) && styles.optionRowDisabled,
+                rowDisabled && styles.optionRowDisabled,
                 pressed && { opacity: 0.65 },
               ]}
               testID={testID}
@@ -315,12 +287,6 @@ export function MobileModelPickerList({
               <View style={styles.optionMain}>
                 <View style={styles.optionTitleRow}>
                   <Text numberOfLines={1} style={styles.optionText}>{row.model.displayName}</Text>
-                  {paymentRequired ? (
-                    <View style={styles.paidBadge}>
-                      <Lock color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-                      <Text style={styles.paidBadgeText}>{t('models.picker.paymentRequiredBadge')}</Text>
-                    </View>
-                  ) : null}
                 </View>
                 {isSubscription || rowEffort || fastOn ? (
                   <View style={styles.optionMetaRow}>

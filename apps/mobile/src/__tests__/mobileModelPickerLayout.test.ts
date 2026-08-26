@@ -47,23 +47,4 @@ describe('MobileModelPickerList compact rows', () => {
     expect(metadata).toBeGreaterThan(modelName);
     expect(source.slice(modelName, metadata)).toContain('</View>');
   });
-
-  it('does not expose model options for payment-locked provider rows', () => {
-    const hasOptions = source.indexOf('const hasOptions =', source.indexOf('const paymentRequired ='));
-    const providerRow = source.indexOf('return ( <Pressable', hasOptions);
-
-    expect(hasOptions).toBeGreaterThan(-1);
-    expect(providerRow).toBeGreaterThan(hasOptions);
-    expect(source.slice(hasOptions, providerRow)).toContain('!paymentRequired');
-  });
-
-  it('exposes payment-locked rows as actionable payment details to assistive technology', () => {
-    expect(source).toContain('models.picker.paymentRequiredAccessibility');
-    expect(source).toMatch(
-      /accessibilityState=\{\{ selected, disabled: disabled \|\| rowDisabled \}\}/,
-    );
-    expect(source).not.toContain(
-      'disabled: disabled || rowDisabled || paymentRequired',
-    );
-  });
 });

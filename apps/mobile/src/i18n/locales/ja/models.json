@@ -17,10 +17,6 @@
     "selectModelAccessibility": "モデル {{model}} を選択",
     "configureAccessibility": "{{model}} を設定",
     "budgetDisabledHint": "このモデルを使うには、先に操作対象のデバイスで API キーを設定してください",
-    "paymentRequiredBadge": "有料",
-    "paymentRequiredAccessibility": "{{provider}} のモデル {{model}} の有料アクセス説明を表示",
-    "paymentRequiredTitle": "有料でこのモデルを解放",
-    "paymentRequiredDescription": "有料プランを購読するか、残高をチャージすると利用できます。デスクトップ版 Cindy の「使用量と請求」で操作してください。",
     "priceLine": "入力 {{input}} · 出力 {{output}} / 100万トークン",
     "contextSuffix": "{{size}} コンテキスト",
     "fastTag": "高速"

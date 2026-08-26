@@ -243,6 +243,14 @@ export function isRowPaymentRequired(row: UnionModelRow): boolean {
   return row.avail.some((agent) => row.byAgent[agent]?.availability === 'requires_payment');
 }
 
+/** 付费锁定优先于本地停用偏好：命中时任何批量恢复都不得改写该行的历史 override。 */
+export function hasPaymentRequiredDisabledRow(
+  rows: readonly UnionModelRow[],
+  isDisabled: (row: UnionModelRow) => boolean = isRowDisabled,
+): boolean {
+  return rows.some((row) => isDisabled(row) && isRowPaymentRequired(row));
+}
+
 /** 该行是否是「能力模型」(图像/音频/视频/向量等,没有显示轴;见头注)。
  *  `userProvider` = 行来自用户自定义供应商 —— 自定义对话模型的未知 group 不吃 id
  *  启发式(`gpt-4o-audio-preview` 是合法对话模型,见 isAgentSelectableModel 注释)。 */
@@ -394,6 +402,10 @@ export function UnifiedModelList({
     (row: UnionModelRow) => pendingDisabled[row.id] ?? isRowDisabled(row),
     [pendingDisabled],
   );
+  const hasLockedDisabledRow = useMemo(
+    () => hasPaymentRequiredDisabledRow(unionRows, rowDisabledEffective),
+    [unionRows, rowDisabledEffective],
+  );
 
   /** 写停用轴:乐观覆盖 + IPC;失败回滚并提示(错误 = 发生了什么 + 下一步)。 */
   const setRowDisabled = useCallback(
@@ -448,6 +460,9 @@ export function UnifiedModelList({
    *  清不掉;若该模型日后回到目录会被静默停用)。乐观覆盖同 setRowDisabled 口径;
    *  失败整组回滚(只回滚仍属于本次的乐观值)。 */
   const resetDisableOverrides = useCallback(() => {
+    // `kind:'reset'` 会删除整组 override，无法排除付费锁定行；保持 fail-closed，
+    // 让其它非锁定行继续使用逐行恢复入口。
+    if (hasLockedDisabledRow) return;
     const rows = unionRows.filter((r) => pendingDisabled[r.id] ?? isRowDisabled(r));
     setPendingDisabled((prev) => {
       const next = { ...prev };
@@ -466,7 +481,7 @@ export function UnifiedModelList({
         });
         toast.error(t('settings.providers.models.accessWriteFailed'));
       });
-  }, [unionRows, pendingDisabled, provider.id, t]);
+  }, [hasLockedDisabledRow, unionRows, pendingDisabled, provider.id, t]);
 
   // 分组(仅未停用的行)+「已停用」分区(停用的行,跨分组沉底)。搜索两边都过滤。
   // 分组沿用现有口径:用每行第一个可用 agent 的目录条目作代表参与分组。
@@ -991,18 +1006,21 @@ export function UnifiedModelList({
                           : (provider.disableOverrideCount ?? 0)}
                       </span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={resetDisableOverrides}
-                      className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                      style={{ color: 'var(--text-tertiary)' }}
-                    >
-                      {t('settings.providers.models.enableAllModels')}
-                    </button>
+                    {!hasLockedDisabledRow && (
+                      <button
+                        type="button"
+                        onClick={resetDisableOverrides}
+                        className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                        style={{ color: 'var(--text-tertiary)' }}
+                      >
+                        {t('settings.providers.models.enableAllModels')}
+                      </button>
+                    )}
                   </div>
                   {!collapsed &&
                     disabledRows.map((row) => {
                       const rep = row.byAgent[row.avail[0]]!;
+                      const paymentRequired = isRowPaymentRequired(row);
                       // 可折行:最小窗口(右栏 ~275px)下「启用此模型」(日文更长)放
                       // 不下时换行,恢复入口始终可达(PR #1102 review 第四轮)。
                       return (
@@ -1024,6 +1042,15 @@ export function UnifiedModelList({
                             {t(CATEGORY_LABEL_KEY[rowCategory(row)])}
                           </span>
                           <span className="min-w-0 flex-1" />
+                          {paymentRequired && (
+                            <span
+                              data-payment-required-badge
+                              className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
+                            >
+                              <Lock size={11} />
+                              {t('settings.providers.models.paymentRequired')}
+                            </span>
+                          )}
                           {rep.contextWindow > 0 && (
                             <span
                               className="w-11 shrink-0 text-right text-12 tabular-nums"
@@ -1032,17 +1059,19 @@ export function UnifiedModelList({
                               {formatContextWindow(rep.contextWindow)}
                             </span>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => setRowDisabled(row, false)}
-                            className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                            style={{
-                              borderColor: 'var(--settings-btn-secondary-border)',
-                              color: 'var(--settings-btn-secondary-text)',
-                            }}
-                          >
-                            {t('settings.providers.models.enableModel')}
-                          </button>
+                          {!paymentRequired && (
+                            <button
+                              type="button"
+                              onClick={() => setRowDisabled(row, false)}
+                              className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                              style={{
+                                borderColor: 'var(--settings-btn-secondary-border)',
+                                color: 'var(--settings-btn-secondary-text)',
+                              }}
+                            >
+                              {t('settings.providers.models.enableModel')}
+                            </button>
+                          )}
                           {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
                             <button
                               type="button"
