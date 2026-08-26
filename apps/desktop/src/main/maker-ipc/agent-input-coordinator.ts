@@ -3338,8 +3338,19 @@ export class AgentInputCoordinator {
     }
     if (active?.persisting) {
       // done 早于 DB 写入完成时不能先释放 drain，否则后续队列会越过一个
-      // 还没确定是否可恢复的已派发输入。
-      recordPendingTerminalEvent(active, { type: 'done' });
+      // 还没确定是否可恢复的已派发输入。漏掉的同 generation error
+      // 必须先写进 deferred terminal，否则落库后会按成功清掉 Retry。
+      const deferredError = this.boundObservedTerminalError(sessionId, active);
+      recordPendingTerminalEvent(
+        active,
+        deferredError
+          ? {
+              type: 'error',
+              message: deferredError.message,
+              signals: deferredError.signals,
+            }
+          : { type: 'done' },
+      );
       this.emit(sessionId);
       return;
     }
@@ -3788,6 +3799,28 @@ export class AgentInputCoordinator {
     if (typeof observed.generation !== 'number') return false;
     if (typeof active.vendorTurnGeneration !== 'number') return false;
     return observed.generation === active.vendorTurnGeneration;
+  }
+
+  private boundObservedTerminalError(
+    sessionId: string,
+    active: ActiveTurn,
+  ): {
+    message: string;
+    signals?: Omit<InterruptedTurnErrorSignals, 'message'>;
+  } | null {
+    const observed = this.readObservedCurrentTurnTerminal(sessionId);
+    if (observed?.kind !== 'error') return null;
+    if (!this.observedMatchesBoundActiveTurn(active, observed)) return null;
+    if (this.isSuppressedObservedError(sessionId, observed)) return null;
+    const signals: Omit<InterruptedTurnErrorSignals, 'message'> = {
+      ...(observed.reason ? { reason: observed.reason } : {}),
+      ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
+      ...(typeof observed.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
+    };
+    return {
+      message: redactSensitiveText(observed.message ?? 'Turn ended with an error'),
+      ...(Object.keys(signals).length > 0 ? { signals } : {}),
+    };
   }
 
   private shouldIgnoreUnownedTerminal(
@@ -5721,8 +5754,40 @@ export class AgentInputCoordinator {
   }
 
   private settlePendingTerminalEventAfterPersist(sessionId: string, active: ActiveTurn): void {
-    const terminalEvent = active.pendingTerminalEvent;
+    let terminalEvent = active.pendingTerminalEvent;
     if (!terminalEvent || !this.isActiveTurnCurrent(sessionId, active)) return;
+    if (terminalEvent.type === 'done') {
+      const deferredError = this.boundObservedTerminalError(sessionId, active);
+      if (deferredError) {
+        terminalEvent = {
+          type: 'error',
+          message: deferredError.message,
+          signals: deferredError.signals,
+        };
+      } else {
+        const observed = this.readObservedCurrentTurnTerminal(sessionId);
+        if (
+          observed?.kind === 'error' &&
+          !this.observedMatchesBoundActiveTurn(active, observed)
+        ) {
+          log.warn(
+            'ignored deferred turn-done while leftover activeTurn does not match observed error',
+            {
+              sessionId,
+              clientId: active.item?.clientId ?? null,
+              boundGeneration: active.vendorTurnGeneration ?? null,
+              observedGeneration: observed.generation ?? null,
+            },
+          );
+          active.pendingTerminalEvent = null;
+          this.emit(sessionId);
+          return;
+        }
+        if (this.consumeSuppressedObservedError(sessionId, observed)) {
+          // Planned-upgrade suppression: settle as successful done below.
+        }
+      }
+    }
     active.pendingTerminalEvent = null;
     const state = this.getState(sessionId);
     state.activeTurn = null;

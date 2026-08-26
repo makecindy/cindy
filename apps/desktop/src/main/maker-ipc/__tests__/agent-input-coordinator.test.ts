@@ -6474,6 +6474,95 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.errorRetryText).toBe('second');
   });
 
+  it('recovers a missed same-generation error when only paired done arrives during steer persist', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setResumableTurnErrorCandidate((signals) => signals.reason === 'empty-response');
+    const sid = 'steer-persist-missed-error-snapshot';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    const persistStarted = deferred<void>();
+    const persistSucceeded = deferred<void>();
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    const steerPromise = h.coordinator.steer(sid, second, { removeFromQueue: true });
+    await persistStarted.promise;
+
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'error',
+      generation: 0,
+      message: 'Authorization: Bearer secret-token',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 0,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    persistSucceeded.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.recovery).toEqual({ kind: 'active-turn', item: second });
+    expect(projection.error).toBe('Authorization: [REDACTED]');
+    expect(JSON.stringify(projection)).not.toContain('secret-token');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not settle a deferred persist done against a later-generation error snapshot', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'steer-persist-done-error-generation-mismatch';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    const persistStarted = deferred<void>();
+    const persistSucceeded = deferred<void>();
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    const steerPromise = h.coordinator.steer(sid, second, { removeFromQueue: true });
+    await persistStarted.promise;
+
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'error',
+      generation: 2,
+      message: 'later turn failed',
+    });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 2,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    persistSucceeded.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
   it('suppresses stale steer persist failure after clearSession wins during persistence', async () => {
     const h = createHarness();
     h.setAgentKind('codex');
