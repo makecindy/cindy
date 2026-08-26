@@ -127,6 +127,22 @@ describe('listAvailableMediaModels', () => {
     ]);
   });
 
+  it('xAI provider 图片模型在媒体目录中保留来源身份', async () => {
+    listProviderMediaModelsMock.mockReturnValue([
+      {
+        id: 'xai/grok-imagine-image',
+        name: 'Grok Imagine Image',
+        providerId: 'xai',
+        mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+
+    await expect(listAvailableMediaModels('image.edit')).resolves.toContainEqual(
+      expect.objectContaining({ id: 'xai/grok-imagine-image', providerId: 'xai' }),
+    );
+  });
+
   it('叠加客户端现有 XD provider/model 停用准入', async () => {
     readModelDisableOverridesMock.mockReturnValueOnce({
       disabledModels: { 'xd:image-without-guide': true },

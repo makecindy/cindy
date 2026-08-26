@@ -3413,7 +3413,9 @@ function getMediaPreferenceConfig(
   const providers = new Map(
     getActiveCatalog().providers.map((provider) => [provider.id, provider] as const),
   );
-  const providerModels: CindyMediaPreferenceModel[] = listProviderMediaModels()
+  const providerModels: CindyMediaPreferenceModel[] = (kind === 'video'
+    ? listLocalProviderVideoModels()
+    : listProviderMediaModels())
     .filter(
       (model) =>
         model.mode === (kind === 'image' ? 'image_generation' : 'video_generation') &&
@@ -3607,10 +3609,27 @@ async function getGhostConfigurableMediaModels(
   try {
     // 类型目录返回该大类所有至少有一种可执行操作的模型；具体支持动作由
     // Gateway modalities 透传给插件判断，不能把插件声明的多个动作取交集。
-    const availability = await listExecutableMediaModels();
+    // The generic media-access snapshot is Gateway-first and historically only
+    // carried image-provider models. Video providers are host-owned (the video
+    // registry executes them), so add their local projection explicitly and do
+    // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
+    let availability: Awaited<ReturnType<typeof listExecutableMediaModels>>;
+    try {
+      availability = await listExecutableMediaModels();
+    } catch (error) {
+      if (type !== 'video') throw error;
+      availability = { models: [], unavailable: [], candidateCount: 0 };
+    }
     const mode = type === 'image' ? 'image_generation' : 'video_generation';
     const videoRegistry = type === 'video' ? getVideoProviderRegistry() : null;
-    const candidates = availability.models.filter(
+    const localVideoModels = type === 'video' ? listLocalProviderVideoModels() : [];
+    const allModels = [...availability.models, ...localVideoModels].filter(
+      (model, index, models) =>
+        models.findIndex(
+          (candidate) => candidate.id === model.id && candidate.providerId === model.providerId,
+        ) === index,
+    );
+    const candidates = allModels.filter(
       (model) =>
         model.mode === mode &&
         (type !== 'video' ||
@@ -4055,16 +4074,22 @@ function listLocalProviderMediaModels() {
     }
     const supportsEdit = getImageChannelRegistry().isProviderEditReady(provider.id);
     return (provider.imageModels ?? []).flatMap((model) => {
-      if (
-        !model.modalities ||
-        isModelDisabled(access, provider.id, model.id) ||
-        !model.modalities.output.includes('image')
-      ) {
+      if (isModelDisabled(access, provider.id, model.id)) {
         return [];
       }
+      // Legacy/provider catalogs may only carry id/name. The channel registry is
+      // the executable capability source in that case: every registered image
+      // channel accepts text generation, and editable channels additionally
+      // accept an image input. Without this normalization, xAI's valid image
+      // models are visible in Settings but disappear from Art's media catalog.
+      const modalities = model.modalities ?? {
+        input: supportsEdit ? ['text', 'image'] : ['text'],
+        output: ['image'],
+      };
+      if (!modalities.output.includes('image')) return [];
       const input = supportsEdit
-        ? [...model.modalities.input]
-        : model.modalities.input.filter((modality) => modality !== 'image');
+        ? [...modalities.input]
+        : modalities.input.filter((modality) => modality !== 'image');
       return [
         {
           id: model.id,
@@ -4072,6 +4097,49 @@ function listLocalProviderMediaModels() {
           providerId: provider.id,
           mode: 'image_generation' as const,
           modalities: { input, output: [...model.modalities.output] },
+          ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
+        },
+      ];
+    });
+  });
+}
+
+/**
+ * Video models are executed by the host video registry rather than the image
+ * provider runtime. Keep their catalog projection beside the image projection
+ * so Art can read the same provider-owned models that Settings displays.
+ */
+function listLocalProviderVideoModels() {
+  const access = readModelDisableOverrides();
+  const registry = getVideoProviderRegistry();
+  if (!registry) return [];
+  return getActiveCatalog().providers.flatMap((provider) => {
+    if (
+      provider.id === 'xd' ||
+      isProviderDisabled(access, provider.id) ||
+      !isVideoCatalogProviderReady(provider.id)
+    ) {
+      return [];
+    }
+    return (provider.videoModels ?? []).flatMap((model) => {
+      if (
+        isModelDisabled(access, provider.id, model.id) ||
+        !registry.hasAlias(model.id, provider.id)
+      ) {
+        return [];
+      }
+      const modalities = model.modalities ?? {
+        input: ['text', 'image'],
+        output: ['video'],
+      };
+      if (!modalities.output.includes('video')) return [];
+      return [
+        {
+          id: model.id,
+          name: model.name,
+          providerId: provider.id,
+          mode: 'video_generation' as const,
+          modalities: { input: [...modalities.input], output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
       ];
