@@ -3870,6 +3870,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           model,
           getSessionProvider(session.id),
         );
+        // beforeProviderStart 已经进入 Session 内部，无法再安全重建跨凭证形态的
+        // runtime。reroute 不能当作 pass 丢弃，否则 null-provider 仍会落到刚被
+        // 锁定/停用的原生默认来源；让本轮失败，由下一次显式选源或重建会话收敛。
+        if (verdict.kind === 'reroute') {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `model "${model}" must switch to provider "${verdict.providerId}" before sending`,
+          );
+        }
         if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
           throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
         }

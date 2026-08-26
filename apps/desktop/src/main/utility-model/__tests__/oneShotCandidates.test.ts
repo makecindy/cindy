@@ -41,6 +41,7 @@ vi.mock('../../maker-host/generic-oauth.js', () => ({
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: vi.fn(() => ({ providers: [] })),
+  isXdGatewayPaymentRequiredRoute: vi.fn(() => false),
 }));
 
 vi.mock('../../maker-host/provider-route.js', () => ({
@@ -80,7 +81,10 @@ import { getChatgptBridgeAuth } from '../../maker-host/anthropic-responses-bridg
 import { getValidClaudeAiOAuth } from '../../maker-host/claude-oauth-refresh.js';
 import { getGrokAccessToken } from '../../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
-import { getActiveCatalog } from '../../maker-host/active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdGatewayPaymentRequiredRoute,
+} from '../../maker-host/active-catalog.js';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
@@ -103,6 +107,7 @@ const readGrokToken = vi.mocked(getGrokAccessToken);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
 const fetchMock = vi.mocked(undiciFetch);
 const activeCatalog = vi.mocked(getActiveCatalog);
+const xdPaymentRequiredRoute = vi.mocked(isXdGatewayPaymentRequiredRoute);
 const readDisableOverrides = vi.mocked(readModelDisableOverrides);
 const providerRouteMutationInProgress = vi.mocked(isProviderRouteMutationInProgress);
 const readCustomKey = vi.mocked(readCustomProviderKey);
@@ -129,6 +134,7 @@ describe('utility one-shot candidates', () => {
     readCustomKey.mockReturnValue(null);
     readDisableOverrides.mockReturnValue({ disabledModels: {}, disabledProviders: {} });
     activeCatalog.mockReturnValue({ providers: [] } as never);
+    xdPaymentRequiredRoute.mockReturnValue(false);
     getProfiles.mockReturnValue([
       {
         id: 'codex-gpt-5.4-mini',
@@ -155,6 +161,38 @@ describe('utility one-shot candidates', () => {
     const candidates = await getUtilityTextCandidates(makerMock(false));
 
     expect(candidates.map((candidate) => candidate.providerId)).toEqual(['litellm-gpt-5.4-mini']);
+  });
+
+  it('does not expose or dispatch an XD utility candidate denied by paid availability', async () => {
+    readKey.mockReturnValue('proxy-key');
+    xdPaymentRequiredRoute.mockImplementation((model, agent) =>
+      model === 'gpt-5.4-mini' && agent === 'codex',
+    );
+
+    const result = await requestUtilityText(makerMock(false), 'hello');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [
+        expect.objectContaining({ providerId: 'codex-gpt-5.4-mini' }),
+        expect.objectContaining({
+          providerId: 'litellm-gpt-5.4-mini',
+          reason: 'model_unavailable',
+        }),
+      ],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks paid availability immediately before a previously resolved XD utility dispatch', async () => {
+    readKey.mockReturnValue('proxy-key');
+    const candidates = await getUtilityTextCandidates(makerMock(false));
+    expect(candidates).toHaveLength(1);
+
+    xdPaymentRequiredRoute.mockReturnValue(true);
+    await expect(candidates[0]!.execute('hello')).rejects.toThrow('request_failed');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns credential-safe diagnostics when every configured candidate is unavailable', async () => {
