@@ -817,7 +817,7 @@ function compactSessionToolResults(readyDb, args) {
   const now = expectNumber(payload.now, 'now');
 
   const selectSession = readyDb.prepare(
-    "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') AND source = 'desktop' AND remote_host_id IS NULL LIMIT 1",
+    "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') AND remote_host_id IS NULL LIMIT 1",
   );
   // Keep this aggregate + bulk update path in sync with worker/opHandlers/tx.ts.
   // The fixed-prefix guard only prevents re-compacting an existing marker.

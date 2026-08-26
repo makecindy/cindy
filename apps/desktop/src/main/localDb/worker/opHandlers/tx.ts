@@ -797,7 +797,6 @@ function compactSessionToolResults(
       FROM sessions
      WHERE id = ?
        AND status IN ('archived', 'deleted')
-       AND source = 'desktop'
        AND remote_host_id IS NULL
      LIMIT 1
   `);

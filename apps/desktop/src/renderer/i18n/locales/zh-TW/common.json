@@ -7526,7 +7526,7 @@
       "promptSend": "傳送",
       "promptCancel": "取消"
     },
-    "toolResultCompacted": "完整工具輸出已釋放（原始大小 {{size}}）",
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "無可展示內容",
       "fileChange": {

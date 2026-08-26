@@ -5,6 +5,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { SESSION_SOURCES } from '../../../../shared/sessionSource.js';
 import { buildDbWorkerBundle } from '../../__tests__/dbWorkerTestUtils.js';
 import type { DbClient } from '../DbClient.js';
 import { createDbClient } from '../DbClient.js';
@@ -382,10 +383,11 @@ describe('db worker tx handlers', () => {
   );
 
   it.each([false, true])(
-    'skips non-authoritative and restored sessions while compacting local Orca and active-turn rows (inline=%s)',
+    'skips remote and restored sessions while compacting every local source (inline=%s)',
     async (useInlineWorker) => {
       await withClient(async (client) => {
-        for (const id of ['remote', 'shared', 'orca', 'turn', 'restored']) {
+        const sourceSessionIds = SESSION_SOURCES.map((source) => `source-${source}`);
+        for (const id of ['remote', 'orca', 'turn', 'restored', ...sourceSessionIds]) {
           await seedSession(client, id);
           await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", [id]);
           await client.exec(
@@ -402,14 +404,19 @@ describe('db worker tx handlers', () => {
           );
         }
         await client.exec("UPDATE sessions SET remote_host_id = 'host-1' WHERE id = 'remote'");
-        await client.exec("UPDATE sessions SET source = 'shared' WHERE id = 'shared'");
+        for (const source of SESSION_SOURCES) {
+          await client.exec('UPDATE sessions SET source = ? WHERE id = ?', [
+            source,
+            `source-${source}`,
+          ]);
+        }
         await client.exec("UPDATE sessions SET orca_role = 'lead' WHERE id = 'orca'");
         await client.exec(
           "UPDATE sessions SET active_turn_started_at = 10, last_turn_ended_at = 9 WHERE id = 'turn'",
         );
         await client.exec("UPDATE sessions SET status = 'active' WHERE id = 'restored'");
 
-        for (const sessionId of ['remote', 'shared', 'restored']) {
+        for (const sessionId of ['remote', 'restored']) {
           await expect(
             client.tx('toolResults.compactSession', {
               sessionId,
@@ -417,18 +424,14 @@ describe('db worker tx handlers', () => {
             }),
           ).resolves.toEqual({ compactedRows: 0, originalBytes: 0 });
         }
-        await expect(
-          client.tx('toolResults.compactSession', {
-            sessionId: 'orca',
-            now: 2,
-          }),
-        ).resolves.toEqual({ compactedRows: 1, originalBytes: 70 * 1024 + 2 });
-        await expect(
-          client.tx('toolResults.compactSession', {
-            sessionId: 'turn',
-            now: 2,
-          }),
-        ).resolves.toEqual({ compactedRows: 1, originalBytes: 70 * 1024 + 2 });
+        for (const sessionId of [...sourceSessionIds, 'orca', 'turn']) {
+          await expect(
+            client.tx('toolResults.compactSession', {
+              sessionId,
+              now: 2,
+            }),
+          ).resolves.toEqual({ compactedRows: 1, originalBytes: 70 * 1024 + 2 });
+        }
         const rows = await client.query<{ id: string; content: string }>(
           'SELECT id, content FROM messages ORDER BY id',
         );
@@ -440,7 +443,9 @@ describe('db worker tx handlers', () => {
               return false;
             }
           }).map((row) => row.id),
-        ).toEqual(['message-orca', 'message-turn']);
+        ).toEqual(
+          ['message-orca', 'message-turn', ...sourceSessionIds.map((id) => `message-${id}`)].sort(),
+        );
       }, { useInlineWorker });
     },
   );
