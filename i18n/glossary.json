@@ -14,6 +14,30 @@
   ],
   "terms": [
     {
+      "id": "harness",
+      "status": "proposed",
+      "en": "Harness",
+      "translations": {
+        "zh-CN": "Harness",
+        "zh-TW": "Harness",
+        "ja": "Harness",
+        "ko": "Harness"
+      },
+      "note": "用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。"
+    },
+    {
+      "id": "model-id",
+      "status": "proposed",
+      "en": "Model ID",
+      "translations": {
+        "zh-CN": "Model ID",
+        "zh-TW": "Model ID",
+        "ja": "Model ID",
+        "ko": "Model ID"
+      },
+      "note": "用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。"
+    },
+    {
       "id": "plugin-main-view",
       "status": "proposed",
       "en": "Main view",

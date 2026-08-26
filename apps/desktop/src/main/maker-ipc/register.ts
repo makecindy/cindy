@@ -6001,7 +6001,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // submit_github_issue 工具的 main 侧提交服务(确认桥 → serverApiFetch)。
-  initGithubIssueSubmit(issueConfirmBridge);
+  initGithubIssueSubmit(issueConfirmBridge, (sessionId) =>
+    turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
+  );
   initRenameSessionsConfirm(renameSessionsConfirmBridge);
 
   // ── newMakerDraft 缓存同步 ──────────────────────────────────────────────
