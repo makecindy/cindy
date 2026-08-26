@@ -171,15 +171,9 @@ async function maybeBroadcastSessionListPreview(
   if (latest?.clientId !== row.clientId) return;
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   const preview = extractMessagePreview(row.content, row.role);
-  try {
-    await persistSessionListPreview(sessionId, preview, row.role, row.createdAt, row.clientId);
-  } catch (err) {
-    log.warn('session list preview persist failed (swallowed)', {
-      sessionId,
-      clientId: row.clientId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  // 不在这里落库。insert/update 事务已经把 list_preview 置空；事后 persist 无法
+  // 校验同一 clientId 的内容版本，交错改写会把旧正文写回非 NULL 缓存。
+  // 侧栏即时刷新靠广播；下次 list/回填从 messages 现算。
   broadcastOwnedPayload(
     'local-db:sessions:patched',
     { sessionId, patch: { preview } },
