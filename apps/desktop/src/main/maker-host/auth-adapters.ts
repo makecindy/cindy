@@ -1815,6 +1815,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             log.warn('late Codex logout intent upgrade failed to revoke provider binding', {
               error: err instanceof Error ? err.message : String(err),
             });
+            throw err;
           }
         }
       }
@@ -1947,6 +1948,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       log.warn('unbind Codex OAuth provider after disconnect failed', {
         error: err instanceof Error ? err.message : String(err),
       });
+      if (activeIntent.explicitRequested) throw err;
     }
   }
 

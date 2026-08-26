@@ -76,6 +76,16 @@ describe('native provider auth legacy binding', () => {
 
     expect(isNativeProviderAuthBound('xai')).toBe(false);
   });
+
+  it('lets the reserved owner finish legacy migration after credentials become available', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    migrateLegacyNativeProviderAuthBindings('owner-a', { xai: true });
+
+    expect(isNativeProviderAuthBound('xai')).toBe(true);
+    expect(getNativeProviderAuthSource('xai')).toBe('explicit-provider-oauth');
+    expect(isNativeProviderAuthSelfAuthorized('xai')).toBe(true);
+  });
 });
 
 describe('local → cloud native provider binding migration', () => {
@@ -99,6 +109,14 @@ describe('local → cloud native provider binding migration', () => {
 
     expect(fs.existsSync(bindingLockDb)).toBe(true);
     expect(fs.existsSync(`${bindingFile}.legacy-claim-lease`)).toBe(false);
+  });
+
+  it('surfaces mutation-lock acquisition failure during explicit unbind', () => {
+    fs.mkdirSync(bindingLockDb, { recursive: true });
+
+    expect(() => unbindNativeProviderAuth('openai', { revoked: true })).toThrow(
+      'failed to acquire native provider binding mutation lock',
+    );
   });
 
   it('reads every binding mutation while holding the shared SQLite writer lock', () => {

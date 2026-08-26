@@ -876,6 +876,24 @@ describe('Codex system credential suppression marker', () => {
     expect(fs.existsSync(localAuth)).toBe(false);
   });
 
+  it('rejects explicit logout when the provider binding mutation lock is unavailable', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-auth-binding-lock-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    fs.mkdirSync(
+      path.join(h.userDataDir, 'native-provider-auth.json.mutation-lock.db'),
+      { recursive: true },
+    );
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.logout()).rejects.toThrow(
+      'failed to acquire native provider binding mutation lock',
+    );
+  });
+
   it('clears a pending recovery state when the user explicitly logs out', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-recovery-logout-'));
     dirs.push(root);

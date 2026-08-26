@@ -165,7 +165,11 @@ function syncParentDirectory(file: string): void {
   }
 }
 
-function withNativeBindingMutationLock<T>(fallback: T, operation: () => T): T {
+function withNativeBindingMutationLock<T>(
+  fallback: T,
+  operation: () => T,
+  opts?: { throwOnLockFailure?: boolean },
+): T {
   const lockDbPath = `${bindingPath()}${BINDING_MUTATION_LOCK_DB_SUFFIX}`;
   fs.mkdirSync(path.dirname(lockDbPath), { recursive: true });
   let lockDb: ReturnType<typeof createBetterSqliteDatabase> | null = null;
@@ -176,8 +180,19 @@ function withNativeBindingMutationLock<T>(fallback: T, operation: () => T): T {
       'CREATE TABLE IF NOT EXISTS binding_mutation_lock (id INTEGER PRIMARY KEY CHECK (id = 1))',
     );
     lockDb.exec('BEGIN IMMEDIATE');
-  } catch {
-    lockDb?.close();
+  } catch (error) {
+    try {
+      lockDb?.close();
+    } catch {
+      // Preserve the acquisition error; close is best effort on a failed open.
+    }
+    if (opts?.throwOnLockFailure) {
+      throw new Error(
+        `failed to acquire native provider binding mutation lock: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     return fallback;
   }
   try {
@@ -192,6 +207,12 @@ function withNativeBindingMutationLock<T>(fallback: T, operation: () => T): T {
     }
     lockDb.close();
   }
+}
+
+function withRequiredNativeBindingMutationLock<T>(operation: () => T): T {
+  return withNativeBindingMutationLock<T>(undefined as T, operation, {
+    throwOnLockFailure: true,
+  });
 }
 
 export type LegacyNativeProviderAuthReservation =
@@ -394,7 +415,7 @@ export function unbindNativeProviderAuth(
   // 不写也是安全的:文件读不出来时 isNativeProviderAuthBound 已经一律 false(用户看到的就是
   // 未连接),claimDetectedNativeProviderAuth 也已在同一条件下拒绝认领 —— 撤销标记要挡的那
   // 件事,此刻本来就发生不了。凭证删除在调用方,不受这里影响。
-  withNativeBindingMutationLock(undefined, () => {
+  withRequiredNativeBindingMutationLock(() => {
     const read = readBindingsOrFail();
     if (!read.ok) return;
     const bindings = read.bindings;
@@ -435,7 +456,7 @@ export function migrateLegacyNativeProviderAuthBindings(
     const read = readBindingsOrFail();
     if (!read.ok) return;
     const bindings = read.bindings;
-    if (bindings.legacyClaimOwner) return;
+    if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== ownerId) return;
 
     const next: BindingFile = { ...bindings, legacyClaimOwner: ownerId };
     for (const provider of NATIVE_PROVIDER_IDS) {
