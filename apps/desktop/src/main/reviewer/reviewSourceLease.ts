@@ -18,6 +18,17 @@ export interface PersistedReviewSourceLeaseRow {
   lease: ReviewSourceLease | null;
 }
 
+async function invalidateListMessageCountIfChanged(
+  dbClient: Pick<DbClient, 'exec'>,
+  sessionId: string,
+  changed: number,
+): Promise<boolean> {
+  if (changed === 1) {
+    await dbClient.exec('UPDATE sessions SET list_message_count = NULL WHERE id = ?', [sessionId]);
+  }
+  return changed === 1;
+}
+
 function reviewSourceLeaseAgentMeta(lease: ReviewSourceLease): string {
   return JSON.stringify({ reviewSourceLease: lease });
 }
@@ -91,7 +102,7 @@ export async function tryAcquireReviewSourceLease(
       input.createdAt,
     ],
   );
-  return result.changes === 1;
+  return invalidateListMessageCountIfChanged(dbClient, input.sourceSessionId, result.changes);
 }
 
 /** Delete only the exact lease acquired by this run, never a newer successor. */
@@ -113,7 +124,7 @@ export async function releaseReviewSourceLease(
       WHERE session_id = ? AND client_id = ? AND content = ?`,
     [input.sourceSessionId, REVIEW_SOURCE_LEASE_CLIENT_ID, reviewSourceLeaseToken(lease)],
   );
-  return result.changes === 1;
+  return invalidateListMessageCountIfChanged(dbClient, input.sourceSessionId, result.changes);
 }
 
 export async function listPersistedReviewSourceLeases(
@@ -146,5 +157,5 @@ export async function discardInvalidReviewSourceLease(
       WHERE id = ? AND session_id = ? AND client_id = ?`,
     [row.id, row.sourceSessionId, REVIEW_SOURCE_LEASE_CLIENT_ID],
   );
-  return result.changes === 1;
+  return invalidateListMessageCountIfChanged(dbClient, row.sourceSessionId, result.changes);
 }

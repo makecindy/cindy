@@ -139,6 +139,74 @@ describe('shared-process session turn lease', () => {
     ]);
   });
 
+  it('invalidates list_message_count when a lease row is inserted or deleted, not on no-op', async () => {
+    const { first, raw } = setup();
+    const owner = { instanceId: 'first', processId: 101 };
+    const seedCount = (count: number) => {
+      raw
+        .prepare(
+          'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+        )
+        .run('keep me', 'user', count, 'source-1');
+    };
+    const readProjection = () =>
+      raw
+        .prepare(
+          'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+        )
+        .get('source-1');
+
+    seedCount(7);
+    await expect(
+      tryAcquireSessionTurnLease(first, {
+        sessionId: 'source-1',
+        turnId: 'turn-1',
+        owner,
+        createdAt: 1,
+      }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(8);
+    await expect(
+      tryAcquireSessionTurnLease(first, {
+        sessionId: 'source-1',
+        turnId: 'turn-1b',
+        owner,
+        createdAt: 2,
+      }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 8,
+    });
+
+    seedCount(9);
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'turn-1', owner }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(10);
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'turn-1', owner }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 10,
+    });
+  });
+
   it('uses exact CAS release so a delayed old end cannot delete a successor', async () => {
     const { first } = setup();
     const owner = { instanceId: 'first', processId: 101 };

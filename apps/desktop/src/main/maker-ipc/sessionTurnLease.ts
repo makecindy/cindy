@@ -73,6 +73,17 @@ export class SilentStopTurnLeaseGate {
 
 type SessionTurnLeaseDb = Pick<DbClient, 'exec' | 'query'>;
 
+async function invalidateListMessageCountIfChanged(
+  dbClient: Pick<DbClient, 'exec'>,
+  sessionId: string,
+  changed: number,
+): Promise<boolean> {
+  if (changed === 1) {
+    await dbClient.exec('UPDATE sessions SET list_message_count = NULL WHERE id = ?', [sessionId]);
+  }
+  return changed === 1;
+}
+
 function sessionTurnLeaseAgentMeta(lease: SessionTurnLease): string {
   return JSON.stringify({ sessionTurnLease: lease });
 }
@@ -143,7 +154,7 @@ export async function tryAcquireSessionTurnLease(
       input.createdAt,
     ],
   );
-  return result.changes === 1;
+  return invalidateListMessageCountIfChanged(dbClient, input.sessionId, result.changes);
 }
 
 /** Atomically replace one exact generation without exposing a lease-free gap. */
@@ -195,7 +206,7 @@ export async function releaseSessionTurnLease(
       WHERE session_id = ? AND client_id = ? AND content = ?`,
     [input.sessionId, sessionTurnLeaseClientId(input.owner), sessionTurnLeaseToken(lease)],
   );
-  return result.changes === 1;
+  return invalidateListMessageCountIfChanged(dbClient, input.sessionId, result.changes);
 }
 
 export async function listPersistedSessionTurnLeases(
@@ -240,7 +251,7 @@ export async function discardInvalidSessionTurnLease(
       WHERE id = ? AND session_id = ? AND client_id = ?`,
     [row.id, row.sessionId, row.clientId],
   );
-  return result.changes === 1;
+  return invalidateListMessageCountIfChanged(dbClient, row.sessionId, result.changes);
 }
 
 export interface SessionTurnLeaseTrackerDeps {

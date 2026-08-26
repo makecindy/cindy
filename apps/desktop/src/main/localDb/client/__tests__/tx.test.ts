@@ -1472,7 +1472,10 @@ describe('db worker tx handlers', () => {
   it('context.rebuild appends markers instead of deleting earlier rebuild boundaries', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
-      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['native-a', 's1']);
+      await client.exec(
+        'UPDATE sessions SET sdk_session_id = ?, list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+        ['native-a', 'keep me', 'user', 9, 's1'],
+      );
       await client.tx('context.rebuild', {
         sessionId: 's1',
         markerId: 'rebuild-1',
@@ -1508,8 +1511,16 @@ describe('db worker tx handlers', () => {
         },
       ]);
       await expect(
-        client.queryOne('SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?', ['s1']),
-      ).resolves.toEqual({ sdk_session_id: null, updated_at: 2000 });
+        client.queryOne(
+          'SELECT sdk_session_id, updated_at, list_preview, list_message_count FROM sessions WHERE id = ?',
+          ['s1'],
+        ),
+      ).resolves.toEqual({
+        sdk_session_id: null,
+        updated_at: 2000,
+        list_preview: 'keep me',
+        list_message_count: null,
+      });
     });
   });
 

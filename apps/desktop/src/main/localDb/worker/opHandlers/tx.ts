@@ -236,7 +236,7 @@ function contextRebuild(db: Database.Database, args: unknown): void {
   const transaction = db.transaction(() => {
     const sessionResult = db
       .prepare(
-        'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
       )
       .run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {

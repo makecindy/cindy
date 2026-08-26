@@ -563,8 +563,8 @@ const MAX_LIMIT = 1000;
  *
  * list_message_count 已回填时走缓存列，跳过 messages 扫描。未回填时封顶
  * SESSION_LIST_MESSAGE_COUNT_CAP：空草稿仍是 0，大会话显示 1000+。
- * 非 NULL 即信任：绕过 createMessage 的批量写（import / treeRehydrate）必须在
- * 同一事务把 list_preview / list_preview_role / list_message_count 置 NULL。
+ * 非 NULL 即信任：绕过 createMessage 的 messages 增删必须同步投影。
+ * import / treeRehydrate 置空三列；turn/review 租约与 context.rebuild 只置空计数。
  */
 const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
   CASE
