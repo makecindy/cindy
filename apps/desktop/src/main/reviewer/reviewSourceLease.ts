@@ -18,17 +18,6 @@ export interface PersistedReviewSourceLeaseRow {
   lease: ReviewSourceLease | null;
 }
 
-async function invalidateListMessageCountIfChanged(
-  dbClient: Pick<DbClient, 'exec'>,
-  sessionId: string,
-  changed: number,
-): Promise<boolean> {
-  if (changed === 1) {
-    await dbClient.exec('UPDATE sessions SET list_message_count = NULL WHERE id = ?', [sessionId]);
-  }
-  return changed === 1;
-}
-
 function reviewSourceLeaseAgentMeta(lease: ReviewSourceLease): string {
   return JSON.stringify({ reviewSourceLease: lease });
 }
@@ -74,7 +63,7 @@ export function readReviewSourceLeaseFromAgentMeta(value: unknown): ReviewSource
  * A rewound assistant row stays out of history, FTS, prompts, and Review context.
  */
 export async function tryAcquireReviewSourceLease(
-  dbClient: Pick<DbClient, 'exec'>,
+  dbClient: Pick<DbClient, 'tx'>,
   input: {
     sourceSessionId: string;
     runId: string;
@@ -87,27 +76,21 @@ export async function tryAcquireReviewSourceLease(
     runId: input.runId,
     owner: input.owner,
   };
-  const result = await dbClient.exec(
-    `INSERT INTO messages (
-       id, client_id, session_id, role, content, agent_meta, created_at, rewind_at
-     ) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
-     ON CONFLICT(session_id, client_id) DO NOTHING`,
-    [
-      createId(),
-      REVIEW_SOURCE_LEASE_CLIENT_ID,
-      input.sourceSessionId,
-      reviewSourceLeaseToken(lease),
-      reviewSourceLeaseAgentMeta(lease),
-      input.createdAt,
-      input.createdAt,
-    ],
-  );
-  return invalidateListMessageCountIfChanged(dbClient, input.sourceSessionId, result.changes);
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'insert',
+    sessionId: input.sourceSessionId,
+    clientId: REVIEW_SOURCE_LEASE_CLIENT_ID,
+    id: createId(),
+    content: reviewSourceLeaseToken(lease),
+    agentMeta: reviewSourceLeaseAgentMeta(lease),
+    createdAt: input.createdAt,
+  });
+  return result.changes === 1;
 }
 
 /** Delete only the exact lease acquired by this run, never a newer successor. */
 export async function releaseReviewSourceLease(
-  dbClient: Pick<DbClient, 'exec'>,
+  dbClient: Pick<DbClient, 'tx'>,
   input: {
     sourceSessionId: string;
     runId: string;
@@ -119,12 +102,13 @@ export async function releaseReviewSourceLease(
     runId: input.runId,
     owner: input.owner,
   };
-  const result = await dbClient.exec(
-    `DELETE FROM messages
-      WHERE session_id = ? AND client_id = ? AND content = ?`,
-    [input.sourceSessionId, REVIEW_SOURCE_LEASE_CLIENT_ID, reviewSourceLeaseToken(lease)],
-  );
-  return invalidateListMessageCountIfChanged(dbClient, input.sourceSessionId, result.changes);
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'deleteByContent',
+    sessionId: input.sourceSessionId,
+    clientId: REVIEW_SOURCE_LEASE_CLIENT_ID,
+    content: reviewSourceLeaseToken(lease),
+  });
+  return result.changes === 1;
 }
 
 export async function listPersistedReviewSourceLeases(
@@ -149,13 +133,14 @@ export async function listPersistedReviewSourceLeases(
 
 /** Remove a malformed legacy/corrupt row only if its immutable id still matches. */
 export async function discardInvalidReviewSourceLease(
-  dbClient: Pick<DbClient, 'exec'>,
+  dbClient: Pick<DbClient, 'tx'>,
   row: Pick<PersistedReviewSourceLeaseRow, 'id' | 'sourceSessionId'>,
 ): Promise<boolean> {
-  const result = await dbClient.exec(
-    `DELETE FROM messages
-      WHERE id = ? AND session_id = ? AND client_id = ?`,
-    [row.id, row.sourceSessionId, REVIEW_SOURCE_LEASE_CLIENT_ID],
-  );
-  return invalidateListMessageCountIfChanged(dbClient, row.sourceSessionId, result.changes);
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'deleteById',
+    sessionId: row.sourceSessionId,
+    clientId: REVIEW_SOURCE_LEASE_CLIENT_ID,
+    id: row.id,
+  });
+  return result.changes === 1;
 }

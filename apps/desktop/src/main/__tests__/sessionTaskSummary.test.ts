@@ -274,8 +274,9 @@ describe('turn-done list preview refresh', () => {
     const updateEnd = messagesSource.indexOf('function clampLimit', updateStart);
     const updateBlock = messagesSource.slice(updateStart, updateEnd);
     expect(updateBlock).toContain('const ownerScope = captureOwnerBroadcastScope();');
+    expect(updateBlock).toContain("await dbClient.tx('message.updateContent'");
     expect(updateBlock.indexOf('const ownerScope = captureOwnerBroadcastScope();')).toBeLessThan(
-      updateBlock.indexOf('.update(messages)'),
+      updateBlock.indexOf("await dbClient.tx('message.updateContent'"),
     );
     expect(updateBlock).toContain(
       'await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);',
@@ -291,7 +292,7 @@ describe('turn-done list preview refresh', () => {
       'const preview = extractMessagePreview(row.content, row.role);',
     );
     expect(broadcastBlock).toContain(
-      'await persistSessionListPreview(sessionId, preview, row.role, row.createdAt);',
+      'await persistSessionListPreview(sessionId, preview, row.role, row.createdAt, row.clientId);',
     );
     expect(broadcastBlock).toContain('patch: { preview }');
     expect(broadcastBlock).not.toContain('if (!preview) return;');

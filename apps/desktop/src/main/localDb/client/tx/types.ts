@@ -22,6 +22,8 @@ export type DbTxName =
   | 'session.agentSwitchFallback'
   | 'context.rebuild'
   | 'message.insert'
+  | 'message.updateContent'
+  | 'message.leaseMutate'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -329,6 +331,22 @@ export interface MessageInsertArgs {
   createdAt: number;
   guarded: boolean;
   expectedClearBoundaryMs?: number | null;
+}
+
+export interface MessageUpdateContentArgs {
+  sessionId: string;
+  clientId: string;
+  content: string;
+}
+
+export interface MessageLeaseMutateArgs {
+  op: 'insert' | 'deleteByContent' | 'deleteById';
+  sessionId: string;
+  clientId: string;
+  id?: string;
+  content?: string;
+  agentMeta?: string | null;
+  createdAt?: number;
 }
 
 /**
@@ -790,6 +808,8 @@ export type DbTxArgsByName = {
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
   'context.rebuild': ContextRebuildArgs;
   'message.insert': MessageInsertArgs;
+  'message.updateContent': MessageUpdateContentArgs;
+  'message.leaseMutate': MessageLeaseMutateArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -837,6 +857,8 @@ export type DbTxResultByName = {
   'session.agentSwitchFallback': undefined;
   'context.rebuild': undefined;
   'message.insert': { changes: number };
+  'message.updateContent': { changes: number };
+  'message.leaseMutate': { changes: number };
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

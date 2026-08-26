@@ -71,18 +71,7 @@ export class SilentStopTurnLeaseGate {
   }
 }
 
-type SessionTurnLeaseDb = Pick<DbClient, 'exec' | 'query'>;
-
-async function invalidateListMessageCountIfChanged(
-  dbClient: Pick<DbClient, 'exec'>,
-  sessionId: string,
-  changed: number,
-): Promise<boolean> {
-  if (changed === 1) {
-    await dbClient.exec('UPDATE sessions SET list_message_count = NULL WHERE id = ?', [sessionId]);
-  }
-  return changed === 1;
-}
+type SessionTurnLeaseDb = Pick<DbClient, 'exec' | 'query' | 'tx'>;
 
 function sessionTurnLeaseAgentMeta(lease: SessionTurnLease): string {
   return JSON.stringify({ sessionTurnLease: lease });
@@ -139,22 +128,16 @@ export async function tryAcquireSessionTurnLease(
   },
 ): Promise<boolean> {
   const lease: SessionTurnLease = { version: 1, turnId: input.turnId, owner: input.owner };
-  const result = await dbClient.exec(
-    `INSERT INTO messages (
-       id, client_id, session_id, role, content, agent_meta, created_at, rewind_at
-     ) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
-     ON CONFLICT(session_id, client_id) DO NOTHING`,
-    [
-      createId(),
-      sessionTurnLeaseClientId(input.owner),
-      input.sessionId,
-      sessionTurnLeaseToken(lease),
-      sessionTurnLeaseAgentMeta(lease),
-      input.createdAt,
-      input.createdAt,
-    ],
-  );
-  return invalidateListMessageCountIfChanged(dbClient, input.sessionId, result.changes);
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'insert',
+    sessionId: input.sessionId,
+    clientId: sessionTurnLeaseClientId(input.owner),
+    id: createId(),
+    content: sessionTurnLeaseToken(lease),
+    agentMeta: sessionTurnLeaseAgentMeta(lease),
+    createdAt: input.createdAt,
+  });
+  return result.changes === 1;
 }
 
 /** Atomically replace one exact generation without exposing a lease-free gap. */
@@ -197,16 +180,17 @@ export async function replaceSessionTurnLease(
 
 /** Delete only the exact turn that acquired the row; a delayed end cannot delete its successor. */
 export async function releaseSessionTurnLease(
-  dbClient: Pick<DbClient, 'exec'>,
+  dbClient: Pick<DbClient, 'tx'>,
   input: { sessionId: string; turnId: string; owner: ReviewRunOwner },
 ): Promise<boolean> {
   const lease: SessionTurnLease = { version: 1, turnId: input.turnId, owner: input.owner };
-  const result = await dbClient.exec(
-    `DELETE FROM messages
-      WHERE session_id = ? AND client_id = ? AND content = ?`,
-    [input.sessionId, sessionTurnLeaseClientId(input.owner), sessionTurnLeaseToken(lease)],
-  );
-  return invalidateListMessageCountIfChanged(dbClient, input.sessionId, result.changes);
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'deleteByContent',
+    sessionId: input.sessionId,
+    clientId: sessionTurnLeaseClientId(input.owner),
+    content: sessionTurnLeaseToken(lease),
+  });
+  return result.changes === 1;
 }
 
 export async function listPersistedSessionTurnLeases(
@@ -243,15 +227,16 @@ export function readPersistedSessionTurnLeases(
 
 /** Remove a malformed row only while its immutable id still identifies the same lease row. */
 export async function discardInvalidSessionTurnLease(
-  dbClient: Pick<DbClient, 'exec'>,
+  dbClient: Pick<DbClient, 'tx'>,
   row: Pick<PersistedSessionTurnLeaseRow, 'id' | 'clientId' | 'sessionId'>,
 ): Promise<boolean> {
-  const result = await dbClient.exec(
-    `DELETE FROM messages
-      WHERE id = ? AND session_id = ? AND client_id = ?`,
-    [row.id, row.sessionId, row.clientId],
-  );
-  return invalidateListMessageCountIfChanged(dbClient, row.sessionId, result.changes);
+  const result = await dbClient.tx('message.leaseMutate', {
+    op: 'deleteById',
+    sessionId: row.sessionId,
+    clientId: row.clientId,
+    id: row.id,
+  });
+  return result.changes === 1;
 }
 
 export interface SessionTurnLeaseTrackerDeps {

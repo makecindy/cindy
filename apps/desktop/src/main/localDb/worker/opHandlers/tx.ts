@@ -82,6 +82,10 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return contextRebuild(db, txArgs);
     case 'message.insert':
       return messageInsert(db, txArgs);
+    case 'message.updateContent':
+      return messageUpdateContent(db, txArgs);
+    case 'message.leaseMutate':
+      return messageLeaseMutate(db, txArgs);
     case 'message.delete':
       return messageDelete(db, txArgs);
     case 'im.deleteBindings':
@@ -318,6 +322,77 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
       } else {
         db.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
       }
+    }
+    return { changes };
+  });
+  return transaction();
+}
+
+function messageUpdateContent(db: Database.Database, args: unknown): { changes: number } {
+  const payload = asRecord(args, 'message.updateContent args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const content = expectString(payload.content, 'content');
+  const transaction = db.transaction(() => {
+    const changes = db
+      .prepare('UPDATE messages SET content = ? WHERE session_id = ? AND client_id = ?')
+      .run(content, sessionId, clientId).changes;
+    if (changes > 0) {
+      const row = db
+        .prepare(
+          'SELECT role, rewind_at FROM messages WHERE session_id = ? AND client_id = ? LIMIT 1',
+        )
+        .get(sessionId, clientId) as { role: string; rewind_at: number | null } | undefined;
+      if (row && row.rewind_at == null && (row.role === 'user' || row.role === 'assistant')) {
+        db.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+        ).run(sessionId);
+      }
+    }
+    return { changes };
+  });
+  return transaction();
+}
+
+function messageLeaseMutate(db: Database.Database, args: unknown): { changes: number } {
+  const payload = asRecord(args, 'message.leaseMutate args');
+  const op = expectString(payload.op, 'op');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const transaction = db.transaction(() => {
+    let changes = 0;
+    if (op === 'insert') {
+      changes = db
+        .prepare(
+          `INSERT INTO messages (
+             id, client_id, session_id, role, content, agent_meta, created_at, rewind_at
+           ) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
+           ON CONFLICT(session_id, client_id) DO NOTHING`,
+        )
+        .run(
+          expectString(payload.id, 'id'),
+          clientId,
+          sessionId,
+          expectString(payload.content, 'content'),
+          nullableString(payload.agentMeta),
+          expectNumber(payload.createdAt, 'createdAt'),
+          expectNumber(payload.createdAt, 'createdAt'),
+        ).changes;
+    } else if (op === 'deleteByContent') {
+      changes = db
+        .prepare('DELETE FROM messages WHERE session_id = ? AND client_id = ? AND content = ?')
+        .run(sessionId, clientId, expectString(payload.content, 'content')).changes;
+    } else if (op === 'deleteById') {
+      changes = db
+        .prepare('DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ?')
+        .run(expectString(payload.id, 'id'), sessionId, clientId).changes;
+    } else {
+      throw Object.assign(new Error(`unknown message.leaseMutate op: ${op}`), {
+        code: 'INVALID_ARGS',
+      });
+    }
+    if (changes > 0) {
+      db.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
     }
     return { changes };
   });

@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
+import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
 import {
   readPersistedSessionTurnLeases,
   releaseSessionTurnLease,
@@ -16,10 +17,11 @@ import {
   tryAcquireSessionTurnLease,
 } from '../sessionTurnLease.js';
 
-function asLeaseClient(db: Database.Database): Pick<DbClient, 'exec' | 'query'> {
+function asLeaseClient(db: Database.Database): Pick<DbClient, 'exec' | 'query' | 'tx'> {
   return {
     exec: async (sql, params = []) => db.prepare(sql).run(...params),
     query: async <T>(sql: string, params: unknown[] = []) => db.prepare(sql).all(...params) as T[],
+    tx: async (name: string, args: unknown) => runDbTx(db, { name, args }) as never,
   };
 }
 

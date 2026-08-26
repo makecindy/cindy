@@ -317,6 +317,10 @@ function dispatchTx(readyDb, payload) {
       return contextRebuild(readyDb, request.args);
     case 'message.insert':
       return messageInsert(readyDb, request.args);
+    case 'message.updateContent':
+      return messageUpdateContent(readyDb, request.args);
+    case 'message.leaseMutate':
+      return messageLeaseMutate(readyDb, request.args);
     case 'message.delete':
       return messageDelete(readyDb, request.args);
     case 'im.deleteBindings':
@@ -475,6 +479,67 @@ function messageInsert(readyDb, args) {
       } else {
         readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
       }
+    }
+    return { changes };
+  })();
+}
+
+function messageUpdateContent(readyDb, args) {
+  const payload = asRecord(args, 'message.updateContent args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const content = expectString(payload.content, 'content');
+  return readyDb.transaction(() => {
+    const changes = readyDb.prepare(
+      'UPDATE messages SET content = ? WHERE session_id = ? AND client_id = ?',
+    ).run(content, sessionId, clientId).changes;
+    if (changes > 0) {
+      const row = readyDb.prepare(
+        'SELECT role, rewind_at FROM messages WHERE session_id = ? AND client_id = ? LIMIT 1',
+      ).get(sessionId, clientId);
+      if (row && row.rewind_at == null && (row.role === 'user' || row.role === 'assistant')) {
+        readyDb.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+        ).run(sessionId);
+      }
+    }
+    return { changes };
+  })();
+}
+
+function messageLeaseMutate(readyDb, args) {
+  const payload = asRecord(args, 'message.leaseMutate args');
+  const op = expectString(payload.op, 'op');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  return readyDb.transaction(() => {
+    let changes = 0;
+    if (op === 'insert') {
+      const createdAt = expectNumber(payload.createdAt, 'createdAt');
+      changes = readyDb.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?) ON CONFLICT(session_id, client_id) DO NOTHING",
+      ).run(
+        expectString(payload.id, 'id'),
+        clientId,
+        sessionId,
+        expectString(payload.content, 'content'),
+        nullableString(payload.agentMeta),
+        createdAt,
+        createdAt,
+      ).changes;
+    } else if (op === 'deleteByContent') {
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE session_id = ? AND client_id = ? AND content = ?',
+      ).run(sessionId, clientId, expectString(payload.content, 'content')).changes;
+    } else if (op === 'deleteById') {
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ?',
+      ).run(expectString(payload.id, 'id'), sessionId, clientId).changes;
+    } else {
+      throw Object.assign(new Error('unknown message.leaseMutate op: ' + op), { code: 'INVALID_ARGS' });
+    }
+    if (changes > 0) {
+      readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
     }
     return { changes };
   })();

@@ -172,7 +172,7 @@ async function maybeBroadcastSessionListPreview(
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   const preview = extractMessagePreview(row.content, row.role);
   try {
-    await persistSessionListPreview(sessionId, preview, row.role, row.createdAt);
+    await persistSessionListPreview(sessionId, preview, row.role, row.createdAt, row.clientId);
   } catch (err) {
     log.warn('session list preview persist failed (swallowed)', {
       sessionId,
@@ -963,6 +963,7 @@ export async function commitMessageDeletion(
       preview,
       latest?.role ?? null,
       latest?.createdAt,
+      latest?.clientId,
     );
   } catch (error) {
     // 删除已经原子提交；message.delete 事务已把 list_preview / role / count 置 NULL，
@@ -1296,12 +1297,14 @@ export async function updateMessageContent(
   content: unknown,
 ): Promise<Message | null> {
   const ownerScope = captureOwnerBroadcastScope();
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
   const serialized = safeStringify(content);
-  await db
-    .update(messages)
-    .set({ content: serialized })
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
+  await dbClient.tx('message.updateContent', {
+    sessionId,
+    clientId,
+    content: serialized,
+  });
   // 窄回读:刻意不选 content——tool_result 全文可达 MB 级,整行回读会把大字段
   // 经 DB worker 的 postMessage 结构化克隆再送回主进程一次。content 就是本次
   // 写入值,用 serialized 回填;行不存在(clientId 未落库)仍以回读判 null。

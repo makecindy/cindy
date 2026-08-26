@@ -7,6 +7,7 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
 import { sessions } from './schema.js';
 import {
+  LATEST_VISIBLE_PREVIEW_FILTER_SQL,
   SESSION_LIST_MESSAGE_COUNT_CAP,
   SESSION_LIST_PROJECTION_BACKFILL_SQL,
 } from './sessionListProjection.sql.js';
@@ -49,6 +50,7 @@ export async function persistSessionListPreview(
   preview: string | null,
   role: string | null,
   visibleCreatedAt?: number | null,
+  visibleClientId?: string | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
   if (preview == null) {
@@ -62,17 +64,39 @@ export async function persistSessionListPreview(
     typeof visibleCreatedAt === 'number' && Number.isFinite(visibleCreatedAt)
       ? Math.floor(visibleCreatedAt)
       : null;
+  const clientId =
+    typeof visibleClientId === 'string' && visibleClientId.length > 0 ? visibleClientId : null;
+  const conds = [
+    eq(sessions.id, sessionId),
+    createdAt == null
+      ? isNull(sessions.clearedAt)
+      : or(isNull(sessions.clearedAt), sql`${sessions.clearedAt} < ${createdAt}`),
+  ];
+  if (createdAt != null && clientId != null) {
+    conds.push(
+      sql`NOT EXISTS (
+        SELECT 1 FROM messages m
+        WHERE m.session_id = ${sessions.id}
+          AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
+          AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
+          AND (
+            m.created_at > ${createdAt}
+            OR (
+              m.created_at = ${createdAt}
+              AND m.rowid > (
+                SELECT m2.rowid FROM messages m2
+                WHERE m2.session_id = ${sessions.id} AND m2.client_id = ${clientId}
+                LIMIT 1
+              )
+            )
+          )
+      )`,
+    );
+  }
   await db
     .update(sessions)
     .set({ listPreview: preview, listPreviewRole: role })
-    .where(
-      and(
-        eq(sessions.id, sessionId),
-        createdAt == null
-          ? isNull(sessions.clearedAt)
-          : or(isNull(sessions.clearedAt), sql`${sessions.clearedAt} < ${createdAt}`),
-      ),
-    );
+    .where(and(...conds));
 }
 
 export async function invalidateSessionListMessageCount(sessionId: string): Promise<void> {
