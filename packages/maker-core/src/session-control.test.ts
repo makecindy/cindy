@@ -740,10 +740,8 @@ describe('Session current-generation terminal observation', () => {
 
     stub.handle.send = vi.fn(async () => undefined);
     await expect(session.send('third')).resolves.toEqual({ accepted: true });
-    const thirdDone = waitForSessionEvent(session, 'done');
-    stub.push({ type: 'done', data: {} });
-    await thirdDone;
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
   });
 
   it('does not adopt a late paired done while the next handle.send is still pending', async () => {
@@ -800,7 +798,7 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 
-  it('binds an accepted result-only done to the new generation after a prior terminal error', async () => {
+  it('does not adopt a late paired done after the next send is accepted without progress', async () => {
     const stub = createHandle();
     const session = createSession(stub, 'codex');
     const firstError = waitForSessionEvent(session, 'error');
@@ -814,6 +812,51 @@ describe('Session current-generation terminal observation', () => {
       },
     });
     await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    stub.push({ type: 'status', data: { isRunning: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
+  it('binds an accepted result-only done after the prior error tail is already attributed', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
     stub.push({ type: 'status', data: { isRunning: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     stub.handle.isTurnRunning = () => false;

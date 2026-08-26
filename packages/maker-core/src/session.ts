@@ -436,8 +436,6 @@ export class Session {
   /** Survives N+1 reservation clearing the current snapshot; leftover done must not adopt. */
   private lastObservedTerminalGeneration: number | null = null;
   private lastObservedTerminalKind: 'done' | 'error' | null = null;
-  /** Set when handle.send() accepts this generation; result-only done may bind to it. */
-  private acceptedTurnGeneration: number | null = null;
   /**
    * N+1 reservation 窗口内观察到的前一轮前台终态。lost-callback 时 turn N 的
    * done/error 可能在直接 N+1 `handle.send()` 待处理期间才 fan-out；当时
@@ -873,7 +871,6 @@ export class Session {
       // and report the turn as undispatched.
       turnDispatched = true;
       reservation.accepted = true;
-      this.acceptedTurnGeneration = reservedTurnGeneration;
       // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
       // error 会清掉它（见 armTurnStallWatchdog）。
       this.armTurnStallWatchdog();
@@ -2563,8 +2560,9 @@ export class Session {
           // Do not adopt while N+1 is still reserved / before provider dispatch:
           // a late N terminal would otherwise be cached as N+1 evidence.
           // After handle.send() accepts, keep holding leftover paired done until
-          // an event proves N+1 progress (agent_start / tokens). In-flight
-          // start-failure errors still belong to this send.
+          // N+1 progress (running / tokens) or N's error tail is already
+          // attributed. Acceptance alone is not enough. In-flight start-failure
+          // errors still belong to this send.
           observedGeneration = this.turnGeneration;
         }
         if (this.terminationStarted) continue;
@@ -2709,9 +2707,9 @@ export class Session {
       return false;
     }
     if (this.isSilentStopDoneEvent(event)) return false;
-    // An accepted N+1 send's result-only done belongs to the new turn.
-    // Leftover paired done is still held while handle.send() is pending.
-    if (this.acceptedTurnGeneration === this.turnGeneration) return false;
+    // Acceptance is not progress. N's leftover paired done looks identical to
+    // N+1's result-only success until N+1 emits running/tokens, or N's error
+    // tail has already been attributed (lastObserved is no longer that error).
     return event.type === 'done';
   }
 
