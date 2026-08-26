@@ -108,6 +108,8 @@ describe('Review artifact confirmation window', () => {
     expect(document).not.toContain('<img');
     expect(document).not.toContain('<svg');
     expect(document).toContain('&lt;script&gt;bad&lt;/script&gt;');
+    expect(document).toContain('class="button primary" href="#allow" autofocus');
+    expect(document).not.toContain('href="#cancel" autofocus');
   });
 
   it('uses a hardened modal with no preload or renderer authorization bridge', async () => {

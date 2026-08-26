@@ -109,8 +109,8 @@ export function buildReviewArtifactConfirmDocument(
     <p class="detail">${escapeHtml(model.detail)}</p>
     <ul>${items}</ul>
     <footer>
-      <a class="button" href="#cancel" autofocus>${escapeHtml(model.cancelText)}</a>
-      <a class="button primary" href="#allow">${escapeHtml(model.allowText)}</a>
+      <a class="button" href="#cancel">${escapeHtml(model.cancelText)}</a>
+      <a class="button primary" href="#allow" autofocus>${escapeHtml(model.allowText)}</a>
     </footer>
   </main>
 </body>
