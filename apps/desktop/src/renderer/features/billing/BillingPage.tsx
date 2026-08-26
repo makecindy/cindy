@@ -480,7 +480,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     const refreshAfterPortal = () => {
       if (!subscriptionPortalRefreshPendingRef.current) return;
       subscriptionPortalRefreshPendingRef.current = false;
-      void loadBillingState();
+      // Stripe Portal can upgrade, downgrade, cancel, or resume a subscription. Billing
+      // state and the XD catalog are separate snapshots, so returning to Cindy must refresh
+      // both explicitly; the app-wide focus refresh is throttled and cannot provide this
+      // entitlement boundary.
+      void Promise.allSettled([
+        loadBillingState(),
+        refreshXdModelsAfterEntitlementChange(),
+      ]);
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshAfterPortal();
@@ -491,7 +498,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       window.removeEventListener('focus', refreshAfterPortal);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [loadBillingState]);
+  }, [loadBillingState, refreshXdModelsAfterEntitlementChange]);
 
   const closeCheckout = useCallback(() => {
     const abandonedIncomplete = checkout.state.subscription?.status === 'INCOMPLETE';

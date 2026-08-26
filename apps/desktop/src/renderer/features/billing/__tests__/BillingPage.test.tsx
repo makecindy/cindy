@@ -1906,11 +1906,14 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
 
     await act(async () => resolvePortal({ success: true }));
     await act(async () => window.dispatchEvent(new Event('focus')));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes billing after a timed-out Stripe portal launch', async () => {
@@ -1933,7 +1936,9 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('does not show Stripe management in the menu for an Alipay subscription', async () => {
