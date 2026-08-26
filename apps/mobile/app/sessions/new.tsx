@@ -103,6 +103,7 @@ import {
 import {
   buildAgentCapabilitiesCacheKey,
   commitAgentCapabilities,
+  evictAgentCapabilitiesForDevice,
   getAgentCapabilitiesGeneration,
   getCachedAgentCapabilities,
   isAgentCapabilitiesGenerationCurrent,
@@ -1753,7 +1754,7 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
       unsubscribe();
     };
-  }, [selectedDeviceId, draft.agentKind, maker, openLink]);
+  }, [availableAgentRefreshNonce, selectedDeviceId, draft.agentKind, maker, openLink]);
 
   // Fast 记忆延迟恢复(codex review P1):切/恢复 agent 的瞬间,目标 agent 的能力表
   // 尚未到达(或残留着切换前 agent 的),恢复点只能保守置 false;真正的恢复在这里——
@@ -1884,7 +1885,9 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     if (!selectedDeviceId) return;
     return onAgentsChanged((deviceId) => {
-      if (deviceId === selectedDeviceId) setAvailableAgentRefreshNonce((value) => value + 1);
+      if (deviceId !== selectedDeviceId) return;
+      evictAgentCapabilitiesForDevice(deviceId);
+      setAvailableAgentRefreshNonce((value) => value + 1);
     });
   }, [onAgentsChanged, selectedDeviceId]);
 
