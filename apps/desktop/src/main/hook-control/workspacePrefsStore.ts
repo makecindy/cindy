@@ -188,7 +188,9 @@ export function setWorkspacePref(
     ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
   };
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
-  const entries = isBlankRow(nextRow) ? rest : [...rest, nextRow];
+  // 全空行是删除墓碑：派发视为跟随默认，重连时向 server 发 all-null，
+  // 避免 /model 卡全量快照把已清除的目录偏好救活。
+  const entries = [...rest, nextRow];
   if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
     throw new Error('too many workspace prefs entries');
   }
@@ -229,20 +231,92 @@ export function replaceChannelWorkspacePrefs(
   return incoming.map(toHookPrefs);
 }
 
+function prefKey(teamId: string | null | undefined, workspace: string): string {
+  return `${teamId ?? ''}::${workspace}`;
+}
+
+function asStoreRow(channel: HookPrefsChannel, pref: HookWorkspacePrefs): WorkspacePrefsEntry | null {
+  if (!HOOK_WORKSPACE_ALIAS_RE.test(pref.workspace)) return null;
+  const teamId = pref.teamId === undefined || pref.teamId === null ? null : pref.teamId;
+  if (teamId !== null && (teamId.length === 0 || teamId.length > 64)) return null;
+  return {
+    channel,
+    teamId,
+    workspace: pref.workspace,
+    model: isNullablePrefField(pref.model) ? pref.model : null,
+    effort: isNullablePrefField(pref.effort) ? pref.effort : null,
+    agentKind: isNullablePrefField(pref.agentKind) ? pref.agentKind : null,
+    permissionMode: isNullablePrefField(pref.permissionMode) ? pref.permissionMode : null,
+  };
+}
+
 /**
- * 升级后第一次连上：本地该渠道还是空的，才把 server 快照搬进来。
- * 本地已有写入则只打迁移标记，不覆盖。
+ * 升级后第一次连上：按目录合并 server 快照。
+ * 本地已有的键（含清空墓碑）一律保留；只补本地从未写过的目录。
  */
 export function importWorkspacePrefsIfNeeded(
   channel: HookPrefsChannel,
   serverPrefs: HookWorkspacePrefs[],
 ): void {
   if (isWorkspacePrefsMigrated(channel)) return;
-  const existing = listWorkspacePrefs(channel);
-  if (existing.length === 0 && serverPrefs.length > 0) {
-    replaceChannelWorkspacePrefs(channel, serverPrefs);
+  const fp = filePath();
+  const store = readStore(fp);
+  const localKeys = new Set(
+    store.entries.filter((e) => e.channel === channel).map((e) => prefKey(e.teamId, e.workspace)),
+  );
+  const incoming: WorkspacePrefsEntry[] = [];
+  for (const pref of serverPrefs) {
+    const row = asStoreRow(channel, pref);
+    if (row === null || isBlankRow(row)) continue;
+    if (localKeys.has(prefKey(row.teamId, row.workspace))) continue;
+    incoming.push(row);
   }
-  markWorkspacePrefsMigrated(channel);
+  const entries = [...store.entries, ...incoming];
+  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+    throw new Error('too many workspace prefs entries');
+  }
+  writeStore(fp, { ...store, migrated: { ...store.migrated, [channel]: true }, entries });
+}
+
+/**
+ * /model 卡主动推送的全量快照：本机墓碑优先（未同步的清空不能被救活），
+ * 其余以快照为准；快照里没有的本机实值行保留（可能还没镜像上去）。
+ */
+export function applyIncomingServerWorkspacePrefs(
+  channel: HookPrefsChannel,
+  serverPrefs: HookWorkspacePrefs[],
+): HookWorkspacePrefs[] {
+  const fp = filePath();
+  const store = readStore(fp);
+  const local = store.entries.filter((e) => e.channel === channel);
+  const other = store.entries.filter((e) => e.channel !== channel);
+  const serverByKey = new Map<string, WorkspacePrefsEntry>();
+  for (const pref of serverPrefs) {
+    const row = asStoreRow(channel, pref);
+    if (row === null || isBlankRow(row)) continue;
+    serverByKey.set(prefKey(row.teamId, row.workspace), row);
+  }
+  const nextChannel: WorkspacePrefsEntry[] = [];
+  const seen = new Set<string>();
+  for (const localRow of local) {
+    const key = prefKey(localRow.teamId, localRow.workspace);
+    seen.add(key);
+    if (isBlankRow(localRow)) {
+      nextChannel.push(localRow);
+      continue;
+    }
+    nextChannel.push(serverByKey.get(key) ?? localRow);
+  }
+  for (const [key, serverRow] of serverByKey) {
+    if (seen.has(key)) continue;
+    nextChannel.push(serverRow);
+  }
+  const entries = [...other, ...nextChannel];
+  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+    throw new Error('too many workspace prefs entries');
+  }
+  writeStore(fp, { ...store, entries });
+  return nextChannel.map(toHookPrefs);
 }
 
 /**

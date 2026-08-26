@@ -14,6 +14,7 @@ vi.mock('../../im/ownerScopedStorage.js', () => ({
 }));
 
 import {
+  applyIncomingServerWorkspacePrefs,
   getWorkspacePref,
   importWorkspacePrefsIfNeeded,
   isWorkspacePrefsMigrated,
@@ -46,7 +47,7 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('slack', 'T2', 'repo').model).toBe('sonnet');
   });
 
-  it('四个字段都清空则删除条目', () => {
+  it('四个字段都清空则保留墓碑，不丢键', () => {
     setWorkspacePref('x', null, 'chat', { model: 'grok-4', agentKind: 'pi' });
     setWorkspacePref('x', null, 'chat', {
       model: null,
@@ -54,10 +55,19 @@ describe('workspacePrefsStore', () => {
       effort: null,
       permissionMode: null,
     });
-    expect(listWorkspacePrefs('x')).toEqual([]);
+    expect(listWorkspacePrefs('x')).toEqual([
+      {
+        workspace: 'chat',
+        model: null,
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+        teamId: null,
+      },
+    ]);
   });
 
-  it('未迁移且本地为空时导入 server 快照；已有本地写入不覆盖', () => {
+  it('未迁移时按目录合并：本地已写的键保留，其它目录仍从 server 补进', () => {
     importWorkspacePrefsIfNeeded('slack', [
       {
         workspace: 'chat',
@@ -79,9 +89,46 @@ describe('workspacePrefsStore', () => {
         agentKind: null,
         permissionMode: null,
       },
+      {
+        workspace: 'repo',
+        model: 'server-repo',
+        effort: null,
+        agentKind: 'codex',
+        permissionMode: null,
+      },
     ]);
     expect(getWorkspacePref('telegram', null, 'chat').model).toBe('local-first');
+    expect(getWorkspacePref('telegram', null, 'repo').model).toBe('server-repo');
     expect(isWorkspacePrefsMigrated('telegram')).toBe(true);
+  });
+
+  it('server 全量快照不复活本机墓碑，也不丢掉未镜像的本机实值', () => {
+    setWorkspacePref('slack', null, 'chat', { model: 'local-chat' });
+    setWorkspacePref('slack', null, 'repo', {
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+    });
+    applyIncomingServerWorkspacePrefs('slack', [
+      {
+        workspace: 'repo',
+        model: 'resurrect-me',
+        effort: null,
+        agentKind: 'claude-code',
+        permissionMode: null,
+      },
+      {
+        workspace: 'other',
+        model: 'from-card',
+        effort: null,
+        agentKind: 'codex',
+        permissionMode: null,
+      },
+    ]);
+    expect(getWorkspacePref('slack', null, 'repo').model).toBeNull();
+    expect(getWorkspacePref('slack', null, 'chat').model).toBe('local-chat');
+    expect(getWorkspacePref('slack', null, 'other').model).toBe('from-card');
   });
 
   it('replaceChannel 只替换该渠道，并丢掉空白/非法别名', () => {

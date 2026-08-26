@@ -44,10 +44,11 @@ import {
   setWorkspaceProviderSource,
 } from './workspaceProviderSourceStore.js';
 import {
+  applyIncomingServerWorkspacePrefs,
   importWorkspacePrefsIfNeeded,
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
-  replaceChannelWorkspacePrefs,
+  markWorkspacePrefsMigrated,
   setWorkspacePref,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
@@ -300,8 +301,8 @@ function parseWorkspacePrefsWrite(payload: unknown): {
 
 function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWorkspacePrefs[]): void {
   try {
-    replaceChannelWorkspacePrefs(channel, prefs);
-    importWorkspacePrefsIfNeeded(channel, []);
+    applyIncomingServerWorkspacePrefs(channel, prefs);
+    markWorkspacePrefsMigrated(channel);
   } catch (err) {
     log.warn(
       `local workspace prefs replace (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
