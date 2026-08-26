@@ -6,7 +6,8 @@ describe('mobile remote session bootstrap', () => {
   it('asks the controlled desktop to include active pinned sessions outside the recent window', () => {
     const homeSource = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
     const detailSource = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
-    const listWithPinned = /local-db:sessions:list'[\s\S]{0,220}\{ includePinned: true \}/;
+    const listWithPinned =
+      /local-db:sessions:list'[\s\S]{0,280}\{ includePinned: true, fresh: true \}/;
 
     expect(homeSource).toMatch(listWithPinned);
     expect(detailSource).toMatch(listWithPinned);

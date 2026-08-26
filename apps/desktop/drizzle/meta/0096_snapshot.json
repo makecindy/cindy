@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "fa076010-f1d1-44d0-9fbf-2e382a5a69e2",
+  "id": "0301f553-95d2-4bd4-a120-d131780848c7",
   "prevId": "90063e36-1470-45d3-84d6-4bb6139dd4a5",
   "tables": {
     "account_usage_snapshots": {
@@ -652,61 +652,6 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "ghost_usage_daily": {
-      "name": "ghost_usage_daily",
-      "columns": {
-        "ghost_id": {
-          "name": "ghost_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "local_day": {
-          "name": "local_day",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "call_count": {
-          "name": "call_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "ghost_usage_daily_day_idx": {
-          "name": "ghost_usage_daily_day_idx",
-          "columns": [
-            "local_day"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "ghost_usage_daily_ghost_id_local_day_pk": {
-          "columns": [
-            "ghost_id",
-            "local_day"
-          ],
-          "name": "ghost_usage_daily_ghost_id_local_day_pk"
-        }
-      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -1393,6 +1338,38 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "messages_fts_rows": {
+      "name": "messages_fts_rows",
+      "columns": {
+        "fts_rowid": {
+          "name": "fts_rowid",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "messages_fts_rows_message_id_idx": {
+          "name": "messages_fts_rows_message_id_idx",
+          "columns": [
+            "message_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}

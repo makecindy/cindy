@@ -425,7 +425,8 @@ export default function HomeScreen() {
           invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
             LIST_LIMIT,
             remoteListStatusFilter(statusFilter),
-            { includePinned: true },
+            // hydrate / 重连是权威重拉，绕开被控端写前的同参数 in-flight list。
+            { includePinned: true, fresh: true },
           ]),
           // `sessions` topic replay covers list-level Agent Island activity, but the authoritative
           // "turn currently running" snapshot is maker:list-active. Pull it with the list so Home

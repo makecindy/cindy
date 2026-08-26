@@ -9,6 +9,7 @@
  * (CI / 未装 pi 的环境不红)。
  */
 
+import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import {
   chmodSync,
@@ -400,6 +401,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: (request) => {
+        const child = spawn(process.execPath, [request.runnerFile, request.configFile], {
+          cwd: request.cwd,
+          env: request.env,
+          detached: true,
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+        child.unref();
+        return child as never;
+      },
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }

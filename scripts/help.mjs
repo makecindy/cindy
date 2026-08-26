@@ -12,6 +12,8 @@ export function printHelp(log = console.log) {
   log('    pnpm restart:desktop:remote --region=cn');
   log('    # Cindy，读取 Global 线上 CDN 端点清单');
   log('    pnpm restart:desktop:remote --endpoints-cdn');
+  log('    # 共享正式版登录态/数据（旧行为；默认已是固定的 dev 独立沙箱）');
+  log('    pnpm restart:desktop:remote -- --shared');
   log('    # Human 可直接启动；不会先清旧进程，Agent 不要使用');
   log('    pnpm dev:desktop:remote');
   log('    pnpm dev:desktop:remote --region=cn');

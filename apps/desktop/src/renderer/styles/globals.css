@@ -1149,26 +1149,25 @@ body.resizing-pane [data-ghost-webview] {
 }
 
 /* 流式正文分段淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
-   每个新词与 inline-code 原子以 --motion-fast 从透明「浮现」。普通聊天不做
-   跨词 stagger,新段的 --wf-delay 为 0ms;已见段 remount 时可用负 delay 恢复
-   原动画进度。不是逐字打字机 —— 段整体已就位,只有 opacity 渐变;
+   每个新词与 inline-code 原子以 --motion-fast 从透明「浮现」。词段沿消息级
+   连续时间线错峰进入；已见段 remount 时可用负 delay 恢复原动画进度。
+   不是逐字打字机 —— 段整体已就位,只有 opacity 渐变;
    pure-opacity 一次性动画,compositor-only。`both` 保证负 delay / remount 续播。
    reduced-motion 双保险:JS 侧短路(插件不挂载,span 不进 DOM)+ 下方 reduce
    块的 animation: none(摘掉动画连同 both 填充,span 落回自然 opacity 1,
    不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
    这里 0% 帧之外元素本身没有 opacity 声明)。 */
 .stream-word {
-  animation: stream-word-in var(--motion-fast) ease-out var(--wf-delay, 0ms) both;
+  animation: stream-word-in var(--motion-fast) var(--motion-ease-out) var(--wf-delay, 0ms) both;
 }
-/* 流式列表圆点淡入(同一 motion class 家族,2026-08-08,Codex Desktop
-   fadeListDecoration 同构):动画打在 ::marker 上,圆点/序号从 transparent
+/* 流式列表圆点淡入(同一 motion class 家族,2026-08-08):动画打在 ::marker 上,圆点/序号从 transparent
    浮现,delay 由 rehypeStreamWordFade 写入(与 li 内第一个词共享 timeline
    位置,圆点与文字同帧出现)。::marker 只支持 color/font 等少数属性,故用
    color 关键帧而不是 opacity。data 属性仅流式挂载;终版渲染无此属性。 */
 [data-stream-marker]::marker {
-  animation: stream-marker-in var(--motion-fast) ease-out var(--wf-delay, 0ms) both;
+  animation: stream-marker-in var(--motion-fast) var(--motion-ease-out) var(--wf-delay, 0ms) both;
 }
-/* 只定义 0% 帧(Codex 同款):终点回落元素自然颜色,不用 inherit 终帧。 */
+/* 只定义 0% 帧：终点回落元素自然颜色，不用 inherit 终帧。 */
 @keyframes stream-marker-in {
   from {
     color: transparent;

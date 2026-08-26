@@ -35,6 +35,14 @@ export interface ConfirmOptions {
    * 破坏性确认(删除/重置等)请保持默认。
    */
   autoFocusConfirm?: boolean;
+  /** 逐字输入 expected 才可确认；由 ConfirmDialog 持有本轮输入状态。 */
+  requireTypedConfirmation?: {
+    expected: string;
+    label: ReactNode;
+    placeholder?: string;
+  };
+  /** 允许确认正文与富内容被框选复制。 */
+  contentSelectable?: boolean;
 }
 
 const DONT_SHOW_AGAIN_PREFIX = 'confirm-dialog.skip:';
@@ -282,6 +290,8 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}
+          requireTypedConfirmation={currentItem.options.requireTypedConfirmation}
+          contentSelectable={currentItem.options.contentSelectable}
           dontShowAgainLabel={
             currentItem.options.dontShowAgainKey
               ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'

@@ -17,6 +17,9 @@ import {
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
+import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
+import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
+import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
@@ -59,6 +62,8 @@ import {
 } from './remoteChatHistory.js';
 
 export interface DesktopMcpProvidersDeps {
+  /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
+  getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
   lspPool: LspServerPool;
   /** 按会话控制启用状态的 plugin registry。 */
@@ -301,6 +306,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_lsp'),
       isUserEnabled: () => readLspModeSettings().enabled,
     },
+    // cindy_docs(文档工坊): docx / pptx / xlsx / csv 全在 @cindy/mcps 内用纯 JS 库实现,
+    // 这里只补上包里做不到的三件事 —— 都需要 electron:
+    //   writeDocsOutput: 最终落盘靠 cwd 绑定的单次 utility process;
+    //   renderHtmlToPdf: HTML → PDF 靠 Chromium printToPDF(隐藏窗即用即毁);
+    //   inspectPdf:     回读 PDF 结构靠一次性 utility process 里的 pdfjs。
+    docs: {
+      logger: createLogger('mcp/cindy_docs'),
+      writeDocsOutput,
+      renderHtmlToPdf,
+      inspectPdf,
+    },
     // xdt-helper: 自省 + history + send_to_session (essential 常开)。
     // send_to_session 是 skill(issue-bot 等)的会话路由原语, 放 essential 常开不断。
     // tryGetOrcaCollabService() 是延迟查找：createDesktopMcpProviders 在 app
@@ -448,9 +464,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       listWorkers: wrap((s, params) => s.listWorkers(params)),
       switchFocus: wrap((s, params) => s.switchFocus(params)),
       sendToWorker: wrap((s, params) => s.sendToWorker(params)),
+      interruptWorker: wrap((s, params) => s.interruptWorker(params)),
       listWorkerQueuedMessages: wrap((s, params) => s.listWorkerQueuedMessages(params)),
       updateWorkerQueuedMessage: wrap((s, params) => s.updateWorkerQueuedMessage(params)),
       cancelWorkerQueuedMessage: wrap((s, params) => s.cancelWorkerQueuedMessage(params)),
+      mergeWorkerQueuedMessages: wrap((s, params) => s.mergeWorkerQueuedMessages(params)),
       idleWorker: wrap((s, params) => s.idleWorker(params)),
       endTeam: wrap((s, params) => s.endTeam(params)),
       archiveWorker: wrap((s, params) => s.archiveWorker(params)),
@@ -532,6 +550,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       name: 'cindy',
       instance: createCindyGhostsMcpServer(
         getCindyGhostsMcpDeps(ctx, {
+          getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,

@@ -397,6 +397,24 @@ export const messages = sqliteTable(
 );
 
 /**
+ * messages_fts 的稳定整数行号映射。
+ *
+ * messages 使用 TEXT 主键，其隐藏 rowid 可能在 VACUUM 后变化，不能直接作为 FTS 的
+ * 持久关联键。这里为曾进入全文索引的消息分配独立整数键，让触发器可以通过普通 B-tree
+ * 按 message_id 找到 FTS rowid，再做定点更新或删除。
+ */
+export const messagesFtsRows = sqliteTable(
+  'messages_fts_rows',
+  {
+    ftsRowid: integer('fts_rowid').primaryKey({ autoIncrement: true }),
+    messageId: text('message_id').notNull(),
+  },
+  (t) => ({
+    byMessageId: uniqueIndex('messages_fts_rows_message_id_idx').on(t.messageId),
+  }),
+);
+
+/**
  * Cindy-owned durable Subagent records.
  *
  * This table is intentionally harness-neutral. `logical_agent_id` is the

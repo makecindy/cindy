@@ -188,6 +188,8 @@ export interface ToolResultImageDescription {
 }
 
 export interface CindyGhostsHostDeps {
+  /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
+  getAppVersion?: () => string;
   /**
    * 现读活跃 Maker Session 的运行时状态。不得回退 DB:权限热切换先作用于
    * runtime、后持久化,DB 在合法窗口内会滞后;缺失/异常必须 fail closed。
@@ -1758,7 +1760,37 @@ export function getCindyGhostsMcpDeps(
       return withForgeOwnerLease(async () => {
         const gate = await getForgeSessionFsGate(resolveSessionContext());
         if (!gate.ok) return gate;
-        const result = await scaffoldGhostDir(request, {
+        const declaredMinCindyVersion = request.minCindyVersion?.trim();
+        const stableCindyVersionPattern =
+          /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+        if (
+          declaredMinCindyVersion &&
+          (declaredMinCindyVersion === '0.0.0' ||
+            !stableCindyVersionPattern.test(declaredMinCindyVersion))
+        ) {
+          return {
+            ok: false,
+            errorCode: 'INVALID_INPUT',
+            message: 'minCindyVersion 必须是插件实际依赖的首个 Cindy 正式版本（major.minor.patch）',
+          };
+        }
+        const currentCindyVersion = hostDeps.getAppVersion?.().trim();
+        const stableCurrentCindyVersion =
+          currentCindyVersion &&
+          currentCindyVersion !== '0.0.0' &&
+          stableCindyVersionPattern.test(currentCindyVersion)
+            ? currentCindyVersion
+            : null;
+        const minCindyVersion = declaredMinCindyVersion || stableCurrentCindyVersion;
+        if (!minCindyVersion) {
+          return {
+            ok: false,
+            errorCode: 'INVALID_INPUT',
+            message:
+              '当前是未发布或预发布 Cindy 构建，请明确填写 minCindyVersion（插件实际依赖的首个 Cindy 正式版本）',
+          };
+        }
+        const result = await scaffoldGhostDir({ ...request, minCindyVersion }, {
           sessionWorkdir: gate.workingDir,
           forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
           writeScaffold: writeForgeScaffoldWithStableParent,

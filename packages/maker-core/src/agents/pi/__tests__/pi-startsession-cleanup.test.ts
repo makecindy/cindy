@@ -176,6 +176,18 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: () => {
+        const handle = {
+          pid: 4321,
+          killed: false,
+          once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+            if (event === 'spawn') queueMicrotask(listener);
+            return handle;
+          },
+          kill: () => true,
+        };
+        return handle as never;
+      },
       registerPiProxySession: () => () => {
         // Detached Subagent leases intentionally dispose after close. Ignore a previous
         // test's late lease callback instead of charging it to the next test's counters.

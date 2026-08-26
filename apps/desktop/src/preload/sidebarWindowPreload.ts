@@ -413,8 +413,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // shared makerChatStore. Do not expose the primary window's full DB API.
     sessions: {
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),
-      list: (limit?: number, status?: string): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:sessions:list', limit, status),
+      list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
       resolveReferences: (sessionIds: string[]): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:resolve-references', sessionIds),
       ackInterrupted: (id: string): Promise<void> =>

@@ -42,8 +42,7 @@ export function hasNonCollapsedSelectionOutsideComposer(editorDom: HTMLElement):
 
 export function useComposerSendFocusRestore(
   editor: ComposerFocusEditor | null,
-  composerMutationLocked: boolean,
-  sendDispatchInFlight: boolean,
+  composerTypingLocked: boolean,
 ): () => void {
   const pendingRestoreRef = useRef<PendingComposerFocusRestore | null>(null);
 
@@ -66,7 +65,7 @@ export function useComposerSendFocusRestore(
   }, [editor]);
 
   useEffect(() => {
-    if (!editor || sendDispatchInFlight || composerMutationLocked) return;
+    if (!editor || composerTypingLocked) return;
 
     const pendingRestore = pendingRestoreRef.current;
     if (!pendingRestore) return;
@@ -101,7 +100,7 @@ export function useComposerSendFocusRestore(
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [composerMutationLocked, editor, sendDispatchInFlight]);
+  }, [composerTypingLocked, editor]);
 
   return useCallback(() => {
     // dispatchSend 会在本地路径与远端路径各捕获一次焦点（第二处在 effort settle 后触发）。

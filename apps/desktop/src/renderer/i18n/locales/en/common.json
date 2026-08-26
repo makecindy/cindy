@@ -825,8 +825,25 @@
         "legacyImagesLabel": "Image cache directory",
         "legacyImagesDescription": "Cindy does not scan or clean this directory automatically. Deleting files may make images in message history unavailable; review them before deleting.",
         "legacyImagesOpenButton": "Open directory",
+        "legacyImagesClearButton": "Clear image cache",
         "legacyImagesDirectoryMissing": "The image cache directory was not found",
         "legacyImagesOpenFailed": "Could not open the image cache directory. Try again.",
+        "legacyImagesClearConfirmTitle": "Clean up the image cache?",
+        "legacyImagesClearConfirmDescription": "Only files in the image cache directory will be deleted; the message database will not be queried. Images in message history may become unavailable, and this cannot be undone.",
+        "legacyImagesClearConfirmButton": "Clear image cache",
+        "legacyImagesCleared": "Image cache cleaned up",
+        "legacyImagesClearFailed": "Could not clean up the image cache. Try again.",
+        "chatAttachmentsLabel": "Message attachment cache directory",
+        "chatAttachmentsDescription": "Some attachments you send are stored here. Cindy does not scan or clean this directory automatically. Deleting files may make attachments in message history unavailable.",
+        "chatAttachmentsOpenButton": "Open directory",
+        "chatAttachmentsClearButton": "Clear attachment cache",
+        "chatAttachmentsDirectoryMissing": "The message attachment cache directory was not found",
+        "chatAttachmentsOpenFailed": "Could not open the message attachment cache directory. Try again.",
+        "chatAttachmentsClearConfirmTitle": "Clean up the message attachment cache?",
+        "chatAttachmentsClearConfirmDescription": "Only files in the message attachment cache directory will be deleted; the message database will not be queried. Some attachments in message history may become unavailable, and this cannot be undone.",
+        "chatAttachmentsClearConfirmButton": "Clear attachment cache",
+        "chatAttachmentsCleared": "Message attachment cache cleaned up",
+        "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
         "cleanupLabel": "Disk cleanup",
         "cleanupDescription": "Scans for media files no session references anymore, oversized caches, and obsolete folders. Shows the numbers first and deletes only after you confirm; images in composer drafts and queued messages are protected automatically.",
         "scanButton": "Scan",
@@ -2585,13 +2602,20 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
+      "description": "Control when Claude Code and Pi automatically compact context. Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code and Pi",
+        "badge": "Claude Code",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
         "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
         "sliderAria": "Adjust auto-compaction trigger threshold"
+      },
+      "piCard": {
+        "label": "Compaction trigger threshold",
+        "badge": "Pi",
+        "description": "Pi's native auto-compaction starts when context usage reaches this percentage. The setting is applied the next time a Pi task starts.",
+        "hint": "Lower values compact earlier and leave more room for the response; higher values compact later. Changes apply the next time a Pi task starts.",
+        "sliderAria": "Adjust Pi auto-compaction trigger threshold"
       }
     },
     "personalization": {
@@ -3139,6 +3163,10 @@
         "memory": {
           "name": "Cindy Memory",
           "description": "Cross-agent long-term memory for persistent context across sessions"
+        },
+        "docs": {
+          "name": "Document Toolkit",
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install."
         },
         "xdt_helper": {
           "name": "Cindy Helper",
@@ -4349,6 +4377,16 @@
         "manualCount": "Bundled manuals: {{count}}",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
+      },
+      "forgeOidcInstallConfirm": {
+        "title": "Confirm organization identity testing",
+        "description": "After installation, this plugin can use your current organization identity to request Connection JWTs for the hosts below. Confirm that this is the plugin you just built.",
+        "pluginNameLabel": "Plugin",
+        "pluginIdLabel": "Plugin id",
+        "hostsLabel": "Organization identity request hosts",
+        "typedIdLabel": "Enter the plugin id <strong>{{id}}</strong> to confirm",
+        "confirm": "Install and allow testing",
+        "cancel": "Cancel"
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -7872,7 +7910,10 @@
     "generatedFiles": {
       "title": "Files created this message",
       "showMore": "Show {{count}} more",
-      "showLess": "Show less"
+      "showLess": "Show less",
+      "artifactLabel": "Artifact",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows", "bytes": "{{count}}" }
     },
     "turnChanges": {
       "title": "Changed {{count}} files",

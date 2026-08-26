@@ -1023,7 +1023,7 @@ export class GhostManager {
     return this.receiptStore.rootDir();
   }
 
-  /** 新安装不再写来源；这里只识别旧 receipt，避免存量 Forge Broker 资格断裂。 */
+  /** 只认显式 Forge 安装写入的来源；未知/手动来源一律按 manual。 */
   readEffectiveInstallOrigin(id: string): 'manual' | 'agent-forge' {
     this.ensureCurrentOwnerContextSync();
     try {
@@ -2567,6 +2567,7 @@ export class GhostManager {
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
     },
   ) {
     return this.runExclusiveMutation(() => this.installUnlocked(lizFilePath, opts));
@@ -2578,6 +2579,7 @@ export class GhostManager {
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
     },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
     // 装入初始启用态由调用方决定；缺省 true 保持既有调用方语义不变。
@@ -2684,6 +2686,7 @@ export class GhostManager {
           packageSha256,
           revision: receiptRevision,
           ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+          ...(opts?.installOrigin ? { installOrigin: opts.installOrigin } : {}),
         });
         await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
         let tombstoneClearPending = false;
@@ -2781,6 +2784,7 @@ export class GhostManager {
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
       onPackagePlaced?: () => void;
@@ -2795,6 +2799,7 @@ export class GhostManager {
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
       /** 新目录已换位、旧目录仍可回滚时执行；抛错会恢复旧版本。 */
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
@@ -2844,11 +2849,9 @@ export class GhostManager {
         },
       };
     }
-    const legacyInstallOrigin =
-      approvalResult.state === 'approved' &&
-      effectiveInstallOrigin(approvalResult.receipt) === 'agent-forge'
-        ? 'agent-forge'
-        : undefined;
+    // 来源描述的是本次明确选择的装入通道，而不是 id 的永久资格。手动更新
+    // 不继承旧 Forge 来源，否则新增 OIDC host 可绕过 Forge 的窄确认。
+    const installOrigin = opts.installOrigin;
     // 延续当前唤醒/沉睡状态。旧安装尚无 receipt 时，重新安装仍采用原
     // `.disabled` 镜像；损坏 receipt 一律保持停用。
     const enabled =
@@ -3023,7 +3026,7 @@ export class GhostManager {
         packageSha256,
         revision: receiptRevision,
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
-        ...(legacyInstallOrigin ? { installOrigin: legacyInstallOrigin } : {}),
+        ...(installOrigin ? { installOrigin } : {}),
       });
       await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
     } catch (err) {

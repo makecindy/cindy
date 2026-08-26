@@ -20,8 +20,10 @@ import {
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import { getDbClient } from '../client/current';
+import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import { buildSessionListFlightKey, runSessionListSingleFlight } from './sessionListSingleFlight';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { bindDeletedPiSubagentCleanupCancel } from './piSubagentDeletion';
 import { resolveBusinessSessionId } from '../../sessionIds';
@@ -71,6 +73,27 @@ const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
+
+function readCurrentDbClientSnapshot(): {
+  client: DbClient;
+  userId: string;
+  clientEpoch: number;
+} | null {
+  try {
+    return currentDb.getCurrentDbClientSnapshot?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readCurrentDbClientUserId(): string | null {
+  try {
+    return currentDb.getCurrentDbClientUserId?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
 type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
@@ -981,12 +1004,16 @@ export function registerSessionIpc(
     'local-db:sessions:list',
     async (_e, limit: unknown, status: unknown, options: unknown) => {
       const startedAt = performance.now();
-      const db = getDbClient().drizzle;
+      const snapshot = readCurrentDbClientSnapshot();
+      const db = snapshot?.client.drizzle ?? getDbClient().drizzle;
+      const userId = snapshot?.userId ?? readCurrentDbClientUserId();
+      const clientEpoch = snapshot?.clientEpoch ?? 0;
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
+      const fresh = shouldBypassSessionListSingleFlight(options);
       // 支持 Sidebar Filter 的 Active/Archived/All status 过滤。
       //   - 'active' / 'archived' → WHERE status = ?
       //   - 'all' / undefined / 其它非法值 → WHERE status != 'deleted'
@@ -994,33 +1021,49 @@ export function registerSessionIpc(
       //      listSessions 行为一致：'all' 白名单 ['active','archived']）
       const statusFilter: 'active' | 'archived' | null =
         status === 'active' || status === 'archived' ? status : null;
-      // 按 DESKTOP_VISIBLE_SESSION_SOURCES 白名单过滤 — 包含 IM 渠道
-      // (feishu/slack/discord)与本机自动化(scheduler/learn/shared);
-      // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。
-      const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
-      const statusWhere = () =>
-        statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
-      const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
+      const loadRows = async () => {
+        // 按 DESKTOP_VISIBLE_SESSION_SOURCES 白名单过滤 — 包含 IM 渠道
+        // (feishu/slack/discord)与本机自动化(scheduler/learn/shared);
+        // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。
+        const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
+        const statusWhere = () =>
+          statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
+        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
 
-      let mergedRows = rows;
-      if (includePinned) {
-        const pinnedRows = await selectSessionListRows(
-          db,
-          and(sourceFilter, statusWhere(), isNotNull(sessions.pinnedAt)),
-          null,
+        let mergedRows = rows;
+        if (includePinned) {
+          const pinnedRows = await selectSessionListRows(
+            db,
+            and(sourceFilter, statusWhere(), isNotNull(sessions.pinnedAt)),
+            null,
+          );
+          mergedRows = mergeSessionListRows(rows, pinnedRows);
+        }
+
+        return mergedRows.map((r) =>
+          sessionToCamel({
+            ...r.session,
+            messageCount: r.messageCount,
+            latestMessageContent: r.latestMessageContent,
+            latestMessageRole: r.latestMessageRole,
+          }),
         );
-        mergedRows = mergeSessionListRows(rows, pinnedRows);
-      }
-
-      const queryFinishedAt = performance.now();
-      const result = mergedRows.map((r) =>
-        sessionToCamel({
-          ...r.session,
-          messageCount: r.messageCount,
-          latestMessageContent: r.latestMessageContent,
-          latestMessageRole: r.latestMessageRole,
-        }),
-      );
+      };
+      // key 用同一快照上的 userId + clientEpoch + 归一化参数。
+      // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
+      const result =
+        userId && !fresh
+          ? await runSessionListSingleFlight(
+              buildSessionListFlightKey({
+                userId,
+                clientEpoch,
+                cap,
+                statusFilter,
+                includePinned,
+              }),
+              loadRows,
+            )
+          : await loadRows();
       const finishedAt = performance.now();
       const filter = statusFilter ?? 'all';
       const elapsedMs = Math.round(finishedAt - startedAt);
@@ -1030,8 +1073,8 @@ export function registerSessionIpc(
         cap,
         includePinned,
         rows: result.length,
-        queryElapsedMs: Math.round(queryFinishedAt - startedAt),
-        mapElapsedMs: Math.round(finishedAt - queryFinishedAt),
+        queryElapsedMs: elapsedMs,
+        mapElapsedMs: 0,
         elapsedMs,
       });
       const logScope = readSessionListLogScope() ?? 'unscoped';
@@ -2191,6 +2234,14 @@ function shouldIncludePinnedSessions(options: unknown): boolean {
     options &&
     typeof options === 'object' &&
     (options as { includePinned?: unknown }).includePinned === true
+  );
+}
+
+function shouldBypassSessionListSingleFlight(options: unknown): boolean {
+  return !!(
+    options &&
+    typeof options === 'object' &&
+    (options as { fresh?: unknown }).fresh === true
   );
 }
 

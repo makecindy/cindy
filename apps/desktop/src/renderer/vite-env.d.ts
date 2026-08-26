@@ -1227,6 +1227,18 @@ interface ElectronAPI {
   ghosts: {
     /** 首帧同步拉取已装清单(规则 7:意识面板与内置面板同帧注册,无跳变)。 */
     listSync: () => { ghosts: import('../shared/ghost').InstalledGhost[] };
+    onForgeOidcInstallConfirmRequest: (
+      callback: (payload: {
+        requestId: string;
+        ghostId: string;
+        ghostName: string;
+        hosts: string[];
+      }) => void,
+    ) => () => void;
+    resolveForgeOidcInstallConfirm: (
+      requestId: string,
+      confirmed: boolean,
+    ) => Promise<{ handled: boolean }>;
     /** Plugin 快捷行最近使用顺序(最新在前,首帧同步读取避免排序跳变)。 */
     recentUsageSync: () => { ids: string[] };
     /** 成功发送一次 Plugin 指令后记录最近使用。 */
@@ -3416,6 +3428,9 @@ interface ElectronAPI {
     /** 本窗口草稿附件 URL 变化时上报(fire-and-forget;多窗口防误删取证)。 */
     reportDraftUrls: (urls: string[]) => void;
     openLegacyImagesDir: () => Promise<{ opened: boolean }>;
+    clearLegacyImagesDir: () => Promise<{ cleared: boolean }>;
+    openChatAttachmentsDir: () => Promise<{ opened: boolean }>;
+    clearChatAttachmentsDir: () => Promise<{ cleared: boolean }>;
     stats: () => Promise<{
       success: boolean;
       error?: string;
@@ -4235,6 +4250,7 @@ interface ElectronAPI {
       list: (
         limit?: number,
         status?: 'active' | 'archived' | 'all',
+        options?: { includePinned?: boolean; fresh?: boolean },
       ) => Promise<import('@/lib/ccAgent.types').Session[]>;
       create: (body?: {
         id?: string;
@@ -5655,8 +5671,22 @@ interface ElectronAPI {
     /** 写入后返回 main 端 clamp 后的最终百分比 */
     compactionSetPct: (
       pct: number,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
     ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
-    compactionResetPct: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    compactionResetPct: (
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+
+    /** Pi 原生自动上下文压缩触发百分比。下次启动或恢复 Pi 任务时生效 */
+    piCompactionGetPct: () => Promise<number>;
+    piCompactionGetState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    piCompactionSetPct: (
+      pct: number,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    piCompactionResetPct: (
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
 
     /** LSP Beta 开关 — 控制 mcp providers 是否注入 lsp_* 工具 (默认 false) */
     lspModeGet: () => Promise<{ enabled: boolean }>;

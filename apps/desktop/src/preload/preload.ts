@@ -611,6 +611,7 @@ const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
 // 意识确认弹窗(confirm 槽:renderer 用主机同款 ConfirmDialog 弹,答案回 main)。
 // main 只投单个窗口(不广播),所以这里落地的窗口就是该弹框的唯一归属。
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
+const fanOutForgeOidcInstallConfirmRequest = createIpcFanOut('forge-oidc-install:confirm-request');
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
 const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
 // 插件自动化草稿(agent 槽 schedule 加档:renderer 开自动化创建面板并预填)。
@@ -1258,6 +1259,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 管子请求。requestId 是 main 铸的,陌生/重复 id 由桥忽略。
     resolveConfirm: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
       ipcRenderer.invoke('ghosts:confirm:resolve', { requestId, confirmed }),
+    onForgeOidcInstallConfirmRequest: fanOutForgeOidcInstallConfirmRequest,
+    resolveForgeOidcInstallConfirm: (
+      requestId: string,
+      confirmed: boolean,
+    ): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke('forge-oidc-install:resolve-confirm', { requestId, confirmed }),
     onPreviewOpen: fanOutGhostPreviewOpen,
     onScheduleDraft: fanOutGhostScheduleDraft,
     getCard: (
@@ -3829,6 +3836,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openLegacyImagesDir: (): Promise<{ opened: boolean }> =>
       ipcRenderer.invoke('cindy-media:legacy-images-open-dir'),
 
+    clearLegacyImagesDir: (): Promise<{ cleared: boolean }> =>
+      ipcRenderer.invoke('cindy-media:legacy-images-clear'),
+
+    openChatAttachmentsDir: (): Promise<{ opened: boolean }> =>
+      ipcRenderer.invoke('cindy-media:chat-attachments-open-dir'),
+
+    clearChatAttachmentsDir: (): Promise<{ cleared: boolean }> =>
+      ipcRenderer.invoke('cindy-media:chat-attachments-clear'),
+
     stats: (): Promise<{
       success: boolean;
       error?: string;
@@ -4836,8 +4852,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
       ipcRenderer.invoke('local-db:ensure-ready', userId),
     sessions: {
-      list: (limit?: number, status?: string): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:sessions:list', limit, status),
+      list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
       create: (body?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:create', body),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),
@@ -6234,10 +6250,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:compaction:get-state'),
     compactionSetPct: (
       pct: number,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
     ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
-      ipcRenderer.invoke('maker:compaction:set-pct', pct),
-    compactionResetPct: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
-      ipcRenderer.invoke('maker:compaction:reset-pct'),
+      ipcRenderer.invoke('maker:compaction:set-pct', pct, owner),
+    compactionResetPct: (
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+      ipcRenderer.invoke('maker:compaction:reset-pct', owner),
+
+    // Pi 原生自动上下文压缩阈值。下次启动或恢复 Pi 任务时生效。
+    piCompactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:pi-compaction:get-pct'),
+    piCompactionGetState: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+      ipcRenderer.invoke('maker:pi-compaction:get-state'),
+    piCompactionSetPct: (
+      pct: number,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+      ipcRenderer.invoke('maker:pi-compaction:set-pct', pct, owner),
+    piCompactionResetPct: (
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
+      ipcRenderer.invoke('maker:pi-compaction:reset-pct', owner),
 
     // LSP Beta 开关 —— 控制 mcp providers 是否注入 lsp_* 工具 (Phase 1 Beta)。
     // 默认 false; 仅对**新 session** 生效, 已开 session 工具列表已固化, 不变。

@@ -371,13 +371,18 @@ export const MAKER_INVOKE = {
   SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
   SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
   /**
-   * Claude Code 与 Pi 共用的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
+   * Claude Code 的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
    * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。
    */
   COMPACTION_GET_PCT: 'maker:compaction:get-pct',
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
+  PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
+  PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',
+  PI_COMPACTION_SET_PCT: 'maker:pi-compaction:set-pct',
+  PI_COMPACTION_RESET_PCT: 'maker:pi-compaction:reset-pct',
   /**
    * LSP Beta 开关 ——
    *  - GET: renderer 启动期同步 localStorage 镜像

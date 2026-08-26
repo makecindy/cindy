@@ -29,8 +29,9 @@ const outsideDir = path.join(tmpUserData, 'outside');
 const logWarnMock = vi.fn();
 const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
-const { packGhostDirMock, forgeInstallPackageMock } = vi.hoisted(() => ({
+const { packGhostDirMock, scaffoldGhostDirMock, forgeInstallPackageMock } = vi.hoisted(() => ({
   packGhostDirMock: vi.fn(),
+  scaffoldGhostDirMock: vi.fn(),
   forgeInstallPackageMock: vi.fn(),
 }));
 const { completeForgePackStagingMock } = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ const {
 }));
 const releaseMutationMock = vi.fn();
 const appSessionBoundaryPendingMock = vi.fn(() => false);
+const appVersionMock = vi.fn(() => '2.3.4');
 const captureMutationOwnerMock = vi.fn(() => ({
   mode: 'local' as const,
   dataOwnerId: 'test',
@@ -205,7 +207,7 @@ vi.mock('../../cindy-brain/cardService.js', () => ({ withCardToken: (r: unknown)
 vi.mock('../../cindy-brain/forge.js', () => ({
   FORGE_GUIDE: 'guide',
   packGhostDir: packGhostDirMock,
-  scaffoldGhostDir: vi.fn(),
+  scaffoldGhostDir: scaffoldGhostDirMock,
 }));
 vi.mock('../../cindy-brain/forgePackStaging.js', () => ({
   completeForgePackStaging: completeForgePackStagingMock,
@@ -281,6 +283,7 @@ function makeDeps(
   // 在 tool-call 时从 ALS 恢复真实 ctx。
   alsSessionContextMock.mockReturnValue(agentKind === 'claude-code' ? undefined : ctx);
   return getCindyGhostsMcpDeps(agentKind === 'claude-code' ? ctx : undefined, {
+    getAppVersion: appVersionMock,
     getLiveSessionGrantState: liveGrantStateMock,
   });
 }
@@ -410,6 +413,14 @@ beforeEach(() => {
     errorCode: 'MANIFEST_INVALID',
     message: 'stop after gate assertion',
   });
+  scaffoldGhostDirMock.mockReset();
+  scaffoldGhostDirMock.mockResolvedValue({
+    ok: true,
+    dir: path.join(WORKDIR, 'new-plugin'),
+    template: 'plain',
+    files: ['ghost.json', 'main.js'],
+    nextSteps: [],
+  });
   forgeInstallPackageMock.mockReset();
   forgeInstallPackageMock.mockResolvedValue({
     action: 'installed',
@@ -438,6 +449,8 @@ beforeEach(() => {
   });
   appSessionBoundaryPendingMock.mockReset();
   appSessionBoundaryPendingMock.mockReturnValue(false);
+  appVersionMock.mockReset();
+  appVersionMock.mockReturnValue('2.3.4');
   clearAllPrefs();
 });
 
@@ -629,6 +642,73 @@ describe('Forge session workdir gate', () => {
     await expect(
       deps.forgeScaffold({ dir: path.join(WORKDIR, 'new-plugin'), template: 'plain', id: 'x', name: 'X' }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'WORKDIR_READ_ONLY' });
+  });
+
+  it('uses the current stable Cindy version only as scaffold metadata for the concrete package', async () => {
+    const deps = makeDeps();
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(scaffoldGhostDirMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minCindyVersion: '2.3.4' }),
+      expect.any(Object),
+    );
+  });
+
+  it('requires explicit package metadata when scaffold runs in an unpublished Cindy build', async () => {
+    appVersionMock.mockReturnValue('0.0.0');
+    const deps = makeDeps();
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
+
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+        minCindyVersion: '1.4.0',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(scaffoldGhostDirMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minCindyVersion: '1.4.0' }),
+      expect.any(Object),
+    );
+
+    scaffoldGhostDirMock.mockClear();
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+        minCindyVersion: '1.4.0-beta.1',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
+
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+        minCindyVersion: '0.0.0',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
   });
 });
 

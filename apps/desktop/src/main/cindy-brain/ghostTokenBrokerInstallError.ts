@@ -12,6 +12,7 @@ export interface GhostTokenBrokerInstallError {
 export function ghostTokenBrokerInstallError(): GhostTokenBrokerInstallError {
   return {
     code: 'GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED',
-    reason: '本地装入的 .cindy 不能使用授权 broker；请改从组织插件市场安装',
+    reason:
+      '手动装入的 .cindy 不能使用授权 broker；请改从组织插件市场安装，或由企业作者使用 ghost_forge_install 安装自测',
   };
 }

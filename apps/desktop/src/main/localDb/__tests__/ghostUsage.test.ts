@@ -15,11 +15,11 @@ import {
 } from '../ghostUsage';
 import * as schema from '../schema';
 
-const MIGRATION_0096 = path.resolve(__dirname, '../../../../drizzle/0096_lively_strong_guy.sql');
+const MIGRATION_0097 = path.resolve(__dirname, '../../../../drizzle/0097_long_black_tarantula.sql');
 
 function freshDb(): { raw: Database.Database; db: GhostUsageDb } {
   const raw = new Database(':memory:');
-  const sqlText = fs.readFileSync(MIGRATION_0096, 'utf8');
+  const sqlText = fs.readFileSync(MIGRATION_0097, 'utf8');
   for (const statement of sqlText.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
     if (trimmed) raw.exec(trimmed);

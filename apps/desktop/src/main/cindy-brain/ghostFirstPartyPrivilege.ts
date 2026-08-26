@@ -11,9 +11,10 @@
  *
  * Input priority: first evaluable of
  *   1. builtin seed → static official table
- *   2. plugin-market ledger (source + scope + organizationId + Release sha256)
+ *   2. explicit agent-forge install + current organization prefix
+ *   3. plugin-market ledger (source + scope + organizationId + Release sha256)
  *      paired with the approved receipt packageSha256
- *   3. neither → fail-closed, no privilege
+ *   4. neither → fail-closed, no privilege
  *
  * Discriminator is the combination of `source` and `scope`, not `scope`
  * alone. Custom / git market rows write `scope: 'public'` as a placeholder
@@ -47,7 +48,7 @@ export type GhostFirstPartyBasis =
   | 'builtin-official'
   | 'market-public'
   | 'market-organization-current'
-  | 'legacy-forge-current-org-prefix'
+  | 'forge-current-org-prefix'
   | 'denied-alias'
   | 'denied-foreign-org'
   | 'denied-unknown-origin';
@@ -80,7 +81,7 @@ export interface GhostFirstPartyFacts {
   builtin: boolean;
   marketRecord: GhostFirstPartyMarketRecord | null;
   currentOrganization: GhostFirstPartyCurrentOrganization | null;
-  /** 仅来自升级前 receipt；新安装恒为 manual。 */
+  /** 仅显式 ghost_forge_install 写入 agent-forge；其它入口均为 manual。 */
   installOrigin: 'manual' | 'agent-forge';
 }
 
@@ -147,20 +148,21 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
     return deny('denied-alias');
   }
 
+  // 企业作者的显式 Forge 自测资格来自本次安装来源与当前组织前缀，和市场账本
+  // 是否已有同 id、是否仍标记 installed 无关。它只开放 Broker / oidc-token，
+  // 宿主原语仍保持拒绝。
+  if (
+    facts.installOrigin === 'agent-forge' &&
+    matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)
+  ) {
+    return allow('forge-current-org-prefix', false);
+  }
+
   const record = facts.marketRecord;
   if (record !== null) {
     if (!record.installed) {
-      // A ledger row that exists but is not installed must not fall through to
-      // the local-package tail below. Two reasons, both mattering:
-      //   1. Fail-open direction. `{scope: 'personal', installed: true}` is
-      //      denied here; flipping `installed` to false would have turned that
-      //      same row into an allow via the tail. A security predicate must
-      //      never grant more when one of its fields is false.
-      //   2. It is the impersonation case, not the self-test case. Once an id
-      //      appears in the market ledger, a hand-built local package carrying
-      //      that same id is impersonating it. Author self-test is unaffected:
-      //      a never-published id has no ledger row at all (`marketRecord`
-      //      is null) and still reaches the tail.
+      // Uninstalled ledger rows stay denied. Explicit Forge self-test is
+      // decided above from origin + org prefix, before this market branch.
       return deny('denied-unknown-origin');
     }
     if (record.scope === 'public' && record.source === 'market') {
@@ -188,21 +190,7 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
       }
       return allow('market-organization-current', false);
     }
-    if (
-      facts.installOrigin === 'agent-forge' &&
-      (record.source === 'git-market' || record.source === 'local-market') &&
-      matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)
-    ) {
-      return allow('legacy-forge-current-org-prefix', false);
-    }
     return deny('denied-unknown-origin');
-  }
-
-  if (
-    facts.installOrigin === 'agent-forge' &&
-    matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)
-  ) {
-    return allow('legacy-forge-current-org-prefix', false);
   }
 
   return deny('denied-unknown-origin');
