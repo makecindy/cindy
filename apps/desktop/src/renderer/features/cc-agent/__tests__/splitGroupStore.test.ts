@@ -24,6 +24,36 @@ async function loadStore() {
   return import('../splitGroupStore');
 }
 
+type TestDropSide = 'left' | 'right' | 'top' | 'bottom';
+
+function paneRect(left: number, top: number, width: number, height: number) {
+  return { left, top, width, height };
+}
+
+function renderedGeometry(
+  source: ReturnType<typeof paneRect>,
+  anchor: ReturnType<typeof paneRect>,
+) {
+  return { source, anchor, gutterPx: 6 };
+}
+
+function adjacentGeometry(side: TestDropSide) {
+  const anchor = paneRect(100, 100, 400, 300);
+  const source =
+    side === 'left'
+      ? paneRect(-106, 100, 200, 300)
+      : side === 'right'
+        ? paneRect(506, 100, 200, 300)
+        : side === 'top'
+          ? paneRect(100, -56, 400, 150)
+          : paneRect(100, 406, 400, 150);
+  return renderedGeometry(source, anchor);
+}
+
+function nonAdjacentGeometry() {
+  return renderedGeometry(paneRect(0, 0, 100, 100), paneRect(300, 200, 100, 100));
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
@@ -230,7 +260,9 @@ describe('splitGroupStore', () => {
       splitGroupStore.setSplitFraction(root.key, 0.7);
       const before = splitGroupStore.getSnapshot();
 
-      expect(splitGroupStore.moveSession('session-b', 'session-a', side)).toBe(false);
+      expect(
+        splitGroupStore.moveSession('session-b', 'session-a', side, adjacentGeometry(side)),
+      ).toBe(false);
       expect(splitGroupStore.getSnapshot()).toBe(before);
       expect(splitGroupStore.getSnapshot().root).toMatchObject({ fraction: 0.7 });
     },
@@ -252,7 +284,9 @@ describe('splitGroupStore', () => {
       splitGroupStore.setSplitFraction(nested.key, 0.6);
       const before = splitGroupStore.getSnapshot();
 
-      expect(splitGroupStore.moveSession('session-b', 'session-a', side)).toBe(false);
+      expect(
+        splitGroupStore.moveSession('session-b', 'session-a', side, adjacentGeometry(side)),
+      ).toBe(false);
       expect(splitGroupStore.getSnapshot()).toBe(before);
       const next = splitGroupStore.getSnapshot().root;
       if (!next || next.type !== 'split') throw new Error('root split missing');
@@ -263,7 +297,9 @@ describe('splitGroupStore', () => {
       });
 
       const beforeNonAdjacentMove = splitGroupStore.getSnapshot();
-      expect(splitGroupStore.moveSession('session-c', 'session-a', side)).toBe(true);
+      expect(
+        splitGroupStore.moveSession('session-c', 'session-a', side, nonAdjacentGeometry()),
+      ).toBe(true);
       expect(splitGroupStore.getSnapshot()).not.toBe(beforeNonAdjacentMove);
     },
   );
@@ -274,7 +310,14 @@ describe('splitGroupStore', () => {
     splitGroupStore.addSession('session-c', 'session-b', 'bottom');
     const before = splitGroupStore.getSnapshot();
 
-    expect(splitGroupStore.moveSession('session-b', 'session-a', 'right')).toBe(true);
+    expect(
+      splitGroupStore.moveSession(
+        'session-b',
+        'session-a',
+        'right',
+        renderedGeometry(paneRect(506, 150, 400, 300), paneRect(100, 100, 400, 300)),
+      ),
+    ).toBe(true);
     expect(splitGroupStore.getSnapshot()).not.toBe(before);
   });
 
@@ -286,8 +329,33 @@ describe('splitGroupStore', () => {
     splitGroupStore.addSession('session-e', 'session-d', 'bottom');
     const before = splitGroupStore.getSnapshot();
 
-    expect(splitGroupStore.moveSession('session-a', 'session-c', 'left')).toBe(true);
+    expect(
+      splitGroupStore.moveSession(
+        'session-a',
+        'session-c',
+        'left',
+        renderedGeometry(paneRect(100, 100, 400, 300), paneRect(506, 100, 400, 220)),
+      ),
+    ).toBe(true);
     expect(splitGroupStore.getSnapshot()).not.toBe(before);
+  });
+
+  it('可视跨度相同的并行分支拖到相邻侧时保持原布局', async () => {
+    const { splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-c', 'session-a', 'right');
+    splitGroupStore.addSession('session-b', 'session-a', 'bottom');
+    splitGroupStore.addSession('session-d', 'session-c', 'bottom');
+    const before = splitGroupStore.getSnapshot();
+
+    expect(
+      splitGroupStore.moveSession(
+        'session-c',
+        'session-a',
+        'right',
+        renderedGeometry(paneRect(506, 100, 400, 300), paneRect(100, 100, 400, 300)),
+      ),
+    ).toBe(false);
+    expect(splitGroupStore.getSnapshot()).toBe(before);
   });
 
   it('分支比例夹到下限，并仅切换根方向', async () => {

@@ -56,6 +56,7 @@ import {
   type DropSide,
   type SplitGroupAddBlockReason,
   type SplitBranchNode,
+  type SplitPaneDropGeometry,
   type SplitNode,
   type SplitPaneNode,
 } from './splitGroupStore';
@@ -66,6 +67,33 @@ const MIN_SPLIT_PANE_WIDTH_PX = 280;
 const MIN_SPLIT_PANE_HEIGHT_PX = 220;
 const DEFAULT_SPLIT_VIEWPORT_WIDTH_PX = 800;
 const DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX = 600;
+
+function getRenderedSplitPaneDropGeometry(
+  sourceSessionId: string,
+  anchorSessionId: string,
+): SplitPaneDropGeometry | null {
+  if (typeof document === 'undefined') return null;
+  const paneElements = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-split-pane-session-id]'),
+  );
+  const sourceElement = paneElements.find(
+    (element) => element.dataset.splitPaneSessionId === sourceSessionId,
+  );
+  const anchorElement = paneElements.find(
+    (element) => element.dataset.splitPaneSessionId === anchorSessionId,
+  );
+  if (!sourceElement || !anchorElement) return null;
+
+  const toRect = (element: HTMLElement) => {
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { left, top, width, height };
+  };
+  return {
+    source: toRect(sourceElement),
+    anchor: toRect(anchorElement),
+    gutterPx: GUTTER_PX,
+  };
+}
 
 function isSplitPaneNoFocusTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
@@ -842,8 +870,8 @@ const SplitPaneView = memo(function SplitPaneView({
           showSplitAddBlocked(t, splitGroupStore.getAddBlockReason(sessionId, pane.sessionId));
         }
       }}
-      onPaneDropped={(sessionId, side) => {
-        splitGroupStore.moveSession(sessionId, pane.sessionId, side);
+      onPaneDropped={(sessionId, side, geometry) => {
+        splitGroupStore.moveSession(sessionId, pane.sessionId, side, geometry);
       }}
     >
       <div
@@ -968,7 +996,11 @@ interface SplitDropTargetProps {
   className?: string;
   dataAttribute: 'single' | 'pane';
   onSessionDropped: (sessionId: string, side: DropSide) => void;
-  onPaneDropped?: (sessionId: string, side: DropSide) => void;
+  onPaneDropped?: (
+    sessionId: string,
+    side: DropSide,
+    geometry: SplitPaneDropGeometry | null,
+  ) => void;
 }
 
 function SplitDropTarget({
@@ -1039,8 +1071,13 @@ function SplitDropTarget({
         );
       setDropSide(null);
       if (!sessionId || !side || sessionId === anchorSessionId) return;
-      if (isPaneDrag) onPaneDropped?.(sessionId, side);
-      else onSessionDropped(sessionId, side);
+      if (isPaneDrag) {
+        onPaneDropped?.(
+          sessionId,
+          side,
+          getRenderedSplitPaneDropGeometry(sessionId, anchorSessionId),
+        );
+      } else onSessionDropped(sessionId, side);
     },
     [anchorSessionId, dropSide, onPaneDropped, onSessionDropped],
   );
