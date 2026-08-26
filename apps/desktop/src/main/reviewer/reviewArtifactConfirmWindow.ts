@@ -58,13 +58,13 @@ const DIALOG_CSS = `
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--surface); color: var(--text); }
 body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 main { display: flex; height: 100vh; min-height: 0; flex-direction: column; padding: 28px; }
-.brand { margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
-h1 { margin: 0; font-size: 20px; font-weight: 650; line-height: 1.3; }
+.brand { margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.3; }
 .message { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .detail { margin: 24px 0 10px; font-size: 13px; line-height: 1.5; }
 ul { flex: 1; min-height: 0; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 li { margin-top: 8px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); }
-.label { overflow-wrap: anywhere; font-size: 13px; font-weight: 550; }
+.label { overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
 .path { margin-top: 4px; overflow-wrap: anywhere; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 footer { display: flex; flex: none; justify-content: flex-end; gap: 10px; margin-top: auto; padding-top: 26px; }
 .button { display: inline-flex; min-width: 88px; height: 36px; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-weight: 600; text-decoration: none; }
