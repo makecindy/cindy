@@ -433,6 +433,9 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
   } | null = null;
+  /** Survives N+1 reservation clearing the current snapshot; leftover done must not adopt. */
+  private lastObservedTerminalGeneration: number | null = null;
+  private lastObservedTerminalKind: 'done' | 'error' | null = null;
   /**
    * N+1 reservation 窗口内观察到的前一轮前台终态。lost-callback 时 turn N 的
    * done/error 可能在直接 N+1 `handle.send()` 待处理期间才 fan-out；当时
@@ -2145,6 +2148,8 @@ export class Session {
         this.terminalEventObservedGeneration === this.turnGeneration &&
         this.terminalEventObservedKind === 'error';
       this.terminalEventObservedGeneration = this.turnGeneration;
+      this.lastObservedTerminalGeneration = this.turnGeneration;
+      this.lastObservedTerminalKind = event.type === 'error' ? 'error' : 'done';
       if (event.type === 'error') {
         this.terminalEventObservedKind = 'error';
         this.armTerminalErrorDrain(this.turnGeneration);
@@ -2515,7 +2520,7 @@ export class Session {
           awaitingCanAdoptNextGeneration &&
           this.turnGeneration === awaitingGeneration + 1 &&
           !this.isPreDispatchReservation() &&
-          !this.shouldHoldGenerationAdoption(event)
+          !this.shouldHoldGenerationAdoption(event, awaitingGeneration)
         ) {
           // Only a next() that started while logically idle may follow the next send.
           // Capturing that fact before awaiting is essential. The terminal drain may
@@ -2524,8 +2529,9 @@ export class Session {
           // clear that fence. The fence itself prevents any later generation entering.
           // Do not adopt while N+1 is still reserved / before provider dispatch:
           // a late N terminal would otherwise be cached as N+1 evidence.
-          // handle.send() pending is a separate window: leftover paired done must
-          // not become N+1 success, but in-flight start-failure errors still adopt.
+          // After handle.send() accepts, keep holding leftover paired done until
+          // an event proves N+1 progress (agent_start / tokens). In-flight
+          // start-failure errors still belong to this send.
           observedGeneration = this.turnGeneration;
         }
         if (this.terminationStarted) continue;
@@ -2657,13 +2663,28 @@ export class Session {
     );
   }
 
-  private shouldHoldGenerationAdoption(event: AgentEvent): boolean {
-    if (!this.sendReservation) return false;
-    if (this.sendReservation.generation !== this.turnGeneration) return false;
-    if (this.sendReservation.accepted) return false;
-    // Leftover paired done during handle.send() must not become N+1 success.
-    // In-flight start-failure errors still belong to this send.
+  private shouldHoldGenerationAdoption(
+    event: AgentEvent,
+    awaitingGeneration: number,
+  ): boolean {
+    // Only a wait that already saw N's terminal can mis-adopt leftover done as N+1.
+    if (awaitingGeneration <= 0) return false;
+    if (this.lastObservedTerminalGeneration !== awaitingGeneration) return false;
+    // Only an error-then-paired-done leftover can look like N+1 success.
+    if (this.lastObservedTerminalKind !== 'error') return false;
+    if (this.isNewTurnProgressEvent(event) || this.isForegroundRunningStatus(event)) {
+      return false;
+    }
+    if (this.isSilentStopDoneEvent(event)) return false;
+    // Leftover paired done must not become N+1 success in the post-acceptance
+    // live-idle gap (PI prompt accepted → agent_start).
     return event.type === 'done';
+  }
+
+  private isForegroundRunningStatus(event: AgentEvent): boolean {
+    if (event.turnScope === 'background') return false;
+    if (event.type !== 'status') return false;
+    return (event.data as { isRunning?: unknown } | null | undefined)?.isRunning === true;
   }
 
   private createSessionRunningError(): Error {
