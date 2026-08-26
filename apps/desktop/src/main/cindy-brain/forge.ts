@@ -2983,7 +2983,7 @@ audience 与组织身份由主机推导,插件清单和运行时代码都不能�
 audience/token；audience 固定为 \`\${orgSlug}:\${ghostId}\`,总长不得超过 64 字符。
 个人身份与手动导入默认不签发。点名例外：\`ghostId\` 精确等于 \`mivo-canvas\` 的组织成员本地安装，
 在已装清单声明的精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 时可解析 audience；其它本地插件、其它精确 host 仍不签发。已有市场
-organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
+organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成无记录。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
 确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
 该凭证必须固定声明
 \`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,

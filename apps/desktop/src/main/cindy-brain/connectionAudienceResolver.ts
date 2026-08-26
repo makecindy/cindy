@@ -5,7 +5,8 @@
  * `mivo-canvas`: organization members may resolve after the org gate when the
  * installed manifest's exact oidc-token host is only `mivo-canvas.dsworks.cn`.
  * An intact organization market record, including installed:false, still takes
- * the digest path and must not skip via this exception. The Host derives the
+ * the digest path and must not skip via this exception. A present but invalid
+ * market ledger is a hard failure, not an absent record. The Host derives the
  * audience from current identity + plugin id.
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
@@ -76,10 +77,17 @@ export function declaredOidcTokenHosts(manifest: GhostManifest): string[] {
   ];
 }
 
+export type MarketInstallationLookup =
+  | { kind: 'absent' }
+  | { kind: 'found'; record: PluginMarketInstallationRecord }
+  | { kind: 'invalid' };
+
 export interface LoadConnectionAudienceResolverOptions {
   readInstalledManifest(ghostId: string): GhostManifest | null;
   readInstalledManifestDigest(ghostId: string): string | null;
-  readMarketInstallation(ghostId: string): PluginMarketInstallationRecord | null;
+  readMarketInstallation(
+    ghostId: string,
+  ): PluginMarketInstallationRecord | MarketInstallationLookup | null;
   readApprovedPackageSha256?(ghostId: string): string | null;
   readInstallOrigin?(ghostId: string): 'manual' | 'agent-forge';
   lookupOrganizationPrefix?(
@@ -162,7 +170,18 @@ export function loadConnectionAudienceResolver(
 
       let installation: PluginMarketInstallationRecord | null = null;
       try {
-        installation = options.readMarketInstallation(ghostId);
+        const lookup = options.readMarketInstallation(ghostId);
+        if (
+          lookup &&
+          typeof lookup === 'object' &&
+          'kind' in lookup &&
+          (lookup.kind === 'absent' || lookup.kind === 'found' || lookup.kind === 'invalid')
+        ) {
+          if (lookup.kind === 'invalid') return reject('market-installation-invalid');
+          if (lookup.kind === 'found') installation = lookup.record;
+        } else {
+          installation = lookup;
+        }
       } catch {
         return reject('market-installation-read-failed');
       }

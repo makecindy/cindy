@@ -221,6 +221,18 @@ describe('installed Plugin Connection audience resolver', () => {
       pluginSlug: 'mivo-canvas',
       allowedHosts: ['mivo-canvas.dsworks.cn'],
     });
+    expect(
+      loadConnectionAudienceResolver({
+        ...resolverOptions(localManifest, null),
+        readMarketInstallation: () => ({ kind: 'absent' }),
+        readInstallOrigin: () => 'manual',
+      }).resolve('mivo-canvas', identity),
+    ).toEqual({
+      membershipId: 'membership-1',
+      audience: 'org-example:mivo-canvas',
+      pluginSlug: 'mivo-canvas',
+      allowedHosts: ['mivo-canvas.dsworks.cn'],
+    });
   });
 
   it('does not extend the local mivo-canvas exception past an exact id and org membership', () => {
@@ -370,6 +382,34 @@ describe('installed Plugin Connection audience resolver', () => {
     const resolver = loadConnectionAudienceResolver(
       resolverOptions(localManifest, marketRecord),
     );
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
+  it('does not take the local exception when the market ledger is invalid', () => {
+    const localManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(localManifest, null),
+      readMarketInstallation: () => ({ kind: 'invalid' }),
+      readInstallOrigin: () => 'manual',
+    });
     expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
   });
 

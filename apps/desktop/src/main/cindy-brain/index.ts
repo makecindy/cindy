@@ -2577,7 +2577,8 @@ function getConnectionAudienceResolver(): ConnectionAudienceResolver {
           .list()
           .find((candidate) => candidate.manifest.id === ghostId)?.manifest ?? null,
       readInstalledManifestDigest: readInstalledGhostManifestDigest,
-      readMarketInstallation: (ghostId) => getPluginMarketLedger().installationForGhost(ghostId),
+      readMarketInstallation: (ghostId) =>
+        getPluginMarketLedger().lookupInstallationForOidc(ghostId),
       readApprovedPackageSha256: (ghostId) =>
         getGhostManager().approvedInstallEvidence(ghostId)?.packageSha256 ?? null,
       readInstallOrigin: (ghostId) => getGhostManager().readEffectiveInstallOrigin(ghostId),

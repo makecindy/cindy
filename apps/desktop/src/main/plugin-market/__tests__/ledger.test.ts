@@ -50,6 +50,11 @@ describe('PluginMarketLedger', () => {
       installed: true,
       source: 'market',
     });
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toMatchObject({
+      kind: 'found',
+      record: { ghostId: 'cindy-test', installed: true },
+    });
+    expect(ledger.lookupInstallationForOidc('missing')).toEqual({ kind: 'absent' });
     expect(fs.existsSync(filePath)).toBe(true);
     expect(
       fs.readdirSync(path.dirname(filePath)).filter((name) => name.endsWith('.tmp')),
@@ -127,6 +132,7 @@ describe('PluginMarketLedger', () => {
       installations: {},
       defaultInstallOptOuts: {},
     });
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toEqual({ kind: 'invalid' });
   });
 
   it('filters a schema-v1 installation record with required fields missing', () => {
@@ -149,6 +155,16 @@ describe('PluginMarketLedger', () => {
     );
 
     expect(ledger.installationForGhost('cindy-test')).toBeNull();
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toEqual({ kind: 'invalid' });
+  });
+
+  it('treats malformed ledger JSON as invalid for OIDC lookup', () => {
+    const { filePath, ledger } = harness();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '{not-json');
+
+    expect(ledger.installationForGhost('cindy-test')).toBeNull();
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toEqual({ kind: 'invalid' });
   });
 
   it('resolves the owner-scoped path for every operation', () => {
