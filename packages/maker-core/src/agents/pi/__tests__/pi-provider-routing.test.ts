@@ -1021,6 +1021,93 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('keeps the live context window when a late catalog reload rewrites settings', async () => {
+    const xaiProvider = {
+      id: 'xai',
+      sourceProviderId: 'xai' as const,
+      name: 'xAI',
+      baseUrl: 'http://127.0.0.1:9/v1',
+      inheritModels: true,
+      apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+      modelIdAliases: {
+        'grok-4.6': 'grok-4.6',
+        'xai/grok-4.6': 'grok-4.6',
+      },
+      models: [{
+        id: 'grok-4.6',
+        wireId: 'grok-4.6',
+        name: 'Grok 4.6',
+        api: 'openai-responses' as const,
+        catalogAddition: true,
+        contextWindow: 100_000,
+      }],
+    };
+    let includeXai = false;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: {
+        endpoint: 'http://127.0.0.1:9',
+        piAutoCompactThresholdPct: 75,
+      },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          { id: 'wide-model', displayName: 'Wide', contextWindow: 200_000, efforts: [], defaultEffort: null },
+          { id: 'narrow-model', displayName: 'Narrow', contextWindow: 100_000, efforts: [], defaultEffort: null },
+          {
+            id: 'xai/grok-4.6',
+            displayName: 'Grok 4.6',
+            contextWindow: 100_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => (includeXai
+        ? { providers: [xaiProvider], env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' } }
+        : {
+            providers: [{
+              id: 'native-a',
+              name: 'Native A',
+              baseUrl: 'http://a.test',
+              api: 'openai-completions',
+              models: [{ id: 'wide-model' }, { id: 'narrow-model' }],
+            }],
+            env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+          }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'catalog-keeps-live-window',
+      workingDir: cwd,
+      model: 'wide-model',
+      providerId: 'native-a',
+    });
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'set_model') {
+        return { success: true, data: { contextWindow: 100_000 } };
+      }
+      return { success: true, data: {} };
+    };
+    await handle.setModel!('narrow-model', { providerId: 'native-a' });
+    includeXai = true;
+    await handle.setModel!('xai/grok-4.6', { providerId: 'xai' });
+    const settings = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'settings.json'), 'utf8'),
+    ) as { compaction?: { reserveTokens?: number } };
+    expect(settings.compaction?.reserveTokens).toBe(25_000);
+    await handle.close();
+  });
+
   it('rolls models.json back when switch_session fails after an xAI catalog refresh', async () => {
     const xaiProvider = {
       id: 'xai',
@@ -1350,12 +1437,12 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await handle.setModel!('xai/grok-4.5', { providerId: 'xai' });
     expect(resolves).toBe(1);
-    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
     expect(captured.requests).toContainEqual({
       type: 'set_model',
       provider: 'xai',
       modelId: 'grok-4.5',
     });
+    expect(captured.requests.filter((request) => request.type === 'switch_session')).toHaveLength(1);
     await handle.close();
   });
 
@@ -1403,12 +1490,12 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await handle.setModel!('xai/grok-4.6', { providerId: null });
     expect(resolves).toBe(1);
-    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
     expect(captured.requests).toContainEqual({
       type: 'set_model',
       provider: 'cindy',
       modelId: 'xai/grok-4.6',
     });
+    expect(captured.requests.filter((request) => request.type === 'switch_session')).toHaveLength(1);
     await handle.close();
   });
 

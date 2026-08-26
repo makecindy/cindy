@@ -39,6 +39,7 @@
   },
   "betaChannel": {
     "title": "Beta チャンネル",
+    "badge": "Beta",
     "description": "Beta チャンネルに参加すると、今後のクライアント更新を先行して受け取れます。",
     "restartHint": "Beta チャンネルは再起動後に反映されます。アプリを再起動してください。",
     "ok": "わかりました",

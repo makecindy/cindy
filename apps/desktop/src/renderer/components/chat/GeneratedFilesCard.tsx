@@ -15,8 +15,8 @@
  *
  * 存在性门槛(DESIGN.md §14.5「可点必存在」):本地会话渲染前 stat 过滤,不存在
  * 的文件不出 chip,整卡为空则不渲染。远程会话经 verifyRemotePathCached 远端 stat
- * 复核:先按 tool_use 记录乐观呈现,verdict 回来后 nonfile/directory 摘掉;
- * unknown(断链 / 限流)保持乐观——与正文 chip 的远程点亮不变量同策。
+ * 复核:仅在远端明确确认是普通文件后呈现；检查中、断链或限流都不先展示一张
+ * 可能无法打开的完成卡。
  *
  * 本地文件统一要求时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内。tool 来源
  * (Write / file-change add)也不能只凭存在性:Write 可能覆盖既有文件,失败路径也可能
@@ -30,12 +30,13 @@ import { ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import type { GeneratedFileRef } from '@/lib/generatedFiles';
+import type { DocumentArtifactMetadata, GeneratedFileRef } from '@/lib/generatedFiles';
 import { classifyMarkdownHref, toLocalFileUrl } from '@/lib/localPathResolver';
 import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import {
   fetchChatFileWithToasts,
   revealRemoteChatFile,
+  type RemotePathVerdict,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
@@ -46,7 +47,182 @@ import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ModelLightbox } from './ModelLightbox';
 
+function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']): number | string {
+  if (!summary || summary.kind !== 'bytes') return summary?.value ?? '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = summary.value;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+const DOCUMENT_COVER_THEME_TOKENS = {
+  light: {
+    '--doc-cover-surface': 'var(--surface-elevated)',
+    '--doc-cover-tint': 'var(--surface-hover)',
+    '--doc-cover-accent': 'var(--accent-cta-bg)',
+    '--doc-cover-ink': 'var(--text-primary)',
+    '--doc-cover-muted': 'var(--text-tertiary)',
+  },
+  dark: {
+    '--doc-cover-surface': 'var(--surface)',
+    '--doc-cover-tint': 'color-mix(in srgb, var(--surface) 88%, var(--text-primary))',
+    '--doc-cover-accent': 'var(--text-primary)',
+    '--doc-cover-ink': 'var(--text-primary)',
+    '--doc-cover-muted': 'var(--text-secondary)',
+  },
+  navy: {
+    '--doc-cover-surface': 'color-mix(in srgb, var(--surface-elevated) 88%, var(--focus-ring))',
+    '--doc-cover-tint': 'color-mix(in srgb, var(--surface-elevated) 76%, var(--focus-ring))',
+    '--doc-cover-accent': 'var(--focus-ring)',
+    '--doc-cover-ink': 'var(--text-primary)',
+    '--doc-cover-muted': 'var(--text-secondary)',
+  },
+} as const;
+
+export function getDocumentCoverThemeStyle(
+  theme: DocumentArtifactMetadata['theme'] = 'light',
+): Record<string, string> {
+  return DOCUMENT_COVER_THEME_TOKENS[theme] ?? DOCUMENT_COVER_THEME_TOKENS.light;
+}
+
+export function isConfirmedRemoteGeneratedFile(verdict: RemotePathVerdict): boolean {
+  return verdict === 'file';
+}
+
+function DocumentCoverPreview({
+  artifact,
+  title,
+}: {
+  artifact: DocumentArtifactMetadata;
+  title: string;
+}) {
+  const { t } = useTranslation();
+  const formatLabel = t(`chat.generatedFiles.formats.${artifact.format}`);
+
+  return (
+    <span
+      className="flex h-[142px] border-b border-[var(--border-default)] bg-[var(--surface)] p-3"
+      style={getDocumentCoverThemeStyle(artifact.theme)}
+      data-document-theme={artifact.theme ?? 'light'}
+    >
+      <span className="flex h-full w-full flex-col rounded-lg border border-[var(--border-default)] bg-[var(--doc-cover-surface)] px-4 py-3.5">
+        <span className="flex items-center justify-between text-11 font-medium uppercase tracking-[0.1em] text-[var(--doc-cover-muted)]">
+          <span>{formatLabel}</span>
+          {artifact.summary && (
+            <span className="normal-case tracking-normal">
+              {t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
+                count: formatArtifactSummaryValue(artifact.summary),
+              })}
+            </span>
+          )}
+        </span>
+        <span className="mt-5 block h-1 w-9 rounded-[9999px] bg-[var(--doc-cover-accent)]" />
+        <span className="mt-3 line-clamp-2 text-15 font-semibold leading-5 text-[var(--doc-cover-ink)]">
+          {title}
+        </span>
+        {artifact.subtitle && (
+          <span className="mt-1 line-clamp-1 text-11 text-[var(--doc-cover-muted)]">
+            {artifact.subtitle}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+function SlidePreview({ artifact, title }: { artifact: DocumentArtifactMetadata; title: string }) {
+  const { t } = useTranslation();
+  const preview = artifact.preview?.kind === 'slide' ? artifact.preview : undefined;
+  const previewTitle = preview?.title || title;
+  const previewSubtitle = preview?.subtitle || artifact.subtitle;
+
+  return (
+    <span
+      className="relative flex aspect-[16/9] items-center justify-center border-b border-[var(--border-default)] bg-[var(--doc-cover-surface)] px-8 text-center"
+      style={getDocumentCoverThemeStyle(artifact.theme)}
+      data-document-theme={artifact.theme ?? 'light'}
+    >
+      <span className="min-w-0">
+        <span className="mx-auto mb-3 block h-1 w-9 rounded-[9999px] bg-[var(--doc-cover-accent)]" />
+        <span className="block line-clamp-2 text-15 font-semibold leading-5 text-[var(--doc-cover-ink)]">
+          {previewTitle}
+        </span>
+        {previewSubtitle && (
+          <span className="mt-1 block line-clamp-1 text-11 text-[var(--doc-cover-muted)]">
+            {previewSubtitle}
+          </span>
+        )}
+      </span>
+      {artifact.summary && (
+        <span className="absolute bottom-2 right-2 rounded-[9999px] border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--doc-cover-muted)]">
+          {t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
+            count: formatArtifactSummaryValue(artifact.summary),
+          })}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function SheetPreview({ artifact, title }: { artifact: DocumentArtifactMetadata; title: string }) {
+  const preview = artifact.preview?.kind === 'sheet' ? artifact.preview : undefined;
+  if (!preview?.rows.length) return <DocumentCoverPreview artifact={artifact} title={title} />;
+
+  const columnCount = Math.max(1, ...preview.rows.map((row) => row.length));
+  const gridTemplateColumns =
+    columnCount === 3 ? '1fr 1.6fr 1fr' : `repeat(${columnCount}, minmax(0, 1fr))`;
+
+  return (
+    <span
+      className="block border-b border-[var(--border-default)] bg-[var(--doc-cover-surface)]"
+      style={getDocumentCoverThemeStyle(artifact.theme)}
+      data-document-theme={artifact.theme ?? 'light'}
+    >
+      {preview.rows.map((row, rowIndex) => (
+        <span
+          key={rowIndex}
+          className={cn(
+            'grid min-h-8 border-b border-[var(--border-default)] last:border-b-0',
+            rowIndex === 0 && preview.hasHeader && 'bg-[var(--doc-cover-tint)]',
+          )}
+          style={{ gridTemplateColumns }}
+        >
+          {Array.from({ length: columnCount }, (_, columnIndex) => (
+            <span
+              key={columnIndex}
+              className={cn(
+                'min-w-0 truncate border-r border-[var(--border-default)] px-2.5 py-1.5 text-12 leading-5 text-[var(--doc-cover-ink)] last:border-r-0',
+                rowIndex === 0 && preview.hasHeader && 'text-11 text-[var(--doc-cover-muted)]',
+              )}
+            >
+              {row[columnIndex] || '\u00a0'}
+            </span>
+          ))}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export function ArtifactPreview({
+  artifact,
+  title,
+}: {
+  artifact: DocumentArtifactMetadata;
+  title: string;
+}) {
+  if (artifact.format === 'xlsx') return <SheetPreview artifact={artifact} title={title} />;
+  if (artifact.format === 'pptx') return <SlidePreview artifact={artifact} title={title} />;
+  return <DocumentCoverPreview artifact={artifact} title={title} />;
+}
+
 function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
+  const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
   const ctxMenu = useFileChipContextMenu({
@@ -101,6 +277,16 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
     setTextLightboxOpen(true);
   };
 
+  const artifact = file.artifact;
+  const format = artifact?.format;
+  const formatLabel = format ? t(`chat.generatedFiles.formats.${format}`) : null;
+  const artifactTitle = artifact?.title || file.name;
+  const summaryLabel = artifact?.summary
+    ? t(`chat.generatedFiles.summary.${artifact.summary.kind}`, {
+        count: formatArtifactSummaryValue(artifact.summary),
+      })
+    : null;
+
   return (
     <>
       <button
@@ -109,17 +295,42 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
         onClick={() => void open()}
         onContextMenu={ctxMenu.onContextMenu}
         className={cn(
-          'inline-flex items-center gap-1.5',
-          'h-7 px-2.5 py-1.5 max-w-[280px]',
-          'rounded-[9999px]',
-          'bg-[var(--msg-md-inline-code-bg)]',
-          'text-13 font-medium text-[var(--msg-assistant-text)]',
-          'hover:bg-[var(--cmd-palette-item-hover)]',
-          'transition-colors cursor-pointer',
+          artifact
+            ? 'group block w-full max-w-[420px] cursor-pointer overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left transition-colors hover:border-[var(--text-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]'
+            : 'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-[9999px] bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
         )}
       >
-        <FileText size={14} className="shrink-0 opacity-70" />
-        <span className="truncate">{file.name}</span>
+        {artifact ? (
+          <>
+            <ArtifactPreview artifact={artifact} title={artifactTitle} />
+            <span className="flex min-w-0 items-center gap-3 px-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
+                  {artifactTitle}
+                </span>
+                <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
+                  <span className="shrink-0">{formatLabel}</span>
+                  {summaryLabel && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="shrink-0">{summaryLabel}</span>
+                    </>
+                  )}
+                  <span aria-hidden="true">·</span>
+                  <span className="truncate">{file.name}</span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-secondary)]">
+                <FileText size={15} aria-hidden="true" />
+              </span>
+            </span>
+          </>
+        ) : (
+          <>
+            <FileText size={14} className="shrink-0 opacity-70" />
+            <span className="truncate">{file.name}</span>
+          </>
+        )}
       </button>
       {ctxMenu.menu}
       {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
@@ -150,10 +361,10 @@ interface GeneratedFileStat {
 }
 
 /**
- * 本地文件是否有足够证据归属于该 turn。tool 来源必须有真实创建时间:
- * Write 也可能覆盖既有文件,仅凭成功/mtime 不能把它当成“新建”;birthtime
- * 不可用时宁可不出。command 来源为兼容不提供 birthtime 的 Linux FS,维持
- * mtime 回退,但仍受完整 turn 时间窗约束。
+ * 本地文件是否有足够证据归属于该 turn。普通文件工具必须有真实创建时间；
+ * 只有文档工具的结构化 ok:true 结果能证明 overwrite 是本轮成功交付，此时
+ * 改用 mtime。command 来源为兼容不提供 birthtime 的 Linux FS,维持 mtime
+ * 回退,但仍受完整 turn 时间窗约束。
  */
 export function isLocalGeneratedFileInTurn(
   file: GeneratedFileRef,
@@ -164,16 +375,16 @@ export function isLocalGeneratedFileInTurn(
   if (stat.kind !== 'file' || turnStartMs === null) return false;
   const birthtimeMs =
     typeof stat.birthtimeMs === 'number' && stat.birthtimeMs > 0 ? stat.birthtimeMs : null;
-  const ts = file.source === 'tool' ? birthtimeMs : (birthtimeMs ?? stat.mtimeMs);
-  // tool 来源的 birthtime 是同机 FS 事实,不放宽下界:放 2 分钟 slack 会把本轮
-  // 覆盖的旧文件误当新建。command 来源保留消息落库/执行时序抖动余量。
-  const lowerBound =
-    file.source === 'tool' ? turnStartMs : turnStartMs - TURN_START_SLACK_MS;
-  return (
-    typeof ts === 'number' &&
-    ts >= lowerBound &&
-    (turnEndMs === null || ts < turnEndMs)
-  );
+  const confirmedArtifactOverwrite = file.artifactConfirmed === true;
+  const ts = confirmedArtifactOverwrite
+    ? stat.mtimeMs
+    : file.source === 'tool'
+      ? birthtimeMs
+      : (birthtimeMs ?? stat.mtimeMs);
+  // tool 来源的 birthtime 或显式成功交付的 mtime 都是同机 FS 事实，不放宽
+  // 下界；command 来源保留消息落库/执行时序抖动余量。
+  const lowerBound = file.source === 'tool' ? turnStartMs : turnStartMs - TURN_START_SLACK_MS;
+  return typeof ts === 'number' && ts >= lowerBound && (turnEndMs === null || ts < turnEndMs);
 }
 
 /** 折叠阈值:约两行 chip。超过则收起为「前 N 个 + 再显示 M 个文件」。 */
@@ -191,26 +402,21 @@ export function GeneratedFilesCard({
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
-  // 本地会话:stat 过滤到真实存在的文件(null = 尚未算完,不渲染,避免闪现后
-  // 又被过滤掉);远程:tool 来源先乐观呈现、远端 stat 复核,command 候选无法
-  // 验证 mtime 一律不出(见文件头注释)。
-  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(
-    remoteOrigin ? files.filter((f) => f.source === 'tool') : null,
-  );
+  // 本地与远程都先保持 null，等存在性检查完成后再展示，避免完成卡闪现后消失。
+  // 远程 command 候选无法验证 mtime，一律不出（见文件头注释）。
+  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(null);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setExisting(null);
     if (remoteOrigin) {
       const toolFiles = files.filter((f) => f.source === 'tool');
-      setExisting(toolFiles);
       void (async () => {
         const checks = await Promise.all(
           toolFiles.map(async (f) => {
             const verdict = await verifyRemotePathCached(remoteOrigin, fileCtx.workingDir, f.path);
-            // nonfile(不存在 / 非普通文件)/ directory 是远端确定结论 → 摘掉;
-            // unknown(断链 / 限流)保持乐观。
-            return verdict !== 'nonfile' && verdict !== 'directory';
+            return isConfirmedRemoteGeneratedFile(verdict);
           }),
         );
         if (!cancelled) setExisting(toolFiles.filter((_, idx) => checks[idx]));
@@ -244,12 +450,17 @@ export function GeneratedFilesCard({
   const visible = expanded ? existing : existing.slice(0, MAX_VISIBLE_FILES);
   const hiddenCount = existing.length - visible.length;
 
+  const hasArtifacts = existing.some((file) => file.artifact);
+  const hasOnlyArtifacts = existing.every((file) => file.artifact);
+
   return (
-    <div className="my-1 flex flex-col gap-1.5">
-      <span className="text-12 text-[var(--text-secondary)]">
-        {t('chat.generatedFiles.title')}
-      </span>
-      <div className="flex flex-wrap gap-1.5">
+    <div className="my-1 flex flex-col gap-2">
+      {!hasOnlyArtifacts && (
+        <span className="text-12 font-medium text-[var(--text-secondary)]">
+          {t('chat.generatedFiles.title')}
+        </span>
+      )}
+      <div className={cn('flex flex-wrap gap-2', hasArtifacts && 'flex-col')}>
         {visible.map((f) => (
           <GeneratedFileChip key={f.path} file={f} />
         ))}

@@ -261,12 +261,14 @@ export interface OrcaCancelStaleTeamsArgs {
 /** Archive every still-active worker session linked to one team. */
 export interface OrcaArchiveWorkersByTeamArgs {
   teamId: string;
+  sessionIds: string[];
   now: number;
 }
 
 /** Repair active worker sessions left behind under a lead's inactive teams. */
 export interface OrcaReconcileInactiveTeamWorkersForLeadArgs {
   leadSessionId: string;
+  sessionIds: string[];
   now: number;
 }
 

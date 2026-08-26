@@ -54,3 +54,8 @@ export function hydrateSessionProvider(sessionId: string, providerId: string | n
 export function clearSessionProvider(sessionId: string): void {
   bySession.delete(sessionId);
 }
+
+/** 账户 / app-session 边界清理全部 owner-scoped 路由。 */
+export function clearAllSessionProviders(): void {
+  bySession.clear();
+}

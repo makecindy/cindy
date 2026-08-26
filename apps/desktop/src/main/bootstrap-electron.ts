@@ -61,7 +61,6 @@ import {
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
 
-const PROCESS_STARTED_AT_MS = Date.now();
 let retryPiRuntimeAfterNetworkRecovery: (() => void) | null = null;
 let disposePiRuntimeRecovery: (() => void) | null = null;
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
@@ -257,9 +256,9 @@ import { createChatAttachmentStageHandler } from './chatAttachmentStage';
 import {
   cleanupOwnedUnpersistedStagedChatAttachments,
   getChatAttachmentCacheRoot,
+  getChatAttachmentOwnerCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
-  sweepStagedChatAttachmentsOnStartup,
 } from './file-browser/remote-file-cache';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import { legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
@@ -299,7 +298,6 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
-import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
 import {
   getSessionRowSnapshot,
   resumeDeletedPiSubagentCleanup,
@@ -640,6 +638,14 @@ import {
   writeSilentEncryptedRetryEnabled,
 } from './maker-host/silent-encrypted-retry-store.js';
 import {
+  readSessionRuntimeFallbackSettingsState,
+  resetSessionRuntimeFallbackSettings,
+  writeSessionRuntimeFallbackEnabled,
+} from './maker-host/session-runtime-fallback-store.js';
+import { clearAllSessionProviders } from './maker-host/session-provider-store.js';
+import { clearAllSessionRuntimeAxes } from './maker-host/session-effort-store.js';
+import { clearAllSessionRuntimeControlStates } from './maker-ipc/sessionRuntimeControl.js';
+import {
   resolveOwnerScopedSecretStorageKey,
   getProviderSecretStore,
 } from './secrets/providerSecretStore.js';
@@ -659,6 +665,10 @@ import {
   readCompactionState,
   resetCompactionPct,
   writeCompactionPct,
+  readPiCompactionPct,
+  readPiCompactionState,
+  resetPiCompactionPct,
+  writePiCompactionPct,
 } from './maker-host/compaction-settings-store.js';
 import {
   readSubagentModelSettings,
@@ -829,6 +839,7 @@ import {
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
+  setAppSessionCommitBoundaryHook,
 } from './appSessionState.js';
 import {
   resolveNewMakerMenuCommand,
@@ -1120,6 +1131,25 @@ function assertChatEmbeddingMutationOwner(raw: unknown): void {
     throwIpcError(
       'PRECONDITION_FAILED',
       'Chat embedding setting belongs to a stale account session.',
+    );
+  }
+}
+
+function assertCompactionMutationOwner(raw: unknown): void {
+  const expected = parseChatEmbeddingOwnerStamp(raw);
+  if (!expected) {
+    throwIpcError('INVALID_PARAMS', 'compaction owner stamp required');
+  }
+  if (
+    !isChatEmbeddingOwnerStampCurrent(
+      expected,
+      getActiveDataOwnerPushStamp(),
+      isAppSessionBoundaryPending(),
+    )
+  ) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Compaction setting belongs to a stale account session.',
     );
   }
 }
@@ -2275,7 +2305,9 @@ registerAppearanceSettingsIpc();
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
 // 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
 // 本产品 spawn 的 agent 根进程。见 main/process-monitor/。
-registerProcessMonitorIpc();
+registerProcessMonitorIpc({
+  allowsSampling: (sender) => resourceUsageWindowController.allowsProcessMonitorSampling(sender),
+});
 
 // ── 主界面布局树存储 IPC──────────────────────────────────────────────
 // renderer 首帧 sendSync 拉布局(规则 7 无跳变)、set/reset 写路径、changed
@@ -2294,6 +2326,11 @@ setCodexImageAuthBinding({
 registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
+setAppSessionCommitBoundaryHook(() => {
+  clearAllSessionProviders();
+  clearAllSessionRuntimeAxes();
+  clearAllSessionRuntimeControlStates();
+});
 authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {
   const builtinOutcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
   if (builtinOutcome === 'deferred') return builtinOutcome;
@@ -4238,23 +4275,70 @@ const registerIpcHandlers = () => {
       effective: 'immediate' as const,
     };
   });
+  ipcMain.handle(MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return sessionRuntimeFallbackWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_SET, async (event, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'session runtime fallback enabled required (boolean)');
+    }
+    writeSessionRuntimeFallbackEnabled(enabled);
+    return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.SESSION_RUNTIME_FALLBACK_RESET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    resetSessionRuntimeFallbackSettings();
+    return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
+  });
 
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return readCompactionPct();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async (event, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
     resetCompactionPct();
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (_e, pct: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof pct !== 'number' || !Number.isFinite(pct)) {
       throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
     }
+    assertCompactionMutationOwner(owner);
     writeCompactionPct(pct);
     return compactionWire();
+  });
+
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readPiCompactionPct();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT, async (event, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
+    resetPiCompactionPct();
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof pct !== 'number' || !Number.isFinite(pct)) {
+      throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
+    }
+    assertCompactionMutationOwner(owner);
+    writePiCompactionPct(pct);
+    return piCompactionWire();
   });
 
   // Window behavior —— swallowActivationClick 保持 renderer 运行时事实标准;
@@ -6741,14 +6825,12 @@ const registerIpcHandlers = () => {
     const ownerScopeKey = activeOwnerScopeKey();
     const ownerId = getActiveAppSession().dataOwnerId;
     if (!ownerId || isAppSessionBoundaryPending()) return;
-    const protectedPaths = await listPersistedChatAttachmentPaths();
     const isCurrentOwner = () =>
       activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
     if (!isCurrentOwner()) return;
     await cleanupOwnedUnpersistedStagedChatAttachments({
       ownerId,
       filePaths,
-      protectedPaths,
       canRemove: isCurrentOwner,
     });
   });
@@ -7143,6 +7225,94 @@ const registerIpcHandlers = () => {
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。
   {
+    const fixedDirectoryIpcLog = createLogger('fixed-directory-ipc');
+    const runFixedDirectoryIpcAction = async <T>(
+      actionName: string,
+      action: () => Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await action();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        fixedDirectoryIpcLog.warn('fixed directory IPC action failed', {
+          action: actionName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError('INTERNAL', 'fixed cache directory action failed');
+      }
+    };
+    const openExistingFixedDirectory = async (
+      rootDir: string,
+      canOpen: () => boolean = () => true,
+    ): Promise<boolean> => {
+      try {
+        const stat = await fs.promises.lstat(rootDir);
+        if (!stat.isDirectory()) return false;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+        throw err;
+      }
+      if (!canOpen()) throw new Error('fixed directory owner changed before open');
+      const error = await shell.openPath(rootDir);
+      if (error) throw new Error(error);
+      return true;
+    };
+    // These actions intentionally accept no renderer path. The frozen xdt-image
+    // cache has no owner metadata, so its confirmed cleanup applies to the whole
+    // profile-level legacy root. Chat attachments remain scoped to the active
+    // owner, but live drafts, message history, and the media ledger are not read:
+    // the explicitly confirmed cache is treated as disposable in full.
+    const clearFixedDirectory = async (
+      rootDir: string,
+      canClear: () => boolean = () => true,
+    ): Promise<void> => {
+      if (!canClear()) throw new Error('fixed directory owner changed before cleanup');
+      await fs.promises.rm(rootDir, { recursive: true, force: true });
+    };
+    const confirmFixedDirectoryClear = async (
+      event: Electron.IpcMainInvokeEvent,
+      labels: { title: string; message: string; confirmButton: string },
+    ): Promise<boolean> => {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!ownerWindow || ownerWindow.isDestroyed()) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'fixed directory cleanup requires a live owner window',
+        );
+      }
+      const result = await dialog.showMessageBox(ownerWindow, {
+        type: 'warning',
+        title: labels.title,
+        message: labels.message,
+        buttons: [labels.confirmButton, t('settings.about.storage.cancelButton')],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      return result.response === 0 && !ownerWindow.isDestroyed() && !event.sender.isDestroyed();
+    };
+    const captureActiveChatAttachmentRoot = () => {
+      const ownerScopeKey = activeOwnerScopeKey();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId || isAppSessionBoundaryPending()) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'chat attachment directory requires a stable data owner',
+        );
+      }
+      return {
+        rootDir: getChatAttachmentOwnerCacheRoot(ownerId),
+        isCurrentOwner: () =>
+          activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending(),
+      };
+    };
+    const withActiveChatAttachmentRoot = <T>(
+      action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
+    ): Promise<T> => {
+      const { rootDir, isCurrentOwner } = captureActiveChatAttachmentRoot();
+      return action(rootDir, isCurrentOwner);
+    };
+
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
     // 时清理取全窗口并集,防误删别的窗口的草稿图)。fire-and-forget send。
     ipcMain.on('cindy-media:report-draft-urls', (event, urls: string[]) => {
@@ -7153,19 +7323,16 @@ const registerIpcHandlers = () => {
       getQueueScanTexts: collectAgentInputQueueScanTexts,
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
-      openLegacyImagesDir: async () => {
-        const rootDir = imageCacheStore.getCacheRoot();
-        try {
-          const stat = await fs.promises.lstat(rootDir);
-          if (!stat.isDirectory()) return false;
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
-          throw err;
-        }
-        const error = await shell.openPath(rootDir);
-        if (error) throw new Error(error);
-        return true;
-      },
+      openLegacyImagesDir: () => openExistingFixedDirectory(imageCacheStore.getCacheRoot()),
+      clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
+      openChatAttachmentsDir: () =>
+        withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
+          openExistingFixedDirectory(rootDir, isCurrentOwner),
+        ),
+      clearChatAttachmentsDir: () =>
+        withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
+          clearFixedDirectory(rootDir, isCurrentOwner),
+        ),
     });
     ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
     ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>
@@ -7189,6 +7356,43 @@ const registerIpcHandlers = () => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openLegacyImagesDir();
     });
+    ipcMain.handle('cindy-media:legacy-images-clear', (event) =>
+      runFixedDirectoryIpcAction('legacy-images-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.about.storage.legacyImagesClearConfirmTitle'),
+          message: t('settings.about.storage.legacyImagesClearConfirmDescription'),
+          confirmButton: t('settings.about.storage.legacyImagesClearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        await storageHandlers.clearLegacyImagesDir();
+        return { cleared: true };
+      }),
+    );
+    ipcMain.handle('cindy-media:chat-attachments-open-dir', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.openChatAttachmentsDir();
+    });
+    ipcMain.handle('cindy-media:chat-attachments-clear', (event) =>
+      runFixedDirectoryIpcAction('chat-attachments-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const ownerScope = captureActiveChatAttachmentRoot();
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.about.storage.chatAttachmentsClearConfirmTitle'),
+          message: t('settings.about.storage.chatAttachmentsClearConfirmDescription'),
+          confirmButton: t('settings.about.storage.chatAttachmentsClearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        if (!ownerScope.isCurrentOwner()) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'chat attachment directory owner changed before cleanup',
+          );
+        }
+        await storageHandlers.clearChatAttachmentsDir();
+        return { cleared: true };
+      }),
+    );
   }
 
   // F5: SDK send-time temporary base64 read (renderer-initiated; main-initiated
@@ -7737,44 +7941,6 @@ app.on('ready', async () => {
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
-      //
-      // Staged-attachment bookkeeping is not first-paint readiness. The persisted-path
-      // lookup is a LIKE + json_tree scan over every retained message body; on a
-      // multi-GB owner DB that blocked LocalDbGate for ~24s after splash had already
-      // unmounted, leaving a white window. Sweep is fire-and-forget, only queries the
-      // DB when the owner cache already has stale files, and is delayed so the shared
-      // db worker can serve session-list / first-paint RPCs first. A stale-cache user
-      // would otherwise just move the 24s stall from the white screen onto the first
-      // task-list query (the db worker's better-sqlite3 .all() is synchronous).
-      const STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS = 5_000;
-      const stagedAttachmentSweepTimer = setTimeout(() => {
-        void sweepStagedChatAttachmentsOnStartup({
-          ownerId: userId,
-          createdBeforeMs: PROCESS_STARTED_AT_MS,
-          loadProtectedPaths: listPersistedChatAttachmentPaths,
-          canContinue: () =>
-            getActiveAppSession().dataOwnerId === userId && !isAppSessionBoundaryPending(),
-        })
-          .then((result) => {
-            if (result.removed > 0 || result.protected > 0) {
-              dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
-                ...result,
-                ownerId: userId,
-              });
-            }
-          })
-          .catch((err) => {
-            dbClientLog.warn(
-              '[ChatAttachment] startup staged attachment sweep failed (non-fatal)',
-              {
-                ownerId: userId,
-                error: err instanceof Error ? err.message : String(err),
-              },
-            );
-          });
-      }, STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS);
-      stagedAttachmentSweepTimer.unref?.();
-      logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
         // 还会长期持有同一 DB；lease 必须留到真正 logout / app quit 才释放。
@@ -8816,12 +8982,30 @@ function silentEncryptedRetryWire() {
   };
 }
 
+function sessionRuntimeFallbackWire() {
+  const state = readSessionRuntimeFallbackSettingsState();
+  return {
+    enabled: state.value.enabled,
+    isCustomized: state.isCustomized,
+    defaultEnabled: state.defaults.enabled,
+  };
+}
+
 function compactionWire() {
   const state = readCompactionState();
   return {
     pct: state.value.claudeCodeAutoCompactPct,
     isCustomized: state.isCustomized,
     defaultPct: state.defaults.claudeCodeAutoCompactPct,
+  };
+}
+
+function piCompactionWire() {
+  const state = readPiCompactionState();
+  return {
+    pct: state.value.piAutoCompactPct,
+    isCustomized: state.isCustomized,
+    defaultPct: state.defaults.piAutoCompactPct,
   };
 }
 

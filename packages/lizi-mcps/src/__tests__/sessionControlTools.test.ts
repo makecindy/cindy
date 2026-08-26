@@ -4,6 +4,7 @@ import { XdtHelperToolRegistry, type XdtHelperToolResult } from '../lizi_xdtHelp
 import {
   registerCancelSessionQueuedMessageTool,
   registerGetSessionRuntimeTool,
+  registerSetSessionRuntimeTool,
   registerSteerSessionTool,
   registerStopSessionTurnTool,
   registerUpdateSessionQueuedMessageTool,
@@ -54,6 +55,19 @@ function setup(opts?: { sessionId?: string | undefined }) {
         gracefulStopState: 'waiting-for-safe-point' as const,
       },
     })),
+    setSessionRuntime: vi.fn(async ({ patch }) => ({
+      ok: true as const,
+      status: 'applied' as const,
+      generation: 2,
+      effectiveProfile: {
+        agentKind: 'codex' as const,
+        model: patch.model ?? 'gpt-5.6-sol',
+        providerId: patch.providerId ?? 'openai',
+        effort: patch.effort ?? 'high',
+        fastMode: patch.fastMode ?? false,
+      },
+      pendingMutation: null,
+    })),
   };
   const registry = new XdtHelperToolRegistry();
   registerUpdateSessionQueuedMessageTool(registry, deps);
@@ -61,10 +75,57 @@ function setup(opts?: { sessionId?: string | undefined }) {
   registerSteerSessionTool(registry, deps);
   registerStopSessionTurnTool(registry, deps);
   registerGetSessionRuntimeTool(registry, deps);
+  registerSetSessionRuntimeTool(registry, deps);
   return { deps, registry };
 }
 
 describe('cindy_helper session control tools', () => {
+  it('atomically changes the current session runtime with generation CAS', async () => {
+    const { deps, registry } = setup();
+    const result = parse(
+      await registry.call('set_session_runtime', {
+        model: 'gpt-5.6-sol',
+        effort: 'high',
+        fast: true,
+        expected_generation: 1,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      session_id: 'caller-session',
+      status: 'applied',
+      generation: 2,
+      effective_boundary: 'immediate',
+      effective: {
+        harness: 'codex',
+        model: 'gpt-5.6-sol',
+        provider_id: 'openai',
+        effort: 'high',
+        fast: true,
+      },
+    });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({
+      targetSessionId: 'caller-session',
+      expectedGeneration: 1,
+      patch: { model: 'gpt-5.6-sol', effort: 'high', fastMode: true },
+    });
+  });
+
+  it('requires a bound current session when session_id is omitted', async () => {
+    const { registry } = setup({ sessionId: undefined });
+    expect(
+      parse(await registry.call('set_session_runtime', { effort: 'high' })),
+    ).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+  });
+
+  it('requires a read-before-write generation token', async () => {
+    const { registry } = setup();
+    expect(
+      parse(await registry.call('set_session_runtime', { effort: 'high' })),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+
   it('updates and cancels only through the caller-bound ownership context', async () => {
     const { deps, registry } = setup();
 
@@ -156,6 +217,11 @@ describe('cindy_helper session control tools', () => {
       last_activity_at: '2026-08-16T01:00:05.000Z',
       current_action_summary: '正在运行工具 Bash',
       graceful_stop_state: 'waiting-for-safe-point',
+      generation: 0,
+      baseline: null,
+      effective: null,
+      pending: null,
+      fallback_enabled: false,
     });
   });
 

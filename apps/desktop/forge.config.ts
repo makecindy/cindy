@@ -21,6 +21,8 @@ import {
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { READ_SHEET_RUNTIME_PACKAGES } from '../../packages/lizi-mcps/src/cindy-docs/readSheetRuntimeDeps';
+import { reviewPdfRuntimePackages } from './src/main/reviewer/reviewPdfRuntimeDeps';
 
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
@@ -253,8 +255,12 @@ function resolveOptions(fromDirs?: string[]): { paths: string[] } | undefined {
 }
 
 function copyDiscordRuntimeDeps(destModules: string): void {
+  copyRuntimeDependencyTrees(DISCORD_RUNTIME_DEPS, destModules);
+}
+
+function copyRuntimeDependencyTrees(deps: readonly string[], destModules: string): void {
   const seen = new Set<string>();
-  for (const dep of DISCORD_RUNTIME_DEPS) {
+  for (const dep of deps) {
     copyDependencyTree(dep, destModules, undefined, seen);
   }
 }
@@ -324,6 +330,9 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     ...NATIVE_RUNTIME_DEPS,
     parcelWatcherPlatformPkg(targetPlatform, targetArch),
     ...sharpPlatformPkgs(targetPlatform, targetArch),
+    // Reviewer PDF utility 的 canvas wrapper 由 Vite externalize；正式包必须
+    // 同时带 wrapper 与目标平台的预编译 binding，不能依赖 workspace hoist。
+    ...reviewPdfRuntimePackages(targetPlatform, targetArch),
     // loudness 只在 Windows 用 (录音时静音)。它的 Win 后端是个捆绑的 .exe,
     // 必须运行时按 __dirname 找 — 所以走 NATIVE_RUNTIME_DEPS 这条路, 不让 vite
     // bundle。Mac/Linux 完全不带, 避免拖入 execa 这条无用依赖链。
@@ -345,6 +354,7 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     console.log(`[forge:afterCopy] bundled native dep: ${dep} <- ${src}`);
   }
   copyDiscordRuntimeDeps(destModules);
+  copyRuntimeDependencyTrees(READ_SHEET_RUNTIME_PACKAGES, destModules);
 }
 
 // 针对 packaged buildPath 的 node_modules 强制重建 better-sqlite3 —— force:true 确保
@@ -1560,6 +1570,13 @@ const config: ForgeConfig = {
           config: 'vite.review-pdf-process.config.ts',
           // 正式包关闭 RunAsNode；PDF.js 在一次性 utility process 中执行，
           // 超时直接 kill，不阻塞 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/doc-tools/docsOutputWriterUtilityProcess.ts',
+          config: 'vite.preload.config.ts',
+          // 最终文档落盘绑定到已验证父目录的 cwd capability，避免 main 侧
+          // realpath 与 write/rename 之间被 symlink 替换。
           target: 'preload',
         },
         {

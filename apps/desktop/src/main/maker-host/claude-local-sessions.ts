@@ -18,6 +18,8 @@ import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current
 import { createLogger } from '../logger.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
+import { commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
+import { capImportedToolResultContent } from '../../shared/toolResultPersistCap.js';
 import {
   cacheImportedBase64Image,
   importedUserContent,
@@ -246,19 +248,36 @@ export async function importExternalClaudeCodeMessagesForSession(sessionId: stri
     return;
   }
 
+  const rows = [];
+  for (const row of imported) {
+    if (row.role === 'tool_result' && typeof row.content === 'string') {
+      // 截断前对原文挂账:worker 里的 stringifyImportedContent 看不到 ledger。
+      await commitMessageMediaRefs({
+        sessionId,
+        role: 'tool_result',
+        content: row.content,
+      }).catch((err) => {
+        log.warn('imported tool_result media ref commit failed', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+    rows.push({
+      lineNo: row.lineNo,
+      partIndex: row.partIndex,
+      role: row.role,
+      content: capImportedToolResultContent(row.role, row.content),
+      toolUseId: row.toolUseId,
+      agentMeta: row.agentMeta,
+      createdAt: row.createdAt,
+    });
+  }
   const { changed } = await getDbClient().tx('claude.importMessages', {
     sessionId,
     importClientIdPrefix,
     sdkSessionId: session.sdkSessionId,
-    rows: imported.map((row) => ({
-      lineNo: row.lineNo,
-      partIndex: row.partIndex,
-      role: row.role,
-      content: row.content,
-      toolUseId: row.toolUseId,
-      agentMeta: row.agentMeta,
-      createdAt: row.createdAt,
-    })),
+    rows,
   });
   if (cacheScope) {
     claudeMessageImportFileCache.set(sessionId, { scope: cacheScope, path: sourceFile, ...sourceStat });

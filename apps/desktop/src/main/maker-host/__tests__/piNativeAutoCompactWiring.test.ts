@@ -1,6 +1,6 @@
 /**
- * Desktop Pi runtime 必须挂上与 Claude Code 共用的自动压缩阈值。
- * 漏接时 PiAgent controller 恒为 null，生产功能不会启用。
+ * Desktop Pi runtime leaves automatic compaction to Pi itself.
+ * The shared host percentage remains a Claude Code setting.
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,6 @@ const state = vi.hoisted(() => ({
   binaryPath: '',
   ripgrepPath: '',
   userDataPath: '',
-  compactPct: 75,
 }));
 
 vi.mock('electron', () => ({
@@ -29,10 +28,6 @@ vi.mock('../../agent-binaries/index.js', () => ({
 vi.mock('../runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => state.ripgrepPath,
   claudeUpstreamEndpoint: () => 'https://example.test',
-}));
-
-vi.mock('../compaction-settings-store.js', () => ({
-  readCompactionPct: () => state.compactPct,
 }));
 
 vi.mock('../../mcp-integrations/piEnvironment.js', () => ({
@@ -109,7 +104,6 @@ describe('Desktop Pi auto-compact wiring', () => {
     state.userDataPath = path.join(root, 'user-data');
     state.binaryPath = path.join(root, 'pi');
     state.ripgrepPath = path.join(root, 'rg');
-    state.compactPct = 75;
     mkdirSync(state.userDataPath, { recursive: true });
     writeFileSync(state.ripgrepPath, 'fake managed ripgrep');
   });
@@ -118,13 +112,11 @@ describe('Desktop Pi auto-compact wiring', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('injects the shared compaction threshold getter into Pi runtimeConfig', () => {
+  it('does not inject the shared host compaction threshold into Pi runtimeConfig', () => {
     const agent = buildPiAgent({ logger });
     expect(agent).not.toBeNull();
     const runtimeConfig = (agent as unknown as { deps: { runtimeConfig: AgentRuntimeConfig } })
       .deps.runtimeConfig;
-    expect(runtimeConfig.autoCompactThresholdPct).toBe(75);
-    state.compactPct = 82;
-    expect(runtimeConfig.autoCompactThresholdPct).toBe(82);
+    expect(runtimeConfig.autoCompactThresholdPct).toBeUndefined();
   });
 });

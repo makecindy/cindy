@@ -70,6 +70,7 @@ function realBuiltinProviderNames(): KnownProviderName[] {
     ssh: {} as never,
     memory: {} as never,
     contacts: {} as never,
+    docs: {} as never,
     xdtHelper: {} as never,
     orca: {} as never,
     lsp: {} as never,
@@ -393,6 +394,22 @@ describe('PluginRegistry — scoped priority', () => {
       // hosted-elsewhere plugins (e.g. browser →「电脑使用」) are also omitted.
       expect(HOSTED_ELSEWHERE_PLUGIN_IDS.has(item.id)).toBe(false);
     }
+  });
+
+  // 文档工坊(cindy_docs)的归置裁决:不是基础设施(不做文档的用户应该能关掉,
+  // 省下两个入口工具的上下文),也没有专属设置页,所以它必须出现在通用「内置工具」
+  // 列表里、默认开启、可由用户在项目或用户默认作用域里关掉。
+  it('exposes the document toolkit as a user-toggleable builtin, enabled by default', async () => {
+    expect(ESSENTIAL_PLUGIN_IDS.has('docs')).toBe(false);
+    expect(HOSTED_ELSEWHERE_PLUGIN_IDS.has('docs')).toBe(false);
+    expect(registry.isEnabled('docs', workingDir)).toBe(true);
+
+    const list = await registry.listPlugins(workingDir);
+    expect(list.map((item) => item.id)).toContain('docs');
+
+    writeProjectSettings(workingDir, { docs: false });
+    registry = createRegistry();
+    expect(registry.isEnabled('docs', workingDir)).toBe(false);
   });
 
   it('listPlugins exposes browser in the user-default scope', async () => {

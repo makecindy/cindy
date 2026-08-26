@@ -114,6 +114,71 @@ describe('process monitor IPC authorization', () => {
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalledTimes(3);
   });
 
+  it('Main retains but does not sample a hidden prewarm subscription', async () => {
+    const sample = vi.fn().mockResolvedValue({ capturedAtMs: 1, entries: [] });
+    const allowsSampling = vi.fn().mockReturnValue(false);
+    const sender = fakeSender();
+    register({ sampler: { sample }, allowsSampling });
+
+    await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
+    await Promise.resolve();
+
+    expect(allowsSampling).toHaveBeenCalledWith(sender);
+    expect(sample).not.toHaveBeenCalled();
+    expect(sender.once).toHaveBeenCalledOnce();
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the Main sampling gate before each tick and before publishing', async () => {
+    let resolveFirstSample!: (sample: { capturedAtMs: number; entries: [] }) => void;
+    const firstSample = new Promise<{ capturedAtMs: number; entries: [] }>((resolve) => {
+      resolveFirstSample = resolve;
+    });
+    const sample = vi
+      .fn()
+      .mockImplementationOnce(() => firstSample)
+      .mockResolvedValue({ capturedAtMs: 2, entries: [] });
+    let allowed = true;
+    const sender = fakeSender();
+    register({ sampler: { sample }, allowsSampling: () => allowed, sampleIntervalMs: 5 });
+    const subscribe = handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL);
+    const unsubscribe = handlerFor(PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL);
+
+    await subscribe({ sender });
+    await vi.waitFor(() => expect(sample).toHaveBeenCalledOnce());
+    allowed = false;
+    resolveFirstSample({ capturedAtMs: 1, entries: [] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(sample).toHaveBeenCalledOnce();
+
+    allowed = true;
+    await vi.waitFor(() => expect(sample.mock.calls.length).toBeGreaterThan(1));
+    await unsubscribe({ sender });
+  });
+
+  it('logs a stable child-process source before the first Windows OS scan', async () => {
+    const scanOsProcesses = vi.fn().mockResolvedValue({ rows: [], childrenByParent: new Map() });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const sender = fakeSender();
+    register({
+      sampler: undefined,
+      scanOsProcesses,
+      platform: 'win32',
+      log,
+    });
+
+    await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
+    await vi.waitFor(() => expect(scanOsProcesses).toHaveBeenCalledOnce());
+
+    expect(log.info).toHaveBeenCalledWith(
+      'Windows OS process scan requested by resource usage sampling',
+      { childProcessSource: 'process-monitor.windows-os-scan' },
+    );
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain('-NoProfile');
+  });
+
   it('订阅后立即推送一帧;窗口不再可信时不推', async () => {
     const sample = { capturedAtMs: 7, entries: [] };
     const sampleNow = vi.fn().mockResolvedValue(sample);
@@ -136,6 +201,30 @@ describe('process monitor IPC authorization', () => {
     await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
     await vi.waitFor(() => expect(sender.once).toHaveBeenCalledTimes(2));
     expect(sender.removeListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fabricate an empty snapshot after failure and recovers on the next tick', async () => {
+    const recovered = { capturedAtMs: 8, entries: [] };
+    const sample = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN', syscall: 'read' }),
+      )
+      .mockResolvedValue(recovered);
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const sender = fakeSender();
+    register({ sampler: { sample }, log, sampleIntervalMs: 5 });
+
+    await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
+    await vi.waitFor(() => expect(sample).toHaveBeenCalledOnce());
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith('process monitor sample failed', {
+      error: 'read ENOTCONN',
+    });
+
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledWith(PROCESS_MONITOR_SAMPLE_CHANNEL, recovered);
+    });
   });
 
   it('反复切换面板时清理旧 destroyed 监听器', async () => {

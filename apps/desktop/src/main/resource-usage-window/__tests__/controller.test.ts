@@ -109,6 +109,7 @@ function makeHarness(
   timeoutMs = 5000,
   prewarmTimeoutMs = 10_000,
   recoveryStabilityMs = 30_000,
+  platform: NodeJS.Platform = 'linux',
 ) {
   const windows: FakeWindow[] = [];
   const mainSender = { id: 100 } as WebContents;
@@ -122,6 +123,7 @@ function makeHarness(
     openTimeoutMs: timeoutMs,
     prewarmTimeoutMs,
     recoveryStabilityMs,
+    platform,
   });
   return { controller, windows, mainSender };
 }
@@ -135,6 +137,36 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('ResourceUsageWindowController', () => {
+  it('keeps Windows prewarm sampling paused until the user explicitly opens the window', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'win32');
+
+    controller.prewarm();
+    expect(controller.allowsProcessMonitorSampling(windows[0]!.webContents)).toBe(false);
+    expect(controller.markRendererReady(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.send).toHaveBeenLastCalledWith(
+      RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+      false,
+    );
+
+    windows[0]?.emitWebContents('did-start-loading');
+    expect(windows[0]?.send).toHaveBeenLastCalledWith(
+      RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+      false,
+    );
+    expect(controller.markRendererReady(windows[0]!.webContents)).toBe(true);
+
+    expect(controller.open(mainSender)).toBe(true);
+    expect(controller.allowsProcessMonitorSampling(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.send).toHaveBeenLastCalledWith(
+      RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+      true,
+    );
+    expect(windows[0]?.show).not.toHaveBeenCalled();
+
+    expect(controller.markPresentationReady(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.show).toHaveBeenCalledOnce();
+  });
+
   it('prewarms a complete presentation without showing or focusing it', () => {
     const { controller, windows } = makeHarness();
 

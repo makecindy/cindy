@@ -4,7 +4,9 @@
  * 依赖全部注入(规则 14):Electron 接线在 bootstrap-electron.ts 只做
  * ipcMain.handle 适配,测试用内存 harness 直接调 handler body。
  *
- * 交互契约(一律先报数后动手):
+ * 交互契约:
+ *   - 两个固定缓存目录只允许打开或整目录清理;清理前由 main 原生对话框做破坏性确认,
+ *     main 不接受路径,也不读取消息数据库或媒体账本;
  *   - stats:占用总览(账面统计 + 死目录；不在设置页挂载时遍历历史图片目录);
  *   - scan:清理预检——renderer 随参带草稿附件 URL(§4 暂存区 (1)),这里
  *     叠加内存队列 (2) 与崩溃快照 (3) 组成活引用集,产出各类可清理项报数;
@@ -43,6 +45,12 @@ export interface StorageIpcDeps {
   legacyRootDir?: string;
   /** Fixed-purpose directory opener. It returns false when the legacy directory is absent. */
   openLegacyImagesDir?: () => Promise<boolean>;
+  /** Delete only the fixed legacy image cache directory; no ledger or message lookup. */
+  clearLegacyImagesDir?: () => Promise<void>;
+  /** Fixed-purpose directory opener for the active owner's staged chat attachments. */
+  openChatAttachmentsDir?: () => Promise<boolean>;
+  /** Delete only the active owner's staged attachment root; no ledger or message lookup. */
+  clearChatAttachmentsDir?: () => Promise<void>;
 }
 
 export interface StorageStatsResult {
@@ -140,6 +148,48 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
           error: err instanceof Error ? err.message : String(err),
         });
         throwIpcError('INTERNAL', 'failed to open legacy image directory');
+      }
+    },
+
+    async clearLegacyImagesDir(): Promise<void> {
+      if (!deps.clearLegacyImagesDir) {
+        throwIpcError('INTERNAL', 'legacy image directory cleaner is unavailable');
+      }
+      try {
+        await deps.clearLegacyImagesDir();
+      } catch (err) {
+        log.warn('clear legacy image directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to clear legacy image directory');
+      }
+    },
+
+    async openChatAttachmentsDir(): Promise<{ opened: boolean }> {
+      if (!deps.openChatAttachmentsDir) {
+        throwIpcError('INTERNAL', 'chat attachment directory opener is unavailable');
+      }
+      try {
+        return { opened: await deps.openChatAttachmentsDir() };
+      } catch (err) {
+        log.warn('open chat attachment directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to open chat attachment directory');
+      }
+    },
+
+    async clearChatAttachmentsDir(): Promise<void> {
+      if (!deps.clearChatAttachmentsDir) {
+        throwIpcError('INTERNAL', 'chat attachment directory cleaner is unavailable');
+      }
+      try {
+        await deps.clearChatAttachmentsDir();
+      } catch (err) {
+        log.warn('clear chat attachment directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to clear chat attachment directory');
       }
     },
 

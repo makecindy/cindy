@@ -1351,7 +1351,9 @@ describe('远程交互接线不变式', () => {
   it('F2: fork IPC handler 广播 sessions:created(否则 fork 会话在被控端/其它控制端不出现)', () => {
     const src = mainSrc('maker-ipc/fork.ts');
     expect(src).toContain('broadcastSessionCreated(session.id)');
-    expect(src).toContain("tapWindowBroadcast('local-db:sessions:created'");
+    expect(src).toContain('emitSessionCreated');
+    const helper = mainSrc('localDb/ipc/sessionCreatedBroadcast.ts');
+    expect(helper).toContain("tapWindowBroadcast('local-db:sessions:created'");
   });
 
   it('F3: schedule / project-automation 的 broadcast 补 tapWindowBroadcast(否则远程不回流)', () => {

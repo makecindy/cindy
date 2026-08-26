@@ -6,7 +6,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import type { PluggableList } from 'unified';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { StreamFadeSpan } from '../StreamFadeSpan';
+import { StreamFadeListItem, StreamFadeSpan } from '../StreamFadeSpan';
 import {
   commitWordFadeCandidate,
   createWordFadeCandidate,
@@ -39,6 +39,7 @@ function StreamingMarkdownHarness({
   const components = useMemo<Components>(
     () => ({
       span: (props) => <StreamFadeSpan {...props} wordFadeState={state} />,
+      li: (props) => <StreamFadeListItem {...props} wordFadeState={state} />,
     }),
     [state],
   );
@@ -86,8 +87,8 @@ describe('StreamFadeSpan', () => {
     expect(forwardedAnimationEnd).toHaveBeenCalledOnce();
     expect(forwardedAnimationEnd.mock.calls[0][0].animationName).toBe('stream-word-in');
     expect(forwardedTargetMatched).toBe(true);
-    expect(state.settled.has('wf-original')).toBe(true);
-    expect(state.settled.has('wf-reused')).toBe(false);
+    expect(state.timeline.settled.has('wf-original')).toBe(true);
+    expect(state.timeline.settled.has('wf-reused')).toBe(false);
   });
 
   it('忽略子节点冒泡和其它动画名', () => {
@@ -111,35 +112,94 @@ describe('StreamFadeSpan', () => {
     fireAnimationEnd(span.querySelector('code')!);
     fireAnimationEnd(span, 'spinner-rotate');
 
-    expect(state.settled.size).toBe(0);
+    expect(state.timeline.settled.size).toBe(0);
   });
 
-  it('settled 前缀拆除导致位置 key 前移时重建真实 span,旧节点不能结算新段', () => {
+  it('settled 后只摘动画 class，后续增长不替换既有 DOM 节点', () => {
     const state = createWordFadeState();
-    state.nowFn = () => 0;
+    state.timeline.nowFn = () => 0;
     const view = render(<StreamingMarkdownHarness content="one two three" state={state} />);
     const firstFrame = Array.from(
-      view.container.querySelectorAll<HTMLSpanElement>('.stream-word'),
+      view.container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),
     );
-    const oldFirst = firstFrame[0];
-    const oldSecond = firstFrame[1];
-    const secondKey = oldSecond.dataset.wfKey!;
+    const firstKeys = firstFrame.map((span) => span.dataset.wfKey);
 
-    fireAnimationEnd(oldFirst);
+    fireAnimationEnd(firstFrame[0]);
+    expect(firstFrame[0].isConnected).toBe(true);
+    expect(firstFrame[0].classList.contains('stream-word')).toBe(false);
     view.rerender(<StreamingMarkdownHarness content="one two three four" state={state} />);
 
     const secondFrame = Array.from(
-      view.container.querySelectorAll<HTMLSpanElement>('.stream-word'),
+      view.container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),
     );
-    expect(secondFrame.map((span) => span.textContent)).toEqual(['two ', 'three ', 'four']);
-    expect(secondFrame[0].dataset.wfKey).toBe(secondKey);
-    expect(secondFrame[0]).not.toBe(oldFirst);
-    expect(oldSecond.isConnected).toBe(false);
+    expect(secondFrame.map((span) => span.textContent)).toEqual([
+      'one ',
+      'two ',
+      'three ',
+      'four',
+    ]);
+    expect(secondFrame.slice(0, 3).map((span) => span.dataset.wfKey)).toEqual(firstKeys);
+    expect(secondFrame[0]).toBe(firstFrame[0]);
+    expect(secondFrame[1]).toBe(firstFrame[1]);
+    expect(secondFrame[2]).toBe(firstFrame[2]);
+  });
 
-    fireAnimationEnd(oldSecond);
-    expect(state.settled.has(secondKey)).toBe(false);
+  it('DOM commit 接入 16ms / 96ms 连续时间线', () => {
+    const state = createWordFadeState();
+    state.timeline.nowFn = () => 0;
+    const content = Array.from({ length: 10 }, (_, index) => `w${index}`).join(' ');
+    const { container } = render(<StreamingMarkdownHarness content={content} state={state} />);
+    const delays = Array.from(
+      container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),
+      (span) => span.style.getPropertyValue('--wf-delay'),
+    );
+    expect(delays).toEqual([
+      '0ms',
+      '16ms',
+      '32ms',
+      '48ms',
+      '64ms',
+      '80ms',
+      '96ms',
+      '100ms',
+      '104ms',
+      '108ms',
+    ]);
+  });
 
-    fireAnimationEnd(secondFrame[0]);
-    expect(state.settled.has(secondKey)).toBe(true);
+  it('千级突发段把透明等待限制在 160ms 内，同时保留前段节奏', () => {
+    const state = createWordFadeState();
+    state.timeline.nowFn = () => 0;
+    const content = Array.from({ length: 1_000 }, (_, index) => `w${index}`).join(' ');
+    const { container } = render(<StreamingMarkdownHarness content={content} state={state} />);
+    const delays = Array.from(
+      container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),
+      (span) => Number.parseInt(span.style.getPropertyValue('--wf-delay'), 10),
+    );
+
+    expect(delays).toHaveLength(1_000);
+    expect(delays.slice(0, 10)).toEqual([0, 16, 32, 48, 64, 80, 96, 100, 104, 108]);
+    expect(Math.max(...delays)).toBe(160);
+    expect(delays.at(-1)).toBe(160);
+  });
+
+  it('列表圆点与首段共用 delay，完成后保留 li 节点', () => {
+    const state = createWordFadeState();
+    state.timeline.nowFn = () => 0;
+    const { container } = render(
+      <StreamingMarkdownHarness content="- alpha beta" state={state} />,
+    );
+    const li = container.querySelector<HTMLLIElement>('[data-stream-marker]')!;
+    const firstWord = li.querySelector<HTMLSpanElement>('[data-wf-key]')!;
+    const key = firstWord.dataset.wfKey!;
+
+    expect(li.dataset.wfKey).toBe(key);
+    expect(li.style.getPropertyValue('--wf-delay')).toBe(
+      firstWord.style.getPropertyValue('--wf-delay'),
+    );
+    fireAnimationEnd(li, 'stream-marker-in');
+    expect(li.isConnected).toBe(true);
+    expect(li.hasAttribute('data-stream-marker')).toBe(false);
+    expect(state.timeline.settled.has(key)).toBe(true);
   });
 });

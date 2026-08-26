@@ -255,7 +255,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     );
     // The composer is also temporarily read-only during the bounded effort-runtime
     // preflight, so a pending send cannot clear text entered after its snapshot.
-    expect(chatInputSource).toContain('editor?.setEditable(!composerMutationLocked)');
+    expect(chatInputSource).toContain('editor?.setEditable(!composerTypingLocked)');
   });
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {
