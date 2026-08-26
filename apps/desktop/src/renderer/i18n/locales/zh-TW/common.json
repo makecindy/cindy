@@ -1710,6 +1710,27 @@
         "hintLoggedIn": "檢測到 {{cli}} 已登入，可直接授權接入",
         "hintInstalled": "檢測到本機已安裝 {{cli}}"
       },
+      "manifest": {
+        "title": "從外部設定新增供應商",
+        "loading": "正在取得供應商設定……",
+        "description": "以下設定由「{{name}}」的服務方自行提供。繼續後將進入新增供應商表單，端點已預填；API key 仍由你自己輸入，本步驟不會儲存任何內容。",
+        "source": "來源：{{origin}}",
+        "modelCount_other": "推薦模型 {{count}} 個",
+        "warning": "這是外部提供的非官方設定，Cindy 不會核驗其服務與計費承諾。請確認你信任該來源後再繼續。",
+        "cancel": "取消",
+        "confirm": "繼續",
+        "close": "關閉",
+        "error": {
+          "timeout": "取得供應商設定逾時。",
+          "redirect": "設定網址發生重新導向，已依安全性原則拒絕。請服務方提供直達連結。",
+          "blockedAddress": "設定網址解析到本機或內網位址，已依安全性原則拒絕。",
+          "http": "取得供應商設定失敗（HTTP {{status}}）。",
+          "network": "網路錯誤，未能取得供應商設定。",
+          "oversize": "設定檔超出大小限制，已拒絕。",
+          "invalid": "設定內容未通過驗證，已整體拒絕。",
+          "reasonCode": "原因碼：{{reason}}"
+        }
+      },
       "wizard": {
         "title": "新增供應商",
         "titleWith": "新增 · {{name}}",

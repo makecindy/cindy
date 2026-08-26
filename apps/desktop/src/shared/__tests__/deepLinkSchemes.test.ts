@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEEP_LINK_PRIMARY_SCHEME,
   DEEP_LINK_PROVIDER_CONNECT_ID_MAX_LENGTH,
+  DEEP_LINK_PROVIDER_MANIFEST_URL_MAX_LENGTH,
   DEEP_LINK_SCHEMES,
   DEEP_LINK_SCHEME_RE_GROUP,
   DEEP_LINK_URL_PREFIX,
@@ -16,6 +17,7 @@ import {
   hasDeepLinkPathPrefix,
   isDeepLinkProtocol,
   isDeepLinkProviderConnectId,
+  isDeepLinkProviderManifestUrl,
   isDeepLinkUrl,
   matchDeepLinkPrefix,
   stripDeepLinkPathPrefix,
@@ -102,6 +104,34 @@ describe('isDeepLinkProviderConnectId', () => {
     expect(isDeepLinkProviderConnectId('a b')).toBe(false);
     expect(
       isDeepLinkProviderConnectId('a'.repeat(DEEP_LINK_PROVIDER_CONNECT_ID_MAX_LENGTH + 1)),
+    ).toBe(false);
+  });
+});
+
+describe('isDeepLinkProviderManifestUrl', () => {
+  it('accepts credential-free absolute https URLs while bounding untrusted URL input', () => {
+    expect(
+      isDeepLinkProviderManifestUrl('https://gateway.example.com/.well-known/cindy-provider.json'),
+    ).toBe(true);
+    // 链接层只管 URL 形态;内容(JSON / 字段白名单)由主进程 fail-closed 校验。
+    expect(isDeepLinkProviderManifestUrl('https://gateway.example.com/manifest?v=2')).toBe(true);
+  });
+
+  it('rejects non-https, credentialed, relative, oversized, and non-string input', () => {
+    expect(isDeepLinkProviderManifestUrl('http://gateway.example.com/manifest.json')).toBe(false);
+    expect(isDeepLinkProviderManifestUrl('https://user:pass@gateway.example.com/m.json')).toBe(
+      false,
+    );
+    expect(isDeepLinkProviderManifestUrl('https://user@gateway.example.com/m.json')).toBe(false);
+    expect(isDeepLinkProviderManifestUrl('file:///etc/passwd')).toBe(false);
+    expect(isDeepLinkProviderManifestUrl('//gateway.example.com/m.json')).toBe(false);
+    expect(isDeepLinkProviderManifestUrl('not a url')).toBe(false);
+    expect(isDeepLinkProviderManifestUrl('')).toBe(false);
+    expect(isDeepLinkProviderManifestUrl(42)).toBe(false);
+    expect(
+      isDeepLinkProviderManifestUrl(
+        `https://gateway.example.com/${'a'.repeat(DEEP_LINK_PROVIDER_MANIFEST_URL_MAX_LENGTH)}`,
+      ),
     ).toBe(false);
   });
 });

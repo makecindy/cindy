@@ -87,6 +87,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
+    fetchManifest: vi.fn(async () => ({ ok: false as const, reason: 'network' as const })),
     rediscoverModels: vi.fn(async () => null),
     refreshBuiltinModels: vi.fn(async () => {}),
     requestModelsAutoRefresh: vi.fn(async () => {}),
@@ -2800,5 +2801,61 @@ describe('provider:oauth mutation ordering', () => {
     await expect(first).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
     await expect(second).resolves.toEqual({ ok: true });
     expect(rollbackCredentials).toHaveBeenCalledOnce();
+  });
+});
+
+describe('provider:manifest-fetch handler', () => {
+  it('校验 sender 后按深链同一条 URL 白名单复核入参,通过才透传 deps.fetchManifest', async () => {
+    const harness = new IpcHarness();
+    const fetchManifest = vi.fn(async () => ({
+      ok: true as const,
+      origin: 'https://gateway.example.com',
+      preset: {
+        id: 'manifest:gateway.example.com',
+        name: 'Acme Gateway',
+        runtimes: { codex: { baseUrl: 'https://gateway.example.com/v1', models: [] } },
+      },
+    }));
+    registerProviderHandlers(harness, makeDeps({ fetchManifest }));
+    const url = 'https://gateway.example.com/.well-known/cindy-provider.json';
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MANIFEST_FETCH, { url }),
+    ).resolves.toMatchObject({ ok: true, origin: 'https://gateway.example.com' });
+    expect(fetchManifest).toHaveBeenCalledWith(url);
+  });
+
+  it('非法入参(非 https / 带凭证 / 非对象)整条拒绝,不触达 deps', async () => {
+    const harness = new IpcHarness();
+    const fetchManifest = vi.fn();
+    registerProviderHandlers(harness, makeDeps({ fetchManifest }));
+    for (const input of [
+      { url: 'http://gateway.example.com/m.json' },
+      { url: 'https://u:p@gateway.example.com/m.json' },
+      { url: '' },
+      {},
+      null,
+      'https://gateway.example.com/m.json',
+    ]) {
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_MANIFEST_FETCH, input),
+      ).rejects.toThrow(/INVALID_PARAMS/);
+    }
+    expect(fetchManifest).not.toHaveBeenCalled();
+  });
+
+  it('不可信 sender 直接拒绝(它以 main 的网络身份向外部地址发请求)', async () => {
+    const harness = new IpcHarness();
+    const rejecting = makeDeps({
+      assertTrustedSender: vi.fn(() => {
+        throwIpcError('PERMISSION_DENIED', '此操作只能从 Cindy 主页面发起');
+      }),
+    });
+    registerProviderHandlers(harness, rejecting);
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MANIFEST_FETCH, {
+        url: 'https://gateway.example.com/m.json',
+      }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(rejecting.fetchManifest).not.toHaveBeenCalled();
   });
 });

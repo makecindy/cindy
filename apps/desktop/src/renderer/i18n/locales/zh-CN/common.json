@@ -1710,6 +1710,27 @@
         "hintLoggedIn": "检测到 {{cli}} 已登录，可直接授权接入",
         "hintInstalled": "检测到本机已安装 {{cli}}"
       },
+      "manifest": {
+        "title": "从外部配置添加供应商",
+        "loading": "正在获取供应商配置……",
+        "description": "以下配置由「{{name}}」的服务方自行提供。继续后将进入添加供应商表单，端点已预填；API key 仍由你自己输入，本步骤不保存任何内容。",
+        "source": "来源：{{origin}}",
+        "modelCount_other": "推荐模型 {{count}} 个",
+        "warning": "这是外部提供的非官方配置，Cindy 不核验其服务与计费承诺。请确认你信任该来源后再继续。",
+        "cancel": "取消",
+        "confirm": "继续",
+        "close": "关闭",
+        "error": {
+          "timeout": "获取供应商配置超时。",
+          "redirect": "配置地址发生了重定向，已按安全策略拒绝。请服务方提供直达链接。",
+          "blockedAddress": "配置地址解析到本机或内网地址，已按安全策略拒绝。",
+          "http": "获取供应商配置失败（HTTP {{status}}）。",
+          "network": "网络错误，未能获取供应商配置。",
+          "oversize": "配置文件超出大小限制，已拒绝。",
+          "invalid": "配置内容未通过校验，已整体拒绝。",
+          "reasonCode": "原因码：{{reason}}"
+        }
+      },
       "wizard": {
         "title": "添加供应商",
         "titleWith": "添加 · {{name}}",

@@ -42,6 +42,7 @@ import {
   focusMainWindow,
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
+  redactDeepLinkForLog,
 } from '../deepLink';
 
 describe('user-initiated main-window focus', () => {
@@ -253,6 +254,73 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('cindy://settings/providers?connect=%E4%ZZ')).toBeNull();
     expect(
       parseDeepLink(`cindy://settings/providers?connect=${'a'.repeat(129)}`),
+    ).toBeNull();
+  });
+
+  it('parses settings/providers payload with a manifest url (both schemes)', () => {
+    const manifestUrl = 'https://gateway.example.com/.well-known/cindy-provider.json';
+    const encoded = encodeURIComponent(manifestUrl);
+    expect(parseDeepLink(`cindy://settings/providers?manifest=${encoded}`)).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      manifest: manifestUrl,
+    });
+    // 其它 query 参数忽略;历史 scheme 同样可用。
+    expect(parseDeepLink(`cindy://settings/providers?foo=bar&manifest=${encoded}`)).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      manifest: manifestUrl,
+    });
+    expect(parseDeepLink(`xdt-maker://settings/providers?manifest=${encoded}`)).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      manifest: manifestUrl,
+    });
+  });
+
+  it('rejects settings deep links whose manifest value fails the shared url whitelist', () => {
+    // manifest 是不可信输入:非 https / 带凭证 / 超长 / 编码残缺 → 整条拒绝。
+    expect(parseDeepLink('cindy://settings/providers?manifest=')).toBeNull();
+    expect(
+      parseDeepLink(
+        `cindy://settings/providers?manifest=${encodeURIComponent('http://gateway.example.com/m.json')}`,
+      ),
+    ).toBeNull();
+    expect(
+      parseDeepLink(
+        `cindy://settings/providers?manifest=${encodeURIComponent('https://u:p@gateway.example.com/m.json')}`,
+      ),
+    ).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?manifest=%E4%ZZ')).toBeNull();
+    expect(
+      parseDeepLink(
+        `cindy://settings/providers?manifest=${encodeURIComponent(`https://g.example.com/${'a'.repeat(2048)}`)}`,
+      ),
+    ).toBeNull();
+  });
+
+  it('redacts query/hash from deep link URLs before they reach persistent logs', () => {
+    // manifest URL 可能带签名 / token 类 query;日志只留 origin+path。
+    expect(
+      redactDeepLinkForLog('cindy://settings/providers?manifest=https%3A%2F%2Fx.example%2Fm.json%3Ftoken%3Dsecret'),
+    ).toBe('cindy://settings/providers…');
+    expect(redactDeepLinkForLog('https://x.example/m.json?token=secret')).toBe(
+      'https://x.example/m.json…',
+    );
+    expect(redactDeepLinkForLog('cindy://settings/providers#frag')).toBe(
+      'cindy://settings/providers…',
+    );
+    expect(redactDeepLinkForLog('cindy://session/abc')).toBe('cindy://session/abc');
+  });
+
+  it('rejects settings deep links carrying both connect and manifest', () => {
+    // 互斥:同现说明链接意图含糊,整条拒绝,不猜优先级。
+    const encoded = encodeURIComponent('https://gateway.example.com/m.json');
+    expect(
+      parseDeepLink(`cindy://settings/providers?connect=openrouter&manifest=${encoded}`),
+    ).toBeNull();
+    expect(
+      parseDeepLink(`cindy://settings/providers?manifest=${encoded}&connect=openrouter`),
     ).toBeNull();
   });
 });

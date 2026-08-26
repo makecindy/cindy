@@ -776,6 +776,7 @@ import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descripto
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
+import { fetchProviderManifest } from '../maker-host/provider-manifest-fetch.js';
 import {
   beginProviderRouteMutation,
   isUserProviderSession,
@@ -6576,6 +6577,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listPresets: () => getActiveCatalog().presets ?? [],
     testConnection: (input) => testProviderConnection(input),
     fetchModels: (spec) => fetchProviderModels(spec),
+    fetchManifest: (url) => fetchProviderManifest(url),
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),

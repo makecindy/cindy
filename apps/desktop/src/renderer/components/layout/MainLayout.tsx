@@ -606,7 +606,12 @@ export function MainLayout() {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
+        | {
+            type: 'settings';
+            tab: 'voice-input' | 'providers';
+            connect?: string;
+            manifest?: string;
+          },
     ) => {
       if (payload.type === 'session') {
         navigateToSession(payload.id, payload.messageClientId);
@@ -631,14 +636,19 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'settings') {
-        // connect 透传给 ProvidersSection 已有的 ?connect=<providerId> 消费逻辑
-        // (可指向内置 provider 或 preset;providers 就绪后一次性消费、消费即从
-        // URL 摘除),与「连接供应商」引导卡的 navigate 形态保持一致。
+        // connect / manifest 透传给 ProvidersSection 的消费逻辑(providers 就绪后
+        // 一次性消费、消费即从 URL 摘除),与「连接供应商」引导卡的 navigate 形态保持
+        // 一致。manifest 打开确认屏(main 拉取 + 校验后由用户确认),connect 直达
+        // 目录内条目;两者在 main/preload 已互斥,这里按同一优先级只透传其一。
         const connect =
           payload.tab === 'providers' && payload.connect
             ? `&connect=${encodeURIComponent(payload.connect)}`
             : '';
-        navigate(`/settings?tab=${payload.tab}${connect}`);
+        const manifest =
+          payload.tab === 'providers' && !payload.connect && payload.manifest
+            ? `&manifest=${encodeURIComponent(payload.manifest)}`
+            : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${manifest}`);
       }
     },
     [navigate, navigateToSession, openShareImport],

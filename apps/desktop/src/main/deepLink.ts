@@ -7,6 +7,9 @@
  *   cindy://project/<urlencoded-workingDir> —— workingDir 全路径 URL-encoded
  *   cindy://settings/providers[?connect=<providerId>] —— 打开设置「模型供应商」页,
  *     可选 connect 直达指定内置渠道或预设的接入流程(白名单校验,见 parseDeepLink)
+ *   cindy://settings/providers?manifest=<urlencoded-https-url> —— 外部供应商 manifest
+ *     接入:链接层只校验 URL 形态(https、无凭证、长度有界),拉取与内容校验由
+ *     主进程 fail-closed 执行,经确认屏后才预填「自定义供应商」表单。与 connect 互斥。
  *
  * 命令行参数形态 (右键菜单 / 命令行):
  *   --open-folder <absolute-path>   或   --open-folder=<absolute-path>
@@ -47,6 +50,7 @@ import {
   DEEP_LINK_SCHEMES,
   DEEP_LINK_URL_PREFIX,
   isDeepLinkProviderConnectId,
+  isDeepLinkProviderManifestUrl,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
 
@@ -74,11 +78,13 @@ export type DeepLinkPayload =
   /**
    * 设置页导航。两个来源:
    *   1. 主进程内部发起(全局浮层等独立窗口把用户带回主窗口的准确设置页);
-   *   2. cindy://settings/providers[?connect=<providerId>] 深链(外部工具一键拉起
-   *      供应商接入流程)。URL 域只开放 tab=providers;connect 是可选的内置
-   *      provider / preset id,经白名单校验后透传给 renderer 已有的消费逻辑。
+   *   2. cindy://settings/providers[?connect=<providerId>|?manifest=<https-url>]
+   *      深链(外部工具一键拉起供应商接入流程)。URL 域只开放 tab=providers;
+   *      connect 是可选的内置 provider / preset id;manifest 是可选的外部供应商
+   *      manifest URL(https-only,链接层只校验 URL 形态,拉取与内容校验在主进程
+   *      后续阶段 fail-closed 执行)。两参数互斥,同现整条拒绝;各自非法也整条拒绝。
    */
-  | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
+  | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string; manifest?: string }
   /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
@@ -133,21 +139,34 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
     // payload 的“首段即值”语义,否则 settings/providers/anything 也会被接收。
     const rawSettingsPath = rawValue.replace(/[?#].*$/, '').replace(/\/+$/, '');
     if (rawSettingsPath !== 'providers' || decoded !== 'providers') return null;
-    // connect 是可选 provider / preset id;深链是不可信输入,值必须过共享白名单,
-    // 不合法就整条拒绝,避免 main/preload 规则漂移。
-    const connect = parseSettingsConnectParam(rawValue);
-    if (connect === INVALID_CONNECT) return null;
-    return connect
+    // connect / manifest 都是可选参数;深链是不可信输入,值必须过共享白名单,
+    // 不合法就整条拒绝,避免 main/preload 规则漂移。两参数互斥:同现说明链接
+    // 意图含糊(既指目录内条目又带外部描述),整条拒绝,不猜优先级。
+    const connect = parseSettingsQueryParam(rawValue, 'connect', isDeepLinkProviderConnectId);
+    if (connect === INVALID_PARAM) return null;
+    const manifest = parseSettingsQueryParam(
+      rawValue,
+      'manifest',
+      isDeepLinkProviderManifestUrl,
+    );
+    if (manifest === INVALID_PARAM) return null;
+    if (connect !== null && manifest !== null) return null;
+    if (manifest !== null) return { type: 'settings', tab: 'providers', manifest };
+    return connect !== null
       ? { type: 'settings', tab: 'providers', connect }
       : { type: 'settings', tab: 'providers' };
   }
   return null;
 }
 
-/** 区分"没带 connect"(null)与"带了但非法"(INVALID_CONNECT → 整条深链拒绝)。 */
-const INVALID_CONNECT = Symbol('invalid-connect');
+/** 区分"没带该参数"(null)与"带了但非法"(INVALID_PARAM → 整条深链拒绝)。 */
+const INVALID_PARAM = Symbol('invalid-settings-param');
 
-function parseSettingsConnectParam(rawValue: string): string | null | typeof INVALID_CONNECT {
+function parseSettingsQueryParam(
+  rawValue: string,
+  name: 'connect' | 'manifest',
+  isValid: (value: unknown) => value is string,
+): string | null | typeof INVALID_PARAM {
   const hashIdx = rawValue.indexOf('#');
   const noHash = hashIdx >= 0 ? rawValue.slice(0, hashIdx) : rawValue;
   const queryIdx = noHash.indexOf('?');
@@ -155,16 +174,16 @@ function parseSettingsConnectParam(rawValue: string): string | null | typeof INV
   const query = noHash.slice(queryIdx + 1);
   for (const pair of query.split('&')) {
     const eqIdx = pair.indexOf('=');
-    if (eqIdx <= 0 || pair.slice(0, eqIdx) !== 'connect') continue;
+    if (eqIdx <= 0 || pair.slice(0, eqIdx) !== name) continue;
     const rawParam = pair.slice(eqIdx + 1);
-    if (!rawParam) return INVALID_CONNECT;
+    if (!rawParam) return INVALID_PARAM;
     let decoded: string;
     try {
       decoded = decodeURIComponent(rawParam);
     } catch {
-      return INVALID_CONNECT;
+      return INVALID_PARAM;
     }
-    return isDeepLinkProviderConnectId(decoded) ? decoded : INVALID_CONNECT;
+    return isValid(decoded) ? decoded : INVALID_PARAM;
   }
   return null;
 }
@@ -270,16 +289,34 @@ export function getDeepLinkMainWindow(): BrowserWindow | null {
 }
 
 /**
+ * 日志脱敏:manifest URL 可能携带签名 / 访问令牌类 query(如预签名存储直链),
+ * 不能整串进持久化日志。统一剥掉 query / hash,只留 origin + path——对定位问题
+ * 足够,对凭证安全必要。解析失败分支同样处理:未解析的原始 URL 里一样可能带
+ * `?manifest=<含 token 的编码 URL>`。
+ */
+export function redactDeepLinkForLog(url: string): string {
+  const cut = url.search(/[?#]/);
+  return cut >= 0 ? `${url.slice(0, cut)}…` : url;
+}
+
+function loggableDeepLinkPayload(payload: DeepLinkPayload): DeepLinkPayload {
+  if (payload.type === 'settings' && payload.manifest !== undefined) {
+    return { ...payload, manifest: redactDeepLinkForLog(payload.manifest) };
+  }
+  return payload;
+}
+
+/**
  * 处理一条入站 URL。会内部解析、根据 mainWindow 状态选择直接发送 or 缓存。
  * 即使解析失败也只 log 不抛,避免污染调用方(open-url / second-instance / argv)。
  */
 export function handleIncomingDeepLink(url: string, source: string): void {
   const payload = parseDeepLink(url);
   if (!payload) {
-    log.warn('ignoring unparseable url', { url, source });
+    log.warn('ignoring unparseable url', { url: redactDeepLinkForLog(url), source });
     return;
   }
-  log.info('received deep link', { source, payload });
+  log.info('received deep link', { source, payload: loggableDeepLinkPayload(payload) });
   dispatchDeepLink(payload);
 }
 

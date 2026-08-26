@@ -6,11 +6,13 @@
  *   2. connect=<左栏占行供应商>(如已连接的 anthropic)→ 直接选中,不开向导。
  *   3. connect=<目录外 id> → 视为 preset id,向导以 preset entry 打开。
  *   4. wizard=1 → 向导目录第一步(entry undefined)。
+ *   5. manifest=<https-url> → 先开确认屏(main 受限拉取,确认前不开向导);确认后向导以
+ *      manifest entry(携带校验过的 preset 对象)打开;取消/失败不产生任何本地动作。
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -175,6 +177,7 @@ beforeEach(() => {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
       setProviderOrder: vi.fn(async () => ({ ok: true })),
+      fetchProviderManifest: vi.fn(async () => ({ ok: false, reason: 'network' })),
     },
     openChatGPTApp: vi.fn(async () => ({ success: true })),
   };
@@ -406,5 +409,136 @@ describe('ProvidersSection — 深链定位', () => {
       releaseOwner: true,
       ownerId,
     });
+  });
+});
+
+describe('ProvidersSection — manifest 深链确认屏', () => {
+  const MANIFEST_URL = 'https://gateway.example.com/.well-known/cindy-provider.json';
+  const MANIFEST_PRESET = {
+    id: 'manifest:gateway.example.com',
+    name: 'Acme Gateway',
+    runtimes: {
+      'claude-code': {
+        baseUrl: 'https://gateway.example.com',
+        models: [{ id: 'acme-large', name: 'Acme Large' }],
+      },
+    },
+  };
+
+  function mockManifestFetch(result: unknown) {
+    const fetchProviderManifest = vi.fn(async () => result);
+    (
+      window.electronAPI.maker as unknown as { fetchProviderManifest: unknown }
+    ).fetchProviderManifest = fetchProviderManifest;
+    return fetchProviderManifest;
+  }
+
+  it('manifest=<url> → 先开确认屏(不开向导);main 拉取;参数清除', async () => {
+    const fetchProviderManifest = mockManifestFetch({
+      ok: true,
+      origin: 'https://gateway.example.com',
+      preset: MANIFEST_PRESET,
+    });
+    renderAt(`?tab=providers&manifest=${encodeURIComponent(MANIFEST_URL)}`);
+
+    expect(await screen.findByText('settings.providers.manifest.title')).not.toBeNull();
+    await waitFor(() =>
+      expect(fetchProviderManifest).toHaveBeenCalledWith({ url: MANIFEST_URL }),
+    );
+    // 确认前不开向导;警示文案与确认按钮同屏。
+    expect(await screen.findByText('settings.providers.manifest.warning')).not.toBeNull();
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    // 参数消费后从 URL 摘除,防刷新重放。
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('确认 → 向导以 manifest entry(携带校验过的 preset 对象)打开', async () => {
+    mockManifestFetch({
+      ok: true,
+      origin: 'https://gateway.example.com',
+      preset: MANIFEST_PRESET,
+    });
+    renderAt(`?tab=providers&manifest=${encodeURIComponent(MANIFEST_URL)}`);
+
+    fireEvent.click(await screen.findByText('settings.providers.manifest.confirm'));
+    await waitFor(() => expect(screen.queryByTestId('wizard-stub')).not.toBeNull());
+    expect(wizardSpy).toHaveBeenCalledWith({ kind: 'manifest', preset: MANIFEST_PRESET });
+    // 确认屏已关闭。
+    expect(screen.queryByText('settings.providers.manifest.warning')).toBeNull();
+  });
+
+  it('取消 → 关闭确认屏,不开向导', async () => {
+    mockManifestFetch({
+      ok: true,
+      origin: 'https://gateway.example.com',
+      preset: MANIFEST_PRESET,
+    });
+    renderAt(`?tab=providers&manifest=${encodeURIComponent(MANIFEST_URL)}`);
+
+    fireEvent.click(await screen.findByText('settings.providers.manifest.cancel'));
+    await waitFor(() =>
+      expect(screen.queryByText('settings.providers.manifest.title')).toBeNull(),
+    );
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    expect(wizardSpy).not.toHaveBeenCalled();
+  });
+
+  it('确认屏驻留期间来了 connect 深链 → 旧确认屏被撤下,新目标正常处理', async () => {
+    mockManifestFetch({
+      ok: true,
+      origin: 'https://gateway.example.com',
+      preset: MANIFEST_PRESET,
+    });
+    function NavigateProbe() {
+      const navigate = useNavigate();
+      return (
+        <button
+          data-testid="second-link"
+          onClick={() => navigate('/settings?tab=providers&connect=outside-catalog')}
+        >
+          nav
+        </button>
+      );
+    }
+    render(
+      <MemoryRouter
+        initialEntries={[`/settings?tab=providers&manifest=${encodeURIComponent(MANIFEST_URL)}`]}
+      >
+        <Routes>
+          <Route
+            path="/settings"
+            element={
+              <>
+                <ProvidersSection />
+                <NavigateProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('settings.providers.manifest.warning')).not.toBeNull();
+    fireEvent.click(screen.getByTestId('second-link'));
+    // 旧确认屏撤下,新 connect 目标按目录外 id 走 preset 向导。
+    await waitFor(() =>
+      expect(screen.queryByText('settings.providers.manifest.warning')).toBeNull(),
+    );
+    await waitFor(() => expect(screen.queryByTestId('wizard-stub')).not.toBeNull());
+    expect(wizardSpy).toHaveBeenLastCalledWith({ kind: 'preset', presetId: 'outside-catalog' });
+  });
+
+  it('拉取失败 → 分类错误文案 + 原因码,只有关闭,不开向导', async () => {
+    mockManifestFetch({ ok: false, reason: 'redirect' });
+    renderAt(`?tab=providers&manifest=${encodeURIComponent(MANIFEST_URL)}`);
+
+    expect(await screen.findByText('settings.providers.manifest.error.redirect')).not.toBeNull();
+    expect(screen.queryByText('settings.providers.manifest.confirm')).toBeNull();
+    fireEvent.click(screen.getByText('settings.providers.manifest.close'));
+    await waitFor(() =>
+      expect(screen.queryByText('settings.providers.manifest.title')).toBeNull(),
+    );
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    expect(wizardSpy).not.toHaveBeenCalled();
   });
 });

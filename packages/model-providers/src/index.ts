@@ -51,6 +51,9 @@ export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
 
+export { parseProviderManifest } from './manifest.js';
+export type { ProviderManifestParseResult, ProviderManifestRejectReason } from './manifest.js';
+
 export {
   buildUserProvider,
   DEFAULT_CUSTOM_CONTEXT_WINDOW,
