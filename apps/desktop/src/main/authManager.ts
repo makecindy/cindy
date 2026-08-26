@@ -118,9 +118,13 @@ import {
 } from './ownerNamespaceMigration.js';
 import {
   migrateLocalNativeProviderAuthBindings,
-  reserveLegacyNativeProviderAuthOwner,
+  releaseLegacyNativeProviderAuthOwner,
+  reserveLegacyNativeProviderAuthOwnerDetailed,
 } from './maker-host/nativeProviderAuthBinding.js';
-import { reserveLocalProfileDataOwner } from './localProfileDataMigration.js';
+import {
+  releaseLocalProfileDataOwner,
+  reserveLocalProfileDataOwnerDetailed,
+} from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import {
@@ -891,6 +895,8 @@ async function withCloudOwnerCommit<T>(opts: {
   let forceBumpGeneration = false;
   let result!: T;
   let committed = false;
+  let commitApplied = false;
+  let rollbackReservation: (() => void) | null = null;
   try {
     result = await withGhostSkillProjectionOwnerCommit({
       previousOwnerId: opts.previousOwnerId,
@@ -916,11 +922,12 @@ async function withCloudOwnerCommit<T>(opts: {
         }
       },
       prepareCommit: async () => {
-        reserveCloudOwnerData(opts.nextOwnerId);
+        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId);
         await opts.prepareCommit?.();
       },
       commit: async () => {
         const result = await opts.commit();
+        commitApplied = true;
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
@@ -932,6 +939,10 @@ async function withCloudOwnerCommit<T>(opts: {
     });
     committed = true;
   } finally {
+    const rollback = rollbackReservation as unknown as (() => void) | null;
+    if (!committed && !commitApplied && rollback) {
+      rollback();
+    }
     const release = releaseBoundary as (() => void) | null;
     release?.();
     if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
@@ -1107,26 +1118,53 @@ async function recoverAccountFreeOwnerAtStartup(
   });
 }
 
-function reserveCloudOwnerData(ownerId: string): void {
-  const profileReservation = reserveLocalProfileDataOwner(
-    ownerId,
-    app.getPath('userData'),
-    BRAND_IDENTITY.dbFilePrefix,
-  );
-  if (profileReservation === 'failed') {
-    throw new Error('local profile data reservation failed before cloud owner commit');
-  }
-
-  const nativeReservation = reserveLegacyNativeProviderAuthOwner(ownerId);
-  if (nativeReservation === 'failed') {
-    throw new Error('native provider ownership reservation failed before cloud owner commit');
-  }
-  if (profileReservation === 'owned-by-other' || nativeReservation === 'owned-by-other') {
-    log.info('cloud owner committed without adopting legacy local data', {
+function reserveCloudOwnerData(ownerId: string): () => void {
+  const rollbackActions: Array<() => void> = [];
+  try {
+    const profileReservation = reserveLocalProfileDataOwnerDetailed(
       ownerId,
-      profileReservation,
-      nativeReservation,
-    });
+      app.getPath('userData'),
+      BRAND_IDENTITY.dbFilePrefix,
+    );
+    if (profileReservation.status === 'failed') {
+      throw new Error('local profile data reservation failed before cloud owner commit');
+    }
+    if (profileReservation.status === 'claimed' && profileReservation.claimToken) {
+      rollbackActions.push(() => {
+        releaseLocalProfileDataOwner(
+          ownerId,
+          app.getPath('userData'),
+          BRAND_IDENTITY.dbFilePrefix,
+          profileReservation.claimToken!,
+        );
+      });
+    }
+
+    const nativeReservation = reserveLegacyNativeProviderAuthOwnerDetailed(ownerId);
+    if (nativeReservation.status === 'failed') {
+      throw new Error('native provider ownership reservation failed before cloud owner commit');
+    }
+    if (nativeReservation.status === 'claimed' && nativeReservation.claimToken) {
+      rollbackActions.push(() => {
+        releaseLegacyNativeProviderAuthOwner(ownerId, nativeReservation.claimToken!);
+      });
+    }
+    if (
+      profileReservation.status === 'owned-by-other' ||
+      nativeReservation.status === 'owned-by-other'
+    ) {
+      log.info('cloud owner committed without adopting legacy local data', {
+        ownerId,
+        profileReservation: profileReservation.status,
+        nativeReservation: nativeReservation.status,
+      });
+    }
+    return () => {
+      for (const rollback of rollbackActions.reverse()) rollback();
+    };
+  } catch (error) {
+    for (const rollback of rollbackActions.reverse()) rollback();
+    throw error;
   }
 }
 
@@ -2520,8 +2558,13 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
         commit: () => commitCloudAppSession(currentUser!.id),
       });
     } else {
-      reserveCloudOwnerData(currentUser.id);
-      commitCloudAppSession(currentUser.id);
+      const rollbackReservation = reserveCloudOwnerData(currentUser.id);
+      try {
+        commitCloudAppSession(currentUser.id);
+      } catch (error) {
+        rollbackReservation();
+        throw error;
+      }
     }
     migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);
     await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');

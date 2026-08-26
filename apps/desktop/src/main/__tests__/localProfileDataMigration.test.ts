@@ -186,6 +186,33 @@ describe('adoptLocalProfileDatabase', () => {
     );
   });
 
+  it('reclaims a lease left by a dead process before retrying adoption', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(
+      `${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`,
+      JSON.stringify({ ownerId: 'owner-a', leaseId: 'stale', pid: 2147483647, claimedAt: 1 }),
+    );
+
+    await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
+      status: 'adopted',
+    });
+    await expect(fs.access(`${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`)).rejects.toThrow();
+  });
+
+  it('recovers a torn lease record left by a crashed process', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(`${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`, '{');
+
+    await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
+      status: 'adopted',
+    });
+    await expect(fs.access(`${target}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`)).rejects.toThrow();
+  });
+
   it('cleans interrupted temporary files before retrying', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');

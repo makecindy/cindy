@@ -75,9 +75,12 @@ describe('native provider auth legacy binding', () => {
 describe('local → cloud native provider binding migration', () => {
   it('reserves the first cloud owner even when no local provider slot exists', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
-    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
       legacyClaimOwner: 'owner-a',
     });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8')).legacyClaimToken).toEqual(
+      expect.any(String),
+    );
 
     session.dataOwnerId = 'owner-b';
     expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');

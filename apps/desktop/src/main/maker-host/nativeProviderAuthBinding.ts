@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -22,6 +23,7 @@ const NATIVE_PROVIDER_IDS = [
 ] as const satisfies readonly NativeProviderId[];
 type BindingFile = Partial<Record<NativeProviderId, string>> & {
   legacyClaimOwner?: string;
+  legacyClaimToken?: string;
   /**
    * 被**显式登出**过、且尚未重新授权的 provider（值 = 执行登出的 owner，仅供诊断）。
    *
@@ -110,31 +112,157 @@ function readBindingsOrFail(): BindingRead {
 function writeBindings(value: BindingFile): void {
   const file = bindingPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(tmp, file);
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // The rename normally removed the temporary path; cleanup is best effort.
+    }
+  }
+}
+
+const LEGACY_CLAIM_LEASE_SUFFIX = '.legacy-claim-lease';
+
+function legacyClaimLeasePath(): string {
+  return `${bindingPath()}${LEGACY_CLAIM_LEASE_SUFFIX}`;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | null)?.code !== 'ESRCH';
+  }
+}
+
+function acquireLegacyClaimLease(): number | null {
+  const lease = legacyClaimLeasePath();
+  fs.mkdirSync(path.dirname(lease), { recursive: true });
+  for (;;) {
+    const tmp = `${lease}.${randomUUID()}.tmp`;
+    let tmpHandle: number | undefined;
+    try {
+      tmpHandle = fs.openSync(tmp, 'wx', 0o600);
+      fs.writeSync(
+        tmpHandle,
+        JSON.stringify({ pid: process.pid, leaseId: randomUUID() }),
+        undefined,
+        'utf8',
+      );
+      fs.fsyncSync(tmpHandle);
+      fs.closeSync(tmpHandle);
+      tmpHandle = undefined;
+      fs.linkSync(tmp, lease);
+      return fs.openSync(lease, 'r');
+    } catch (error) {
+      try {
+        if (tmpHandle !== undefined) fs.closeSync(tmpHandle);
+      } catch {
+        // Best-effort close before removing a failed claim lease.
+      }
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') return null;
+      try {
+        const current = JSON.parse(fs.readFileSync(lease, 'utf8')) as { pid?: unknown };
+        if (typeof current.pid === 'number' && !isProcessAlive(current.pid)) {
+          fs.unlinkSync(lease);
+          continue;
+        }
+      } catch {
+        // A valid lease is published atomically; malformed content is treated
+        // as an unavailable claim rather than being guessed at.
+      }
+      return null;
+    } finally {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        // Best-effort cleanup of the private candidate file.
+      }
+    }
+  }
+}
+
+function releaseLegacyClaimLease(handle: number): void {
+  try {
+    fs.closeSync(handle);
+  } finally {
+    try {
+      fs.unlinkSync(legacyClaimLeasePath());
+    } catch {
+      // Best-effort cleanup; a future reservation will fail closed if the lease remains.
+    }
+  }
 }
 
 export type LegacyNativeProviderAuthReservation =
   'claimed' | 'already-owned' | 'owned-by-other' | 'failed';
 
+export interface LegacyNativeProviderAuthReservationDetails {
+  status: LegacyNativeProviderAuthReservation;
+  claimToken?: string;
+}
+
 /** Reserve the one-shot native-provider namespace at the verified cloud commit edge. */
+export function reserveLegacyNativeProviderAuthOwnerDetailed(
+  ownerId: string,
+): LegacyNativeProviderAuthReservationDetails {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) {
+    return { status: 'failed' };
+  }
+  const leaseHandle = acquireLegacyClaimLease();
+  if (leaseHandle === null) return { status: 'failed' };
+  try {
+    const read = readBindingsOrFail();
+    if (!read.ok) return { status: 'failed' };
+    const bindings = read.bindings;
+    if ('legacyClaimOwner' in bindings) {
+      return bindings.legacyClaimOwner === normalizedOwnerId
+        ? { status: 'already-owned' }
+        : { status: 'owned-by-other' };
+    }
+    const claimToken = randomUUID();
+    writeBindings({
+      ...bindings,
+      legacyClaimOwner: normalizedOwnerId,
+      legacyClaimToken: claimToken,
+    });
+    return { status: 'claimed', claimToken };
+  } catch {
+    return { status: 'failed' };
+  } finally {
+    releaseLegacyClaimLease(leaseHandle);
+  }
+}
+
 export function reserveLegacyNativeProviderAuthOwner(
   ownerId: string,
 ): LegacyNativeProviderAuthReservation {
+  return reserveLegacyNativeProviderAuthOwnerDetailed(ownerId).status;
+}
+
+export function releaseLegacyNativeProviderAuthOwner(ownerId: string, claimToken: string): boolean {
   const normalizedOwnerId = ownerId.trim();
-  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) return 'failed';
+  if (!normalizedOwnerId || !claimToken) return false;
   const read = readBindingsOrFail();
-  if (!read.ok) return 'failed';
+  if (!read.ok) return false;
   const bindings = read.bindings;
-  if ('legacyClaimOwner' in bindings) {
-    return bindings.legacyClaimOwner === normalizedOwnerId ? 'already-owned' : 'owned-by-other';
+  if (bindings.legacyClaimOwner !== normalizedOwnerId || bindings.legacyClaimToken !== claimToken) {
+    return false;
   }
+  const next = { ...bindings };
+  delete next.legacyClaimOwner;
+  delete next.legacyClaimToken;
   try {
-    writeBindings({ ...bindings, legacyClaimOwner: normalizedOwnerId });
-    return 'claimed';
+    writeBindings(next);
+    return true;
   } catch {
-    return 'failed';
+    return false;
   }
 }
 

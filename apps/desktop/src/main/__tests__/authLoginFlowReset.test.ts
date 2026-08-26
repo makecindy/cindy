@@ -308,11 +308,18 @@ describe('auth login-flow reset', () => {
     const prepareEnd = source.indexOf('\n      },\n      commit: async () => {', prepareStart);
     const prepareBody = source.slice(prepareStart, prepareEnd);
 
-    expect(prepareBody).toContain('reserveCloudOwnerData(opts.nextOwnerId);');
+    expect(prepareBody).toContain(
+      'rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId);',
+    );
     expect(prepareBody.indexOf('reserveCloudOwnerData')).toBeLessThan(
       prepareBody.indexOf('await opts.prepareCommit?.();'),
     );
-    expect(source).toContain('reserveCloudOwnerData(currentUser.id);');
+    expect(source).toContain(
+      'const rollbackReservation = reserveCloudOwnerData(currentUser.id);',
+    );
+    expect(source).toContain(
+      'const rollback = rollbackReservation as unknown as (() => void) | null;',
+    );
   });
 
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {
