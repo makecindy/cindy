@@ -24,6 +24,7 @@ import {
   collectDeleteAnchorClientIds,
   collectStableLocalFileRefs,
   collectTurnFinalAssistantClientIds,
+  isGeneratedFilesTurnSealed,
   findRestorableViewportItemIdx,
   groupWorkRuns,
   insertForkOriginItem,
@@ -337,6 +338,58 @@ describe('collectTurnFinalAssistantClientIds', () => {
   });
 });
 
+describe('isGeneratedFilesTurnSealed', () => {
+  it('stays open on the latest turn until the tail sub-turn finishes', () => {
+    const open = [mkUser('u1'), mkTool('write-1', 'Write', { file_path: 'C:/work/a.md' })];
+    expect(isGeneratedFilesTurnSealed(open, false)).toBe(false);
+
+    const sealed = [...open, { ...mkAssistant('done'), turnCompleted: true }];
+    expect(isGeneratedFilesTurnSealed(sealed, false)).toBe(true);
+  });
+
+  it('does not inherit the previous sub-turn seal after auto-continue', () => {
+    const afterContinue = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+    ];
+    expect(isGeneratedFilesTurnSealed(afterContinue, false)).toBe(false);
+
+    const afterSynthetic = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      { ...mkUser('continue'), isSyntheticTrigger: true },
+    ];
+    expect(isGeneratedFilesTurnSealed(afterSynthetic, false)).toBe(false);
+  });
+
+  it('reseals only after the current tail sub-turn finishes', () => {
+    const resealed = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+      mkResult('write-2-result', 'tu-write-2'),
+      { ...mkAssistant('gate-followup'), turnCompleted: true },
+    ];
+    expect(isGeneratedFilesTurnSealed(resealed, false)).toBe(true);
+  });
+
+  it('treats an explicit failed tail sub-turn as sealed', () => {
+    const failedTail = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+      { ...mkAssistant('failed'), turnCompleted: false },
+    ];
+    expect(isGeneratedFilesTurnSealed(failedTail, false)).toBe(true);
+  });
+
+  it('seals historical turns that already have a following user boundary', () => {
+    const historical = [mkUser('u1'), mkTool('write-1', 'Write', { file_path: 'C:/work/a.md' })];
+    expect(isGeneratedFilesTurnSealed(historical, true)).toBe(true);
+  });
+});
+
 // ── case 1: 流式追加 token 不改变 message item key ────────────────────────
 
 describe('buildRenderItems — key stability', () => {
@@ -522,6 +575,57 @@ describe('buildRenderItems — key stability', () => {
     );
     expect(firstCard).toBeDefined();
     expect(secondCard).toBe(firstCard);
+  });
+
+  it('unseals generated files when the same visible turn auto-continues after turnCompleted', () => {
+    const workingDir = 'C:/work';
+    const firstWrite = mkTool('write-1', 'Write', { file_path: 'C:/work/a.md', content: 'x' });
+    const firstResult = mkResult('write-1-result', 'tu-write-1');
+    const sealed = buildRenderItems(
+      [mkUser('u1'), firstWrite, firstResult, { ...mkAssistant('main-summary'), turnCompleted: true }],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const continued = buildRenderItems(
+      [
+        mkUser('u1'),
+        firstWrite,
+        firstResult,
+        { ...mkAssistant('main-summary'), turnCompleted: true },
+        mkTool('write-2', 'Write', { file_path: 'C:/work/b.md', content: 'y' }),
+      ],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const resealed = buildRenderItems(
+      [
+        mkUser('u1'),
+        firstWrite,
+        firstResult,
+        { ...mkAssistant('main-summary'), turnCompleted: true },
+        mkTool('write-2', 'Write', { file_path: 'C:/work/b.md', content: 'y' }),
+        mkResult('write-2-result', 'tu-write-2'),
+        { ...mkAssistant('gate-followup'), turnCompleted: true },
+      ],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+
+    expect(sealed?.turnSealed).toBe(true);
+    expect(continued?.turnSealed).toBe(false);
+    expect(resealed?.turnSealed).toBe(true);
   });
 
   it('streaming token append to an assistant message keeps the same item key', () => {

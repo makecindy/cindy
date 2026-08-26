@@ -954,6 +954,35 @@ function isCompletedAssistantMessage(message: ChatMessage): boolean {
   );
 }
 
+function isGeneratedFilesSubTurnTerminal(message: ChatMessage): boolean {
+  // 显式失败也是子轮终态:后续没有新工作就该封口复核,不能把失败当成「还在跑」。
+  return message.turnCompleted === false || isCompletedAssistantMessage(message);
+}
+
+/**
+ * 产物卡封口只看当前尾部子轮。同一可见 user turn 在 turnCompleted 后自动续跑时,
+ * 前一子轮的收尾信号不得让后续 ready:false 的文件立刻 stat。
+ * export 仅供单测使用。
+ */
+export function isGeneratedFilesTurnSealed(
+  slice: readonly ChatMessage[],
+  hasFollowingUser: boolean,
+): boolean {
+  if (hasFollowingUser) return true;
+  let lastTerminalIdx = -1;
+  for (let i = 0; i < slice.length; i++) {
+    if (isGeneratedFilesSubTurnTerminal(slice[i])) lastTerminalIdx = i;
+  }
+  if (lastTerminalIdx < 0) return false;
+  for (let i = lastTerminalIdx + 1; i < slice.length; i++) {
+    const message = slice[i];
+    if (message.role === 'tool_use') return false;
+    if (message.role === 'user' && message.isSyntheticTrigger === true) return false;
+    if (message.role === 'assistant' && !message.systemCardType) return false;
+  }
+  return true;
+}
+
 export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessage[]): Set<string> {
   const out = new Set<string>();
   let sealedAnswerFound = false;
@@ -1730,15 +1759,7 @@ export function buildRenderItems(
     }
     const boundaryTimestamp = Date.parse(messages[hi]?.createdAt ?? '');
     const hasFollowingUser = hi < messages.length;
-    const turnSealed =
-      hasFollowingUser ||
-      slice.some(
-        (message) =>
-          message.turnCompleted === true ||
-          (message.turnMoney?.amount ?? 0) > 0 ||
-          (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
-          message.turnUsageDetails !== undefined,
-      );
+    const turnSealed = isGeneratedFilesTurnSealed(slice, hasFollowingUser);
     items.push({
       type: 'generated_files',
       key: `genfiles-${messages[lo].clientId}`,
