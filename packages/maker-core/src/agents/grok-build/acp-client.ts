@@ -154,7 +154,12 @@ export class AcpClient {
         : null;
       this.pending.set(id, { method, resolve, reject, timeoutId });
     });
-    await this.transport.writeLine(JSON.stringify(payload));
+    try {
+      await this.transport.writeLine(JSON.stringify(payload));
+    } catch (err) {
+      this.takePending(id);
+      throw err;
+    }
     return result;
   }
 

@@ -34,4 +34,9 @@ describe('grok-build auto-review policy', () => {
     expect(pickPermissionOptionId(options, 'allow', true)).toBe('a2');
     expect(pickPermissionOptionId(options, 'deny')).toBe('r1');
   });
+
+  it('fail-closes deny when only allow_* options exist', () => {
+    const options = [{ optionId: 'a1', kind: 'allow_once' }];
+    expect(pickPermissionOptionId(options, 'deny')).toBeNull();
+  });
 });

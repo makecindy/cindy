@@ -47,6 +47,7 @@ export function createGrokStdioTransport(opts: GrokStdioTransportOptions): AcpTr
   const closeHandlers = new Set<AcpCloseHandler>();
   const pendingLines: string[] = [];
   let closed = false;
+  let exited = false;
   let closeReason = 'transport closed';
   let stdoutRl: Interface | undefined;
   let stderrRl: Interface | undefined;
@@ -95,6 +96,7 @@ export function createGrokStdioTransport(opts: GrokStdioTransportOptions): AcpTr
     finish(`grok spawn error: ${err.message}`);
   });
   child.on('exit', (code, signal) => {
+    exited = true;
     finish(signal ? `grok exited signal ${signal}` : `grok exited code ${code ?? 'unknown'}`);
   });
 
@@ -139,19 +141,28 @@ export function createGrokStdioTransport(opts: GrokStdioTransportOptions): AcpTr
     async close(reason = 'client close'): Promise<void> {
       if (closed) return;
       finish(reason);
-      if (!child.killed) {
-        child.kill('SIGTERM');
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(() => {
-            if (!child.killed) child.kill('SIGKILL');
-            resolve();
-          }, 2_000);
-          child.once('exit', () => {
-            clearTimeout(timer);
-            resolve();
-          });
+      if (exited || child.exitCode != null) return;
+      await new Promise<void>((resolve) => {
+        if (exited) {
+          resolve();
+          return;
+        }
+        const timer = setTimeout(() => {
+          if (!exited) {
+            try { child.kill('SIGKILL'); } catch { /* already gone */ }
+          }
+          resolve();
+        }, 2_000);
+        child.once('exit', () => {
+          clearTimeout(timer);
+          resolve();
         });
-      }
+        try { child.kill('SIGTERM'); } catch { /* already gone */ }
+        if (exited) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
     },
   };
 }

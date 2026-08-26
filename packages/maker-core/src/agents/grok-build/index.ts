@@ -168,6 +168,7 @@ export class GrokBuildAgent extends BaseAgent {
     let promptInFlight = false;
     const lastUserIntent = { text: '' };
     const thought = { blockId: randomUUID() };
+    let onTurnAccepted: (() => void) | undefined;
     const autoReviewNotice = createAutoReviewUnavailableNotice((message) => {
       events.push({ type: 'error', data: { message, isTerminal: false }, source: GROK_BUILD_SOURCE });
     });
@@ -177,14 +178,12 @@ export class GrokBuildAgent extends BaseAgent {
       args,
       cwd: opts.workingDir,
       env,
-    });
-    if (typeof transport.pid === 'number') {
-      this.deps.registerLocalAgentProcess?.({
-        pid: transport.pid,
+      onProcessSpawned: (pid) => this.deps.registerLocalAgentProcess?.({
+        pid,
         kind: 'grok-build',
         role: 'task-host',
-      });
-    }
+      }),
+    });
     const client = new AcpClient({
       transport,
       logger: this.deps.logger.child('grok-build'),
@@ -192,6 +191,7 @@ export class GrokBuildAgent extends BaseAgent {
 
     client.onNotification((method, params) => {
       if (method !== 'session/update' || !isRecord(params) || !isRecord(params.update)) return;
+      onTurnAccepted?.();
       const sessionUpdate = params.update as { sessionUpdate: string; [key: string]: unknown };
       if (sessionUpdate.sessionUpdate === 'usage_update') {
         usage = {
@@ -229,31 +229,38 @@ export class GrokBuildAgent extends BaseAgent {
     });
 
     client.start();
-    const init = await client.initialize({
-      protocolVersion: ACP_PROTOCOL_VERSION,
-      clientInfo: { name: 'cindy', version: '0.0.0' },
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-      },
-    });
-    if (init.agentCapabilities?.promptCapabilities?.image) {
-      // capabilities is already published; image support is negotiated per session.
-      this.deps.logger.debug('grok-build ACP reports image prompt capability');
-    }
+    try {
+      const init = await client.initialize({
+        protocolVersion: ACP_PROTOCOL_VERSION,
+        clientInfo: { name: 'cindy', version: '0.0.0' },
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+        },
+      });
+      if (init.agentCapabilities?.promptCapabilities?.image) {
+        // capabilities is already published; image support is negotiated per session.
+        this.deps.logger.debug('grok-build ACP reports image prompt capability');
+      }
 
-    const hostPrompt = this.deps.runtimeConfig.systemPrompt?.trim() ?? '';
-    const userPrompt = opts.userPrompt?.trim() ?? '';
-    const systemPromptOverride = [hostPrompt, userPrompt].filter(Boolean).join('\n\n') || undefined;
-    const created = await client.sessionNew({
-      cwd: opts.workingDir,
-      mcpServers: [],
-      _meta: {
-        ...(bypass ? { yoloMode: true } : {}),
-        ...(systemPromptOverride ? { systemPromptOverride } : {}),
-      },
-    });
-    acpSessionId = created.sessionId;
+      const hostPrompt = this.deps.runtimeConfig.systemPrompt?.trim() ?? '';
+      const userPrompt = opts.userPrompt?.trim() ?? '';
+      const systemPromptOverride = [hostPrompt, userPrompt].filter(Boolean).join('\n\n') || undefined;
+      const created = await client.sessionNew({
+        cwd: opts.workingDir,
+        mcpServers: [],
+        _meta: {
+          ...(bypass ? { yoloMode: true } : {}),
+          ...(systemPromptOverride ? { systemPromptOverride } : {}),
+        },
+      });
+      acpSessionId = created.sessionId;
+    } catch (err) {
+      closed = true;
+      await client.close('startSession failed');
+      events.end();
+      throw err;
+    }
     events.push({
       type: 'session_id',
       data: { sessionId: acpSessionId },
@@ -274,18 +281,48 @@ export class GrokBuildAgent extends BaseAgent {
           source: GROK_BUILD_SOURCE,
         });
         promptInFlight = true;
+        let sendReturned = false;
+        let acceptState: 'pending' | 'accepted' | 'rejected' = 'pending';
+        let acceptResolve = () => {};
+        const accepted = new Promise<void>((resolve) => {
+          acceptResolve = resolve;
+        });
+        const markAccepted = () => {
+          if (acceptState !== 'pending') return;
+          acceptState = 'accepted';
+          acceptResolve();
+        };
+        const publishAfterSend = (event: AgentEvent) => {
+          const fire = () => { events.push(event); };
+          if (sendReturned) fire();
+          else setImmediate(fire);
+        };
+        onTurnAccepted = markAccepted;
+        const promptPromise = (async () => {
+          try {
+            const result = await client.sessionPrompt({
+              sessionId: acpSessionId,
+              prompt: userMessageToPrompt(message),
+            });
+            markAccepted();
+            publishAfterSend(translatePromptResult(result));
+          } catch (err) {
+            if (acceptState === 'accepted' || sendReturned) {
+              const messageText = err instanceof Error ? err.message : String(err);
+              publishAfterSend(translateError(messageText, true));
+              return;
+            }
+            acceptState = 'rejected';
+            throw err;
+          } finally {
+            promptInFlight = false;
+            if (onTurnAccepted === markAccepted) onTurnAccepted = undefined;
+          }
+        })();
         try {
-          const result = await client.sessionPrompt({
-            sessionId: acpSessionId,
-            prompt: userMessageToPrompt(message),
-          });
-          events.push(translatePromptResult(result));
-        } catch (err) {
-          const messageText = err instanceof Error ? err.message : String(err);
-          events.push(translateError(messageText, true));
-          throw err;
+          await Promise.race([accepted, promptPromise]);
+          sendReturned = true;
         } finally {
-          promptInFlight = false;
           void sendOpts;
         }
       },

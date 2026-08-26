@@ -91,5 +91,5 @@ export function pickPermissionOptionId(
     const match = options.find((option) => option.kind === kind);
     if (match) return match.optionId;
   }
-  return options[0]?.optionId ?? null;
+  return behavior === 'allow' ? options[0]?.optionId ?? null : null;
 }
