@@ -185,17 +185,24 @@ export function setWorkspacePref(
 ): { prefs: HookWorkspacePrefs[]; rev: number } {
   const fp = filePath();
   const store = readStore(fp);
+  const exact = store.entries.find((e) => sameKey(e, channel, teamId, workspace));
+  const inherited =
+    exact === undefined && teamId !== null
+      ? store.entries.find((e) => sameKey(e, channel, null, workspace))
+      : undefined;
   const current =
-    store.entries.find((e) => sameKey(e, channel, teamId, workspace)) ??
-    ({
-      channel,
-      teamId,
-      workspace,
-      model: null,
-      effort: null,
-      agentKind: null,
-      permissionMode: null,
-    } satisfies WorkspacePrefsEntry);
+    exact ??
+    (inherited
+      ? { ...inherited, teamId }
+      : ({
+          channel,
+          teamId,
+          workspace,
+          model: null,
+          effort: null,
+          agentKind: null,
+          permissionMode: null,
+        } satisfies WorkspacePrefsEntry));
   const rev = rowRev(current) + 1;
   const nextRow: WorkspacePrefsEntry = {
     ...current,

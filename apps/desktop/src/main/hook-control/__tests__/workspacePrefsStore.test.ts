@@ -48,6 +48,19 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('slack', 'T2', 'repo').model).toBe('sonnet');
   });
 
+  it('新建 team 专属行时从 null 兜底继承未改字段', () => {
+    setWorkspacePref('slack', null, 'repo', { model: 'sonnet', agentKind: 'claude-code' });
+    setWorkspacePref('slack', 'T1', 'repo', { model: 'opus' });
+    expect(getWorkspacePref('slack', 'T1', 'repo')).toMatchObject({
+      model: 'opus',
+      agentKind: 'claude-code',
+    });
+    expect(getWorkspacePref('slack', null, 'repo')).toMatchObject({
+      model: 'sonnet',
+      agentKind: 'claude-code',
+    });
+  });
+
   it('四个字段都清空则保留墓碑，不丢键', () => {
     setWorkspacePref('x', null, 'chat', { model: 'grok-4', agentKind: 'pi' });
     setWorkspacePref('x', null, 'chat', {

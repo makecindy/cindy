@@ -304,7 +304,12 @@ export function useHookWorkspacePrefs(
 
   // (multi-team)偏好归属 team: 可选清单 = 未 displaced 的绑定; 选中项失效
   // (解绑/被顶)时自动回落首个, 不留悬空选择
-  const multiTeam = provider === 'slack' && hook?.serverMultiTeam === true;
+  // 离线冷启动 welcome 还没回来时 serverMultiTeam 是 false，但 bindings
+  // 缓存已经能区分 multi-team。有未 displaced 行就按多绑定写 teamId，
+  // 避免离线改动落成 null 行、重连后无法镜像到对应 workspace。
+  const multiTeam =
+    provider === 'slack' &&
+    (hook?.serverMultiTeam === true || (hook?.bindings ?? []).some((b) => !b.displaced));
   const teams = useMemo(
     () =>
       (provider === 'slack' ? (hook?.bindings ?? []) : [])
