@@ -51,7 +51,6 @@ import {
   markWorkspacePrefMirrored,
   markWorkspacePrefsMigrated,
   peekWorkspacePrefRev,
-  resetChannelWorkspacePrefs,
   setWorkspacePref,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
@@ -571,19 +570,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         persistUnsolicitedServerPrefs(view.provider, view.prefs);
         broadcastProviderPrefs(providerLocalPrefsView(view.provider));
       },
-      onHookReadyForPrefsMirror: (provider, change) => {
-        const rebound =
-          Boolean(
-            change?.previousBindingId &&
-              change.bindingId &&
-              change.previousBindingId !== change.bindingId,
-          ) ||
-          Boolean(
-            change?.previousSlackUserId &&
-              change.slackUserId &&
-              change.previousSlackUserId !== change.slackUserId,
-          );
-        if (rebound) resetChannelWorkspacePrefs(provider);
+      onHookReadyForPrefsMirror: (provider) => {
         void mirrorWorkspacePrefs(provider);
       },
       notifyTelegramBehavior: broadcastTelegramBehavior,

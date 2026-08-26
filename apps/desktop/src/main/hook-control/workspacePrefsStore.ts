@@ -155,19 +155,6 @@ export function markWorkspacePrefsMigrated(channel: HookPrefsChannel): void {
   writeStore(fp, { ...store, migrated: { ...store.migrated, [channel]: true } });
 }
 
-/** 换绑时丢掉该渠道本机行并重开迁移，避免把上一身份的偏好镜像给新绑定。 */
-export function resetChannelWorkspacePrefs(channel: HookPrefsChannel): void {
-  const fp = filePath();
-  const store = readStore(fp);
-  const migrated = { ...store.migrated };
-  delete migrated[channel];
-  writeStore(fp, {
-    ...store,
-    migrated,
-    entries: store.entries.filter((e) => e.channel !== channel),
-  });
-}
-
 export function listWorkspacePrefs(channel: HookPrefsChannel): HookWorkspacePrefs[] {
   return readStore(filePath()).entries.filter((e) => e.channel === channel).map(toHookPrefs);
 }

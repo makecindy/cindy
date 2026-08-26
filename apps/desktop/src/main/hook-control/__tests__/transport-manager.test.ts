@@ -3212,46 +3212,7 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
     expect(mirrored).toEqual(['slack']);
   });
 
-  it('单绑定 Slack 同账号换用户时带上前后 slackUserId', async () => {
-    const { wss, url } = await startServer();
-    const store = memoryStore({ url });
-    const changes: Array<{ previous: string | null | undefined; next: string | null | undefined }> =
-      [];
-    const manager = makeManager(store, {
-      onHookReadyForPrefsMirror: (_provider, change) => {
-        changes.push({ previous: change?.previousSlackUserId, next: change?.slackUserId });
-      },
-    });
-    cleanups.push(() => manager.dispose());
-    const { sock } = await connect(manager, wss);
-    sock.send(
-      serializeHookMessage(
-        makeBindUpdate({
-          state: 'confirmed',
-          slackUserId: 'U1',
-          slackUserName: 'tester',
-          message: null,
-        }),
-      ),
-    );
-    await expect.poll(() => changes.length, { timeout: 3000 }).toBe(1);
-    expect(changes[0]).toEqual({ previous: null, next: 'U1' });
-
-    sock.send(
-      serializeHookMessage(
-        makeBindUpdate({
-          state: 'confirmed',
-          slackUserId: 'U2',
-          slackUserName: 'other',
-          message: null,
-        }),
-      ),
-    );
-    await expect.poll(() => changes.length, { timeout: 3000 }).toBe(2);
-    expect(changes[1]).toEqual({ previous: 'U1', next: 'U2' });
-  });
-
-  it('Slack 已绑定后重连 welcome 会再镜像', async () => {
+  it('Slack 重连 welcome 不抢跑；等 bind.update 再镜像', async () => {
     const { wss, url } = await startServer();
     const store = memoryStore({ url });
     const mirrored: string[] = [];
@@ -3279,6 +3240,17 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
     const [sock2] = await connPromise;
     sock2.send(serializeHookMessage(makeWelcome({ serverName: 'mock', features: [] })));
     await expect.poll(() => manager.snapshot().status, { timeout: 3000 }).toBe('connected');
+    expect(mirrored).toEqual(['slack']);
+    sock2.send(
+      serializeHookMessage(
+        makeBindUpdate({
+          state: 'confirmed',
+          slackUserId: 'U1',
+          slackUserName: 'tester',
+          message: null,
+        }),
+      ),
+    );
     await expect.poll(() => mirrored.length, { timeout: 3000 }).toBe(2);
     expect(mirrored).toEqual(['slack', 'slack']);
   });
@@ -3585,44 +3557,6 @@ describe('多 workspace 绑定(multi-team)', () => {
     sock.send(serializeHookMessage(makeBindState({ bindings: [T1] })));
     await expect.poll(() => mirrored.length, { timeout: 3000 }).toBe(1);
     expect(mirrored).toEqual(['slack']);
-  });
-
-  it('multi-team 同 team 换用户时 bind.state / bind.update 都带上前后 slackUserId', async () => {
-    const changes: Array<{ previous: string | null | undefined; next: string | null | undefined }> =
-      [];
-    const { sock } = await connectMulti({
-      managerOverrides: {
-        onHookReadyForPrefsMirror: (_provider, change) => {
-          changes.push({ previous: change?.previousSlackUserId, next: change?.slackUserId });
-        },
-      },
-    });
-    sock.send(serializeHookMessage(makeBindState({ bindings: [T1] })));
-    await expect.poll(() => changes.length, { timeout: 3000 }).toBe(1);
-    expect(changes[0]).toEqual({ previous: undefined, next: undefined });
-
-    sock.send(
-      serializeHookMessage(
-        makeBindState({ bindings: [{ ...T1, slackUserId: 'U9', slackUserName: 'other' }] }),
-      ),
-    );
-    await expect.poll(() => changes.length, { timeout: 3000 }).toBe(2);
-    expect(changes[1]).toEqual({ previous: 'U1', next: 'U9' });
-
-    sock.send(
-      serializeHookMessage(
-        makeBindUpdate({
-          state: 'confirmed',
-          slackUserId: 'U8',
-          slackUserName: 'third',
-          message: null,
-          teamId: 'T1',
-          teamName: 'acme',
-        }),
-      ),
-    );
-    await expect.poll(() => changes.length, { timeout: 3000 }).toBe(3);
-    expect(changes[2]).toEqual({ previous: 'U9', next: 'U8' });
   });
 
   it('addBinding: 发空 bind.start, pending 落 pendingBind 并弹浏览器; confirmed(teamId) upsert 行 + 清 pendingBind', async () => {
