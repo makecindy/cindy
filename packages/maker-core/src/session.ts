@@ -471,6 +471,8 @@ export class Session {
   private staleTerminalQueuedGeneration: number | null = null;
   /** Previous turn generation, kept until leftover tail or new-turn progress. */
   private pendingPriorGeneration: number | null = null;
+  /** N+1 has emitted foreground running; later errors belong to this send. */
+  private sawCurrentTurnRunning = false;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
    * AgentEvent.turnOrigin 上,turn 终止(isTerminalTurnEvent)后清空 — 共享
@@ -758,6 +760,7 @@ export class Session {
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
     this.unacceptedSendGeneration = reservedTurnGeneration;
+    this.sawCurrentTurnRunning = false;
     this.terminalObservedDuringReservation = null;
     onTurnReserved?.(reservedTurnGeneration);
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
@@ -2021,7 +2024,10 @@ export class Session {
     return (
       (event.type === 'done' && !this.isSilentStopDoneEvent(event)) ||
       this.isIdleStatusEvent(event) ||
-      (isTerminalAgentErrorEvent(event) && this.staleTerminalQueuedGeneration !== null)
+      (isTerminalAgentErrorEvent(event) && (
+        this.staleTerminalQueuedGeneration !== null ||
+        this.pendingPriorGeneration !== null
+      ))
     );
   }
 
@@ -2042,9 +2048,27 @@ export class Session {
     observedGeneration: number,
     event: AgentEvent,
   ): number {
+    if (this.isForegroundRunningStatus(event)) {
+      this.sawCurrentTurnRunning = true;
+    }
     if (observedGeneration > waitStartGeneration) {
+      // A wait that started on N can adopt N+1 progress, but the first
+      // unobserved N error must not ride that adoption into N+1.
+      if (
+        isTerminalAgentErrorEvent(event) &&
+        this.pendingPriorGeneration !== null &&
+        this.pendingPriorGeneration < this.turnGeneration &&
+        this.lastObservedTerminalKind !== 'error' &&
+        !this.sawCurrentTurnRunning &&
+        this.isUnacceptedCurrentSend()
+      ) {
+        const prior = this.pendingPriorGeneration;
+        this.pendingPriorGeneration = null;
+        this.staleTerminalQueuedGeneration = null;
+        return prior;
+      }
       this.staleTerminalQueuedGeneration = null;
-      if (this.isNewTurnProgressEvent(event)) {
+      if (this.isNewTurnProgressEvent(event) || this.isForegroundRunningStatus(event)) {
         this.pendingPriorGeneration = null;
       }
       return observedGeneration;
@@ -2053,8 +2077,13 @@ export class Session {
     const leftoverDoneOrIdle =
       (event.type === 'done' && !this.isSilentStopDoneEvent(event)) ||
       this.isIdleStatusEvent(event);
-    if (prior !== null && leftoverDoneOrIdle && waitStartGeneration !== 0) {
-      if (event.type === 'done') {
+    const leftoverUnobservedPriorError =
+      isTerminalAgentErrorEvent(event) &&
+      prior !== null &&
+      !this.sawCurrentTurnRunning &&
+      this.isUnacceptedCurrentSend();
+    if (prior !== null && (leftoverDoneOrIdle || leftoverUnobservedPriorError) && waitStartGeneration !== 0) {
+      if (event.type === 'done' || leftoverUnobservedPriorError) {
         this.pendingPriorGeneration = null;
         this.staleTerminalQueuedGeneration = null;
       } else {
@@ -2196,9 +2225,19 @@ export class Session {
       isTerminal &&
       !isBackgroundEvent &&
       this.isUnacceptedCurrentSend() &&
-      this.lastObservedTerminalKind === 'error' &&
-      this.lastObservedTerminalGeneration !== null &&
-      this.lastObservedTerminalGeneration < this.turnGeneration;
+      (
+        (
+          this.lastObservedTerminalKind === 'error' &&
+          this.lastObservedTerminalGeneration !== null &&
+          this.lastObservedTerminalGeneration < this.turnGeneration
+        ) ||
+        (
+          this.pendingPriorGeneration !== null &&
+          this.pendingPriorGeneration < this.turnGeneration &&
+          isTerminalAgentErrorEvent(event) &&
+          !this.sawCurrentTurnRunning
+        )
+      );
     const terminalBoundaryObserved =
       isCurrentGeneration && isTerminal && !isBackgroundEvent && !preDispatchReservation;
     if (terminalBoundaryObserved && !lateErrorAfterDoneSnapshot && !reservationWindowLeftover) {
