@@ -205,6 +205,32 @@ describe('StorageManagementCard database cleanup', () => {
     );
   });
 
+  it('maps serialized IPC scheduling failures to localized messages', async () => {
+    vi.mocked(window.electronAPI.localDb.maintenance.schedule).mockRejectedValueOnce(
+      new Error(
+        'Error invoking remote method: Error: [PRECONDITION_FAILED] active database owner changed',
+      ),
+    );
+    render(<StorageManagementCard />);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }),
+    );
+    await screen.findByRole('alertdialog', {
+      name: 'settings.about.storage.dbSlimmingScanResultTitle',
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingConfirmButton' }),
+    );
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipcError.PRECONDITION_FAILED');
+    });
+    expect(toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('active database owner changed'),
+    );
+  });
+
   it('offers only 7 days, 1 month, 3 months, and 6 months, defaulting to 7 days', async () => {
     render(<StorageManagementCard />);
 
@@ -288,6 +314,10 @@ describe('StorageManagementCard database cleanup', () => {
     const report = await screen.findByText('settings.about.storage.dbSlimmingReportTasks');
     const resultDialog = report.closest('[role="alertdialog"]');
     expect(resultDialog).toBe(persistentDialog);
+    const confirmButton = screen.getByRole('button', {
+      name: 'settings.about.storage.dbSlimmingConfirmButton',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(confirmButton));
     expect(
       screen.queryByRole('alertdialog', {
         name: 'settings.about.storage.dbSlimmingScanLoading',

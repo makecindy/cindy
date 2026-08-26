@@ -532,9 +532,11 @@ function DatabaseSlimmingSection() {
       setExecutionLocked(false);
       setReportOpen(true);
       toast.error(
-        error instanceof Error
-          ? error.message
-          : t('settings.about.storage.dbSlimmingScheduleFailed'),
+        t(
+          mapIpcErrorToI18nKey(error, {
+            fallback: 'settings.about.storage.dbSlimmingScheduleFailed',
+          }),
+        ),
       );
     }
   };
@@ -754,7 +756,7 @@ function DatabaseCleanupDialog({
 }: DatabaseCleanupDialogProps) {
   const { t } = useTranslation();
   const bodyId = useId();
-  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const reportVisible = reportOpen && scanned !== null;
   const mode = scanLoading
     ? 'scanning'
@@ -768,7 +770,7 @@ function DatabaseCleanupDialog({
 
   useEffect(() => {
     if (mode !== 'report') return;
-    const frame = requestAnimationFrame(() => cancelButtonRef.current?.focus());
+    const frame = requestAnimationFrame(() => confirmButtonRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [mode]);
 
@@ -856,7 +858,6 @@ function DatabaseCleanupDialog({
                   <div className="mt-6 flex shrink-0 justify-end gap-2.5">
                     <AlertDialog.Cancel asChild>
                       <button
-                        ref={cancelButtonRef}
                         type="button"
                         className={cn(
                           'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
@@ -869,6 +870,7 @@ function DatabaseCleanupDialog({
                       </button>
                     </AlertDialog.Cancel>
                     <button
+                      ref={confirmButtonRef}
                       type="button"
                       disabled={insufficientSpace || scanned.messageCount === 0}
                       onClick={onConfirm}

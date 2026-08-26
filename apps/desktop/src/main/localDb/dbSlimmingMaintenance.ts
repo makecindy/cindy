@@ -590,8 +590,8 @@ function compactWorkingCopy(
     const cleanup = activeDb.transaction(() => {
       // message_id/session_id are UNINDEXED FTS columns. Letting the trigger run
       // once per message turns a large cleanup into N full FTS scans. Drop only
-      // this trigger inside the transaction, scan FTS once by session, then
-      // restore the exact schema SQL before committing.
+      // this trigger inside the transaction, scan FTS once by session, clear
+      // its stable rowid map in bulk, then restore the exact schema SQL.
       if (messagesFtsDeleteTriggerSql) {
         activeDb.exec('DROP TRIGGER messages_fts_delete');
       }
@@ -599,6 +599,16 @@ function compactWorkingCopy(
         activeDb.exec(
           `DELETE FROM messages_fts
             WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
+        );
+      }
+      if (tableExists(activeDb, 'messages_fts_rows')) {
+        activeDb.exec(
+          `DELETE FROM messages_fts_rows
+            WHERE message_id IN (
+              SELECT message.id
+                FROM messages message
+                JOIN temp.db_slimming_targets target ON target.id = message.session_id
+            )`,
         );
       }
       if (

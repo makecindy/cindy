@@ -92,10 +92,19 @@ function createCleanupFixture(): void {
       role UNINDEXED,
       content
     );
+    CREATE TABLE messages_fts_rows (
+      fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+      message_id TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX messages_fts_rows_message_id_idx ON messages_fts_rows(message_id);
     CREATE TABLE messages_fts_delete_audit (message_id TEXT NOT NULL);
     CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages BEGIN
       INSERT INTO messages_fts_delete_audit (message_id) VALUES (old.id);
-      DELETE FROM messages_fts WHERE message_id = old.id;
+      DELETE FROM messages_fts
+        WHERE rowid = (
+          SELECT fts_rowid FROM messages_fts_rows WHERE message_id = old.id
+        );
+      DELETE FROM messages_fts_rows WHERE message_id = old.id;
     END;
     CREATE TABLE subagent_runs (
       id TEXT PRIMARY KEY,
@@ -144,9 +153,15 @@ function createCleanupFixture(): void {
       id,
       'x'.repeat(32 * 1024),
     );
+    const ftsRowid = Number(
+      db
+        .prepare('INSERT INTO messages_fts_rows (message_id) VALUES (?)')
+        .run(`message-${id}`).lastInsertRowid,
+    );
     db.prepare(
-      'INSERT INTO messages_fts (message_id, session_id, role, content) VALUES (?, ?, ?, ?)',
+      'INSERT INTO messages_fts (rowid, message_id, session_id, role, content) VALUES (?, ?, ?, ?, ?)',
     ).run(
+      ftsRowid,
       `message-${id}`,
       id,
       'user',
@@ -278,12 +293,25 @@ describe('runDbSlimmingMaintenance', () => {
         'message-deleted-new',
       ]);
       expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 3 });
+      expect(
+        db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
+      ).toEqual([
+        { message_id: 'message-active-old' },
+        { message_id: 'message-archived-new' },
+        { message_id: 'message-deleted-new' },
+      ]);
       expect(db.prepare('SELECT count(*) AS count FROM messages_fts_delete_audit').get()).toEqual({
         count: 0,
       });
       db.prepare("DELETE FROM messages WHERE id = 'message-active-old'").run();
       expect(db.prepare('SELECT message_id FROM messages_fts_delete_audit').all()).toEqual([
         { message_id: 'message-active-old' },
+      ]);
+      expect(
+        db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
+      ).toEqual([
+        { message_id: 'message-archived-new' },
+        { message_id: 'message-deleted-new' },
       ]);
       expect(db.prepare('SELECT count(*) AS count FROM subagent_runs').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM subagent_run_aliases').get()).toEqual({ count: 2 });
