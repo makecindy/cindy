@@ -197,6 +197,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     id: string;
     name: string;
     disabled?: boolean;
+    availability?: CatalogModel['availability'];
     group: 'image' | 'video' | 'embedding';
   }> = [
     ...(provider.imageModels ?? []).map((m) => ({ ...m, group: 'image' as const })),
@@ -213,6 +214,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
       defaultEffort: null,
       group: m.group,
       ...(m.disabled === true ? { disabled: true } : {}),
+      ...(m.availability !== undefined ? { availability: m.availability } : {}),
     };
     const row: UnionModelRow = {
       id: m.id,

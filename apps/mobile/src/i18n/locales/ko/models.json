@@ -18,6 +18,7 @@
     "configureAccessibility": "{{model}} 구성",
     "budgetDisabledHint": "이 모델을 사용하려면 먼저 제어 대상 기기에서 API 키를 설정해야 합니다",
     "paymentRequiredBadge": "유료",
+    "paymentRequiredAccessibility": "{{provider}}의 모델 {{model}} 유료 액세스 안내 보기",
     "paymentRequiredTitle": "결제 후 이 모델 잠금 해제",
     "paymentRequiredDescription": "유료 플랜을 구독하거나 잔액을 충전하면 사용할 수 있습니다. 데스크톱 Cindy의 사용량 및 결제에서 진행하세요.",
     "priceLine": "입력 {{input}} · 출력 {{output}} / 100만 토큰",
