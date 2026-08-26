@@ -820,12 +820,25 @@ function compactSessionToolResults(readyDb, args) {
     "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') LIMIT 1",
   );
   // Keep this aggregate + bulk update path in sync with worker/opHandlers/tx.ts.
-  // The fixed-prefix guard only prevents re-compacting an existing marker.
+  // Only prefix-shaped rows pay for JSON validation.
+  const uncompactedContentPredicate = [
+    'CASE',
+    "WHEN content NOT GLOB '{\\\"type\\\":\\\"tool_result_compacted\\\",\\\"version\\\":1,*' THEN 1",
+    'WHEN json_valid(content) = 0 THEN 1',
+    "WHEN json_type(content) = 'object'",
+    "AND json_extract(content, '$.type') = 'tool_result_compacted'",
+    "AND json_extract(content, '$.version') = 1",
+    "AND json_type(content, '$.originalBytes') IN ('integer', 'real')",
+    "AND json_extract(content, '$.originalBytes') >= 0",
+    "AND json_type(content, '$.compactedAt') IN ('integer', 'real')",
+    "AND json_extract(content, '$.compactedAt') >= 0 THEN 0",
+    'ELSE 1 END',
+  ].join(' ');
   const summarizeCandidates = readyDb.prepare(
-    "SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes FROM messages WHERE session_id = ? AND role = 'tool_result' AND content NOT GLOB '{\\\"type\\\":\\\"tool_result_compacted\\\",\\\"version\\\":1,*'",
+    "SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes FROM messages WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
   );
   const compactMessages = readyDb.prepare(
-    "UPDATE messages SET content = json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?) WHERE session_id = ? AND role = 'tool_result' AND content NOT GLOB '{\\\"type\\\":\\\"tool_result_compacted\\\",\\\"version\\\":1,*'",
+    "UPDATE messages SET content = json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?) WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
   );
 
   return readyDb.transaction(() => {
@@ -1254,6 +1267,21 @@ function claudeImportMessages(readyDb, args) {
     WHERE
       messages.role != 'message_tombstone' AND
       messages.rewind_at IS NULL AND
+      (
+        messages.role != 'tool_result' OR
+        CASE
+          WHEN messages.content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
+          WHEN json_valid(messages.content) = 0 THEN 1
+          WHEN json_type(messages.content) = 'object'
+           AND json_extract(messages.content, '$.type') = 'tool_result_compacted'
+           AND json_extract(messages.content, '$.version') = 1
+           AND json_type(messages.content, '$.originalBytes') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.originalBytes') >= 0
+           AND json_type(messages.content, '$.compactedAt') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.compactedAt') >= 0 THEN 0
+          ELSE 1
+        END = 1
+      ) AND
       (
         messages.role IS NOT excluded.role OR
         messages.content IS NOT excluded.content OR

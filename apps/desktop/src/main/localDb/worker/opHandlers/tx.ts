@@ -799,16 +799,30 @@ function compactSessionToolResults(
        AND status IN ('archived', 'deleted')
      LIMIT 1
   `);
-  // Archived/deleted tool results are intentionally treated uniformly. The
-  // archive/delete path does no JSON parsing, media inspection, tool_use
-  // pairing, size threshold, or per-row database round trips. The fixed-prefix
-  // guard is only for idempotency when an archived task is later deleted.
+  // Archived/deleted tool results are intentionally treated uniformly. Ordinary
+  // rows only pay for the fixed-prefix check. JSON validation runs solely for
+  // the tiny set of rows that look like our marker, preventing an unrelated
+  // tool result with the same prefix from being skipped forever.
+  const uncompactedContentPredicate = `
+    CASE
+      WHEN content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
+      WHEN json_valid(content) = 0 THEN 1
+      WHEN json_type(content) = 'object'
+       AND json_extract(content, '$.type') = 'tool_result_compacted'
+       AND json_extract(content, '$.version') = 1
+       AND json_type(content, '$.originalBytes') IN ('integer', 'real')
+       AND json_extract(content, '$.originalBytes') >= 0
+       AND json_type(content, '$.compactedAt') IN ('integer', 'real')
+       AND json_extract(content, '$.compactedAt') >= 0 THEN 0
+      ELSE 1
+    END
+  `;
   const summarizeCandidates = db.prepare(`
     SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes
       FROM messages
      WHERE session_id = ?
        AND role = 'tool_result'
-       AND content NOT GLOB '{"type":"tool_result_compacted","version":1,*'
+       AND (${uncompactedContentPredicate}) = 1
   `);
   const compactMessages = db.prepare(`
     UPDATE messages
@@ -820,7 +834,7 @@ function compactSessionToolResults(
        )
      WHERE session_id = ?
        AND role = 'tool_result'
-       AND content NOT GLOB '{"type":"tool_result_compacted","version":1,*'
+       AND (${uncompactedContentPredicate}) = 1
   `);
 
   return db.transaction(() => {
@@ -922,6 +936,21 @@ function claudeImportMessages(db: Database.Database, args: unknown): { changed: 
     WHERE
       messages.role != 'message_tombstone' AND
       messages.rewind_at IS NULL AND
+      (
+        messages.role != 'tool_result' OR
+        CASE
+          WHEN messages.content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
+          WHEN json_valid(messages.content) = 0 THEN 1
+          WHEN json_type(messages.content) = 'object'
+           AND json_extract(messages.content, '$.type') = 'tool_result_compacted'
+           AND json_extract(messages.content, '$.version') = 1
+           AND json_type(messages.content, '$.originalBytes') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.originalBytes') >= 0
+           AND json_type(messages.content, '$.compactedAt') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.compactedAt') >= 0 THEN 0
+          ELSE 1
+        END = 1
+      ) AND
       (
         messages.role IS NOT excluded.role OR
         messages.content IS NOT excluded.content OR

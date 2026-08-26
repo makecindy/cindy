@@ -288,6 +288,11 @@ describe('db worker tx handlers', () => {
         });
         const malformedStructured = `{"xdt_image_urls":["${imageUrl}"],"output":"${largeText}`;
         const mediaLikePlainText = `source mentions xdt_image_urls but is not structured\n${largeText}`;
+        const markerPrefixCollision = JSON.stringify({
+          type: 'tool_result_compacted',
+          version: 1,
+          note: 'ordinary tool output',
+        });
         const cases = [
           ['plain', largeText, 'tool-1'],
           ['missing-id', largeText, null],
@@ -313,7 +318,8 @@ describe('db worker tx handlers', () => {
            VALUES
             ('small', 'small', 's1', 'tool_result', 'small', NULL, 99),
             ('empty', 'empty', 's1', 'tool_result', '', NULL, 100),
-            ('compacted', 'compacted', 's1', 'tool_result', ?, NULL, 101)`,
+            ('compacted', 'compacted', 's1', 'tool_result', ?, NULL, 101),
+            ('prefix-collision', 'prefix-collision', 's1', 'tool_result', ?, NULL, 102)`,
           [
             JSON.stringify({
               type: 'tool_result_compacted',
@@ -321,6 +327,7 @@ describe('db worker tx handlers', () => {
               originalBytes: 123,
               compactedAt: 100,
             }),
+            markerPrefixCollision,
           ],
         );
 
@@ -331,9 +338,12 @@ describe('db worker tx handlers', () => {
             now: 500,
           }),
         ).resolves.toEqual({
-          compactedRows: cases.length + 2,
+          compactedRows: cases.length + 3,
           originalBytes: cases.map(([, content]) => content)
-            .reduce((sum, content) => sum + Buffer.byteLength(content), Buffer.byteLength('small')),
+            .reduce(
+              (sum, content) => sum + Buffer.byteLength(content),
+              Buffer.byteLength('small') + Buffer.byteLength(markerPrefixCollision),
+            ),
         });
 
         const rows = await client.query<{ id: string; content: string }>(
@@ -357,6 +367,12 @@ describe('db worker tx handlers', () => {
           type: 'tool_result_compacted',
           version: 1,
           originalBytes: 0,
+          compactedAt: 500,
+        });
+        expect(JSON.parse(rows.find((row) => row.id === 'prefix-collision')!.content)).toEqual({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: Buffer.byteLength(markerPrefixCollision),
           compactedAt: 500,
         });
         const compactedBeforeRetry = rows.map((row) => row.content);
@@ -703,6 +719,81 @@ describe('db worker tx handlers', () => {
       });
     });
   });
+
+  it.each([false, true])(
+    'claude.importMessages does not restore a compacted tool result (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        const marker = JSON.stringify({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 80_000,
+          compactedAt: 500,
+        });
+        await client.exec(
+          `INSERT INTO messages
+            (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at)
+           VALUES
+            (?, ?, ?, 'tool_result', ?, ?, NULL, ?),
+            (?, ?, ?, 'tool_result', ?, ?, NULL, ?)`,
+          [
+            'existing',
+            'claude-import:8-0',
+            's1',
+            marker,
+            'tool-2',
+            3100,
+            'prefix-collision',
+            'claude-import:9-0',
+            's1',
+            '{"type":"tool_result_compacted","version":1,',
+            'tool-3',
+            3200,
+          ],
+        );
+
+        await expect(
+          client.tx('claude.importMessages', {
+            sessionId: 's1',
+            importClientIdPrefix: 'claude-import:',
+            sdkSessionId: 'sdk-1',
+            rows: [
+              {
+                lineNo: 8,
+                partIndex: 0,
+                role: 'tool_result',
+                content: 'restored full body',
+                toolUseId: 'tool-2',
+                agentMeta: null,
+                createdAt: 3100,
+              },
+              {
+                lineNo: 9,
+                partIndex: 0,
+                role: 'tool_result',
+                content: 'replacement full body',
+                toolUseId: 'tool-3',
+                agentMeta: null,
+                createdAt: 3200,
+              },
+            ],
+          }),
+        ).resolves.toEqual({ changed: 1 });
+        await expect(
+          client.queryOne<{ content: string }>(
+            'SELECT content FROM messages WHERE client_id = ?',
+            ['claude-import:8-0'],
+          ),
+        ).resolves.toEqual({ content: marker });
+        const collision = await client.queryOne<{ content: string }>(
+          'SELECT content FROM messages WHERE client_id = ?',
+          ['claude-import:9-0'],
+        );
+        expect(JSON.parse(collision!.content)).toBe('replacement full body');
+      }, { useInlineWorker });
+    },
+  );
 
   it('claude.importMessages caps oversized tool_result content at the persistence limit', async () => {
     await withClient(async (client) => {

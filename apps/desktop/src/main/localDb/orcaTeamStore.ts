@@ -10,6 +10,7 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from './agentIslandSessionPatch.js';
 import { withSessionRouteLock, withSessionRouteLocks } from './sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from './sessionRuntimeCleanup.js';
+import { compactSessionToolResultsBestEffort } from './toolResultCompaction.js';
 
 const log = createLogger('orca-team-store');
 
@@ -248,9 +249,10 @@ export async function markTeamEnded(
  * orca_role 字段保留 'worker' 不动 — 历史上下文识别需要它。
  */
 export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
+  const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForTeam(teamId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
-    const ids = await getDbClient().tx('orca.archiveWorkersByTeam', {
+    const ids = await client.tx('orca.archiveWorkersByTeam', {
       teamId,
       sessionIds: candidateIds,
       now: Date.now(),
@@ -258,7 +260,10 @@ export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
     for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
     return ids;
   });
-  for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
+  for (const id of updatedIds) {
+    broadcastSessionPatch(id, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId: id });
+  }
   return updatedIds;
 }
 
@@ -291,9 +296,10 @@ export async function markWorkersStatusByTeam(
 export async function reconcileInactiveTeamWorkersForLead(
   leadSessionId: string,
 ): Promise<string[]> {
+  const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForInactiveTeams(leadSessionId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
-    const ids = await getDbClient().tx('orca.reconcileInactiveTeamWorkersForLead', {
+    const ids = await client.tx('orca.reconcileInactiveTeamWorkersForLead', {
       leadSessionId,
       sessionIds: candidateIds,
       now: Date.now(),
@@ -301,7 +307,10 @@ export async function reconcileInactiveTeamWorkersForLead(
     for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
     return ids;
   });
-  for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
+  for (const id of updatedIds) {
+    broadcastSessionPatch(id, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId: id });
+  }
   return updatedIds;
 }
 
@@ -500,12 +509,14 @@ export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean
  * 这条路径只服务失败清理，不影响正常协同结束时保留历史 worker link 的语义。
  */
 export async function removeWorker(workerId: string): Promise<void> {
-  const removedSessionId = await getDbClient().tx('orca.removeWorker', {
+  const client = getDbClient();
+  const removedSessionId = await client.tx('orca.removeWorker', {
     workerId,
     now: Date.now(),
   });
   if (removedSessionId) {
     broadcastSessionPatch(removedSessionId, { status: 'archived', orcaRole: null });
+    void compactSessionToolResultsBestEffort({ client, sessionId: removedSessionId });
   }
 }
 
@@ -524,8 +535,9 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
  * 归档单个 worker session, 不牵连同 team 其他 worker。
  */
 export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
+  const client = getDbClient();
   const changed = await withSessionRouteLock(sessionId, async () => {
-    const result = await getDbClient().drizzle
+    const result = await client.drizzle
       .update(sessions)
       .set({ status: 'archived', updatedAt: Date.now() })
       .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
@@ -534,7 +546,10 @@ export async function archiveSingleWorkerSession(sessionId: string): Promise<voi
     cleanupSessionRuntimeForTerminalStatus(sessionId, 'archived');
     return true;
   });
-  if (changed) broadcastSessionPatch(sessionId, { status: 'archived' });
+  if (changed) {
+    broadcastSessionPatch(sessionId, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId });
+  }
 }
 
 async function listActiveWorkerSessionIdsForTeam(teamId: string): Promise<string[]> {
