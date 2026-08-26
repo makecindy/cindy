@@ -825,8 +825,25 @@
         "legacyImagesLabel": "图片缓存目录",
         "legacyImagesDescription": "Cindy 不会自动扫描或清理此目录。删除文件后，历史消息中的图片可能无法显示，请自行确认后操作。",
         "legacyImagesOpenButton": "打开目录",
+        "legacyImagesClearButton": "清理图片缓存",
         "legacyImagesDirectoryMissing": "没有找到图片缓存目录",
         "legacyImagesOpenFailed": "无法打开图片缓存目录，请重试",
+        "legacyImagesClearConfirmTitle": "清理图片缓存？",
+        "legacyImagesClearConfirmDescription": "只会删除图片缓存目录中的文件，不会读取消息数据库。清理后，历史消息中的图片可能无法显示，且无法恢复。",
+        "legacyImagesClearConfirmButton": "清理图片缓存",
+        "legacyImagesCleared": "图片缓存已清理",
+        "legacyImagesClearFailed": "无法清理图片缓存，请重试",
+        "chatAttachmentsLabel": "消息附件缓存目录",
+        "chatAttachmentsDescription": "发送的部分附件会保存在这里。Cindy 不会自动扫描或清理此目录；删除文件后，历史消息中的附件可能无法打开。",
+        "chatAttachmentsOpenButton": "打开目录",
+        "chatAttachmentsClearButton": "清理附件缓存",
+        "chatAttachmentsDirectoryMissing": "没有找到消息附件缓存目录",
+        "chatAttachmentsOpenFailed": "无法打开消息附件缓存目录，请重试",
+        "chatAttachmentsClearConfirmTitle": "清理消息附件缓存？",
+        "chatAttachmentsClearConfirmDescription": "只会删除消息附件缓存目录中的文件，不会读取消息数据库。清理后，历史消息中的部分附件可能无法打开，且无法恢复。",
+        "chatAttachmentsClearConfirmButton": "清理附件缓存",
+        "chatAttachmentsCleared": "消息附件缓存已清理",
+        "chatAttachmentsClearFailed": "无法清理消息附件缓存，请重试",
         "cleanupLabel": "磁盘清理",
         "cleanupDescription": "扫描没有被任何任务引用的媒体文件、超限缓存与废弃目录。先报数，确认后才删除；输入框草稿和排队消息里的图片会被自动保护。",
         "scanButton": "扫描",
@@ -1947,6 +1964,7 @@
     },
     "betaChannel": {
       "title": "Beta 测试渠道",
+      "badge": "Beta",
       "description": "加入 Beta 测试渠道，提前接收即将发布的客户端更新。开启后需重启客户端生效。",
       "toggleAria": "Beta 测试渠道开关",
       "restartTitle": "重启客户端",
@@ -2575,13 +2593,20 @@
     },
     "compaction": {
       "title": "上下文压缩",
-      "description": "控制 Claude Code 和 Pi 何时自动压缩上下文。此设置不影响 Codex；Codex 单独管理上下文压缩。",
+      "description": "控制 Claude Code 和 Pi 何时自动压缩上下文。Codex 单独管理上下文压缩。",
       "card": {
         "label": "压缩触发阈值",
-        "badge": "Claude Code 与 Pi",
+        "badge": "Claude Code",
         "description": "上下文占用达到该百分比时自动压缩。调低会更早压缩、保留更多余量；调高会更晚压缩、单轮上下文更满。",
         "hint": "上下文占用达到该比例时自动压缩。修改即时生效；下一轮结束或切换到更小窗口时按新比例判断。",
         "sliderAria": "调整自动压缩触发阈值"
+      },
+      "piCard": {
+        "label": "压缩触发阈值",
+        "badge": "Pi",
+        "description": "Pi 的原生自动压缩会在上下文占用达到该比例时开始。此设置会在下次启动 Pi 任务时生效。",
+        "hint": "调低会更早压缩、为回复保留更多余量；调高会更晚压缩。修改会在下次启动 Pi 任务时生效。",
+        "sliderAria": "调整 Pi 自动压缩触发阈值"
       }
     },
     "terminalShell": {
@@ -3130,6 +3155,10 @@
           "name": "Cindy 记忆",
           "description": "跨 Agent 的长期记忆，让上下文在任务之间持续"
         },
+        "docs": {
+          "name": "文档工坊",
+          "description": "把内容做成真文件 —— PDF、Word、Excel、PPT，并能回读核对产出。不需要另装任何软件。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "宿主能力自省 —— 告诉 Agent 当前可用的工具与模型"
@@ -3154,6 +3183,18 @@
         "enabled": "已开启静默加密内容重试。",
         "disabled": "已关闭静默加密内容重试。",
         "toggleFailed": "切换静默加密内容重试失败"
+      }
+    },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "任务模型自动降级",
+        "description": "连接或容量故障连续发生时，先切换到同名模型的其他已连接来源，再尝试当前 Agent 明确推荐的模型；不会切换 Agent，也不会改掉你保存的选择。默认关闭。"
+      },
+      "toggleAria": "切换任务模型自动降级",
+      "toast": {
+        "enabled": "已开启任务模型自动降级。",
+        "disabled": "已关闭任务模型自动降级。",
+        "toggleFailed": "切换任务模型自动降级失败"
       }
     },
     "remoteControl": {
@@ -4327,6 +4368,16 @@
         "manualCount": "随包手册 {{count}} 篇",
         "expandDescription": "展开完整介绍",
         "collapseDescription": "收起介绍"
+      },
+      "forgeOidcInstallConfirm": {
+        "title": "确认企业身份自测",
+        "description": "安装后，这个插件可以使用你当前的企业身份，向下列域名请求 Connection JWT。请确认这是你刚刚构建的插件。",
+        "pluginNameLabel": "插件",
+        "pluginIdLabel": "插件 id",
+        "hostsLabel": "企业身份请求域名",
+        "typedIdLabel": "输入插件 id <strong>{{id}}</strong> 以确认",
+        "confirm": "安装并允许自测",
+        "cancel": "取消"
       },
       "trust": {
         "official": "Cindy 官方插件",
@@ -6355,6 +6406,7 @@
     },
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
+      "settingsLinkBeta": "设置，当前用户：{{name}}，Beta 测试渠道已开启",
       "canaryBadge": "灰度用户",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -7847,7 +7899,10 @@
     "generatedFiles": {
       "title": "本条消息生成的文件",
       "showMore": "显示另外 {{count}} 个",
-      "showLess": "收起"
+      "showLess": "收起",
+      "artifactLabel": "成品",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} 页", "slides": "{{count}} 张幻灯片", "sheets": "{{count}} 个工作表", "rows": "{{count}} 行", "bytes": "{{count}}" }
     },
     "turnChanges": {
       "title": "已更改 {{count}} 个文件",

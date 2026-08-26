@@ -66,8 +66,8 @@ export interface GhostInstallReceipt {
    */
   packageSha256?: string;
   /**
-   * 旧版 Forge 安装写入的来源标记。新安装不再写入；保留只读是为了让升级前
-   * 已获 Broker 资格的存量插件不会在客户端升级后突然失效。
+   * 显式 `ghost_forge_install` 写入的来源标记。手动导入等其它入口不写；旧版
+   * receipt 中的同名值继续有效，避免升级后丢失既有企业作者自测资格。
    */
   installOrigin?: string;
   /**
@@ -1060,7 +1060,7 @@ function isPersistableInstallOrigin(value: string): boolean {
   );
 }
 
-/** 旧 receipt 的授权视图：只有历史 agent-forge 值有效，其余一律降级。 */
+/** 来源授权视图：只有 Host 写入的 agent-forge 值有效，其余一律降级。 */
 export function effectiveInstallOrigin(
   receipt: Pick<GhostInstallReceipt, 'installOrigin'>,
 ): 'manual' | 'agent-forge' {

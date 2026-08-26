@@ -64,6 +64,16 @@ describe('主题注册表 · 资源用量进程图标', () => {
   });
 });
 
+describe('主题注册表 · Beta 渠道状态徽标', () => {
+  it.each([
+    ['beta-channel-badge-bg', '#DF0C27'],
+    ['beta-channel-badge-fg', '#FFFFFF'],
+  ] as const)('"%s" 使用 light / dark 同值的专用语义色', (id, hex) => {
+    expect(colorRegistry.resolveDefault(id, 'light')).toBe(hex);
+    expect(colorRegistry.resolveDefault(id, 'dark')).toBe(hex);
+  });
+});
+
 describe('主题注册表 · Plan 操作卡文字语义', () => {
   it.each(['plan-action-approve-text', 'plan-action-fb-text'])(
     '"%s" 使用卡片强调正文而非反相按钮文字',

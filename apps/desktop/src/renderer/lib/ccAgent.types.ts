@@ -222,6 +222,11 @@ export interface Session {
   contextTokens: number;
   contextWindow: number;
   fastMode: boolean;
+  /** Host-only temporary route; absent on older Desktop/device-link peers. */
+  runtimeGeneration?: number;
+  runtimeBaseline?: SessionRuntimeProfileProjection;
+  runtimeEffective?: SessionRuntimeProfileProjection;
+  runtimePending?: SessionRuntimePendingProjection | null;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -306,6 +311,20 @@ export interface Session {
    * 为置顶会话生成）。卡片置顶行优先展示它，列表/文字模式只用 preview。
    */
   summary?: string | null;
+}
+
+export interface SessionRuntimeProfileProjection {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  model: string;
+  providerId: string | null;
+  effort: Effort | null;
+  fastMode: boolean;
+}
+
+export interface SessionRuntimePendingProjection {
+  generation: number;
+  source: 'agent' | 'fallback';
+  profile: SessionRuntimeProfileProjection;
 }
 
 // 'error':turn 失败的 terminal error 持久化行(main 的 onTurnErrorEvent 落库)。

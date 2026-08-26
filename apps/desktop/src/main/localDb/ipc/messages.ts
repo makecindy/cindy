@@ -191,24 +191,6 @@ function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
   }
 }
 
-// DbClient uses better-sqlite3 `.all()`: never return whole message bodies for
-// retention bookkeeping. JSON1 extracts only the distinct paths that startup
-// cleanup needs, while LIKE avoids invoking json_each for unrelated history.
-const PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN = '%chat-attachment-cache%';
-const PERSISTED_CHAT_ATTACHMENT_PATHS_SQL = `SELECT DISTINCT
-         attachment.atom AS filePath
-   FROM messages AS m
-   JOIN sessions AS s ON s.id = m.session_id
-   JOIN json_tree(
-          CASE WHEN json_valid(m.content) THEN m.content ELSE '{}' END,
-          '$.files'
-        ) AS attachment
-  WHERE s.status != 'deleted'
-    AND m.rewind_at IS NULL
-    AND m.content LIKE ?
-    AND attachment.key = 'path'
-    AND attachment.type = 'text'`;
-
 export interface EstimatedSessionValueEntry {
   clientId: string;
   money: RegionalMoney;
@@ -235,15 +217,6 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'plan_review',
   'thinking',
 ] as const);
-
-/** Return all staged attachment paths retained by the current owner's message DB. */
-export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
-  const rows = await getDbClient().query<{ filePath: unknown }>(
-    PERSISTED_CHAT_ATTACHMENT_PATHS_SQL,
-    [PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN],
-  );
-  return rows.flatMap((row) => (typeof row.filePath === 'string' ? [row.filePath] : []));
-}
 
 export function registerMessageIpc(): void {
   ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
@@ -1297,15 +1270,30 @@ export async function updateMessageContent(
 ): Promise<Message | null> {
   const ownerScope = captureOwnerBroadcastScope();
   const db = getDbClient().drizzle;
+  const serialized = safeStringify(content);
   await db
     .update(messages)
-    .set({ content: safeStringify(content) })
+    .set({ content: serialized })
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
-  const [row] = await db
-    .select()
+  // 窄回读:刻意不选 content——tool_result 全文可达 MB 级,整行回读会把大字段
+  // 经 DB worker 的 postMessage 结构化克隆再送回主进程一次。content 就是本次
+  // 写入值,用 serialized 回填;行不存在(clientId 未落库)仍以回读判 null。
+  const [narrow] = await db
+    .select({
+      id: messages.id,
+      clientId: messages.clientId,
+      sessionId: messages.sessionId,
+      role: messages.role,
+      toolUseId: messages.toolUseId,
+      agentMeta: messages.agentMeta,
+      agentKind: messages.agentKind,
+      createdAt: messages.createdAt,
+      rewindAt: messages.rewindAt,
+    })
     .from(messages)
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
+  const row: MessageRow | undefined = narrow ? { ...narrow, content: serialized } : undefined;
   if (row) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
     // (review P2:vendor 事件顺序一变,首现于 update 的 blob URL 若不在这里
@@ -1557,8 +1545,23 @@ export async function createMessage(
     }
     throw err;
   }
-  const [row] = await db.select().from(messages).where(eq(messages.id, id));
-  if (!row) throw new Error('Message 创建后查询失败');
+  // 插入成功后不再整行回读:大 content(tool_result 全文)会经 DB worker 的
+  // postMessage 再送回主进程一次。insertRow 就是刚写入的行(新行 rewind_at 恒
+  // NULL);必须过 messageToCamel 走与回读完全相同的解析路径(JSON.parse 失败
+  // 回退裸串、assistant 引文剥离),否则返回值/广播行的类型语义会漂移。幂等命中
+  // 与 UNIQUE / guarded 回退路径仍保留各自的回读(上方),不受影响。
+  const row: MessageRow = {
+    id: insertRow.id,
+    clientId: insertRow.clientId,
+    sessionId: insertRow.sessionId,
+    role: insertRow.role,
+    content: insertRow.content,
+    toolUseId: insertRow.toolUseId ?? null,
+    agentMeta: insertRow.agentMeta ?? null,
+    agentKind: insertRow.agentKind ?? null,
+    createdAt: insertRow.createdAt,
+    rewindAt: null,
+  };
   const msg = messageToCamel(row);
   // 媒体总仓挂账钩子(规则 25):消息落库是"blob 归属本会话"的
   // 确定时点,覆盖所有落库来源(renderer IPC / hook / im / agent echo / 合成

@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,12 +9,14 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
+import { recordPiSubagentRunnerFailure } from '../pi-subagent-runs.js';
 import {
   CINDY_SUBAGENT_ENV,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
 } from '../cindy-subagent-source.js';
 
 const roots: string[] = [];
+const children = new Set<ChildProcess>();
 const require = createRequire(import.meta.url);
 
 async function fixture() {
@@ -103,7 +106,46 @@ process.stdin.on('end', () => process.exit(0));
   return { root, configHome, runRoot, permissionFile, runtimeFile, runnerFile, fakePi, extensionFile };
 }
 
+function hostInput(f: Awaited<ReturnType<typeof fixture>>, permission = 'allow') {
+  const runners = new Map<string, ChildProcess>();
+  return vi.fn(async (title: string, placeholder: string) => {
+    if (title !== 'cindy:pi-subagent-runner') return permission;
+    const request = JSON.parse(placeholder) as { action: 'launch' | 'terminate' | 'status'; runId: string };
+    const runDir = path.join(f.runRoot, request.runId);
+    if (request.action === 'status') {
+      return JSON.stringify({ ok: true });
+    }
+    if (request.action === 'terminate') {
+      const child = runners.get(request.runId);
+      if (child) child.kill('SIGTERM');
+      return JSON.stringify({ ok: true });
+    }
+    const child = spawn(process.execPath, [path.join(runDir, 'runner.cjs'), path.join(runDir, 'config.json')], {
+      cwd: f.root,
+      env: process.env,
+      stdio: 'ignore',
+    });
+    runners.set(request.runId, child);
+    children.add(child);
+    child.once('close', (code, signal) => {
+      runners.delete(request.runId);
+      children.delete(child);
+      void recordPiSubagentRunnerFailure(
+        runDir,
+        `Durable runner exited${signal ? ` with signal ${signal}` : ''}`
+          + (typeof code === 'number' ? ` with code ${code}` : ''),
+      );
+    });
+    return new Promise<string>((resolve) => {
+      child.once('spawn', () => resolve(JSON.stringify({ ok: true })));
+      child.once('error', () => resolve(JSON.stringify({ ok: false })));
+    });
+  });
+}
+
 afterEach(async () => {
+  for (const child of children) child.kill('SIGKILL');
+  children.clear();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -119,7 +161,6 @@ describe('Cindy PI Subagent foreground durable path', () => {
       [CINDY_SUBAGENT_ENV.runtimeFile]: f.runtimeFile,
       [CINDY_SUBAGENT_ENV.runRoot]: f.runRoot,
       [CINDY_SUBAGENT_ENV.runnerFile]: f.runnerFile,
-      [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
       [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
       CINDY_PI_PERMISSION_FILE: f.permissionFile,
       CINDY_PI_SESSION_ID: 'parent-session',
@@ -154,7 +195,7 @@ describe('Cindy PI Subagent foreground durable path', () => {
       const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
       await extension({ registerTool: (tool) => Object.assign(registered, tool) });
       expect(registered.execute).toBeTypeOf('function');
-      const input = vi.fn(async () => 'allow');
+      const input = hostInput(f);
       const result = await registered.execute!(
         'tool-foreground',
         { agent: 'worker', task: 'write the fixture', model: 'claude-fable-5' },
@@ -200,27 +241,27 @@ describe('Cindy PI Subagent foreground durable path', () => {
         [CINDY_SUBAGENT_ENV.runtimeFile]: f.runtimeFile,
         [CINDY_SUBAGENT_ENV.runRoot]: f.runRoot,
         [CINDY_SUBAGENT_ENV.runnerFile]: f.runnerFile,
-        [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
         PI_CODING_AGENT_DIR: f.configHome,
       });
-      const registered: { execute?: (...args: any[]) => Promise<unknown> } = {};
+      const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
       try {
         const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
         await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+        const input = hostInput(f);
         const execution = registered.execute!(
           'tool-runner-exit',
           { agent: 'scout', task: 'inspect the fixture' },
           new AbortController().signal,
           () => undefined,
-          { sessionManager: { getBranch: () => [] } },
+          { ui: { input }, sessionManager: { getBranch: () => [] } },
         );
         await expect(Promise.race([
           execution,
           new Promise((_, reject) => setTimeout(() => reject(new Error('foreground wait hung')), 5_000)),
-        ])).rejects.toThrow(/exited before publishing a terminal status.*exit 7/i);
+        ])).rejects.toThrow(/Durable runner exited.*code 7/i);
       } finally {
         for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
         Object.assign(process.env, previous);
@@ -266,7 +307,6 @@ setTimeout(() => process.exit(0), 20000).unref();
         [CINDY_SUBAGENT_ENV.runtimeFile]: f.runtimeFile,
         [CINDY_SUBAGENT_ENV.runRoot]: f.runRoot,
         [CINDY_SUBAGENT_ENV.runnerFile]: f.runnerFile,
-        [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
@@ -277,13 +317,14 @@ setTimeout(() => process.exit(0), 20000).unref();
       try {
         const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
         await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+        const input = hostInput(f);
         const startedAt = Date.now();
         const execution = registered.execute!(
           'tool-abort-wedged-runner',
           { agent: 'scout', task: 'inspect the fixture' },
           controller.signal,
           () => undefined,
-          { sessionManager: { getBranch: () => [] } },
+          { ui: { input }, sessionManager: { getBranch: () => [] } },
         );
         setTimeout(() => controller.abort(), 50);
         // The bound is the 5s stop grace, not the run deadline (which is at
@@ -335,25 +376,32 @@ setTimeout(() => process.exit(0), 20000).unref();
 const fs = require('node:fs');
 const path = require('node:path');
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+let settled = false;
+const publishStopped = () => {
+  if (settled) return;
+  settled = true;
+  const now = Date.now();
+  const status = {
+    version: 1, runId: config.runId, taskId: config.taskId,
+    parentSessionId: config.parentSessionId, runnerInstanceId: 'abort-fixture',
+    state: 'stopped', startedAt: now, updatedAt: now, endedAt: now,
+    tasks: config.tasks.map((task) => ({
+      childId: task.childId, sessionId: task.sessionId, agent: task.agent,
+      status: 'stopped', error: 'stopped before first status', endedAt: now,
+    })),
+  };
+  fs.writeFileSync(path.join(config.runDir, 'status.json'), JSON.stringify(status) + '\\n');
+  process.exit(0);
+};
+process.on('SIGTERM', publishStopped);
 const timer = setInterval(() => {
   let files = [];
   try { files = fs.readdirSync(path.join(config.runDir, 'controls')); } catch {}
   for (const file of files) {
     const control = JSON.parse(fs.readFileSync(path.join(config.runDir, 'controls', file), 'utf8'));
     if (control.action !== 'stop') continue;
-    const now = Date.now();
-    const status = {
-      version: 1, runId: config.runId, taskId: config.taskId,
-      parentSessionId: config.parentSessionId, runnerInstanceId: 'abort-fixture',
-      state: 'stopped', startedAt: now, updatedAt: now, endedAt: now,
-      tasks: config.tasks.map((task) => ({
-        childId: task.childId, sessionId: task.sessionId, agent: task.agent,
-        status: 'stopped', error: 'stopped before first status', endedAt: now,
-      })),
-    };
-    fs.writeFileSync(path.join(config.runDir, 'status.json'), JSON.stringify(status) + '\\n');
     clearInterval(timer);
-    process.exit(0);
+    publishStopped();
   }
 }, 20);
 // Publish readiness only after the stop-control poller is installed. Writing
@@ -369,23 +417,23 @@ setTimeout(() => process.exit(2), 5000).unref();
         [CINDY_SUBAGENT_ENV.runtimeFile]: f.runtimeFile,
         [CINDY_SUBAGENT_ENV.runRoot]: f.runRoot,
         [CINDY_SUBAGENT_ENV.runnerFile]: f.runnerFile,
-        [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
         PI_CODING_AGENT_DIR: f.configHome,
       });
-      const registered: { execute?: (...args: any[]) => Promise<unknown> } = {};
+      const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
       const controller = new AbortController();
       try {
         const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
         await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+        const input = hostInput(f);
         const execution = registered.execute!(
           'tool-abort-before-status',
           { agent: 'scout', task: 'inspect the fixture' },
           controller.signal,
           () => undefined,
-          { sessionManager: { getBranch: () => [] } },
+          { ui: { input }, sessionManager: { getBranch: () => [] } },
         );
         // Abort only after the runner is up. A 50ms timer races spawn and the
         // parent reports "Durable runner exited" instead of the stop status.

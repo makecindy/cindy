@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/81c6f1f9a4da87983a716bdb405a4e5adc859e32ef59b98b654af4b0a58a1a54",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/71046b3dc5cf9074da16a9c27fed04b8c046b20ddc8f62e4b43d8126c029ea09",
   "creationInfo": {
-    "created": "2026-08-02T09:08:05Z",
+    "created": "2026-08-14T10:29:27Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -76,6 +76,16 @@
       "SPDXID": "SPDXRef-Package-82458194310410e0",
       "versionInfo": "5.14.0",
       "downloadLocation": "https://github.com/lobehub/lobe-icons/tree/v5.14.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "oh-my-pi Windows Git PATH helpers (adapted)",
+      "SPDXID": "SPDXRef-Package-42f340d5003334bd",
+      "versionInfo": "326d24bd40d9858e24e1036ae739c27c72eeb543",
+      "downloadLocation": "https://github.com/can1357/oh-my-pi/tree/326d24bd40d9858e24e1036ae739c27c72eeb543",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -13695,6 +13705,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-82458194310410e0"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-42f340d5003334bd"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

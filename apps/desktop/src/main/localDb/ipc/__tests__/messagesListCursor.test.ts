@@ -85,7 +85,6 @@ import {
   findPendingForkOrigin,
   getMessageDeletionTarget,
   commitMessageDeletion,
-  listPersistedChatAttachmentPaths,
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
@@ -168,106 +167,6 @@ function insertCostMessage(
       rewindAt: input.rewindAt ?? null,
     });
 }
-
-describe('staged chat attachment retention', () => {
-  it('extracts distinct protected paths in SQLite without returning message bodies', async () => {
-    const sqlite = createDb();
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('deleted', 'deleted');
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('retained', 'active');
-
-    const sharedPath = 'C:\\chat-attachment-cache\\owner\\shared.bin';
-    const retainedPath = 'C:\\chat-attachment-cache\\owner\\retained.bin';
-    const deletedPath = 'C:\\chat-attachment-cache\\owner\\deleted.bin';
-    const unrelatedContent = JSON.stringify({ text: 'x'.repeat(1024 * 1024) });
-    const insert = sqlite.prepare(`
-      INSERT INTO messages (
-        id, client_id, session_id, role, content, created_at
-      ) VALUES (
-        @id, @id, @sessionId, 'user', @content, @createdAt
-      )
-    `);
-    insert.run({
-      id: 'retained-unrelated',
-      sessionId: 'retained',
-      content: unrelatedContent,
-      createdAt: 1,
-    });
-    insert.run({
-      id: 'retained-attachment',
-      sessionId: 'retained',
-      content: JSON.stringify({
-        files: [
-          { path: sharedPath },
-          'legacy-scalar-entry',
-          { path: retainedPath },
-          { path: sharedPath },
-        ],
-      }),
-      createdAt: 2,
-    });
-    insert.run({
-      id: 'deleted-attachment',
-      sessionId: 'deleted',
-      content: JSON.stringify({ files: [{ path: deletedPath }] }),
-      createdAt: 3,
-    });
-    insert.run({
-      id: 'malformed-attachment',
-      sessionId: 'retained',
-      content: '{"files":[{"path":"chat-attachment-cache',
-      createdAt: 4,
-    });
-
-    h.query.mockClear();
-    await expect(listPersistedChatAttachmentPaths()).resolves.toEqual([
-      sharedPath,
-      retainedPath,
-    ]);
-    expect(h.query).toHaveBeenCalledWith(
-      expect.stringContaining('json_tree'),
-      ['%chat-attachment-cache%'],
-    );
-    expect(h.query.mock.calls[0][0]).toContain('SELECT DISTINCT');
-  });
-
-  it('does not protect staged paths referenced only by deleted sessions', async () => {
-    const sqlite = createDb();
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('active', 'active');
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('deleted', 'deleted');
-    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('archived', 'archived');
-
-    const insert = sqlite.prepare(`
-      INSERT INTO messages (
-        id, client_id, session_id, role, content, created_at
-      ) VALUES (
-        @id, @id, @sessionId, 'user', @content, @createdAt
-      )
-    `);
-    insert.run({
-      id: 'active-message',
-      sessionId: 'active',
-      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\active.bin' }] }),
-      createdAt: 1,
-    });
-    insert.run({
-      id: 'deleted-message',
-      sessionId: 'deleted',
-      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\deleted.bin' }] }),
-      createdAt: 2,
-    });
-    insert.run({
-      id: 'archived-message',
-      sessionId: 'archived',
-      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\archived.bin' }] }),
-      createdAt: 3,
-    });
-
-    await expect(listPersistedChatAttachmentPaths()).resolves.toEqual([
-      'C:\\chat-attachment-cache\\active.bin',
-      'C:\\chat-attachment-cache\\archived.bin',
-    ]);
-  });
-});
 
 describe('local-db:messages:list cursor', () => {
   beforeEach(() => {

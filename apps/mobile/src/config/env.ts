@@ -1,3 +1,4 @@
+import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 
 import {
@@ -268,9 +269,10 @@ syncBuildTokenEndpointCache();
 
 // 二进制版本号:审核模式匹配基准。优先原生层版本(iOS CFBundleShortVersionString /
 // Android versionName,OTA 热更后不漂移),expoConfig.version 兜底(dev / 测试环境
-// 拿不到原生值)。与 mobileTapdb 的版本上报取值口径一致。
+// 拿不到原生值)。expo-application 已由现有 expo-auth-session / expo-notifications
+// 链进存量整包;这里只消费现成原生模块,不改 package.json / runtime fingerprint。
 export const APP_BINARY_VERSION = (
-  Constants.nativeAppVersion ??
+  Application.nativeApplicationVersion ??
   Constants.expoConfig?.version ??
   ''
 ).trim();

@@ -23,6 +23,8 @@ import { createSshMcpServer } from './cindy_sshMcpServer.js';
 import { createCindyMemoryMcpServer } from './cindy_memoryMcpServer.js';
 import { createCindyContactsMcpServer } from './cindy_contactsMcpServer.js';
 import { createXdtHelperMcpServer, type XdtHelperMcpDeps } from './lizi_xdtHelperMcpServer.js';
+import { createCindyDocsMcpServer } from './cindy_docsMcpServer.js';
+import type { DocsMcpDeps } from './cindy-docs/types.js';
 import { createOrcaMcpServer, type OrcaMcpDeps } from './orca/index.js';
 import { createCindyLspMcpServer, detectTypeScriptProject } from './lsp/index.js';
 import { createBrowserMcpServer } from './browser/index.js';
@@ -88,6 +90,14 @@ export interface CreateLiziMcpProvidersOptions {
    * 对应"协同模式"可关插件。deps 注入即激活 9 个 team 工具。
    */
   orca?: OrcaMcpDeps;
+  /**
+   * cindy_docs(文档工坊): PDF / Word / Excel / PPT 的格式转换原语。
+   * 与 xdtHelper 同款 —— 无外部账号依赖,host 仍需显式传(即使 {})才启用。
+   * writeDocsOutput 缺省时生成工具不注册；renderHtmlToPdf 缺省时 render_pdf
+   * 不注册(本包不 import electron,这些边界能力由 desktop main 闭包注入)。
+   * 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
+   */
+  docs?: DocsMcpDeps;
 }
 
 function selected(
@@ -370,6 +380,28 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_helper',
         instance: createXdtHelperMcpServer(opts.xdtHelper!, {
+          agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
+          workingDir: ctx.workingDir,
+          ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
+          sessionId: ctx.sessionId,
+          vendorOptions: ctx.vendorOptions,
+        }),
+      }),
+    });
+  }
+
+  if (opts.docs && selected(enabled, 'cindy_docs')) {
+    providers.push({
+      name: 'cindy_docs',
+      // 无 isEnabled 门控:plugin 系统已在 host 层(mcp-providers.ts wrap)按
+      // 宿主内置能力开关 id 'docs' 已包了 isEnabled 检查,这里再加就是双重门(同 cindy_ssh / cindy_orca)。
+      // ctx 闭包绑定 workingDir/sessionId —— 所有文件路径都以它为根做边界钳制;
+      // Codex / Pi 的 HTTP bridge 在 tool-call 阶段由 AsyncLocalStorage 恢复真实 ctx,
+      // 恢复不出来时 _paths.resolveSessionRoot 会 fail closed 返 NO_SESSION_CONTEXT。
+      toClaudeSdkConfig: (ctx) => ({
+        type: 'sdk',
+        name: 'cindy_docs',
+        instance: createCindyDocsMcpServer(opts.docs!, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
           ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),

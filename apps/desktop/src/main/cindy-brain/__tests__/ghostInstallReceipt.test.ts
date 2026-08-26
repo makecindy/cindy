@@ -229,7 +229,7 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   });
 
-  it('preserves only the legacy Forge origin as an effective authorization fact', async () => {
+  it('recognizes only the Host-owned Forge origin as an effective authorization fact', async () => {
     await store.write(
       createGhostInstallReceipt({
         ...createSetupReceipt(),

@@ -31,6 +31,7 @@ import {
 	discoverTestFiles,
 	expandWorkspacePatterns,
 	filterRunsByWorkspace,
+	isIgnoredFile,
 	mapWithConcurrency,
 	normalizeRelPath,
 	parseWorkspacePatterns,
@@ -289,6 +290,41 @@ test("discoverTestFiles ignores generated and nested non-workspace directories",
 		"apps/server/src/__tests__/services/oss.spec.ts",
 		"apps/desktop/src/renderer/__tests__/automationGeneratedSessions.test.ts",
 	]);
+});
+
+test("isIgnoredFile ignores the git-ignored tmp/ product directory", () => {
+	// .gitignore 忽略 tmp/（会话工具临时产物）。readAllFiles 若递归进去，
+	// 遇到沙箱/工具遗留的不可读子目录会 EPERM 让整个门禁失败（#3353）。
+	assert.equal(isIgnoredFile("tmp/blocked"), true);
+	assert.equal(isIgnoredFile("tmp/nested/deep/file.ts"), true);
+	assert.equal(isIgnoredFile("packages/orca-workflow/tmp/x.test.ts"), true);
+	// 含 "tmp" 的合法包名/文件名不应被误杀（按路径段精确匹配）。
+	assert.equal(isIgnoredFile("packages/tmp-adapter/src/index.ts"), false);
+});
+
+test("readAllFiles tolerates an unreadable directory instead of crashing the gate", () => {
+	// 平台不支持把目录 chmod 成不可读时（Windows）跳过：EPERM 容错分支在
+	// POSIX 上由 chmod 0o000 覆盖，逻辑本身是平台无关的 try/catch。
+	if (process.platform === "win32") return;
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "read-all-files-"));
+	try {
+		fs.mkdirSync(path.join(root, "src"), { recursive: true });
+		fs.writeFileSync(path.join(root, "src", "a.test.ts"), "// ok\n");
+		// 一个当前进程无权 scandir 的目录（模拟沙箱遗留物）。
+		const locked = path.join(root, "tmp", "locked");
+		fs.mkdirSync(locked, { recursive: true });
+		fs.writeFileSync(path.join(locked, "secret.txt"), "x");
+		fs.chmodSync(path.join(root, "tmp", "locked"), 0o000);
+		try {
+			const files = readAllFiles(root);
+			assert.deepEqual(files.map(normalizeRelPath).sort(), ["src/a.test.ts"]);
+		} finally {
+			// 必须先恢复权限才能在 Windows/POSIX 清理临时目录。
+			fs.chmodSync(path.join(root, "tmp", "locked"), 0o700);
+		}
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("checkTestFiles fails runnable tiers with no selected tests", () => {

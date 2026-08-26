@@ -534,7 +534,10 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
     expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
     expect(closedBlock).toContain(
-      'const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(',
+      'shouldPreserveCodexReconnectStalledAutoResume(session, closeReason)',
+    );
+    expect(closedBlock).toContain(
+      'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain('if (preserveAutoResumeIntent) {');
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');

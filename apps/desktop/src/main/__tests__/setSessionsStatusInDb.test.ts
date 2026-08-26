@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   isSessionStillRemovable: vi.fn(),
   cancelSessionOperations: vi.fn(),
   cleanupRemovedSession: vi.fn(),
+  runtimeCleanup: vi.fn(),
   removeSessionRefs: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
   isOwnerScopeCurrent: vi.fn(),
@@ -80,6 +81,7 @@ import {
   recycleSessionWorktreeForStatusChange,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionRuntimeCleanup,
   setSessionsStatusInDb,
 } from '../localDb/ipc/sessions.js';
 import { setSessionRouteLockImplementation } from '../localDb/sessionRouteLock.js';
@@ -97,12 +99,14 @@ beforeEach(() => {
   h.isOwnerScopeCurrent.mockReturnValue(true);
   setSessionRemovalCancelOperations(h.cancelSessionOperations);
   setSessionRemovalCleanup(h.cleanupRemovedSession);
+  setSessionRuntimeCleanup(h.runtimeCleanup);
   setSessionRouteLockImplementation(h.withSendToSessionLock);
 });
 
 afterEach(() => {
   setSessionRemovalCancelOperations(null);
   setSessionRemovalCleanup(null);
+  setSessionRuntimeCleanup(null);
   setSessionRouteLockImplementation(null);
   fs.rmSync(h.userDataPath, { recursive: true, force: true });
 });
@@ -193,6 +197,37 @@ describe('setSessionsStatusInDb', () => {
       sessionIds: ['s2', 's1', 's2'],
       status: 'active',
     });
+  });
+
+  it('cleans archived runtime state before releasing the batch route locks', async () => {
+    const order: string[] = [];
+    h.isSessionStillRemovable.mockResolvedValueOnce(false);
+    h.tx.mockImplementationOnce(async () => {
+      order.push('status-commit');
+      return [
+        {
+          sessionId: 's1',
+          title: 'T1',
+          workingDir: null,
+          workspaceKind: 'dialogue',
+          status: 'archived',
+        },
+      ];
+    });
+    h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.withSendToSessionLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      order.push('lock-released');
+      return result;
+    });
+
+    await setSessionsStatusInDb(['s1'], 'archived');
+    await vi.waitFor(() => {
+      expect(h.isSessionStillRemovable).toHaveBeenCalledWith('s1', h.drizzle);
+    });
+
+    expect(order).toEqual(['status-commit', 'runtime-cleanup', 'lock-released']);
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('s1');
   });
 
   it('rechecks current status before closing a session from a delayed archive task', async () => {

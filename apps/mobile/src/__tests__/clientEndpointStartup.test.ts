@@ -97,10 +97,28 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
     ).resolves.toEqual({ ok: true, source: 'cdn' });
   });
 
+  it('二进制版本优先读原生 0.1.2，不被 OTA manifest 的 0.1.0 覆盖', async () => {
+    vi.resetModules();
+    vi.doMock('expo-application', () => ({
+      nativeApplicationVersion: '0.1.2',
+    }));
+    vi.doMock('expo-constants', () => ({
+      default: { expoConfig: { version: '0.1.0' } },
+    }));
+    try {
+      const env = await import('@/config/env');
+      expect(env.APP_BINARY_VERSION).toBe('0.1.2');
+    } finally {
+      vi.doUnmock('expo-application');
+      vi.doUnmock('expo-constants');
+      vi.resetModules();
+    }
+  });
+
   it('清单 review 命中二进制版本号且非 TestFlight → REVIEW_MODE=true', async () => {
     vi.resetModules();
     vi.doMock('expo-constants', () => ({
-      default: { expoConfig: { version: '9.9.9' }, nativeAppVersion: '9.9.9' },
+      default: { expoConfig: { version: '9.9.9' } },
     }));
     try {
       const env = await import('@/config/env');

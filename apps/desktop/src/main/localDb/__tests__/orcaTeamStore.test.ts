@@ -1,15 +1,18 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
+import { setSessionRouteLockImplementation } from '../sessionRouteLock.js';
+import { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 import * as schema from '../schema.js';
 
 const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   notifyAgentIslandSessionPatch: vi.fn(),
+  runtimeCleanup: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -29,7 +32,14 @@ describe('orcaTeamStore', () => {
   let currentClient: DbClient | null = null;
   let rawDb: Database.Database | null = null;
 
+  beforeEach(() => {
+    setSessionRuntimeCleanup(h.runtimeCleanup);
+    setSessionRouteLockImplementation(null);
+  });
+
   afterEach(async () => {
+    setSessionRuntimeCleanup(null);
+    setSessionRouteLockImplementation(null);
     vi.clearAllMocks();
     if (currentClient) {
       clearCurrentDbClient(currentClient);
@@ -104,6 +114,9 @@ describe('orcaTeamStore', () => {
     expect(h.notifyAgentIslandSessionPatch).toHaveBeenCalledWith('worker-session-2', {
       status: 'archived',
     });
+    expect(h.runtimeCleanup).toHaveBeenCalledTimes(2);
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-2');
   });
 
   it('never archives or broadcasts a worker task that is already deleted', async () => {
@@ -127,6 +140,7 @@ describe('orcaTeamStore', () => {
       sessionId: 'worker-session-2',
       patch: { status: 'archived' },
     });
+    expect(h.runtimeCleanup).not.toHaveBeenCalledWith('worker-session-2');
   });
 
   it('reconciles only still-active workers from inactive teams', async () => {
@@ -153,6 +167,58 @@ describe('orcaTeamStore', () => {
       { id: 'worker-session-1', status: 'archived' },
       { id: 'worker-session-2', status: 'deleted' },
     ]);
+    expect(h.runtimeCleanup).toHaveBeenCalledTimes(1);
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+  });
+
+  it('cleans archived worker runtime state before releasing route locks and broadcasting', async () => {
+    const { archiveWorkersByTeam } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    const events: string[] = [];
+    setSessionRuntimeCleanup((sessionId) => events.push(`cleanup:${sessionId}`));
+    setSessionRouteLockImplementation(async (sessionId, task) => {
+      events.push(`lock:${sessionId}:start`);
+      const result = await task();
+      events.push(`lock:${sessionId}:end`);
+      return result;
+    });
+    h.tapWindowBroadcast.mockImplementation(() => {
+      events.push('broadcast');
+    });
+
+    await archiveWorkersByTeam('team-1');
+
+    expect(events).toEqual([
+      'lock:worker-session-1:start',
+      'lock:worker-session-2:start',
+      'cleanup:worker-session-1',
+      'cleanup:worker-session-2',
+      'lock:worker-session-2:end',
+      'lock:worker-session-1:end',
+      'broadcast',
+      'broadcast',
+    ]);
+  });
+
+  it('cleans runtime state when a single worker is archived and skips deleted workers', async () => {
+    const { archiveSingleWorkerSession } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    await archiveSingleWorkerSession('worker-session-1');
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+
+    h.runtimeCleanup.mockClear();
+    await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [
+      'deleted',
+      'worker-session-2',
+    ]);
+    await archiveSingleWorkerSession('worker-session-2');
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
   });
 
   it('preserves Pi worker identity in Orca projections', async () => {

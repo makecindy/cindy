@@ -825,8 +825,25 @@
         "legacyImagesLabel": "画像キャッシュディレクトリ",
         "legacyImagesDescription": "Cindy はこのディレクトリを自動でスキャンまたはクリーンアップしません。ファイルを削除するとメッセージ履歴の画像が表示できなくなる場合があるため、内容を確認してから操作してください。",
         "legacyImagesOpenButton": "ディレクトリを開く",
+        "legacyImagesClearButton": "画像キャッシュを削除",
         "legacyImagesDirectoryMissing": "画像キャッシュディレクトリが見つかりません",
         "legacyImagesOpenFailed": "画像キャッシュディレクトリを開けませんでした。もう一度お試しください。",
+        "legacyImagesClearConfirmTitle": "画像キャッシュをクリーンアップしますか？",
+        "legacyImagesClearConfirmDescription": "画像キャッシュディレクトリ内のファイルだけを削除し、メッセージデータベースは参照しません。履歴内の画像が表示できなくなる場合があり、この操作は元に戻せません。",
+        "legacyImagesClearConfirmButton": "画像キャッシュを削除",
+        "legacyImagesCleared": "画像キャッシュをクリーンアップしました",
+        "legacyImagesClearFailed": "画像キャッシュをクリーンアップできませんでした。もう一度お試しください。",
+        "chatAttachmentsLabel": "メッセージ添付ファイルのキャッシュディレクトリ",
+        "chatAttachmentsDescription": "送信する一部の添付ファイルはここに保存されます。Cindy はこのディレクトリを自動でスキャンまたはクリーンアップしません。ファイルを削除すると履歴内の添付ファイルを開けなくなる場合があります。",
+        "chatAttachmentsOpenButton": "ディレクトリを開く",
+        "chatAttachmentsClearButton": "添付ファイルキャッシュを削除",
+        "chatAttachmentsDirectoryMissing": "メッセージ添付ファイルのキャッシュディレクトリが見つかりません",
+        "chatAttachmentsOpenFailed": "メッセージ添付ファイルのキャッシュディレクトリを開けませんでした。もう一度お試しください。",
+        "chatAttachmentsClearConfirmTitle": "メッセージ添付ファイルのキャッシュをクリーンアップしますか？",
+        "chatAttachmentsClearConfirmDescription": "メッセージ添付ファイルのキャッシュディレクトリ内のファイルだけを削除し、メッセージデータベースは参照しません。履歴内の一部の添付ファイルを開けなくなる場合があり、この操作は元に戻せません。",
+        "chatAttachmentsClearConfirmButton": "添付ファイルキャッシュを削除",
+        "chatAttachmentsCleared": "メッセージ添付ファイルのキャッシュをクリーンアップしました",
+        "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
         "cleanupLabel": "ディスククリーンアップ",
         "cleanupDescription": "どのセッションからも参照されていないメディアファイル、上限を超えたキャッシュ、不要になったフォルダをスキャンします。まず件数を表示し、確認後にのみ削除します。入力欄の下書きや送信待ちメッセージ内の画像は自動的に保護されます。",
         "scanButton": "スキャン",
@@ -1955,6 +1972,7 @@
     },
     "betaChannel": {
       "title": "Beta チャンネル",
+      "badge": "Beta",
       "description": "Beta チャンネルに参加すると、今後のクライアント更新を先行して受け取れます。再起動後に反映されます。",
       "toggleAria": "Beta チャンネルの切り替え",
       "restartTitle": "クライアントを再起動",
@@ -2583,13 +2601,20 @@
     },
     "compaction": {
       "title": "コンテキスト圧縮",
-      "description": "Claude Code と Pi がいつ自動的にコンテキストを圧縮するかを制御します。この設定は Codex に影響しません。Codex は独自にコンテキスト圧縮を管理します。",
+      "description": "Claude Code と Pi がコンテキストを自動圧縮するタイミングを制御します。Codex は独自にコンテキスト圧縮を管理します。",
       "card": {
         "label": "圧縮トリガーしきい値",
-        "badge": "Claude Code と Pi",
+        "badge": "Claude Code",
         "description": "コンテキスト使用量がこの割合に達したときに自動圧縮します。低くすると早めに圧縮して余裕を多く残し、高くすると遅めに圧縮して 1 ターンのコンテキストをより多く使います。",
         "hint": "コンテキスト使用量がこの割合に達すると自動圧縮します。変更は即時反映され、次のターン終了時またはより小さいウィンドウへ切り替えたあとに新しい割合で判定します。",
         "sliderAria": "自動圧縮トリガーしきい値を調整"
+      },
+      "piCard": {
+        "label": "圧縮トリガーしきい値",
+        "badge": "Pi",
+        "description": "Pi の自動圧縮は、コンテキスト使用量がこの割合に達したときに開始します。設定は次に Pi タスクを起動したときに反映されます。",
+        "hint": "低くすると早めに圧縮して応答用の余裕を多く残し、高くすると遅めに圧縮します。変更は次に Pi タスクを起動したときに適用されます。",
+        "sliderAria": "Pi の自動圧縮トリガーしきい値を調整"
       }
     },
     "personalization": {
@@ -3138,6 +3163,10 @@
           "name": "Cindy メモリ",
           "description": "セッションをまたいでコンテキストを保持する Agent 横断の長期メモリ"
         },
+        "docs": {
+          "name": "ドキュメント工房",
+          "description": "内容を実ファイルに — PDF / Word / Excel / PowerPoint を生成し、読み返して仕上がりを確認。追加ソフトのインストールは不要。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "ホスト機能の開示 — 利用可能なツールとモデルを Agent に伝える"
@@ -3162,6 +3191,18 @@
         "enabled": "暗号化コンテンツの静かな再試行をオンにしました。",
         "disabled": "暗号化コンテンツの静かな再試行をオフにしました。",
         "toggleFailed": "暗号化コンテンツの静かな再試行の切り替えに失敗しました"
+      }
+    },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "タスクモデルの自動フォールバック",
+        "description": "接続または容量エラーが続くと、同じモデルの別の接続済みプロバイダー、次に現在の Agent で明示的に推奨されたモデルを試します。Agent や保存済みの選択は変更しません。デフォルトはオフです。"
+      },
+      "toggleAria": "タスクモデルの自動フォールバックを切り替え",
+      "toast": {
+        "enabled": "タスクモデルの自動フォールバックをオンにしました。",
+        "disabled": "タスクモデルの自動フォールバックをオフにしました。",
+        "toggleFailed": "タスクモデルの自動フォールバックの切り替えに失敗しました"
       }
     },
     "remoteControl": {
@@ -4335,6 +4376,16 @@
         "manualCount": "同梱マニュアル {{count}} 件",
         "expandDescription": "紹介全文を表示",
         "collapseDescription": "紹介を折りたたむ"
+      },
+      "forgeOidcInstallConfirm": {
+        "title": "組織 ID のセルフテストを確認",
+        "description": "インストール後、このプラグインは現在の組織 ID を使用して、以下のホスト向けの Connection JWT をリクエストできます。今ビルドしたプラグインであることを確認してください。",
+        "pluginNameLabel": "プラグイン",
+        "pluginIdLabel": "プラグイン id",
+        "hostsLabel": "組織 ID のリクエスト先ホスト",
+        "typedIdLabel": "確認するにはプラグイン id <strong>{{id}}</strong> を入力",
+        "confirm": "インストールしてテストを許可",
+        "cancel": "キャンセル"
       },
       "trust": {
         "official": "Cindy 公式プラグイン",
@@ -6363,6 +6414,7 @@
     },
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
+      "settingsLinkBeta": "設定, 現在のユーザー: {{name}}, Beta チャンネル有効",
       "canaryBadge": "Canary ユーザー",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -7855,7 +7907,10 @@
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
       "showMore": "さらに {{count}} 件表示",
-      "showLess": "折りたたむ"
+      "showLess": "折りたたむ",
+      "artifactLabel": "成果物",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} ページ", "slides": "{{count}} 枚のスライド", "sheets": "{{count}} シート", "rows": "{{count}} 行", "bytes": "{{count}}" }
     },
     "turnChanges": {
       "title": "{{count}} ファイルを変更",

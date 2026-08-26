@@ -1,16 +1,93 @@
 // @ts-nocheck —— 被测对象是 .mjs 发布工具模块,vitest 跑其纯函数。
 import { describe, expect, it } from 'vitest';
+import { X509Certificate } from 'node:crypto';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { rootCertificates } from 'node:tls';
 import {
+  androidGradleTasksForArtifacts,
+  assertAndroidUploadCertificateSha256,
+  normalizeAndroidCertificateSha256,
   readAndroidVersionCode,
+  readAndroidCertificateSha256FromPemOutput,
   nextSequentialVersionCode,
   replaceVersionCodeInAndroidVersionJson,
+  resolveAndroidArtifactKinds,
+  resolveAndroidUploadCertificateSha256,
   resolveAndroidSigningEnv,
   patchBuildGradleSigning,
   patchGradlePropertiesMemory,
 } from '../../scripts/lib/android-local.mjs';
+
+describe('resolveAndroidArtifactKinds', () => {
+  it('按地区默认:cn/dev 只出 APK,global 同时出 APK + AAB', () => {
+    expect(resolveAndroidArtifactKinds('cn')).toEqual(['apk']);
+    expect(resolveAndroidArtifactKinds('dev')).toEqual(['apk']);
+    expect(resolveAndroidArtifactKinds('global')).toEqual(['apk', 'aab']);
+  });
+
+  it('global 支持显式选择单产物或双产物,返回顺序确定', () => {
+    expect(resolveAndroidArtifactKinds('global', 'apk')).toEqual(['apk']);
+    expect(resolveAndroidArtifactKinds('global', 'aab')).toEqual(['aab']);
+    expect(resolveAndroidArtifactKinds('global', 'aab,apk')).toEqual(['apk', 'aab']);
+  });
+
+  it('拒绝未知/重复/空产物以及非 global AAB', () => {
+    expect(() => resolveAndroidArtifactKinds('global', 'ipa')).toThrow(/仅支持/);
+    expect(() => resolveAndroidArtifactKinds('global', 'apk,apk')).toThrow(/重复/);
+    expect(() => resolveAndroidArtifactKinds('global', true)).toThrow(/必须指定/);
+    expect(() => resolveAndroidArtifactKinds('cn', 'apk,aab')).toThrow(/仅用于 global/);
+  });
+});
+
+describe('androidGradleTasksForArtifacts', () => {
+  it('把产物确定性映射到 release tasks', () => {
+    expect(androidGradleTasksForArtifacts(['apk'])).toEqual(['assembleRelease']);
+    expect(androidGradleTasksForArtifacts(['apk', 'aab'])).toEqual(['assembleRelease', 'bundleRelease']);
+  });
+
+  it('空产物集合 fail closed', () => {
+    expect(() => androidGradleTasksForArtifacts([])).toThrow(/至少需要一种/);
+  });
+});
+
+describe('Google Play upload certificate pin', () => {
+  const SHA256 = '0123456789abcdef'.repeat(4);
+  const COLON_SHA256 = SHA256.toUpperCase().match(/.{2}/g)?.join(':') ?? '';
+
+  it('归一化 Play Console / keytool 常见指纹格式', () => {
+    expect(normalizeAndroidCertificateSha256(SHA256)).toBe(SHA256);
+    expect(normalizeAndroidCertificateSha256(`SHA-256: ${COLON_SHA256}`)).toBe(SHA256);
+    expect(() => normalizeAndroidCertificateSha256('not-a-fingerprint')).toThrow(/64 位/);
+  });
+
+  it('按 region 从独立 env 读取 pin,缺失或非法时 fail closed', () => {
+    expect(resolveAndroidUploadCertificateSha256('global', {
+      XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL: COLON_SHA256,
+    })).toBe(SHA256);
+    expect(() => resolveAndroidUploadCertificateSha256('global', {})).toThrow(
+      /XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL/,
+    );
+    expect(() => resolveAndroidUploadCertificateSha256('global', {
+      XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL: 'bad',
+    })).toThrow(/64 位/);
+  });
+
+  it('从 keytool RFC 输出读取 signer 证书;无 PEM 时拒绝未签名 AAB', () => {
+    const pem = rootCertificates[0];
+    const expected = new X509Certificate(pem).fingerprint256.replaceAll(':', '').toLowerCase();
+    expect(readAndroidCertificateSha256FromPemOutput(`Signer #1\n${pem}\n`)).toBe(expected);
+    expect(() => readAndroidCertificateSha256FromPemOutput('jar 未签名')).toThrow(/未找到 PEM/);
+  });
+
+  it('实际 signer 必须与独立 upload cert pin 一致', () => {
+    expect(assertAndroidUploadCertificateSha256(SHA256, COLON_SHA256)).toBe(SHA256);
+    expect(() => assertAndroidUploadCertificateSha256(SHA256, 'f'.repeat(64))).toThrow(
+      /上传证书不符/,
+    );
+  });
+});
 
 function withMobileDir(json: unknown, fn: (dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), 'xdt-android-ver-'));

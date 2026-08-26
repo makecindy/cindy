@@ -857,18 +857,17 @@ function orcaCancelStaleTeams(readyDb, args) {
 function orcaArchiveWorkersByTeam(readyDb, args) {
   const payload = asRecord(args, 'orca.archiveWorkersByTeam args');
   const teamId = expectString(payload.teamId, 'teamId');
-  const now = expectNumber(payload.now, 'now');
-  const selectCandidates = readyDb.prepare(
-    "SELECT sessions.id FROM orca_workers INNER JOIN sessions ON orca_workers.session_id = sessions.id WHERE orca_workers.team_id = ? AND sessions.status = 'active' ORDER BY sessions.id",
+  const sessionIds = expectArray(payload.sessionIds, 'sessionIds').map((value, index) =>
+    expectString(value, 'sessionIds[' + index + ']'),
   );
+  const now = expectNumber(payload.now, 'now');
   const archiveSession = readyDb.prepare(
-    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers WHERE orca_workers.session_id = sessions.id AND orca_workers.team_id = ?)",
   );
   return readyDb.transaction(() => {
-    const candidates = selectCandidates.all(teamId);
     const updatedIds = [];
-    for (const { id } of candidates) {
-      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    for (const id of sessionIds) {
+      if (archiveSession.run(now, id, teamId).changes > 0) updatedIds.push(id);
     }
     return updatedIds;
   })();
@@ -877,22 +876,21 @@ function orcaArchiveWorkersByTeam(readyDb, args) {
 function orcaReconcileInactiveTeamWorkersForLead(readyDb, args) {
   const payload = asRecord(args, 'orca.reconcileInactiveTeamWorkersForLead args');
   const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
-  const now = expectNumber(payload.now, 'now');
-  const selectCandidates = readyDb.prepare(
-    "SELECT sessions.id FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id INNER JOIN sessions ON orca_workers.session_id = sessions.id WHERE orca_teams.lead_session_id = ? AND orca_teams.status != 'active' AND sessions.status = 'active' ORDER BY sessions.id",
+  const sessionIds = expectArray(payload.sessionIds, 'sessionIds').map((value, index) =>
+    expectString(value, 'sessionIds[' + index + ']'),
   );
+  const now = expectNumber(payload.now, 'now');
   const finishWorkers = readyDb.prepare(
     "UPDATE orca_workers SET status = 'done', updated_at = ? WHERE team_id IN (SELECT id FROM orca_teams WHERE lead_session_id = ? AND status != 'active')",
   );
   const archiveSession = readyDb.prepare(
-    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id WHERE orca_workers.session_id = sessions.id AND orca_teams.lead_session_id = ? AND orca_teams.status != 'active')",
   );
   return readyDb.transaction(() => {
-    const candidates = selectCandidates.all(leadSessionId);
     finishWorkers.run(now, leadSessionId);
     const updatedIds = [];
-    for (const { id } of candidates) {
-      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    for (const id of sessionIds) {
+      if (archiveSession.run(now, id, leadSessionId).changes > 0) updatedIds.push(id);
     }
     return updatedIds;
   })();
@@ -905,6 +903,12 @@ function orcaUpsertWorker(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
+    const activeTeam = readyDb.prepare(
+      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
+    ).get(teamId);
+    if (!activeTeam) {
+      throw new Error('Orca team ' + teamId + ' is no longer active');
+    }
     if (payload.focused === true) {
       readyDb.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
@@ -1052,7 +1056,7 @@ function codexImportMessages(readyDb, args) {
         clientId,
         sessionId,
         role,
-        content: stringifyContent(row.content),
+        content: stringifyImportedContent(role, row.content),
         agentMeta: JSON.stringify({ sdkSessionId, model }),
         createdAt,
       }).changes;
@@ -1095,12 +1099,13 @@ function claudeImportMessages(readyDb, args) {
     for (const rawRow of rows) {
       const row = asRecord(rawRow, 'claude row');
       const key = expectNumber(row.lineNo, 'row.lineNo') + '-' + expectNumber(row.partIndex, 'row.partIndex');
+      const role = expectString(row.role, 'row.role');
       count += upsert.run({
         id: 'claude-import-' + sdkSessionId + '-' + key,
         clientId: importClientIdPrefix + key,
         sessionId,
-        role: expectString(row.role, 'row.role'),
-        content: stringifyContent(row.content),
+        role,
+        content: stringifyImportedContent(role, row.content),
         toolUseId: nullableString(row.toolUseId),
         agentMeta: row.agentMeta ? stringifyContent(row.agentMeta) : null,
         createdAt: expectNumber(row.createdAt, 'row.createdAt'),
@@ -1727,6 +1732,23 @@ function truncate(value, max) {
 function stringifyContent(value) {
   const json = JSON.stringify(value);
   return json === undefined ? 'null' : json;
+}
+
+function capToolResultTextForPersist(text) {
+  var limit = 8 * 1024;
+  var suffix = '\\n\\n[tool result truncated: stored first 8KB]';
+  if (text.length <= limit) return text;
+  var cut = Math.max(0, limit - suffix.length);
+  var lastKept = text.charCodeAt(cut - 1);
+  if (cut > 0 && lastKept >= 0xd800 && lastKept <= 0xdbff) cut -= 1;
+  return text.slice(0, cut) + suffix;
+}
+
+function stringifyImportedContent(role, content) {
+  if (role === 'tool_result' && typeof content === 'string') {
+    return stringifyContent(capToolResultTextForPersist(content));
+  }
+  return stringifyContent(content);
 }
 
 function asRecord(value, label) {

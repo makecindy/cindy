@@ -17,8 +17,13 @@
  * AggregateError(Node 并发连接尝试全失败的聚合错误,几乎只出现在网络场景)、
  * Anthropic SDK 的 APIConnectionTimeoutError / APIConnectionError 原文
  * ("Request timed out" / "API Error: The operation timed out" / "Connection error",
- * SDK 重试耗尽后透传成终止型 turn error)。
+ * SDK 重试耗尽后透传成终止型 turn error)。Pi / OpenAI Responses 还会写出不带
+ * `API Error:` 前缀的 `The operation timed out.`，以及
+ * `OpenAI Responses stream ended before a terminal response event`。
  */
+/** 仅在 Pi `auto_retry_end` 失败后使用：把「点一下重试」留给用户，Host 不再续跑。首次 aborted 不得打这个 reason。 */
+export const PI_GATEWAY_DROP_REASON = 'pi-gateway-drop';
+
 export interface ReconnectAttempt {
   attempt: number;
   maxAttempts: number;
@@ -48,7 +53,7 @@ export function parseReconnectAttemptMessage(message: string): ReconnectAttempt 
 export function isNetworkishErrorMessage(message: string): boolean {
   return (
     parseReconnectAttemptMessage(message) !== null ||
-    /\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|^API Error:\s*The operation timed out|Connection error/i.test(
+    /\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|^API Error:\s*The operation timed out|^The operation timed out|stream ended before a terminal|Connection error/i.test(
       message,
     )
   );

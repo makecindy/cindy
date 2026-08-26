@@ -53,7 +53,11 @@ import {
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import type { ChatMessage } from '@/lib/makerChatStore';
-import { verbForTool, verbLabelKeyForIntent, verbLabelKeyForRow } from '@/lib/agent-actions/verbAggregator';
+import {
+  verbForTool,
+  verbLabelKeyForIntent,
+  verbLabelKeyForRow,
+} from '@/lib/agent-actions/verbAggregator';
 import { statsForToolCall } from '@/lib/agent-actions/diffStats';
 import { extractDisplayParam } from '@/lib/agent-actions/actionPresentation';
 import { SUPPORTED_IMAGE_EXTS, extractExt } from '@/lib/fileTypes';
@@ -230,8 +234,7 @@ function parseAudioTracks(raw: unknown): ToolAudioTrack[] {
         : undefined;
     // kind 字段是新增 — 老版本 server / 历史 message 没带,默认按 'music' 渲染保
     // 持兼容(那条路径自带 cover placeholder,不会因 missing kind 走崩)。
-    const kind: 'music' | 'sound_effect' =
-      obj.kind === 'sound_effect' ? 'sound_effect' : 'music';
+    const kind: 'music' | 'sound_effect' = obj.kind === 'sound_effect' ? 'sound_effect' : 'music';
     out.push({
       kind,
       audioUrl,
@@ -345,10 +348,7 @@ export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
     // 提取层只打标不裁决,压不压基座由 MessageStream 验证锚卡真含对应图片
     // 后决定(验证不过照常渲染,图片永不消失)。手机端提取器不认该令牌。
     const imagesInCard = parsed.xdt_images_in_card === true;
-    if (
-      typeof parsed.xdt_image_url === 'string' &&
-      isToolImageUrl(parsed.xdt_image_url)
-    ) {
+    if (typeof parsed.xdt_image_url === 'string' && isToolImageUrl(parsed.xdt_image_url)) {
       const modelFile = nextModelFile();
       items.push({
         kind: 'image',
@@ -372,10 +372,7 @@ export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
     }
     // 协议白名单与图卡同款双世界:老 xdt-video://(遗产只读)+ 新
     // cindy-media://(意识 gen_video 等新链路产物)。
-    if (
-      typeof parsed.xdt_video_url === 'string' &&
-      isToolVideoUrl(parsed.xdt_video_url)
-    ) {
+    if (typeof parsed.xdt_video_url === 'string' && isToolVideoUrl(parsed.xdt_video_url)) {
       items.push({
         kind: 'video',
         url: parsed.xdt_video_url,
@@ -455,16 +452,38 @@ export function extractToolResultImageUrls(toolResult: string): string[] {
     .map((m) => m.url);
 }
 
+/** 文档工具失败时优先展示可执行的 hint，避免把内部 JSON 直接甩给普通用户。 */
+export function humanizeDocumentToolResult(toolName: string, toolResult: string): string | null {
+  const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
+  const documentTool = normalized.split(':').at(-1) ?? normalized;
+  if (!/^(make_docx|make_pptx|make_xlsx|render_pdf|read_sheet|inspect_pdf)$/.test(documentTool)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(toolResult) as {
+      ok?: unknown;
+      data?: { hint?: unknown; message?: unknown };
+    };
+    if (parsed.ok !== false) return null;
+    if (typeof parsed.data?.hint === 'string' && parsed.data.hint.trim()) {
+      return parsed.data.hint.trim();
+    }
+    if (typeof parsed.data?.message === 'string' && parsed.data.message.trim()) {
+      return parsed.data.message.trim();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function commandDisplayText(inp: Record<string, unknown>): string {
   if (typeof inp.displayCommand === 'string') return inp.displayCommand;
   if (typeof inp.command !== 'string') return '';
   return normalizeDisplayCommand(inp.command) ?? inp.command;
 }
 
-function formatInlineInput(
-  toolName: string,
-  inp: Record<string, unknown> | null,
-): string {
+function formatInlineInput(toolName: string, inp: Record<string, unknown> | null): string {
   if (!inp) return '';
   switch (toolName) {
     case 'Bash':
@@ -700,7 +719,10 @@ export function AgentActionRow({
       ? descriptor.intent?.action
       : undefined;
   const isRawCommandFallback =
-    descriptor.kind === 'command' && !descriptor.description && !descriptor.intent && showRawCommand;
+    descriptor.kind === 'command' &&
+    !descriptor.description &&
+    !descriptor.intent &&
+    showRawCommand;
   const verbLabel = t(
     intentAction
       ? verbLabelKeyForIntent(intentAction)
@@ -716,9 +738,10 @@ export function AgentActionRow({
     () => extractDisplayParam(descriptor, { hideRawCommandFallback: showRawCommand }),
     [descriptor, showRawCommand],
   );
-  const fileChangeCountText = isFileChange && descriptor.changes.length > 1
-    ? t('chat.agentActionRow.fileChange.files', { count: descriptor.changes.length })
-    : null;
+  const fileChangeCountText =
+    isFileChange && descriptor.changes.length > 1
+      ? t('chat.agentActionRow.fileChange.files', { count: descriptor.changes.length })
+      : null;
   const rawCommand =
     showRawCommand &&
     descriptor.kind === 'command' &&
@@ -727,10 +750,10 @@ export function AgentActionRow({
     descriptor.command
       ? descriptor.command
       : null;
-  const stats = useMemo(
-    () => statsForToolCall(toolName, inp),
-    [toolName, inp],
-  );
+  const userFacingToolResult = toolResult
+    ? (humanizeDocumentToolResult(toolName, toolResult) ?? toolResult)
+    : null;
+  const stats = useMemo(() => statsForToolCall(toolName, inp), [toolName, inp]);
   const isFilePathTool = FILE_PATH_TOOLS.has(toolName);
   const filePath = descriptor.kind === 'file' ? descriptor.filePath : '';
   const singleFileChange =
@@ -894,7 +917,7 @@ export function AgentActionRow({
             ? `${rowVerbLabel} ${ghostInfo.name} ${ghostInfo.tool}`
             : displayParam || fileChangeCountText
               ? hideVerb
-                ? displayParam?.text ?? fileChangeCountText ?? ''
+                ? (displayParam?.text ?? fileChangeCountText ?? '')
                 : `${rowVerbLabel} ${displayParam?.text ?? fileChangeCountText ?? ''}`
               : rowVerbLabel
         }
@@ -921,11 +944,7 @@ export function AgentActionRow({
           }
           className="inline-flex h-[18px] w-4 items-center justify-center shrink-0 text-[var(--msg-tool-card-chevron)]"
         >
-          {status === 'running' ? (
-            <Spinner size={13} />
-          ) : (
-            <Check size={13} />
-          )}
+          {status === 'running' ? <Spinner size={13} /> : <Check size={13} />}
         </span>
         {!hideVerb && (
           <span className="text-14 text-[var(--msg-tool-card-chevron)] shrink-0">
@@ -943,11 +962,7 @@ export function AgentActionRow({
         {/* v9: 移除 chevron 上的"查看详情" Tooltip。整行 button 已经是
             统一激活目标，末尾 chevron 只保留视觉提示。 */}
         <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
-          {isInlineExpand && expanded ? (
-            <ChevronDown size={13} />
-          ) : (
-            <ChevronRight size={13} />
-          )}
+          {isInlineExpand && expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
       </button>
       {rawCommand && !expanded && (
@@ -981,22 +996,22 @@ export function AgentActionRow({
           )}
         >
           {inlineInputText && (
-            <pre className="whitespace-pre-wrap break-words m-0">
-              {inlineInputText}
-            </pre>
+            <pre className="whitespace-pre-wrap break-words m-0">{inlineInputText}</pre>
           )}
-          {toolResult && (
+          {userFacingToolResult && (
             <>
               {inlineInputText && (
                 <div className="my-2 h-px bg-[var(--msg-tool-card-chevron)]/20" />
               )}
               <pre className="whitespace-pre-wrap break-words m-0 text-[var(--msg-tool-card-chevron)]">
-                {toolResult}
+                {userFacingToolResult}
               </pre>
             </>
           )}
-          {!inlineInputText && !toolResult && (
-            <span className="text-[var(--msg-tool-card-chevron)]">{t('chat.agentActionRow.noContent')}</span>
+          {!inlineInputText && !userFacingToolResult && (
+            <span className="text-[var(--msg-tool-card-chevron)]">
+              {t('chat.agentActionRow.noContent')}
+            </span>
           )}
         </div>
       )}
@@ -1017,9 +1032,7 @@ export function AgentActionRow({
           onClose={closeLightbox}
         />
       )}
-      {lightbox.kind === 'image' && (
-        <ImageLightbox src={lightbox.src} onClose={closeLightbox} />
-      )}
+      {lightbox.kind === 'image' && <ImageLightbox src={lightbox.src} onClose={closeLightbox} />}
       {lightbox.kind === 'payload' && (
         <ToolPayloadLightbox
           payload={lightbox.payload}

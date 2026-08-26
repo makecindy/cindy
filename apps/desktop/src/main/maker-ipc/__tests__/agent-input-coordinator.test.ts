@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { createOrcaInterAgentDispatcher } from '../orcaInterAgentDispatcher.js';
+import {
+  createOrcaTeamService,
+  type OrcaTeamServiceDeps,
+  type OrcaWorkerRecordSnapshot,
+} from '../orcaTeamService.js';
 import { rebuildSessionQueueItem } from '../sessionControlService.js';
 import type {
   AgentInputCoordinatorDeps,
@@ -32,6 +38,438 @@ const mocks = vi.hoisted(() => {
     touchUserSendInDb: vi.fn(async () => {}),
     logger,
   };
+});
+
+describe('AgentInputCoordinator Orca priority queue transactions', () => {
+  const orcaItem = (clientId: string, text: string) =>
+    makeItem(clientId, text, {
+      origin: { kind: 'orca', senderLabel: 'Lead', displayText: text },
+    });
+
+  it('restores first, reserves at the head with a host stamp, deduplicates, and emits once', async () => {
+    const h = createHarness();
+    const sid = 'priority-worker';
+    h.setRunning(true);
+    h.setLoadQueueSnapshot(async () => [orcaItem('restored-old', 'old')]);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.emitProjection.mockClear();
+    h.persistQueueSnapshot.mockClear();
+
+    const onReserved = vi.fn(() => {
+      expect(h.emitProjection).not.toHaveBeenCalled();
+      expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.clientId).toBe(
+        'interrupt-new',
+      );
+    });
+    const first = h.coordinator.reserveNextInput(sid, orcaItem('interrupt-new', 'replace'), {
+      onReserved,
+    });
+    expect(first.reserved).toBe(true);
+    expect(first.projection.pendingQueue.map((item) => item.clientId)).toEqual([
+      'interrupt-new',
+      'restored-old',
+    ]);
+    const control = h.coordinator.getQueueControlSnapshot(sid);
+    expect(control.pendingQueue[0]?.hostAcceptedAtMs).toEqual(expect.any(Number));
+    expect(onReserved).toHaveBeenCalledOnce();
+    expect(h.emitProjection).toHaveBeenCalledTimes(1);
+    expect(h.persistQueueSnapshot).toHaveBeenCalledTimes(1);
+
+    h.emitProjection.mockClear();
+    const duplicate = h.coordinator.reserveNextInput(sid, orcaItem('interrupt-new', 'duplicate'));
+    expect(duplicate.reserved).toBe(false);
+    expect(
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => item.clientId),
+    ).toEqual(['interrupt-new', 'restored-old']);
+    expect(h.emitProjection).not.toHaveBeenCalled();
+  });
+
+  it('keeps a user-paused queue paused while reserving the next input', async () => {
+    const h = createHarness();
+    const sid = 'paused-worker';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, orcaItem('old', 'old'));
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+
+    const result = h.coordinator.reserveNextInput(sid, orcaItem('interrupt', 'replace'));
+    expect(result.projection.queuePaused).toBe(true);
+    expect(result.projection.pendingQueue.map((item) => item.clientId)).toEqual([
+      'interrupt',
+      'old',
+    ]);
+  });
+
+  it('atomically merges only the requested consecutive lead rows and settles removed callbacks', async () => {
+    const h = createHarness();
+    const sid = 'merge-worker';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, orcaItem('q1', 'one'));
+    h.coordinator.enqueue(sid, orcaItem('q2', 'two'));
+    h.coordinator.enqueue(sid, orcaItem('q3', 'three'));
+    const survivorStamp =
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.hostAcceptedAtMs;
+    h.emitProjection.mockClear();
+    h.onDiscardedQueuedMessage.mockClear();
+
+    const result = h.coordinator.mergeQueuedMessagesAtomically(sid, ['q1', 'q2'], ([survivor]) => ({
+      ...survivor!,
+      text: 'merged',
+      persistedContent: 'merged',
+      chatMessage: { ...survivor!.chatMessage, content: 'merged' },
+    }));
+
+    expect(result.merged).toBe(true);
+    expect(result.projection.pendingQueue.map((item) => [item.clientId, item.text])).toEqual([
+      ['q1', 'merged'],
+      ['q3', 'three'],
+    ]);
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.hostAcceptedAtMs).toBe(
+      survivorStamp,
+    );
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledTimes(1);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q2' }),
+    );
+    expect(h.emitProjection).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a zero-modification conflict for non-consecutive, reordered, or unauthorized targets', async () => {
+    const h = createHarness();
+    const sid = 'merge-conflict-worker';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, orcaItem('q1', 'one'));
+    h.coordinator.enqueue(sid, makeItem('user', 'user'));
+    h.coordinator.enqueue(sid, orcaItem('q2', 'two'));
+    const before = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    h.emitProjection.mockClear();
+
+    for (const ids of [
+      ['q1', 'q2'],
+      ['q2', 'q1'],
+      ['q1', 'q1'],
+    ]) {
+      const result = h.coordinator.mergeQueuedMessagesAtomically(sid, ids, (targets) =>
+        targets.every((item) => item.origin?.kind === 'orca') ? targets[0]! : null,
+      );
+      expect(result.merged).toBe(false);
+    }
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual(before);
+    expect(h.emitProjection).not.toHaveBeenCalled();
+  });
+
+  async function createProvisionalDispatchHarness() {
+    const h = createHarness();
+    const sid = 'provisional-worker-session';
+    const leadSessionId = 'lead-session';
+    const workerId = 'worker-id';
+    const manualInterrupt = {
+      current: null as { reason: string; markedAt: number } | null,
+    };
+    h.abortSession.mockImplementation(async () => {
+      // Mirrors register.ts abortSession: mark input_stop synchronously before awaiting vendor abort.
+      manualInterrupt.current = { reason: 'input_stop', markedAt: Date.now() };
+    });
+    let worker: OrcaWorkerRecordSnapshot = {
+      id: workerId,
+      teamId: 'team-id',
+      leadSessionId,
+      sessionId: sid,
+      status: 'idle',
+      label: 'worker',
+      role: 'worker',
+      focused: true,
+      idleSince: null,
+      session: {
+        title: 'Worker',
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        effort: 'medium',
+        permissionMode: 'default',
+        fastMode: false,
+      },
+    };
+    const dispatcher = createOrcaInterAgentDispatcher({
+      createId: () => 'replacement-client',
+      getSessionMeta: async () => ({ agentKind: 'codex' as const }),
+      getSessionRowSnapshot: async () => ({
+        title: 'Worker',
+        status: 'active',
+        userSendAt: null,
+      }),
+      getLiveSession: () => null,
+      shouldQueueNewTurn: (sessionId) => h.coordinator.shouldQueueNewTurn(sessionId),
+      hasSendToSessionLock: () => false,
+      buildCreateOptsForQueuedSession: async () => ({
+        agentKind: 'codex' as const,
+        workingDir: '/repo',
+        model: 'gpt-5.4',
+        effort: 'medium',
+        permissionMode: 'default',
+      }),
+      enqueueQueuedMessage: (sessionId, item) => {
+        h.coordinator.enqueue(sessionId, item);
+      },
+      reserveNextQueuedMessage: async (sessionId, item, onReserved) => {
+        await h.coordinator.ensureQueueRestored(sessionId);
+        return h.coordinator.reserveNextInput(sessionId, item, { onReserved }).reserved;
+      },
+      sendToSessionInternal: async () => {
+        throw new Error('direct send is not used by this provisional queued test');
+      },
+      createDbMessage: async () => ({}),
+      beginDirectTurnChangeSet: async () => {},
+      abortDirectTurnChangeSet: () => {},
+      resolveWorkerSenderLabel: async (_id, fallback) => fallback,
+      isSessionRunningError: () => false,
+      log: mocks.logger,
+    });
+    const serviceDeps = {
+      getWorkerLinkBySessionId: async () => ({
+        workerId,
+        teamId: 'team-id',
+        workerSessionId: sid,
+        leadSessionId,
+      }),
+      getWorkerLinkByWorkerId: async () => ({
+        workerId,
+        teamId: 'team-id',
+        workerSessionId: sid,
+        leadSessionId,
+      }),
+      listWorkersByLead: async () => [worker],
+      getLiveSession: () => ({ isTurnRunning: () => true }),
+      resumeWorkerSession: async () => {},
+      updateWorkerStatus: async (_id, status) => {
+        worker = { ...worker, status };
+      },
+      markWorkerIdle: async () => {
+        worker = { ...worker, status: 'idle' };
+      },
+      markWorkerIdleIfStatus: async () => false,
+      restoreWorkerDoneIfIdle: async () => false,
+      cancelWorkerSessionOperations: async () => {},
+      closeWorkerSession: async () => {},
+      closeWorkerSessionIfIdle: async () => true,
+      hasPendingWorkerInput: async () => false,
+      hasSendToSessionLock: () => false,
+      archiveWorkerSession: async () => {},
+      getManualInterrupt: () => manualInterrupt.current,
+      clearManualInterrupt: () => {
+        manualInterrupt.current = null;
+      },
+      restoreManualInterrupt: (_sessionId, snapshot) => {
+        manualInterrupt.current = snapshot;
+      },
+      broadcastOrcaWorkerChanged: () => {},
+      dispatchWorkerMessage: async (params) => {
+        await params.onAccepted?.();
+        await params.onAcceptedCommit?.();
+        return {
+          ok: true as const,
+          mode: 'dispatched' as const,
+          clientId: 'old-client',
+          dispatchOutcome: {
+            kind: 'session-dispatch' as const,
+            source: params.dispatchMeta.source,
+            dispatched: true as const,
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        };
+      },
+      reserveWorkerMessage: async (params) => {
+        const result = await dispatcher.reserveNextOrcaInterAgentMessage({
+          targetSessionId: params.targetSessionId,
+          rawContent: params.message,
+          source: 'lead',
+          senderLabel: 'Lead',
+          workerId: params.workerId,
+          meta: params.dispatchMeta,
+          onReserved: params.onReserved,
+          onAccepted: params.onAccepted,
+          onAcceptedRollback: params.onAcceptedRollback,
+          onAcceptedCommit: params.onAcceptedCommit,
+        });
+        if (!result.ok) return result;
+        return {
+          ...result,
+          targetTitle: result.targetTitle ?? null,
+          targetLastUserSendAt: result.targetLastUserSendAt ?? null,
+        };
+      },
+      requestWorkerInterrupt: async () => {
+        manualInterrupt.current = { reason: 'lead_interrupt', markedAt: Date.now() };
+        return { stopOutcome: 'requested' as const, queuePaused: false };
+      },
+      getWorkerQueuePaused: () => h.coordinator.isQueuePaused(sid),
+      sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),
+      getSessionQueueSnapshot: async () => ({
+        pendingQueue: h.coordinator.getQueueControlSnapshot(sid).pendingQueue,
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: true,
+        willQueue: h.coordinator.shouldQueueNewTurn(sid),
+        queuePaused: h.coordinator.isQueuePaused(sid),
+      }),
+      ensureWorkerQueueRestored: async () => true,
+      removeQueuedMessage: () => false,
+      replaceQueuedMessage: () => false,
+      mergeQueuedMessages: () => false,
+      log: mocks.logger,
+    } satisfies OrcaTeamServiceDeps;
+    const service = createOrcaTeamService(serviceDeps);
+
+    h.onAcceptedQueuedMessage.mockImplementation((sessionId, item) =>
+      dispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item),
+    );
+    return {
+      h,
+      sid,
+      service,
+      serviceDeps,
+      dispatcher,
+      getWorker: () => worker,
+      getManualInterrupt: () => manualInterrupt.current,
+    };
+  }
+
+  it('replays an old terminal after accepted replacement is cancelled before vendor dispatch', async () => {
+    const x = await createProvisionalDispatchHarness();
+    await x.service.sendToWorker({
+      callerLeadSessionId: 'lead-session',
+      targetSessionId: x.sid,
+      message: 'old turn',
+    });
+    x.h.setRunning(true);
+    await x.service.interruptWorker({
+      callerLeadSessionId: 'lead-session',
+      targetSessionId: x.sid,
+      message: 'replacement',
+    });
+    expect(x.h.coordinator.getQueueInspection(x.sid)[0]?.queuedMessageId).toBe(
+      'replacement-client',
+    );
+    const oldCapture = x.service.captureWorkerTerminalTurn(x.sid);
+    const accepted = deferred<void>();
+    const releaseAccepted = deferred<void>();
+    const dispatchSettled = deferred<void>();
+    let dispatchError: unknown;
+    x.h.onAcceptedQueuedMessage.mockImplementation(async (sessionId, item) => {
+      await x.dispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
+      accepted.resolve();
+      await releaseAccepted.promise;
+    });
+    x.h.sendToAgent.mockImplementation(async (sessionId, _message, _createOpts, sendOpts) => {
+      try {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        const result = sendSuccess('orca');
+        await x.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
+          sessionId,
+          sendOpts,
+          result,
+        );
+        return result;
+      } catch (err) {
+        dispatchError = err;
+        await x.dispatcher.rollbackQueuedOrcaInterAgentAcceptedCallback(
+          sessionId,
+          sendOpts.persistUserMessage?.clientId,
+        );
+        throw err;
+      } finally {
+        dispatchSettled.resolve();
+      }
+    });
+
+    x.h.setRunning(false);
+    x.h.coordinator.onExternalTurnSettled(x.sid);
+    await accepted.promise;
+    expect(x.h.coordinator.getQueueControlSnapshot(x.sid).pendingQueue).toHaveLength(0);
+    expect(x.h.coordinator.getQueueInspection(x.sid)).toEqual([
+      expect.objectContaining({ queuedMessageId: 'replacement-client', consuming: true }),
+    ]);
+    let terminalSettled = false;
+    const oldTerminal = x.service
+      .handleWorkerTerminalTurn({
+        sessionId: x.sid,
+        status: 'done',
+        finalText: 'old output',
+        capture: oldCapture,
+      })
+      .then(() => {
+        terminalSettled = true;
+      });
+    await flush();
+    expect(terminalSettled).toBe(false);
+
+    x.h.coordinator.stop(x.sid, { keepQueue: true, pauseQueue: false });
+    expect(x.h.abortSession).toHaveBeenCalledWith(x.sid);
+    expect(x.getManualInterrupt()).toMatchObject({ reason: 'input_stop' });
+    releaseAccepted.resolve();
+    await dispatchSettled.promise;
+    await oldTerminal;
+
+    expect(dispatchError).toBeInstanceOf(Error);
+    expect((dispatchError as Error).message).toContain('SEND_CANCELLED_BEFORE_DISPATCH');
+    expect(x.getWorker().status).toBe('idle');
+    expect(x.serviceDeps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      'worker manual interrupt: suppressed auto-bridge',
+      expect.objectContaining({ sessionId: x.sid, reason: 'input_stop' }),
+    );
+    expect(x.service.captureWorkerTerminalTurn(x.sid)).toMatchObject({
+      manualInterrupt: null,
+      autoBridgeIdentity: null,
+    });
+  });
+
+  it('invalidates an old terminal after accepted replacement reaches vendor dispatch', async () => {
+    const x = await createProvisionalDispatchHarness();
+    await x.service.sendToWorker({
+      callerLeadSessionId: 'lead-session',
+      targetSessionId: x.sid,
+      message: 'old turn',
+    });
+    x.h.setRunning(true);
+    await x.service.interruptWorker({
+      callerLeadSessionId: 'lead-session',
+      targetSessionId: x.sid,
+      message: 'replacement',
+    });
+    const oldCapture = x.service.captureWorkerTerminalTurn(x.sid);
+    const accepted = deferred<void>();
+    const releaseAccepted = deferred<void>();
+    x.h.onAcceptedQueuedMessage.mockImplementation(async (sessionId, item) => {
+      await x.dispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
+      accepted.resolve();
+      await releaseAccepted.promise;
+    });
+    x.h.sendToAgent.mockImplementation(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      const result = sendSuccess('orca');
+      await x.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(sessionId, sendOpts, result);
+      return result;
+    });
+
+    x.h.setRunning(false);
+    x.h.coordinator.onExternalTurnSettled(x.sid);
+    await accepted.promise;
+    const oldTerminal = x.service.handleWorkerTerminalTurn({
+      sessionId: x.sid,
+      status: 'done',
+      finalText: 'old output',
+      capture: oldCapture,
+    });
+    releaseAccepted.resolve();
+    await oldTerminal;
+
+    expect(x.getWorker().status).toBe('running');
+    expect(x.serviceDeps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
 });
 
 vi.mock('../../localDb/ipc/messages.js', () => ({

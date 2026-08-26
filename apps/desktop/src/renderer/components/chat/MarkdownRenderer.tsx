@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -33,14 +33,12 @@ import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
 import {
-  commitWordFadeCandidate,
-  createWordFadeCandidate,
   getOrCreateWordFadeState,
   releaseWordFadeState,
-  rehypeStreamWordFade,
 } from './rehypeStreamWordFade';
-import { StreamFadeSpan } from './StreamFadeSpan';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
+import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
+import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
@@ -1641,13 +1639,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
-  // 流式逐词淡入(rehypeStreamWordFade,§14.4 第五个 sanctioned motion class):
-  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。committed state
-  // 按消息身份跨 parse / remount 保留;本次 render 只写 candidate,layout effect
-  // 确认 DOM 已提交后才落状态,避免被放弃的并发 render 提前推进 key / 时间线。
-  // 根节点监听 animationend 把播完的段落袋(settled),下一次 parse 还原纯文本。
-  // isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS —— 终版渲染无
-  // 任何 span 包装,插件、state 与监听一起被回收,静态路径零开销。
+  // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
+  // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
+  // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
   // 用户开关(Settings → 个性化 → 流式动效,默认开)与 reduced-motion 取 AND:
   // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
   const reducedMotion = useReducedMotion();
@@ -1677,21 +1671,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
     [repairedContent, emitSourceLines],
   );
-  const wordFade = useMemo(() => {
-    if (!wordFadeState) return null;
-    const candidate = createWordFadeCandidate(wordFadeState);
-    return {
-      candidate,
-      plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, candidate]] as PluggableList,
-    };
-    // animationend 不触发 React state;即使正文没变,其它 render 也要克隆最新 settled。
-  }, [wordFadeState, renderedContent, wordFadeState?.settled.size]);
-  useLayoutEffect(() => {
-    if (wordFadeState && wordFade) {
-      commitWordFadeCandidate(wordFadeState, wordFade.candidate);
-    }
-  }, [wordFadeState, wordFade]);
-  const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
+  const streamingChunks = useMemo(
+    () =>
+      isStreaming && !emitSourceLines
+        ? splitStreamingMarkdownChunks(renderedContent)
+        : [{ start: 0, content: renderedContent }],
+    [emitSourceLines, isStreaming, renderedContent],
+  );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地
@@ -1718,16 +1704,6 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
-  const streamFadeComponents = useMemo<Components>(
-    () =>
-      wordFadeState
-        ? {
-            span: (props) => <StreamFadeSpan {...props} wordFadeState={wordFadeState} />,
-          }
-        : {},
-    [wordFadeState],
-  );
-
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still
@@ -1735,7 +1711,6 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   const components = useMemo<Components>(
     () => ({
       ...baseComponents,
-      ...streamFadeComponents,
       // doc-mode anchor: emitSourceLines=true 时把 baseComponents 里的 block
       // renderer 整体替换成带 data-source-line 注入的版本。chat 调用方不传 prop
       // → 默认 false → 整段是 falsy 短路, components 对象与之前完全一致。
@@ -1890,21 +1865,41 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       currentSessionTitle,
       allowPrivilegedLinks,
       remoteMediaOrigin,
-      streamFadeComponents,
     ],
   );
 
   return (
     <div className="msg-markdown select-text">
-      <ReactMarkdown
-        remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-        rehypePlugins={rehypePlugins}
-        components={components}
-        urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
-        skipHtml
-      >
-        {renderedContent}
-      </ReactMarkdown>
+      {isStreaming ? (
+        streamingChunks.map((chunk) => (
+          <StreamingMarkdownChunk
+            key={chunk.start}
+            sourceKey={String(chunk.start)}
+            content={chunk.content}
+            remarkPlugins={
+              allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
+            }
+            rehypePlugins={REHYPE_PLUGINS}
+            components={components}
+            urlTransform={
+              allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform
+            }
+            wordFadeState={wordFadeState}
+            emitSourceLines={emitSourceLines}
+            wholeDocument={streamingChunks.length === 1}
+          />
+        ))
+      ) : (
+        <ReactMarkdown
+          remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          components={components}
+          urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
+          skipHtml
+        >
+          {renderedContent}
+        </ReactMarkdown>
+      )}
       {lightboxSrc && (
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
