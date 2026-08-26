@@ -15,6 +15,7 @@ vi.mock('../../im/ownerScopedStorage.js', () => ({
 
 import {
   applyIncomingServerWorkspacePrefs,
+  dropBlankWorkspacePref,
   getWorkspacePref,
   importWorkspacePrefsIfNeeded,
   isWorkspacePrefsMigrated,
@@ -129,6 +130,72 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('slack', null, 'repo').model).toBeNull();
     expect(getWorkspacePref('slack', null, 'chat').model).toBe('local-chat');
     expect(getWorkspacePref('slack', null, 'other').model).toBe('from-card');
+  });
+
+  it('dropBlank 只丢掉墓碑，不动实值行', () => {
+    setWorkspacePref('slack', null, 'chat', { model: 'keep' });
+    dropBlankWorkspacePref('slack', null, 'chat');
+    expect(getWorkspacePref('slack', null, 'chat').model).toBe('keep');
+  });
+
+  it('镜像确认后丢掉墓碑，后续卡片写入可以进本机', () => {
+    setWorkspacePref('slack', null, 'repo', {
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+    });
+    expect(listWorkspacePrefs('slack').map((e) => e.workspace)).toEqual(['repo']);
+    dropBlankWorkspacePref('slack', null, 'repo');
+    expect(listWorkspacePrefs('slack')).toEqual([]);
+
+    applyIncomingServerWorkspacePrefs('slack', [
+      {
+        workspace: 'repo',
+        model: 'from-card',
+        effort: null,
+        agentKind: 'claude-code',
+        permissionMode: null,
+      },
+    ]);
+    expect(getWorkspacePref('slack', null, 'repo').model).toBe('from-card');
+  });
+
+  it('快照已无该键时也丢掉墓碑（删除已在 server 落地）', () => {
+    setWorkspacePref('slack', null, 'repo', {
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+    });
+    setWorkspacePref('slack', null, 'chat', { model: 'keep-me' });
+    applyIncomingServerWorkspacePrefs('slack', [
+      {
+        workspace: 'chat',
+        model: 'keep-me',
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+      },
+    ]);
+    expect(listWorkspacePrefs('slack').map((e) => e.workspace)).toEqual(['chat']);
+    applyIncomingServerWorkspacePrefs('slack', [
+      {
+        workspace: 'repo',
+        model: 'from-card',
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+      },
+      {
+        workspace: 'chat',
+        model: 'keep-me',
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+      },
+    ]);
+    expect(getWorkspacePref('slack', null, 'repo').model).toBe('from-card');
   });
 
   it('replaceChannel 只替换该渠道，并丢掉空白/非法别名', () => {

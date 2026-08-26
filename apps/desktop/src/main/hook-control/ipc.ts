@@ -45,6 +45,7 @@ import {
 } from './workspaceProviderSourceStore.js';
 import {
   applyIncomingServerWorkspacePrefs,
+  dropBlankWorkspacePref,
   importWorkspacePrefsIfNeeded,
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
@@ -330,6 +331,7 @@ async function mirrorWorkspacePrefs(channel: HookPrefsChannel): Promise<void> {
       } else {
         await m.setProviderWorkspacePrefs(channel, row.workspace, patch);
       }
+      dropBlankWorkspacePref(channel, row.teamId ?? null, row.workspace);
     }
     if (channel === 'slack') broadcastPrefs(slackLocalPrefsView());
     else broadcastProviderPrefs(providerLocalPrefsView(channel));
@@ -921,11 +923,14 @@ export function registerHookControlIpc(): void {
     }
     const view = slackLocalPrefsView();
     broadcastPrefs(view);
-    void m.setWorkspacePrefs(parsed.workspace, parsed.patch, parsed.teamId).catch((err: unknown) => {
-      log.warn(
-        `slack workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
+    void m
+      .setWorkspacePrefs(parsed.workspace, parsed.patch, parsed.teamId)
+      .then(() => dropBlankWorkspacePref('slack', parsed.teamId, parsed.workspace))
+      .catch((err: unknown) => {
+        log.warn(
+          `slack workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     return { prefs: view };
   });
 
@@ -951,11 +956,14 @@ export function registerHookControlIpc(): void {
     }
     const view = providerLocalPrefsView(provider);
     broadcastProviderPrefs(view);
-    void m.setProviderWorkspacePrefs(provider, parsed.workspace, parsed.patch).catch((err: unknown) => {
-      log.warn(
-        `${provider} workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
+    void m
+      .setProviderWorkspacePrefs(provider, parsed.workspace, parsed.patch)
+      .then(() => dropBlankWorkspacePref(provider, parsed.teamId, parsed.workspace))
+      .catch((err: unknown) => {
+        log.warn(
+          `${provider} workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     return { prefs: view };
   });
 

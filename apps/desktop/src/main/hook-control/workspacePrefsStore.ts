@@ -188,14 +188,34 @@ export function setWorkspacePref(
     ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
   };
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
-  // 全空行是删除墓碑：派发视为跟随默认，重连时向 server 发 all-null，
-  // 避免 /model 卡全量快照把已清除的目录偏好救活。
+  // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null，
+  // 避免 /model 卡全量快照把尚未镜像的清空救活。镜像成功后由
+  // dropBlankWorkspacePref 清掉，让之后的卡片写入能进本机。
   const entries = [...rest, nextRow];
   if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
   return entries.filter((e) => e.channel === channel).map(toHookPrefs);
+}
+
+/**
+ * 某键的 all-null 已成功镜像到 server 后，丢掉墓碑。
+ * 实值行和非本键不受影响；没有墓碑时是 no-op。
+ */
+export function dropBlankWorkspacePref(
+  channel: HookPrefsChannel,
+  teamId: string | null,
+  workspace: string,
+): void {
+  const fp = filePath();
+  const store = readStore(fp);
+  const current = store.entries.find((e) => sameKey(e, channel, teamId, workspace));
+  if (!current || !isBlankRow(current)) return;
+  writeStore(fp, {
+    ...store,
+    entries: store.entries.filter((e) => !sameKey(e, channel, teamId, workspace)),
+  });
 }
 
 /** 用 server 全量快照替换某渠道全部本地行（/model 卡遥控）。 */
@@ -279,7 +299,8 @@ export function importWorkspacePrefsIfNeeded(
 }
 
 /**
- * /model 卡主动推送的全量快照：本机墓碑优先（未同步的清空不能被救活），
+ * /model 卡主动推送的全量快照：尚未镜像的本机墓碑优先（未同步的清空不能被救活），
+ * 快照里已经没有该键时丢掉墓碑（删除已落地，允许之后的卡片写入）；
  * 其余以快照为准；快照里没有的本机实值行保留（可能还没镜像上去）。
  */
 export function applyIncomingServerWorkspacePrefs(
@@ -302,7 +323,7 @@ export function applyIncomingServerWorkspacePrefs(
     const key = prefKey(localRow.teamId, localRow.workspace);
     seen.add(key);
     if (isBlankRow(localRow)) {
-      nextChannel.push(localRow);
+      if (serverByKey.has(key)) nextChannel.push(localRow);
       continue;
     }
     nextChannel.push(serverByKey.get(key) ?? localRow);
