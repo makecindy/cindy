@@ -84,10 +84,13 @@ function createHandle(opts?: {
   };
 }
 
-function createSession(stub: ReturnType<typeof createHandle>): Session {
+function createSession(
+  stub: ReturnType<typeof createHandle>,
+  agentKind: Session['agentKind'] = 'claude-code',
+): Session {
   return new Session({
     id: 'session-control',
-    agentKind: 'claude-code',
+    agentKind,
     workDir: '/repo',
     handle: stub.handle,
     capabilities: {} as never,
@@ -721,6 +724,56 @@ describe('Session current-generation terminal observation', () => {
       sdkError: 'server_error',
       errorStatus: 529,
     });
+  });
+
+  it('does not adopt a late paired done while the next handle.send is still pending', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 
   it('does not inherit a reservation-window terminal after a later send is accepted', async () => {

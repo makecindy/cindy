@@ -357,6 +357,8 @@ type TurnControlState = {
 type SendReservation = {
   generation: number;
   phase: 'accepting' | 'dispatching';
+  /** handle.send() has resolved as accepted. Until then, late N terminals stay off N+1. */
+  accepted: boolean;
   cancelled: boolean;
   abortController: AbortController;
   settled: Promise<SendReservationOutcome>;
@@ -374,6 +376,7 @@ function createSendReservation(generation: number): SendReservation {
   return {
     generation,
     phase: 'accepting',
+    accepted: false,
     cancelled: false,
     abortController: new AbortController(),
     settled,
@@ -864,6 +867,7 @@ export class Session {
       // racing after that point may request abort, but cannot rewrite history
       // and report the turn as undispatched.
       turnDispatched = true;
+      reservation.accepted = true;
       // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
       // error 会清掉它（见 armTurnStallWatchdog）。
       this.armTurnStallWatchdog();
@@ -2510,7 +2514,8 @@ export class Session {
         if (
           awaitingCanAdoptNextGeneration &&
           this.turnGeneration === awaitingGeneration + 1 &&
-          !this.isPreDispatchReservation()
+          !this.isPreDispatchReservation() &&
+          !this.shouldHoldGenerationAdoption(event)
         ) {
           // Only a next() that started while logically idle may follow the next send.
           // Capturing that fact before awaiting is essential. The terminal drain may
@@ -2519,6 +2524,8 @@ export class Session {
           // clear that fence. The fence itself prevents any later generation entering.
           // Do not adopt while N+1 is still reserved / before provider dispatch:
           // a late N terminal would otherwise be cached as N+1 evidence.
+          // handle.send() pending is a separate window: leftover paired done must
+          // not become N+1 success, but in-flight start-failure errors still adopt.
           observedGeneration = this.turnGeneration;
         }
         if (this.terminationStarted) continue;
@@ -2648,6 +2655,15 @@ export class Session {
       this.sendReservation.generation === this.turnGeneration &&
       this.sendReservation.phase === 'accepting'
     );
+  }
+
+  private shouldHoldGenerationAdoption(event: AgentEvent): boolean {
+    if (!this.sendReservation) return false;
+    if (this.sendReservation.generation !== this.turnGeneration) return false;
+    if (this.sendReservation.accepted) return false;
+    // Leftover paired done during handle.send() must not become N+1 success.
+    // In-flight start-failure errors still belong to this send.
+    return event.type === 'done';
   }
 
   private createSessionRunningError(): Error {
