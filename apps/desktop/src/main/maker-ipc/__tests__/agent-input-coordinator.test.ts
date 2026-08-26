@@ -7099,6 +7099,179 @@ describe('AgentInputCoordinator steer transaction', () => {
     }
   });
 
+  it('clears a planned-upgrade marker on Session close so a replacement instance cannot consume it', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-closed-replacement';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+        instanceId: 'harness-session',
+      });
+      h.coordinator.onSessionClosed(sid);
+      h.setTurnSessionIdentity({ instanceId: 'replacement-session' });
+      h.setTurnGeneration(0);
+      h.setRunning(false);
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setObservedCurrentTurnTerminal({ kind: 'none' });
+
+      h.coordinator.enqueue(sid, makeItem('q-2', 'after-rebuild'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] unexpected after rebuild',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'replacement-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toContain('REMOTE_DAEMON_CLOSED');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not consume a stale planned-upgrade marker after identity swap even without close', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-stale-instance';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+        instanceId: 'harness-session',
+      });
+      h.setTurnSessionIdentity({ instanceId: 'replacement-session' });
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] unexpected after swap',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'replacement-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toContain('REMOTE_DAEMON_CLOSED');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover error as planned-upgrade after close + generation reuse', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-leftover-reuse';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true });
+      h.setTurnSessionIdentity({ instanceId: 'replacement-session' });
+      h.setTurnGeneration(0);
+      h.setRunning(false);
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setObservedCurrentTurnTerminal({ kind: 'none' });
+
+      h.coordinator.enqueue(sid, makeItem('q-2', 'after-rebuild'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] unexpected leftover',
+        reason: 'remote_daemon_closed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-3', 'queued-after-error'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toContain('REMOTE_DAEMON_CLOSED');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-3']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still silences planned-upgrade close on the same Session instance', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-same-instance';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] daemon restarting',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+        instanceId: 'harness-session',
+      });
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery).toBeNull();
+      expect(projection.error).toBeNull();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not treat an observed terminal error as a successful leftover settlement', async () => {
     vi.useFakeTimers();
     try {

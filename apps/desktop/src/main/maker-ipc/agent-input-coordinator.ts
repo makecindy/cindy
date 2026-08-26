@@ -666,10 +666,16 @@ interface SessionInputState {
   fencedStaleTerminal: { instanceId: string; generation: number } | null;
   /**
    * Host-intentionally ignored terminal (planned cc-mgr upgrade close).
-   * Session still records the error snapshot; leftover/paired-done must not
-   * re-synthesize it as a user-visible recovery.
+   * Bound to the emitting Session incarnation + generation. Session still
+   * records the error snapshot; leftover/paired-done must not re-synthesize
+   * it as a user-visible recovery, and a replacement Session must not consume
+   * a stale marker after generation restart.
    */
-  suppressedTerminalError: { generation: number; reason: string } | null;
+  suppressedTerminalError: {
+    instanceId: string;
+    generation: number;
+    reason: string;
+  } | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -3144,13 +3150,19 @@ export class AgentInputCoordinator {
 
   noteSuppressedTerminalError(
     sessionId: string,
-    meta: { generation?: number; reason?: string },
+    meta: { generation?: number; reason?: string; instanceId?: string },
   ): void {
     if (typeof meta.generation !== 'number' || typeof meta.reason !== 'string' || meta.reason.length === 0) {
       return;
     }
+    const instanceId =
+      typeof meta.instanceId === 'string' && meta.instanceId.length > 0
+        ? meta.instanceId
+        : readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
+    if (!instanceId) return;
     const state = this.getState(sessionId);
     state.suppressedTerminalError = {
+      instanceId,
       generation: meta.generation,
       reason: meta.reason,
     };
@@ -3411,6 +3423,10 @@ export class AgentInputCoordinator {
     opts?: { preserveInputBoundary?: boolean; preserveAutoResumeIntent?: boolean },
   ): void {
     const state = this.getState(sessionId);
+    // Planned-upgrade suppression is per Session incarnation. Replacement
+    // Sessions restart generation; a leftover marker would silence a later
+    // genuine remote_daemon_closed on the reused generation.
+    state.suppressedTerminalError = null;
     if (!opts?.preserveAutoResumeIntent) {
       this.supersedePendingAutoResumeRecoveries(sessionId);
     }
@@ -3706,7 +3722,9 @@ export class AgentInputCoordinator {
     if (!suppressed || observed?.kind !== 'error') return false;
     if (typeof observed.generation !== 'number') return false;
     if (suppressed.generation !== observed.generation) return false;
-    return observed.reason === suppressed.reason;
+    if (observed.reason !== suppressed.reason) return false;
+    const liveInstanceId = readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
+    return liveInstanceId !== null && liveInstanceId === suppressed.instanceId;
   }
 
   private consumeSuppressedObservedError(

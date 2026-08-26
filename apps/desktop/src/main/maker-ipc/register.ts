@@ -4249,6 +4249,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           agentInputCoordinatorHolder?.noteSuppressedTerminalError(session.id, {
             generation: event.sessionTurnGeneration,
             reason: 'remote_daemon_closed',
+            instanceId: event.sessionInstanceId ?? session.instanceId,
           });
         } else {
           agentInputCoordinatorHolder?.onTurnEvent(
