@@ -724,6 +724,26 @@ describe('Session current-generation terminal observation', () => {
       sdkError: 'server_error',
       errorStatus: 529,
     });
+    await expect(session.send('third')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'Authorization: [REDACTED]',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(session.send('third')).resolves.toEqual({ accepted: true });
+    const thirdDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await thirdDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 
   it('does not adopt a late paired done while the next handle.send is still pending', async () => {

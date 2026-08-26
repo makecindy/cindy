@@ -941,6 +941,17 @@ export class Session {
           this.terminalEventObservedErrorMessage = previousTerminalObservation.message;
           this.terminalEventObservedErrorSignals = previousTerminalObservation.signals;
         }
+        this.lastObservedTerminalGeneration = this.terminalEventObservedGeneration;
+        this.lastObservedTerminalKind = this.terminalEventObservedKind;
+        // Confirmed rejection skips the generic tail fence above, but a
+        // promoted/restored error still needs the same drain as a live error.
+        if (
+          this.terminalEventObservedKind === 'error' &&
+          typeof this.terminalEventObservedGeneration === 'number' &&
+          this.terminalEventObservedGeneration > 0
+        ) {
+          this.armTerminalErrorDrain(this.terminalEventObservedGeneration);
+        }
         if (
           previousTurnGeneration > 0 &&
           this.terminalEventObservedGeneration !== previousTurnGeneration
@@ -2182,6 +2193,15 @@ export class Session {
       // Codex closes a terminal error with an idle status rather than a done
       // event. That status drains the provider tail, but it is not itself a
       // generation boundary for ordinary status events.
+      this.clearTerminalErrorDrain();
+    } else if (
+      event.type === 'done' &&
+      !isBackgroundEvent &&
+      this.terminalErrorDrainGeneration !== null &&
+      this.lastObservedTerminalKind === 'error' &&
+      this.terminalErrorDrainGeneration === this.lastObservedTerminalGeneration
+    ) {
+      // Rolled-back / leftover paired done still belongs to the promoted error.
       this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
