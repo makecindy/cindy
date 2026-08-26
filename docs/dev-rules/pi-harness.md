@@ -45,24 +45,32 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   真值仅经 Pi 父进程专用 env 传递，`CINDY_PI_MCP_BRIDGE` 只存 env 引用；这些 env 与描述符
   都会在 bash spawn 边界剥离。bridge 并行执行外部 server 启动探测，每个 server 的
   `initialize + tools/list` 总预算为 10s（低于 Pi RPC 30s ready 门槛）；探测完成后实际工具
-  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。工具注册
-  为 `mcp__<server>__<tool>`。配置新增、修改、禁用或删除对下一新建/重启会话生效；旧活动
-  会话保留启动时 generation 快照至 close。
+  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
+  始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
+  input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
+  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。Host 审批、策略与变更捕获仍使用真实
+  `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
+  Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
+  下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
   时从 `get_entries` 校正。
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
 Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、启动时 RPC
-`set_auto_compaction{enabled:true}` / `set_thinking_level`。env:`CINDY_PI_API_KEY`、
+`set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
+Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
+下一次发送前换窗。设置页的 Pi 百分比在每次启动或恢复 Pi 任务时冻结，并写入该任务 `settings.json` 的
+`compaction.reserveTokens`（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
+Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
 放任 pi 默认(未写 settings.json):`retry.*`(agent 级 3 次退避、provider 级 0)、
-`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、`compaction.reserveTokens/keepRecentTokens`、
-`defaultProjectTrust`。这些默认目前合理;**若未来发现某默认值需钉死防 pi 二进制升级漂移,
-在 `index.ts` 加 `writeSettingsJson` 显式写入**(与 models.json 同机制,每次 startSession 覆写)。
+`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、`compaction.keepRecentTokens`、
+`defaultProjectTrust`。Cindy 会在每次 startSession 覆写 `transport` 与 `compaction.reserveTokens`；
+未配置 Pi 百分比时不写 `reserveTokens`，沿用 Pi 默认 16384。
 
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 
@@ -180,8 +188,9 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
       每个真实模型(chatgpt/、xai/、glm、deepseek、kimi…)仍建议在 release candidate 上
       anthropic-compat 下至少跑一轮**带工具调用**的回合,逐个确认 thinking 格式 / tool
       streaming / redacted thinking 正确；这是额度/账号发布 smoke，不再是功能缺口。
-- [x] **compaction**:启动显式开启 auto-compaction；手动 compact、boundary/usage 翻译、
-      compaction digest 写入与缓存命中均有测试。长上下文压力仍属于 RC soak。
+- [x] **compaction**:启动显式开启 Pi 原生 auto-compaction；threshold／overflow 压缩及续接由 Pi
+      负责，Cindy 只投影事件并在本机确定性失败后换窗。手动 compact、boundary/usage 翻译、
+      compaction digest 写入与缓存命中仍有测试。
 - [x] **无人值守**:scheduler 对 `agentKind=pi` 使用 Pi 默认模型与
       `bypassPermissions` 的契约测试已补；Pi bridge 的 auto allow/deny 也用真二进制覆盖。
 - [x] **resume 边界**:已用 Pi v0.82.1 真二进制创建 JSONL，再由 v0.83.0 恢复；
@@ -197,13 +206,13 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
 
 > 续做指南(每项怎么接着做 + file:line 锚点 + 坑)见 `docs/dev-rules/pi-remaining-work.md`。
 
-- ✅ **HTML 导出**(已交付):`export_html` RPC 全链路,会话头部菜单「导出为 HTML」,
-  仅当前打开的本地 pi 会话可见。见 `Capabilities.sessionHtmlExport` /
+- ✅ **HTML 导出**(已交付):`export_html` RPC 全链路仍在。会话头部 overflow 菜单入口暂隐
+  (Pi 专属项先不进 `···`)。见 `Capabilities.sessionHtmlExport` /
   `Session.exportSessionHtml` / `MAKER_INVOKE.EXPORT_SESSION_HTML`。
-- ✅ **手动压缩**(已交付):`compact` RPC 全链路,会话头部菜单「压缩上下文」,gate 同
-  HTML 导出、回合运行中禁用。良性「nothing to compact / too small」→ `noop`(不报失败)。
+- ✅ **手动压缩**(已交付):`compact` RPC 全链路仍在。头部 overflow 菜单入口暂隐;对话区
+  context ring 仍可点按压缩。良性「nothing to compact / too small」→ `noop`(不报失败)。
   见 `Capabilities.manualCompact` / `Session.compactSession` / `MAKER_INVOKE.COMPACT_SESSION`。
-  注:pi 斜杠转义后用户无法手输 `/compact`,此菜单是 pi 会话手动压缩的唯一入口。
+  注:pi 斜杠转义后用户无法手输 `/compact`,context ring 是当前 Pi 会话手动压缩入口。
 - ✅ **subagent 接 pi 轻量引擎**(已交付):Orca worker 可选 `pi` 引擎。核心链路(MCP
   schema / worker 创建服务 / 默认模型 claude-sonnet-4-6 / PiAgent 注册)本已按 AgentKind
   接通;本次补齐 UI(CreateWorkerPopover / composer「+」菜单协同项 / draft 映射)、两个
@@ -219,7 +228,8 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
   链路:CustomProviderDialog pi tab(+ api 选择器)→ custom-provider-store(pi runtime)→
   user-provider 派生 → pi-host `resolvePiNativeProviders` → PiAgent writeModelsJson 原生块 +
   provider 感知 setModel。真二进制测试证明直连原生端点、网关零请求。
-- ✅ **统一会话树**(已交付):会话头部「会话分支」把 Cindy 原有 session fork 与当前 Pi
-  append-only entry tree 嵌在同一棵树中。支持原生分支切换、可选分支摘要、选中 user entry
-  回填原 prompt、SQLite 可见时间线原子重投影与上下文 usage 恢复;device-link / mobile
-  transport contract 同步开放。切换不回滚工作区文件。
+- ✅ **统一会话树**(已交付):Cindy session fork 与 Pi append-only entry tree 的后端/
+  对话框实现仍在。头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
+  `agentKind=pi` 露出。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
+  SQLite 可见时间线原子重投影与上下文 usage 恢复;device-link / mobile transport
+  contract 同步开放。切换不回滚工作区文件。

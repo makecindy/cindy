@@ -13,7 +13,6 @@ const MANIFEST: GhostManifest = {
   version: '2.3.0',
   kind: 'chip',
   entry: 'main.js',
-  slots: ['network'],
   network: {
     hosts: ['open.feishu.cn'],
     secrets: [

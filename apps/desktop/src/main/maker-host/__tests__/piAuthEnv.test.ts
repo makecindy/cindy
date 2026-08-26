@@ -19,6 +19,7 @@ vi.mock('electron', () => ({
 vi.mock('../auth-adapters.js', () => ({
   readClaudeApiKey: () => h.gatewayKey,
   desktopCodexAuthAdapter: { getState: async () => ({ authenticated: false }) },
+  desktopClaudeAuthAdapter: { ensureSharedGlobalSkills: async () => undefined },
 }));
 vi.mock('../custom-provider-header-secrets.js', () => ({
   listCustomProvidersWithSecureHeaders: async () => [

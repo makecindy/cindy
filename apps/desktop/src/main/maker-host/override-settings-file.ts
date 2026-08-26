@@ -49,7 +49,7 @@ interface CachedState<T> extends OverrideSettingsState<T> {
  */
 export function createOverrideSettingsFile<T>(options: {
   filePath: () => string;
-  defaults: T;
+  defaults: T | (() => T);
   normalize: (raw: unknown) => T;
   mergeOverrides?: (args: {
     patch: Partial<T>;
@@ -75,7 +75,8 @@ export function createOverrideSettingsFile<T>(options: {
   /** 缓存装载时文件的 mtimeMs;null = 装载时文件不存在(默认态)。 */
   let cachedFileMtimeMs: number | null = null;
 
-  const defaults = (): T => clone(options.defaults);
+  const defaults = (): T =>
+    clone(typeof options.defaults === 'function' ? (options.defaults as () => T)() : options.defaults);
 
   /** 当前文件 mtimeMs;文件不存在/不可 stat 时 null(与"无文件"同态)。 */
   function statFileMtimeMs(): number | null {

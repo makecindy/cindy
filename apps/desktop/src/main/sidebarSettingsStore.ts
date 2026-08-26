@@ -16,8 +16,11 @@ import { isIpcError } from '../shared/ipc-errors.js';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
 import {
   normalizeSidebarPinnedOrder,
+  SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES,
   SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
   SIDEBAR_PINNED_ORDER_MAX_ENTRIES,
+  isSidebarGhostId,
+  type SidebarMainViewHiddenWriteRequest,
   type SidebarPinnedOrderMutation,
   type SidebarPinnedOrderWriteRequest,
   type SidebarLegacyRendererOwnerClaim,
@@ -33,6 +36,7 @@ import {
   ownerScopedUserDataPath,
 } from './appSessionState.js';
 import { createLogger } from './logger.js';
+import { resumeInputDeviceTaskSlots } from './input-devices/registry.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
   hasExclusiveSharedLegacyUserDataAccess,
@@ -47,9 +51,14 @@ import { isAppContentWindow } from './windowFocusClassifier.js';
 interface SidebarSettingsShape {
   pinnedOrder: string[];
   hiddenProjectKeys: string[];
+  hiddenMainViewGhostIds: string[];
 }
 
-const DEFAULTS: SidebarSettingsShape = { pinnedOrder: [], hiddenProjectKeys: [] };
+const DEFAULTS: SidebarSettingsShape = {
+  pinnedOrder: [],
+  hiddenProjectKeys: [],
+  hiddenMainViewGhostIds: [],
+};
 const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
@@ -89,11 +98,25 @@ function normalizeHiddenProjectKeys(raw: unknown): string[] {
   return normalized;
 }
 
+function normalizeHiddenMainViewGhostIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of raw) {
+    if (!isSidebarGhostId(entry) || seen.has(entry)) continue;
+    seen.add(entry);
+    normalized.push(entry);
+    if (normalized.length >= SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES) break;
+  }
+  return normalized;
+}
+
 function normalizeSettings(raw: unknown): SidebarSettingsShape {
   const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return {
     pinnedOrder: normalizeSidebarPinnedOrder(value.pinnedOrder),
     hiddenProjectKeys: normalizeHiddenProjectKeys(value.hiddenProjectKeys),
+    hiddenMainViewGhostIds: normalizeHiddenMainViewGhostIds(value.hiddenMainViewGhostIds),
   };
 }
 
@@ -195,6 +218,7 @@ export function loadSidebarSettingsSnapshot(): SidebarSettingsSnapshot {
     pinnedOrderIsAuthoritative: current.pinnedOrderIsAuthoritative,
     pinnedOrder: Array.from(current.settings.pinnedOrder),
     hiddenProjectKeys: Array.from(current.settings.hiddenProjectKeys),
+    hiddenMainViewGhostIds: Array.from(current.settings.hiddenMainViewGhostIds),
   };
 }
 
@@ -309,6 +333,13 @@ function requireProjectKey(raw: unknown): string {
   return projectKey;
 }
 
+function requireGhostId(raw: unknown): string {
+  if (!isSidebarGhostId(raw)) {
+    throwIpcError('INVALID_PARAMS', 'invalid main-view plugin id');
+  }
+  return raw;
+}
+
 function requireWriteRequest(raw: unknown): Record<string, unknown> & DataOwnerPushStamp {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !isDataOwnerPushStamp(raw)) {
     throwIpcError('INVALID_PARAMS', 'invalid sidebar owner stamp');
@@ -374,6 +405,20 @@ function broadcastHiddenProjectKeysChanged(
   }
 }
 
+function broadcastHiddenMainViewGhostIdsChanged(
+  ghostIds: readonly string[],
+  ownerStamp: DataOwnerPushStamp,
+): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isAppContentWindow(window)) continue;
+    window.webContents.send(
+      'sidebar-settings:hidden-main-view-ghost-ids-changed',
+      Array.from(ghostIds),
+      ownerStamp,
+    );
+  }
+}
+
 async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
   const request = requireWriteRequest(rawRequest);
   const mutation = requirePinnedMutation(request.mutation);
@@ -411,6 +456,7 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
   }
   if (changed) {
     broadcastPinnedOrderChanged(nextSettings.pinnedOrder, ownerStamp);
+    refreshInputDeviceTaskSlotsAfterPinnedOrderChange();
   }
   return Array.from(nextSettings.pinnedOrder);
 }
@@ -468,6 +514,57 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
     broadcastHiddenProjectKeysChanged(nextSettings.hiddenProjectKeys, ownerStamp);
   }
   return changed;
+}
+
+/** Persist one plugin main-view visibility override in Main's owner-scoped store. */
+async function setMainViewHidden(rawRequest: unknown): Promise<string[]> {
+  const request = requireWriteRequest(rawRequest);
+  const ghostId = requireGhostId(request.ghostId);
+  if (typeof request.hidden !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'invalid main-view hidden state');
+  }
+  const hidden = request.hidden;
+  assertRequestedOwner(request);
+  const scopeKey = activeOwnerScopeKey();
+  const ownerStamp: DataOwnerPushStamp = {
+    dataOwnerId: request.dataOwnerId,
+    ownerGeneration: request.ownerGeneration,
+  };
+  requireSidebarStoreAccess();
+  const store = currentStore();
+  let changed = false;
+  let nextSettings: SidebarSettingsShape;
+  try {
+    nextSettings = await enqueueWrite(scopeKey, () =>
+      store.updateAtomic((current) => {
+        requireSidebarStoreAccess({ rejectSnapshotChange: true });
+        const currentIds = current.value.hiddenMainViewGhostIds;
+        const alreadyHidden = currentIds.includes(ghostId);
+        if (alreadyHidden === hidden) return { hiddenMainViewGhostIds: currentIds };
+        if (hidden && currentIds.length >= SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES) {
+          throwIpcError('INVALID_PARAMS', 'too many hidden main-view plugins');
+        }
+        changed = true;
+        return {
+          hiddenMainViewGhostIds: hidden
+            ? [...currentIds, ghostId]
+            : currentIds.filter((entry) => entry !== ghostId),
+        };
+      }, SIDEBAR_WRITE_OPTIONS),
+    );
+    assertScopeCurrent(scopeKey);
+  } catch (err) {
+    if (isIpcError(err)) throw err;
+    if (activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', 'active account changed during sidebar mutation');
+    }
+    log.error('failed to persist hidden main-view plugins', err);
+    throwIpcError('INTERNAL', 'failed to persist sidebar settings');
+  }
+  if (changed) {
+    broadcastHiddenMainViewGhostIdsChanged(nextSettings.hiddenMainViewGhostIds, ownerStamp);
+  }
+  return Array.from(nextSettings.hiddenMainViewGhostIds);
 }
 
 type SidebarPathState = 'missing' | 'regular-file' | 'blocked';
@@ -741,6 +838,14 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   return initializeScopedSidebarSettings(scopedPath, ownerKey, legacyPath);
 }
 
+function refreshInputDeviceTaskSlotsAfterPinnedOrderChange(): void {
+  void resumeInputDeviceTaskSlots().catch((error: unknown) => {
+    log.warn('Input device task slot refresh failed after pinned-order change', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 export function registerSidebarSettingsIpc(): void {
   ipcMain.on('sidebar-settings:claim-renderer-legacy-owner-sync', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -758,6 +863,10 @@ export function registerSidebarSettingsIpc(): void {
     assertTrustedAppRendererEvent(event);
     return setProjectHidden(request as SidebarProjectHiddenWriteRequest);
   });
+  ipcMain.handle('sidebar-settings:set-main-view-hidden', (event, request) => {
+    assertTrustedAppRendererEvent(event);
+    return setMainViewHidden(request as SidebarMainViewHiddenWriteRequest);
+  });
 }
 
 export const __testing = {
@@ -765,5 +874,6 @@ export const __testing = {
   MAX_SETTINGS_BYTES,
   LEGACY_RENDERER_OWNER_MARKER_FILE,
   MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES,
+  SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES,
   pendingWriteChainCount: () => writeChains.size,
 };

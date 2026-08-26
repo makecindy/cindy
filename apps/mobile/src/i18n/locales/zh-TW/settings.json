@@ -39,6 +39,7 @@
   },
   "betaChannel": {
     "title": "Beta 測試管道",
+    "badge": "Beta",
     "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。",
     "restartHint": "Beta 測試管道需要重新啟動客戶端後才能生效，請重新啟動應用。",
     "ok": "我知道了",

@@ -251,6 +251,140 @@ describe('messageMarkdown', () => {
     ]);
   });
 
+  it('does not swallow fullwidth parentheses or CJK punctuation after a bare URL', () => {
+    expect(parseMobileMarkdownInlines(
+      '诊断已写在 https://github.com/example/app/issues/3561#issuecomment-5391602790（无 @）。',
+    )).toEqual([
+      { type: 'text', text: '诊断已写在 ' },
+      {
+        type: 'link',
+        text: 'https://github.com/example/app/issues/3561#issuecomment-5391602790',
+        url: 'https://github.com/example/app/issues/3561#issuecomment-5391602790',
+      },
+      { type: 'text', text: '（无 @）。' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path（说明）然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '（说明）然后' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path。然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '。然后' },
+    ]);
+    expect(parseMobileMarkdownInlines('见 https://en.wikipedia.org/wiki/Foo_(bar) 词条')).toEqual([
+      { type: 'text', text: '见 ' },
+      {
+        type: 'link',
+        text: 'https://en.wikipedia.org/wiki/Foo_(bar)',
+        url: 'https://en.wikipedia.org/wiki/Foo_(bar)',
+      },
+      { type: 'text', text: ' 词条' },
+    ]);
+    expect(parseMobileMarkdownInlines('见 (https://example.com/path) 收尾')).toEqual([
+      { type: 'text', text: '见 (' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: ') 收尾' },
+    ]);
+    expect(parseMobileMarkdownInlines('~https://example.com/~alice')).toEqual([
+      { type: 'text', text: '~' },
+      {
+        type: 'link',
+        text: 'https://example.com/~alice',
+        url: 'https://example.com/~alice',
+      },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://example.com/api/[id] 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://example.com/api/[id]',
+        url: 'https://example.com/api/[id]',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://子域。例子。测试 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://子域。例子。测试', url: 'https://子域。例子。测试' },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://пример。онлайн/path 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://пример。онлайн/path',
+        url: 'https://пример。онлайн/path',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://例子。测试。这是说明')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://例子。测试', url: 'https://例子。测试' },
+      { type: 'text', text: '。这是说明' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://例子。ファッション/path 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://例子。ファッション/path',
+        url: 'https://例子。ファッション/path',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com。这是说明')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com', url: 'https://example.com' },
+      { type: 'text', text: '。这是说明' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://子域。四字域名。测试 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      {
+        type: 'link',
+        text: 'https://子域。四字域名。测试',
+        url: 'https://子域。四字域名。测试',
+      },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://例子。测试。')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://例子。测试', url: 'https://例子。测试' },
+      { type: 'text', text: '。' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path・说明')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '・说明' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 http://localhost:3000。然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'http://localhost:3000', url: 'http://localhost:3000' },
+      { type: 'text', text: '。然后' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://例子。测试/path 看')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://例子。测试/path', url: 'https://例子。测试/path' },
+      { type: 'text', text: ' 看' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://example.com/路径 与 https://例子.测试/path')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://example.com/路径', url: 'https://example.com/路径' },
+      { type: 'text', text: ' 与 ' },
+      { type: 'link', text: 'https://例子.测试/path', url: 'https://例子.测试/path' },
+    ]);
+    expect(parseMobileMarkdownInlines('打开 https://example.com/ＡＢＣ 与 https://example.com/abc々def')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://example.com/ＡＢＣ', url: 'https://example.com/ＡＢＣ' },
+      { type: 'text', text: ' 与 ' },
+      { type: 'link', text: 'https://example.com/abc々def', url: 'https://example.com/abc々def' },
+    ]);
+    expect(parseMobileMarkdownInlines('看 https://example.com/path\u00A0然后')).toEqual([
+      { type: 'text', text: '看 ' },
+      { type: 'link', text: 'https://example.com/path', url: 'https://example.com/path' },
+      { type: 'text', text: '\u00A0然后' },
+    ]);
+  });
+
   it('parses common inline formatting tokens', () => {
     expect(parseMobileMarkdownInlines(
       'Use **bold**, *em*, `code`, ~~gone~~, [docs](https://example.com/docs).',

@@ -26,4 +26,10 @@ describe('resource usage renderer entry isolation', () => {
     expect(source).not.toContain('bootstrapLspModeFromMain');
     expect(source).not.toContain('bootstrapGitSafetySettingsFromMain');
   });
+
+  it('bootstraps the same theme path as other lightweight windows', () => {
+    const source = fs.readFileSync(path.join(rendererRoot, 'resource-usage-entry.tsx'), 'utf8');
+    expect(source).toContain('getInitialThemeVariant');
+    expect(source).toContain('themeService.applyTheme');
+  });
 });

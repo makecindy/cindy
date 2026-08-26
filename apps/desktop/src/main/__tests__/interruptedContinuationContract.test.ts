@@ -237,6 +237,34 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toMatch(/supportsScheduleIntervalNullClear:\s*true/);
   });
 
+  it('previews user enqueues to Agent Island before drain/sendToAgent', () => {
+    expect(registerSource).toContain('previewQueuedUserTurn: (sessionId, item) => {');
+    expect(registerSource).toContain("source: 'enqueue'");
+    expect(registerSource).toContain('item.text || item.persistedContent');
+    expect(registerSource).toContain('extractAgentIslandPromptText(content)');
+    const drainableHead = coordinatorSource.indexOf(
+      'if (this.getDrainableHead(sessionId, state) === item)',
+    );
+    const enqueuePreview = coordinatorSource.indexOf('this.deps.previewQueuedUserTurn?.(sessionId, item);');
+    const drainImmediate = coordinatorSource.indexOf("void this.drain(sessionId, 'enqueue-immediate');");
+    expect(drainableHead).toBeGreaterThan(-1);
+    expect(enqueuePreview).toBeGreaterThan(drainableHead);
+    expect(drainImmediate).toBeGreaterThan(enqueuePreview);
+    expect(coordinatorSource).toContain('!automaticOrigin && !isUiContinuationItem(item)');
+  });
+
+  it('rolls back Agent Island enqueue preview when the queued item is discarded, rejected, or blocked', () => {
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'discarded')",
+    );
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected')",
+    );
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked')",
+    );
+  });
+
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
     const userEnqueueStart = registerSource.indexOf('onUserEnqueue:');
     const userEnqueueEnd = registerSource.indexOf('onDiscardedQueuedMessage:', userEnqueueStart);
@@ -270,11 +298,12 @@ describe('interrupted continuation enqueue contract', () => {
     expect(sessionViewSource).toMatch(
       /if \(syntheticContinuationPending && sessionInterruptAcked\) \{\s*setSessionInterruptAcked\(false\);\s*\}/,
     );
-    // 恰好两处消费点(error-tail banner 与 interrupted banner 的互斥渲染条件),
-    // 多一处就要回来审视是否绕过了「抑制交给排队/在飞状态」这条契约。
+    // 恰好三处消费点(error-tail / interrupted / unread-failed-schedule banner
+    // 的互斥渲染条件),多一处就要回来审视是否绕过了「抑制交给排队/在飞状态」
+    // 这条契约。
     // 注:PR #879 加的「挂起状态落回 false 的边沿 → 重算告警红点」effect 走的是
     // 早退写法(`if (!was || syntheticContinuationPending) return;`),不消费这个
     // 否定形式,故计数不变。
-    expect(matchIndexes(sessionViewSource, /!syntheticContinuationPending/)).toHaveLength(2);
+    expect(matchIndexes(sessionViewSource, /!syntheticContinuationPending/)).toHaveLength(3);
   });
 });

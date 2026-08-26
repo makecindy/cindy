@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
@@ -48,16 +49,24 @@ const VALID_RESPONSE: ListModelsResponse = {
 
 const VALID_V3_RESPONSE: ListModelsResponse = {
   ...VALID_RESPONSE,
-  schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  schemaVersion: MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
   models: [
     {
       ...VALID_RESPONSE.models[0]!,
       perAgent: {
-        'claude-code': { supportsFastMode: false, wireProtocol: 'anthropic-messages' },
+        'claude-code': {
+          supportsFastMode: false,
+          wireProtocol: 'anthropic-messages',
+        },
         codex: { wireProtocol: 'openai-responses' },
       },
     },
   ],
+};
+
+const VALID_V4_RESPONSE: ListModelsResponse = {
+  ...VALID_V3_RESPONSE,
+  schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
 };
 
 const VALID_REGISTRY: ModelRegistry = {
@@ -136,7 +145,8 @@ describe('model access catalog contract', () => {
     const versions = [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
       [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
-      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V4_RESPONSE.models[0]!],
     ] as const;
 
     for (const [schemaVersion, model] of versions) {
@@ -146,7 +156,10 @@ describe('model access catalog contract', () => {
         [{ ...response, producerRevision: 'stale-v2' }, 'response.producerRevision'],
         [{ ...response, models: [{ ...model, family: 'example' }] }, 'response.models[0].family'],
         [
-          { ...response, models: [{ ...model, provenance: { source: 'stale-v2' } }] },
+          {
+            ...response,
+            models: [{ ...model, provenance: { source: 'stale-v2' } }],
+          },
           'response.models[0].provenance',
         ],
         [
@@ -166,7 +179,12 @@ describe('model access catalog contract', () => {
         [
           {
             ...response,
-            models: [{ ...model, tieredPricing: [{ ...tier, provenance: 'stale-v2' }] }],
+            models: [
+              {
+                ...model,
+                tieredPricing: [{ ...tier, provenance: 'stale-v2' }],
+              },
+            ],
           },
           'response.models[0].tieredPricing[0].provenance',
         ],
@@ -195,7 +213,9 @@ describe('model access catalog contract', () => {
     });
     expectReject(withDefault([]), 'response.models[0].newSessionDefault');
     expectReject(withDefault(['codex', 'codex']), 'response.models[0].newSessionDefault');
-    expect(parseListModelsResponse(withDefault(['pi']))).toMatchObject({ ok: true });
+    expect(parseListModelsResponse(withDefault(['pi']))).toMatchObject({
+      ok: true,
+    });
     expectReject(
       {
         ...VALID_RESPONSE,
@@ -216,11 +236,15 @@ describe('model access catalog contract', () => {
     for (const [schemaVersion, model] of [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
       [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
-      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V4_RESPONSE.models[0]!],
     ] as const) {
       expect(parseListModelsResponse({ schemaVersion, models: [model] }).ok).toBe(true);
       expectReject({ schemaVersion, models: [{ ...model, mode: 42 }] }, 'response.models[0].mode');
-      expectReject({ schemaVersion, models: [{ ...model, icon: '   ' }] }, 'response.models[0].icon');
+      expectReject(
+        { schemaVersion, models: [{ ...model, icon: '   ' }] },
+        'response.models[0].icon',
+      );
       expectReject({ schemaVersion, models: [{ ...model, icon: 42 }] }, 'response.models[0].icon');
       expectReject(
         {
@@ -228,6 +252,57 @@ describe('model access catalog contract', () => {
           models: [{ ...model, modalities: { input: ['text', 42], output: ['text'] } }],
         },
         'response.models[0].modalities.input',
+      );
+    }
+  });
+
+  it.each([undefined, 'responses'] as const)(
+    '仍要求 mode=%s 的可聊天模型提供 contextWindow',
+    (mode) => {
+      const { contextWindow: _contextWindow, mode: _mode, ...withoutContextWindow } =
+        VALID_V3_RESPONSE.models[0]!;
+      expectReject(
+        {
+          schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+          models: [{ ...withoutContextWindow, ...(mode === undefined ? {} : { mode }) }],
+        },
+        'response.models[0].contextWindow',
+      );
+    },
+  );
+
+  it('v4 允许媒体模型省略 contextWindow，v3 保持已发布约束', () => {
+    for (const mode of ['image_generation', 'video_generation'] as const) {
+      const mediaModel = {
+        id: `${mode}-model`,
+        name: `${mode} model`,
+        mode,
+        currency: 'CNY',
+        agents: [],
+        modalities: {
+          input: mode === 'image_generation' ? ['text'] : ['text', 'image'],
+          output: [mode === 'image_generation' ? 'image' : 'video'],
+        },
+      } as const;
+      expect(
+        parseListModelsResponse({
+          schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+          models: [mediaModel],
+        }).ok,
+      ).toBe(true);
+      expectReject(
+        {
+          schemaVersion: MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
+          models: [mediaModel],
+        },
+        'response.models[0].agents',
+      );
+      expectReject(
+        {
+          schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+          models: [{ ...mediaModel, agents: ['codex'] }],
+        },
+        'response.models[0].agents must be empty',
       );
     }
   });
@@ -242,9 +317,7 @@ describe('model access catalog contract', () => {
 
   it('accepts missing currency for legacy fallback and rejects unsupported explicit values', () => {
     const { currency: _currency, ...withoutCurrency } = VALID_RESPONSE.models[0]!;
-    expect(
-      parseListModelsResponse({ ...VALID_RESPONSE, models: [withoutCurrency] }),
-    ).toEqual({
+    expect(parseListModelsResponse({ ...VALID_RESPONSE, models: [withoutCurrency] })).toEqual({
       ok: true,
       value: { ...VALID_RESPONSE, models: [withoutCurrency] },
     });
@@ -296,7 +369,7 @@ describe('model access catalog contract', () => {
   });
 
   it('rejects unsupported schema versions and malformed nested pricing', () => {
-    expectReject({ ...VALID_RESPONSE, schemaVersion: 4 }, 'response.schemaVersion');
+    expectReject({ ...VALID_RESPONSE, schemaVersion: 5 }, 'response.schemaVersion');
     expectReject(
       {
         ...VALID_RESPONSE,
@@ -311,7 +384,7 @@ describe('model access catalog contract', () => {
     );
   });
 
-  it('accepts v3 Pi only with an explicit supported wire protocol', () => {
+  it('accepts v3 Pi with either explicit gateway wire protocol', () => {
     const piModel = {
       ...VALID_V3_RESPONSE.models[0],
       agents: ['claude-code', 'codex', 'pi'],
@@ -321,12 +394,8 @@ describe('model access catalog contract', () => {
       },
     } as const;
     expect(parseListModelsResponse({ ...VALID_V3_RESPONSE, models: [piModel] }).ok).toBe(true);
-    expectReject(
-      { ...VALID_V3_RESPONSE, models: [{ ...piModel, perAgent: {} }] },
-      'response.models[0].perAgent.claude-code.wireProtocol',
-    );
-    expectReject(
-      {
+    expect(
+      parseListModelsResponse({
         ...VALID_V3_RESPONSE,
         models: [
           {
@@ -337,8 +406,11 @@ describe('model access catalog contract', () => {
             },
           },
         ],
-      },
-      'response.models[0].perAgent.pi.wireProtocol must be openai-responses',
+      }).ok,
+    ).toBe(true);
+    expectReject(
+      { ...VALID_V3_RESPONSE, models: [{ ...piModel, perAgent: {} }] },
+      'response.models[0].perAgent.claude-code.wireProtocol',
     );
     expectReject(
       {
@@ -358,14 +430,23 @@ describe('model access catalog contract', () => {
   });
 
   it('requires complete runtime metadata in v3 without changing v2', () => {
-    const { name: _name, contextWindow: _contextWindow, ...incomplete } =
-      VALID_V3_RESPONSE.models[0]!;
+    const {
+      name: _name,
+      contextWindow: _contextWindow,
+      ...incomplete
+    } = VALID_V3_RESPONSE.models[0]!;
     expectReject(
-      { ...VALID_V3_RESPONSE, models: [{ ...incomplete, contextWindow: 200_000 }] },
+      {
+        ...VALID_V3_RESPONSE,
+        models: [{ ...incomplete, contextWindow: 200_000 }],
+      },
       'response.models[0].name',
     );
     expectReject(
-      { ...VALID_V3_RESPONSE, models: [{ ...incomplete, name: 'Example Chat Model' }] },
+      {
+        ...VALID_V3_RESPONSE,
+        models: [{ ...incomplete, name: 'Example Chat Model' }],
+      },
       'response.models[0].contextWindow',
     );
     expect(
@@ -380,7 +461,13 @@ describe('model access catalog contract', () => {
     expectReject(
       {
         ...VALID_RESPONSE,
-        models: [{ ...VALID_RESPONSE.models[0], efforts: ['low'], defaultEffort: 'high' }],
+        models: [
+          {
+            ...VALID_RESPONSE.models[0],
+            efforts: ['low'],
+            defaultEffort: 'high',
+          },
+        ],
       },
       'response.models[0].defaultEffort',
     );
@@ -447,7 +534,10 @@ function expectRegistryReject(value: unknown, path: string): void {
 describe('public model registry contract', () => {
   it('round-trips canonical metadata, provider routes, and sourced reference prices', () => {
     const wire = JSON.parse(JSON.stringify(VALID_REGISTRY));
-    expect(parseModelRegistry(wire)).toEqual({ ok: true, value: VALID_REGISTRY });
+    expect(parseModelRegistry(wire)).toEqual({
+      ok: true,
+      value: VALID_REGISTRY,
+    });
   });
 
   it('continues to parse legacy v1 registries, while v1 rejects the v2-only field', () => {
@@ -497,7 +587,11 @@ describe('public model registry contract', () => {
     const wire = {
       ...VALID_REGISTRY,
       models: [
-        { ...entry, routes: [{ ...route, agents: ['claude-code'] }], newSessionDefault: ['codex'] },
+        {
+          ...entry,
+          routes: [{ ...route, agents: ['claude-code'] }],
+          newSessionDefault: ['codex'],
+        },
       ],
     };
     expectRegistryReject(
@@ -596,7 +690,10 @@ describe('public model registry contract', () => {
   it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
     expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 3 }, 'modelRegistry.schemaVersion');
     expectRegistryReject(
-      { ...VALID_REGISTRY, models: [VALID_REGISTRY.models[0], VALID_REGISTRY.models[0]] },
+      {
+        ...VALID_REGISTRY,
+        models: [VALID_REGISTRY.models[0], VALID_REGISTRY.models[0]],
+      },
       'modelRegistry.models[1].id',
     );
     expectRegistryReject(
@@ -638,7 +735,11 @@ describe('public model registry contract', () => {
               {
                 ...baseRoute,
                 referencePrices: [
-                  { ...basePrice, minInputTokens: 200_000, maxInputTokens: 200_000 },
+                  {
+                    ...basePrice,
+                    minInputTokens: 200_000,
+                    maxInputTokens: 200_000,
+                  },
                 ],
               },
             ],
@@ -659,7 +760,10 @@ describe('public model registry contract', () => {
                 referencePrices: [
                   {
                     ...basePrice,
-                    source: { ...basePrice.source, url: 'http://example.com/pricing' },
+                    source: {
+                      ...basePrice.source,
+                      url: 'http://example.com/pricing',
+                    },
                   },
                 ],
               },
@@ -786,7 +890,10 @@ describe('public model registry contract', () => {
     };
     const orderedModels = [VALID_REGISTRY.models[0]!, secondModel];
     expect(modelRegistryCanonicalJson({ ...VALID_REGISTRY, models: orderedModels })).not.toBe(
-      modelRegistryCanonicalJson({ ...VALID_REGISTRY, models: [...orderedModels].reverse() }),
+      modelRegistryCanonicalJson({
+        ...VALID_REGISTRY,
+        models: [...orderedModels].reverse(),
+      }),
     );
   });
 

@@ -97,7 +97,6 @@ function ghost(id: string, opts: { enabled?: boolean; position?: 'left' | 'tab' 
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['panel'],
     panel: {
       html: 'panel.html',
       ...(opts.position !== undefined ? { position: opts.position } : {}),
@@ -363,7 +362,7 @@ describe('setDetached', () => {
 });
 
 describe('native minimize', () => {
-  it('routes native minimize to the renderer bubble action', () => {
+  it('routes native minimize to the renderer panel-minimize action', () => {
     const h = makeHarness(new Set(['a']));
     h.controller.setDetached('a', true);
     const win = h.created[0].win;

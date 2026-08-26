@@ -324,6 +324,11 @@ export interface ChatBridgeCapabilities {
   googleThoughtSignaturePlaceholder?: boolean;
   /** 缺少上游 usage 时仍生成 Responses 要求的完整零值 usage 结构。默认开启。 */
   zeroUsageOnMissing?: boolean;
+  /**
+   * Ollama/Qwen Chat 模板要求 system 只能出现在消息列表开头。
+   * `coalesce-leading` 把所有 system/developer 按原顺序合并成唯一的首条 system。
+   */
+  systemMessagePolicy?: 'preserve' | 'coalesce-leading';
 }
 
 export interface ChatBridgeLogger {

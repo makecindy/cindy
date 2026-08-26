@@ -128,6 +128,7 @@ describe('active-catalog discovered augment', () => {
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
     expect(xai?.agents).toContain('pi');
     expect(xai?.routing.pi?.upstream).toBe('https://api.x.ai/v1');
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBe('openai-responses');
     expect(xai?.models.pi?.map((model) => model.id)).toEqual([
       'grok-4.3',
       'grok-4.5',
@@ -135,6 +136,18 @@ describe('active-catalog discovered augment', () => {
       'grok-build-0.1',
     ]);
     expect(xai?.models.pi).not.toEqual(xai?.models['claude-code']);
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.3')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+    });
   });
 
   it('xAI account snapshot is authoritative and projects canonical ids per harness', () => {
@@ -150,6 +163,90 @@ describe('active-catalog discovered augment', () => {
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
       contextWindow: 500_000,
       supportsImageInput: true,
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('keeps official Grok 4.6 xhigh when SuperGrok discovery omits the new ladder rung', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([
+      { id: 'xai/grok-4.6', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+    ]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    // Claude/Codex 静态梯子留给 #2601；Pi 目录已带官方 xhigh。
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('does not union the official Grok 4.6 ladder onto other SuperGrok models', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([
+      { id: 'xai/grok-4.5', efforts: ['low'], defaultEffort: 'low' },
+      { id: 'xai/grok-4.6', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+    ]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.5')).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('SuperGrok discovery 下发降序档位时目录吐规范升序(Grok 4.5 滑轴反向回归)', () => {
+    // 降序数组此前只有 Grok 4.6 经 mergeKnownXaiEfforts 顺带归一,其余条目原样透传 ——
+    // 滑杆按下标画轴,4.5 的轴整条反向(Chris 2026-08-19 实测)。合并层现在对所有 xAI
+    // 条目统一 canonicalEffortOrder;本用例模拟旧降序磁盘缓存直进合并层的形态。
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([
+      { id: 'xai/grok-4.5', efforts: ['high', 'medium', 'low'], defaultEffort: 'high' },
+    ]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.5')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('keeps an in-list SuperGrok discovery default for non-Grok-4.6 models', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([
+      { id: 'xai/grok-4.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'low' },
+      { id: 'xai/grok-4.6', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+    ]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'low',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.5')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'low',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
     });
   });
 

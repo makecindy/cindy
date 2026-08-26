@@ -88,6 +88,10 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
   WorktreeBadge: () => null,
 }));
 
+vi.mock('@/contexts/WorktreeContext', () => ({
+  useWorktreeForSession: () => null,
+}));
+
 vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));

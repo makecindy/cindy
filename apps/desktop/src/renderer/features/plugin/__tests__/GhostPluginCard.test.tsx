@@ -1,7 +1,8 @@
 /**
  * Regression coverage for installed Plugin card actions (redesigned card:
  * whole-card opens detail, kind-specific primary button, manage entry),
- * market card actions, and the legacy recovery notice.
+ * market card actions, the legacy recovery notice, and market success navigation
+ * (first install opens detail; update stays put).
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -28,18 +29,18 @@ vi.mock('@/contexts/AuthContext', () => ({
 
 import {
   __installedPluginLayoutForTests,
-  diffMarketUpdatePermissionItems,
   GhostPluginCard,
   LegacyGhostRecoveryNotice,
-  marketUpdateAllowsPermissionExpansion,
   MarketPluginCard,
+  MyPublishesSectionVisibilityGate,
+  SHOW_MY_PUBLISHES_SECTION,
+  shouldOpenInstalledDetailAfterMarketSuccess,
 } from '../GhostPluginPage';
 import {
   __ingestGhostBadgeForTest,
   __resetGhostUnreadForTest,
 } from '@/cindy-brain/ghostUnreadStore';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
-import type { InstalledGhost } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 const {
@@ -50,55 +51,113 @@ const {
   visibleInstalledPluginItems,
 } = __installedPluginLayoutForTests;
 
-describe('diffMarketUpdatePermissionItems', () => {
-  it.each(['legacy-unapproved', 'invalid'] as const)(
-    'reviews every target permission for a %s install',
-    (approvalState) => {
-      const manifest = {
-        schemaVersion: 2 as const,
-        id: 'legacy-plugin',
-        name: 'Legacy Plugin',
-        description: 'Legacy approval regression fixture',
-        author: 'Cindy',
-        version: '1.0.0',
-        kind: 'chip' as const,
-        entry: 'main.js',
-        slots: ['notify'] as ['notify'],
-      };
-      const installed = {
-        manifest,
-        dir: 'C:\\plugins\\legacy-plugin',
-        enabled: false,
-        approval: { state: approvalState },
-      };
-      const next = {
-        ...manifest,
-        version: '2.0.0',
-        slots: ['notify', 'fs'] as ['notify', 'fs'],
-      };
+describe('MyPublishesSectionVisibilityGate', () => {
+  const labels = {
+    overviewLabel: 'Overview',
+    publishesLabel: 'My publishes',
+    tabsAriaLabel: 'Plugin page sections',
+  };
 
-      const diff = diffMarketUpdatePermissionItems(installed, next);
-      expect(diff.added.map((item) => item.key)).toEqual(expect.arrayContaining(['notify', 'fs']));
-      expect(diff.removed).toEqual([]);
-      expect(diff.unchanged).toEqual([]);
-    },
-  );
+  it('shows both secondary tabs and switches their selected panel when enabled', () => {
+    render(
+      <MyPublishesSectionVisibilityGate
+        visible
+        {...labels}
+        publishes={<div data-testid="publishes-content" />}
+      >
+        <div data-testid="overview-content" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    const overviewTab = screen.getByRole('tab', { name: 'Overview' });
+    const publishesTab = screen.getByRole('tab', { name: 'My publishes' });
+    const overviewPanel = document.getElementById(overviewTab.getAttribute('aria-controls') ?? '');
+    const publishesPanel = document.getElementById(
+      publishesTab.getAttribute('aria-controls') ?? '',
+    );
+
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(overviewTab.getAttribute('aria-selected')).toBe('true');
+    expect(publishesTab.getAttribute('aria-selected')).toBe('false');
+    expect(overviewPanel?.hidden).toBe(false);
+    expect(publishesPanel?.hidden).toBe(true);
+
+    fireEvent.click(publishesTab);
+
+    // This excludes a decorative tab row that never switches the visible content.
+    expect(overviewTab.getAttribute('aria-selected')).toBe('false');
+    expect(publishesTab.getAttribute('aria-selected')).toBe('true');
+    expect(overviewPanel?.hidden).toBe(true);
+    expect(publishesPanel?.hidden).toBe(false);
+  });
+
+  it('removes the whole secondary tab row and publishing effects when disabled', () => {
+    const publishesRender = vi.fn();
+    function PublishesProbe() {
+      publishesRender();
+      return <div data-testid="publishes-content-disabled" />;
+    }
+
+    const { container } = render(
+      <MyPublishesSectionVisibilityGate
+        visible={SHOW_MY_PUBLISHES_SECTION}
+        {...labels}
+        publishes={<PublishesProbe />}
+      >
+        <section className="mt-6" data-testid="installed-content-disabled" />
+        <section className="mt-10" data-testid="recommended-content-disabled" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    // This excludes hiding only the publishing panel while leaving a one-tab row or wrapper noise.
+    expect(SHOW_MY_PUBLISHES_SECTION).toBe(false);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    const installed = screen.getByTestId('installed-content-disabled');
+    const recommended = screen.getByTestId('recommended-content-disabled');
+    expect(Array.from(container.children)).toEqual([installed, recommended]);
+    expect(installed.className).toBe('mt-6');
+    expect(recommended.className).toBe('mt-10');
+    expect(publishesRender).not.toHaveBeenCalled();
+  });
+
+  it('keeps overview content mounted and in place while viewing publishes', () => {
+    render(
+      <MyPublishesSectionVisibilityGate
+        visible
+        {...labels}
+        publishes={<div data-testid="publishes-content-persistent" />}
+      >
+        <div data-testid="overview-content-persistent" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    const overviewNode = screen.getByTestId('overview-content-persistent');
+    const publishesNode = screen.getByTestId('publishes-content-persistent');
+    const overviewPanel = overviewNode.parentElement;
+    const publishesPanel = publishesNode.parentElement;
+
+    expect(overviewPanel?.nextElementSibling).toBe(publishesPanel);
+    fireEvent.click(screen.getByRole('tab', { name: 'My publishes' }));
+
+    // The same DOM node and panel order exclude conditional unmounting or reordering the catalog.
+    expect(screen.getByTestId('overview-content-persistent')).toBe(overviewNode);
+    expect(overviewPanel?.nextElementSibling).toBe(publishesPanel);
+    expect(overviewPanel?.hidden).toBe(true);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(screen.getByTestId('overview-content-persistent')).toBe(overviewNode);
+    expect(overviewPanel?.hidden).toBe(false);
+  });
 });
 
-describe('marketUpdateAllowsPermissionExpansion', () => {
-  const installed = (approvalState: 'approved' | 'legacy-unapproved' | 'invalid') =>
-    ({ approval: { state: approvalState } }) as InstalledGhost;
+describe('shouldOpenInstalledDetailAfterMarketSuccess', () => {
+  it('opens the installed detail after a first-time market install', () => {
+    expect(shouldOpenInstalledDetailAfterMarketSuccess(false)).toBe(true);
+  });
 
-  it.each(['legacy-unapproved', 'invalid'] as const)(
-    'allows the full reapproval of a no-permission %s install',
-    (approvalState) => {
-      expect(marketUpdateAllowsPermissionExpansion(installed(approvalState), 0)).toBe(true);
-    },
-  );
-
-  it('only allows approved installs when the reviewed diff adds permissions', () => {
-    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 0)).toBe(false);
-    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 1)).toBe(true);
+  it('stays on the current page after an update or replacement', () => {
+    expect(shouldOpenInstalledDetailAfterMarketSuccess(true)).toBe(false);
   });
 });
 
@@ -112,6 +171,8 @@ const commandPlugin: GhostPluginListItem = {
   approvalState: 'approved',
   builtin: false,
   tabPanel: false,
+  hasMainView: false,
+  mainViewTitle: null,
   hostCapability: null,
   oauthAuthorizationExpired: false,
 };
@@ -135,6 +196,14 @@ const simulatorPlugin: GhostPluginListItem = {
   id: 'ios-simulator',
   name: 'iOS Simulator',
   hostCapability: 'ios-simulator',
+};
+
+const mainViewPlugin: GhostPluginListItem = {
+  ...panelPlugin,
+  id: 'workspace',
+  name: 'Workspace',
+  hasMainView: true,
+  mainViewTitle: 'Workspace',
 };
 
 const marketPlugin: PluginMarketItem = {
@@ -240,6 +309,32 @@ describe('GhostPluginCard', () => {
     expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
   });
 
+  it('keeps the tab-panel action when the plugin also declares main-view', () => {
+    const onPrimary = vi.fn();
+    render(<GhostPluginCard item={mainViewPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
+  });
+
+  it('does not add a primary action for a main-view-only tool plugin', () => {
+    render(
+      <GhostPluginCard
+        item={{
+          ...toolPlugin,
+          hasMainView: true,
+          mainViewTitle: 'Workspace',
+        }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.page.agentInvoked')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
+  });
+
   it('routes the manage icon to detail without firing the primary action', () => {
     const onPrimary = vi.fn();
     const onManage = vi.fn();
@@ -304,6 +399,27 @@ describe('GhostPluginCard', () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
+  });
+
+  it('replaces the update pill with a spinner while this card is pending', () => {
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        updateVersion="1.1.0"
+        updateBusy
+        updatePending
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    const update = screen.getByRole('button', {
+      name: 'settings.ghosts.page.updateAria',
+    });
+    expect(update.getAttribute('aria-busy')).toBe('true');
+    expect(update.querySelector('.animate-spin')).toBeTruthy();
+    expect(update.textContent).toBe('');
   });
 
   it('sends a tool-only plugin to manage and renders no primary button', () => {
@@ -603,6 +719,26 @@ describe('MarketPluginCard', () => {
     expect((busyCardBody as HTMLButtonElement).disabled).toBe(true);
     expect(busyCardBody.className).toContain('cursor-wait');
     expect(busyCardBody.className).not.toContain('cursor-not-allowed');
+  });
+
+  it('replaces the install label with a spinner while this card is pending', () => {
+    render(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy
+        pending
+        onSelect={vi.fn()}
+        onInstall={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const install = screen.getByRole('button', {
+      name: 'settings.ghosts.page.installAria',
+    });
+    expect(install.getAttribute('aria-busy')).toBe('true');
+    expect(install.querySelector('.animate-spin')).toBeTruthy();
+    expect(install.textContent).toBe('');
   });
 });
 

@@ -64,6 +64,10 @@ function Harness() {
   );
 }
 
+function confirmPublicContent() {
+  fireEvent.click(screen.getByRole('checkbox', { name: 'issueAgent.confirm.privacyConfirm' }));
+}
+
 afterEach(() => {
   cleanup();
   clearIssueConfirmDraftsForSession('session-a');
@@ -197,6 +201,7 @@ describe('IssueConfirmCard submission identity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'issueAgent.confirm.identityGithubUser' }));
     expect(screen.getByText('issueAgent.confirm.identityGithubUserHint')).not.toBeNull();
     expect(screen.queryByLabelText('issueAgent.confirm.publicNameLabel')).toBeNull();
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -239,6 +244,7 @@ describe('IssueConfirmCard submission identity', () => {
     expect(screen.getByText('issueAgent.confirm.identityGithubUserHint')).not.toBeNull();
     expect(screen.queryByLabelText('issueAgent.confirm.publicNameLabel')).toBeNull();
 
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith({
       confirmed: true,
@@ -258,6 +264,7 @@ describe('IssueConfirmCard submission identity', () => {
     const input = screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement;
     expect(input.value).toBe('当前昵称');
     fireEvent.change(input, { target: { value: '  公开昵称  ' } });
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -281,6 +288,7 @@ describe('IssueConfirmCard submission identity', () => {
     expect(
       (screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement).value,
     ).toBe('issueAgent.confirm.anonymous');
+    confirmPublicContent();
     fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -305,5 +313,32 @@ describe('IssueConfirmCard submission identity', () => {
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     expect((input as HTMLInputElement).type).toBe('text');
     expect((input as HTMLInputElement).maxLength).toBe(100);
+  });
+
+  it('requires explicit public-content confirmation and resets it after edits', () => {
+    const onRespond = vi.fn();
+    render(
+      <IssueConfirmCard sessionId="session-a" pending={platformPending} onRespond={onRespond} />,
+    );
+
+    const submit = screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ });
+    const confirmation = screen.getByRole('checkbox', {
+      name: 'issueAgent.confirm.privacyConfirm',
+    });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect((confirmation as HTMLInputElement).checked).toBe(false);
+
+    confirmPublicContent();
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('issueAgent.confirm.bodyLabel'), {
+      target: { value: '重新编辑后的正文' },
+    });
+    expect((confirmation as HTMLInputElement).checked).toBe(false);
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+
+    confirmPublicContent();
+    fireEvent.click(submit);
+    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ body: '重新编辑后的正文' }));
   });
 });

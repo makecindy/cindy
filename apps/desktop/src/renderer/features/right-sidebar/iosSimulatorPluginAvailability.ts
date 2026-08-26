@@ -10,12 +10,61 @@ import type { TabState } from './types';
  */
 export function isIOSSimulatorPluginAvailable(ghosts: readonly InstalledGhost[]): boolean {
   return ghosts.some(
-    ({ enabled, manifest }) => enabled === true && manifest.slots.includes('ios-simulator'),
+    ({ enabled, manifest }) => enabled === true && manifest.iosSimulator === true,
   );
 }
 
 function isHiddenSimulatorTab(tab: TabState, pluginAvailable: boolean): boolean {
   return tab.kind === 'ios-simulator' && !pluginAvailable;
+}
+
+export interface RightSidebarTabAvailability {
+  iosSimulatorAvailable: boolean;
+  subagentsAvailable: boolean;
+}
+
+function isUnavailableTab(tab: TabState, availability: RightSidebarTabAvailability): boolean {
+  return (
+    isHiddenSimulatorTab(tab, availability.iosSimulatorAvailable) ||
+    (tab.kind === 'subagents' && !availability.subagentsAvailable)
+  );
+}
+
+/** Preserve unavailable persisted tabs while projecting only product-eligible surfaces. */
+export function projectAvailableTabs(
+  tabs: readonly TabState[],
+  activeTabId: string | null,
+  availability: RightSidebarTabAvailability,
+): { tabs: TabState[]; activeTabId: string | null } {
+  const visibleTabs = tabs.filter((tab) => !isUnavailableTab(tab, availability));
+  const visibleActiveTabId = visibleTabs.some((tab) => tab.id === activeTabId)
+    ? activeTabId
+    : (visibleTabs[0]?.id ?? null);
+  return { tabs: visibleTabs, activeTabId: visibleActiveTabId };
+}
+
+/** Merge visible ordering into the full persisted list without moving hidden slots. */
+export function mergeAvailableTabOrder(
+  allTabs: readonly TabState[],
+  orderedVisibleIds: readonly string[],
+  availability: RightSidebarTabAvailability,
+): string[] {
+  const visibleTabs = allTabs.filter((tab) => !isUnavailableTab(tab, availability));
+  const expectedIds = new Set(visibleTabs.map((tab) => tab.id));
+  if (
+    orderedVisibleIds.length !== visibleTabs.length ||
+    new Set(orderedVisibleIds).size !== orderedVisibleIds.length ||
+    orderedVisibleIds.some((id) => !expectedIds.has(id))
+  ) {
+    return allTabs.map((tab) => tab.id);
+  }
+
+  let visibleIndex = 0;
+  return allTabs.map((tab) =>
+    isUnavailableTab(tab, availability)
+      ? tab.id
+      : (orderedVisibleIds[visibleIndex++] ?? tab.id),
+  );
 }
 
 /**
@@ -28,13 +77,10 @@ export function projectIOSSimulatorTabs(
   activeTabId: string | null,
   pluginAvailable: boolean,
 ): { tabs: TabState[]; activeTabId: string | null } {
-  const visibleTabs = pluginAvailable
-    ? [...tabs]
-    : tabs.filter((tab) => !isHiddenSimulatorTab(tab, pluginAvailable));
-  const visibleActiveTabId = visibleTabs.some((tab) => tab.id === activeTabId)
-    ? activeTabId
-    : (visibleTabs[0]?.id ?? null);
-  return { tabs: visibleTabs, activeTabId: visibleActiveTabId };
+  return projectAvailableTabs(tabs, activeTabId, {
+    iosSimulatorAvailable: pluginAvailable,
+    subagentsAvailable: true,
+  });
 }
 
 /**
@@ -47,22 +93,8 @@ export function mergeIOSSimulatorVisibleTabOrder(
   orderedVisibleIds: readonly string[],
   pluginAvailable: boolean,
 ): string[] {
-  if (pluginAvailable) return [...orderedVisibleIds];
-
-  const visibleTabs = allTabs.filter((tab) => !isHiddenSimulatorTab(tab, pluginAvailable));
-  const expectedIds = new Set(visibleTabs.map((tab) => tab.id));
-  if (
-    orderedVisibleIds.length !== visibleTabs.length ||
-    new Set(orderedVisibleIds).size !== orderedVisibleIds.length ||
-    orderedVisibleIds.some((id) => !expectedIds.has(id))
-  ) {
-    return allTabs.map((tab) => tab.id);
-  }
-
-  let visibleIndex = 0;
-  return allTabs.map((tab) =>
-    isHiddenSimulatorTab(tab, pluginAvailable)
-      ? tab.id
-      : (orderedVisibleIds[visibleIndex++] ?? tab.id),
-  );
+  return mergeAvailableTabOrder(allTabs, orderedVisibleIds, {
+    iosSimulatorAvailable: pluginAvailable,
+    subagentsAvailable: true,
+  });
 }

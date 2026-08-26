@@ -49,6 +49,16 @@ describe('encodeCatalogPin / decodeCatalogPin', () => {
     });
   });
 
+  it('编码包含分隔符的运行期供应商 ID', () => {
+    const pin = encodeCatalogPin('custom:xai', 'codex', 'grok:4');
+    expect(pin).toBe('cat:custom%3Axai:codex:grok:4');
+    expect(decodeCatalogPin(pin)).toEqual({
+      providerId: 'custom:xai',
+      agentKind: 'codex',
+      model: 'grok:4',
+    });
+  });
+
   it('非目录钉 / 残缺形态 / 不可路由 agent 一律 null', () => {
     for (const bad of [
       '',
@@ -89,12 +99,13 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options).toEqual([
       {
         id: 'cat:xd:codex:codex/gpt-5.5',
-        label: 'GPT 5.5 折扣 · Cindy Gateway',
+        label: 'Codex · GPT 5.5 折扣 · Cindy Gateway',
         group: 'Cindy Gateway',
         providerId: 'xd',
         agentKind: 'codex',
         modelId: 'codex/gpt-5.5',
         modelName: 'GPT 5.5 折扣',
+        agentSuffix: 'Codex',
         budget: true,
         subscription: false,
         routing: {
@@ -104,12 +115,13 @@ describe('buildTextOneshotPinOptions', () => {
       },
       {
         id: 'cat:openai:codex:gpt-5.5',
-        label: 'GPT 5.5 · OpenAI',
+        label: 'Codex · GPT 5.5 · OpenAI',
         group: 'OpenAI',
         providerId: 'openai',
         agentKind: 'codex',
         modelId: 'gpt-5.5',
         modelName: 'GPT 5.5',
+        agentSuffix: 'Codex',
         budget: false,
         subscription: true,
         routing: { codex: { upstream: 'https://api.example.com', authStrategy: 'oauth-token' } },
@@ -126,6 +138,30 @@ describe('buildTextOneshotPinOptions', () => {
       { disabledProviders: { openai: true }, disabledModels: { 'xd:gpt-a': true } },
     );
     expect(options.map((o) => o.id)).toEqual(['cat:xd:codex:gpt-b']);
+  });
+
+  it('过滤目录视图中已停用的模型并透传默认可见性', () => {
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        provider({
+          id: 'xd',
+          models: {
+            codex: [
+              chat('disabled', { disabled: true }),
+              chat('retired', { status: 'retired' }),
+              chat('hidden-by-default', { defaultEnabled: false }),
+            ],
+          },
+        }),
+      ),
+      undefined,
+    );
+
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({
+      id: 'cat:xd:codex:hidden-by-default',
+      defaultEnabled: false,
+    });
   });
 
   it('非聊天模型过滤:mode 非聊天能态、mode 缺省但 group 是已知非聊天分类', () => {
@@ -247,7 +283,7 @@ describe('buildTextOneshotPinOptions', () => {
     ]);
   });
 
-  it('内置供应商同一模型跨 agent 折叠成一行(agent 不影响出线);自定义保留两行补后缀', () => {
+  it('每个 Agent + Model 路由独立成行并始终标注 Agent', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
         provider({
@@ -273,11 +309,37 @@ describe('buildTextOneshotPinOptions', () => {
       undefined,
     );
     expect(options.map((o) => [o.id, o.label])).toEqual([
-      // 内置:折叠成 codex 行,无后缀。
-      ['cat:xd:codex:gpt-5.5', 'GPT 5.5 · GW'],
-      // 自定义:两条真路由,都补 agent 后缀。
-      ['cat:dual:codex:gpt-5.5', 'GPT 5.5 · Dual · Codex'],
-      ['cat:dual:claude-code:gpt-5.5', 'GPT 5.5 · Dual · Claude Code'],
+      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · GW'],
+      ['cat:xd:claude-code:gpt-5.5', 'Claude Code · GPT 5.5 · GW'],
+      ['cat:dual:codex:gpt-5.5', 'Codex · GPT 5.5 · Dual'],
+      ['cat:dual:claude-code:gpt-5.5', 'Claude Code · GPT 5.5 · Dual'],
+    ]);
+    expect(options.map((o) => o.agentSuffix)).toEqual([
+      'Codex',
+      'Claude Code',
+      'Codex',
+      'Claude Code',
+    ]);
+  });
+
+  it('同一供应商下完全相同的 Agent + Model 路由只显示一次', () => {
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        provider({
+          id: 'xd',
+          models: {
+            codex: [
+              chat('gpt-5.5', { name: 'GPT 5.5' }),
+              chat('gpt-5.5', { name: 'GPT 5.5 duplicate' }),
+            ],
+          },
+        }),
+      ),
+      undefined,
+    );
+
+    expect(options.map((o) => [o.id, o.label])).toEqual([
+      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · xd'],
     ]);
   });
 
@@ -395,5 +457,19 @@ describe('resolveOneshotCatalogModel', () => {
     expect(resolveOneshotCatalogModel(catalog, undefined, 'no-such-model')).toBeNull();
     expect(resolveOneshotCatalogModel(catalog, undefined, '   ')).toBeNull();
     expect(resolveOneshotCatalogModel(catalog, { disabledProviders: { xd: true } }, 'gpt-a')).toBeNull();
+  });
+
+  it('目录视图中已停用的模型不能作为声明路由', () => {
+    const catalog = catalogOf(
+      provider({ id: 'xd', models: { codex: [chat('gpt-disabled', { disabled: true })] } }),
+    );
+    expect(resolveOneshotCatalogModel(catalog, undefined, 'gpt-disabled')).toBeNull();
+  });
+
+  it('目录中已退役的模型不能作为声明路由', () => {
+    const catalog = catalogOf(
+      provider({ id: 'xd', models: { codex: [chat('gpt-retired', { status: 'retired' })] } }),
+    );
+    expect(resolveOneshotCatalogModel(catalog, undefined, 'gpt-retired')).toBeNull();
   });
 });

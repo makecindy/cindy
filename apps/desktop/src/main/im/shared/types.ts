@@ -338,6 +338,21 @@ export interface ImUiTextPack {
       title: (header: string) => string;
       noOptionsHint: string;
       resolved: (optionLabel: string) => string;
+      /**
+       * 多题/多选打勾卡文案 — 仅支持卡片原地更新(updateInteractiveCard)
+       * 的渠道提供(目前飞书), 缺省渠道不提供: ask 保持 v1 单问卡
+       * (只渲染第一问 / multiSelect 降级单选)。
+       */
+      multi?: {
+        /** 卡片标题 — 一次问了多道题, 不再借用第一问的 header。 */
+        title: string;
+        /** 多选题的问题行后缀。 */
+        multiSelectHint: string;
+        /** 提交按钮文案。 */
+        submitLabel: string;
+        /** 已选选项的按钮前缀(打勾标记)。 */
+        selectedMark: string;
+      };
     };
     plan: {
       title: string;

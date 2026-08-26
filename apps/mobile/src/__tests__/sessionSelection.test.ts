@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   isMobileSessionBulkActionAvailable,
   mobileSessionBulkActionButtonLabel,
@@ -11,6 +12,10 @@ import {
 } from '@/session/sessionSelection';
 import type { RemoteSession } from '@/session/types';
 import type { RemoteSessionSection } from '@/session/sessionList';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -92,7 +97,7 @@ describe('mobile session selection', () => {
 
     expect(summary.candidates.map((item) => item.id)).toEqual(['active']);
     expect(summary.skippedCount).toBe(2);
-    expect(summary.description).toContain('将跳过 2 个不适用的任务');
+    expect(summary.description).toContain('跳过 2 个不适用的任务');
     expect(isMobileSessionBulkActionAvailable(summary)).toBe(true);
     expect(mobileSessionBulkActionButtonLabel(summary)).toBe('归档 1');
     expect(mobileSessionBulkPatch('archive')).toEqual({ status: 'archived', pinnedAt: null });
@@ -119,7 +124,7 @@ describe('mobile session selection', () => {
 
     expect(summary.candidates.map((item) => item.id)).toEqual(['archived']);
     expect(summary.skippedCount).toBe(2);
-    expect(summary.description).toContain('将跳过 2 个不适用的任务');
+    expect(summary.description).toContain('跳过 2 个不适用的任务');
     expect(mobileSessionBulkPatch('restore')).toEqual({ status: 'active' });
   });
 

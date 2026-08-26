@@ -28,6 +28,7 @@ const DYNAMIC_PROVIDER_IDS = ['anthropic', 'openai', 'xd'] as const;
 
 /** xAI 随包 fallback 元数据清单。 */
 const EXPECTED_XAI_IDS = [
+  'xai/grok-4.6',
   'xai/grok-4.5',
   'xai/grok-4.3',
   'xai/grok-build-0.1',
@@ -144,11 +145,17 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect((xai.models.codex ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
     expect((xai.models.pi ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_PI_IDS);
     expect(xai.models.pi?.find((m) => m.id === 'grok-4.6')).toMatchObject({
+      piApi: 'openai-responses',
       contextWindow: 500_000,
       maxOutput: 500_000,
       supportsImageInput: true,
-      efforts: [],
-      defaultEffort: null,
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+    expect(xai.models['claude-code']?.find((m) => m.id === 'xai/grok-4.6')).toMatchObject({
+      contextWindow: 500_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
     });
   });
 
@@ -172,6 +179,12 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
         expect(Array.isArray(p.models[a]), `${p.id} models[${a}]`).toBe(true);
       }
     }
+  });
+
+  it('declares native Responses custom-tool support on each built-in Codex Responses route', () => {
+    expect(provider('openai').routing.codex?.supportsResponsesCustomTools).toBe(true);
+    expect(provider('xd').routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(provider('xai').routing.codex?.supportsResponsesCustomTools).toBe(false);
   });
 
   it('declares access separately from model names', () => {

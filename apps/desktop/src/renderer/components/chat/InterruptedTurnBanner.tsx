@@ -30,10 +30,11 @@
  * --error-fg / --error-fg-strong(与 ErrorMessageCard 同组),不硬编码 Tailwind red。
  */
 
-import { useState } from 'react';
-import { CirclePause, Play, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { AlertCircle, CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { ErrorBanner } from './ErrorBanner';
 
 export function InterruptedTurnBanner({
@@ -90,7 +91,9 @@ export function InterruptedTurnBanner({
         title={t('chat.interruptedBanner.continueTitle')}
       >
         <Play size={12} />
-        {sending ? t('chat.interruptedBanner.continuing') : t('chat.interruptedBanner.continueAction')}
+        {sending
+          ? t('chat.interruptedBanner.continuing')
+          : t('chat.interruptedBanner.continueAction')}
       </button>
       <button
         type="button"
@@ -99,6 +102,49 @@ export function InterruptedTurnBanner({
         title={t('chat.interruptedBanner.dismissTitle')}
       >
         <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+/** 定时任务失败/中断未读:只有「标为已读」,没有继续。继续走已有的 error/中断横幅。 */
+export function UnreadFailedScheduleBanner({
+  onDismiss,
+  className,
+  style,
+}: {
+  onDismiss: () => void;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div
+      className={cn(
+        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
+        'border bg-[var(--error-bg)] border-[var(--error-border)]',
+        className,
+      )}
+      style={style}
+      data-testid="unread-failed-schedule-banner"
+      data-banner-kind="unread-failed-schedule"
+    >
+      <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
+      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
+        {t('chat.unreadFailedScheduleBanner.text')}
+      </span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className={cn(
+          'shrink-0 text-xs font-medium',
+          'text-[var(--error-fg-strong)]',
+          'hover:opacity-70 transition-opacity',
+        )}
+        title={t('chat.unreadFailedScheduleBanner.markAsReadTitle')}
+      >
+        {t('chat.unreadFailedScheduleBanner.markAsRead')}
       </button>
     </div>
   );
@@ -150,6 +196,11 @@ export function ErrorTailErrorBanner({
   className?: string;
   style?: React.CSSProperties;
 }) {
+  const usageLimitRecovery = useMemo(
+    () => extractUsageLimitRecoveryHint({ message: errorText }),
+    [errorText],
+  );
+
   return (
     <ErrorBanner
       error={errorText}
@@ -158,6 +209,7 @@ export function ErrorTailErrorBanner({
       onRetry={() => void onContinue()}
       onCancel={onDismiss}
       onSilentStopContinue={onSilentStopContinue}
+      usageLimitRecovery={usageLimitRecovery}
       agentKind={agentKind}
       remoteHostId={remoteHostId}
       deviceLinkDeviceId={deviceLinkDeviceId}

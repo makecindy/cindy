@@ -89,6 +89,33 @@ describe('Session.send vision bridge hook', () => {
     expect(sent[0].content).toEqual([{ type: 'text', text: '[desc] the image shows a red button' }]);
   });
 
+  it('preserves Host-managed image references after the bridge replaces image blocks', async () => {
+    const managedUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const { handle, sent } = makeRecordingHandle();
+    const hook: VisionBridgeHook = async () => ({
+      applied: true,
+      message: {
+        type: 'user',
+        content: [{ type: 'text', text: '[desc] the image shows a red button' }],
+      },
+    });
+    const session = makeSession(handle, hook);
+
+    await session.send({
+      type: 'user',
+      content: [{ type: 'image', path: '/tmp/ui.png', managedUrl }],
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].content).toEqual([
+      { type: 'text', text: '[desc] the image shows a red button' },
+      {
+        type: 'text',
+        text: expect.stringContaining(JSON.stringify({ image: 1, uri: managedUrl })),
+      },
+    ]);
+  });
+
   it('passes through unchanged when applied=false with note (note not blocking)', async () => {
     const { handle, sent } = makeRecordingHandle();
     const hook: VisionBridgeHook = async (msg) => ({ applied: false, message: msg, note: 'vision backend down' });
@@ -275,6 +302,56 @@ describe('Session.steer vision bridge hook', () => {
     // 视觉桥把 image block 替换为描述文本后交给 handle.steer。
     expect(steered).toHaveLength(1);
     expect(steered[0].content).toEqual([{ type: 'text', text: '[desc] the image shows a chat list' }]);
+  });
+
+  it('preserves Host-managed image references when steering through the vision bridge', async () => {
+    const managedUrl = 'xdt-image://vision-steer/screenshot.png';
+    const steered: UserMessage[] = [];
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'claude-code',
+      model: 'deepseek-v4',
+      async send() {},
+      async steer(msg: UserMessage) {
+        steered.push(msg);
+      },
+      async abort() {},
+      async close() {},
+      async *events() {},
+      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      setInteractionResolver: () => undefined,
+      isTurnRunning: () => true,
+    } as unknown as AgentSessionHandle;
+    const hook: VisionBridgeHook = async () => ({
+      applied: true,
+      message: {
+        type: 'user',
+        content: [{ type: 'text', text: '[desc] bridged screenshot' }],
+      },
+    });
+    const session = new Session({
+      id: 'session-vb-steer-reference',
+      agentKind: 'claude-code',
+      workDir: path.join('workspace', 'repo'),
+      handle,
+      capabilities: { sameTurnSteer: { supported: true } } as never,
+      logger: createLogger() as never,
+      visionBridge: hook,
+    });
+
+    await session.steer({
+      type: 'user',
+      content: [{ type: 'image', path: '/tmp/a.png', managedUrl }],
+    });
+
+    expect(steered).toHaveLength(1);
+    expect(steered[0].content).toEqual([
+      { type: 'text', text: '[desc] bridged screenshot' },
+      {
+        type: 'text',
+        text: expect.stringContaining(JSON.stringify({ image: 1, uri: managedUrl })),
+      },
+    ]);
   });
 
   it('does not steer when the turn ends during async vision conversion', async () => {

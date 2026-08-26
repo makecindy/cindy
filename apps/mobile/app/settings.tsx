@@ -32,6 +32,7 @@ import {
   subscribeAnalyticsConsent,
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
+import { hasPrivacyConsent } from '@/update/updateConsentGate';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -70,6 +71,7 @@ import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   refreshMobileVoiceDictionary,
+  subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import {
   buildMobileVoiceDictionaryEntryViews,
@@ -121,8 +123,7 @@ export default function SettingsScreen() {
   const { locale, setLocale } = useLocale();
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
-  const deviceLink = useDeviceLink();
-  const { lastPresenceSnapshot, status } = deviceLink;
+  const { lastPresenceSnapshot, status, invoke } = useDeviceLink();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
@@ -146,6 +147,7 @@ export default function SettingsScreen() {
   // beta 测试渠道(设备级)开关。真相在 betaChannelStore;hydrate 完成前禁用,避免对陈旧值取反。
   const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
   const [betaBusy, setBetaBusy] = useState(false);
+  const showBetaBadge = betaReady && betaEnabled;
   const updateCheckInFlightRef = useRef(false);
   // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。
   const [dictionaryScreenOpen, setDictionaryScreenOpen] = useState(false);
@@ -323,6 +325,10 @@ export default function SettingsScreen() {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
+        // OTA 检查会携带 eas-client-id,须经隐私同意闸门(企业 SSO 豁免协议门,可能未
+        // 同意;且检查进行中登出会撤销同意)。整包 /latest 为匿名请求,不在此列。动态
+        // 判定而非调用瞬间快照,manifest 请求前与资源下载前各问一次。
+        isConsented: hasPrivacyConsent,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
@@ -722,7 +728,7 @@ export default function SettingsScreen() {
     void Promise.all(
       online.map((host) => refreshMobileVoiceDictionary(
         host.deviceId,
-        () => deviceLink.invoke<MobileVoiceDictionarySnapshotResult>(
+        () => invoke<MobileVoiceDictionarySnapshotResult>(
           host.deviceId,
           DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
           [],
@@ -734,16 +740,36 @@ export default function SettingsScreen() {
       // 缓存写在模块里,组件靠这个计数触发重渲染。
       setDictionaryRevision((value) => value + 1);
     });
-  }, [desktopDevices, deviceLink]);
+  }, [desktopDevices, invoke]);
 
+  // 页面打开后再由 effect 读取缓存和刷新。设备清单本身是异步 REST 请求，不能只
+  // 捕获点击瞬间的 desktopDevices=[]，否则清单稍后到达时历史缓存永远不会 hydrate。
   const openVoiceDictionary = useCallback(() => {
     setDictionaryScreenOpen(true);
-    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。
+  }, []);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen || desktopDevices.length === 0) return;
+    let cancelled = false;
+    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。这个 effect
+    // 同时依赖 desktopDevices，因此设备清单在页面打开后才到达时也会走同一条路径。
     void Promise.all(desktopDevices.map((host) => hydrateMobileVoiceDictionary(host.deviceId)))
-      .then(() => setDictionaryRevision((value) => value + 1))
+      .then(() => {
+        if (!cancelled) setDictionaryRevision((value) => value + 1);
+      })
       .catch(() => undefined);
     refreshVoiceDictionary();
-  }, [desktopDevices, refreshVoiceDictionary]);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopDevices, dictionaryScreenOpen, refreshVoiceDictionary]);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen) return;
+    return subscribeMobileVoiceDictionaryCache(() => {
+      setDictionaryRevision((value) => value + 1);
+    });
+  }, [dictionaryScreenOpen]);
 
   // dictionaryRevision 只作为依赖存在:缓存是模块级的,刷新完成后靠它触发重算。
   const dictionaryEntries = useMemo(
@@ -833,7 +859,14 @@ export default function SettingsScreen() {
             <View key="version" style={styles.versionRow} testID="settings.version">
               <View style={styles.versionTexts}>
                 <Text style={styles.rowLabel}>{t('settings.version.currentLabel')}</Text>
-                <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
+                <View style={styles.versionValueRow}>
+                  <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
+                  {showBetaBadge ? (
+                    <View style={styles.betaChannelBadge} testID="settings.betaChannelBadge">
+                      <Text style={styles.betaChannelBadgeText}>{t('settings.betaChannel.badge')}</Text>
+                    </View>
+                  ) : null}
+                </View>
                 <Text style={styles.rowDetail} numberOfLines={1} testID="settings.otaVersion">{t('settings.version.otaVersion', { version: otaVersion })}</Text>
                 {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x),不是在线电脑的实时版本;仅自建线且已注入时显示 */}
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
@@ -1594,7 +1627,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   versionTexts: { flex: 1, gap: 2, minWidth: 0 },
-  versionValue: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  versionValueRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  versionValue: { color: colors.textPrimary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  betaChannelBadge: {
+    backgroundColor: colors.betaChannelBadgeBackground,
+    borderRadius: radius.pill,
+    flexShrink: 0,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 1,
+  },
+  betaChannelBadgeText: {
+    color: colors.betaChannelBadgeForeground,
+    fontSize: typeScale.micro,
+    fontWeight: fontWeight.semibold,
+  },
   versionButton: { flexShrink: 0, minWidth: 84 },
   // —— 可复制行 ——
   copyRow: {

@@ -160,11 +160,16 @@ export type OAuthProviderDescriptor =
  */
 export interface RoutingDescriptor {
   /**
-   * 上游 wire protocol。缺省按 agent 保持历史语义：Claude Code = anthropic-messages，
-   * Codex = openai-responses。Codex 的 openai-chat / anthropic-messages 会分别进入
-   * 对应的本地 Responses bridge。
+   * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
+   * Codex 的 openai-chat / anthropic-messages 会分别进入对应的本地 Responses bridge。
    */
   wireProtocol?: ProviderWireProtocol;
+  /**
+   * 此 Codex Responses 上游是否原生接受 `type: "custom"` 工具。
+   * `false` 时 Desktop 可把选定的 custom tool 对称转换为普通 function tool；
+   * 未声明表示没有足够能力信息，调用方不得按模型名猜测。
+   */
+  supportsResponsesCustomTools?: boolean;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /**
@@ -329,6 +334,8 @@ export interface CatalogModel {
   effortDisplayNames?: Partial<Record<Effort, string>>;
   /** 默认 effort；null = 不支持。 */
   defaultEffort: Effort | null;
+  /** 思考只有开/关两档时，选择器显示开关而不是档位列表。 */
+  thinkingToggle?: boolean;
   /**
    * 该模型在**该 (provider, agent) 下**是否支持 Fast Mode —— Fast 能力的**唯一真相**。
    *
@@ -421,6 +428,15 @@ export interface CatalogModel {
   disabled?: boolean;
 }
 
+/** Provider 自己执行的媒体模型；modalities 是能力判断的唯一依据。 */
+export interface ProviderMediaModel {
+  id: string;
+  name: string;
+  modalities?: { input: string[]; output: string[] };
+  officialDocs?: string;
+  disabled?: boolean;
+}
+
 /** 供应商定义。 */
 export interface Provider {
   /** 'anthropic' | 'openai' | 'xd' | 未来自定义 id。 */
@@ -461,7 +477,7 @@ export interface Provider {
    * `disabled` 是视图层字段(与 CatalogModel.disabled 同语义):buildRegistry 按用户
    * 停用 override 烘焙,设置页据此渲染专属媒体条目的停用状态;目录数据本身不携带。
    */
-  imageModels?: { id: string; name: string; disabled?: boolean }[];
+  imageModels?: ProviderMediaModel[];
   /**
    * 图像能力的默认选型(与 imageModels 配套;值必须是 imageModels 里的 id):
    * - standard:未指定任何偏好时的默认模型(意识 cindy 槽"默认"档的真身);
@@ -476,7 +492,7 @@ export interface Provider {
    * 消费方为意识 cindy 槽(白名单 + 详情页下拉)。可选,additions-only。
    * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
    */
-  videoModels?: { id: string; name: string; disabled?: boolean }[];
+  videoModels?: ProviderMediaModel[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
@@ -524,15 +540,17 @@ export interface ProviderRuntimeModelConfig {
   defaultEnabled?: boolean;
   /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
   supportsImageInput?: boolean;
-  /** Pi 自定义模型是否支持 reasoning；缺省 / false 均按不支持处理。 */
+  /** 该 runtime 模型是否支持 reasoning；缺省表示未声明（由投影层决定 fallback）。 */
   reasoning?: boolean;
   /**
-   * Pi 自定义模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
-   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
+   * 该 runtime 模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
+   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的端点。
    */
   reasoningEfforts?: PiReasoningEffort[];
-  /** Pi 自定义模型的厂商推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
+  /** 该 runtime 模型的推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
   reasoningDefaultEffort?: PiReasoningEffort;
+  /** 思考只有开/关时走开关 UI。 */
+  thinkingToggle?: boolean;
 }
 
 /**

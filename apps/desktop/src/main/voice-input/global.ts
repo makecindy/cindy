@@ -53,6 +53,14 @@ import {
 import { voiceInputOverlayPositionStore } from './overlayPositionStore.js';
 import { voiceInputDataStore } from './VoiceInputDataStore.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
+import {
+  resolveNativeVoiceActivation,
+  type NativeVoiceActivationSource,
+} from './nativeVoiceActivation.js';
+import {
+  assertHelperCommandSucceeded,
+  waitForSpawnedProcess,
+} from './macHelperProcess.js';
 
 const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
@@ -91,32 +99,29 @@ function hasActiveShortcutRecordingSession(): boolean {
 }
 
 /**
- * 上一次 native 激活的 start 有没有真的投递到下游。
+ * Which native source currently owns the overlay start/end pair.
  *
- * listener 的 triggered / end 是它自己的内部时序，与这里的投递层抑制无关：被上面那条守卫挡掉的
- * start，用户按住超过阈值再松手时照样会给出一条 end（endActiveTriggerIfNeeded 补发的那条同理）。
- * 而 end 在下游就是「停止并提交」—— 一个正在跑的 inline 语音输入会话会被这条**没有配对 start**
- * 的 end 直接提交掉，而用户只是按了一下本该被吞掉的键。
- *
- * 所以 end 的投递条件是「配对的 start 投递过没有」。这也覆盖了录制框已经关掉、end 才姗姗来迟的
- * 情形 —— 那时录制守卫早就不生效了，只有配对关系还算数。
+ * Hardware and the system shortcut share this overlay. The pairing is per
+ * source so one side's start or end cannot submit or drop the other.
  */
-let nativeActivationStartDelivered = false;
+let nativeActivationOwner: NativeVoiceActivationSource | null = null;
 
-function handleNativeGlobalShortcutPhase(phase: GlobalVoiceInputShortcutPhase): void {
-  if (phase !== 'end' && hasActiveShortcutRecordingSession()) {
-    // 挡掉 start 就等于这次激活在下游不存在，它后面那条配对的 end 也必须一起挡掉。
-    if (phase === 'start') nativeActivationStartDelivered = false;
-    log.debug('ignoring native global shortcut activation while recording', { phase });
+function handleNativeGlobalShortcutPhase(
+  phase: GlobalVoiceInputShortcutPhase,
+  source: NativeVoiceActivationSource = 'shortcut',
+): void {
+  const next = resolveNativeVoiceActivation(
+    nativeActivationOwner,
+    phase,
+    source,
+    hasActiveShortcutRecordingSession(),
+  );
+  nativeActivationOwner = next.owner;
+  if (!next.deliver) {
+    log.debug('ignoring native voice activation', { phase, source });
     return;
   }
-  if (phase === 'end' && !nativeActivationStartDelivered) {
-    log.debug('ignoring native global shortcut end without a delivered start');
-    return;
-  }
-  // tap 没有配对的 end；end 到这里就算消费掉了。两种都把配对状态清干净。
-  nativeActivationStartDelivered = phase === 'start';
-  log.debug('native global shortcut triggered', { phase });
+  log.debug('native global shortcut triggered', { phase, source });
   if (phase === 'tap') {
     handleGlobalVoiceInputShortcutTap();
   } else if (phase === 'start') {
@@ -161,6 +166,11 @@ const windowsFunctionKeyShortcutListener = new WindowsFunctionKeyShortcutListene
 export function releaseActiveGlobalVoiceInputShortcut(): void {
   macModifierShortcutListener.releaseActiveTrigger();
   windowsFunctionKeyShortcutListener.releaseActiveTrigger();
+}
+
+/** Drive the existing global overlay from hardware, using the same phases as the system shortcut. */
+export function triggerGlobalVoiceInputFromHardware(phase: GlobalVoiceInputShortcutPhase): void {
+  handleNativeGlobalShortcutPhase(phase, 'hardware');
 }
 
 type VoiceInputGlobalResult =
@@ -3661,6 +3671,27 @@ async function runMacTextInsertionHelper(
       `Invalid helper response: ${error instanceof Error ? error.message : String(error)}. Stdout bytes: ${stdout.length}.`,
     );
   }
+}
+
+export async function runMacTextInsertionHelperCommand(
+  args: string[],
+  options?: { input?: string; timeoutMs?: number },
+): Promise<MacTextInsertionHelperResult> {
+  const result = await runMacTextInsertionHelper(args, options);
+  assertHelperCommandSucceeded(result);
+  return result;
+}
+
+export async function spawnMacTextInsertionHelper(args: string[]) {
+  const helperPath = await resolveMacTextInsertionHelperPath();
+  return waitForSpawnedProcess(
+    spawn(helperPath, args, { stdio: ['pipe', 'ignore', 'pipe'] }),
+    (error) => {
+      log.warn('macOS text insertion helper failed after spawn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 /** 取 stdout 的最后一行 JSON 作为命令结果（前面的行是流式进度事件）。 */

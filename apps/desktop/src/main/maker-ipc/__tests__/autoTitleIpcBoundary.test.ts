@@ -64,6 +64,9 @@ vi.mock('../../maker-host/title-one-shot.js', () => ({
   generateTitleViaProvider: h.generateTitle,
   generateTitleViaProviderResult: h.generateTitleResult,
 }));
+vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
+  readAuxiliaryModelSelection: vi.fn(() => null),
+}));
 vi.mock('../../messagePersistBroadcaster.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));

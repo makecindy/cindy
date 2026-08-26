@@ -38,6 +38,7 @@ import {
   materializeQueuedOssAttachmentsDeferred,
   normalizeUserMessage,
 } from '../normalizeAttachments.js';
+import * as imageCacheStore from '../../imageCacheStore.js';
 import * as cindyMediaBlobStore from '../../cindy-media/blobStore.js';
 import { ingestMedia } from '../../cindy-media/ingest.js';
 import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.js';
@@ -60,6 +61,80 @@ afterEach(async () => {
 });
 
 describe('inline attachment temporary files', () => {
+  it('keeps a resolved xdt-image URL as the Host-managed image identity', async () => {
+    const imageUrl = 'xdt-image://managed-reference/source.png';
+    const absPath = path.join(tempRoot.value, 'source.png');
+    vi.mocked(imageCacheStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+    });
+
+    const normalized = await normalizeUserMessage('managed-reference', {
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: imageUrl,
+        managedUrl: 'https://renderer.example/forged.png',
+      }],
+    });
+
+    expect(normalized).toEqual({
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: absPath,
+        managedUrl: imageUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+      }],
+    });
+  });
+
+  it('keeps a resolved cindy-media URL as the Host-managed image identity', async () => {
+    const hash = '9'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'blob.png');
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+
+    const normalized = await normalizeUserMessage('managed-media-reference', {
+      type: 'user',
+      content: [{ type: 'image', path: mediaUrl }],
+    });
+
+    expect(normalized).toEqual({
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: absPath,
+        managedUrl: mediaUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+      }],
+    });
+  });
+
+  it('drops a renderer-supplied managed identity from an ordinary image path', async () => {
+    const imagePath = path.join(tempRoot.value, 'ordinary.png');
+
+    const normalized = await normalizeUserMessage('untrusted-managed-reference', {
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: imagePath,
+        managedUrl: `cindy-media://blobs/${'f'.repeat(64)}.png`,
+      }],
+    });
+
+    expect(normalized).toEqual({
+      type: 'user',
+      content: [{ type: 'image', path: imagePath }],
+    });
+  });
+
   it('marks directly materialized OSS images as desktop-host attachments', async () => {
     const hash = 'a'.repeat(64);
     const mediaUrl = `cindy-media://blobs/${hash}.png`;
@@ -101,7 +176,7 @@ describe('inline attachment temporary files', () => {
       type: 'user',
       content: [{
         type: 'image',
-        path: absPath,
+        path: mediaUrl,
         mimeType: 'image/png',
         pathOrigin: 'desktop-host',
         base64: undefined,

@@ -76,6 +76,7 @@ describe('model visibility legacy Renderer owner claim', () => {
     expect(claimLegacyModelVisibilityOwner()).toEqual({
       dataOwnerId: 'owner-a',
       ownerGeneration: 1,
+      canWriteOwnerScoped: true,
       claimed: true,
       claimedByOtherOwner: false,
       canInitialize: true,
@@ -90,6 +91,7 @@ describe('model visibility legacy Renderer owner claim', () => {
     expect(claimLegacyModelVisibilityOwner()).toEqual({
       dataOwnerId: 'owner-b',
       ownerGeneration: 2,
+      canWriteOwnerScoped: true,
       claimed: false,
       claimedByOtherOwner: true,
       canInitialize: false,
@@ -117,14 +119,23 @@ describe('model visibility legacy Renderer owner claim', () => {
   it('does not claim from signed-out, boundary-pending, or shared access', () => {
     harness.mode = 'signed-out';
     harness.ownerId = null;
-    expect(claimLegacyModelVisibilityOwner().claimed).toBe(false);
+    expect(claimLegacyModelVisibilityOwner()).toMatchObject({
+      canWriteOwnerScoped: false,
+      claimed: false,
+    });
     harness.mode = 'cloud';
     harness.ownerId = 'owner-a';
     harness.boundaryPending = true;
-    expect(claimLegacyModelVisibilityOwner().claimed).toBe(false);
+    expect(claimLegacyModelVisibilityOwner()).toMatchObject({
+      canWriteOwnerScoped: false,
+      claimed: false,
+    });
     harness.boundaryPending = false;
     harness.exclusive = false;
-    expect(claimLegacyModelVisibilityOwner().claimed).toBe(false);
+    expect(claimLegacyModelVisibilityOwner()).toMatchObject({
+      canWriteOwnerScoped: true,
+      claimed: false,
+    });
     expect(fs.existsSync(path.join(harness.root, markerName))).toBe(false);
   });
 
@@ -142,6 +153,7 @@ describe('model visibility legacy Renderer owner claim', () => {
     expect(claimLegacyModelVisibilityOwner().canInitialize).toBe(true);
     harness.exclusive = false;
     expect(claimLegacyModelVisibilityOwner()).toMatchObject({
+      canWriteOwnerScoped: true,
       claimed: true,
       claimedByOtherOwner: false,
       canInitialize: false,
@@ -151,6 +163,7 @@ describe('model visibility legacy Renderer owner claim', () => {
   it('fails closed instead of replacing a malformed marker', () => {
     fs.writeFileSync(path.join(harness.root, markerName), '{broken', 'utf-8');
     expect(claimLegacyModelVisibilityOwner()).toMatchObject({
+      canWriteOwnerScoped: true,
       claimed: false,
       claimedByOtherOwner: false,
       canInitialize: false,

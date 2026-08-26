@@ -27,6 +27,7 @@ import {
   GraduationCap,
   KeyRound,
   LayoutTemplate,
+  Library,
   MapPin,
   Megaphone,
   MessageCircleQuestion,
@@ -45,6 +46,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
+import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostErrandPrefs } from '@/cindy-brain/GhostErrandPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -58,6 +60,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,
@@ -81,11 +84,14 @@ interface GhostPluginDetailViewProps {
   onToggle: (enabled: boolean) => void;
   /** 主动作:面板型「使用」/ 指令或 Host 能力型「对话」;纯工具型不渲染主按钮。 */
   onUse: () => void;
+  /** main-view 入口偏好只影响侧边栏，不改变插件启用态或路由资格。 */
+  mainViewSidebarVisible?: boolean;
+  onMainViewSidebarVisibleChange?: (visible: boolean) => void;
   /** 头部更新 CTA:市场有新版本时走市场更新确认流。 */
   onUpdate: () => void;
   /**
-   * 缺少批准状态时的恢复入口(重新走一次完整权限确认)。可选:仅插件页宿主注入;
-   * 未注入时按钮不出现,门控见下方 `needsReapproval && !detail.builtin && onReapprove`。
+   * 安装记录缺失或损坏时的恢复入口。可选:仅插件页宿主注入；未注入时按钮不出现，
+   * 门控见下方 `needsReapproval && !detail.builtin && onReapprove`。
    */
   onReapprove?: () => void;
   /** ⋮ 菜单的兜底路径:从本地 .cindy 文件更新。 */
@@ -107,6 +113,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   tool: Wrench,
   command: Terminal,
   panel: PanelRight,
+  'main-view': AppWindow,
   code: FileCode2,
   subscribe: Radio,
   card: LayoutTemplate,
@@ -114,6 +121,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   notify: Megaphone,
   confirm: MessageCircleQuestion,
   fs: FilePen,
+  library: Library,
   'session-context': MapPin,
   pick: FolderOpen,
   preview: AppWindow,
@@ -154,6 +162,8 @@ export function GhostPluginDetailView({
   onBack,
   onToggle,
   onUse,
+  mainViewSidebarVisible = true,
+  onMainViewSidebarVisibleChange,
   onUpdate,
   onReapprove,
   onUpdateFromFile,
@@ -169,7 +179,7 @@ export function GhostPluginDetailView({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
-  // 未批准的安装不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
+  // 安装记录不完整时不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
   // 看起来只是"被关掉了"),再喂 main 改版的 primaryAction/primaryEnabled。
   const needsReapproval = detail.approvalState !== 'approved';
   const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
@@ -180,7 +190,8 @@ export function GhostPluginDetailView({
       primaryAction === 'capability' ||
       (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
-  const hasConfiguration = detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
+  const hasConfiguration =
+    detail.hasMainView || detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
   /**
    * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
@@ -289,6 +300,12 @@ export function GhostPluginDetailView({
                   type="button"
                   onClick={onUpdate}
                   disabled={updateBusy}
+                  aria-label={
+                    updateVersion === detail.version
+                      ? t('settings.ghosts.market.update')
+                      : t('settings.ghosts.market.updateTo', { version: updateVersion })
+                  }
+                  aria-busy={updateBusy || undefined}
                   className={cn(
                     'inline-flex h-10 items-center justify-center gap-1.5 rounded-full px-5 text-13 font-medium',
                     'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -297,10 +314,16 @@ export function GhostPluginDetailView({
                     'disabled:cursor-wait disabled:opacity-60 disabled:active:scale-100',
                   )}
                 >
-                  <ArrowUp size={14} aria-hidden="true" />
-                  {updateVersion === detail.version
-                    ? t('settings.ghosts.market.update')
-                    : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                  {updateBusy ? (
+                    <Spinner size={14} />
+                  ) : (
+                    <>
+                      <ArrowUp size={14} aria-hidden="true" />
+                      {updateVersion === detail.version
+                        ? t('settings.ghosts.market.update')
+                        : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                    </>
+                  )}
                 </button>
               ) : null}
               {primaryAction !== 'manage' ? (
@@ -332,12 +355,13 @@ export function GhostPluginDetailView({
               {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
               <button
                 type="button"
+                role="switch"
                 onClick={() => {
                   // 未批准的安装不可切换启用(点了 Main 也会拒);与 updateBusy 同级门控。
                   if (!toggleDisabled && !needsReapproval) onToggle(!enabled);
                 }}
                 disabled={toggleDisabled || needsReapproval}
-                aria-pressed={enabled}
+                aria-checked={enabled}
                 aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
                 className={cn(
                   'flex shrink-0 items-center gap-2 rounded-full py-1 pl-3 pr-1 transition-colors duration-150',
@@ -357,13 +381,24 @@ export function GhostPluginDetailView({
                       : 'settings.ghosts.detail.disabledLabel',
                   )}
                 </span>
-                <Switch
-                  checked={enabled}
-                  disabled={toggleDisabled || needsReapproval}
+                <span
                   aria-hidden="true"
-                  tabIndex={-1}
-                  className="pointer-events-none"
-                />
+                  className={cn(
+                    'inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors',
+                    enabled
+                      ? 'bg-[var(--switch-track-on)]'
+                      : 'bg-[var(--switch-track-off)]',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'block h-4 w-4 rounded-full ring-0 transition-transform',
+                      enabled
+                        ? 'translate-x-4 bg-background'
+                        : 'translate-x-0 bg-[var(--switch-thumb-off)]',
+                    )}
+                  />
+                </span>
               </button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -440,13 +475,7 @@ export function GhostPluginDetailView({
           </div>
 
           {needsReapproval ? (
-            <div
-              className={cn(
-                'mt-5 rounded-xl px-4 py-3.5',
-                DETAIL_SURFACE_CLASS,
-              )}
-              role="status"
-            >
+            <div className={cn('mt-5 rounded-xl px-4 py-3.5', DETAIL_SURFACE_CLASS)} role="status">
               <p className="text-13 font-medium text-[var(--text-primary)]">
                 {t('settings.ghosts.reapproval.noticeTitle')}
               </p>
@@ -470,6 +499,35 @@ export function GhostPluginDetailView({
               title={t('settings.ghosts.detail.configurationTitle')}
             />
             <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-3')}>
+              {detail.hasMainView ? (
+                <div
+                  className={cn(
+                    DETAIL_SURFACE_CLASS,
+                    'flex min-h-20 items-center gap-3 rounded-xl px-5 py-4',
+                  )}
+                >
+                  <AppWindow
+                    size={18}
+                    className="shrink-0 text-[var(--text-tertiary)]"
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
+                      {t('settings.ghosts.detail.sidebarEntryTitle')}
+                    </p>
+                    <p className="mt-0.5 text-13 leading-5 text-[var(--text-secondary)]">
+                      {t('settings.ghosts.detail.sidebarEntryDescription', {
+                        title: detail.mainViewTitle ?? detail.name,
+                      })}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={mainViewSidebarVisible}
+                    onCheckedChange={onMainViewSidebarVisibleChange}
+                    aria-label={t('settings.ghosts.detail.showInSidebar')}
+                  />
+                </div>
+              ) : null}
               {detail.hasSettingsUi ? (
                 ghost ? (
                   <>
@@ -520,6 +578,8 @@ export function GhostPluginDetailView({
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
+
+        <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} />
 
         <DetailsSection detail={detail} panelStatus={panelStatus} />
       </article>
@@ -745,7 +805,9 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
 function PermissionDetailRow({ item }: { item: GhostPermissionItem }) {
   const { t } = useTranslation();
   const Icon = permissionItemIcon(item);
-  const hostDescription = item.detailKey ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs) : null;
+  const hostDescription = item.detailKey
+    ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs)
+    : null;
   return (
     <div className="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
       <Icon

@@ -99,6 +99,11 @@ function tail(value: string, maxBytes = 32 * 1024): string {
 const PACKAGE_RESOLVED_ON_LINE = /\bPackage\.resolved\b/i;
 const PACKAGE_RESOLVED_UNUSABLE_ON_LINE =
   /\b(missing|does not exist|couldn't be opened|could not be opened|unable to read|no such file|unable to load the resolved file)\b/i;
+const PACKAGE_RESOLVED_REQUIRED_DIAGNOSTIC =
+  /\ba resolved file is required when automatic dependency resolution is disabled and should be placed at .*?\bPackage\.resolved\b/i;
+const RESOLVED_FILE_PIN = "-onlyUsePackageVersionsFromResolvedFile";
+const PRIMARY_APPLICATION_PRODUCT_TYPE = "com.apple.product-type.application";
+const XCRESULT_LEGACY_OBJECT_REQUIRED = /--legacy flag is required/i;
 
 /**
  * Retry the resolved-file pin only when one diagnostic line names
@@ -110,11 +115,22 @@ function isMissingPackageResolvedDiagnostic(
   result: IOSSimulatorCommandResult,
 ): boolean {
   const output = `${result.stdout}\n${result.stderr}`;
-  return output.split(/\r?\n/).some(
-    (line) =>
-      PACKAGE_RESOLVED_ON_LINE.test(line) &&
-      PACKAGE_RESOLVED_UNUSABLE_ON_LINE.test(line),
-  );
+  if (
+    output
+      .split(/\r?\n/)
+      .some(
+        (line) =>
+          PACKAGE_RESOLVED_ON_LINE.test(line) &&
+          PACKAGE_RESOLVED_UNUSABLE_ON_LINE.test(line),
+      )
+  ) {
+    return true;
+  }
+  // Xcode 26.5 uses this wording for every xcodebuild action, including
+  // `-list` and `-showBuildSettings`. Normalize whitespace so a wrapped
+  // diagnostic remains one logical record without broadening the fallback to
+  // unrelated failures that merely mention Package.resolved.
+  return PACKAGE_RESOLVED_REQUIRED_DIAGNOSTIC.test(output.replace(/\s+/g, " "));
 }
 
 function commandLogTail(
@@ -164,24 +180,36 @@ function entryBuildSettings(entry: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Pick the build settings of the target that produces the installable `.app`.
- * `-showBuildSettings -json` emits one entry per target; a scheme with app +
- * extension/helper targets would otherwise pre-flight against the wrong
- * target's ARCHS. Returns null when no `.app` target is identifiable.
+ * Pick the build settings of the primary installable application target.
+ * App Clips and Watch apps also use `.app` wrappers, so PRODUCT_TYPE is the
+ * authoritative discriminator when Xcode provides it. The wrapper-only path
+ * is retained for older/synthetic output that omits PRODUCT_TYPE entirely.
  */
-function appTargetBuildSettings(parsed: unknown): Record<string, unknown> | null {
+function primaryApplicationBuildSettings(
+  parsed: unknown,
+): Record<string, unknown> | null {
   if (!Array.isArray(parsed) || parsed.length === 0) return null;
-  for (const entry of parsed) {
+  const entries = parsed.flatMap((entry) => {
     const settings = entryBuildSettings(entry);
-    if (settings) {
-      const wrapper = settings.WRAPPER_NAME;
-      if (typeof wrapper === "string" && wrapper.endsWith(".app")) return settings;
-    }
+    return settings ? [settings] : [];
+  });
+  const typedEntries = entries.filter(
+    (settings) => typeof settings.PRODUCT_TYPE === "string",
+  );
+  if (typedEntries.length > 0) {
+    const primaryApplications = typedEntries.filter(
+      (settings) => settings.PRODUCT_TYPE === PRIMARY_APPLICATION_PRODUCT_TYPE,
+    );
+    return primaryApplications.length === 1 ? primaryApplications[0]! : null;
   }
-  // No `.app` target could be identified (missing/unevaluated WRAPPER_NAME).
-  // Do NOT fall back to the first entry — it may be a framework/extension/test
-  // bundle whose ARCHS differs from the app. Skip the preflight instead.
-  return null;
+  const legacyAppTargets = entries.filter((settings) => {
+    const wrapper = settings.WRAPPER_NAME;
+    return typeof wrapper === "string" && wrapper.endsWith(".app");
+  });
+  // No unique primary target could be identified. Do NOT guess: the first app
+  // may be a helper whose ARCHS differs from the installable product. The
+  // actual build/artifact validation remains authoritative.
+  return legacyAppTargets.length === 1 ? legacyAppTargets[0]! : null;
 }
 
 /**
@@ -193,14 +221,16 @@ function appTargetBuildSettings(parsed: unknown): Record<string, unknown> | null
  * (test bundles, independent frameworks). Returns `null` when the output cannot
  * be trusted.
  */
-function effectiveArchitectures(showBuildSettingsJson: string): string[] | null {
+function effectiveArchitectures(
+  showBuildSettingsJson: string,
+): string[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(showBuildSettingsJson);
   } catch {
     return null;
   }
-  const settings = appTargetBuildSettings(parsed);
+  const settings = primaryApplicationBuildSettings(parsed);
   if (!settings) return null;
   const archs = String(settings.ARCHS ?? "")
     .split(/\s+/)
@@ -216,7 +246,7 @@ function effectiveArchitectures(showBuildSettingsJson: string): string[] | null 
 
 async function throwIfBuildCancelled(
   signal?: AbortSignal,
-  resultBundlePath?: string,
+  resultBundlePath?: string | null,
 ): Promise<void> {
   if (!signal?.aborted) return;
   if (resultBundlePath) {
@@ -433,9 +463,48 @@ export class IOSSimulatorProjectBuilder {
 
     const containerFlag =
       project.kind === "xcode-workspace" ? "-workspace" : "-project";
-    const list = await this.#runner.run(
-      "xcodebuild",
-      ["-list", "-json", containerFlag, project.containerPath!],
+    const clonedSourcePackagesArgs = input.clonedSourcePackagesDirPath
+      ? ["-clonedSourcePackagesDirPath", input.clonedSourcePackagesDirPath]
+      : [];
+    let useResolvedFilePin = true;
+    const runXcodeWithResolvedFilePolicy = async (
+      args: readonly string[],
+      options: Parameters<IOSSimulatorCommandRunner["run"]>[2],
+      cancellationResultBundlePath?: string | null,
+    ): Promise<{
+      result: IOSSimulatorCommandResult;
+      attempts: IOSSimulatorCommandResult[];
+    }> => {
+      const attempts: IOSSimulatorCommandResult[] = [];
+      const run = (pinned: boolean) =>
+        this.#runner.run(
+          "xcodebuild",
+          pinned ? [...args, RESOLVED_FILE_PIN] : args,
+          options,
+        );
+      let result = await run(useResolvedFilePin);
+      attempts.push(result);
+      await throwIfBuildCancelled(input.signal, cancellationResultBundlePath);
+      if (
+        useResolvedFilePin &&
+        result.exitCode !== 0 &&
+        isMissingPackageResolvedDiagnostic(result)
+      ) {
+        useResolvedFilePin = false;
+        result = await run(false);
+        attempts.push(result);
+        await throwIfBuildCancelled(input.signal, cancellationResultBundlePath);
+      }
+      return { result, attempts };
+    };
+    const listRun = await runXcodeWithResolvedFilePolicy(
+      [
+        "-list",
+        "-json",
+        containerFlag,
+        project.containerPath!,
+        ...clonedSourcePackagesArgs,
+      ],
       {
         cwd: project.projectRoot,
         timeoutMs: 60_000,
@@ -444,14 +513,14 @@ export class IOSSimulatorProjectBuilder {
         env: this.#childEnvironment,
       },
     );
-    await throwIfBuildCancelled(input.signal);
+    const list = listRun.result;
     if (list.exitCode !== 0 || list.outputTruncated) {
       throw new IOSSimulatorProjectBuildError(
         "APP_BUILD_FAILED",
         "Xcode could not inspect the project.",
-        commandLogTail([list]),
+        commandLogTail(listRun.attempts),
         null,
-        Boolean(list.outputTruncated),
+        listRun.attempts.some((attempt) => Boolean(attempt.outputTruncated)),
         true,
       );
     }
@@ -498,13 +567,10 @@ export class IOSSimulatorProjectBuilder {
       "generic/platform=iOS Simulator",
       "-derivedDataPath",
       input.derivedDataPath,
-      ...(input.clonedSourcePackagesDirPath
-        ? ["-clonedSourcePackagesDirPath", input.clonedSourcePackagesDirPath]
-        : []),
+      ...clonedSourcePackagesArgs,
     ];
     if (input.expectedArch) {
-      const archSettings = await this.#runner.run(
-        "xcodebuild",
+      const archSettingsRun = await runXcodeWithResolvedFilePolicy(
         [...commonArgs, "-showBuildSettings", "-json"],
         {
           cwd: project.projectRoot,
@@ -514,7 +580,7 @@ export class IOSSimulatorProjectBuilder {
           env: this.#childEnvironment,
         },
       );
-      await throwIfBuildCancelled(input.signal);
+      const archSettings = archSettingsRun.result;
       const effective =
         archSettings.exitCode === 0 && !archSettings.outputTruncated
           ? effectiveArchitectures(archSettings.stdout)
@@ -523,25 +589,28 @@ export class IOSSimulatorProjectBuilder {
         throw new IOSSimulatorProjectBuildError(
           "APP_ARCH_MISMATCH",
           `The app target would produce architectures [${effective.join(", ")}], but the target simulator needs ${input.expectedArch}. Check the app target's ARCHS and EXCLUDED_ARCHS.`,
-          commandLogTail([archSettings]),
+          commandLogTail(archSettingsRun.attempts),
           null,
-          Boolean(archSettings.outputTruncated),
+          archSettingsRun.attempts.some((attempt) =>
+            Boolean(attempt.outputTruncated),
+          ),
         );
       }
     }
-    const resultBundlePath = path.join(
-      input.derivedDataPath,
-      `CindyBuild-${randomUUID()}.xcresult`,
-    );
+    const nextResultBundlePath = () =>
+      path.join(input.derivedDataPath, `CindyBuild-${randomUUID()}.xcresult`);
+    let resultBundlePath = nextResultBundlePath();
+    const buildAttempts: IOSSimulatorCommandResult[] = [];
+    const buildArgs = (bundlePath: string, pinned: boolean) => [
+      ...commonArgs,
+      ...(pinned ? [RESOLVED_FILE_PIN] : []),
+      "-resultBundlePath",
+      bundlePath,
+      "build",
+    ];
     let build = await this.#runner.run(
       "xcodebuild",
-      [
-        ...commonArgs,
-        "-onlyUsePackageVersionsFromResolvedFile",
-        "-resultBundlePath",
-        resultBundlePath,
-        "build",
-      ],
+      buildArgs(resultBundlePath, useResolvedFilePin),
       {
         cwd: project.projectRoot,
         timeoutMs: this.#buildTimeoutMs,
@@ -550,19 +619,28 @@ export class IOSSimulatorProjectBuilder {
         env: this.#childEnvironment,
       },
     );
+    buildAttempts.push(build);
     await throwIfBuildCancelled(input.signal, resultBundlePath);
-    if (build.exitCode !== 0 && isMissingPackageResolvedDiagnostic(build)) {
+    if (
+      useResolvedFilePin &&
+      build.exitCode !== 0 &&
+      isMissingPackageResolvedDiagnostic(build)
+    ) {
       // Only retry when Xcode says the resolved file is missing or unusable.
       // A generic compile/link failure that happens to mention Package.resolved
-      // must not pay for a second full build. The failed build may have written
-      // its .xcresult; -resultBundlePath requires a non-existent path, so
-      // remove it before retrying.
-      await rm(resultBundlePath, { recursive: true, force: true }).catch(
+      // must not pay for a second full build. Always allocate a new bundle path:
+      // Xcode rejects an existing -resultBundlePath, so a best-effort cleanup
+      // failure must not make the fallback deterministically fail again.
+      useResolvedFilePin = false;
+      const failedResultBundlePath = resultBundlePath;
+      resultBundlePath = nextResultBundlePath();
+      await rm(failedResultBundlePath, { recursive: true, force: true }).catch(
         () => undefined,
       );
+      await throwIfBuildCancelled(input.signal, resultBundlePath);
       build = await this.#runner.run(
         "xcodebuild",
-        [...commonArgs, "-resultBundlePath", resultBundlePath, "build"],
+        buildArgs(resultBundlePath, false),
         {
           cwd: project.projectRoot,
           timeoutMs: this.#buildTimeoutMs,
@@ -571,6 +649,7 @@ export class IOSSimulatorProjectBuilder {
           env: this.#childEnvironment,
         },
       );
+      buildAttempts.push(build);
       await throwIfBuildCancelled(input.signal, resultBundlePath);
     }
     const availableResultBundlePath = (await exists(resultBundlePath))
@@ -581,14 +660,13 @@ export class IOSSimulatorProjectBuilder {
       throw new IOSSimulatorProjectBuildError(
         "APP_BUILD_FAILED",
         "The Xcode project could not be built.",
-        commandLogTail([build]),
+        commandLogTail(buildAttempts),
         availableResultBundlePath,
-        Boolean(build.outputTruncated),
+        buildAttempts.some((attempt) => Boolean(attempt.outputTruncated)),
         true,
       );
     }
-    const settings = await this.#runner.run(
-      "xcodebuild",
+    const settingsRun = await runXcodeWithResolvedFilePolicy(
       [...commonArgs, "-showBuildSettings", "-json"],
       {
         cwd: project.projectRoot,
@@ -597,31 +675,36 @@ export class IOSSimulatorProjectBuilder {
         signal: input.signal,
         env: this.#childEnvironment,
       },
+      resultBundlePath,
     );
-    await throwIfBuildCancelled(input.signal, resultBundlePath);
+    const settings = settingsRun.result;
     if (settings.exitCode !== 0 || settings.outputTruncated) {
       throw new IOSSimulatorProjectBuildError(
         "APP_ARTIFACT_INVALID",
         "Xcode build settings are unavailable.",
-        commandLogTail([build, settings]),
+        commandLogTail([build, ...settingsRun.attempts]),
         availableResultBundlePath,
-        Boolean(build.outputTruncated || settings.outputTruncated),
+        Boolean(
+          build.outputTruncated ||
+          settingsRun.attempts.some((attempt) =>
+            Boolean(attempt.outputTruncated),
+          ),
+        ),
       );
     }
     let appPaths: string[] = [];
     try {
-      const parsed = JSON.parse(settings.stdout) as Array<{
-        buildSettings?: Record<string, unknown>;
-      }>;
-      appPaths = parsed.flatMap((entry) => {
-        const directory = entry.buildSettings?.TARGET_BUILD_DIR;
-        const wrapper = entry.buildSettings?.WRAPPER_NAME;
-        return typeof directory === "string" &&
-          typeof wrapper === "string" &&
-          wrapper.endsWith(".app")
+      const primarySettings = primaryApplicationBuildSettings(
+        JSON.parse(settings.stdout),
+      );
+      const directory = primarySettings?.TARGET_BUILD_DIR;
+      const wrapper = primarySettings?.WRAPPER_NAME;
+      appPaths =
+        typeof directory === "string" &&
+        typeof wrapper === "string" &&
+        wrapper.endsWith(".app")
           ? [path.join(directory, wrapper)]
           : [];
-      });
     } catch {
       appPaths = [];
     }
@@ -726,15 +809,16 @@ export class IOSSimulatorProjectBuilder {
     maxBufferBytes = 2 * 1024 * 1024,
     signal?: AbortSignal,
   ): Promise<string> {
-    const result = await this.#runner.run(
+    const options = {
+      timeoutMs: 60_000,
+      maxBufferBytes,
+      env: this.#childEnvironment,
+      signal,
+    };
+    let result = await this.#runner.run(
       "xcrun",
       ["xcresulttool", "get", "--path", resultBundlePath, "--format", "json"],
-      {
-        timeoutMs: 60_000,
-        maxBufferBytes,
-        env: this.#childEnvironment,
-        signal,
-      },
+      options,
     );
     if (signal?.aborted) {
       throw new IOSSimulatorInstanceError(
@@ -742,6 +826,36 @@ export class IOSSimulatorProjectBuilder {
         "The Xcode result bundle read was cancelled because the simulator host is shutting down.",
         true,
       );
+    }
+    if (
+      result.exitCode !== 0 &&
+      XCRESULT_LEGACY_OBJECT_REQUIRED.test(`${result.stdout}\n${result.stderr}`)
+    ) {
+      // Xcode 26.5 rejects the historical default-object spelling unless the
+      // deprecated object reader is made explicit. Retry only that exact
+      // compatibility diagnostic so older Xcode releases keep their existing
+      // command path and unrelated xcresult failures are not doubled.
+      result = await this.#runner.run(
+        "xcrun",
+        [
+          "xcresulttool",
+          "get",
+          "object",
+          "--legacy",
+          "--path",
+          resultBundlePath,
+          "--format",
+          "json",
+        ],
+        options,
+      );
+      if (signal?.aborted) {
+        throw new IOSSimulatorInstanceError(
+          "MUTATION_CANCELLED",
+          "The Xcode result bundle read was cancelled because the simulator host is shutting down.",
+          true,
+        );
+      }
     }
     if (result.exitCode !== 0) {
       throw new IOSSimulatorInstanceError(

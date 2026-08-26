@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 
 import type { PluginScope } from '@cindy/plugin-protocol';
+import { ghostManifestToLegacyV2DigestFormat } from '../../shared/ghost.js';
 import {
   atomicWriteFileSync,
   readAtomicFileSync,
@@ -56,7 +57,10 @@ function canonicalJson(value: unknown): string {
 
 /** manifest 的稳定摘要:语义相同的 manifest 无论键序/来源如何,摘要一致。 */
 export function ghostManifestDigest(manifest: unknown): string {
-  return crypto.createHash('sha256').update(canonicalJson(manifest)).digest('hex');
+  return crypto
+    .createHash('sha256')
+    .update(canonicalJson(ghostManifestToLegacyV2DigestFormat(manifest)))
+    .digest('hex');
 }
 
 interface PluginMarketLedgerData {
@@ -248,6 +252,47 @@ export class PluginMarketLedger {
       }
     }
     this.write(data);
+  }
+
+  /**
+   * Reconnect a historical server update route after the approved receipt proves
+   * its original package identity. That receipt does not attest the current
+   * directory bytes, so an organization-scoped market record is demoted to
+   * legacy-adopted until a verified market update installs fresh bytes. This
+   * keeps automatic updates available without restoring Connection JWT trust
+   * from historical source evidence. The compare-and-write prevents a concurrent
+   * uninstall or source replacement from being overwritten by a stale snapshot.
+   */
+  restoreDisconnectedInstallation(
+    expected: PluginMarketInstallationRecord,
+    userId: string,
+  ): boolean {
+    const data = this.read();
+    const current = data.installations[expected.ghostId];
+    if (
+      !current
+      || current.installed
+      || (current.source !== 'market' && current.source !== 'legacy-adopted')
+      || canonicalJson(current) !== canonicalJson(expected)
+    ) {
+      return false;
+    }
+    data.installations[current.ghostId] = {
+      ...current,
+      source:
+        current.scope === 'organization' && current.source === 'market'
+          ? 'legacy-adopted'
+          : current.source,
+      installed: true,
+      updatedAt: new Date().toISOString(),
+    };
+    const remainingOptOuts = (data.defaultInstallOptOuts[userId] ?? []).filter(
+      (pluginId) => pluginId !== current.pluginId,
+    );
+    if (remainingOptOuts.length > 0) data.defaultInstallOptOuts[userId] = remainingOptOuts;
+    else delete data.defaultInstallOptOuts[userId];
+    this.write(data);
+    return true;
   }
 
   markRemoved(ghostId: string, userId: string | null): void {

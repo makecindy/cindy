@@ -5,7 +5,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { TurnPermissionPolicyUnsupportedError } from '@cindy/maker-core';
+import {
+  MAIN_OWNED_SEND_CONTEXT,
+  TurnPermissionPolicyUnsupportedError,
+} from '@cindy/maker-core';
 import type {
   AgentEvent,
   Capabilities,
@@ -418,6 +421,7 @@ function setupSessionWithId(
 interface TurnOverrides {
   userMessageId?: string;
   text?: string;
+  agentText?: string;
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -437,6 +441,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
     userId: 'ou_user',
     userMessageId: overrides.userMessageId ?? 'msg-user',
     text: overrides.text ?? 'PROMPT_SECRET full user message TOKEN_VALUE file body',
+    ...(overrides.agentText ? { agentText: overrides.agentText } : {}),
     attachments: [],
     onTurnComplete,
     ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
@@ -686,6 +691,21 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(maker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentKind: 'pi', providerId: null }),
     );
+  });
+
+  it('attaches a Main-owned IM origin proof to every channel dispatch', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn(vi.fn(), {
+      text: 'pi install npm:context-mode',
+      agentText: 'persona\nreply\ngroup context\nspeaker\nhandoff\nplan reconciliation',
+    });
+
+    const sendOptions = h.send.mock.calls[0]?.[1];
+    expect(sendOptions?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'im', channel: 'feishu', taskId: 'msg-user' },
+      rawChannelText: 'pi install npm:context-mode',
+    });
   });
 
   it('marks only an accepted attached IM turn headless and releases it on done', async () => {

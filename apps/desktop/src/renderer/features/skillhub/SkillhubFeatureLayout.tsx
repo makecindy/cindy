@@ -38,14 +38,10 @@ import { useSkillSync } from './hooks/useSkillSync';
 import { projectHash } from './lib/projectHash';
 import { useAuth } from '@/contexts/AuthContext';
 
-export function SkillhubFeatureLayout() {
+/** Shared SkillHub store sync. Settings embeds the home view without the route layout. */
+export function useSkillhubStoreSync(): void {
   const { dataOwnerId, mode } = useAuth();
   const cloudSyncEnabled = mode === 'cloud';
-  // 技能改为右侧整页(无左树导航),左侧 app 侧栏沿用 cc-agent 项目/对话列表。
-  // 显式注册同一个 CCAgentSidebarUpper:warm 导航时与 cc-agent 注册的是同一组件
-  // 类型,只 reconcile、不 remount(实例状态保留);冷启动直接进 /skillhub 时则首次
-  // 播种,避免左栏空白(详见 useRegisterCCAgentSidebar)。
-  useRegisterCCAgentSidebar();
 
   // v0.2.1: trigger batch sync whenever the skill list changes
   const { skills, syncResults, bootstrapped } = useSkillhub();
@@ -63,7 +59,13 @@ export function SkillhubFeatureLayout() {
   useEffect(() => {
     if (!cloudSyncEnabled || !bootstrapped) return;
     if (syncResults.size === 0) return; // sync 还没完成
-    const items: Array<{ name: string; absolutePath: string; version: string; authorId: string; folderHash?: string }> = [];
+    const items: Array<{
+      name: string;
+      absolutePath: string;
+      version: string;
+      authorId: string;
+      folderHash?: string;
+    }> = [];
     const itemKeys: Array<{ name: string; key: string }> = [];
     for (const s of skills) {
       if (s.kind !== 'skill') continue;
@@ -91,7 +93,9 @@ export function SkillhubFeatureLayout() {
         absolutePath: s.absolutePath,
         version: latestVersion,
         authorId: serverAuthorId,
-        ...(typeof sync.folderHash === 'string' && sync.folderHash ? { folderHash: sync.folderHash } : {}),
+        ...(typeof sync.folderHash === 'string' && sync.folderHash
+          ? { folderHash: sync.folderHash }
+          : {}),
       });
       itemKeys.push({ name: s.name, key });
     }
@@ -148,6 +152,15 @@ export function SkillhubFeatureLayout() {
     // list is unchanged or empty.
     bootstrapSkillhub();
   }, [dataOwnerId, skillhubProjects]);
+}
+
+export function SkillhubFeatureLayout() {
+  // 技能改为右侧整页(无左树导航),左侧 app 侧栏沿用 cc-agent 项目/对话列表。
+  // 显式注册同一个 CCAgentSidebarUpper:warm 导航时与 cc-agent 注册的是同一组件
+  // 类型,只 reconcile、不 remount(实例状态保留);冷启动直接进 /skillhub 时则首次
+  // 播种,避免左栏空白(详见 useRegisterCCAgentSidebar)。
+  useRegisterCCAgentSidebar();
+  useSkillhubStoreSync();
 
   return (
     <div className="flex h-full w-full flex-col">

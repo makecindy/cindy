@@ -447,6 +447,28 @@ export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size
 export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20, lineHeight: LOGIN_COPY_LINE_HEIGHT } as const;
 /** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
 export const LOGIN_SSO_ORG_HINT_TOP = 244;
+/**
+ * 最近组织浮层：紧贴输入框下沿并与输入框等宽，作为浮层覆盖后续提示与主按钮。
+ * 它与输入框同处登录组坐标系，phone 短屏/长屏与 pad 都随各自 surface scale
+ * 一起移动；最大高度收在手机 440 高面板内，其余条目在无可见滚动条的浮层内滚动。
+ */
+export const LOGIN_SSO_ORG_HISTORY = {
+  x: LOGIN_CONTROL.x,
+  y: LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8,
+  width: LOGIN_CONTROL.width,
+  maxHeight:
+    LOGIN_ERROR_TEXT.y +
+    LOGIN_ERROR_TEXT.height -
+    (LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8) -
+    10,
+  rowMinHeight: 88,
+  radius: 22,
+  rowRadius: 16,
+  font: 20,
+  lineHeight: LOGIN_COPY_LINE_HEIGHT,
+  paddingX: LOGIN_CONTROL.textPadLeft,
+  paddingY: 16,
+} as const;
 
 /**
  * 协议同意行(consent PR;figma 600:660「服务条款」行,与桌面 CONSENT_ROW 同参数源):

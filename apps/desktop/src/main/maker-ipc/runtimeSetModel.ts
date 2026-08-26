@@ -2,6 +2,7 @@ import type { AgentKind, Effort } from '@cindy/maker-core';
 
 import {
   getSessionProvider,
+  hasSessionProvider,
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
@@ -19,6 +20,7 @@ interface RuntimeSetModelSession {
   agentKind: AgentKind;
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
+  codexThreadModelProviderId?: string | null;
   model: string;
   setModel: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => Promise<void>;
 }
@@ -47,6 +49,11 @@ export interface ApplyRuntimeSetModelChangeInput {
   model: string;
   providerId?: string | null;
   effort?: Effort;
+  /**
+   * Orca Worker 的 live model/provider 属于执行单元身份，不能热切。即使凭证
+   * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
+   */
+  forceSessionRebuild?: boolean;
   isSessionInTurn?: (sessionId: string) => boolean;
   /**
    * 会话自己正在跑 turn 时的延迟生效登记(PendingCredentialSwitchService.register)。
@@ -93,6 +100,13 @@ export type ApplyRuntimeSetModelChangeResult =
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
   | { status: 'deferred' };
 
+export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
+  return (
+    (error as { code?: unknown } | null)?.code === 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' ||
+    (error instanceof Error && error.message.includes('[REMOTE_MODEL_SWITCH_ROUTE_CHANGE]'))
+  );
+}
+
 /**
  * 应用本地运行时 model/provider 切换。
  *
@@ -130,7 +144,7 @@ export async function applyRuntimeSetModelChange(
         ? pendingTarget.providerId
         : currentProviderId;
   const shouldCloseSession = sess
-    ? shouldCloseSessionForCredentialSwitch({
+    ? input.forceSessionRebuild === true || shouldCloseSessionForCredentialSwitch({
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
         currentProviderId,
@@ -138,6 +152,7 @@ export async function applyRuntimeSetModelChange(
         currentModel: sess.model,
         nextModel: model,
         currentCodexProxyActive: sess.codexProxyActive,
+        currentCodexThreadModelProviderId: sess.codexThreadModelProviderId,
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;
@@ -271,7 +286,13 @@ export async function applyRuntimeSetModelChange(
   }
   try {
     await sess.setModel(model, {
-      providerId: nextProviderId,
+      // model-only 且内存尚未确认来源时不要把 providerId:null 传进 runtime,
+      // 否则未 hydrate 的 custom 会话会被清成默认网关。
+      ...(normalizedProviderId !== undefined
+        || hasSessionProvider(sessionId)
+        || pendingTarget !== undefined
+        ? { providerId: nextProviderId }
+        : {}),
       ...(effort !== undefined ? { effort } : {}),
     });
   } catch (err) {

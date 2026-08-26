@@ -19,6 +19,7 @@ import type { IOSSimulatorCommandRunner } from "./types.js";
 
 const roots: string[] = [];
 const SIMULATOR_UDID = "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6";
+const RESOLVED_FILE_PIN = "-onlyUsePackageVersionsFromResolvedFile";
 afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -549,6 +550,62 @@ describe("IOSSimulatorProjectBuilder", () => {
     });
   });
 
+  it("removes the xcresult when cancellation interrupts final build settings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    const workspace = path.join(root, "Example.xcworkspace");
+    await mkdir(workspace);
+    const controller = new AbortController();
+    let resultBundlePath = "";
+    let finalSettingsStarted = false;
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args, options) => {
+        if (args.includes("-list")) {
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("build")) {
+          const resultBundleIndex = args.indexOf("-resultBundlePath");
+          resultBundlePath = args[resultBundleIndex + 1]!;
+          await mkdir(resultBundlePath, { recursive: true });
+          return { stdout: "build succeeded", stderr: "", exitCode: 0 };
+        }
+        if (args.includes("-showBuildSettings")) {
+          finalSettingsStarted = true;
+          await new Promise<void>((resolve) => {
+            if (options?.signal?.aborted) resolve();
+            else
+              options?.signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+          });
+          return { stdout: "", stderr: "", exitCode: null };
+        }
+        throw new Error("unexpected xcodebuild invocation");
+      },
+    );
+    const buildPromise = new IOSSimulatorProjectBuilder({
+      commandRunner: { run },
+    }).build({
+      worktreeRoot: root,
+      derivedDataPath: path.join(root, "derived"),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(finalSettingsStarted).toBe(true));
+
+    controller.abort();
+
+    await expect(buildPromise).rejects.toMatchObject({
+      code: "MUTATION_CANCELLED",
+    });
+    await expect(realpath(resultBundlePath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("cancels an in-flight xcresult read through the command runner", async () => {
     const controller = new AbortController();
     const run = vi.fn(
@@ -597,6 +654,65 @@ describe("IOSSimulatorProjectBuilder", () => {
     );
   });
 
+  it("retries an xcresult read with the explicit legacy object command when Xcode requires it", async () => {
+    const run = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes("--legacy")) {
+        return {
+          stdout: '{"issues":[]}',
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return {
+        stdout: "",
+        stderr:
+          "Error: This command is deprecated and will be removed in a future release, --legacy flag is required to use it.",
+        exitCode: 64,
+      };
+    });
+    const builder = new IOSSimulatorProjectBuilder({ commandRunner: { run } });
+    const resultBundlePath = "/tmp/CindyBuild-xcode-26.xcresult";
+
+    await expect(builder.readXcresult(resultBundlePath, 1024)).resolves.toBe(
+      '{"issues":[]}\n',
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      1,
+      "xcrun",
+      ["xcresulttool", "get", "--path", resultBundlePath, "--format", "json"],
+      expect.objectContaining({ maxBufferBytes: 1024 }),
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      2,
+      "xcrun",
+      [
+        "xcresulttool",
+        "get",
+        "object",
+        "--legacy",
+        "--path",
+        resultBundlePath,
+        "--format",
+        "json",
+      ],
+      expect.objectContaining({ maxBufferBytes: 1024 }),
+    );
+  });
+
+  it("does not retry an unrelated xcresult read failure", async () => {
+    const run = vi.fn(async () => ({
+      stdout: "",
+      stderr: "Error: the result bundle is unreadable",
+      exitCode: 1,
+    }));
+    const builder = new IOSSimulatorProjectBuilder({ commandRunner: { run } });
+
+    await expect(
+      builder.readXcresult("/tmp/CindyBuild-unreadable.xcresult"),
+    ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("pre-flights the target architecture before building when arm64 is excluded", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
     roots.push(root);
@@ -643,9 +759,9 @@ describe("IOSSimulatorProjectBuilder", () => {
       ),
     });
     // The build command must never run when the preflight rejects.
-    expect(
-      run.mock.calls.some(([, args]) => args.includes("build")),
-    ).toBe(false);
+    expect(run.mock.calls.some(([, args]) => args.includes("build"))).toBe(
+      false,
+    );
   });
 
   it("proceeds to build when the target architecture is available", async () => {
@@ -653,6 +769,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     roots.push(root);
     const workspace = path.join(root, "Example.xcworkspace");
     const appPath = path.join(root, "derived", "Build", "Example.app");
+    const clonedSourcePackagesDirPath = path.join(root, "spm");
     await mkdir(workspace);
     await mkdir(appPath, { recursive: true });
     const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
@@ -688,14 +805,99 @@ describe("IOSSimulatorProjectBuilder", () => {
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
       expectedArch: "arm64",
+      clonedSourcePackagesDirPath,
     });
     expect(result).toMatchObject({ scheme: "Example" });
+    const xcodeCalls = run.mock.calls.map(([, args]) => args);
+    expect(xcodeCalls).toHaveLength(4);
+    expect(xcodeCalls.every((args) => args.includes(RESOLVED_FILE_PIN))).toBe(
+      true,
+    );
     expect(
-      run.mock.calls.some(([, args]) => args.includes("-onlyUsePackageVersionsFromResolvedFile")),
+      xcodeCalls.every((args) => {
+        const index = args.indexOf("-clonedSourcePackagesDirPath");
+        return index >= 0 && args[index + 1] === clonedSourcePackagesDirPath;
+      }),
     ).toBe(true);
+    expect(xcodeCalls[0]).toEqual(expect.arrayContaining(["-list", "-json"]));
+    expect(xcodeCalls[1]).toEqual(
+      expect.arrayContaining(["-showBuildSettings", "-json"]),
+    );
+    expect(xcodeCalls[2]).toContain("build");
+    expect(xcodeCalls[3]).toEqual(
+      expect.arrayContaining(["-showBuildSettings", "-json"]),
+    );
   });
 
-  it("retries without the resolved-file pin only when Package.resolved is missing", async () => {
+  it("disables the resolved-file pin for the remaining build after Xcode 26.5 rejects -list", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    const workspace = path.join(root, "Example.xcworkspace");
+    const appPath = path.join(root, "derived", "Build", "Example.app");
+    await mkdir(workspace);
+    await mkdir(appPath, { recursive: true });
+    let listAttempts = 0;
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args.includes("-list")) {
+          listAttempts += 1;
+          if (args.includes(RESOLVED_FILE_PIN)) {
+            return {
+              stdout: "",
+              stderr:
+                "xcodebuild: error: a resolved file is required when automatic dependency resolution is disabled and should be placed at /tmp/Example.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+              exitCode: 74,
+            };
+          }
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("-showBuildSettings")) {
+          return {
+            stdout: JSON.stringify([
+              {
+                buildSettings: {
+                  ARCHS: "arm64",
+                  TARGET_BUILD_DIR: path.dirname(appPath),
+                  WRAPPER_NAME: "Example.app",
+                },
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
+
+    await new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+      worktreeRoot: root,
+      derivedDataPath: path.join(root, "derived"),
+      expectedArch: "arm64",
+    });
+
+    expect(listAttempts).toBe(2);
+    expect(run.mock.calls[0]![1]).toContain(RESOLVED_FILE_PIN);
+    expect(run.mock.calls[1]![1]).not.toContain(RESOLVED_FILE_PIN);
+    expect(
+      run.mock.calls
+        .slice(1)
+        .every(([, args]) => !args.includes(RESOLVED_FILE_PIN)),
+    ).toBe(true);
+    expect(run.mock.calls.map(([, args]) => args)).toEqual([
+      expect.arrayContaining(["-list", "-json", RESOLVED_FILE_PIN]),
+      expect.arrayContaining(["-list", "-json"]),
+      expect.arrayContaining(["-showBuildSettings", "-json"]),
+      expect.arrayContaining(["build"]),
+      expect.arrayContaining(["-showBuildSettings", "-json"]),
+    ]);
+  });
+
+  it("retries a missing Package.resolved build with a fresh xcresult path", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
     roots.push(root);
     const workspace = path.join(root, "Example.xcworkspace");
@@ -726,11 +928,15 @@ describe("IOSSimulatorProjectBuilder", () => {
             exitCode: 0,
           };
         }
-        if (args.includes("-onlyUsePackageVersionsFromResolvedFile")) {
+        const resultBundleIndex = args.indexOf("-resultBundlePath");
+        if (args.includes("build") && resultBundleIndex >= 0) {
+          await mkdir(args[resultBundleIndex + 1]!, { recursive: true });
+        }
+        if (args.includes("build") && args.includes(RESOLVED_FILE_PIN)) {
           return {
             stdout: "",
             stderr:
-              "error: unable to load the resolved file: Package.resolved does not exist",
+              "xcodebuild: error: a resolved file is required when automatic dependency resolution is disabled and should be placed at /tmp/Example.xcworkspace/xcshareddata/swiftpm/Package.resolved",
             exitCode: 65,
           };
         }
@@ -741,12 +947,26 @@ describe("IOSSimulatorProjectBuilder", () => {
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
     });
-    const buildCalls = run.mock.calls.filter(([, args]) => args.includes("build"));
-    expect(buildCalls).toHaveLength(2);
-    expect(buildCalls[0]![1]).toContain("-onlyUsePackageVersionsFromResolvedFile");
-    expect(buildCalls[1]![1]).not.toContain(
-      "-onlyUsePackageVersionsFromResolvedFile",
+    const buildCalls = run.mock.calls.filter(([, args]) =>
+      args.includes("build"),
     );
+    expect(buildCalls).toHaveLength(2);
+    expect(buildCalls[0]![1]).toContain(RESOLVED_FILE_PIN);
+    expect(buildCalls[1]![1]).not.toContain(RESOLVED_FILE_PIN);
+    const firstResultBundleIndex =
+      buildCalls[0]![1].indexOf("-resultBundlePath");
+    const secondResultBundleIndex =
+      buildCalls[1]![1].indexOf("-resultBundlePath");
+    expect(firstResultBundleIndex).toBeGreaterThanOrEqual(0);
+    expect(secondResultBundleIndex).toBeGreaterThanOrEqual(0);
+    expect(buildCalls[1]![1][secondResultBundleIndex + 1]).not.toBe(
+      buildCalls[0]![1][firstResultBundleIndex + 1],
+    );
+    expect(
+      run.mock.calls
+        .slice(run.mock.calls.indexOf(buildCalls[1]!))
+        .every(([, args]) => !args.includes(RESOLVED_FILE_PIN)),
+    ).toBe(true);
   });
 
   it("does not retry when a compile failure only mentions Package.resolved", async () => {
@@ -779,9 +999,9 @@ describe("IOSSimulatorProjectBuilder", () => {
         derivedDataPath: path.join(root, "derived"),
       }),
     ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
-    expect(run.mock.calls.filter(([, args]) => args.includes("build"))).toHaveLength(
-      1,
-    );
+    expect(
+      run.mock.calls.filter(([, args]) => args.includes("build")),
+    ).toHaveLength(1);
   });
 
   it("does not retry when Package.resolved and a missing-file error are on different lines", async () => {
@@ -800,7 +1020,8 @@ describe("IOSSimulatorProjectBuilder", () => {
         if (args.includes("build")) {
           return {
             stdout: "note: resolved versions are listed in Package.resolved",
-            stderr: "error: 'Header.h' file not found\nNo such file or directory: Foo.swift",
+            stderr:
+              "error: 'Header.h' file not found\nNo such file or directory: Foo.swift",
             exitCode: 65,
           };
         }
@@ -813,9 +1034,9 @@ describe("IOSSimulatorProjectBuilder", () => {
         derivedDataPath: path.join(root, "derived"),
       }),
     ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
-    expect(run.mock.calls.filter(([, args]) => args.includes("build"))).toHaveLength(
-      1,
-    );
+    expect(
+      run.mock.calls.filter(([, args]) => args.includes("build")),
+    ).toHaveLength(1);
   });
 
   it("does not retry when unable to load a different resolved file", async () => {
@@ -834,7 +1055,8 @@ describe("IOSSimulatorProjectBuilder", () => {
         if (args.includes("build")) {
           return {
             stdout: "",
-            stderr: "error: unable to load the resolved file of Foo.xcframework",
+            stderr:
+              "error: unable to load the resolved file of Foo.xcframework",
             exitCode: 65,
           };
         }
@@ -847,12 +1069,12 @@ describe("IOSSimulatorProjectBuilder", () => {
         derivedDataPath: path.join(root, "derived"),
       }),
     ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
-    expect(run.mock.calls.filter(([, args]) => args.includes("build"))).toHaveLength(
-      1,
-    );
+    expect(
+      run.mock.calls.filter(([, args]) => args.includes("build")),
+    ).toHaveLength(1);
   });
 
-  it("pre-flights against the .app target when a scheme has multiple targets", async () => {
+  it("selects the primary application when a scheme builds auxiliary app products", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
     roots.push(root);
     const workspace = path.join(root, "Example.xcworkspace");
@@ -869,18 +1091,38 @@ describe("IOSSimulatorProjectBuilder", () => {
           };
         }
         if (args.includes("-showBuildSettings")) {
-          // 多 target：第一个是 extension（仅 x86_64），第二个才是 .app。
-          // 预检必须读 .app 的 ARCHS，否则会基于 extension 误判 arch 不匹配。
+          // App Clip and Watch targets also produce `.app` wrappers. Both the
+          // architecture preflight and final artifact lookup must select the
+          // primary iOS application by PRODUCT_TYPE, not wrapper extension.
           return {
             stdout: JSON.stringify([
               {
                 buildSettings: {
+                  PRODUCT_TYPE: "com.apple.product-type.app-extension",
                   WRAPPER_NAME: "ExampleExtension.appex",
                   ARCHS: "x86_64",
                 },
               },
               {
                 buildSettings: {
+                  PRODUCT_TYPE:
+                    "com.apple.product-type.application.on-demand-install-capable",
+                  WRAPPER_NAME: "ExampleClip.app",
+                  ARCHS: "x86_64",
+                  TARGET_BUILD_DIR: path.dirname(appPath),
+                },
+              },
+              {
+                buildSettings: {
+                  PRODUCT_TYPE: "com.apple.product-type.application.watchapp2",
+                  WRAPPER_NAME: "ExampleWatch.app",
+                  ARCHS: "x86_64",
+                  TARGET_BUILD_DIR: path.dirname(appPath),
+                },
+              },
+              {
+                buildSettings: {
+                  PRODUCT_TYPE: "com.apple.product-type.application",
                   WRAPPER_NAME: "Example.app",
                   ARCHS: "arm64 x86_64",
                   TARGET_BUILD_DIR: path.dirname(appPath),
@@ -902,6 +1144,137 @@ describe("IOSSimulatorProjectBuilder", () => {
       expectedArch: "arm64",
     });
     expect(result).toMatchObject({ scheme: "Example" });
+  });
+
+  it("fails open when architecture preflight cannot identify one unique .app target", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    const workspace = path.join(root, "Example.xcworkspace");
+    const appPath = path.join(root, "derived", "Build", "Example.app");
+    await mkdir(workspace);
+    await mkdir(appPath, { recursive: true });
+    let settingsCalls = 0;
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args.includes("-list")) {
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("-showBuildSettings")) {
+          settingsCalls += 1;
+          return {
+            stdout: JSON.stringify(
+              settingsCalls === 1
+                ? [
+                    {
+                      buildSettings: {
+                        WRAPPER_NAME: "Example.app",
+                        ARCHS: "x86_64",
+                      },
+                    },
+                    {
+                      buildSettings: {
+                        WRAPPER_NAME: "ExampleHelper.app",
+                        ARCHS: "arm64",
+                      },
+                    },
+                  ]
+                : [
+                    {
+                      buildSettings: {
+                        WRAPPER_NAME: "Example.app",
+                        TARGET_BUILD_DIR: path.dirname(appPath),
+                      },
+                    },
+                  ],
+            ),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
+
+    await expect(
+      new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+        worktreeRoot: root,
+        derivedDataPath: path.join(root, "derived"),
+        expectedArch: "arm64",
+      }),
+    ).resolves.toMatchObject({ scheme: "Example" });
+    expect(run.mock.calls.some(([, args]) => args.includes("build"))).toBe(
+      true,
+    );
+  });
+
+  it("does not guess when a scheme contains multiple primary application targets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    const workspace = path.join(root, "Example.xcworkspace");
+    const products = path.join(root, "derived", "Build");
+    await mkdir(workspace);
+    await mkdir(path.join(products, "Example.app"), { recursive: true });
+    await mkdir(path.join(products, "ExampleAdmin.app"), { recursive: true });
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args.includes("-list")) {
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("-showBuildSettings")) {
+          return {
+            stdout: JSON.stringify([
+              {
+                buildSettings: {
+                  PRODUCT_TYPE: "com.apple.product-type.application",
+                  WRAPPER_NAME: "Example.app",
+                  TARGET_BUILD_DIR: products,
+                  ARCHS: "x86_64",
+                },
+              },
+              {
+                buildSettings: {
+                  PRODUCT_TYPE: "com.apple.product-type.application",
+                  WRAPPER_NAME: "ExampleAdmin.app",
+                  TARGET_BUILD_DIR: products,
+                  ARCHS: "arm64",
+                },
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
+
+    await expect(
+      new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+        worktreeRoot: root,
+        derivedDataPath: path.join(root, "derived"),
+        expectedArch: "arm64",
+      }),
+    ).rejects.toMatchObject({
+      code: "APP_ARTIFACT_INVALID",
+      message: "The Xcode build did not produce one unambiguous app artifact.",
+    });
+    // Ambiguous target selection must fail open during the architecture
+    // preflight, then fail closed only after the actual build cannot identify
+    // one installable product.
+    expect(run.mock.calls.some(([, args]) => args.includes("build"))).toBe(
+      true,
+    );
+    expect(
+      run.mock.calls.filter(([, args]) => args.includes("-showBuildSettings")),
+    ).toHaveLength(2);
   });
 
   it("ignores arch exclusions from targets not embedded in the app", async () => {

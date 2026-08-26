@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 
 import type { DbTxName } from '../../client/tx/types.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
+import { capImportedToolResultContent } from '../../../../shared/toolResultPersistCap.js';
 import {
   wechatActivateBindingEpoch,
   wechatCancelForCommand,
@@ -77,6 +78,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return sessionsSetStatus(db, txArgs);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(db, txArgs);
+    case 'context.rebuild':
+      return contextRebuild(db, txArgs);
     case 'message.delete':
       return messageDelete(db, txArgs);
     case 'im.deleteBindings':
@@ -213,6 +216,39 @@ function sessionAgentSwitchFallback(db: Database.Database, args: unknown): void 
         code: 'NOT_FOUND',
       });
     }
+  });
+  transaction();
+}
+
+/** 同一任务换干净原生会话：清 sdk_session_id + 追加隐藏 context_rebuild，不改可见消息。 */
+function contextRebuild(db: Database.Database, args: unknown): void {
+  const payload = asRecord(args, 'context.rebuild args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const markerId = expectString(payload.markerId, 'markerId');
+  const markerClientId = expectString(payload.markerClientId, 'markerClientId');
+  const markerContent = expectString(payload.markerContent, 'markerContent');
+  const markerCreatedAt = expectNumber(payload.markerCreatedAt, 'markerCreatedAt');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  const transaction = db.transaction(() => {
+    const sessionResult = db
+      .prepare(
+        'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+      )
+      .run(updatedAt, sessionId, expectedClearedAt);
+    if (sessionResult.changes !== 1) {
+      throw Object.assign(new Error(`Session missing or clear-boundary changed: ${sessionId}`), {
+        code: 'PRECONDITION_FAILED',
+      });
+    }
+    // 只追加新边界。删掉更早的 context_rebuild 会让 fork 在「A 重建 → 切 B → B 再重建」
+    // 后误把 A 重建前的消息接到 A 重建后的 SDK session。
+    db.prepare(
+      "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
+    ).run(markerId, markerClientId, sessionId, markerContent, markerCreatedAt, markerCreatedAt);
   });
   transaction();
 }
@@ -613,7 +649,7 @@ function codexImportMessages(db: Database.Database, args: unknown): { changed: n
         clientId,
         sessionId,
         role,
-        content: stringifyContent(row.content),
+        content: stringifyImportedContent(role, row.content),
         agentMeta: JSON.stringify({ sdkSessionId, model }),
         createdAt,
       }).changes;
@@ -656,12 +692,13 @@ function claudeImportMessages(db: Database.Database, args: unknown): { changed: 
     for (const rawRow of rows) {
       const row = asRecord(rawRow, 'claude row');
       const key = `${expectNumber(row.lineNo, 'row.lineNo')}-${expectNumber(row.partIndex, 'row.partIndex')}`;
+      const role = expectString(row.role, 'row.role');
       changed += upsert.run({
         id: `claude-import-${sdkSessionId}-${key}`,
         clientId: `${importClientIdPrefix}${key}`,
         sessionId,
-        role: expectString(row.role, 'row.role'),
-        content: stringifyContent(row.content),
+        role,
+        content: stringifyImportedContent(role, row.content),
         toolUseId: nullableString(row.toolUseId),
         agentMeta: row.agentMeta ? stringifyContent(row.agentMeta) : null,
         createdAt: expectNumber(row.createdAt, 'row.createdAt'),
@@ -1522,22 +1559,24 @@ function orcaCancelStaleTeams(db: Database.Database, args: unknown): void {
 function orcaArchiveWorkersByTeam(db: Database.Database, args: unknown): string[] {
   const payload = asRecord(args, 'orca.archiveWorkersByTeam args');
   const teamId = expectString(payload.teamId, 'teamId');
-  const now = expectNumber(payload.now, 'now');
-  const selectCandidates = db.prepare(
-    `SELECT sessions.id
-       FROM orca_workers
-       INNER JOIN sessions ON orca_workers.session_id = sessions.id
-      WHERE orca_workers.team_id = ? AND sessions.status = 'active'
-      ORDER BY sessions.id`,
+  const sessionIds = expectArray(payload.sessionIds, 'sessionIds').map((value, index) =>
+    expectString(value, `sessionIds[${index}]`),
   );
+  const now = expectNumber(payload.now, 'now');
   const archiveSession = db.prepare(
-    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+    `UPDATE sessions
+        SET status = 'archived', updated_at = ?
+      WHERE id = ? AND status = 'active'
+        AND EXISTS (
+          SELECT 1 FROM orca_workers
+           WHERE orca_workers.session_id = sessions.id
+             AND orca_workers.team_id = ?
+        )`,
   );
   const transaction = db.transaction(() => {
-    const candidates = selectCandidates.all(teamId) as Array<{ id: string }>;
     const updatedIds: string[] = [];
-    for (const { id } of candidates) {
-      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    for (const id of sessionIds) {
+      if (archiveSession.run(now, id, teamId).changes > 0) updatedIds.push(id);
     }
     return updatedIds;
   });
@@ -1550,17 +1589,10 @@ function orcaReconcileInactiveTeamWorkersForLead(
 ): string[] {
   const payload = asRecord(args, 'orca.reconcileInactiveTeamWorkersForLead args');
   const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
-  const now = expectNumber(payload.now, 'now');
-  const selectCandidates = db.prepare(
-    `SELECT sessions.id
-       FROM orca_workers
-       INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id
-       INNER JOIN sessions ON orca_workers.session_id = sessions.id
-      WHERE orca_teams.lead_session_id = ?
-        AND orca_teams.status != 'active'
-        AND sessions.status = 'active'
-      ORDER BY sessions.id`,
+  const sessionIds = expectArray(payload.sessionIds, 'sessionIds').map((value, index) =>
+    expectString(value, `sessionIds[${index}]`),
   );
+  const now = expectNumber(payload.now, 'now');
   const finishWorkers = db.prepare(
     `UPDATE orca_workers
         SET status = 'done', updated_at = ?
@@ -1570,14 +1602,23 @@ function orcaReconcileInactiveTeamWorkersForLead(
       )`,
   );
   const archiveSession = db.prepare(
-    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+    `UPDATE sessions
+        SET status = 'archived', updated_at = ?
+      WHERE id = ? AND status = 'active'
+        AND EXISTS (
+          SELECT 1
+            FROM orca_workers
+            INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id
+           WHERE orca_workers.session_id = sessions.id
+             AND orca_teams.lead_session_id = ?
+             AND orca_teams.status != 'active'
+        )`,
   );
   const transaction = db.transaction(() => {
-    const candidates = selectCandidates.all(leadSessionId) as Array<{ id: string }>;
     finishWorkers.run(now, leadSessionId);
     const updatedIds: string[] = [];
-    for (const { id } of candidates) {
-      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    for (const id of sessionIds) {
+      if (archiveSession.run(now, id, leadSessionId).changes > 0) updatedIds.push(id);
     }
     return updatedIds;
   });
@@ -1591,6 +1632,12 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   db.transaction(() => {
+    const activeTeam = db.prepare(
+      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
+    ).get(teamId);
+    if (!activeTeam) {
+      throw new Error(`Orca team ${teamId} is no longer active`);
+    }
     if (payload.focused === true) {
       db.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
@@ -1961,6 +2008,15 @@ function truncate(value: string, max: number): string {
 function stringifyContent(value: unknown): string {
   const json = JSON.stringify(value);
   return json === undefined ? 'null' : json;
+}
+
+/**
+ * 外部 CLI 历史导入与 live 落库同口径:tool_result 正文截到 8KB。
+ * 不截会让 rollout / transcript 重导入"复活"全文。媒体挂账在 main 导入层
+ * 对原文执行(本函数跑在 DB worker,碰不到 cindy-media ledger)。
+ */
+function stringifyImportedContent(role: string, content: unknown): string {
+  return stringifyContent(capImportedToolResultContent(role, content));
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
