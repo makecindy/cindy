@@ -246,15 +246,23 @@ export function UnifiedModelRow({
   const tripleTitle = `${engineOption.label}${
     config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
   }${config.fast ? ' · Fast' : ''}`;
+  const paymentRequiredActionLabel = paymentRequired
+    ? [entry.displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
+        .filter(Boolean)
+        .join(' · ')
+    : undefined;
 
   // 行根节点的交互与语义两种样式完全一致(选中/浮层/键盘),只有布局不同 —— 抽成
   // 共享 props,badge 分支不复制一遍手写事件导致行为漂移。
   const rowRootProps = {
     role: 'option' as const,
     'aria-selected': selected,
-    'aria-disabled': interactionDisabled || paymentRequired,
+    // 付费行不能被选为模型，但它本身是“查看付费说明”的可执行入口；只有真正
+    // 阻断全部交互的状态才声明 disabled，避免读屏软件抑制 Enter / Space 激活。
+    'aria-disabled': interactionDisabled ? true : undefined,
+    'aria-label': paymentRequiredActionLabel,
     // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
-    'aria-keyshortcuts': 'ArrowLeft',
+    'aria-keyshortcuts': paymentRequired ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     'data-unified-anchor': anchorKey(anchor),
@@ -265,7 +273,11 @@ export function UnifiedModelRow({
       if (!paymentRequired) onReveal(anchor, event.currentTarget);
     },
     onBlur: (event: ReactFocusEvent<HTMLDivElement>) => onBlurAway(event.relatedTarget),
-    onClick: paymentRequired ? onPaymentRequired : onSelect,
+    onClick: () => {
+      if (interactionDisabled) return;
+      if (paymentRequired) onPaymentRequired?.();
+      else onSelect();
+    },
     onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget || interactionDisabled) return;
       if (paymentRequired) {

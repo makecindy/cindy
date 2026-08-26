@@ -2437,7 +2437,12 @@ function ModelSelectorContentView({
           <div
             role="option"
             aria-selected={isSelected}
-            aria-disabled={disabled || paymentRequired}
+            aria-disabled={disabled ? true : undefined}
+            aria-label={
+              paymentRequired
+                ? `${model.displayName} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
+                : undefined
+            }
             title={disabledReason ?? undefined}
             data-model-selected={isSelected ? 'true' : undefined}
             data-model-options-active={isEditingThis ? 'true' : undefined}

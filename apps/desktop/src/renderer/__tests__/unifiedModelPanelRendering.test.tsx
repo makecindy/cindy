@@ -3019,7 +3019,7 @@ describe('统一面板 · 付费锁定行', () => {
     const onSelect = vi.fn();
     const onReveal = vi.fn();
     const onPaymentRequired = vi.fn();
-    const row = render(
+    const renderRow = (interactionDisabled: boolean) => (
       <UnifiedModelRow
         entry={{
           providerId: 'xd',
@@ -3058,7 +3058,7 @@ describe('统一面板 · 付费锁定行', () => {
         active={false}
         isFavoriteRow={false}
         justFavorited={false}
-        interactionDisabled={false}
+        interactionDisabled={interactionDisabled}
         paymentRequired
         paymentRequiredLabel="付费"
         paymentRequiredUnlockLabel="付费解锁"
@@ -3071,11 +3071,14 @@ describe('统一面板 · 付费锁定行', () => {
         onBlurAway={vi.fn()}
         onSelect={onSelect}
         onStar={vi.fn()}
-      />,
+      />
     );
+    const row = render(renderRow(false));
 
     const option = row.getByRole('option');
-    expect(option.getAttribute('aria-disabled')).toBe('true');
+    expect(option.hasAttribute('aria-disabled')).toBe(false);
+    expect(option.getAttribute('aria-label')).toBe('Paid Model · 付费解锁');
+    expect(option.hasAttribute('aria-keyshortcuts')).toBe(false);
     expect(option.getAttribute('tabindex')).toBe('0');
     const paymentBadge = row.getByText('付费').closest('[data-payment-required-badge]');
     expect(paymentBadge).not.toBeNull();
@@ -3091,6 +3094,13 @@ describe('统一面板 · 付费锁定行', () => {
     fireEvent.keyDown(option, { key: 'Enter' });
     expect(onReveal).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
+    expect(onPaymentRequired).toHaveBeenCalledTimes(2);
+
+    row.rerender(renderRow(true));
+    const disabledOption = row.getByRole('option');
+    expect(disabledOption.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(disabledOption);
+    fireEvent.keyDown(disabledOption, { key: 'Enter' });
     expect(onPaymentRequired).toHaveBeenCalledTimes(2);
   });
 });

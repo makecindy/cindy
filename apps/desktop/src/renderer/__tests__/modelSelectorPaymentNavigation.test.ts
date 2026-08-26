@@ -22,4 +22,18 @@ describe('ModelSelector paid model navigation', () => {
     );
     expect(paymentRequiredBlock).not.toContain('window.history');
   });
+
+  it('keeps the payment explanation action enabled for assistive technology', () => {
+    const start = modelSelectorSource.indexOf('const renderModelItem =');
+    const end = modelSelectorSource.indexOf('const emptyState =', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const modelRowBlock = modelSelectorSource.slice(start, end);
+    expect(modelRowBlock).toContain('aria-disabled={disabled ? true : undefined}');
+    expect(modelRowBlock).toContain(
+      "`${model.displayName} · ${t('newChat.modelSelector.paymentRequired.unlock')}`",
+    );
+    expect(modelRowBlock).not.toContain('aria-disabled={disabled || paymentRequired}');
+  });
 });
