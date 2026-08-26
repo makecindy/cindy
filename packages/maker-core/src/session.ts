@@ -2124,7 +2124,11 @@ export class Session {
         isTerminalAgentErrorEvent(event) &&
         this.staleTerminalQueuedGeneration === null
       );
-    if (leftoverTail && this.staleTerminalQueuedGeneration !== null) {
+    if (
+      leftoverTail &&
+      this.staleTerminalQueuedGeneration !== null &&
+      this.isUnacceptedCurrentSend()
+    ) {
       const stamped = this.staleTerminalQueuedGeneration;
       if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
         this.staleTerminalQueuedGeneration = null;
