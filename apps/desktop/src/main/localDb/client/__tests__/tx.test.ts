@@ -428,6 +428,52 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('claude.importMessages caps oversized tool_result content at the persistence limit', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      const cap = 8 * 1024;
+      const result = await client.tx('claude.importMessages', {
+        sessionId: 's1',
+        importClientIdPrefix: 'claude-import:',
+        sdkSessionId: 'sdk-1',
+        rows: [
+          {
+            lineNo: 8,
+            partIndex: 0,
+            role: 'tool_result',
+            content: 'z'.repeat(cap * 2),
+            toolUseId: 'tool-2',
+            agentMeta: null,
+            createdAt: 3100,
+          },
+          {
+            lineNo: 9,
+            partIndex: 0,
+            role: 'assistant',
+            content: { text: 'a'.repeat(cap * 2) },
+            toolUseId: null,
+            agentMeta: null,
+            createdAt: 3200,
+          },
+        ],
+      });
+
+      expect(result).toEqual({ changed: 2 });
+      const toolResult = (await client.queryOne(
+        'SELECT content FROM messages WHERE client_id = ?',
+        ['claude-import:8-0'],
+      )) as { content: string };
+      const storedText = JSON.parse(toolResult.content) as string;
+      expect(storedText.length).toBeLessThanOrEqual(cap);
+      expect(storedText).toContain('[tool result truncated');
+      const assistant = (await client.queryOne(
+        'SELECT content FROM messages WHERE client_id = ?',
+        ['claude-import:9-0'],
+      )) as { content: string };
+      expect((JSON.parse(assistant.content) as { text: string }).text.length).toBe(cap * 2);
+    });
+  });
+
   it('claude.importMessages does not rewrite rewound imported messages', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
@@ -2055,11 +2101,16 @@ describe('db worker tx handlers', () => {
         }
 
         await expect(
-          client.tx('orca.archiveWorkersByTeam', { teamId: 'active-team', now: 100 }),
+          client.tx('orca.archiveWorkersByTeam', {
+            teamId: 'active-team',
+            sessionIds: ['active-worker'],
+            now: 100,
+          }),
         ).resolves.toEqual(['active-worker']);
         await expect(
           client.tx('orca.reconcileInactiveTeamWorkersForLead', {
             leadSessionId: 'lead',
+            sessionIds: ['orphan-worker'],
             now: 200,
           }),
         ).resolves.toEqual(['orphan-worker']);
@@ -2118,6 +2169,35 @@ describe('db worker tx handlers', () => {
       expect(results).toContainEqual({ ok: true, occupiedSlotsBefore: 0 });
       expect(results).toContainEqual({ ok: false, errorCode: 'WORKER_CREATION_IN_PROGRESS' });
     });
+  });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('rejects a worker link persisted after its team has ended in the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'late-worker', { orcaRole: 'worker' });
+      await client.exec(
+        'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ['team-1', 'lead', 'completed', 1, 2, 2],
+      );
+
+      await expect(client.tx('orca.upsertWorker', {
+        id: 'late-worker-link',
+        teamId: 'team-1',
+        sessionId: 'late-worker',
+        status: 'idle',
+        label: 'late',
+        role: 'reviewer',
+        focused: false,
+        now: 3,
+      })).rejects.toThrow('Orca team team-1 is no longer active');
+
+      await expect(
+        client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['late-worker-link']),
+      ).resolves.toBeUndefined();
+    }, { useInlineWorker });
   });
 
   it('counts terminal workers until their sessions are archived', async () => {

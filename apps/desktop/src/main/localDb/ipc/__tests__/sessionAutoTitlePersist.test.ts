@@ -23,7 +23,10 @@ vi.mock('electron', () => ({
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../client/current', () => ({ getDbClient: () => ({ drizzle: h.db }) }));
+vi.mock('../../client/current', () => ({
+  getDbClient: () => ({ drizzle: h.db }),
+  getCurrentDbClientUserId: () => 'test-user',
+}));
 vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),

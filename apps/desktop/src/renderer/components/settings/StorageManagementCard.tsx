@@ -1,13 +1,14 @@
 /**
  * StorageManagementCard — 关于页「存储空间」卡片。
  * ---------------------------------------------------------------------------
- * 三段式:
+ * 组成:
  *   1. 占用总览(挂载时异步拉一次;数据在本地,拿到前不渲染 loading 骨架,
  *      规则 7:先拿数据再刷新显示);
- *   2. 清理:扫描(报数)→ 明细确认 → 执行 → 结果。发起扫描/清理时把
+ *   2. 两个固定缓存目录:打开目录或经破坏性确认后整目录清理;
+ *   3. 媒体总仓清理:扫描(报数)→ 明细确认 → 执行 → 结果。发起扫描/清理时把
  *      composerDraftStore 全部草稿附件 URL 随参带给 main——草稿图是合法的
  *      零引用 blob,main 读不到 renderer 内存,不带就会被当垃圾清掉;
- *   3. 体检(对账):只报不删,异常计数展示,全量清单在 main 日志里。
+ *   4. 体检(对账):只报不删,异常计数展示,全量清单在 main 日志里。
  *
  * 无瞬态 loading(规则 7):扫描/体检/清理都是本地毫秒级操作,按钮文案与
  * 已显示的结果区块在操作期间保持不动,结果到达才一次性刷新——中间态文案
@@ -41,6 +42,7 @@ export function StorageManagementCard() {
   // in-flight 防重入标志(不进 state:操作期间界面零变化,见文件头)。
   const cleanupBusyRef = useRef(false);
   const reconcileBusyRef = useRef(false);
+  const directoryCleanupBusyRef = useRef(false);
 
   const refreshStats = async () => {
     try {
@@ -61,6 +63,45 @@ export function StorageManagementCard() {
       if (!result.opened) toast.info(t('settings.about.storage.legacyImagesDirectoryMissing'));
     } catch {
       toast.error(t('settings.about.storage.legacyImagesOpenFailed'));
+    }
+  };
+
+  const handleClearLegacyImagesDir = async () => {
+    if (directoryCleanupBusyRef.current) return;
+    directoryCleanupBusyRef.current = true;
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.clearLegacyImagesDir();
+      if (!result.cleared) return;
+      toast.success(t('settings.about.storage.legacyImagesCleared'));
+    } catch {
+      toast.error(t('settings.about.storage.legacyImagesClearFailed'));
+    } finally {
+      directoryCleanupBusyRef.current = false;
+    }
+  };
+
+  const handleOpenChatAttachmentsDir = async () => {
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.openChatAttachmentsDir();
+      if (!result.opened) {
+        toast.info(t('settings.about.storage.chatAttachmentsDirectoryMissing'));
+      }
+    } catch {
+      toast.error(t('settings.about.storage.chatAttachmentsOpenFailed'));
+    }
+  };
+
+  const handleClearChatAttachmentsDir = async () => {
+    if (directoryCleanupBusyRef.current) return;
+    directoryCleanupBusyRef.current = true;
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir();
+      if (!result.cleared) return;
+      toast.success(t('settings.about.storage.chatAttachmentsCleared'));
+    } catch {
+      toast.error(t('settings.about.storage.chatAttachmentsClearFailed'));
+    } finally {
+      directoryCleanupBusyRef.current = false;
     }
   };
 
@@ -181,9 +222,35 @@ export function StorageManagementCard() {
             {t('settings.about.storage.legacyImagesDescription')}
           </p>
         </div>
-        <CardButton onClick={handleOpenLegacyImagesDir}>
-          {t('settings.about.storage.legacyImagesOpenButton')}
-        </CardButton>
+        <div className="flex shrink-0 items-center gap-2">
+          <CardButton onClick={handleOpenLegacyImagesDir}>
+            {t('settings.about.storage.legacyImagesOpenButton')}
+          </CardButton>
+          <CardButton onClick={handleClearLegacyImagesDir}>
+            {t('settings.about.storage.legacyImagesClearButton')}
+          </CardButton>
+        </div>
+      </div>
+
+      <Divider />
+
+      <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-13 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.chatAttachmentsLabel')}
+          </span>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.storage.chatAttachmentsDescription')}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <CardButton onClick={handleOpenChatAttachmentsDir}>
+            {t('settings.about.storage.chatAttachmentsOpenButton')}
+          </CardButton>
+          <CardButton onClick={handleClearChatAttachmentsDir}>
+            {t('settings.about.storage.chatAttachmentsClearButton')}
+          </CardButton>
+        </div>
       </div>
 
       <Divider />
@@ -334,7 +401,7 @@ function CardButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'shrink-0 rounded-md px-2.5 py-1 text-12 font-medium transition-colors',
+        'shrink-0 rounded-full px-2.5 py-1 text-12 font-medium transition-colors',
         'border border-[var(--settings-theme-card-border)]',
         emphasis
           ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] border-transparent hover:opacity-90'

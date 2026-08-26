@@ -1,8 +1,8 @@
 /**
  * 资源用量独立窗口的预热、显示和回收状态机。
  *
- * 窗口在主界面稳定后提前创建。renderer 挂载与首份采样都发生在隐藏阶段；用户打开时
- * 只恢复采样并显示已有内容。普通关闭仅隐藏，主窗口真正销毁或应用退出时才销毁窗口。
+ * 窗口在主界面稳定后提前创建。renderer 在隐藏阶段挂载；Windows 的首份采样延迟到用户
+ * 主动打开，其他平台保留隐藏快照预热。普通关闭仅隐藏，主窗口真正销毁或退出时才销毁。
  */
 
 import type { BrowserWindow, WebContents } from 'electron';
@@ -61,7 +61,7 @@ export class ResourceUsageWindowController {
   private prewarmTimeout: NodeJS.Timeout | null = null;
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
   private leaveTimeout: NodeJS.Timeout | null = null;
-  private samplingActive = true;
+  private samplingActive = false;
   private automaticRecoveryAttempts = 0;
   private destroyingWindow = false;
   private disposed = false;
@@ -119,10 +119,11 @@ export class ResourceUsageWindowController {
     this.rendererReady = true;
     if (this.locale) this.sendLocale(win, this.locale);
     this.setSamplingActive(win, this.samplingActive);
+    if (!this.samplingActive && !this.visible && !this.pendingOpen) this.clearPrewarmTimeout();
     return true;
   }
 
-  /** 首份快照已提交；隐藏预热到此结束，停止后台采样但保留表格状态。 */
+  /** 首份快照已提交；完成待显示内容，隐藏时停止后台采样但保留表格状态。 */
   markPresentationReady(sender: WebContents): boolean {
     const win = this.windowForSender(sender);
     if (!win) return false;
@@ -205,6 +206,16 @@ export class ResourceUsageWindowController {
     return this.winRef !== null && !this.winRef.isDestroyed();
   }
 
+  /**
+   * process-monitor 的 Main 侧二次门禁。资源窗口隐藏预热时即使 renderer 错误订阅，
+   * Windows 也不能因此拉起 OS 进程扫描；主窗口里可见的旧兼容页签不受影响。
+   */
+  allowsProcessMonitorSampling(sender: WebContents): boolean {
+    const win = this.winRef;
+    if (!win || win.isDestroyed() || sender !== win.webContents) return true;
+    return this.samplingActive;
+  }
+
   private ensureWindow(): BrowserWindow | null {
     if (this.winRef && !this.winRef.isDestroyed()) return this.winRef;
     let win: BrowserWindow;
@@ -221,7 +232,9 @@ export class ResourceUsageWindowController {
     this.rendererReady = false;
     this.presentationReady = false;
     this.visible = false;
-    this.samplingActive = true;
+    // Windows 预热只加载 BrowserWindow / renderer。昂贵且可能触发安全软件管道异常的
+    // OS 扫描必须等用户显式 open；其他平台保留既有首份快照预热体验。
+    this.samplingActive = this.pendingOpen || this.platform() !== 'win32';
     this.destroyingWindow = false;
     this.fullscreenTransition = 'idle';
     this.applyNativeTitle(win);
@@ -494,7 +507,7 @@ export class ResourceUsageWindowController {
     this.presentationReady = false;
     this.visible = false;
     this.pendingOpen = false;
-    this.samplingActive = true;
+    this.samplingActive = false;
     this.destroyingWindow = false;
     if (!options.preserveOwner) {
       this.unbindOwnerVisibility();
@@ -570,7 +583,7 @@ export class ResourceUsageWindowController {
     if (this.visible) win.hide();
     this.rendererReady = false;
     this.presentationReady = false;
-    this.setSamplingActive(win, true);
+    this.setSamplingActive(win, shouldRestore || this.platform() !== 'win32');
     if (shouldRestore) {
       this.pendingOpen = true;
       this.scheduleOpenFallback(win);

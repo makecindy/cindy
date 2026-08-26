@@ -43,6 +43,7 @@ import {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
 } from '../shared/stream-interrupt-error.js';
+import { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from '../shared/network-error.js';
 import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import {
@@ -79,7 +80,7 @@ interface PiPendingAssistantError {
   sdkError: string;
   errorStatus?: 401 | 429 | 529;
   usageLimit?: true;
-  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON;
+  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON;
 }
 
 interface PiThinkingBlock {
@@ -159,8 +160,6 @@ export interface PiTranslateContext {
    * reduce it into the preceding live-card state.
    */
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
-  /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
-  hostAutoCompactInFlight: boolean;
   /** Optional rewrite for ctx_doctor tool result text (Cindy-managed package paths). */
   rewriteToolResultText?: (text: string) => string;
   /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
@@ -208,7 +207,6 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     subagentToolCalls: new Map(),
     toolNamesByCallId: new Map(),
     pendingAssistantError: null,
-    hostAutoCompactInFlight: false,
     compactTurnScope: null,
   };
 }
@@ -470,6 +468,16 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
   };
 }
 
+function isPiTransientAssistantFailure(message: PiAssistantMessage): boolean {
+  if (message.stopReason === 'error') return true;
+  if (message.stopReason !== 'aborted') return false;
+  const errorMessage = message.errorMessage?.trim() ?? '';
+  return errorMessage.length > 0 && (
+    isNetworkishErrorMessage(errorMessage)
+    || isStreamInterruptedErrorMessage(errorMessage)
+  );
+}
+
 function parsePiAutoRetryProgress(
   event: PiRpcEvent,
 ): { attempt: number; maxAttempts: number } | null {
@@ -628,14 +636,14 @@ export function translatePiEvent(
         ctx.generationTimingReliable = false;
       }
       const fullText = assistantTextOf(message);
-      if (message.stopReason === 'error') {
+      if (isPiTransientAssistantFailure(message)) {
         const rawError = message.errorMessage?.trim() || fullText.trim() || 'Pi agent request failed';
         ctx.pendingAssistantError = piAssistantErrorOf(rawError);
       } else {
         // A normal assistant message proves an earlier provider failure recovered.
         ctx.pendingAssistantError = null;
       }
-      if (message.stopReason !== 'error' && fullText.length > 0) {
+      if (!isPiTransientAssistantFailure(message) && fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。
         ctx.finalAssistantText = fullText;
         queue.push({
@@ -860,15 +868,10 @@ export function translatePiEvent(
       // failed request. Drop any stale latch so the next request samples its
       // own tariff at message_start.
       ctx.pendingPriceVariants = [];
-      // 走 CC/Codex 同一套 `(auto-retry N/M)` 跨 agent 协议。这个后缀在 mobile /
-      // Telegram 投影里**只表示过载**，不能拿去编码未分类 5xx —— 否则手机会把普通
-      // 供应商故障显示成「模型服务繁忙」。
-      //
-      // 第 1 次不透出：单次抖动 pi 一次重试就过，提示只会闪一下徒增噪音
-      // （与 claude-code translator 的 api_retry 防噪口径一致）。
-      // 未分类错误同样静默：渠道 / 手机没有对应本地化契约，CC 也只透过载类。
+      // `(auto-retry N/M)` 只给过载用：mobile / Telegram 把这个后缀当成「模型服务繁忙」。
+      // 网络类改走 `Reconnecting... N/M`，未分类 5xx / LiteLLM in-stream 仍静默。
       const progress = parsePiAutoRetryProgress(event);
-      if (!progress || progress.attempt < 2) return;
+      if (!progress) return;
       const sdkError = typeof event.errorMessage === 'string'
         ? redactSensitiveText(event.errorMessage)
         : undefined;
@@ -877,19 +880,41 @@ export function translatePiEvent(
         || '';
       const signals = extractNonSecretErrorSignals(rawMessage);
       const errorStatus = ctx.pendingAssistantError?.errorStatus ?? signals.errorStatus;
-      if (parseOverloadError(rawMessage, errorStatus) === null) return;
-      queue.push({
-        type: 'error',
-        data: {
-          message: formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
-          isTerminal: false,
-          willRetry: true,
-          reason: UPSTREAM_OVERLOAD_REASON,
-          ...(sdkError ? { sdkError } : {}),
-          ...(errorStatus !== undefined ? { errorStatus } : {}),
-        },
-        source: 'pi',
-      });
+      if (parseOverloadError(rawMessage, errorStatus) !== null) {
+        // 第 1 次不透出：单次抖动 pi 一次重试就过，提示只会闪一下徒增噪音
+        // （与 claude-code translator 的 api_retry 防噪口径一致）。
+        if (progress.attempt < 2) return;
+        queue.push({
+          type: 'error',
+          data: {
+            message: formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
+            isTerminal: false,
+            willRetry: true,
+            reason: UPSTREAM_OVERLOAD_REASON,
+            ...(sdkError ? { sdkError } : {}),
+            ...(errorStatus !== undefined ? { errorStatus } : {}),
+          },
+          source: 'pi',
+        });
+        return;
+      }
+      // 网络 / 超时 / Responses 半截流：复用 Desktop 已有的 Reconnecting N/M 进行态，
+      // 不要套 `(auto-retry N/M)`——那条跨端协议在手机上只表示过载。
+      if (isNetworkishErrorMessage(rawMessage)) {
+        queue.push({
+          type: 'error',
+          data: {
+            message: `Reconnecting... ${progress.attempt}/${progress.maxAttempts}`,
+            isTerminal: false,
+            willRetry: true,
+            ...(sdkError ? { sdkError } : {}),
+            ...(errorStatus !== undefined ? { errorStatus } : {}),
+          },
+          source: 'pi',
+        });
+        return;
+      }
+      // LiteLLM in-stream / 未分类 5xx：保持静默，避免误报「模型服务繁忙」。
       return;
     }
 
@@ -905,11 +930,17 @@ export function translatePiEvent(
         ? piAssistantErrorOf(rawFinalError)
         : ctx.pendingAssistantError ?? piAssistantErrorOf('pi auto-retry failed');
       ctx.pendingAssistantError = null;
+      // 只有 Pi 自己的 retry budget 用尽，才挡住 Host 续跑。首次 aborted 半截流
+      // 没有 auto_retry_*，必须保持无 reason，好让 Host 按网络类接走。
+      const exhaustedReason = !finalError.reason && isNetworkishErrorMessage(finalError.message)
+        ? PI_GATEWAY_DROP_REASON
+        : undefined;
       queue.push({
         type: 'error',
         data: {
           ...finalError,
           isTerminal: true,
+          ...(exhaustedReason ? { reason: exhaustedReason } : {}),
         },
         source: 'pi',
       });
@@ -917,9 +948,9 @@ export function translatePiEvent(
     }
 
     case 'compaction_start': {
-      // Host auto-compact 发在 agent_settled 之后(isStreaming=false)。若这里
-      // 无条件 isRunning=true 而不标 background，desktop tracker 会当成新一轮产品 turn。
-      // 在 start 锁存 scope：end 时 isStreaming 可能已因新 turn 变 true。
+      // Idle manual compaction is background work, while native threshold and
+      // overflow compaction remain inside Pi's active agent run.
+      // Latch the scope at start because a new turn may begin before end arrives.
       pushStatus(queue, ctx, 'Compacting context…', true, latchCompactTurnScope(ctx));
       return;
     }
@@ -937,7 +968,7 @@ export function translatePiEvent(
       queue.push({
         type: 'compact_boundary',
         data: {
-          trigger: event.reason === 'manual' && !ctx.hostAutoCompactInFlight ? 'manual' : 'auto',
+          trigger: event.reason === 'manual' ? 'manual' : 'auto',
           preTokens: result?.tokensBefore,
           postTokens: result?.estimatedTokensAfter,
         },

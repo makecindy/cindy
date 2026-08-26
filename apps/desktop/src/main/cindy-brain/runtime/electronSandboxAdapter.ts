@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { createLogger } from '../../logger.js';
 import {
   GHOST_SCHEME,
-  ghostPartition,
   type GhostAppContextResult,
   type GhostMediaModelsResult,
   type GhostMediaModelType,
   type InstalledGhost,
 } from '../../../shared/ghost.js';
+import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
+import { ownerScopedGhostPartition } from '../ghostWebviewPartition.js';
 import { GHOST_BOOT_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -224,14 +225,36 @@ export function setGhostConnectionsHandler(handler: GhostConnectionsProtocolHand
 /** 该分区是否已挂过协议 handler(session 分区随 app 生命周期,挂一次即可)。 */
 const partitionRegistered = new Set<string>();
 const partitionGhost = new Map<string, { dir: string; entry: string }>();
+type GhostProtocolOwnerIdentity = Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>;
+const partitionOwner = new Map<string, GhostProtocolOwnerIdentity>();
+
+function ghostProtocolOwnerSnapshot(owner: ActiveAppSession): GhostProtocolOwnerIdentity {
+  return { mode: owner.mode, dataOwnerId: owner.dataOwnerId };
+}
+
+function isSameGhostProtocolOwner(
+  left: GhostProtocolOwnerIdentity,
+  right: GhostProtocolOwnerIdentity,
+): boolean {
+  return left.mode === right.mode && left.dataOwnerId === right.dataOwnerId;
+}
+
+function isGhostProtocolOwnerActive(owner: GhostProtocolOwnerIdentity): boolean {
+  return isSameGhostProtocolOwner(owner, getActiveAppSession());
+}
 
 /**
  * 确保某意识分区上的 cindy-ghost:// 协议 handler 就位(幂等)。
  * 两个调用方:离屏沙箱窗口(create)与面板 webview 附加闸(webview-security
  * 放行前调用——handler 必须先于 webview 首次加载挂好)。
  */
-export function ensureGhostProtocolRegistered(ghost: InstalledGhost): void {
-  registerGhostProtocol(ghostPartition(ghost.manifest.id), ghost);
+export function ensureGhostProtocolRegistered(
+  ghost: InstalledGhost,
+  owner: ActiveAppSession = getActiveAppSession(),
+): void {
+  const partition = ownerScopedGhostPartition(ghost.manifest.id, owner);
+  if (!partition) throw new Error('ghost protocol requires an active data owner');
+  registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(owner));
 }
 
 /**
@@ -242,7 +265,15 @@ export function ensureGhostProtocolRegistered(ghost: InstalledGhost): void {
 const GHOST_HTML_CSP =
   "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:";
 
-function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
+function registerGhostProtocol(
+  partition: string,
+  ghost: InstalledGhost,
+  owner: GhostProtocolOwnerIdentity,
+): void {
+  const registeredOwner = partitionOwner.get(partition);
+  if (registeredOwner && !isSameGhostProtocolOwner(registeredOwner, owner)) {
+    throw new Error('ghost protocol partition already belongs to a different data owner');
+  }
   partitionGhost.set(partition, {
     dir: ghost.dir,
     entry: ghost.manifest.entry,
@@ -253,6 +284,11 @@ function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
   // 实际无 handler,面板与电子脑一起哑火(review P0 的中毒模式)。
   const ses = session.fromPartition(partition);
   const ghostId = ghost.manifest.id;
+  // 每个 owner 都会得到新的内存 session；权限与下载必须显式拒绝，不能
+  // 因为分区是新建的就依赖 Electron 默认行为。
+  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  ses.setPermissionCheckHandler(() => false);
+  ses.on('will-download', (event) => event.preventDefault());
   // 分区级断网(docs/dev-rules/plugin-security-and-authoring.md 的"网络永远不直连"):本分区发出的一切
   // 请求,只放行自己协议同 id 下的资源;http(s) / ws / 其它协议一律掐断。
   // 进程沙箱不管网络,这里才是"零网络"承诺的真正闸门;外部数据未来走
@@ -263,6 +299,15 @@ function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
   });
   ses.protocol.handle(SCHEME, async (request) => {
     try {
+      // owner B 提交后，owner A 的旧 guest 仍可能短暂存活并新发请求。
+      // 在 URL 路由、body 读取和任何 provider 调用前拒绝旧 Session；已经
+      // 进入 handler 的请求不在这里取消或排空。
+      if (!isGhostProtocolOwnerActive(owner)) {
+        return new Response(null, {
+          status: 403,
+          headers: { 'Cache-Control': 'no-store' },
+        });
+      }
       const url = new URL(request.url);
       // 分区专属通道只认自己的 id,其它 host 一律 403(结构隔离的最后一道断言)。
       if (url.host !== ghostId) return new Response(null, { status: 403 });
@@ -453,6 +498,7 @@ function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
       return new Response(null, { status: 500 });
     }
   });
+  partitionOwner.set(partition, owner);
   partitionRegistered.add(partition); // 全部挂载成功,才算注册完成
 }
 
@@ -615,8 +661,10 @@ class ElectronSandboxHandle implements SandboxHandle {
   private destroyed = false;
 
   constructor(private readonly ghost: InstalledGhost) {
-    const partition = ghostPartition(ghost.manifest.id);
-    registerGhostProtocol(partition, ghost);
+    const activeOwner = getActiveAppSession();
+    const partition = ownerScopedGhostPartition(ghost.manifest.id, activeOwner);
+    if (!partition) throw new Error('ghost sandbox requires an active data owner');
+    registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(activeOwner));
     this.win = new BrowserWindow({
       show: false,
       // 逻辑页是恒隐藏的离屏工作台;可见面板由独立 webview 嵌入布局。

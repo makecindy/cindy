@@ -17,6 +17,9 @@ describe('FORGE_GUIDE · Cindy Connection 凭证章节', () => {
       'identities',
       '不允许 `*.example.com` 通配',
       'POST / PUT / PATCH / DELETE',
+      '显式调用 `ghost_forge_install` 安装',
+      '要求用户手输相同 id',
+      '手动导入不签发',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

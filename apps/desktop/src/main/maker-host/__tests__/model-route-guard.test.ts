@@ -568,6 +568,7 @@ describe('materializeExclusiveProviderRoute', () => {
 
   it('SET_MODEL undefined 保持当前 custom 来源,不会改绑 xAI', () => {
     expect(resolveSetModelGuardProviderId(undefined, 'my-litellm')).toBe('my-litellm');
+    expect(resolveSetModelGuardProviderId(null, 'my-litellm')).toBeNull();
     expect(resolveExclusiveSetModelReroute(
       undefined,
       'my-litellm',

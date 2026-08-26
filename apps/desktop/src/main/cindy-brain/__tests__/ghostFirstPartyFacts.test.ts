@@ -200,6 +200,40 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     });
   });
 
+  it('keeps explicit Forge facts usable when the rebuildable market ledger cannot be read', () => {
+    const loaded = loader({
+      readInstallOrigin: () => 'agent-forge',
+      readMarketInstallation: () => {
+        throw new Error('EACCES');
+      },
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+    }).load('acme-tool', 'runtime', ORG_A);
+
+    expect(loaded).toMatchObject({
+      kind: 'ready',
+      facts: {
+        marketRecord: null,
+        installOrigin: 'agent-forge',
+        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme' },
+      },
+    });
+  });
+
+  it('applies an install-time Forge origin before consulting a broken market ledger', () => {
+    const loaded = loader({
+      readInstallOrigin: () => 'manual',
+      readMarketInstallation: () => {
+        throw new Error('EACCES');
+      },
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+    }).load('acme-tool', 'install', ORG_A, { installOrigin: 'agent-forge' });
+
+    expect(loaded).toMatchObject({
+      kind: 'ready',
+      facts: { installOrigin: 'agent-forge', marketRecord: null },
+    });
+  });
+
   it('copies a confirmed ledger miss as marketRecord null when facts are otherwise ready', () => {
     const loaded = loader({
       readMarketInstallation: () => null,
@@ -314,7 +348,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     });
   });
 
-  it('copies only the legacy Forge origin and fails closed when it cannot be read', () => {
+  it('copies only the explicit Forge origin and fails closed when it cannot be read', () => {
     const forged = loader({
       readInstallOrigin: () => 'agent-forge',
       lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),

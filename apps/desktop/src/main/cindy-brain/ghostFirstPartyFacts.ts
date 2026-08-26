@@ -54,6 +54,7 @@ export interface GhostFirstPartyFactsLoader {
     ghostId: string,
     purpose: GhostFirstPartyFactsPurpose,
     identity: GhostFirstPartyFactsIdentity,
+    overrides?: GhostFirstPartyFactsOverrides,
   ): GhostFirstPartyFactsLoad;
 }
 
@@ -63,7 +64,7 @@ export interface LoadGhostFirstPartyFactsLoaderOptions {
   /** Missing or legacy package evidence must return null. */
   readApprovedPackageSha256(ghostId: string): string | null;
   lookupOrganizationPrefix(orgId: string): OrganizationPrefixLookup;
-  /** 新安装返回 manual；仅旧 receipt 会返回 agent-forge。 */
+  /** 显式 ghost_forge_install 返回 agent-forge；其它入口返回 manual。 */
   readInstallOrigin(ghostId: string): 'manual' | 'agent-forge';
 }
 
@@ -107,26 +108,11 @@ export type GhostFirstPartyFactsOverrides = {
   marketRecord?: GhostFirstPartyMarketRecord | null;
 };
 
-export function applyGhostFirstPartyFactsOverrides(
-  load: GhostFirstPartyFactsLoad,
-  overrides?: GhostFirstPartyFactsOverrides,
-): GhostFirstPartyFactsLoad {
-  if (!overrides || load.kind !== 'ready') return load;
-  return {
-    kind: 'ready',
-    facts: {
-      ...load.facts,
-      ...(overrides.installOrigin !== undefined ? { installOrigin: overrides.installOrigin } : {}),
-      ...(overrides.marketRecord !== undefined ? { marketRecord: overrides.marketRecord } : {}),
-    },
-  };
-}
-
 export function loadGhostFirstPartyFactsLoader(
   options: LoadGhostFirstPartyFactsLoaderOptions,
 ): GhostFirstPartyFactsLoader {
   return {
-    load(ghostId, purpose, identity) {
+    load(ghostId, purpose, identity, overrides) {
       const unavailable = (
         reason: GhostFirstPartyFactsUnavailableReason,
       ): GhostFirstPartyFactsLoad => ({
@@ -143,24 +129,34 @@ export function loadGhostFirstPartyFactsLoader(
         return unavailable('installed-list-read-failed');
       }
 
-      let marketRecord: GhostFirstPartyMarketRecord | null = null;
-      try {
-        const installation = options.readMarketInstallation(ghostId);
-        marketRecord = installation
-          ? toMarketRecord(installation, options.readApprovedPackageSha256(ghostId))
-          : null;
-      } catch {
-        // Builtin official plugins do not consult the ledger. A corrupt ledger
-        // must not take away xd-feishu / xd-atlassian broker eligibility.
-        if (!builtin) return unavailable('market-installation-read-failed');
-        marketRecord = null;
+      let installOrigin: 'manual' | 'agent-forge' = 'manual';
+      if (overrides?.installOrigin !== undefined) {
+        installOrigin = overrides.installOrigin;
+      } else {
+        try {
+          installOrigin = options.readInstallOrigin(ghostId);
+        } catch {
+          installOrigin = 'manual';
+        }
       }
 
-      let installOrigin: 'manual' | 'agent-forge' = 'manual';
-      try {
-        installOrigin = options.readInstallOrigin(ghostId);
-      } catch {
-        installOrigin = 'manual';
+      let marketRecord: GhostFirstPartyMarketRecord | null = null;
+      if (overrides?.marketRecord !== undefined) {
+        marketRecord = overrides.marketRecord;
+      } else {
+        try {
+          const installation = options.readMarketInstallation(ghostId);
+          marketRecord = installation
+            ? toMarketRecord(installation, options.readApprovedPackageSha256(ghostId))
+            : null;
+        } catch {
+          // Builtin official plugins and explicit Forge self-tests do not depend
+          // on the ledger. A corrupt cache must not take either qualification away.
+          if (!builtin && installOrigin !== 'agent-forge') {
+            return unavailable('market-installation-read-failed');
+          }
+          marketRecord = null;
+        }
       }
 
       if (identity.membershipKind !== 'org' || !identity.orgId) {

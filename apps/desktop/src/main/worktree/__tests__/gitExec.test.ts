@@ -44,6 +44,8 @@ type FakeChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
   exitCode: number | null;
   signalCode: string | null;
+  stdout: EventEmitter;
+  stderr: EventEmitter;
 };
 
 interface FakeGit {
@@ -69,6 +71,8 @@ function installExecFileMock(): FakeGit {
   child.kill = vi.fn();
   child.exitCode = null;
   child.signalCode = null;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
   const state: FakeGit = {
     child,
     gitOpts: undefined,
@@ -88,7 +92,7 @@ function installExecFileMock(): FakeGit {
         if (state.psHangUntilTimeout) {
           // 模拟 WMI 挂死:只有 execFile 自身的 timeout 到点才以错误收口
           setTimeout(() => cb!(new Error('powershell query timed out'), '', ''), opts?.timeout ?? 3_000);
-          return {};
+          return new EventEmitter();
         }
         const answer = () => {
           if (state.psTable === null) cb!(new Error('powershell unavailable'), '', '');
@@ -99,7 +103,7 @@ function installExecFileMock(): FakeGit {
         } else {
           answer();
         }
-        return {};
+        return new EventEmitter();
       }
       if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
       state.gitOpts = opts;
@@ -174,6 +178,37 @@ afterEach(() => {
 });
 
 describe('gitExec timeoutMs', () => {
+  it('stdout ENOTCONN 先完成整树清理，再收口为 GitExecError', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    let finishTreeCleanup!: () => void;
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => {
+        finishTreeCleanup = onSettled ?? (() => undefined);
+      },
+    );
+    const pending = gitExec(['status'], '/repo');
+    const status = probe(pending);
+    state.child.stdout.emit(
+      'error',
+      Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN', syscall: 'read' }),
+    );
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
+
+    // execFile 回调只证明继承的 stdio 已放手；树杀尚未确认前不得向调用方返回。
+    state.gitCb!(new Error('killed'), '', '');
+    await flushMicrotasks();
+    expect(status.settled).toBe(false);
+    finishTreeCleanup();
+
+    await expect(pending).rejects.toMatchObject({
+      cause: expect.objectContaining({ code: 'ENOTCONN', syscall: 'read' }),
+    });
+  });
+
   it('Windows 超时 → 快照确认 git 树幸存者(含 git.exe 已退但后代仍活)全部消失才收口', async () => {
     setPlatform('win32');
     const state = installExecFileMock();

@@ -156,6 +156,61 @@ describe('ConfirmDialog 长内容布局', () => {
     render(<ConfirmDialog open onOpenChange={() => {}} title="确定退出？" confirmText="退出" />);
     const dialog = screen.getByRole('alertdialog');
     expect(dialog.querySelectorAll('.overflow-y-auto').length).toBe(0);
+    // 对照项：没有显式开放框选的普通确认框仍保持防误选行为。
+    expect(dialog.className).toContain('select-none');
+    expect(dialog.className).not.toContain('select-text');
     expect(flashScrollbar).not.toHaveBeenCalled();
+  });
+
+  it('手输确认逐字匹配且正文可选择，前后空格不能绕过 id 核对', () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="企业身份自测"
+        description="确认域名"
+        content={<div>api.acme.test</div>}
+        contentSelectable
+        confirmText="安装"
+        requireTypedConfirmation={{ expected: 'acme-tool', label: '输入插件 id' }}
+        onConfirm={onConfirm}
+      />,
+    );
+    const input = screen.getByLabelText('输入插件 id');
+    const confirmButton = screen.getByRole('button', { name: '安装' });
+    const dialog = screen.getByRole('alertdialog');
+    // 根节点必须撤掉 select-none；只在子滚动区加 select-text 无法保证展示 id 可框选。
+    expect(dialog.className).toContain('select-text');
+    expect(dialog.className).not.toContain('select-none');
+    expect(dialog.querySelector('.overflow-y-auto')?.className).toContain('select-text');
+
+    fireEvent.change(input, { target: { value: ' acme-tool ' } });
+    expect((confirmButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input, { target: { value: 'acme-tool' } });
+    expect((confirmButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(confirmButton);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('手输匹配后按 Enter 仍服从调用方的额外禁用条件', () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="企业身份自测"
+        confirmText="安装"
+        confirmDisabled
+        requireTypedConfirmation={{ expected: 'acme-tool', label: '输入插件 id' }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    const input = screen.getByLabelText('输入插件 id');
+    fireEvent.change(input, { target: { value: 'acme-tool' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 });

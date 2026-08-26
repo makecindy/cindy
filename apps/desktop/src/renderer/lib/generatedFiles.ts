@@ -34,12 +34,202 @@ export interface GeneratedFileRef {
    * 'command' = 命令文本启发式候选,渲染前还需 mtime 时间窗校验。
    */
   source: 'tool' | 'command';
+  /** 文档工具返回的轻量交付信息；普通源码文件没有此字段。 */
+  artifact?: DocumentArtifactMetadata;
+  /** true 仅表示同一 tool_use 有结构化 ok:true 结果，可用本轮 mtime 证明成功覆盖。 */
+  artifactConfirmed?: boolean;
+}
+
+export type DocumentArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
+export type DocumentArtifactSummary = {
+  kind: 'pages' | 'slides' | 'sheets' | 'rows' | 'bytes';
+  value: number;
+};
+
+export type DocumentArtifactPreview =
+  | {
+      kind: 'sheet';
+      /** 只取工具输入中真实存在的前几行、前几列。 */
+      rows: string[][];
+      hasHeader: boolean;
+    }
+  | {
+      kind: 'slide';
+      /** 封面文字来自第一张幻灯片，不构造示例内容。 */
+      title?: string;
+      subtitle?: string;
+    };
+
+export interface DocumentArtifactMetadata {
+  format: DocumentArtifactFormat;
+  title?: string;
+  subtitle?: string;
+  theme?: 'light' | 'dark' | 'navy';
+  cover?: boolean;
+  summary?: DocumentArtifactSummary;
+  preview?: DocumentArtifactPreview;
 }
 
 interface ToolUseLike {
   role: string;
   toolName?: string;
   toolInput?: unknown;
+  toolUseId?: string;
+  content?: string;
+}
+
+function documentToolName(toolName: string): string | null {
+  const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
+  const name = normalized.split(':').at(-1) ?? normalized;
+  return /^(make_docx|make_pptx|make_xlsx|render_pdf)$/.test(name) ? name : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseToolResult(content: string | undefined): Record<string, unknown> | null {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function stringField(record: Record<string, unknown> | null, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function previewCellText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).slice(0, 48);
+  }
+  const record = asRecord(value);
+  if (record && 'result' in record) return previewCellText(record.result);
+  if (record && 'text' in record) return previewCellText(record.text);
+  return '';
+}
+
+function sheetPreview(input: Record<string, unknown> | null): DocumentArtifactPreview | undefined {
+  const firstSheet = asRecord(Array.isArray(input?.sheets) ? input.sheets[0] : null);
+  if (!firstSheet) return undefined;
+  const header = Array.isArray(firstSheet.header)
+    ? firstSheet.header.slice(0, 3).map(previewCellText)
+    : [];
+  const bodyRows = Array.isArray(firstSheet.rows)
+    ? firstSheet.rows
+        .slice(0, header.length > 0 ? 3 : 4)
+        .filter(Array.isArray)
+        .map((row) => row.slice(0, 3).map(previewCellText))
+    : [];
+  const rows = header.length > 0 ? [header, ...bodyRows] : bodyRows;
+  return rows.length > 0 ? { kind: 'sheet', rows, hasHeader: header.length > 0 } : undefined;
+}
+
+export function extractDocumentArtifactMetadata(
+  toolName: string,
+  input: unknown,
+  resultContent?: string,
+): DocumentArtifactMetadata | undefined {
+  const name = documentToolName(toolName);
+  if (!name) return undefined;
+  const inputRecord = asRecord(input);
+  const result = parseToolResult(resultContent);
+  // 旧消息可能没有保存 tool_result，仍允许只按输入重建轻量卡片；但只要当前
+  // 消息明确带了结果，就必须由 ok:true 证明生成成功。解析失败和 ok:false 都
+  // 不能把同轮预先存在的同名文件冒充成这次成功交付的作品。
+  if (resultContent !== undefined && result?.ok !== true) return undefined;
+  const resultArtifact = asRecord(result?.artifact);
+  const format =
+    name === 'make_docx'
+      ? 'docx'
+      : name === 'make_pptx'
+        ? 'pptx'
+        : name === 'make_xlsx'
+          ? 'xlsx'
+          : 'pdf';
+  const theme =
+    stringField(resultArtifact, 'theme') ??
+    stringField(result, 'theme') ??
+    stringField(inputRecord, 'theme');
+  const validTheme = theme === 'light' || theme === 'dark' || theme === 'navy' ? theme : undefined;
+  const title =
+    stringField(resultArtifact, 'title') ??
+    stringField(result, 'title') ??
+    stringField(inputRecord, 'title') ??
+    (name === 'make_pptx'
+      ? stringField(
+          asRecord(Array.isArray(inputRecord?.slides) ? inputRecord.slides[0] : null),
+          'title',
+        )
+      : name === 'make_xlsx'
+        ? stringField(
+            asRecord(Array.isArray(inputRecord?.sheets) ? inputRecord.sheets[0] : null),
+            'name',
+          )
+        : undefined);
+  const subtitle =
+    stringField(resultArtifact, 'subtitle') ??
+    stringField(result, 'subtitle') ??
+    stringField(inputRecord, 'subtitle');
+  const rawSummary = asRecord(resultArtifact?.summary) ?? asRecord(result?.summary);
+  const summaryKind = rawSummary?.kind;
+  const summaryValue = rawSummary?.value;
+  const summary =
+    (summaryKind === 'pages' ||
+      summaryKind === 'slides' ||
+      summaryKind === 'sheets' ||
+      summaryKind === 'rows' ||
+      summaryKind === 'bytes') &&
+    typeof summaryValue === 'number' &&
+    Number.isFinite(summaryValue)
+      ? { kind: summaryKind, value: summaryValue }
+      : name === 'make_pptx' && Array.isArray(inputRecord?.slides)
+        ? { kind: 'slides' as const, value: inputRecord.slides.length }
+        : name === 'make_xlsx' && Array.isArray(inputRecord?.sheets)
+          ? { kind: 'sheets' as const, value: inputRecord.sheets.length }
+          : (name === 'make_docx' || name === 'render_pdf') &&
+              typeof result?.bytes === 'number' &&
+              Number.isFinite(result.bytes)
+            ? { kind: 'bytes' as const, value: result.bytes }
+            : undefined;
+  const firstSlide =
+    name === 'make_pptx'
+      ? asRecord(Array.isArray(inputRecord?.slides) ? inputRecord.slides[0] : null)
+      : null;
+  const preview =
+    name === 'make_xlsx'
+      ? sheetPreview(inputRecord)
+      : name === 'make_pptx'
+        ? {
+            kind: 'slide' as const,
+            ...(stringField(firstSlide, 'title')
+              ? { title: stringField(firstSlide, 'title') }
+              : {}),
+            ...(stringField(firstSlide, 'subtitle')
+              ? { subtitle: stringField(firstSlide, 'subtitle') }
+              : {}),
+          }
+        : undefined;
+  return {
+    format,
+    ...(title ? { title } : {}),
+    ...(subtitle ? { subtitle } : {}),
+    ...(validTheme ? { theme: validTheme } : {}),
+    ...(typeof resultArtifact?.cover === 'boolean'
+      ? { cover: resultArtifact.cover }
+      : typeof inputRecord?.cover === 'boolean'
+        ? { cover: inputRecord.cover }
+        : {}),
+    ...(summary ? { summary: summary as DocumentArtifactSummary } : {}),
+    ...(preview ? { preview } : {}),
+  };
 }
 
 /**
@@ -504,6 +694,16 @@ export function collectGeneratedFiles(
   messages: readonly ToolUseLike[],
   workingDir: string,
 ): GeneratedFileRef[] {
+  const resultByToolUseId = new Map<string, string>();
+  for (const message of messages) {
+    if (
+      message.role === 'tool_result' &&
+      message.toolUseId &&
+      typeof message.content === 'string'
+    ) {
+      resultByToolUseId.set(message.toolUseId, message.content);
+    }
+  }
   // 第一遍:收「本轮被文件工具**修改**过」的路径。它们是编辑不是新建,命令文本
   // 里再出现也不算产物候选——否则跑测试 / 构建命令引用刚编辑过的源码文件
   // (`vitest run src/x.test.ts`)会被 mtime 窗口放行,把编码会话的改动文件全
@@ -543,6 +743,32 @@ export function collectGeneratedFiles(
 
     for (const rawPath of createdPathsFromToolUse(toolName, msg.toolInput)) {
       addPath(rawPath, 'tool');
+    }
+    const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
+    const artifact = extractDocumentArtifactMetadata(toolName, msg.toolInput, resultContent);
+    if (artifact) {
+      const outputPath =
+        typeof asRecord(msg.toolInput)?.outPath === 'string'
+          ? (asRecord(msg.toolInput)!.outPath as string)
+          : undefined;
+      if (outputPath) {
+        const abs = canonicalizeWindowsShape(resolveToolFilePath(outputPath, workingDir));
+        const key = dedupeKeyForPath(abs);
+        const existing = byKey.get(key);
+        const artifactConfirmed = parseToolResult(resultContent)?.ok === true;
+        if (existing) {
+          existing.artifact = artifact;
+          if (artifactConfirmed) existing.artifactConfirmed = true;
+        } else {
+          byKey.set(key, {
+            path: abs,
+            name: basename(abs),
+            source: 'tool',
+            artifact,
+            ...(artifactConfirmed ? { artifactConfirmed: true } : {}),
+          });
+        }
+      }
     }
     const descriptor = describeToolUse(toolName, msg.toolInput);
     if (descriptor.kind === 'command' && descriptor.command) {
