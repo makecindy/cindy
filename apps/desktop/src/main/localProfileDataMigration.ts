@@ -25,6 +25,7 @@ export interface LocalProfileDataMigrationFs {
   pathExists(file: string): Promise<boolean>;
   readFile(file: string): Promise<string>;
   createFileExclusive(file: string, contents: string): Promise<boolean>;
+  rename(source: string, target: string): Promise<void>;
   copyFile(source: string, target: string): Promise<void>;
   link(source: string, target: string): Promise<void>;
   removeIfExists(file: string): Promise<void>;
@@ -73,6 +74,7 @@ const realFs: LocalProfileDataMigrationFs = {
     }
   },
   copyFile: (source, target) => fs.promises.copyFile(source, target),
+  rename: (source, target) => fs.promises.rename(source, target),
   link: (source, target) => fs.promises.link(source, target),
   removeIfExists: (file) => fs.promises.rm(file, { force: true }),
 };
@@ -108,40 +110,79 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function parseMigrationLease(raw: string): LocalProfileMigrationLease | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<LocalProfileMigrationLease>;
+    if (
+      typeof parsed.ownerId === 'string' &&
+      typeof parsed.leaseId === 'string' &&
+      Number.isInteger(parsed.pid) &&
+      typeof parsed.claimedAt === 'number'
+    ) {
+      return parsed as LocalProfileMigrationLease;
+    }
+  } catch {
+    // A torn record is recoverable because production lease publication is atomic.
+  }
+  return null;
+}
+
+async function removeMigrationLeaseIfMatches(
+  deps: LocalProfileDataMigrationDeps,
+  lease: string,
+  expectedLeaseId: string | null,
+): Promise<boolean> {
+  const candidate = `${lease}.reclaim.${randomUUID()}`;
+  try {
+    // Rename claims the exact directory entry that was inspected. If another
+    // process reclaimed or replaced it first, this fails without touching the
+    // replacement lease.
+    await deps.fs.rename(lease, candidate);
+  } catch {
+    return false;
+  }
+
+  const current = parseMigrationLease(await deps.fs.readFile(candidate).catch(() => ''));
+  const matches = expectedLeaseId === null ? current === null : current?.leaseId === expectedLeaseId;
+  if (matches) {
+    await deps.fs.removeIfExists(candidate);
+    return true;
+  }
+
+  // Put a lease we did not own back only when the destination is still vacant;
+  // never replace a newer lease that won the race while we inspected this one.
+  try {
+    await deps.fs.link(candidate, lease);
+    await deps.fs.removeIfExists(candidate);
+  } catch {
+    // A newer lease may already occupy the path; keep the candidate for the
+    // next cleanup pass rather than deleting another process's lease.
+  }
+  return false;
+}
+
 async function acquireMigrationLease(
   deps: LocalProfileDataMigrationDeps,
   lease: string,
   ownerId: string,
-): Promise<boolean> {
+): Promise<string | null> {
+  const leaseId = randomUUID();
   const contents = `${JSON.stringify({
     ownerId,
-    leaseId: randomUUID(),
+    leaseId,
     pid: process.pid,
     claimedAt: Date.now(),
   } satisfies LocalProfileMigrationLease)}\n`;
   for (;;) {
-    if (await deps.fs.createFileExclusive(lease, contents)) return true;
+    if (await deps.fs.createFileExclusive(lease, contents)) return leaseId;
 
-    let current: LocalProfileMigrationLease | null = null;
-    try {
-      const parsed = JSON.parse(
-        await deps.fs.readFile(lease),
-      ) as Partial<LocalProfileMigrationLease>;
-      if (
-        typeof parsed.ownerId === 'string' &&
-        typeof parsed.leaseId === 'string' &&
-        Number.isInteger(parsed.pid) &&
-        typeof parsed.claimedAt === 'number'
-      ) {
-        current = parsed as LocalProfileMigrationLease;
-      }
-    } catch {
-      // The holder may still be finishing its exclusive file write. Wait for a
-      // complete lease record instead of deleting an active holder's marker.
+    const current = parseMigrationLease(await deps.fs.readFile(lease).catch(() => ''));
+
+    if (current && isProcessAlive(current.pid)) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      continue;
     }
-
-    if (!current || !isProcessAlive(current.pid)) {
-      await deps.fs.removeIfExists(lease);
+    if (await removeMigrationLeaseIfMatches(deps, lease, current?.leaseId ?? null)) {
       continue;
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
@@ -296,6 +337,7 @@ async function copyDatabaseAtomically(
   const dbTmp = `${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.${attemptId}`;
   const tempFiles = [dbTmp];
   const sidecars: Array<{ tmp: string; final: string }> = [];
+  const publishedFiles: string[] = [];
   try {
     await deps.fs.copyFile(sourceDb, dbTmp);
     for (const suffix of DB_SIDECAR_SUFFIXES) {
@@ -312,6 +354,7 @@ async function copyDatabaseAtomically(
     // sidecar. A process that loses this no-replace commit must leave no
     // sidecars behind for the winner's database file group.
     await deps.fs.link(dbTmp, targetDb);
+    publishedFiles.push(targetDb);
     // Commit sidecars only after the main database link has won. A sidecar that
     // already exists belongs to the process that won the main-file race; never
     // replace it.
@@ -320,11 +363,18 @@ async function copyDatabaseAtomically(
         await deps.fs.link(sidecar.tmp, sidecar.final);
       } catch (error) {
         if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
+        continue;
       }
+      publishedFiles.push(sidecar.final);
     }
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+    await Promise.all(
+      publishedFiles
+        .reverse()
+        .map((file) => deps.fs.removeIfExists(file).catch(() => undefined)),
+    );
     throw error;
   } finally {
     await Promise.all(tempFiles.map((file) => deps.fs.removeIfExists(file)));
@@ -349,7 +399,7 @@ export async function adoptLocalProfileDatabase(
   const sourceDb = dbPath(deps, LOCAL_PROFILE_DATA_OWNER_ID);
   const targetDb = dbPath(deps, normalizedOwnerId);
   const lease = migrationLeasePath(targetDb);
-  let leaseHeld = false;
+  let leaseId: string | null = null;
   try {
     const markerClaim = await claimMigrationMarker(normalizedOwnerId, deps);
     if (markerClaim === 'owned-by-other') return { status: 'claimed-by-other-owner' };
@@ -361,8 +411,8 @@ export async function adoptLocalProfileDatabase(
     // owner marker deliberately allows same-owner readers, so it cannot itself
     // protect the copy; this lease keeps one process from cleaning or publishing
     // another process's temporary database/WAL files.
-    leaseHeld = await acquireMigrationLease(deps, lease, normalizedOwnerId);
-    if (!leaseHeld) return { status: 'target-exists' };
+    leaseId = await acquireMigrationLease(deps, lease, normalizedOwnerId);
+    if (!leaseId) return { status: 'target-exists' };
     if (await deps.fs.pathExists(targetDb)) {
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
@@ -376,7 +426,7 @@ export async function adoptLocalProfileDatabase(
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    if (leaseHeld) await deps.fs.removeIfExists(lease).catch(() => undefined);
+    if (leaseId) await removeMigrationLeaseIfMatches(deps, lease, leaseId).catch(() => false);
   }
 }
 

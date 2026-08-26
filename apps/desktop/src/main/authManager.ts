@@ -936,12 +936,18 @@ async function withCloudOwnerCommit<T>(opts: {
         }
         return result;
       },
+      onCommitFailure: () => {
+        const rollback = rollbackReservation as unknown as (() => void) | null;
+        rollbackReservation = null;
+        if (rollback) rollback();
+      },
     });
     committed = true;
   } finally {
-    const rollback = rollbackReservation as unknown as (() => void) | null;
-    if (!committed && !commitApplied && rollback) {
-      rollback();
+    if (!committed && !commitApplied) {
+      const rollback = rollbackReservation as unknown as (() => void) | null;
+      rollbackReservation = null;
+      if (rollback) rollback();
     }
     const release = releaseBoundary as (() => void) | null;
     release?.();

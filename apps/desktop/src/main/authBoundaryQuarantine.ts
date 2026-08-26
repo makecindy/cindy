@@ -54,6 +54,7 @@ interface OwnerCommitOptions<T> {
   nextOwnerId: string | null;
   prepareTransition?: (context: { ownerChanged: boolean }) => Promise<void>;
   prepareCommit?: () => Promise<void>;
+  onCommitFailure?: () => void | Promise<void>;
   commit: () => T | Promise<T>;
 }
 
@@ -382,6 +383,11 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
       }
       return result;
     } catch (error) {
+      try {
+        await options.onCommitFailure?.();
+      } catch (rollbackError) {
+        log.error('Ghost skill projection owner commit rollback failed', rollbackError);
+      }
       if (requiresTransition) {
         try {
           writeState({

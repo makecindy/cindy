@@ -241,6 +241,25 @@ describe('Ghost skill projection boundary state', () => {
     });
   });
 
+  it('runs owner-commit rollback before publishing the failed pending state', async () => {
+    const rollbackPhases: string[] = [];
+    await expect(
+      withGhostSkillProjectionOwnerCommit({
+        previousOwnerId: null,
+        nextOwnerId: 'owner-a',
+        prepareTransition: async () => {},
+        commit: () => {
+          throw new Error('local commit failed');
+        },
+        onCommitFailure: () => {
+          rollbackPhases.push((readPersistedState() as { phase: string }).phase);
+        },
+      }),
+    ).rejects.toThrow('local commit failed');
+
+    expect(rollbackPhases).toEqual(['pending']);
+  });
+
   it('requires a teardown hook whenever owner state is missing or mismatched', async () => {
     await expect(
       withGhostSkillProjectionOwnerCommit({

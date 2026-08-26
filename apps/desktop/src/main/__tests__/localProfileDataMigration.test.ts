@@ -43,6 +43,7 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
             throw error;
           }
         },
+        rename: (source, target) => fs.rename(source, target),
         copyFile: (source, target) => fs.copyFile(source, target),
         link: (source, target) => fs.link(source, target),
         removeIfExists: (file) => fs.rm(file, { force: true }),
@@ -184,6 +185,32 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
       'cloud-db',
     );
+  });
+
+  it('removes the published database group when a sidecar link fails', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db-wal'), 'local-wal');
+    const failingDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async (source, destination) => {
+          if (destination === `${target}-wal`) {
+            throw Object.assign(new Error('sidecar link failed'), { code: 'EIO' });
+          }
+          return deps.fs.link(source, destination);
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', failingDeps)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'sidecar link failed',
+    });
+    await expect(fs.access(target)).rejects.toThrow();
+    await expect(fs.access(`${target}-wal`)).rejects.toThrow();
   });
 
   it('reclaims a lease left by a dead process before retrying adoption', async () => {
