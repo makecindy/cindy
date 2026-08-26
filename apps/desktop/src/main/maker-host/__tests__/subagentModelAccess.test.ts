@@ -37,6 +37,19 @@ describe('Claude subagent model access', () => {
       .toEqual({ status: 'allowed' });
   });
 
+  it('denies a payment-required model from the authoritative XD snapshot', () => {
+    expect(classify({
+      model: 'sonnet',
+      xdSnapshot: {
+        authoritative: true,
+        models: [{
+          ...xdModel('claude-sonnet-4-6'),
+          availability: 'requires_payment',
+        }],
+      },
+    })).toEqual({ status: 'denied' });
+  });
+
   it('does not treat a static or stale non-XD catalog absence as denial', () => {
     expect(classify({
       providerId: 'anthropic',

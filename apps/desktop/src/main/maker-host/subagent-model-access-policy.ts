@@ -24,6 +24,7 @@ function modelMatches(requested: string, candidate: string): boolean {
 interface XdAccessModel {
   id: string;
   agents?: readonly string[];
+  availability?: 'available' | 'requires_payment';
 }
 
 interface XdAccessSnapshot {
@@ -33,7 +34,11 @@ interface XdAccessSnapshot {
 
 function xdClaudeCodeModels(models: readonly XdAccessModel[]): readonly string[] {
   return models
-    .filter((model) => model.agents?.includes('claude-code'))
+    .filter(
+      (model) =>
+        model.availability !== 'requires_payment'
+        && model.agents?.includes('claude-code'),
+    )
     .map((model) => model.id);
 }
 
