@@ -70,6 +70,9 @@ export interface ExecutableMediaModelsResult {
 }
 
 export type ExecutableMediaModel = ModelCatalogEntry & { providerId: string };
+type GatewayMediaCatalogEntry = ModelCatalogEntry & {
+  availability?: 'available' | 'requires_payment';
+};
 
 interface ExecutableMediaSnapshot {
   models: ModelCatalogEntry[];
@@ -191,7 +194,7 @@ export function filterEnabledGatewayMediaModels<
  * 的实时投影；Gateway mode 决定图片/视频模型类型。Guide 独立按 modelId
  * 懒取，不参与模型发现。
  */
-async function fetchGatewayMediaModels(): Promise<ModelCatalogEntry[]> {
+async function fetchGatewayMediaModels(): Promise<GatewayMediaCatalogEntry[]> {
   const payload = await serverApiFetch<unknown>(MEDIA_MODELS_PATH, {
     baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
     timeoutMs: MEDIA_MODEL_REQUEST_TIMEOUT_MS,
@@ -367,7 +370,12 @@ function unavailableFromGuideError(modelId: string, error: unknown): Unavailable
 }
 
 async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> {
-  const models = await fetchGatewayMediaModels();
+  // The snapshot is itself an execution authorization source for legacy media
+  // paths, not just a cache behind listExecutableMediaModels. Never record a
+  // v5 paid-only model as executable even when it has a valid invocation Guide.
+  const models = (await fetchGatewayMediaModels()).filter(
+    (model) => model.availability !== 'requires_payment',
+  );
   const batch = await fetchMediaInvocationGuideBatch();
   const capabilitiesByModel = new Map<string, ReadonlySet<MediaCapability>>();
   const guideIdsByModel = new Map<string, string>();
