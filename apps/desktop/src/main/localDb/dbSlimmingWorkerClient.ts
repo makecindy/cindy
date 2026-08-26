@@ -341,10 +341,12 @@ export function runDbSlimmingMaintenanceInWorker(
       }
     });
     child.on('error', (...args) => {
-      // A process error after kill does not prove the child has exited. Keep the
-      // writer lease and wait for exit (or the fail-closed termination guard).
+      // A process error does not prove the child has exited. Keep the writer
+      // lease and wait for exit (or the fail-closed termination guard).
       if (terminationRequested) return;
-      fail(new Error(`database cleanup process error: ${args.map(String).join(' ')}`));
+      requestTermination(
+        new Error(`database cleanup process error: ${args.map(String).join(' ')}`),
+      );
     });
     child.on('exit', (code) => {
       exited = true;

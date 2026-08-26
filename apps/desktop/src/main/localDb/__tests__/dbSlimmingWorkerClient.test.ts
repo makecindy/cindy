@@ -342,6 +342,40 @@ describe('runDbSlimmingMaintenanceInWorker', () => {
     await expect(resultPromise).resolves.toEqual(outcome);
   });
 
+  it('holds the writer lease when a process error does not confirm exit', async () => {
+    vi.useFakeTimers();
+    const child = new FakeUtilityProcess();
+    const resultPromise = runDbSlimmingMaintenanceInWorker(
+      {
+        userDataDir: 'C:\\user-data',
+        dbFilePath: 'C:\\user-data\\owner.db',
+        request: createRequest(),
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      },
+      () => child,
+    );
+    const resultError = resultPromise.catch((error: unknown) => error);
+
+    child.emit('message', { type: 'ready' });
+    child.emit('error', new Error('ipc failed'));
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS);
+
+    const error = await resultError;
+    expect(error).toBeInstanceOf(DbSlimmingWorkerTerminationUnconfirmedError);
+    if (!(error instanceof DbSlimmingWorkerTerminationUnconfirmedError)) {
+      throw new Error('expected an unconfirmed termination error');
+    }
+    const releaseWriterLease = vi.fn();
+    expect(deferReleaseUntilDbSlimmingWorkerTermination(error, releaseWriterLease)).toBe(true);
+    await Promise.resolve();
+    expect(releaseWriterLease).not.toHaveBeenCalled();
+
+    child.emit('exit', 1);
+    await error.terminationConfirmed;
+    expect(releaseWriterLease).toHaveBeenCalledTimes(1);
+  });
+
   it('distinguishes a process startup failure before maintenance begins', async () => {
     const child = new FakeUtilityProcess();
     const resultPromise = runDbSlimmingMaintenanceInWorker(
@@ -355,6 +389,7 @@ describe('runDbSlimmingMaintenanceInWorker', () => {
     );
 
     child.emit('error', new Error('bundle missing'));
+    child.emit('exit', 1);
 
     await expect(resultPromise).rejects.toBeInstanceOf(DbSlimmingWorkerStartupError);
   });
