@@ -11,8 +11,12 @@ import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQ
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
-import { latestVisiblePreview, latestVisiblePreviewRow } from '../latestMessageText';
+import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
+import {
+  incrementSessionListMessageCount,
+  persistSessionListPreview,
+} from '../sessionListProjection';
 import {
   messageToCamel,
   messageCreateToRow,
@@ -169,9 +173,19 @@ async function maybeBroadcastSessionListPreview(
   }
   if (latest?.clientId !== row.clientId) return;
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  const preview = extractMessagePreview(row.content, row.role);
+  try {
+    await persistSessionListPreview(sessionId, preview, row.role);
+  } catch (err) {
+    log.warn('session list preview persist failed (swallowed)', {
+      sessionId,
+      clientId: row.clientId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   broadcastOwnedPayload(
     'local-db:sessions:patched',
-    { sessionId, patch: { preview: extractMessagePreview(row.content, row.role) } },
+    { sessionId, patch: { preview } },
     ownerScope,
   );
 }
@@ -945,10 +959,12 @@ export async function commitMessageDeletion(
   // 口径要动得连 maker-shared/sessionList 的 messageCountLabel 一起改。
   let preview: string | null = null;
   try {
-    preview = await latestVisiblePreview(sessionId);
+    const latest = await latestVisiblePreviewRow(sessionId);
+    preview = extractMessagePreview(latest?.content, latest?.role);
+    await persistSessionListPreview(sessionId, preview, latest?.role ?? null);
   } catch (error) {
-    // 删除已经原子提交；投影查询失败不能把成功操作伪装成失败。广播保守空值，
-    // 后续 sessions:list / reseed 会按 DB 真相收敛。
+    // 删除已经原子提交；message.delete 事务已把 list_preview / role / count 置 NULL，
+    // 投影刷新失败不能把成功操作伪装成失败。广播保守空值，list 回落子查询。
     log.warn('message delete session projection refresh failed', {
       sessionId,
       deletedClientIds: clientIds,
@@ -1108,6 +1124,15 @@ export async function rewindPersistedUserMessageAfterClear(
   );
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
+  try {
+    await persistSessionListPreview(sessionId, null, null);
+  } catch (err) {
+    log.warn('clear-race session list preview invalidate failed', {
+      sessionId,
+      clientId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const mediaCleanup = await Promise.allSettled(
     [...new Set([row.id, row.clientId])].map((refId) =>
@@ -1598,6 +1623,12 @@ export async function createMessage(
   // 的 makerChatStore push 到 in-memory state, 让消息流实时刷新。
   // Renderer 自己调 createMessage IPC 时也会触发这个 broadcast, 但因为它已经
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
+  void incrementSessionListMessageCount(sessionId).catch((err) => {
+    log.warn('session list message count increment failed', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
   if (opts?.shouldBroadcast?.() !== false) {
     broadcastMessageRow(sessionId, msg, opts?.broadcastOwnerScope);
     await maybeBroadcastSessionListPreview(sessionId, row, opts?.broadcastOwnerScope);

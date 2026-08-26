@@ -429,7 +429,7 @@ function messageDelete(
       }
     }
     const sessionResult = db.prepare(
-      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ?',
+      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
     ).run(updatedAt, sessionId);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
@@ -797,14 +797,16 @@ function rewindCommit(db: Database.Database, args: unknown): void {
       db.prepare(
         `UPDATE sessions
            SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,
-               codex_plan_json = NULL, sdk_session_id = ?
+               codex_plan_json = NULL, sdk_session_id = ?,
+               list_preview = NULL, list_preview_role = NULL
          WHERE id = ?`,
       ).run(now, now, sdkSessionId, sessionId);
     } else {
       db.prepare(
         `UPDATE sessions
            SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,
-               codex_plan_json = NULL
+               codex_plan_json = NULL,
+               list_preview = NULL, list_preview_role = NULL
          WHERE id = ?`,
       ).run(now, now, sessionId);
     }

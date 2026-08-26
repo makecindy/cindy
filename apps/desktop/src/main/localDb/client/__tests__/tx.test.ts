@@ -45,6 +45,9 @@ CREATE TABLE sessions (
   codex_plan_json TEXT,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
+  list_preview TEXT,
+  list_preview_role TEXT,
+  list_message_count INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

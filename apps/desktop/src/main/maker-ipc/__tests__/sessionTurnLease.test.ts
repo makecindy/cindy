@@ -40,7 +40,10 @@ describe('shared-process session turn lease', () => {
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         active_turn_started_at INTEGER,
-        last_turn_ended_at INTEGER
+        last_turn_ended_at INTEGER,
+        list_preview TEXT,
+        list_preview_role TEXT,
+        list_message_count INTEGER
       );
       CREATE TABLE messages (
         id TEXT PRIMARY KEY,

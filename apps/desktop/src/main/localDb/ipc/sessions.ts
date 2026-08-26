@@ -23,6 +23,13 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import {
+  LIST_PREVIEW_EXTRACT_SQL,
+  LATEST_VISIBLE_PREVIEW_FILTER_SQL,
+  persistSessionListProjectionBatch,
+  SESSION_LIST_MESSAGE_COUNT_CAP,
+  type SessionListProjectionBackfillItem,
+} from '../sessionListProjection';
 import { buildSessionListFlightKey, runSessionListSingleFlight } from './sessionListSingleFlight';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { bindDeletedPiSubagentCleanupCancel } from './piSubagentDeletion';
@@ -33,6 +40,7 @@ import {
   sessionCreateToRow,
   sessionPatchToRow,
   normalizeRemoteHostId,
+  finalizePlainPreview,
   type SessionRowWithCount,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
@@ -552,43 +560,49 @@ const MAX_LIMIT = 1000;
  * 也走同一条标量子查询，避免切任务时把几万行 join 进单行快照。
  *
  * 由 sessionListMessageCount 回归测试守护。
+ *
+ * list_message_count 已回填时走缓存列，跳过 messages 扫描。未回填时封顶
+ * SESSION_LIST_MESSAGE_COUNT_CAP：空草稿仍是 0，大会话显示 1000+。
  */
 const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
-  SELECT count(*) FROM messages m WHERE m.session_id = ${sessions.id}
+  CASE
+    WHEN ${sessions.listMessageCount} IS NOT NULL THEN ${sessions.listMessageCount}
+    ELSE (
+      SELECT count(*) FROM (
+        SELECT 1 FROM messages m WHERE m.session_id = ${sessions.id} LIMIT ${SESSION_LIST_MESSAGE_COUNT_CAP}
+      )
+    )
+  END
 )`.as('message_count');
 
 /**
- * sidebar-card-mode：最近一条 user/assistant 消息的 content / role correlated 子查询。
- * 跳过 tool_use/tool_result/thinking 等噪音 role；rewind 软删的消息不进预览。
- * 命中 idx_messages_session_created (session_id, created_at) 索引，逐 session O(logN)。
+ * sidebar-card-mode：最近一条可见 user/assistant 的预览抽出 / role。
+ * list_preview 已回填时 CASE 短路，不碰 messages。否则 SQL 侧 json_extract 纯文本，
+ * 不把整段 content 跨 worker RPC。autoResume 只检查 user 行的 agent_meta。
  */
-// .as(alias) 必须显式给——drizzle 对匿名 sql 字段在 better-sqlite3 下无法
-// 稳定按 select key 映射，结果列取不到值（实测全 undefined → preview 恒 null）。
-// clearedAt 边界与 messages:list 同口径:clear 过的会话只看 clearedAt 之后的消息,
-// 否则卡片预览会露出 /clear 已隐藏的旧内容。
-// autoResume 排除:silent-stop 自动续跑注入的「继续」(agentMeta.autoResume=true,
-// 见 register.ts handleSilentStopTurnEnd)不是用户消息,渲染层显示为「已自动继续」
-// 分隔卡,预览同样不能把它当最近消息展示(session.preview 经 device-link 直达手机
-// 首页,漏了会显示一条用户没发过的消息)。按落库标记过滤,不按文本——用户真发
-// 「继续」是合法消息。json_extract 对 JSON true 返回 1;缺字段返回 NULL,IS NOT 1 放行。
-// 非法 JSON 必须用 CASE 挡住 json_extract,OR json_valid 不保证短路,会整句 malformed JSON。
-const LATEST_MSG_CONTENT_SQL = sql<string | null>`(
-  SELECT m.content FROM messages m
-  WHERE m.session_id = ${sessions.id}
-    AND m.role IN ('user', 'assistant')
-    AND m.rewind_at IS NULL
-    AND (m.agent_meta IS NULL OR CASE WHEN json_valid(m.agent_meta) THEN json_extract(m.agent_meta, '$.autoResume') END IS NOT 1)
-    AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-  ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
-)`.as('latest_message_content');
+const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
+  CASE
+    WHEN ${sessions.listPreview} IS NOT NULL THEN NULL
+    ELSE (
+      SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
+      WHERE m.session_id = ${sessions.id}
+        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
+        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
+      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+    )
+  END
+)`.as('latest_message_extract');
 const LATEST_MSG_ROLE_SQL = sql<string | null>`(
-  SELECT m.role FROM messages m
-  WHERE m.session_id = ${sessions.id}
-    AND m.role IN ('user', 'assistant')
-    AND m.rewind_at IS NULL
-    AND (m.agent_meta IS NULL OR CASE WHEN json_valid(m.agent_meta) THEN json_extract(m.agent_meta, '$.autoResume') END IS NOT 1)
-    AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-  ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+  CASE
+    WHEN ${sessions.listPreviewRole} IS NOT NULL THEN ${sessions.listPreviewRole}
+    ELSE (
+      SELECT m.role FROM messages m
+      WHERE m.session_id = ${sessions.id}
+        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
+        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
+      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+    )
+  END
 )`.as('latest_message_role');
 
 /**
@@ -946,6 +960,8 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
       // make pre-clear history visible again or invalidate a newer input token.
       clearedAt: sql<number>`MAX(COALESCE(${sessions.clearedAt}, 0), ${ts})`,
       updatedAt: sql<number>`MAX(COALESCE(${sessions.updatedAt}, 0), ${ts})`,
+      listPreview: null,
+      listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
   const [updated] = await db
@@ -974,6 +990,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
         sdkSessionId: null,
         clearedAt: new Date(effectiveClearedAt).toISOString(),
         updatedAt: new Date(effectiveUpdatedAt).toISOString(),
+        preview: null,
       },
       ownerScope,
     );
@@ -1040,11 +1057,12 @@ export function registerSessionIpc(
           mergedRows = mergeSessionListRows(rows, pinnedRows);
         }
 
+        scheduleSessionListProjectionBackfill(mergedRows);
         return mergedRows.map((r) =>
           sessionToCamel({
             ...r.session,
             messageCount: r.messageCount,
-            latestMessageContent: r.latestMessageContent,
+            latestMessageExtract: r.latestMessageExtract,
             latestMessageRole: r.latestMessageRole,
           }),
         );
@@ -1521,12 +1539,15 @@ export function registerSessionIpc(
       // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
       // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
       // 这里一并清空,待 clear 后新一轮 turn-done 重新生成。
-      await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sid));
+      await db
+        .update(sessions)
+        .set({ summary: null, listPreview: null, listPreviewRole: null })
+        .where(eq(sessions.id, sid));
       // 广播 summary:null,让已挂载的 sidebar 立即清掉旧摘要(codex review)——renderer 的
       // clearSession 乐观 patch 只带 sdkSessionId/clearedAt、不含 summary,本 update handler
       // 也不另发 patched;不广播则卡片/rail 会继续显示 clear 前摘要直到一次全量 refresh。
       if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, { summary: null }, ownerScope);
+        broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
       }
       void recomputePrRefsForSession(sid).catch(() => undefined);
     }
@@ -2142,11 +2163,65 @@ function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): vo
   });
 }
 
+const pendingSessionListProjectionBackfill = new Map<string, SessionListProjectionBackfillItem>();
+let sessionListProjectionBackfillInFlight = false;
+
+/**
+ * list 算出来的 preview / count 异步写回 sessions。
+ * 必须合成一次 RPC：首屏 1000 行每人两条 drizzle UPDATE 会打爆 worker 队列
+ * （inFlight=128 queued=512）。两次 list 交错时也先攒进同一批。
+ */
+function scheduleSessionListProjectionBackfill(rows: readonly SessionListRow[]): void {
+  for (const row of rows) {
+    const sessionId = row.session.id;
+    const item = pendingSessionListProjectionBackfill.get(sessionId) ?? { id: sessionId };
+    if (row.session.listPreview == null && row.latestMessageExtract != null) {
+      const preview = finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole);
+      if (preview != null) {
+        item.preview = preview;
+        item.role = row.latestMessageRole;
+      }
+    }
+    if (row.session.listMessageCount == null) {
+      item.count = row.messageCount;
+    }
+    if (item.preview !== undefined || item.count !== undefined) {
+      pendingSessionListProjectionBackfill.set(sessionId, item);
+    }
+  }
+  void drainSessionListProjectionBackfill();
+}
+
+async function drainSessionListProjectionBackfill(): Promise<void> {
+  if (sessionListProjectionBackfillInFlight) return;
+  if (pendingSessionListProjectionBackfill.size === 0) return;
+  sessionListProjectionBackfillInFlight = true;
+  try {
+    while (pendingSessionListProjectionBackfill.size > 0) {
+      const items = Array.from(pendingSessionListProjectionBackfill.values());
+      pendingSessionListProjectionBackfill.clear();
+      try {
+        await persistSessionListProjectionBatch(items);
+      } catch (err) {
+        log.warn('session list projection backfill failed', {
+          count: items.length,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } finally {
+    sessionListProjectionBackfillInFlight = false;
+    if (pendingSessionListProjectionBackfill.size > 0) {
+      void drainSessionListProjectionBackfill();
+    }
+  }
+}
+
 /** {@link selectSessionListRows} 的行形状——与 sessionToCamel 的入参对齐。 */
 interface SessionListRow {
   session: typeof sessions.$inferSelect;
   messageCount: number;
-  latestMessageContent: string | null;
+  latestMessageExtract: string | null;
   latestMessageRole: string | null;
 }
 
@@ -2188,7 +2263,7 @@ function selectSessionListRows(
     .select({
       session: sessions,
       messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageContent: LATEST_MSG_CONTENT_SQL,
+      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
       latestMessageRole: LATEST_MSG_ROLE_SQL,
     })
     .from(sessions)
@@ -2208,7 +2283,7 @@ async function selectSessionWithCount(
     .select({
       session: sessions,
       messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageContent: LATEST_MSG_CONTENT_SQL,
+      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
       latestMessageRole: LATEST_MSG_ROLE_SQL,
     })
     .from(sessions)
@@ -2218,7 +2293,7 @@ async function selectSessionWithCount(
   return {
     ...r.session,
     messageCount: r.messageCount,
-    latestMessageContent: r.latestMessageContent,
+    latestMessageExtract: r.latestMessageExtract,
     latestMessageRole: r.latestMessageRole,
   };
 }

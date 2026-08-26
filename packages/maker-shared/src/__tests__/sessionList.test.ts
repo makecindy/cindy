@@ -209,6 +209,24 @@ describe('sessionList', () => {
     });
   });
 
+  it('caps oversized message counts at 1000+', () => {
+    const item = toRemoteSessionListItem(session('s-big', {
+      title: '大库',
+      workingDir: null,
+      workspaceKind: 'dialogue',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      userSendAt: '2026-01-01T00:05:00.000Z',
+      _count: { messages: 1001 },
+    }), new Date('2026-01-01T00:10:00.000Z').getTime());
+
+    expect(item).toMatchObject({
+      detail: '活跃 · 5 分钟前 · 1000+ 条消息',
+      messagePreview: null,
+      lastActivityAt: '2026-01-01T00:05:00.000Z',
+    });
+  });
+
   it('labels pi sessions as Pi instead of falling back to Claude Code', () => {
     // codex review 回归:共享标签映射二元化会让桌面创建的 Pi 会话在手机端显示成 Claude Code。
     const item = toRemoteSessionListItem(session('s-pi', {
