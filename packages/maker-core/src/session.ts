@@ -2559,10 +2559,10 @@ export class Session {
           // clear that fence. The fence itself prevents any later generation entering.
           // Do not adopt while N+1 is still reserved / before provider dispatch:
           // a late N terminal would otherwise be cached as N+1 evidence.
-          // After handle.send() accepts, keep holding leftover paired done until
-          // N+1 progress (running / tokens) or N's error tail is already
-          // attributed. Acceptance alone is not enough. In-flight start-failure
-          // errors still belong to this send.
+          // After handle.send() accepts, a no-progress done is N+1's result-only
+          // terminal when N's paired done was lost. Leftover paired done is still
+          // held while the send is pending. In-flight start-failure errors still
+          // belong to this send.
           observedGeneration = this.turnGeneration;
         }
         if (this.terminationStarted) continue;
@@ -2707,10 +2707,17 @@ export class Session {
       return false;
     }
     if (this.isSilentStopDoneEvent(event)) return false;
-    // Acceptance is not progress. N's leftover paired done looks identical to
-    // N+1's result-only success until N+1 emits running/tokens, or N's error
-    // tail has already been attributed (lastObserved is no longer that error).
-    return event.type === 'done';
+    if (event.type !== 'done') return false;
+    // Hold leftover paired done only while N+1 is not yet accepted.
+    // After accept, a no-progress done is N+1's result-only terminal when N's
+    // paired done was lost; lastObserved staying `error` must not swallow it.
+    // Pending handle.send / accepting reservation still fence the old tail.
+    const reservation = this.sendReservation;
+    return Boolean(
+      reservation &&
+      reservation.generation === this.turnGeneration &&
+      !reservation.accepted,
+    );
   }
 
   private isForegroundRunningStatus(event: AgentEvent): boolean {
