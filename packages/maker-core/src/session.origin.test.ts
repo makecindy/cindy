@@ -592,8 +592,8 @@ describe('Session per-turn origin 打标', () => {
     setTurnRunning(false);
     const second = session.send('second');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
     await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
     await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
 
     expect(seen.some((event) => event.type === 'done')).toBe(false);
@@ -681,6 +681,31 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('lets a result-only N+1 done settle after leftover idle then current running', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({ type: 'done', data: {} });
+    const liveDone = seen.find((event) => event.type === 'done');
+    expect(liveDone?.sessionTurnGeneration).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 });
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('stamps an immediate new-turn 401 after running as the live generation', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,
@@ -724,8 +749,8 @@ describe('Session per-turn origin 打标', () => {
     setTurnRunning(false);
     const second = session.send('second', { origin: SCHED_ORIGIN });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
     await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
     await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
 
     expect(seen.some((event) => event.type === 'done')).toBe(false);

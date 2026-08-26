@@ -2050,6 +2050,10 @@ export class Session {
     const attributed = (generation: number): number => {
       if (this.isForegroundRunningStatus(event)) {
         this.sawCurrentTurnRunningGeneration = generation;
+        if (generation === this.turnGeneration) {
+          this.pendingPriorGeneration = null;
+          this.staleTerminalQueuedGeneration = null;
+        }
       }
       return generation;
     };
