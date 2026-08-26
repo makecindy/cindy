@@ -1270,7 +1270,11 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
       )}
       {(status === 'completed' || status === 'stale') && result && (
         <div className="mt-3 border-t border-border pt-3">
-          <MarkdownRenderer content={result} workingDir={workingDir ?? ''} />
+          <MarkdownRenderer
+            content={result}
+            workingDir={workingDir ?? ''}
+            allowPrivilegedLinks={failureCode !== 'source-workspace-changed'}
+          />
         </div>
       )}
     </div>

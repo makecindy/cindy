@@ -11,12 +11,28 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { promises as fs } from 'node:fs';
+import fsSync, { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Windows 未开启开发者模式且进程无特权时创建文件 symlink 会 EPERM。
+// 精确探测一次；不可用时只跳过依赖文件 symlink 的两条专属覆盖。
+const canSymlink = (() => {
+  const probeDir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'cindy-docs-renderer-symlink-probe-'));
+  try {
+    const target = path.join(probeDir, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(probeDir, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
 
 interface FakeWindowOptions {
   webPreferences?: Record<string, unknown>;
@@ -195,7 +211,7 @@ describe('渲染窗的安全配置', () => {
     expect(win.shown).toBe(false);
   });
 
-  it('本地资源路径含 symlink 时 fail closed,不把 file URL 交给 Chromium', async () => {
+  it.skipIf(!canSymlink)('本地资源路径含 symlink 时 fail closed,不把 file URL 交给 Chromium', async () => {
     const sourceDir = path.join(tempRoot, 'source');
     const outsideDir = path.join(tempRoot, 'outside');
     await Promise.all([fs.mkdir(sourceDir), fs.mkdir(outsideDir)]);
@@ -295,7 +311,7 @@ describe('渲染主流程', () => {
     await expect(fs.stat(source)).resolves.toBeTruthy();
   });
 
-  it('主文档快照完成后源路径被换成外部链接也不会改变待打印内容', async () => {
+  it.skipIf(!canSymlink)('主文档快照完成后源路径被换成外部链接也不会改变待打印内容', async () => {
     const source = path.join(tempRoot, 'src.html');
     const outside = path.join(tempRoot, 'outside.html');
     const moved = path.join(tempRoot, 'src-original.html');
