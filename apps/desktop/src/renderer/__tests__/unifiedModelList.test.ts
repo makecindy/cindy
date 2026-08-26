@@ -196,6 +196,25 @@ describe('countModelsByAgent', () => {
     ]);
   });
 
+  it('付费锁定行不进批量显示分母，其历史隐藏偏好不会卡住 allOn', () => {
+    const withPaymentRequired = {
+      ...provider,
+      models: {
+        ...provider.models,
+        codex: [
+          ...(provider.models.codex ?? []),
+          { ...model('paid-model'), availability: 'requires_payment' },
+        ],
+      },
+    } as ProviderView;
+    setModelVisibility('codex', 'p1', 'paid-model', false);
+
+    expect(countModelsByAgent(withPaymentRequired)).toEqual([
+      { agent: 'claude-code', on: 2, total: 2 },
+      { agent: 'codex', on: 2, total: 2 },
+    ]);
+  });
+
   it('停用模型与能力模型(image 等)不进「显示 x/y」计数', () => {
     const withExtras = {
       ...provider,

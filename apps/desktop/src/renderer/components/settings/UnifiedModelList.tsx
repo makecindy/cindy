@@ -265,7 +265,8 @@ export function getHiddenAgents(providerId: string, row: UnionModelRow): AgentKi
 
 /**
  * 每个 Agent 各自的模型显示数;UI 必须保留 Agent 维度,不能汇总成模型条目总数。
- * 口径 = 对话模型(能力模型没有显示轴)且未停用(停用行不可显示,不计入分母)。
+ * 口径 = 对话模型(能力模型没有显示轴)且未停用、非付费锁定行。付费锁定行与停用行
+ * 都不可写显示偏好，不计入批量开关分母，与 handleBulk targets 保持同一口径。
  * `isDisabled` 允许调用方注入停用判定(组件里 = 快照标志叠加 pendingDisabled 乐观
  * 覆盖,否则乐观窗口内「全部显示/隐藏」的方向与分母陈旧,PR #744 review);缺省读
  * 快照的 model.disabled。
@@ -283,6 +284,7 @@ export function countModelsByAgent(
     const models = (provider.models[agent] ?? []).filter(
       (model) =>
         isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) &&
+        model.availability !== 'requires_payment' &&
         !isDisabled(agent, model),
     );
     return {
