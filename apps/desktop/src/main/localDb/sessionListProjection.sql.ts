@@ -50,9 +50,7 @@ SET
   END,
   list_message_count = CASE
     WHEN sessions.list_message_count IS NULL THEN (
-      SELECT count(*) FROM (
-        SELECT 1 FROM messages m WHERE m.session_id = sessions.id LIMIT ${SESSION_LIST_MESSAGE_COUNT_CAP}
-      )
+      SELECT count(*) FROM messages m WHERE m.session_id = sessions.id
     )
     ELSE sessions.list_message_count
   END

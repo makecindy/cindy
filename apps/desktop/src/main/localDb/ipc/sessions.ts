@@ -27,7 +27,6 @@ import {
   LIST_PREVIEW_EXTRACT_SQL,
   LATEST_VISIBLE_PREVIEW_FILTER_SQL,
   persistSessionListProjectionBatch,
-  SESSION_LIST_MESSAGE_COUNT_CAP,
   type SessionListProjectionBackfillItem,
 } from '../sessionListProjection';
 import { buildSessionListFlightKey, runSessionListSingleFlight } from './sessionListSingleFlight';
@@ -561,18 +560,16 @@ const MAX_LIMIT = 1000;
  *
  * 由 sessionListMessageCount 回归测试守护。
  *
- * list_message_count 已回填时走缓存列，跳过 messages 扫描。未回填时封顶
- * SESSION_LIST_MESSAGE_COUNT_CAP：空草稿仍是 0，大会话显示 1000+。
+ * list_message_count 已回填时走缓存列，跳过 messages 扫描。未回填时 count(*) 精确总数
+ * （侧栏文案仍用 messageCountLabel 把 ≥1001 显示成 1000+；wire `_count.messages` 保持精确）。
  * 非 NULL 即信任：绕过 createMessage 的 messages 增删必须同步投影。
- * import / treeRehydrate 置空三列；turn/review 租约与 context.rebuild 只置空计数。
+ * import / treeRehydrate 置空三列；turn/review 租约、context.rebuild、createMessage 只置空计数。
  */
 const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
   CASE
     WHEN ${sessions.listMessageCount} IS NOT NULL THEN ${sessions.listMessageCount}
     ELSE (
-      SELECT count(*) FROM (
-        SELECT 1 FROM messages m WHERE m.session_id = ${sessions.id} LIMIT ${SESSION_LIST_MESSAGE_COUNT_CAP}
-      )
+      SELECT count(*) FROM messages m WHERE m.session_id = ${sessions.id}
     )
   END
 )`.as('message_count');

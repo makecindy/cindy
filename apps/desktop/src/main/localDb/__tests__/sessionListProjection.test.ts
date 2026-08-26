@@ -6,7 +6,6 @@ import type { SessionRowWithCount } from '../mapper';
 import {
   LATEST_VISIBLE_PREVIEW_FILTER_SQL,
   LIST_PREVIEW_EXTRACT_SQL,
-  SESSION_LIST_MESSAGE_COUNT_CAP,
   SESSION_LIST_PROJECTION_BACKFILL_SQL,
 } from '../sessionListProjection.sql';
 
@@ -92,24 +91,20 @@ describe('session list SQL preview extract', () => {
     db.close();
   });
 
-  it('caps fallback message count at 1001', () => {
+  it('fallback message count is the exact row total', () => {
     const db = openPreviewDb();
     db.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
     const insert = db.prepare(
       `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, 's1', 'tool_result', '[]', 1)`,
     );
     const tx = db.transaction(() => {
-      for (let i = 0; i < 1500; i += 1) insert.run(`m${i}`);
+      for (let i = 0; i < 15; i += 1) insert.run(`m${i}`);
     });
     tx();
     const count = db
-      .prepare(
-        `SELECT count(*) AS n FROM (
-           SELECT 1 FROM messages m WHERE m.session_id = ? LIMIT ${SESSION_LIST_MESSAGE_COUNT_CAP}
-         )`,
-      )
+      .prepare(`SELECT count(*) AS n FROM messages m WHERE m.session_id = ?`)
       .get('s1') as { n: number };
-    expect(count.n).toBe(SESSION_LIST_MESSAGE_COUNT_CAP);
+    expect(count.n).toBe(15);
     db.close();
   });
 });
@@ -163,6 +158,52 @@ describe('sessionToCamel list preview cache', () => {
     } as SessionRowWithCount);
     expect(session.preview).toBe('cached preview');
     expect(session._count?.messages).toBe(4);
+  });
+
+  it('sanitizes cached listPreview the same way as SQL extracts', () => {
+    const session = sessionToCamel({
+      id: 's-1',
+      title: 't',
+      workingDir: null,
+      workspaceKind: 'project',
+      model: 'm',
+      effort: 'high',
+      permissionMode: 'ask',
+      providerId: null,
+      status: 'active',
+      sdkSessionId: null,
+      totalTokenUsage: 0,
+      totalCostUsd: 0,
+      totalCostAmount: 0,
+      totalCostCurrency: null,
+      totalCostIsApproximate: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      fastMode: false,
+      planModeEnabled: false,
+      clearedAt: null,
+      pinnedAt: null,
+      userSendAt: null,
+      agentKind: 'cc',
+      source: 'desktop',
+      orcaRole: null,
+      parentSessionId: null,
+      forkedAtMessageId: null,
+      worktreePath: null,
+      usedProjectContext: false,
+      extraDirs: '[]',
+      remoteHostId: null,
+      activeTurnStartedAt: null,
+      lastTurnEndedAt: null,
+      listPreview: '[UI_ACTION_TRIGGER] continue',
+      listPreviewRole: 'user',
+      listMessageCount: 4,
+      summary: null,
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 4,
+    } as SessionRowWithCount);
+    expect(session.preview).toBeNull();
   });
 
   it('finalizes SQL extracts without JSON.parse of a truncated object', () => {
@@ -249,9 +290,7 @@ describe('session list projection backfill SQL', () => {
         `SELECT CASE
            WHEN list_message_count IS NOT NULL THEN list_message_count
            ELSE (
-             SELECT count(*) FROM (
-               SELECT 1 FROM messages m WHERE m.session_id = sessions.id LIMIT ${SESSION_LIST_MESSAGE_COUNT_CAP}
-             )
+             SELECT count(*) FROM messages m WHERE m.session_id = sessions.id
            )
          END AS n FROM sessions WHERE id = ?`,
       )

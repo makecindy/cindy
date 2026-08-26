@@ -14,7 +14,7 @@ import { getDbClient } from '../client/current';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
 import {
-  incrementSessionListMessageCount,
+  invalidateSessionListMessageCount,
   persistSessionListPreview,
 } from '../sessionListProjection';
 import {
@@ -1628,8 +1628,8 @@ export async function createMessage(
   // 的 makerChatStore push 到 in-memory state, 让消息流实时刷新。
   // Renderer 自己调 createMessage IPC 时也会触发这个 broadcast, 但因为它已经
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
-  void incrementSessionListMessageCount(sessionId).catch((err) => {
-    log.warn('session list message count increment failed', {
+  void invalidateSessionListMessageCount(sessionId).catch((err) => {
+    log.warn('session list message count invalidate failed', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     });

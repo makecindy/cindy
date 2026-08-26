@@ -210,7 +210,7 @@ describe('sessions:list messageCount source', () => {
     expect(source).toMatch(/messageCount: SESSION_MESSAGE_COUNT_SQL,/);
     expect(source).not.toMatch(/leftJoin\(messages/);
     expect(source).not.toMatch(/MESSAGE_COUNT_COL/);
-    // 已回填时短路缓存列；未回填时 count(*) 封顶 SESSION_LIST_MESSAGE_COUNT_CAP。
+    // 已回填时短路缓存列；未回填时 count(*) 是精确总数。
     expect(source).toMatch(
       /SESSION_MESSAGE_COUNT_SQL = sql<number>`\(\s*CASE/,
     );
@@ -218,7 +218,7 @@ describe('sessions:list messageCount source', () => {
       /WHEN \$\{sessions\.listMessageCount\} IS NOT NULL THEN \$\{sessions\.listMessageCount\}/,
     );
     expect(source).toMatch(
-      /SELECT count\(\*\) FROM \(\s*SELECT 1 FROM messages m WHERE m\.session_id = \$\{sessions\.id\} LIMIT \$\{SESSION_LIST_MESSAGE_COUNT_CAP\}/,
+      /SELECT count\(\*\) FROM messages m WHERE m\.session_id = \$\{sessions\.id\}/,
     );
     expect(source).toMatch(/ORDER BY m\.created_at DESC, m\.rowid DESC LIMIT 1/);
 

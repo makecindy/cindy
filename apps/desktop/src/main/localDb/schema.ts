@@ -227,7 +227,7 @@ export const sessions = sqliteTable(
     listPreviewRole: text('list_preview_role'),
     /**
      * 侧栏「N 条消息」缓存。口径与历史 count(*) 相同（不过滤 role/rewind/clear）。
-     * 回落查询封顶 1001，超过后 UI 显示 1000+。NULL = 尚未回填。
+     * 存精确总数；UI 把 ≥1001 显示成 1000+。NULL = 尚未回填。
      */
     listMessageCount: integer('list_message_count'),
     createdAt: integer('created_at').notNull(),

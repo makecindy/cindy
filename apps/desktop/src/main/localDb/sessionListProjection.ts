@@ -75,18 +75,9 @@ export async function persistSessionListPreview(
     );
 }
 
-export async function incrementSessionListMessageCount(sessionId: string): Promise<void> {
+export async function invalidateSessionListMessageCount(sessionId: string): Promise<void> {
   const db = getDbClient().drizzle;
-  await db
-    .update(sessions)
-    .set({
-      listMessageCount: sql`CASE
-        WHEN ${sessions.listMessageCount} IS NULL THEN NULL
-        WHEN ${sessions.listMessageCount} >= ${SESSION_LIST_MESSAGE_COUNT_CAP} THEN ${SESSION_LIST_MESSAGE_COUNT_CAP}
-        ELSE ${sessions.listMessageCount} + 1
-      END`,
-    })
-    .where(eq(sessions.id, sessionId));
+  await db.update(sessions).set({ listMessageCount: null }).where(eq(sessions.id, sessionId));
 }
 
 export async function invalidateSessionListPreview(sessionId: string): Promise<void> {
@@ -98,8 +89,10 @@ export async function persistSessionListMessageCount(
   count: number,
 ): Promise<void> {
   const db = getDbClient().drizzle;
-  const capped = Math.min(Math.max(0, Math.floor(count)), SESSION_LIST_MESSAGE_COUNT_CAP);
-  await db.update(sessions).set({ listMessageCount: capped }).where(eq(sessions.id, sessionId));
+  await db
+    .update(sessions)
+    .set({ listMessageCount: Math.max(0, Math.floor(count)) })
+    .where(eq(sessions.id, sessionId));
 }
 
 /** 一次 RPC 回填整页 list 投影。空数组是 no-op。 */

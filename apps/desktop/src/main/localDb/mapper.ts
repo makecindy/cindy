@@ -238,13 +238,14 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     updatedAt: new Date(row.updatedAt).toISOString(),
     _count: { messages: row.messageCount },
     preview:
-      row.listPreview ??
-      (row.latestMessageExtract != null
-        ? finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole)
-        : extractMessagePreview(
-            boundSerializedMessageContent(row.latestMessageContent),
-            row.latestMessageRole,
-          )),
+      row.listPreview != null
+        ? finalizePlainPreview(row.listPreview, row.listPreviewRole)
+        : row.latestMessageExtract != null
+          ? finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole)
+          : extractMessagePreview(
+              boundSerializedMessageContent(row.latestMessageContent),
+              row.latestMessageRole,
+            ),
     summary: row.summary ?? null,
   };
   return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
