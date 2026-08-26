@@ -31,9 +31,17 @@ const AGENT_RANK: Record<UsageAgentKind, number> = {
 };
 
 const TH_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 text-right text-11 font-medium text-[var(--text-tertiary)]';
+  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-11 font-medium text-[var(--text-tertiary)]';
 const TD_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] py-2 text-right text-12 tabular-nums';
+  'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-12 tabular-nums';
+
+/**
+ * 首列 (agent / model) 是唯一可收缩的列, 实现与 UsageTaskTable 的任务列相同:
+ * `w-full + max-w-0` 让它先塌到 0 (打破"按最长内容取列宽"的默认行为) 再领走
+ * 其余列分完后剩下的空间, 内层的 truncate 由此生效 (见 #3393 的同一段分析)。
+ * pl-3 是列间距, 否则相邻两列的数字会贴到一起; 首列自身取 pl-0。
+ */
+const FIRST_COL_CLASS = 'w-full max-w-0 pl-0';
 
 function Swatch({ rank }: { rank: number }): React.JSX.Element {
   return (
@@ -87,7 +95,9 @@ export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.
       <table className="w-full border-collapse">
         <thead>
           <tr>
-            <th className={cn(TH_CLASS, 'text-left')}>{t('usageHistory.byAgent.col.agent')}</th>
+            <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
+              {t('usageHistory.byAgent.col.agent')}
+            </th>
             <th className={TH_CLASS}>{t('usageHistory.byAgent.col.total')}</th>
             <th className={TH_CLASS}>{t('usageHistory.byAgent.col.share')}</th>
             <th className={TH_CLASS}>{t('usageHistory.byAgent.col.today')}</th>
@@ -102,10 +112,12 @@ export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.
             const rank = AGENT_RANK[row.agentKind] ?? 3;
             return (
               <tr key={row.agentKind}>
-                <td className={cn(TD_CLASS, 'text-left')}>
+                <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
                   <span className="flex min-w-0 items-center gap-2">
                     <Swatch rank={rank} />
-                    <span className="truncate">{row.agentKind}</span>
+                    <span className="truncate" title={row.agentKind}>
+                      {row.agentKind}
+                    </span>
                   </span>
                 </td>
                 <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
@@ -131,7 +143,9 @@ export function UsageModelTable({ rows }: { rows: ModelTokenRow[] }): React.JSX.
     <table className="w-full border-collapse">
       <thead>
         <tr>
-          <th className={cn(TH_CLASS, 'text-left')}>{t('usageHistory.byModel.col.model')}</th>
+          <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
+            {t('usageHistory.byModel.col.model')}
+          </th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.total')}</th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.share')}</th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.input')}</th>
@@ -146,10 +160,12 @@ export function UsageModelTable({ rows }: { rows: ModelTokenRow[] }): React.JSX.
       <tbody>
         {rows.map((row, index) => (
           <tr key={row.key}>
-            <td className={cn(TD_CLASS, 'text-left')}>
+            <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
               <span className="flex min-w-0 items-center gap-2">
                 <Swatch rank={index} />
-                <span className="truncate">{formatModelShort(row.model)}</span>
+                <span className="truncate" title={row.model}>
+                  {formatModelShort(row.model)}
+                </span>
                 {/* 同一模型 id 可能跨 agent 撞名, 标签让两行区分得开 */}
                 <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-10 leading-none text-[var(--text-tertiary)]">
                   {row.agentKind}

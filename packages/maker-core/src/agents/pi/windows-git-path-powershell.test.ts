@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -142,73 +142,104 @@ describe('Windows Git PATH PowerShell probes', () => {
     }
   });
 
-  it.runIf(process.platform === 'win32')('kills probe descendants after the coordinator times out', () => {
-    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-    if (!systemRoot) throw new Error('Windows system root is unavailable');
-    const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    const encodedSleepCommand = Buffer.from('Start-Sleep -Seconds 30', 'utf16le').toString('base64');
-    const script = [
-      '$startInfo = New-Object System.Diagnostics.ProcessStartInfo',
-      `$startInfo.FileName = '${powershell.replaceAll("'", "''")}'`,
-      `$startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encodedSleepCommand}'`,
-      '$startInfo.UseShellExecute = $false',
-      '$startInfo.CreateNoWindow = $true',
-      '$process = New-Object System.Diagnostics.Process',
-      '$process.StartInfo = $startInfo',
-      '[void]$process.Start()',
-      '[Console]::Out.WriteLine($process.Id)',
-      '[Console]::Out.Flush()',
-      'Start-Sleep -Seconds 30',
-    ].join('\n');
-    let childPid: number | undefined;
-    let coordinatorPid: number | undefined;
-    try {
-      execFileSync(
-        powershell,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
-        {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: 1_500,
-          windowsHide: true,
-        },
+  it.runIf(process.platform === 'win32')(
+    'kills probe descendants after the coordinator is terminated',
+    async () => {
+      const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+      if (!systemRoot) throw new Error('Windows system root is unavailable');
+      const powershell = path.join(
+        systemRoot,
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe',
       );
-      throw new Error('coordinator unexpectedly completed before its timeout');
-    } catch (error) {
-      const failure = error as NodeJS.ErrnoException & { stdout?: string | Buffer };
-      expect(failure.code).toBe('ETIMEDOUT');
-      coordinatorPid = failure.pid;
-      const output = Buffer.isBuffer(failure.stdout)
-        ? failure.stdout.toString('utf8')
-        : failure.stdout ?? '';
-      childPid = Number(output.trim().split(/\r?\n/).at(-1));
-      expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
-    }
+      const encodedSleepCommand = Buffer.from('Start-Sleep -Seconds 30', 'utf16le').toString(
+        'base64',
+      );
+      const script = [
+        '$startInfo = New-Object System.Diagnostics.ProcessStartInfo',
+        `$startInfo.FileName = '${powershell.replaceAll("'", "''")}'`,
+        `$startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encodedSleepCommand}'`,
+        '$startInfo.UseShellExecute = $false',
+        '$startInfo.CreateNoWindow = $true',
+        '$process = New-Object System.Diagnostics.Process',
+        '$process.StartInfo = $startInfo',
+        '[void]$process.Start()',
+        '[Console]::Out.WriteLine($process.Id)',
+        '[Console]::Out.Flush()',
+        'Start-Sleep -Seconds 30',
+      ].join('\n');
+      let childPid: number | undefined;
+      let coordinatorPid: number | undefined;
+      let coordinator: ReturnType<typeof spawn> | undefined;
+      try {
+        coordinator = spawn(
+          powershell,
+          ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+          {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+          },
+        );
+        coordinatorPid = coordinator.pid;
+        expect(Number.isInteger(coordinatorPid) && (coordinatorPid ?? 0) > 0).toBe(true);
 
-    terminateWindowsPowerShellDescendants(powershell, coordinatorPid);
+        let output = '';
+        coordinator.stdout?.setEncoding('utf8');
+        coordinator.stdout?.on('data', (chunk: string) => {
+          output += chunk;
+        });
+        await vi.waitFor(
+          () => {
+            childPid = Number(output.trim().split(/\r?\n/).at(-1));
+            expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+          },
+          { timeout: 5_000, interval: 50 },
+        );
 
-    try {
-      execFileSync(
-        powershell,
-        [
-          '-NoLogo',
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
+        const coordinatorExit = new Promise<void>((resolve) => {
+          coordinator?.once('exit', () => resolve());
+        });
+        expect(coordinator.kill()).toBe(true);
+        await coordinatorExit;
+
+        terminateWindowsPowerShellDescendants(powershell, coordinatorPid);
+
+        execFileSync(
+          powershell,
           [
-            '$deadline = [DateTime]::UtcNow.AddSeconds(3)',
-            `while (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) {`,
-            '  if ([DateTime]::UtcNow -ge $deadline) { exit 1 }',
-            '  Start-Sleep -Milliseconds 50',
-            '}',
-          ].join('\n'),
-        ],
-        { stdio: 'ignore', timeout: 5_000, windowsHide: true },
-      );
-    } finally {
-      spawnSync('taskkill.exe', ['/PID', String(childPid), '/F'], { stdio: 'ignore', windowsHide: true });
-    }
-  }, 12_000);
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            [
+              '$deadline = [DateTime]::UtcNow.AddSeconds(3)',
+              `while (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) {`,
+              '  if ([DateTime]::UtcNow -ge $deadline) { exit 1 }',
+              '  Start-Sleep -Milliseconds 50',
+              '}',
+            ].join('\n'),
+          ],
+          { stdio: 'ignore', timeout: 5_000, windowsHide: true },
+        );
+      } finally {
+        if (coordinatorPid) {
+          spawnSync('taskkill.exe', ['/PID', String(coordinatorPid), '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        }
+        if (childPid) {
+          spawnSync('taskkill.exe', ['/PID', String(childPid), '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        }
+      }
+    },
+    12_000,
+  );
 
   it('reports recoverable script failures only when a logger is supplied', () => {
     const warn = vi.fn();

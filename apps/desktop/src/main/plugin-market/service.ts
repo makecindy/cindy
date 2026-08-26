@@ -13,19 +13,11 @@ import { app, dialog } from 'electron';
 
 import {
   GHOST_ICON_MAX_BYTES,
-  ghostNetworkAuthorizationWithinCap,
-  ghostNodeSecretAuthorizationWithinCap,
-  ghostSetupAuthorizationWithinCap,
-  ghostSettingsUiWithinCap,
-  ghostSubscribeAuthorizationWithinCap,
-  ghostToolParametersWithinCap,
-  ghostUnknownV3FieldsWithinCap,
   ghostInstallApprovalToken,
   ghostIconMimeType,
   isSafeGhostRelativePath,
   isOfficialGhostId,
   isValidGhostId,
-  unreviewedGhostPermissionItems,
   validateGhostManifest,
   type GhostManifest,
   type InstalledGhost,
@@ -1070,10 +1062,6 @@ export class PluginMarketService {
       if (plugin.currentRelease.id !== options.expectedReleaseId) {
         throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after selection');
       }
-      const compatible = validateGhostManifest(plugin.currentRelease.manifest);
-      if (!compatible.ok) {
-        throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-      }
       const existing = getGhostManager()
         .list()
         .find((ghost) => ghost.manifest.id === plugin.ghostId);
@@ -1084,7 +1072,6 @@ export class PluginMarketService {
           ...(options.expectedInstalledApproval !== undefined
             ? { expectedInstalledApproval: options.expectedInstalledApproval }
             : {}),
-          manifestCap: compatible.manifest,
           allowSourceReplacement: options.allowSourceReplacement === true,
         },
         owner,
@@ -1696,8 +1683,6 @@ export class PluginMarketService {
     options: {
       /** receipt 模型的并发护栏:比对 receipt 派生 token,状态变更即拒(与 main 硬化叠加)。 */
       expectedInstalledApproval?: string;
-      /** 市场目录公开 Manifest 是真实下载包允许的 Host 能力上限。 */
-      manifestCap?: GhostManifest;
       /** 用户明确点击安装时，允许所选市场包原地替换其它来源的同 id 插件。 */
       allowSourceReplacement?: boolean;
       beforeCommitInLock?: () => void;
@@ -1743,10 +1728,6 @@ export class PluginMarketService {
       }
     }
 
-    // manifestCap 只来自上游同一条安装链路已经通过 validateGhostManifest 的
-    // 规范化结果。v2 的内部模型会移除 slots，再把它当原始 ghost.json 二次校验
-    // 会误判为非法；这里直接把已验证的能力上限交给真实包一致性校验。
-    const manifestCap = options.manifestCap ?? null;
     const download = await this.api.download(plugin.id, plugin.currentRelease.id);
     requireSameMarketOwner(owner);
     if (
@@ -1775,28 +1756,6 @@ export class PluginMarketService {
         ) {
           throwIpcError('GHOST_FILE_INVALID', 'Downloaded Plugin package identity changed');
         }
-        if (manifestCap) {
-          const extraCapabilities = unreviewedGhostPermissionItems(
-            manifestCap,
-            undefined,
-            inspected.canonicalManifest,
-          );
-          if (
-            extraCapabilities.length > 0 ||
-            !ghostNetworkAuthorizationWithinCap(manifestCap, inspected.canonicalManifest) ||
-            !ghostNodeSecretAuthorizationWithinCap(manifestCap, inspected.canonicalManifest) ||
-            !ghostSetupAuthorizationWithinCap(manifestCap, inspected.canonicalManifest) ||
-            !ghostSettingsUiWithinCap(manifestCap, inspected.canonicalManifest) ||
-            !ghostSubscribeAuthorizationWithinCap(manifestCap, inspected.canonicalManifest) ||
-            !ghostToolParametersWithinCap(manifestCap, inspected.canonicalManifest) ||
-            !ghostUnknownV3FieldsWithinCap(manifestCap, inspected.canonicalManifest)
-          ) {
-            throwIpcError(
-              'GHOST_FILE_INVALID',
-              'Downloaded Plugin package capabilities exceed the market manifest',
-            );
-          }
-        }
       }
       const ghost = await this.commitDownloadedPackage(
         tempPath,
@@ -1806,7 +1765,6 @@ export class PluginMarketService {
           ...(options.expectedInstalledApproval !== undefined
             ? { expectedInstalledApproval: options.expectedInstalledApproval }
             : {}),
-          ...(manifestCap ? { manifestCap } : {}),
           allowSourceReplacement: options.allowSourceReplacement,
           beforeCommitInLock: options.beforeCommitInLock,
         },
@@ -1825,7 +1783,6 @@ export class PluginMarketService {
     plugin: VisiblePluginSummary | VisiblePluginDetail,
     options: {
       expectedInstalledApproval?: string;
-      manifestCap?: GhostManifest;
       allowSourceReplacement?: boolean;
       beforeCommitInLock?: () => void;
       expectedInstalled: boolean;
@@ -1908,7 +1865,6 @@ export class PluginMarketService {
         ...(options.expectedInstalledApproval !== undefined
           ? { expectedInstalledApproval: options.expectedInstalledApproval }
           : {}),
-        ...(options.manifestCap ? { manifestCap: options.manifestCap } : {}),
         ...(options.beforeCommitInLock || replacingSource
           ? { beforeCommitInLock: detachPreviousRoute }
           : {}),
@@ -2360,17 +2316,11 @@ export class PluginMarketService {
           const detail = await this.api.detail(summary.id);
           requireSameMarketOwner(owner);
           assertDetailMatchesSummary(summary, detail);
-          const manifestCap = validateGhostManifest(detail.currentRelease.manifest);
-          if (!manifestCap.ok) {
-            throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-          }
           // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
           await this.installDetail(
             detail,
             {
               expectedInstalled: false,
-              // 目录 Manifest 是真实包允许的能力上限；超出时按包内容不一致拒绝。
-              manifestCap: manifestCap.manifest,
               // 下载期间用户可能从本地插件页完成显式卸载。最终落位前在
               // ghostId 锁内重读卸载意图，不能让旧 snapshot 把插件装回来。
               beforeCommitInLock: () => {
@@ -2464,16 +2414,11 @@ export class PluginMarketService {
           const detail = await this.api.detail(summary.id);
           requireSameMarketOwner(owner);
           assertDetailMatchesSummary(summary, detail);
-          const manifestCap = validateGhostManifest(detail.currentRelease.manifest);
-          if (!manifestCap.ok) {
-            throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-          }
           await this.installDetail(
             detail,
             {
               expectedInstalled: true,
               expectedInstalledApproval: ghostInstallApprovalToken(freshInstalled.approval),
-              manifestCap: manifestCap.manifest,
               beforeCommitInLock: () => {
                 if (isGhostBusy(summary.ghostId)) {
                   throw new SilentUpgradeBusyError('Plugin is busy');

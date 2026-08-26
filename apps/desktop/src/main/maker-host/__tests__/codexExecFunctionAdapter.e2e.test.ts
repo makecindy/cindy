@@ -11,7 +11,10 @@ import { createResponsesCustomToolFunctionAdapter } from '@cindy/responses-chat-
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
-import { AppServerHost } from '../../../../../../packages/maker-core/src/agents/codex/app-server/host.js';
+import {
+  AppServerHost,
+  type ThreadSubscription,
+} from '../../../../../../packages/maker-core/src/agents/codex/app-server/host.js';
 import {
   Method,
   type ItemEnvelope,
@@ -201,7 +204,12 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
       res.end(responseBody);
     });
     const providerUrl = await listen(provider);
-    cleanups.push(() => new Promise<void>((resolve) => provider.close(() => resolve())));
+    cleanups.push(() =>
+      new Promise<void>((resolve) => {
+        provider.closeAllConnections();
+        provider.close(() => resolve());
+      }),
+    );
 
     const adapter = createResponsesCustomToolFunctionAdapter(['exec']);
     const proxy: ProxyHandle = await createAnthropicCompatProxy({
@@ -263,7 +271,13 @@ stream_max_retries = 0
       logger,
       clientInfo: { name: 'cindy-issue-3168-e2e', version: '0.0.0' },
     });
-    cleanups.push(() => host.shutdown());
+    let subscription: ThreadSubscription | undefined;
+    cleanups.push(async () => {
+      // This test owns the host. Shut it down before releasing the thread so a
+      // slow thread/unsubscribe cannot consume most of Vitest's hook budget.
+      await host.shutdown();
+      await subscription?.release();
+    });
 
     const thread = await withTimeout(
       host.request<ThreadStartResponse>(
@@ -287,12 +301,11 @@ stream_max_retries = 0
     });
     const startedItems: ItemEnvelope[] = [];
     const completedItems: ItemEnvelope[] = [];
-    const subscription = host.subscribeThread(thread.thread.id, {
+    subscription = host.subscribeThread(thread.thread.id, {
       turnCompleted: () => resolveTurnCompleted(),
       itemStarted: ({ item }) => startedItems.push(item),
       itemCompleted: ({ item }) => completedItems.push(item),
     });
-    cleanups.push(() => subscription.release());
 
     await withTimeout(
       host.request(

@@ -1,5 +1,5 @@
 /**
- * xdt-helper/list_worker_queue.ts —— 列出指定 worker 输入队列中排队的消息。
+ * xdt-helper/get_worker_queue_status.ts —— 读取指定 worker 工作态与完整输入队列。
  *
  * Lead 派发的消息在 worker 忙时会排队(send_to_worker 的 wake_kind=queued);
  * 本工具让 lead 在消息被消费前看到队列全貌。口径「看得全、只能动自己的」:
@@ -22,7 +22,7 @@ export interface WorkerQueuedMessageEntry {
   consuming: boolean;
 }
 
-export interface ListWorkerQueueDeps {
+export interface GetWorkerQueueStatusDeps {
   getSessionContext?: () => {
     sessionId?: string;
   };
@@ -34,6 +34,10 @@ export interface ListWorkerQueueDeps {
       {
         workerId: string;
         workerSessionId: string;
+        status: string;
+        isWorking: boolean;
+        willQueue: boolean;
+        queuePaused: boolean;
         messages: WorkerQueuedMessageEntry[];
       },
       'WORKER_NOT_FOUND'
@@ -42,19 +46,19 @@ export interface ListWorkerQueueDeps {
 }
 
 const DESCRIPTION =
-  '列出指定 worker 输入队列中正在排队(尚未被消费)的消息,每条含来源、位置与正文。' +
+  '读取指定 worker 当前工作态、下一条消息是否会排队,以及完整待处理队列。' +
   'source=lead 的条目是你自己发的(send_to_worker / initial_task 排队产生),' +
-  '可用 update_queued_message / cancel_queued_message 修改或撤回;' +
+  '可用 update_queued_message / cancel_queued_message 修改或撤回,或用 merge_queued_messages 原子合并连续的 Lead 消息;' +
   'source=user / scheduler 的条目正文可见(供理解排队顺序与内容),但不可修改/撤回。' +
   'consuming=true 表示该条正在投递中,已不可修改/撤回。' +
   '失败码: LEAD_NOT_SUPPORTED / WORKER_NOT_FOUND。';
 
-export function registerListWorkerQueueTool(
+export function registerGetWorkerQueueStatusTool(
   registry: XdtHelperToolRegistry,
-  deps: ListWorkerQueueDeps,
+  deps: GetWorkerQueueStatusDeps,
 ): void {
   registry.register({
-    name: 'list_worker_queue',
+    name: 'get_worker_queue_status',
     category: 'control',
     description: DESCRIPTION,
     inputShape: {
@@ -78,6 +82,11 @@ export function registerListWorkerQueueTool(
       return okPayload({
         worker_id: result.workerId,
         worker_session_id: result.workerSessionId,
+        status: result.status,
+        is_working: result.isWorking,
+        will_queue: result.willQueue,
+        queued_count: result.messages.length,
+        queue_paused: result.queuePaused,
         queue: result.messages.map((entry) => ({
           queued_message_id: entry.queuedMessageId,
           position: entry.position,
