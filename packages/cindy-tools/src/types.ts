@@ -446,6 +446,8 @@ export interface CindyGhostsMcpDeps {
     id: string;
     name: string;
     description?: string;
+    /** 省略时由正式版 Host 使用自身版本；开发构建必须明确填写。 */
+    minCindyVersion?: string;
   }): Promise<CindyForgeScaffoldResult>;
   /**
    * 把一个源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件；

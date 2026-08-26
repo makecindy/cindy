@@ -782,6 +782,7 @@ export function getMaker(): Maker {
     };
 
     const makerMemoryProviderDeps = {
+      getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
       pluginRegistry,

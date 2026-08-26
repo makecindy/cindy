@@ -1025,6 +1025,7 @@ export async function handleForgeScaffold(
     id: string;
     name: string;
     description?: string;
+    minCindyVersion?: string;
   },
 ): Promise<McpTextResult> {
   try {
@@ -1322,6 +1323,10 @@ export function createCindyGhostsMcpServer(
         .string()
         .optional()
         .describe("一句话说明插件用途；省略时会生成占位说明"),
+      minCindyVersion: z
+        .string()
+        .optional()
+        .describe("插件实际依赖的首个 Cindy 正式版本；省略时使用当前正式版，开发构建必须明确填写"),
     },
     async (input) => handleForgeScaffold(deps, input),
   );

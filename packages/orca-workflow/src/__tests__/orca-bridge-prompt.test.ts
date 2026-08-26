@@ -10,7 +10,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
   const channelDisclosureRule =
     'label every delegated task with its actual execution channel: Orca Worker or native subagent.';
   const toolSurfaceRule =
-    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker.';
+    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages.';
   const explicitCreationBoundary =
     'Use create_worker only when the user explicitly asks to open one new worker, and use create_workers only when the user explicitly asks to open multiple new workers.';
   const missingWorkerBoundary =
@@ -25,6 +25,8 @@ describe('renderOrcaLeadSystemPrompt', () => {
     'Treat send_to_worker as dispatched only when its payload has ok=true and wake_kind=resumed, already-active, or queued.';
   const createDispatchSignals =
     'Treat create_worker, and each created result from create_workers, as dispatched only when it has dispatched=true, a queued_message_id, or dispatch_outcome.kind=session-dispatch with dispatch_outcome.dispatched=true (including dispatch_outcome.wakeKind=queued).';
+  const interruptDispatchSignals =
+    'Treat interrupt_worker as dispatched only when its payload has ok=true and queued_message_id; stop_outcome reports the graceful-stop result and never means the replacement was dropped.';
   const batchResultRule =
     'After a multi-role tool-call batch returns, always relay create_workers.user_report verbatim when present, summarize every create_workers per-item result or error, and report every other failed/no-dispatch tool result.';
 
@@ -81,6 +83,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(toolSurfaceRule);
     expect(prompt).toContain(sendDispatchSignals);
     expect(prompt).toContain(createDispatchSignals);
+    expect(prompt).toContain(interruptDispatchSignals);
     expect(prompt).toContain(batchResultRule);
     expect(prompt).toContain(multiRoleBatchBoundary);
     expect(prompt).toContain(
@@ -104,7 +107,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(
-      'If create_worker or send_to_worker fails or lacks those dispatch signals, report the result immediately instead of ending silently.',
+      'If create_worker, send_to_worker, or interrupt_worker fails or lacks those dispatch signals, report the result immediately instead of ending silently.',
     );
     expect(prompt).toContain(
       'Silence is tied to the concrete dispatch signals above, not merely to calling a tool.',
@@ -122,6 +125,20 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(missingWorkerBoundary);
     expect(prompt).toContain(missingGenericWorkerBoundary);
     expect(prompt).toContain(multiRoleReadinessBoundary);
+  });
+
+  it('states the queue inspection, atomic interrupt, and atomic merge rules verbatim', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      'Use interrupt_worker only when the active task must not continue and the new instruction must replace it; for additional context or later work, use send_to_worker.',
+    );
+    expect(prompt).toContain(
+      'If get_workspace_info shows queued_count > 0 or queue_paused=true, call get_worker_queue_status first, then revise or withdraw one pending message, merge related messages, or send a separate task.',
+    );
+    expect(prompt).toContain(
+      'Never simulate an interrupt or merge with multiple stop, update, cancel, or send calls because the queue may advance between calls.',
+    );
   });
 
   it('keeps Worker routing and disclosure rules when an initial worker exists', () => {

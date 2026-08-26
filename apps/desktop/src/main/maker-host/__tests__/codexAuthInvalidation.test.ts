@@ -128,6 +128,18 @@ afterEach(() => {
 });
 
 describe('Codex system credential suppression marker', () => {
+  it('qualifies the Windows ACL principal when the machine and user names can collide', async () => {
+    const { resolveWindowsAclPrincipal } = await import('../auth-adapters.js');
+
+    expect(
+      resolveWindowsAclPrincipal({ USERDOMAIN: 'WORKSTATION', USERNAME: 'alex' }, 'fallback'),
+    ).toBe('WORKSTATION\\alex');
+    expect(
+      resolveWindowsAclPrincipal({ USERDOMAIN: 'WORKSTATION', USERNAME: 'DOMAIN\\alex' }, 'fallback'),
+    ).toBe('DOMAIN\\alex');
+    expect(resolveWindowsAclPrincipal({}, 'fallback')).toBe('fallback');
+  });
+
   it('user disconnect persists as reconcile suppression without surfacing an auth error', () => {
     const { codexHome, systemAuth, localAuth } = fixture();
     writeInvalidatedSystemCodexAuthMarker(
