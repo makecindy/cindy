@@ -4385,7 +4385,7 @@ const opened = await cindy.iosSimulator.request({
    企业身份下若清单声明 \`source:"oidc-token"\`，提交安装前会展示插件名、id 与精确请求
    域名，并要求用户手输相同 id；取消不会安装。只有确认后的企业作者自测才会取得 Forge
    作者资格并可签发 Connection JWT；个人身份下的 Forge 安装和手动导入都不会取得这项资格。
-   手动导入另有一条点名例外，见 §4.7：仅 \`ghostId\` 精确等于 \`mivo-canvas\` 的组织成员本地安装可解析 audience；
+   本地安装另有一条点名例外，见 §4.7：仅 \`ghostId\` 精确等于 \`mivo-canvas\` 的组织成员本地安装可解析 audience；
 4. 安装后再让用户 \`$<command> <内容>\` 试一单，看聊天图卡/面板是否符合预期。
 
 企业组织成员需要发布时，调用 \`ghost_forge_pack({ dir: '<绝对路径>', intent: 'publish' })\`。
