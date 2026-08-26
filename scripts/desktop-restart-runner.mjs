@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { assertSharedDevMigrationPolicy } from './dev-migration-policy.mjs';
 import {
   buildDesktopDevVerdictFromFailure,
+  desktopRestartArgvConflictMessage,
+  normalizeDesktopRestartArgv,
   printDesktopDevVerdict,
   restartContextFromArgv,
 } from './desktop-dev-verdict.mjs';
@@ -92,12 +94,15 @@ function runStep(step) {
 }
 
 export function runDesktopRestart(argv, root = rootDir, stepRunner = runStep) {
-  assertSharedDevMigrationPolicy(root, argv);
-  for (const step of buildDesktopRestartSteps(argv, root)) stepRunner(step);
+  const normalizedArgv = normalizeDesktopRestartArgv(argv);
+  const conflict = desktopRestartArgvConflictMessage(normalizedArgv);
+  if (conflict) throw new Error(conflict);
+  assertSharedDevMigrationPolicy(root, normalizedArgv);
+  for (const step of buildDesktopRestartSteps(normalizedArgv, root)) stepRunner(step);
 }
 
 function main() {
-  const argv = process.argv.slice(2);
+  const argv = normalizeDesktopRestartArgv(process.argv.slice(2));
   try {
     runDesktopRestart(argv);
   } catch (error) {

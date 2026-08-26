@@ -102,19 +102,28 @@ const noopLogger: Logger = {
 
 describe("Pi native settings", () => {
   it("maps the configured percentage to Pi reserve tokens", () => {
+    const retry = {
+      enabled: true,
+      maxRetries: 6,
+      baseDelayMs: 2000,
+      provider: { maxRetries: 0 },
+    };
     expect(JSON.parse(buildPiSettingsJsonContent(128_000, 75))).toEqual({
       transport: "sse",
+      retry,
       compaction: { reserveTokens: 32_000 },
     });
     expect(JSON.parse(buildPiSettingsJsonContent(200_000, 75))).toEqual({
       transport: "sse",
+      retry,
       compaction: { reserveTokens: 50_000 },
     });
     expect(JSON.parse(buildPiSettingsJsonContent(100_000, 75))).toEqual({
       transport: "sse",
+      retry,
       compaction: { reserveTokens: 25_000 },
     });
-    expect(JSON.parse(buildPiSettingsJsonContent(128_000))).toEqual({ transport: "sse" });
+    expect(JSON.parse(buildPiSettingsJsonContent(128_000))).toEqual({ transport: "sse", retry });
   });
 });
 

@@ -33,6 +33,7 @@ import {
 import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNavigation';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
+import { formatCompactTokens } from '@/lib/usageFormat';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
 import {
   PI_SUBAGENT_TOOL_NAME,
@@ -393,7 +394,10 @@ export function AgentTaskCard({
       { key: 'status', text: t(`chat.agentTask.status.${status}`) },
     ];
     if (typeof update?.usage?.totalTokens === 'number') {
-      parts.push({ key: 'tokens', text: t('chat.agentTask.tokens', { count: update.usage.totalTokens }) });
+      parts.push({
+        key: 'tokens',
+        text: t('chat.agentTask.tokens', { count: formatCompactTokens(update.usage.totalTokens) }),
+      });
     }
     if (typeof update?.usage?.toolUses === 'number') {
       parts.push({ key: 'toolUses', text: t('chat.agentTask.toolUses', { count: update.usage.toolUses }) });

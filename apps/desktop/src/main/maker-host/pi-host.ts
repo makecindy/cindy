@@ -56,6 +56,7 @@ import type {
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { t } from '../i18n.js';
+import { spawnPiSubagentRunner } from '../cindy-brain/piSubagentRunnerHost.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import {
@@ -1628,6 +1629,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
+    spawnPiSubagentRunner,
     derivePiProxySessionToken,
     capabilityAdditions: opts.capabilityAdditions,
     reviewAutoPermissionAction: opts.reviewAutoPermissionAction,

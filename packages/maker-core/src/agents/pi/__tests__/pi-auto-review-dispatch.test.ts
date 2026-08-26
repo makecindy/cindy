@@ -29,6 +29,14 @@ const captured = vi.hoisted(() => ({
   onEvent: null as ((event: unknown) => void) | null,
   requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
+  runnerLaunches: [] as Array<{
+    runId: string;
+    runDir: string;
+    runnerFile: string;
+    configFile: string;
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+  }>,
   proxyRegistrations: [] as Array<{
     sessionId: string;
     token: string;
@@ -171,6 +179,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onEvent = null;
     captured.requests = [];
     captured.sent = [];
+    captured.runnerLaunches = [];
     captured.proxyRegistrations = [];
     captured.mcpVendorOptions = undefined;
     captured.failSetModel = false;
@@ -286,6 +295,30 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: (request) => {
+        captured.runnerLaunches.push(request);
+        const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+        const emit = (event: string, ...args: unknown[]): void => {
+          for (const listener of listeners.get(event) ?? []) listener(...args);
+        };
+        const handle = {
+          pid: 4321,
+          killed: false,
+          once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+            const queued = listeners.get(event) ?? [];
+            queued.push(listener);
+            listeners.set(event, queued);
+            if (event === 'spawn') queueMicrotask(listener);
+            return handle;
+          },
+          kill: () => {
+            handle.killed = true;
+            queueMicrotask(() => emit('exit', 0, 'SIGTERM'));
+            return true;
+          },
+        };
+        return handle as never;
+      },
       registerPiProxySession: (sessionId, token, _resolveProviderId, options) => {
         captured.proxyRegistrations.push({
           sessionId,
@@ -369,6 +402,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   }
 
+  function fireSubagentRunnerRequest(
+    id: string,
+    action: 'launch' | 'terminate',
+    runId: string,
+  ): void {
+    captured.onEvent!({
+      type: 'extension_ui_request',
+      method: 'input',
+      id,
+      title: 'cindy:pi-subagent-runner',
+      placeholder: JSON.stringify({ action, runId }),
+    });
+  }
+
   it('spawns with a private managed rg path, default prompt and no restrictive tool allowlist', async () => {
     if (process.platform === 'win32') {
       // Windows 的环境变量键不区分大小写，无法同时构造“仅有小写键”的进程环境。
@@ -420,6 +467,68 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(noProxy).toContain(entry);
     }
     expect(captured.env.no_proxy).toBeUndefined();
+  });
+
+  it('asks the host to launch a durable runner without treating the app executable as Node', async () => {
+    const previousNode = process.env.ELECTRON_RUN_AS_NODE;
+    const previousLegacy = process.env.CINDY_PI_SUBAGENT_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    process.env.CINDY_PI_SUBAGENT_NODE = '/Applications/Cindy.app/Contents/MacOS/Cindy';
+    try {
+    await start();
+    expect(captured.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+    expect(captured.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    const runRoot = captured.env.CINDY_PI_SUBAGENT_RUN_ROOT;
+    const ownerId = captured.env.CINDY_PI_SUBAGENT_OWNER_ID;
+    expect(runRoot).toBeTruthy();
+    expect(ownerId).toBeTruthy();
+
+    const runId = '123e4567-e89b-42d3-a456-4266141740aa';
+    const runDir = path.join(runRoot!, runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'runner.cjs'), "'use strict';\n");
+    writeFileSync(path.join(runDir, 'config.json'), '{}\n');
+    writeFileSync(path.join(runDir, 'status.json'), `${JSON.stringify({
+      version: 1,
+      runId,
+      taskId: 'tool-runner-host',
+      parentSessionId: 's1',
+      runtimeOwnerId: ownerId,
+      runnerInstanceId: `launch-pending-${runId}`,
+      state: 'queued',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      tasks: [{
+        childId: `${runId}-1`,
+        sessionId: `${runId}-1`,
+        agent: 'scout',
+        status: 'queued',
+      }],
+    })}\n`);
+
+    fireSubagentRunnerRequest('runner-launch', 'launch', runId);
+    const response = await waitForResponse('runner-launch');
+    expect(JSON.parse(String(response.value))).toEqual({ ok: true, confirmed: true });
+    expect(captured.runnerLaunches).toHaveLength(1);
+    expect(captured.runnerLaunches[0]).toMatchObject({
+      runId,
+      runDir,
+      runnerFile: path.join(runDir, 'runner.cjs'),
+      configFile: path.join(runDir, 'config.json'),
+      cwd,
+    });
+    expect(captured.runnerLaunches[0]?.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(captured.runnerLaunches[0]?.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+
+    fireSubagentRunnerRequest('runner-stop', 'terminate', runId);
+    const stop = await waitForResponse('runner-stop');
+    expect(JSON.parse(String(stop.value))).toEqual({ ok: true, confirmed: true });
+    } finally {
+      if (previousNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = previousNode;
+      if (previousLegacy === undefined) delete process.env.CINDY_PI_SUBAGENT_NODE;
+      else process.env.CINDY_PI_SUBAGENT_NODE = previousLegacy;
+    }
   });
 
   it('routes chat-requested Pi extension installs into the host-managed store', async () => {

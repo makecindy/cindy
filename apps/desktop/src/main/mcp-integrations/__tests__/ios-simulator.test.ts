@@ -10050,7 +10050,7 @@ describe('iOS Simulator host', () => {
         });
         expect(inspectArtifact).not.toHaveBeenCalled();
         const diagnosticsId = (
-          failed as { ok: false; data: { diagnostics: { diagnosticsId: string } } }
+          failed as unknown as { ok: false; data: { diagnostics: { diagnosticsId: string } } }
         ).data.diagnostics.diagnosticsId;
         await expect(
           host.callTool(
