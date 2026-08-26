@@ -145,22 +145,34 @@ function readInstallationsFile(filePath: string): InstallationsFileRead {
   if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) {
     return { kind: 'invalid', installations: {}, raw: null };
   }
+  const rawInstallations = value.installations;
+  if (
+    rawInstallations === undefined ||
+    rawInstallations === null ||
+    typeof rawInstallations !== 'object' ||
+    Array.isArray(rawInstallations)
+  ) {
+    return { kind: 'invalid', installations: {}, raw: value };
+  }
   const installations: Record<string, PluginMarketInstallationRecord> = {};
-  if (value.installations && typeof value.installations === 'object') {
-    for (const [ghostId, record] of Object.entries(value.installations)) {
-      if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
-    }
+  for (const [ghostId, record] of Object.entries(rawInstallations)) {
+    if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
   }
   return { kind: 'ok', installations, raw: value };
 }
 
 function rawMentionsGhost(file: InstallationsFileRead, ghostId: string): boolean {
   const installations = file.raw?.installations;
-  return Boolean(
-    installations &&
-      typeof installations === 'object' &&
-      !Array.isArray(installations) &&
-      Object.prototype.hasOwnProperty.call(installations, ghostId),
+  if (!installations || typeof installations !== 'object' || Array.isArray(installations)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(installations, ghostId)) return true;
+  return Object.values(installations).some(
+    (record) =>
+      record &&
+      typeof record === 'object' &&
+      !Array.isArray(record) &&
+      (record as { ghostId?: unknown }).ghostId === ghostId,
   );
 }
 
