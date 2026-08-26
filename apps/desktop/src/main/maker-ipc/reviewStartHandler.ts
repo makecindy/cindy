@@ -211,6 +211,11 @@ export interface ReviewStartHandlerDeps {
   warn(message: string, fields: Record<string, unknown>): void;
 }
 
+export interface ReviewRunControl {
+  /** Record local user intent before the shared input coordinator aborts the Reviewer turn. */
+  noteReviewerStopRequested(reviewerSessionId: string): boolean;
+}
+
 function terminalErrorDetails(event: AgentEvent): {
   error?: string;
   failureCode?: ReviewFailureCode;
@@ -219,6 +224,12 @@ function terminalErrorDetails(event: AgentEvent): {
   return typeof data?.message === 'string' && data.message
     ? { error: data.message }
     : { failureCode: 'provider-failed' };
+}
+
+function isCancelledReviewDone(event: AgentEvent): boolean {
+  if (event.type !== 'done') return false;
+  const data = event.data as { cancelled?: unknown } | null;
+  return data?.cancelled === true;
 }
 
 export class ReviewPreconditionError extends Error {
@@ -241,8 +252,9 @@ const REVIEW_TERMINAL_CARD_RETRY_MAX_MS = 5_000;
 export function registerReviewStartHandler(
   registry: IpcHandlerRegistry,
   deps: ReviewStartHandlerDeps,
-): void {
+): ReviewRunControl {
   const activeReviewsBySource = new Map<string, { runId: string; reviewerSessionId: string }>();
+  const activeStopNotifiersByReviewer = new Map<string, () => boolean>();
 
   registry.handle(MAKER_INVOKE.START_REVIEW, async (event, raw: unknown) => {
     deps.assertCaller(event);
@@ -277,6 +289,13 @@ export function registerReviewStartHandler(
     let pendingTerminalCard: ReviewCardWrite | null = null;
     let terminalCardPersisted = false;
     let sourceCardWriteChain = Promise.resolve();
+    let stopRequested = false;
+    const noteStopRequested = (): boolean => {
+      if (settled) return false;
+      stopRequested = true;
+      return true;
+    };
+    activeStopNotifiersByReviewer.set(reviewerSessionId, noteStopRequested);
 
     const enqueueSourceCardWrite = (write: () => Promise<void>): Promise<void> => {
       const next = sourceCardWriteChain.then(write, write);
@@ -332,6 +351,9 @@ export function registerReviewStartHandler(
         releaseRetryDelayMs = REVIEW_SOURCE_LEASE_RELEASE_RETRY_MS;
         const active = activeReviewsBySource.get(request.sourceSessionId);
         if (active?.runId === runId) activeReviewsBySource.delete(request.sourceSessionId);
+        if (activeStopNotifiersByReviewer.get(reviewerSessionId) === noteStopRequested) {
+          activeStopNotifiersByReviewer.delete(reviewerSessionId);
+        }
       })();
       releasePromise = pending;
       void pending.finally(() => {
@@ -487,6 +509,11 @@ export function registerReviewStartHandler(
         settlementCause = 'provider-terminal';
         disposeReviewerListeners();
         terminalFinalization = (async () => {
+          if (stopRequested || isCancelledReviewDone(reviewEvent)) {
+            await updateSourceCard('failed', '', undefined, 'reviewer-closed');
+            await closeReviewer();
+            return;
+          }
           if (terminalError) {
             const details = terminalErrorDetails(reviewEvent);
             await updateSourceCard('failed', '', details.error, details.failureCode);
@@ -646,4 +673,9 @@ export function registerReviewStartHandler(
       throw error;
     }
   });
+
+  return {
+    noteReviewerStopRequested: (reviewerSessionId) =>
+      activeStopNotifiersByReviewer.get(reviewerSessionId)?.() ?? false,
+  };
 }

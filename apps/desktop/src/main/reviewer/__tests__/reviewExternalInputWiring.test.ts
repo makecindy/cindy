@@ -26,6 +26,27 @@ describe('Review external input wiring', () => {
     }
   });
 
+  it('allows only local Stop through the Review input guard', () => {
+    expect(registerSource).toMatch(
+      /if \(intent !== 'stop' \|\| remote\) await assertReviewExternalInputAllowed\(sid\);/,
+    );
+    const stopHandlerStart = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.INPUT_STOP',
+    );
+    const stopHandlerEnd = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.INPUT_RESUME',
+      stopHandlerStart,
+    );
+    const stopHandler = registerSource.slice(stopHandlerStart, stopHandlerEnd);
+    expect(stopHandler).toContain('const remote = isDeviceLinkInvoke();');
+    expect(stopHandler).toContain(
+      "await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');",
+    );
+    expect(stopHandler).toContain(
+      'if (!remote) reviewRunControl.noteReviewerStopRequested(sid);',
+    );
+  });
+
   it('also rejects local cross-task and Orca delivery into Review tasks', () => {
     expect(registerSource).toMatch(
       /async function sendToSessionInternal[\s\S]*?await assertReviewExternalInputAllowed\(targetSessionId\);/,

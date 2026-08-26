@@ -8172,7 +8172,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return '';
   };
 
-  registerReviewStartHandler(makerSessionRegistry, {
+  const reviewRunControl = registerReviewStartHandler(makerSessionRegistry, {
     assertCaller: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
     waitUntilReady: async (sourceSessionId) => {
@@ -13696,8 +13696,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sid: string,
     remote: boolean,
     opts: unknown,
+    intent: 'external-input' | 'stop' = 'external-input',
   ): Promise<MainOwnedInputBoundaryStamp> => {
-    await assertReviewExternalInputAllowed(sid);
+    // Stop is lifecycle control rather than external input. Keep the exception
+    // local-only: this Review version does not expand Device Link control.
+    if (intent !== 'stop' || remote) await assertReviewExternalInputAllowed(sid);
     // Capture the coordinator generation before the first database await.  A
     // concurrent /clear replaces the in-memory state; after that await we must
     // reject the old request rather than treating the new generation as its
@@ -14115,7 +14118,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
     const sid = requireSessionId(sessionId);
-    await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+    const remote = isDeviceLinkInvoke();
+    await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');
+    if (!remote) reviewRunControl.noteReviewerStopRequested(sid);
     // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
     // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
     notePromptPredictionSessionStopped(sid);

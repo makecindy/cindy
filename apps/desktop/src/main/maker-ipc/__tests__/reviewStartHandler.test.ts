@@ -286,6 +286,39 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(meta).not.toHaveProperty('error');
   });
 
+  it('does not publish a partial result when the user stops Review', async () => {
+    const harness = new IpcHarness();
+    const reviewer = new FakeReviewer();
+    const deps = makeDeps(reviewer);
+    const control = registerReviewStartHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
+
+    expect(control.noteReviewerStopRequested('reviewer-1')).toBe(true);
+    expect(control.noteReviewerStopRequested('reviewer-1')).toBe(true);
+    // Pi and some Claude stop paths close with an ordinary done event, so the
+    // host-owned stop marker must win over any partial provider result.
+    reviewer.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(deps.updateSourceCard).toHaveBeenCalledTimes(1));
+
+    expect(deps.readReviewerResult).not.toHaveBeenCalled();
+    expect(deps.updateSourceCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: '',
+        meta: expect.objectContaining({
+          status: 'failed',
+          failureCode: 'reviewer-closed',
+        }),
+      }),
+    );
+    expect(deps.closeReviewer).toHaveBeenCalledTimes(1);
+    expect(deps.releaseSourceLease).toHaveBeenCalledTimes(1);
+    expect(control.noteReviewerStopRequested('reviewer-1')).toBe(false);
+
+    await expect(harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest())).resolves.toMatchObject(
+      { ok: true, runId: 'run-2' },
+    );
+  });
+
   it('uses a stable provider failure code only when no diagnostic detail exists', async () => {
     const harness = new IpcHarness();
     const reviewer = new FakeReviewer();
