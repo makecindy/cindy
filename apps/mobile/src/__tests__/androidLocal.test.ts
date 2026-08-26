@@ -1,14 +1,20 @@
 // @ts-nocheck —— 被测对象是 .mjs 发布工具模块,vitest 跑其纯函数。
 import { describe, expect, it } from 'vitest';
+import { X509Certificate } from 'node:crypto';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { rootCertificates } from 'node:tls';
 import {
   androidGradleTasksForArtifacts,
+  assertAndroidUploadCertificateSha256,
+  normalizeAndroidCertificateSha256,
   readAndroidVersionCode,
+  readAndroidCertificateSha256FromPemOutput,
   nextSequentialVersionCode,
   replaceVersionCodeInAndroidVersionJson,
   resolveAndroidArtifactKinds,
+  resolveAndroidUploadCertificateSha256,
   resolveAndroidSigningEnv,
   patchBuildGradleSigning,
   patchGradlePropertiesMemory,
@@ -43,6 +49,43 @@ describe('androidGradleTasksForArtifacts', () => {
 
   it('空产物集合 fail closed', () => {
     expect(() => androidGradleTasksForArtifacts([])).toThrow(/至少需要一种/);
+  });
+});
+
+describe('Google Play upload certificate pin', () => {
+  const SHA256 = '0123456789abcdef'.repeat(4);
+  const COLON_SHA256 = SHA256.toUpperCase().match(/.{2}/g)?.join(':') ?? '';
+
+  it('归一化 Play Console / keytool 常见指纹格式', () => {
+    expect(normalizeAndroidCertificateSha256(SHA256)).toBe(SHA256);
+    expect(normalizeAndroidCertificateSha256(`SHA-256: ${COLON_SHA256}`)).toBe(SHA256);
+    expect(() => normalizeAndroidCertificateSha256('not-a-fingerprint')).toThrow(/64 位/);
+  });
+
+  it('按 region 从独立 env 读取 pin,缺失或非法时 fail closed', () => {
+    expect(resolveAndroidUploadCertificateSha256('global', {
+      XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL: COLON_SHA256,
+    })).toBe(SHA256);
+    expect(() => resolveAndroidUploadCertificateSha256('global', {})).toThrow(
+      /XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL/,
+    );
+    expect(() => resolveAndroidUploadCertificateSha256('global', {
+      XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL: 'bad',
+    })).toThrow(/64 位/);
+  });
+
+  it('从 keytool RFC 输出读取 signer 证书;无 PEM 时拒绝未签名 AAB', () => {
+    const pem = rootCertificates[0];
+    const expected = new X509Certificate(pem).fingerprint256.replaceAll(':', '').toLowerCase();
+    expect(readAndroidCertificateSha256FromPemOutput(`Signer #1\n${pem}\n`)).toBe(expected);
+    expect(() => readAndroidCertificateSha256FromPemOutput('jar 未签名')).toThrow(/未找到 PEM/);
+  });
+
+  it('实际 signer 必须与独立 upload cert pin 一致', () => {
+    expect(assertAndroidUploadCertificateSha256(SHA256, COLON_SHA256)).toBe(SHA256);
+    expect(() => assertAndroidUploadCertificateSha256(SHA256, 'f'.repeat(64))).toThrow(
+      /上传证书不符/,
+    );
   });
 });
 

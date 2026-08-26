@@ -3,6 +3,7 @@
 // ./ios-local.mjs(不重复实现);本文件只放 Android 特有的:committed versionCode 读取、
 // 生成的 android/app/build.gradle 签名 patch、keystore 签名环境解析。
 
+import { X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -46,6 +47,69 @@ export function androidGradleTasksForArtifacts(kinds) {
   const selected = Array.isArray(kinds) ? kinds : [];
   if (!selected.length) throw new Error('Android 构建至少需要一种产物');
   return selected.map((kind) => kind === 'apk' ? 'assembleRelease' : 'bundleRelease');
+}
+
+export const ANDROID_UPLOAD_CERT_SHA256_ENV = 'XDT_ANDROID_UPLOAD_CERT_SHA256';
+
+/**
+ * 归一化 Play Console / keytool 常见的 SHA-256 证书指纹格式。证书指纹是公开身份 pin,
+ * 不是 keystore 口令；允许裸 64 位 hex、冒号分隔和 SHA256: 前缀。
+ * @param {unknown} raw
+ * @param {string} [source]
+ */
+export function normalizeAndroidCertificateSha256(raw, source = 'Android 证书 SHA-256') {
+  const normalized = String(raw ?? '')
+    .trim()
+    .replace(/^sha-?256\s*:/i, '')
+    .replace(/[\s:]/g, '')
+    .toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalized)) {
+    throw new Error(`${source} 必须是 64 位十六进制 SHA-256 指纹`);
+  }
+  return normalized;
+}
+
+/**
+ * 从独立 env 读取 Google Play 上传证书 pin。它不能从本次选择的 JKS 动态计算，否则
+ * keystorePath / alias 本身配错时会把错误证书同时当作“期望值”，失去发布身份保护。
+ * @param {string} authRegion
+ * @param {NodeJS.ProcessEnv} [baseEnv]
+ */
+export function resolveAndroidUploadCertificateSha256(authRegion, baseEnv = process.env) {
+  const suffix = String(authRegion ?? '').trim().toUpperCase();
+  const envName = `${ANDROID_UPLOAD_CERT_SHA256_ENV}_${suffix}`;
+  const raw = String(baseEnv[envName] ?? '').trim();
+  if (!raw) {
+    throw new Error(`${envName} 未设置(AAB 构建必须独立 pin Google Play「上传密钥证书」SHA-256,不要填应用签名密钥证书)`);
+  }
+  return normalizeAndroidCertificateSha256(raw, envName);
+}
+
+/**
+ * 解析 `keytool -printcert -jarfile <aab> -rfc` 输出中的首张(签名者 leaf)证书。
+ * 未签名 JAR/AAB 的 keytool 也可能退出 0,但不会输出 PEM；这里必须 fail closed。
+ * @param {unknown} rawOutput
+ * @param {string} [source]
+ */
+export function readAndroidCertificateSha256FromPemOutput(rawOutput, source = 'AAB 签名证书') {
+  const pem = String(rawOutput ?? '').match(
+    /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/,
+  )?.[0];
+  if (!pem) throw new Error(`${source} 未找到 PEM 证书(产物可能未签名)`);
+  try {
+    return normalizeAndroidCertificateSha256(new X509Certificate(pem).fingerprint256, source);
+  } catch (err) {
+    throw new Error(`${source} 解析失败:${err?.message ?? err}`);
+  }
+}
+
+export function assertAndroidUploadCertificateSha256(actual, expected) {
+  const actualSha256 = normalizeAndroidCertificateSha256(actual, 'AAB 实际签名证书 SHA-256');
+  const expectedSha256 = normalizeAndroidCertificateSha256(expected, '预期上传证书 SHA-256');
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`AAB 上传证书不符:期望 ${expectedSha256},实际 ${actualSha256}`);
+  }
+  return actualSha256;
 }
 
 // 签名配置零代码默认值:keystore 路径 / alias / 两个口令全部由 XDT_ANDROID_* 环境变量提供,

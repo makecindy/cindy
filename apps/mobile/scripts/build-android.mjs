@@ -45,6 +45,9 @@
 //   self-host-regions.json 的 <region>.androidSigning:keystorePath / keyAlias
 //   口令走环境变量(按 region 大写后缀,cn 可省略后缀回落):
 //     XDT_ANDROID_KEYSTORE_PASSWORD_<REGION> / XDT_ANDROID_KEY_PASSWORD_<REGION>
+//   Global AAB 还必须独立 pin Play Console「上传密钥证书」的公开 SHA-256(不要填
+//   「应用签名密钥证书」;不得从当前 JKS 动态计算,否则配错 JKS 时无法拦截):
+//     XDT_ANDROID_UPLOAD_CERT_SHA256_GLOBAL
 //   keystore 本体在仓库外目录,不入仓。
 // =============================================================================
 
@@ -60,8 +63,11 @@ import {
   formatBakedEnvLines,
 } from './release-lib.mjs';
 import {
+  assertAndroidUploadCertificateSha256,
   readAndroidVersionCode,
+  readAndroidCertificateSha256FromPemOutput,
   resolveAndroidArtifactKinds,
+  resolveAndroidUploadCertificateSha256,
   androidGradleTasksForArtifacts,
   resolveAndroidSigningEnv,
   patchBuildGradleSigning,
@@ -282,7 +288,7 @@ function validateAabMetadata(aabPath, androidDir, expectPackage, expectVersionCo
   log(`  ✓ AAB metadata 校验通过(package=${expectPackage}, version=${expectVersionName}, versionCode=${expectVersionCode})`);
 }
 
-function validateAabSignature(aabPath, javaEnv) {
+function validateAabSignature(aabPath, javaEnv, expectedCertificateSha256) {
   const r = spawnSync('jarsigner', ['-verify', aabPath], { encoding: 'utf8', env: javaEnv });
   if (r.error?.code === 'ENOENT') {
     throw new Error('未找到 jarsigner(JDK 17+ 应自带),无法确认 AAB 已使用 release keystore 签名');
@@ -290,7 +296,26 @@ function validateAabSignature(aabPath, javaEnv) {
   if (r.status !== 0) {
     throw new Error(`AAB jarsigner 校验失败:${r.stderr || r.stdout || `exit ${r.status}`}`);
   }
-  log('  ✓ AAB jarsigner 校验通过(已签名)');
+
+  // jarsigner 对“未签名 JAR”也可能打印警告后退出 0,因此不能把上面的零退出码当作
+  // 已签名证据。keytool 的 RFC 输出必须包含实际 signer 证书,再与独立 Play upload cert
+  // pin 比对；这样既拒绝未签名 AAB,也拒绝由错误 JKS 产生的结构合法签名。
+  const cert = spawnSync('keytool', ['-printcert', '-jarfile', aabPath, '-rfc'], {
+    encoding: 'utf8',
+    env: javaEnv,
+  });
+  if (cert.error?.code === 'ENOENT') {
+    throw new Error('未找到 keytool(JDK 17+ 应自带),无法读取 AAB 签名证书');
+  }
+  if (cert.status !== 0) {
+    throw new Error(`AAB 签名证书读取失败:${cert.stderr || cert.stdout || `exit ${cert.status}`}`);
+  }
+  const actualCertificateSha256 = readAndroidCertificateSha256FromPemOutput(
+    cert.stdout,
+    'AAB 实际签名证书',
+  );
+  assertAndroidUploadCertificateSha256(actualCertificateSha256, expectedCertificateSha256);
+  log('  ✓ AAB 签名完整且与已 pin 的 Google Play 上传证书一致');
 }
 
 async function main() {
@@ -330,6 +355,7 @@ async function main() {
   const missingBake = missingSelfHostBakeFields(region);
 
   // git 闸门只管真构建:dry-run 纯本地(不做 origin/main 远端比对,分支/离线可跑)。
+  let expectedUploadCertificateSha256 = null;
   if (args.execute) {
     if (!args.skipGitGate) assertProductionGitGate();
     else log('  warn: --skip-git-gate,跳过 main/clean/HEAD 校验(仅本地迭代用)');
@@ -341,6 +367,12 @@ async function main() {
     }
     // 签名配置预检:缺配置尽早暴露,不白跑数分钟 prebuild(取用值在 buildApk 内再解析一次)。
     resolveAndroidSigningEnv(region, process.env);
+    if (artifactKinds.includes('aab')) {
+      expectedUploadCertificateSha256 = resolveAndroidUploadCertificateSha256(
+        region.authRegion,
+        process.env,
+      );
+    }
   }
 
   // env 必须在 versionCode 决定之后构建:经 XDT_ANDROID_VERSION_CODE 注入 prebuild。
@@ -354,7 +386,10 @@ async function main() {
   const suffix = String(region.authRegion).toUpperCase();
   const aSign = region.androidSigning ?? {};
   const pwPreview = (base) => (process.env[`${base}_${suffix}`]?.trim() || (suffix === 'CN' ? process.env[base]?.trim() : '')) ? 'set' : '未设';
-  console.log(`sign: 自有 keystore 自签,path=${aSign.keystorePath || '(JSON 未填)'} alias=${aSign.keyAlias || '(JSON 未填)'} storePw(env ${suffix})=${pwPreview('XDT_ANDROID_KEYSTORE_PASSWORD')} keyPw(env ${suffix})=${pwPreview('XDT_ANDROID_KEY_PASSWORD')}`);
+  const uploadCertPreview = artifactKinds.includes('aab')
+    ? pwPreview('XDT_ANDROID_UPLOAD_CERT_SHA256')
+    : '不适用';
+  console.log(`sign: 自有 keystore 自签,path=${aSign.keystorePath || '(JSON 未填)'} alias=${aSign.keyAlias || '(JSON 未填)'} storePw(env ${suffix})=${pwPreview('XDT_ANDROID_KEYSTORE_PASSWORD')} keyPw(env ${suffix})=${pwPreview('XDT_ANDROID_KEY_PASSWORD')} uploadCertSha256(env ${suffix})=${uploadCertPreview}`);
   const gradleTasks = androidGradleTasksForArtifacts(artifactKinds);
   console.log(`steps: prebuild → patch build.gradle 签名 → gradlew ${gradleTasks.join(' ')} → 回读/核对 runtimeVersion → metadata/签名校验(仅构建,无上传/发布)`);
   if (missingBake.length) {
@@ -396,7 +431,11 @@ async function main() {
       versionCode,
       version,
     );
-    validateAabSignature(built.artifacts.aab, built.javaEnv);
+    validateAabSignature(
+      built.artifacts.aab,
+      built.javaEnv,
+      expectedUploadCertificateSha256,
+    );
   }
   const uniqueRuntimeVersions = [...new Set(Object.values(runtimeVersions))];
   if (uniqueRuntimeVersions.length !== 1) {
