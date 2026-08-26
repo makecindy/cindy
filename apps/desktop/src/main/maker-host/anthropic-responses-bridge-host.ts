@@ -21,7 +21,13 @@
 import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
+import { zstdCompress, zstdDecompress } from 'node:zlib';
 
+import {
+  sanitizeXaiModelInputBody,
+  type LocalRequestHandler,
+} from '@cindy/anthropic-compat-proxy';
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 
 import { createMakerLogger } from './logger-adapter.js';
@@ -35,8 +41,12 @@ import {
 } from './chatgpt-bridge-auth-invalidation.js';
 import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
-import { xaiServerSideTools } from './xai-server-side-tools.js';
+import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { describeErrorChain } from '../utils/errorChain.js';
+
+const zstdCompressAsync = promisify(zstdCompress);
+const zstdDecompressAsync = promisify(zstdDecompress);
 
 const log = createMakerLogger('cc-bridge');
 
@@ -47,6 +57,7 @@ const OPENAI_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const REFRESH_MARGIN_SEC = 120;
 // token 刷新 fetch 超时 —— 刷新在 _refreshChain mutex 内串行,不设超时会拖住所有排队请求。
 const REFRESH_FETCH_TIMEOUT_MS = 15_000;
+const XAI_LIVE_SEARCH_TOOL_TYPE = 'live_search';
 
 let _handler: ResponsesBridgeHandler | null = null;
 let _initialized = false;
@@ -287,8 +298,8 @@ function xaiProviderConfig(): BridgeProviderConfig {
     buildHeaders: async () => ({
       authorization: `Bearer ${await getGrokAccessToken()}`,
     }),
-    // api.x.ai 无 ChatGPT 那种订阅窗口端点;尽力抓响应头 x-ratelimit-* 给底部 chip 展示,
-    // 拿不到(上游不返头)则 renderer 诚实降级为仅价值估算。
+    // 周用量走 cli-chat-proxy billing,不在这条推理链上。这里只尽力抓 x-ratelimit-*
+    // 作为 RPM/TPM 瞬时值;拿不到不影响账号周用量 chip。
     onRateLimit: (info) => recordXaiRateLimitSnapshot(info),
     // 上游判定 OAuth 凭证失效时收口本地登录态。缺这一步的话:token 被服务端提前作废后
     // 本地 expires_at 仍未到期 → 永不刷新 → 每次请求都 403,而「设置 → 模型供应商」还
@@ -323,4 +334,449 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
     log.error('responses bridge handler 装配失败', { err: err instanceof Error ? err.message : String(err) });
   }
   return _handler;
+}
+
+type PiNativeSubscriptionProvider = 'openai' | 'xai';
+type PiNativeWireProtocol = 'openai-responses' | 'openai-chat';
+
+interface PiNativeUpstream {
+  url: string;
+  wireProtocol: PiNativeWireProtocol;
+}
+
+export interface PiNativeSubscriptionHandlerDeps {
+  fetch: typeof outboundFetch;
+  getChatgptAuth: typeof getChatgptBridgeAuth;
+  getGrokToken: typeof getGrokAccessToken;
+  invalidateChatgpt: typeof invalidateChatgptBridgeAuth;
+  invalidateXai: typeof invalidateXaiBridgeAuth;
+  recordXaiRateLimit: typeof recordXaiRateLimitSnapshot;
+}
+
+const defaultPiNativeSubscriptionHandlerDeps: PiNativeSubscriptionHandlerDeps = {
+  fetch: outboundFetch,
+  getChatgptAuth: getChatgptBridgeAuth,
+  getGrokToken: getGrokAccessToken,
+  invalidateChatgpt: invalidateChatgptBridgeAuth,
+  invalidateXai: invalidateXaiBridgeAuth,
+  recordXaiRateLimit: recordXaiRateLimitSnapshot,
+};
+
+function piNativeUpstream(
+  providerId: PiNativeSubscriptionProvider,
+  requestUrl: string,
+): PiNativeUpstream | null {
+  let pathname: string;
+  try {
+    pathname = new URL(requestUrl, 'http://127.0.0.1').pathname;
+  } catch {
+    return null;
+  }
+  if (providerId === 'openai') {
+    return pathname === '/codex/responses'
+      ? {
+          url: 'https://chatgpt.com/backend-api/codex/responses',
+          wireProtocol: 'openai-responses',
+        }
+      : null;
+  }
+  const normalized = pathname.startsWith('/v1/') ? pathname : `/v1${pathname}`;
+  if (normalized === '/v1/responses') {
+    return { url: `https://api.x.ai${normalized}`, wireProtocol: 'openai-responses' };
+  }
+  if (normalized === '/v1/chat/completions') {
+    return { url: `https://api.x.ai${normalized}`, wireProtocol: 'openai-chat' };
+  }
+  return null;
+}
+
+function nativeResponseHeaders(response: Response): Record<string, string> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, name) => {
+    const lower = name.toLowerCase();
+    if (
+      lower === 'content-type'
+      || lower === 'cache-control'
+      || lower === 'retry-after'
+      || lower === 'x-request-id'
+      || lower.startsWith('x-ratelimit-')
+      || lower.startsWith('openai-')
+    ) {
+      headers[lower] = value;
+    }
+  });
+  return headers;
+}
+
+function finiteRateLimitHeader(headers: Headers, name: string): number | undefined {
+  const raw = headers.get(name);
+  if (raw === null || raw.trim().length === 0) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function recordNativeXaiRateLimit(
+  headers: Headers,
+  record: typeof recordXaiRateLimitSnapshot,
+): void {
+  const info = {
+    limitRequests: finiteRateLimitHeader(headers, 'x-ratelimit-limit-requests'),
+    remainingRequests: finiteRateLimitHeader(headers, 'x-ratelimit-remaining-requests'),
+    limitTokens: finiteRateLimitHeader(headers, 'x-ratelimit-limit-tokens'),
+    remainingTokens: finiteRateLimitHeader(headers, 'x-ratelimit-remaining-tokens'),
+  };
+  if (Object.values(info).some((value) => value !== undefined)) {
+    record(info);
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Pi 用独立 `[1m]` 模型项承载上下文/压缩策略；ChatGPT 上游仍只接受官方裸 model id。 */
+function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> | null {
+  if (!isPlainRecord(body) || typeof body.model !== 'string' || !body.model.endsWith('[1m]')) {
+    return null;
+  }
+  return { ...body, model: body.model.slice(0, -'[1m]'.length) };
+}
+
+async function rewriteOpenaiContextProfileRequest(
+  rawBody: Buffer,
+  parsedBody: unknown,
+  contentEncoding: string | undefined,
+): Promise<{ body: Buffer; contentEncoding: string | undefined } | null> {
+  const parsedProfile = withOpenaiContextProfileModel(parsedBody);
+  if (parsedProfile) {
+    return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
+  }
+  if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
+  try {
+    // Near-1M-token payloads are large enough to stall Electron main. Node's async
+    // zstd APIs move compression work to the libuv worker pool.
+    const decodedBody = await zstdDecompressAsync(rawBody);
+    const decoded = JSON.parse(decodedBody.toString('utf8')) as unknown;
+    const compressedProfile = withOpenaiContextProfileModel(decoded);
+    if (!compressedProfile) return null;
+    return {
+      body: await zstdCompressAsync(Buffer.from(JSON.stringify(compressedProfile))),
+      contentEncoding,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(rawBody.toString('utf8'));
+    return isPlainRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isXaiSearchToolType(value: unknown): boolean {
+  return value === XAI_X_SEARCH_TOOL_TYPE || value === XAI_LIVE_SEARCH_TOOL_TYPE;
+}
+
+function chatFunctionToolName(tool: unknown): string | null {
+  if (!isPlainRecord(tool) || tool.type !== 'function' || !isPlainRecord(tool.function)) {
+    return null;
+  }
+  return typeof tool.function.name === 'string' ? tool.function.name : null;
+}
+
+function selectsRemovedXaiSearchTool(toolChoice: unknown): boolean {
+  if (isXaiSearchToolType(toolChoice)) return true;
+  return isPlainRecord(toolChoice) && isXaiSearchToolType(toolChoice.type);
+}
+
+function withoutNativeXaiChatSearchTools(
+  body: Record<string, unknown>,
+  existing: unknown[],
+): Record<string, unknown> | null {
+  const tools = existing.filter((tool) => (
+    !isPlainRecord(tool) || !isXaiSearchToolType(tool.type)
+  ));
+  if (tools.length === existing.length) return null;
+
+  const next = { ...body };
+  if (tools.length === 0) {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+    return next;
+  }
+
+  next.tools = tools;
+  if (selectsRemovedXaiSearchTool(next.tool_choice)) {
+    const functionToolNames = tools.flatMap((tool) => {
+      const name = chatFunctionToolName(tool);
+      return name === null ? [] : [name];
+    });
+    if (functionToolNames.length === 1) {
+      next.tool_choice = {
+        type: 'function',
+        function: { name: functionToolNames[0] },
+      };
+    } else {
+      next.tool_choice = functionToolNames.length > 1 ? 'required' : 'auto';
+    }
+  }
+  return next;
+}
+
+/**
+ * PI already emits xAI-native payloads, so this path bypasses the Messages →
+ * Responses bridge that normally supplies xAI's model-gated server tools.
+ * Restore the same stable contract here while respecting the native endpoint.
+ * Current xAI server-side search tools belong to Responses; Chat Completions'
+ * legacy live_search path is deprecated. Strip either search spelling from Chat
+ * requests while preserving PI function tools and tool_choice. For Responses,
+ * normalize stale spellings, append one missing x_search declaration, and keep
+ * forced-function narrowing from being satisfied by x_search instead.
+ */
+function withNativeXaiServerSideTools(
+  body: unknown,
+  wireProtocol: PiNativeWireProtocol,
+): Record<string, unknown> | null {
+  if (!isPlainRecord(body) || typeof body.model !== 'string') return null;
+  const existing = Array.isArray(body.tools) ? body.tools : [];
+  if (wireProtocol === 'openai-chat') {
+    return withoutNativeXaiChatSearchTools(body, existing);
+  }
+
+  const model = body.model.startsWith(XAI_MODEL_PREFIX)
+    ? body.model.slice(XAI_MODEL_PREFIX.length)
+    : body.model;
+  const serverTools = xaiServerSideTools(model);
+  if (serverTools.length === 0) return null;
+
+  const preferredXSearchTool = existing.find((tool) => (
+    isPlainRecord(tool) && tool.type === XAI_X_SEARCH_TOOL_TYPE
+  ));
+  let searchToolDeclared = false;
+  let toolsChanged = false;
+  const tools = existing.flatMap((tool) => {
+    if (
+      !isPlainRecord(tool) ||
+      (tool.type !== XAI_X_SEARCH_TOOL_TYPE && tool.type !== XAI_LIVE_SEARCH_TOOL_TYPE)
+    ) {
+      return [tool];
+    }
+    if (searchToolDeclared) {
+      toolsChanged = true;
+      return [];
+    }
+    searchToolDeclared = true;
+    if (preferredXSearchTool !== undefined) {
+      if (tool === preferredXSearchTool) return [tool];
+      toolsChanged = true;
+      return [preferredXSearchTool];
+    }
+    toolsChanged = true;
+    // live_search options belong to the deprecated Chat Completions shape and
+    // are not interchangeable with Responses x_search options.
+    return [{ type: XAI_X_SEARCH_TOOL_TYPE }];
+  });
+  const declaredTypes = new Set(
+    tools.map((tool) => (
+      isPlainRecord(tool) && typeof tool.type === 'string' ? tool.type : ''
+    )),
+  );
+  const missing = serverTools.filter((tool) => !declaredTypes.has(tool.type));
+  if (missing.length > 0) {
+    tools.push(...missing);
+    toolsChanged = true;
+  }
+  let next = toolsChanged ? { ...body, tools } : body;
+
+  if (
+    isPlainRecord(body.tool_choice) &&
+    body.tool_choice.type === XAI_LIVE_SEARCH_TOOL_TYPE
+  ) {
+    return {
+      ...next,
+      tool_choice: { type: XAI_X_SEARCH_TOOL_TYPE },
+    };
+  }
+
+  if (body.tool_choice === 'required') {
+    const functionToolNames = tools.flatMap((tool) => {
+      if (!isPlainRecord(tool) || tool.type !== 'function') return [];
+      return typeof tool.name === 'string' ? [tool.name] : [];
+    });
+    if (functionToolNames.length === 1) {
+      const name = functionToolNames[0]!;
+      next = {
+        ...next,
+        tool_choice: { type: 'function', name },
+      };
+      return next;
+    }
+  }
+  return toolsChanged ? next : null;
+}
+
+async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res']): Promise<void> {
+  res.writeHead(response.status, nativeResponseHeaders(response));
+  if (!response.body) {
+    res.end();
+    return;
+  }
+  const reader = response.body.getReader();
+  try {
+    while (!res.destroyed) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (!res.write(Buffer.from(chunk.value))) {
+        await new Promise<void>((resolve) => {
+          const done = (): void => {
+            res.off('drain', done);
+            res.off('close', done);
+            resolve();
+          };
+          res.once('drain', done);
+          res.once('close', done);
+        });
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  if (!res.destroyed) res.end();
+}
+
+/**
+ * Forward an already-native PI request. Unlike getResponsesBridgeHandler this
+ * performs no Messages/Responses conversion: PI constructs the provider's
+ * native payload, while the host swaps placeholder loopback credentials for
+ * the connected account credential and restores xAI's model-gated server tools.
+ */
+export function getPiNativeSubscriptionHandler(
+  providerId: PiNativeSubscriptionProvider,
+  sessionId: string,
+  deps: PiNativeSubscriptionHandlerDeps = defaultPiNativeSubscriptionHandlerDeps,
+): LocalRequestHandler {
+  return async ({ rawBody, parsedBody, ctx, res }) => {
+    const upstream = piNativeUpstream(providerId, ctx.url);
+    if (ctx.method !== 'POST' || !upstream) {
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: { message: 'Unsupported PI subscription endpoint.' } }));
+      return;
+    }
+    const controller = new AbortController();
+    const abortOnClose = (): void => controller.abort();
+    res.once('close', abortOnClose);
+    try {
+      let accessToken: string;
+      let headers: Record<string, string>;
+      if (providerId === 'openai') {
+        const auth = await deps.getChatgptAuth();
+        accessToken = auth.accessToken;
+        headers = buildChatgptBridgeHeaders({
+          accessToken,
+          accountId: auth.accountId,
+          sessionId,
+        });
+      } else {
+        accessToken = await deps.getGrokToken();
+        headers = { authorization: `Bearer ${accessToken}` };
+      }
+      headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
+      headers.accept = ctx.headers.accept ?? 'text/event-stream';
+      let outboundBody = rawBody;
+      let contentEncoding: string | undefined = ctx.headers['content-encoding'];
+      if (providerId === 'openai') {
+        const rewritten = await rewriteOpenaiContextProfileRequest(
+          rawBody,
+          parsedBody,
+          contentEncoding,
+        );
+        if (rewritten) {
+          outboundBody = rewritten.body;
+          contentEncoding = rewritten.contentEncoding;
+        }
+      } else if (providerId === 'xai') {
+        const parsed = isPlainRecord(parsedBody)
+          ? parsedBody
+          : parseJsonRecord(rawBody);
+        const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
+        const current = sanitized ?? parsed;
+        const withServerTools = current
+          ? withNativeXaiServerSideTools(current, upstream.wireProtocol)
+          : null;
+        if (sanitized || withServerTools) {
+          outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
+          // The proxy parsed a plain JSON request. After reserializing it the
+          // original content encoding, if any, no longer describes the bytes.
+          contentEncoding = undefined;
+        }
+      }
+      if (contentEncoding) headers['content-encoding'] = contentEncoding;
+
+      const response = await deps.fetch(upstream.url, {
+        method: 'POST',
+        headers,
+        body: new Uint8Array(outboundBody),
+        signal: controller.signal,
+      });
+      if (providerId === 'xai' && response.ok) {
+        recordNativeXaiRateLimit(response.headers, deps.recordXaiRateLimit);
+      }
+      if (!response.ok) {
+        const errorBody = Buffer.from(await response.arrayBuffer());
+        const errorText = errorBody.toString('utf8');
+        if (providerId === 'openai') {
+          await deps.invalidateChatgpt({
+            status: response.status,
+            body: errorText,
+            failedAccessToken: accessToken,
+          });
+        } else {
+          await deps.invalidateXai({
+            status: response.status,
+            body: errorText,
+            failedAccessToken: accessToken,
+          });
+        }
+        res.writeHead(response.status, nativeResponseHeaders(response));
+        res.end(errorBody);
+        return;
+      }
+      await pipeNativeResponse(response, res);
+    } catch (err) {
+      if (controller.signal.aborted || res.destroyed) return;
+      // Once a 200/SSE response has started, an upstream body failure cannot
+      // be converted into a structured 502. Propagate it to runLocalHandler,
+      // which destroys the client response so PI observes a transport failure
+      // instead of accepting a cleanly-ended truncated stream.
+      if (res.headersSent) throw err;
+      const detail = describeErrorChain(err);
+      const providerLabel = providerId === 'xai' ? 'xAI/Grok' : 'OpenAI/ChatGPT';
+      log.warn('PI native subscription forwarding failed', {
+        providerId,
+        endpoint: upstream.url,
+        wireProtocol: upstream.wireProtocol,
+        requestPath: ctx.url,
+        detail,
+      });
+      res.writeHead(502, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        error: {
+          type: 'upstream_error',
+          provider: providerId,
+          endpoint: upstream.url,
+          message: `${providerLabel} upstream request failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      }));
+    } finally {
+      res.off('close', abortOnClose);
+    }
+  };
 }

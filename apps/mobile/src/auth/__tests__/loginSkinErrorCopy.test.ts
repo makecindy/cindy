@@ -66,6 +66,27 @@ describe("loginSkin 错误文案 5 语(catalog verbatim 路由)", () => {
     );
   });
 
+  it("CAPTCHA_REQUIRED:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_REQUIRED");
+    expect(authErrorMessages.CAPTCHA_REQUIRED["zh-CN"]).toBe(
+      "请先完成安全验证。",
+    );
+  });
+
+  it("CAPTCHA_INVALID:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_INVALID");
+    expect(authErrorMessages.CAPTCHA_INVALID["zh-CN"]).toBe(
+      "安全验证未通过，请重试。",
+    );
+  });
+
+  it("CAPTCHA_UNAVAILABLE:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_UNAVAILABLE");
+    expect(authErrorMessages.CAPTCHA_UNAVAILABLE["zh-CN"]).toBe(
+      "安全验证服务暂不可用，请稍后再试。",
+    );
+  });
+
   it("INVALID_AUTH_CODE:5 语 catalog verbatim 路由", () => {
     expectCodeRoutedVerbatim("INVALID_AUTH_CODE");
     expect(authErrorMessages.INVALID_AUTH_CODE["zh-CN"]).toBe(

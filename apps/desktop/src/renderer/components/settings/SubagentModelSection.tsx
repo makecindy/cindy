@@ -1,9 +1,9 @@
 /**
- * Settings -> Personalization 的 Subagent 设置:默认模型(Claude Code / Codex)+
+ * Settings -> Personalization 的 Subagent 设置:Claude Code 默认模型 / Codex 锁定模型+
  * Codex 子代理护栏(总开关 / Cindy 策略 / 并发上限 / 嵌套开关)。
  *
  * main 进程 JSON store 是事实源;renderer 只展示并通过 IPC 提交覆盖值。
- * codex spawn 注入键的变更可能延迟生效(返回体 codexRestartDeferred=true 时
+ * Codex app-server / Proxy 路由配置的变更可能延迟生效(返回体 codexRestartDeferred=true 时
  * 提示「运行中的 Codex 对话将在任务结束后应用」,与 Memory 设置同款语义)。
  */
 
@@ -29,6 +29,8 @@ import { createLogger } from '@/lib/logger';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
 import {
+  clearProviderModelEffort,
+  clearProviderModelFast,
   getProviderModelEffort,
   getProviderModelFast,
   setProviderModelEffort,
@@ -38,8 +40,9 @@ import {
   CODEX_SUBAGENT_CONCURRENCY_INITIAL,
   CODEX_SUBAGENT_CONCURRENCY_MAX,
   CODEX_SUBAGENT_CONCURRENCY_MIN,
+  CODEX_SUBAGENT_MODEL_KEYS,
+  CLAUDE_SUBAGENT_MODEL_KEYS,
   SUBAGENT_GUARDRAIL_KEYS,
-  SUBAGENT_MODEL_CARD_KEYS,
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   isCodexSubagentEffort,
   type CodexSubagentEffort,
@@ -59,6 +62,9 @@ const CODEX_SUBAGENT_MODEL_MEMORY: ModelMemoryAccessors = {
   setEffort: setProviderModelEffort,
   getFast: getProviderModelFast,
   setFast: setProviderModelFast,
+  // 「恢复推荐」删记忆键(而不是把这一版目录默认快照写回),与标准模型面板同语义。
+  clearEffort: clearProviderModelEffort,
+  clearFast: clearProviderModelFast,
 };
 
 type SubagentAgentKind = 'claude-code' | 'codex';
@@ -176,10 +182,10 @@ export function SubagentModelSection() {
     return fromProviders.length ? fromProviders : (codexCaps.capabilities?.availableModels ?? []);
   }, [providers, codexCaps.capabilities]);
 
-  // 选模型时解析成对的 effort:上游只设 default_subagent_model 时子代理 effort 会被
-  // 重置为目标模型目录默认档而非继承父级,所以模型与 effort 必须原子成对写入,UI 上
-  // 也始终显示一个确定档位。优先保留当前档 → 目录默认档 → 末档(codex-model-discovery
-  // 的 fallback 约定)→ 目录无 effort 数据时 null(= 跟随模型默认,注入层跳过)。
+  // 选模型时解析成对的 effort:Codex 锁定路由会在 Proxy 中同时强制应用模型与 effort，
+  // 所以二者必须原子成对写入，UI 上也始终显示一个确定档位。优先保留当前档 → 目录
+  // 默认档 → 末档(codex-model-discovery 的 fallback 约定)→ 目录无 effort 数据时 null
+  // (= 移除父线程继承档位，让目标模型使用默认档)。
   const resolveCodexEffort = useCallback(
     (modelId: string, current: CodexSubagentEffort | null): CodexSubagentEffort | null => {
       const model = codexModels.find((m) => m.id === modelId);
@@ -402,10 +408,12 @@ export function SubagentModelSection() {
     visibleModelUnion(providers, 'claude-code', () => true).length > 0;
   const hasCatalogCodexModel = visibleModelUnion(providers, 'codex', () => true).length > 0;
 
-  // DefaultOverrideControls 按卡片键组分组判 isCustomized;卡级恢复 = 写该卡全键
-  // 默认值 patch(configuration-and-overrides §4 的「相应粒度恢复入口」)。
-  const modelCardCustomized = settings.customizedKeys.some((key) =>
-    (SUBAGENT_MODEL_CARD_KEYS as readonly string[]).includes(key),
+  // 两个 Agent 各自判断覆盖、各自恢复；按钮常驻占位，避免任一行因覆盖状态改变宽度。
+  const claudeModelCustomized = settings.customizedKeys.some((key) =>
+    (CLAUDE_SUBAGENT_MODEL_KEYS as readonly string[]).includes(key),
+  );
+  const codexModelCustomized = settings.customizedKeys.some((key) =>
+    (CODEX_SUBAGENT_MODEL_KEYS as readonly string[]).includes(key),
   );
   const guardrailCustomized = settings.customizedKeys.some((key) =>
     (SUBAGENT_GUARDRAIL_KEYS as readonly string[]).includes(key),
@@ -427,7 +435,7 @@ export function SubagentModelSection() {
         </p>
       </div>
 
-      {/* ── 卡 1:默认模型 ─────────────────────────────────────────────── */}
+      {/* ── 卡 1:Subagent 模型 ────────────────────────────────────────── */}
       <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
         <div className="flex items-center gap-4 px-4 py-4">
           <div className="flex w-[150px] shrink-0 items-center gap-2">
@@ -438,7 +446,7 @@ export function SubagentModelSection() {
             <div className="min-w-0 flex-1">
               {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择
                   面板,处处同行为):供应商分段、订阅来源全开,(model, providerId) 原子
-                  落库。仅 effort/Fast 配置列保持关闭(configurationEnabled=false)——
+                  落库。仅 effort/Fast 配置列与行内摘要保持关闭(configurationEnabled=false)——
                   子代理派发通道 CLAUDE_CODE_SUBAGENT_MODEL 只有模型 id,没有 effort/Fast
                   维度,展示可调项会承诺一个不存在的能力(功能特殊化理由,见 PR 说明)。 */}
               <ModelSelector
@@ -497,10 +505,11 @@ export function SubagentModelSection() {
               />
             </div>
             <DefaultOverrideControls
-              isCustomized={modelCardCustomized}
+              isCustomized={claudeModelCustomized}
               disabled={pending}
+              alwaysVisible
               onReset={() => {
-                void resetCard(SUBAGENT_MODEL_CARD_KEYS);
+                void resetCard(CLAUDE_SUBAGENT_MODEL_KEYS);
               }}
             />
           </div>
@@ -513,55 +522,59 @@ export function SubagentModelSection() {
             <CodexMark size={16} className="text-[var(--text-secondary)]" />
             <span className="text-14 font-medium text-[var(--text-primary)]">Codex</span>
           </div>
-          <div className="min-w-0 flex-1">
-            {/* Codex 行与 Claude 行同一块标准面板,差异只有两点:configurationEnabled
-                默认开启(codex 派发通道有 effort 维度:agents.default_subagent_reasoning_effort,
-                且上游只设模型会把子代理 effort 重置为目标模型默认档,必须成对写);
-                以及 (model, providerId, effort) 三元组原子落库。 */}
-            <ModelSelector
-              modelId={settings.codex ?? ''}
-              effort={settings.codexEffort ?? ''}
-              modelMemory={CODEX_SUBAGENT_MODEL_MEMORY}
-              onModelChange={(modelId) => {
-                void setCodexModel(modelId, settings.codexProviderId);
-              }}
-              onEffortChange={(effort) => {
-                void setCodexEffort(effort);
-              }}
-              vendorKey="codex"
-              // 隐藏 Chat 桥接的 Codex 供应商模型(DeepSeek/Kimi/GLM 等 openai-chat
-              // wire):原生 spawn 按 Codex 自身目录解析子代理默认模型,桥接模型必被
-              // 拒(greptile review P1)。统一面板基准下的功能特殊化,理由=上游硬约束;
-              // codexV2ModelHint 仍保留说明(手改设置文件仍可写入任意值)。
-              excludeChatBridgedCodex
-              currentProviderId={settings.codexProviderId}
-              sourceDisconnected={codexSourceDisconnected}
-              onNavigateToProviders={
-                providersLoading || hasCatalogCodexModel
-                  ? undefined
-                  : () => navigate('/settings?tab=providers')
-              }
-              reselectEmitsChange
-              onProviderChange={(providerId, modelId, reconciledEffort) => {
-                const nextModel = modelId ?? settings.codex;
-                if (!nextModel) return;
-                void setCodexModel(
-                  nextModel,
-                  resolveProviderId('codex', nextModel, providerId),
-                  reconciledEffort,
-                );
-              }}
-              switching={pending}
-              disabled={providersLoading}
-              triggerVariant="field"
-              popoverSide="bottom"
-              unknownModelLabel={(id) => id}
-              fallbackOption={{
-                active: settings.codex === null,
-                label: unspecifiedLabel,
-                onSelect: () => {
-                  void setCodexModel(null, null);
-                },
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="min-w-0 flex-1">
+              {/* Codex 行与 Claude 行同一块标准面板；Codex 锁定路由额外支持 effort，
+                  并把 (model, providerId, effort) 三元组原子落库。兼容桥第三方模型同样
+                  可选，实际 Provider 与 wire 协议由本地 Proxy 在子线程请求上应用。 */}
+              <ModelSelector
+                modelId={settings.codex ?? ''}
+                effort={settings.codexEffort ?? ''}
+                modelMemory={CODEX_SUBAGENT_MODEL_MEMORY}
+                onModelChange={(modelId) => {
+                  void setCodexModel(modelId, settings.codexProviderId);
+                }}
+                onEffortChange={(effort) => {
+                  void setCodexEffort(effort);
+                }}
+                vendorKey="codex"
+                currentProviderId={settings.codexProviderId}
+                sourceDisconnected={codexSourceDisconnected}
+                onNavigateToProviders={
+                  providersLoading || hasCatalogCodexModel
+                    ? undefined
+                    : () => navigate('/settings?tab=providers')
+                }
+                reselectEmitsChange
+                onProviderChange={(providerId, modelId, reconciledEffort) => {
+                  const nextModel = modelId ?? settings.codex;
+                  if (!nextModel) return;
+                  void setCodexModel(
+                    nextModel,
+                    resolveProviderId('codex', nextModel, providerId),
+                    reconciledEffort,
+                  );
+                }}
+                switching={pending}
+                disabled={providersLoading}
+                triggerVariant="field"
+                popoverSide="bottom"
+                unknownModelLabel={(id) => id}
+                fallbackOption={{
+                  active: settings.codex === null,
+                  label: unspecifiedLabel,
+                  onSelect: () => {
+                    void setCodexModel(null, null);
+                  },
+                }}
+              />
+            </div>
+            <DefaultOverrideControls
+              isCustomized={codexModelCustomized}
+              disabled={pending}
+              alwaysVisible
+              onReset={() => {
+                void resetCard(CODEX_SUBAGENT_MODEL_KEYS);
               }}
             />
           </div>
@@ -569,6 +582,10 @@ export function SubagentModelSection() {
 
         <p className="px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
           {t('settings.subagentModels.codexV2ModelHint')}
+        </p>
+
+        <p className="px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          {t('settings.subagentModels.codexOauthCompatibilityHint')}
         </p>
 
         <p className="px-4 pb-4 text-12 leading-[1.5] text-[var(--text-secondary)]">

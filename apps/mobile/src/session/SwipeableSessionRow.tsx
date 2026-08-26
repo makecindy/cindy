@@ -36,9 +36,9 @@ import Animated, {
   withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
-import { Archive, Ellipsis, Pin, PinOff } from 'lucide-react-native';
+import { Archive, ArchiveRestore, Ellipsis, Pin, PinOff } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
-import { pinToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
+import { pinToggleAction, statusToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
@@ -59,7 +59,7 @@ const ICON_SIZE = iconSize.swipeAction;
 /**
  * 页面级滑动控制 bundle:registry + 三个动作回调打包成一个稳定引用(useMemo),
  * 供 ProjectRow / AutomationGroupChildren 等嵌套渲染路径向下透传——不提供时对应
- * 行退化为不可滑动(设备详情页等未接滑动的调用点保持原行为)。
+ * 行退化为不可滑动(选择态或不需要手势的调用点保持原行为)。
  */
 export interface SessionSwipeControls {
   registry: SwipeRowRegistry;
@@ -178,11 +178,15 @@ function SwipeableSessionRowInner({
     [pinLabel, pinned, handlePinPress, styles, testID],
   );
 
+  const statusToggle = statusToggleAction(session.status);
+
   const renderRightActions = useCallback(
     (_progress: SharedValue<number>, translation: SharedValue<number>) => {
       translationRef.current = translation;
       return (
         <RightActionsPanel
+          archiveLabel={statusToggle.label}
+          archived={statusToggle.action === 'restore'}
           fullSwipeThreshold={fullSwipeThreshold}
           onArchive={handleArchivePress}
           onOptions={handleOptionsPress}
@@ -192,7 +196,7 @@ function SwipeableSessionRowInner({
         />
       );
     },
-    [fullSwipeThreshold, handleArchivePress, handleOptionsPress, styles, testID],
+    [statusToggle, fullSwipeThreshold, handleArchivePress, handleOptionsPress, styles, testID],
   );
 
   return (
@@ -269,6 +273,8 @@ function PinActionPanel({
  * 外扩保持贴行间距;越过全滑阈值「归档」150ms 拉伸盖满(预告松手即归档)、「选项」淡出。
  */
 function RightActionsPanel({
+  archiveLabel,
+  archived,
   fullSwipeThreshold,
   onArchive,
   onOptions,
@@ -276,6 +282,8 @@ function RightActionsPanel({
   testID,
   translation,
 }: {
+  archiveLabel: string;
+  archived: boolean;
   fullSwipeThreshold: number;
   onArchive(): void;
   onOptions(): void;
@@ -285,6 +293,7 @@ function RightActionsPanel({
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const StatusIcon = archived ? ArchiveRestore : Archive;
   // armed = 位移越过全滑阈值。独立 SharedValue 只在跨越阈值时写入,避免
   // useDerivedValue 里对逐帧变化的 translation 直接 withTiming(目标每帧重设,动画走不完)。
   const armed = useSharedValue(false);
@@ -338,14 +347,14 @@ function RightActionsPanel({
       </Animated.View>
       <Animated.View style={[styles.archiveButton, archiveStyle]}>
         <Pressable
-          accessibilityLabel={t('session.row.archiveConversation')}
+          accessibilityLabel={archiveLabel}
           accessibilityRole="button"
           onPress={onArchive}
           style={styles.actionPressable}
           testID={testID ? `${testID}.archiveAction` : undefined}
         >
           <View style={styles.rightIconWrap}>
-            <Archive color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
+            <StatusIcon color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
           </View>
         </Pressable>
       </Animated.View>

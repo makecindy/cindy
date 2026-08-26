@@ -65,6 +65,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children: ReactNode }) => children,
   Tooltip: {
     Provider: ({ children }: { children: ReactNode }) => children,
     Root: ({ children }: { children: ReactNode }) => children,
@@ -94,6 +95,10 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
     mocks.worktreeSessionIds.has(sessionId)
       ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT')
       : null,
+}));
+
+vi.mock('@/contexts/WorktreeContext', () => ({
+  useWorktreeForSession: () => null,
 }));
 
 vi.mock('@/state/agentIslandActivity', () => ({
@@ -333,12 +338,17 @@ describe('SessionCard visual cases', () => {
       );
 
       const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
-      const title = within(card!).getByText(visualCase.session.title);
+      const title = within(card!).getByText(visualCase.session.title, {
+        selector: variant === 'list' ? '.sidebar-title-marquee__ellipsis' : undefined,
+      });
       const actionButton = card?.querySelector<HTMLButtonElement>(
         'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
       );
       expect(card?.draggable).toBe(true);
+      expect(card?.className).toContain('cursor-pointer');
+      expect(card?.className).not.toContain('cursor-grab');
       expect(card?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
+      expect(title.className).not.toContain('cursor-grab');
       expect(actionButton).not.toBeNull();
 
       fireEvent.pointerDown(title, { button: 0, pointerType: 'mouse' });
@@ -416,9 +426,7 @@ describe('SessionCard visual cases', () => {
 
   it('uses the unified Timer for automation cases without a bound schedule', () => {
     renderCase('automation-timer');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBe(
-      '由自动化创建',
-    );
+    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBeNull();
     expect(
       screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer'),
     ).not.toBeNull();
@@ -521,7 +529,7 @@ describe('SessionCard visual cases', () => {
     );
     const listTitleRow = Array.from(listContainer.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') &&
+        node.className.includes('h-[22px]') &&
         node.textContent?.includes('自动化日报巡检') &&
         node.querySelector('[aria-label="查看自动化任务"]'),
     );
@@ -553,7 +561,7 @@ describe('SessionCard visual cases', () => {
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
     const titleRow = Array.from(card.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') && node.textContent?.includes(visualCase.session.title),
+        node.className.includes('h-[22px]') && node.textContent?.includes(visualCase.session.title),
     );
     expect(titleRow).toBeTruthy();
     const statusIconSlot = Array.from(titleRow!.querySelectorAll<HTMLElement>('span')).find(
@@ -655,15 +663,17 @@ describe('SessionCard visual cases', () => {
       expect(action.className).toContain('size-5');
       expect(action.className).toContain('rounded-md');
       expect(action.className).toContain('text-sidebar-action-icon');
+      expect(action.className).not.toMatch(/(?:^|\s)bg-sidebar(?:\s|$)/);
       expect(action.className).not.toContain('size-6');
       expect(action.className).not.toContain('bg-[var(--cmd-palette-bg)]');
       expect(action.className).not.toContain('border-sidebar-border');
       expect(action.querySelector('svg')?.getAttribute('width')).toBe('14');
     }
     // C 期起 time 包在 SessionInfoMeta 的 span 里;最近的 div 祖先才是让位容器。
+    // 信息层与操作占位叠在同一格,槽根仍是 group/slot,中间多一层 max-content grid。
     const listTimeFade = listContainer.querySelector('time')?.closest('div');
     expect(listTimeFade?.className).toContain('group-focus-within/slot:opacity-0');
-    expect(listTimeFade?.parentElement?.className).toContain('group/slot');
+    expect(listTimeFade?.closest('[class*="group/slot"]')?.className).toContain('group/slot');
     cleanup();
 
     const { container: activeListContainer } = render(
@@ -673,6 +683,7 @@ describe('SessionCard visual cases', () => {
       name: moreActionsName,
     });
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
+    expect(activeListMore.className).not.toContain('bg-sidebar-item-active');
     expect(activeListMore.className).toContain(
       'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
     );
@@ -722,6 +733,16 @@ describe('SessionCard visual cases', () => {
       if (variant === 'list') {
         // 让位容器是 time 最近的 div 祖先(time 嵌在 SessionInfoMeta span 内)。
         expect(container.querySelector('time')?.closest('div')?.className).toContain('invisible');
+        const confirmReserve = Array.from(container.querySelectorAll<HTMLElement>('span')).find(
+          (node) =>
+            node.getAttribute('aria-hidden') === 'true' &&
+            node.className.includes('w-max') &&
+            node.textContent === '归档',
+        );
+        expect(confirmReserve).toBeTruthy();
+        expect(confirmReserve?.className).toContain('px-[9px]');
+        expect(confirmReserve?.className).toContain('text-11');
+        expect(confirmReserve?.className).not.toContain('inline-block h-[22px] w-14');
       }
     },
   );

@@ -281,6 +281,19 @@ export class GhostPanelWindowsController {
 
   // ── 生命周期 ────────────────────────────────────────────────────────
 
+  /**
+   * data owner 真变化时同步销毁旧 owner 的所有独立窗口。
+   * 把既有面板收口回 docked/closed，避免新 owner 失去正常 UI 入口。
+   */
+  closeForOwnerChange(): void {
+    const { windows } = this.deps.settings.read();
+    this.destroyAllWindows();
+    for (const ghostId of Object.keys(windows)) {
+      this.deps.settings.patchEntry(ghostId, { detached: false, lastOpen: false });
+    }
+    this.broadcast();
+  }
+
   /** 主窗口销毁时回收所有隐藏窗口;controller 仍可随下一扇主窗重新预热。 */
   destroyAllWindows(): void {
     for (const [id, slot] of this.slots) {
@@ -339,7 +352,7 @@ export class GhostPanelWindowsController {
     });
     win.on('minimize', () => {
       if (slot.destroyingWindow || this.disposed) return;
-      // 原生标题栏（macOS 黄灯）与系统级最小化入口也必须复用 Ghost 气泡语义。
+      // 原生标题栏（macOS 黄灯）与系统级最小化入口也必须复用插件面板最小化语义。
       // 先恢复，避免在 renderer 完成 setDetached(false) 前短暂留在 Dock/任务栏。
       if (win.isMinimized()) win.restore();
       this.deps.sendToWindow(win, GHOST_PANEL_WINDOW_MINIMIZE_REQUESTED_CHANNEL, undefined);

@@ -12,8 +12,8 @@
  *     是哪个 key——值太短不产指纹时缺省;老键由保险库真身首查懒回填,见
  *     readGhostSecretTailFromIo);
  *   - login-email 派生:{ key, saved, identity? }(identity = 当前登录邮箱,
- *     供设置页只读展示"用的是哪个身份"。回给意识不算新增泄露面:装入确认
- *     框已披露"将使用你的登录邮箱",且该凭证每次代发都注给它自己的服务端。
+ *     供设置页只读展示"用的是哪个身份"。回给意识不算新增泄露面:插件详情
+ *     已披露"将使用你的登录邮箱",且该凭证每次代发都注给它自己的服务端。
  *     未登录/登录态缺邮箱 → saved:false 无 identity,页面照"请重新登录"画);
  *   - gh-cli 优先 + PAT 备用:{ key, saved, tail?, hostSource:'gh-cli',
  *     hostAvailable }。saved/tail 只描述保险库里的备用 PAT；hostAvailable

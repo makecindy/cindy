@@ -5,28 +5,26 @@
  * Popover: WORKERS header + worker rows + Create new worker 行。
  */
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode, type WheelEvent } from 'react';
-import { useTranslation } from 'react-i18next';
 import {
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  ChevronRight,
-  X,
-  EllipsisVertical,
-} from 'lucide-react';
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  type ReactNode,
+  type WheelEvent,
+} from 'react';
+import { useTranslation } from 'react-i18next';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, X, EllipsisVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppShortcutDisplay } from '@/hooks/useAppShortcut';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { WorkerInfo } from './hooks/useWorkers';
 import { shouldShowWorkerLabel } from './workerLabel';
-import {
-  clearWorkerAttention,
-  useWorkerAttentionSnapshot,
-} from './lib/workerAttentionStore';
+import { clearWorkerAttention, useWorkerAttentionSnapshot } from './lib/workerAttentionStore';
 
 // Strip provider prefix: 'deepseek/deepseek-v4-pro' → 'deepseek-v4-pro'.
 // 通用代理网关返回的 model id 经常带 'provider/model' 形式, UI 里只显末段更清爽.
@@ -35,36 +33,33 @@ function simplifyModelName(model: string): string {
   return slash >= 0 ? model.slice(slash + 1) : model;
 }
 
-// Effort 文字 → 5-bar 视觉编码 (跟主 pill 的 Codex effort 表达对齐).
-// minimal/low/medium/high/max 对应填 1/2/3/4/5 个柱.
-const EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'max'] as const;
-function effortFillCount(effort: string | null): number {
-  const idx = EFFORT_LEVELS.indexOf((effort ?? 'medium') as (typeof EFFORT_LEVELS)[number]);
-  return idx >= 0 ? idx + 1 : 3;
+// 各模型档位集合不同,信号条没有稳定含义。已知档才写词表里的短文案,
+// 未知值不显示,也不再默默掉回 medium。
+const WORKER_EFFORT_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+function workerEffortLabel(t: (key: string) => string, effort: string | null): string | null {
+  if (!effort || !WORKER_EFFORT_LEVELS.has(effort)) return null;
+  return t(`effortLevels.${effort}`);
 }
 
-function EffortBars({ effort }: { effort: string | null }) {
-  const fill = effortFillCount(effort);
+function WorkerModelLine({
+  model,
+  effort,
+}: {
+  model: string;
+  effort: string | null;
+}) {
+  const { t } = useTranslation();
+  const effortLabel = workerEffortLabel(t, effort);
+  // 列表选中行是浅色 chip 底,不能套深色药丸上的 --surface-on-card,
+  // 日间会糊成看不清。副行一律走次级字色。
+  // 菜单有 overflow-x-hidden,整行 nowrap 会把后加的档位裁掉;
+  // 模型名可截,档位词短、必须留在可见区。右侧给 archive / ERR 留空。
   return (
-    <span
-      className="inline-flex items-end"
-      style={{ gap: 1.5, height: 8 }}
-      aria-label={`effort ${effort ?? 'medium'}`}
-    >
-      {[0, 1, 2, 3, 4].map((i) => (
-        <span
-          key={i}
-          style={{
-            display: 'inline-block',
-            width: 2,
-            height: 4 + i,
-            borderRadius: 1,
-            backgroundColor: i < fill ? 'var(--text-secondary)' : 'var(--text-tertiary)',
-            opacity: i < fill ? 1 : 0.35,
-          }}
-        />
-      ))}
-    </span>
+    <div className="mt-0.5 mr-7 ml-[26px] flex min-w-0 items-baseline gap-1.5 text-12 leading-snug text-[var(--text-secondary)]">
+      <span className="min-w-0 truncate">{simplifyModelName(model)}</span>
+      {effortLabel ? <span className="shrink-0">· {effortLabel}</span> : null}
+    </div>
   );
 }
 
@@ -90,6 +85,7 @@ function WorkerAvatar({
   showAttentionDot?: boolean;
   selected?: boolean;
 }) {
+  const { t } = useTranslation();
   const vendor = agentKindToVendor(agent);
   const selectedIdleClassName =
     selected && status !== 'running' && status !== 'error'
@@ -110,7 +106,7 @@ function WorkerAvatar({
             backgroundColor: 'var(--card-status-done)',
             boxShadow: '0 0 0 1.5px var(--surface-elevated)',
           }}
-          aria-label="unread"
+          aria-label={t('orca.rolePill.unread')}
         />
       )}
     </span>
@@ -165,15 +161,23 @@ function ensureChildHorizontallyVisible(container: HTMLElement, child: HTMLEleme
   }
 }
 
+/** Distance for one overflow nudge. Exported for unit tests. */
+export function workerTabsScrollStep(clientWidth: number): number {
+  return Math.max(80, Math.floor(clientWidth * 0.7));
+}
+
 type WorkerListLayout = 'tabs' | 'dropdown';
 type DropdownOpenMode = 'transient' | 'pinned' | null;
 
-function readStoredWorkerListLayout(): WorkerListLayout {
-  if (typeof window === 'undefined') return 'dropdown';
+// Exported for direct unit testing of the default-layout fallback matrix.
+export function readStoredWorkerListLayout(): WorkerListLayout {
+  if (typeof window === 'undefined') return 'tabs';
   try {
-    return window.localStorage.getItem(WORKER_LIST_LAYOUT_KEY) === 'tabs' ? 'tabs' : 'dropdown';
+    const stored = window.localStorage.getItem(WORKER_LIST_LAYOUT_KEY);
+    if (stored === 'dropdown') return 'dropdown';
+    return 'tabs';
   } catch {
-    return 'dropdown';
+    return 'tabs';
   }
 }
 
@@ -241,12 +245,7 @@ function WorkerSummary({
 }) {
   return (
     <>
-      <div
-        className={cn(
-          'flex items-center gap-2 leading-snug',
-          compact ? 'text-11' : 'text-13',
-        )}
-      >
+      <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
         <WorkerAvatar
           agent={worker.agent}
           status={worker.status}
@@ -285,10 +284,7 @@ function WorkerSummary({
         )}
       </div>
       {!compact && (
-        <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-11 leading-snug text-[var(--text-tertiary)]">
-          <span>{simplifyModelName(worker.model)}</span>
-          <EffortBars effort={worker.effort} />
-        </div>
+        <WorkerModelLine model={worker.model} effort={worker.effort} />
       )}
     </>
   );
@@ -299,12 +295,7 @@ export interface RolePillDropdownProps {
   workers: WorkerInfo[];
   selectedWorkerId: string | null;
   activeWorkerCount: number;
-  softLimit: number;
-  hardLimit: number;
   onSwitchFocus: (workerId: string) => void;
-  onOpenCreate: () => void;
-  onOpenSettings: () => void;
-  settingsEnabled?: boolean;
   onArchiveWorker: (workerId: string) => void;
   /** false 时,选中的 worker 不会仅因组件挂载/刷新而自动清 attention。 */
   clearAttentionWhenVisible?: boolean;
@@ -312,29 +303,211 @@ export interface RolePillDropdownProps {
 }
 
 export interface WorkerListToolbarProps extends RolePillDropdownProps {
+  softLimit: number;
+  hardLimit: number;
+  onOpenCreate: () => void;
   trailingActions?: ReactNode;
+  /** 硬上限时 + 按钮跳转协同设置的逃生口；分离侧栏窗口无法导航到设置路由，传 undefined 表示不接线。 */
+  onOpenSettings?: () => void;
+}
+
+// 菜单经 absolute 定位且未走 portal 渲染，会被最近的 overflow 非 visible 祖先裁剪。
+// 找到该裁剪祖先元素（overflow 非 visible 的最近祖先）；找不到返回 null。
+function findClippingContainer(el: HTMLElement): HTMLElement | null {
+  let container: HTMLElement | null = el.parentElement;
+  while (container) {
+    const style = window.getComputedStyle(container);
+    if (style.overflowX !== 'visible' || style.overflowY !== 'visible') break;
+    container = container.parentElement;
+  }
+  return container;
+}
+
+// 找到裁剪祖先的视口边界（top/bottom/left/right），用于钳制菜单可用高度/宽度；
+// 找不到裁剪祖先时返回 null，由调用方退回视口边界。
+function findClippingBounds(
+  el: HTMLElement,
+): { top: number; bottom: number; left: number; right: number } | null {
+  const container = findClippingContainer(el);
+  if (!container) return null;
+  const r = container.getBoundingClientRect();
+  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+}
+
+// 菜单经 top-full + mt-1 从锚点下方定位。按锚点相对最近裁剪祖先（而非 window.innerHeight）
+// 计算可用高度——当 Worker 工具栏位于高度小于 viewport 的 overflow-hidden 侧栏容器中时，
+// 仍能正确钳制菜单高度与展开方向，避免菜单伸出容器被裁掉、底部 Worker 行 / 布局切换项
+// 无法滚动到达。当锚点下方空间不足（低于上方空间）时改为向上展开。maxHeight 严格钳制在
+// 锚点一侧的真实可用空间内，不再设「固定内容高度保底」——可用空间小于 header + 布局切换项
+// 所需高度时，由菜单外层 overflow-y-auto 兜底滚动（布局切换项仍可滚动到），避免
+// Math.max(保底, 可用空间) 把菜单顶出裁剪边界、布局切换项反而不可点。
+function useAnchorMenuMaxHeight(
+  anchorRef: { current: HTMLElement | null },
+  open: boolean,
+): { maxHeight: number; placeAbove: boolean } | undefined {
+  const [placement, setPlacement] = useState<
+    { maxHeight: number; placeAbove: boolean } | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // mt-1/mb-1 (4px) + 12px 安全边距。
+      const gap = 4;
+      const pad = 12;
+      const clip = findClippingBounds(el);
+      const topBound = clip ? clip.top : 0;
+      const bottomBound = clip ? clip.bottom : window.innerHeight;
+      const belowSpace = bottomBound - rect.bottom - gap - pad;
+      const aboveSpace = rect.top - topBound - gap - pad;
+      const placeAbove = aboveSpace > belowSpace;
+      setPlacement({
+        maxHeight: Math.max(0, placeAbove ? aboveSpace : belowSpace),
+        placeAbove,
+      });
+    };
+    update();
+    window.addEventListener('resize', update);
+    // 侧栏经拖拽分割线（pointermove）调整宽度时不会触发 window.resize；用 ResizeObserver
+    // 监听裁剪祖先容器尺寸变化，菜单打开期间及时重算边界，避免菜单超出当前侧栏被裁掉。
+    const clipContainer = anchorRef.current ? findClippingContainer(anchorRef.current) : null;
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && clipContainer ? new ResizeObserver(update) : null;
+    if (resizeObserver && clipContainer) resizeObserver.observe(clipContainer);
+    return () => {
+      window.removeEventListener('resize', update);
+      resizeObserver?.disconnect();
+    };
+  }, [anchorRef, open]);
+  return placement;
+}
+
+// 菜单宽度钳制：硬编码 w-[320px] 在窄侧栏（侧栏 shell overflow-hidden，最小宽 280px）
+// 会被裁掉一截。按锚点相对最近裁剪祖先（overflow 非 visible 的容器）的同侧可用宽度
+// 钳制菜单最大宽度，避免 worker 行与布局标签被裁切。找不到裁剪祖先时退回视口边界。
+// align: 'left' 表示菜单左对齐锚点向右展开（dropdown popover），
+//        'right' 表示菜单右对齐锚点向左展开（⋮ 菜单）。
+function useAnchorMenuMaxWidth(
+  anchorRef: { current: HTMLElement | null },
+  open: boolean,
+  align: 'left' | 'right',
+): number | undefined {
+  const [maxWidth, setMaxWidth] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const anchor = el.getBoundingClientRect();
+      const bounds = findClippingBounds(el) ?? { left: 0, right: window.innerWidth };
+      const available = align === 'left' ? bounds.right - anchor.left : anchor.right - bounds.left;
+      setMaxWidth(Math.max(0, available));
+    };
+    update();
+    window.addEventListener('resize', update);
+    // 侧栏经拖拽分割线（pointermove）调整宽度时不会触发 window.resize；用 ResizeObserver
+    // 监听裁剪祖先容器尺寸变化，菜单打开期间及时重算边界，避免菜单超出当前侧栏被裁掉。
+    const clipContainer = anchorRef.current ? findClippingContainer(anchorRef.current) : null;
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && clipContainer ? new ResizeObserver(update) : null;
+    if (resizeObserver && clipContainer) resizeObserver.observe(clipContainer);
+    return () => {
+      window.removeEventListener('resize', update);
+      resizeObserver?.disconnect();
+    };
+  }, [anchorRef, open, align]);
+  return maxWidth;
 }
 
 function WorkerLayoutMenu({
   layout,
   onLayoutChange,
+  workers,
+  selectedWorkerId,
+  activeWorkerCount,
+  onSwitchFocus,
+  onArchiveWorker,
+  clearAttentionWhenVisible = true,
 }: {
   layout: WorkerListLayout;
   onLayoutChange: (layout: WorkerListLayout) => void;
+  workers: WorkerInfo[];
+  selectedWorkerId: string | null;
+  activeWorkerCount: number;
+  onSwitchFocus: (workerId: string) => void;
+  onArchiveWorker: (workerId: string) => void;
+  clearAttentionWhenVisible?: boolean;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  // 与 dropdown (RolePillDropdown) 对齐展开交互：hover 临时展开 (transient)、
+  // 点击固定 (pinned)、移出后延迟关闭 —— 两种布局下 ⋮ 的操作体感一致。
+  const [openMode, setOpenMode] = useState<DropdownOpenMode>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const hoverOpenTimerRef = useRef<number | null>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+  const attention = useWorkerAttentionSnapshot();
+  const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
+  const totalWorkerCount = workers.length;
+  const activeCount = activeWorkerCount;
+  const open = openMode !== null;
+  const menuPlacement = useAnchorMenuMaxHeight(wrapperRef, open);
+  const menuMaxWidth = useAnchorMenuMaxWidth(wrapperRef, open, 'right');
+
+  const clearHoverTimers = useCallback(() => {
+    clearTimerRef(hoverOpenTimerRef);
+    clearTimerRef(hoverCloseTimerRef);
+  }, []);
+
+  const closeMenu = useCallback(() => {
+    clearHoverTimers();
+    setOpenMode(null);
+  }, [clearHoverTimers]);
+
+  const handleMouseEnter = useCallback(() => {
+    if (openMode === 'pinned') return;
+    clearTimerRef(hoverCloseTimerRef);
+    if (openMode === 'transient' || hoverOpenTimerRef.current !== null) return;
+    hoverOpenTimerRef.current = window.setTimeout(() => {
+      hoverOpenTimerRef.current = null;
+      setOpenMode('transient');
+    }, HOVER_OPEN_DELAY_MS);
+  }, [openMode]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (openMode === 'pinned') return;
+    clearTimerRef(hoverOpenTimerRef);
+    if (openMode !== 'transient' || hoverCloseTimerRef.current !== null) return;
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null;
+      setOpenMode(null);
+    }, HOVER_CLOSE_DELAY_MS);
+  }, [openMode]);
+
+  useEffect(() => {
+    return () => clearHoverTimers();
+  }, [clearHoverTimers]);
+
+  useLayoutEffect(() => {
+    if (!open || !clearAttentionWhenVisible) return;
+    if (
+      selectedWorkerId &&
+      workers.find((item) => item.workerId === selectedWorkerId)?.status !== 'done'
+    ) {
+      clearWorkerAttention(selectedWorkerId);
+    }
+  }, [attention, clearAttentionWhenVisible, selectedWorkerId, workers, open]);
 
   useEffect(() => {
     if (!open) return;
     const onMouseDown = (event: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
-        setOpen(false);
+        closeMenu();
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') closeMenu();
     };
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
@@ -342,16 +515,21 @@ function WorkerLayoutMenu({
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open]);
+  }, [closeMenu, open]);
 
-  const rows: Array<{ value: WorkerListLayout; label: string }> = [
+  const layoutRows: Array<{ value: WorkerListLayout; label: string }> = [
     { value: 'tabs', label: t('orca.rolePill.layoutTabs') },
     { value: 'dropdown', label: t('orca.rolePill.layoutDropdown') },
   ];
 
   return (
-    <div ref={wrapperRef} className="relative shrink-0">
-      <Tip text={t('orca.rolePill.layoutMenuLabel')} side="bottom" delay={250}>
+    <div
+      ref={wrapperRef}
+      className="relative shrink-0"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      <Tip text={t('orca.rolePill.layoutMenuLabel')} side="bottom" delay={250} disabled={open}>
         <button
           type="button"
           aria-label={t('orca.rolePill.layoutMenuLabel')}
@@ -360,38 +538,133 @@ function WorkerLayoutMenu({
             'hover:bg-muted/70 hover:text-foreground',
             open && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
           )}
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => {
+            clearHoverTimers();
+            setOpenMode((mode) => (mode === 'pinned' ? null : 'pinned'));
+          }}
         >
           <EllipsisVertical size={13} />
         </button>
       </Tip>
       {open && (
         <div
-          className="absolute right-0 top-full z-50 mt-1 w-[190px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
-          style={{ boxShadow: 'var(--shadow-menu)' }}
+          className={cn(
+            'absolute right-0 z-50 flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            menuPlacement?.placeAbove ? 'bottom-full mb-1' : 'top-full mt-1',
+          )}
+          style={{
+            boxShadow: 'var(--shadow-menu)',
+            maxHeight: menuPlacement?.maxHeight,
+            maxWidth: menuMaxWidth,
+          }}
         >
-          <div className="select-none px-2.5 py-1.5 text-10 font-medium leading-snug text-[var(--text-tertiary)]">
-            {t('orca.rolePill.layoutMenuLabel')}
-          </div>
-          {rows.map((row) => {
-            const selected = row.value === layout;
-            return (
-              <button
-                key={row.value}
-                type="button"
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-12 leading-snug text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
-                onClick={() => {
-                  onLayoutChange(row.value);
-                  setOpen(false);
-                }}
-              >
-                <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--text-primary)]">
-                  {selected && <Check size={12} strokeWidth={2.4} />}
+          {/* Header: WORKERS + count */}
+          {layout === 'tabs' && (
+            <>
+              <div className="flex shrink-0 select-none items-center justify-between px-4 pt-3 pb-2">
+                <span className="text-10 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+                  {t('orca.rolePill.workersHeader')}
                 </span>
-                <span>{row.label}</span>
-              </button>
-            );
-          })}
+                <span className="text-10 font-medium text-[var(--text-tertiary)]">
+                  {t('orca.rolePill.workerCountSummary', {
+                    count: totalWorkerCount,
+                    totalCount: totalWorkerCount,
+                    activeCount,
+                  })}
+                </span>
+              </div>
+
+              {/* Worker rows */}
+              <div className="flex flex-col">
+                {workers.map((w) => {
+                  const isFocused = w.workerId === selectedWorkerId || w.focused;
+                  const isError = w.status === 'error';
+                  return (
+                    <div key={w.workerId} className="group relative">
+                      <button
+                        type="button"
+                        className={cn(
+                          'flex w-full flex-col px-4 py-2 text-left transition-colors',
+                          isError
+                            ? 'bg-[var(--error-bg)] border-l-2 border-[var(--error-fg)] pl-[14px]'
+                            : isFocused
+                              ? 'bg-[var(--surface-chip)] border-l-2 border-[var(--status-bar-accent)] pl-[14px]'
+                              : 'pl-4',
+                        )}
+                        onClick={() => {
+                          onSwitchFocus(w.workerId);
+                          closeMenu();
+                        }}
+                      >
+                        <div className="flex items-center gap-2 text-13 leading-snug">
+                          <WorkerAvatar
+                            agent={w.agent}
+                            status={w.status}
+                            showAttentionDot={!isFocused && attention.has(w.workerId)}
+                          />
+                          <span className="font-medium text-[var(--text-primary)]">{w.role}</span>
+                          {shouldShowWorkerLabel(w.role, w.label) && (
+                            <>
+                              <span className="text-[var(--text-tertiary)]">#</span>
+                              <span className="text-[var(--text-secondary)]">{w.label}</span>
+                            </>
+                          )}
+                        </div>
+                        <WorkerModelLine model={w.model} effort={w.effort} />
+                      </button>
+                      {/* hover archive ✕ */}
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-[22px] w-[22px] items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeMenu();
+                          void requestArchiveWorker(w);
+                        }}
+                        aria-label={t('orca.rolePill.archiveWorkerAria', {
+                          name: getWorkerArchiveDisplayName(w),
+                        })}
+                      >
+                        <X size={13} />
+                      </button>
+                      {isError && (
+                        <WorkerErrorBadge className="absolute right-2 top-1.5 z-10 shadow-[0_0_0_1.5px_var(--surface-elevated)]" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Separator */}
+              <div className="mx-4 h-px shrink-0 bg-[var(--border-default)]" />
+            </>
+          )}
+
+          {/* Layout options */}
+          <div className="shrink-0 p-1">
+            <div className="select-none px-2.5 py-1.5 text-10 font-medium leading-snug text-[var(--text-tertiary)]">
+              {t('orca.rolePill.layoutMenuLabel')}
+            </div>
+            {layoutRows.map((row) => {
+              const selected = row.value === layout;
+              return (
+                <button
+                  key={row.value}
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-12 leading-snug text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+                  onClick={() => {
+                    onLayoutChange(row.value);
+                    closeMenu();
+                  }}
+                >
+                  <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--text-primary)]">
+                    {selected && <Check size={12} strokeWidth={2.4} />}
+                  </span>
+                  <span>{row.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -403,37 +676,56 @@ function CreateWorkerTabButton({
   softLimit,
   hardLimit,
   onOpenCreate,
+  onOpenSettings,
 }: {
   activeCount: number;
   softLimit: number;
   hardLimit: number;
   onOpenCreate: () => void;
+  onOpenSettings?: () => void;
 }) {
   const { t } = useTranslation();
+  const shortcutKey = useAppShortcutDisplay('new-maker');
   const hardDisabled = activeCount >= hardLimit;
+  // 硬上限时 + 按钮提供「跳转协同设置」逃生口；但分离侧栏窗口无法导航到设置路由
+  // （onOpenSettings 未接线），此时退回旧的 disabled 行为，避免呈现一个点了没反应的按钮。
+  const hardSettingsAction = hardDisabled && !!onOpenSettings;
+  const hardBlocked = hardDisabled && !onOpenSettings;
   const softWarn = !hardDisabled && activeCount >= softLimit;
-  const tooltip = hardDisabled
-    ? t('orca.rolePill.hardLimitHint', { count: hardLimit })
-    : softWarn
-      ? t('orca.rolePill.softLimitHint', { count: softLimit })
-      : t('orca.rolePill.createWorker');
+  const tooltip = hardSettingsAction
+    ? t('orca.rolePill.hardLimitSettingsHint', { count: hardLimit })
+    : hardBlocked
+      ? t('orca.rolePill.hardLimitHint', { count: hardLimit })
+      : softWarn
+        ? t('orca.rolePill.softLimitHint', { count: softLimit })
+        : shortcutKey
+          ? `${t('orca.rolePill.createWorker')} (${shortcutKey})`
+          : t('orca.rolePill.createWorker');
 
   return (
     <Tip text={tooltip} side="bottom" delay={250}>
       <button
         type="button"
-        aria-label={t('orca.rolePill.createWorker')}
-        aria-disabled={hardDisabled}
+        aria-label={
+          hardSettingsAction
+            ? t('orca.rolePill.settingsCollaboration')
+            : t('orca.rolePill.createWorker')
+        }
+        aria-disabled={hardBlocked || undefined}
         className={cn(
           'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)]',
           'bg-[var(--surface-elevated)] text-[var(--text-secondary)] transition-colors',
           'hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)]',
-          softWarn && 'text-[var(--status-bar-accent)]',
-          hardDisabled &&
+          (softWarn || hardSettingsAction) && 'text-[var(--status-bar-accent)]',
+          hardBlocked &&
             'cursor-not-allowed opacity-40 hover:bg-[var(--surface-elevated)] hover:text-[var(--text-secondary)]',
         )}
         onClick={() => {
-          if (hardDisabled) return;
+          if (hardSettingsAction) {
+            onOpenSettings?.();
+            return;
+          }
+          if (hardBlocked) return;
           onOpenCreate();
         }}
       >
@@ -461,8 +753,10 @@ function WorkerTabsList({
   const focusedTabRef = useRef<HTMLButtonElement | null>(null);
   const [scrollState, setScrollState] = useState({ left: false, right: false });
   const attention = useWorkerAttentionSnapshot();
+  const reducedMotion = useReducedMotion();
   const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
-  const focusedWorkerId = selectedWorkerId ?? workers.find((worker) => worker.focused)?.workerId ?? null;
+  const focusedWorkerId =
+    selectedWorkerId ?? workers.find((worker) => worker.focused)?.workerId ?? null;
 
   useLayoutEffect(() => {
     if (!clearAttentionWhenVisible) return;
@@ -512,10 +806,50 @@ function WorkerTabsList({
   };
 
   return (
-    <div className="relative min-w-0 flex-1">
+    <div className="relative flex min-w-0 flex-1 items-center">
+      {/* 箭头放在滚动区域外, 两侧常驻等宽占位: 既不覆盖 tab 点击区, 也避免
+          箭头出现/隐藏时改变 scroller 宽度造成边缘状态来回抖动。 到边后按钮只
+          禁用不卸载并移出 Tab 顺序; 已持有的焦点不强制转移, 名称与 Tip 改为到边说明。 */}
+      <div className="h-6 w-5 shrink-0">
+        <Tip
+          text={
+            scrollState.left
+              ? t('orca.rolePill.scrollWorkersLeft')
+              : t('orca.rolePill.scrollWorkersLeftEdge')
+          }
+          side="bottom"
+          delay={250}
+        >
+          <button
+            type="button"
+            aria-label={
+              scrollState.left
+                ? t('orca.rolePill.scrollWorkersLeft')
+                : t('orca.rolePill.scrollWorkersLeftEdge')
+            }
+            aria-disabled={!scrollState.left || undefined}
+            tabIndex={scrollState.left ? 0 : -1}
+            className={cn(
+              'inline-flex h-6 w-5 items-center justify-center rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              !scrollState.left && 'pointer-events-none opacity-0',
+            )}
+            onClick={() => {
+              const element = scrollRef.current;
+              if (!element || !scrollState.left) return;
+              element.scrollBy({
+                left: -workerTabsScrollStep(element.clientWidth),
+                behavior: reducedMotion ? 'auto' : 'smooth',
+              });
+            }}
+          >
+            <ChevronLeft size={14} />
+          </button>
+        </Tip>
+      </div>
       <div
         ref={scrollRef}
-        className="flex min-w-0 items-center gap-1 overflow-x-auto pr-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-testid="worker-tabs-scroller"
+        className="flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onScroll={updateScrollState}
         onWheel={handleWheel}
       >
@@ -591,17 +925,53 @@ function WorkerTabsList({
       {scrollState.left && (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-5"
+          className="pointer-events-none absolute inset-y-0 left-5 w-4"
           style={{ background: 'linear-gradient(to right, hsl(var(--content-area)), transparent)' }}
         />
       )}
       {scrollState.right && (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-y-0 right-0 w-7"
+          className="pointer-events-none absolute inset-y-0 right-5 w-4"
           style={{ background: 'linear-gradient(to right, transparent, hsl(var(--content-area)))' }}
         />
       )}
+      <div className="h-6 w-5 shrink-0">
+        <Tip
+          text={
+            scrollState.right
+              ? t('orca.rolePill.scrollWorkersRight')
+              : t('orca.rolePill.scrollWorkersRightEdge')
+          }
+          side="bottom"
+          delay={250}
+        >
+          <button
+            type="button"
+            aria-label={
+              scrollState.right
+                ? t('orca.rolePill.scrollWorkersRight')
+                : t('orca.rolePill.scrollWorkersRightEdge')
+            }
+            aria-disabled={!scrollState.right || undefined}
+            tabIndex={scrollState.right ? 0 : -1}
+            className={cn(
+              'inline-flex h-6 w-5 items-center justify-center rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              !scrollState.right && 'pointer-events-none opacity-0',
+            )}
+            onClick={() => {
+              const element = scrollRef.current;
+              if (!element || !scrollState.right) return;
+              element.scrollBy({
+                left: workerTabsScrollStep(element.clientWidth),
+                behavior: reducedMotion ? 'auto' : 'smooth',
+              });
+            }}
+          >
+            <ChevronRight size={14} />
+          </button>
+        </Tip>
+      </div>
     </div>
   );
 }
@@ -616,7 +986,6 @@ export function WorkerListToolbar({
   onSwitchFocus,
   onOpenCreate,
   onOpenSettings,
-  settingsEnabled = true,
   onArchiveWorker,
   trailingActions,
   clearAttentionWhenVisible = true,
@@ -642,8 +1011,18 @@ export function WorkerListToolbar({
           softLimit={softLimit}
           hardLimit={hardLimit}
           onOpenCreate={onOpenCreate}
+          onOpenSettings={onOpenSettings}
         />
-        <WorkerLayoutMenu layout={layout} onLayoutChange={handleLayoutChange} />
+        <WorkerLayoutMenu
+          layout={layout}
+          onLayoutChange={handleLayoutChange}
+          workers={workers}
+          selectedWorkerId={selectedWorkerId}
+          activeWorkerCount={activeWorkerCount}
+          onSwitchFocus={onSwitchFocus}
+          onArchiveWorker={onArchiveWorker}
+          clearAttentionWhenVisible={clearAttentionWhenVisible}
+        />
         {trailingActions}
       </div>
     );
@@ -658,6 +1037,7 @@ export function WorkerListToolbar({
             softLimit={softLimit}
             hardLimit={hardLimit}
             onOpenCreate={onOpenCreate}
+            onOpenSettings={onOpenSettings}
           />
           <WorkerTabsList
             workers={workers}
@@ -668,24 +1048,37 @@ export function WorkerListToolbar({
           />
         </>
       ) : (
-        <div className="min-w-0 flex-1">
-          <RolePillDropdown
-            worker={worker}
-            workers={workers}
-            selectedWorkerId={selectedWorkerId}
-            activeWorkerCount={activeWorkerCount}
+        <>
+          <CreateWorkerTabButton
+            activeCount={activeCount}
             softLimit={softLimit}
             hardLimit={hardLimit}
-            onSwitchFocus={onSwitchFocus}
             onOpenCreate={onOpenCreate}
             onOpenSettings={onOpenSettings}
-            settingsEnabled={settingsEnabled}
-            onArchiveWorker={onArchiveWorker}
-            clearAttentionWhenVisible={clearAttentionWhenVisible}
           />
-        </div>
+          <div className="min-w-0 flex-1">
+            <RolePillDropdown
+              worker={worker}
+              workers={workers}
+              selectedWorkerId={selectedWorkerId}
+              activeWorkerCount={activeWorkerCount}
+              onSwitchFocus={onSwitchFocus}
+              onArchiveWorker={onArchiveWorker}
+              clearAttentionWhenVisible={clearAttentionWhenVisible}
+            />
+          </div>
+        </>
       )}
-      <WorkerLayoutMenu layout={layout} onLayoutChange={handleLayoutChange} />
+      <WorkerLayoutMenu
+        layout={layout}
+        onLayoutChange={handleLayoutChange}
+        workers={workers}
+        selectedWorkerId={selectedWorkerId}
+        activeWorkerCount={activeWorkerCount}
+        onSwitchFocus={onSwitchFocus}
+        onArchiveWorker={onArchiveWorker}
+        clearAttentionWhenVisible={clearAttentionWhenVisible}
+      />
       {trailingActions}
     </div>
   );
@@ -696,19 +1089,12 @@ export function RolePillDropdown({
   workers,
   selectedWorkerId,
   activeWorkerCount,
-  softLimit,
-  hardLimit,
   onSwitchFocus,
-  onOpenCreate,
-  onOpenSettings,
-  settingsEnabled = true,
   onArchiveWorker,
   clearAttentionWhenVisible = true,
   className,
 }: RolePillDropdownProps) {
   const { t } = useTranslation();
-  // new-maker 快捷键显示跟随 registry 生效值 (用户改绑后热更新)。
-  const shortcutKey = useAppShortcutDisplay('new-maker');
   const [openMode, setOpenMode] = useState<DropdownOpenMode>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
@@ -717,6 +1103,8 @@ export function RolePillDropdown({
   const attention = useWorkerAttentionSnapshot();
   const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
   const open = openMode !== null;
+  const menuPlacement = useAnchorMenuMaxHeight(triggerRef, open);
+  const menuMaxWidth = useAnchorMenuMaxWidth(triggerRef, open, 'left');
 
   useLayoutEffect(() => {
     if (!clearAttentionWhenVisible) return;
@@ -809,7 +1197,7 @@ export function RolePillDropdown({
     <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
       {/* ── Trigger: 单 chip [avatar 含 status + role + caret].
             model / effort 不在这里展示 — focused worker 的 model 在输入框那边自然
-            可见, dropdown 列表里 worker rows 第二行还展示简化 model + effort bars
+            可见, dropdown 列表里 worker rows 第二行还展示简化 model + 档位文字
             供切换时对比, 这里只用 role 标识 "当前活跃的 worker". ── */}
       <button
         ref={triggerRef}
@@ -852,11 +1240,18 @@ export function RolePillDropdown({
       {open && (
         <div
           ref={popoverRef}
-          className="absolute left-0 top-full z-50 mt-1 w-[320px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]"
-          style={{ boxShadow: 'var(--shadow-menu)' }}
+          className={cn(
+            'absolute left-0 z-50 flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            menuPlacement?.placeAbove ? 'bottom-full mb-1' : 'top-full mt-1',
+          )}
+          style={{
+            boxShadow: 'var(--shadow-menu)',
+            maxHeight: menuPlacement?.maxHeight,
+            maxWidth: menuMaxWidth,
+          }}
         >
           {/* Header: WORKERS + count */}
-          <div className="flex select-none items-center justify-between px-4 pt-3 pb-2">
+          <div className="flex shrink-0 select-none items-center justify-between px-4 pt-3 pb-2">
             <span className="text-10 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
               {t('orca.rolePill.workersHeader')}
             </span>
@@ -909,12 +1304,9 @@ export function RolePillDropdown({
                         </>
                       )}
                     </div>
-                    {/* 副行: 简化 model 名 (去 provider 前缀) + effort bars.
-                        Claude / Codex 都显 (两种 agent 都有 reasoning effort 概念). */}
-                    <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-11 leading-snug text-[var(--text-tertiary)]">
-                      <span>{simplifyModelName(w.model)}</span>
-                      <EffortBars effort={w.effort} />
-                    </div>
+                    {/* 副行: 简化 model 名 (去 provider 前缀) + 档位文字.
+                        各模型档位集合不同,不用信号条假装同一把尺子. */}
+                    <WorkerModelLine model={w.model} effort={w.effort} />
                   </button>
                   {/* hover archive ✕ */}
                   <button
@@ -939,98 +1331,6 @@ export function RolePillDropdown({
               );
             })}
           </div>
-
-          {/* Separator */}
-          <div className="mx-4 h-px bg-[var(--border-default)]" />
-
-          {/* ── Create new worker row (3 上限态) ── */}
-          {activeCount >= hardLimit ? (
-            /* hard disabled */
-            <div className="px-4 py-2.5 rounded-b-xl">
-              <div className="flex items-center gap-2 opacity-40">
-                <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md bg-[var(--surface-elevated)]">
-                  <Plus size={13} />
-                </span>
-                <span className="text-13 leading-snug text-[var(--text-primary)]">
-                  {t('orca.rolePill.createWorker')}
-                </span>
-              </div>
-              <div className="mt-1 text-11 leading-snug text-[var(--text-tertiary)]">
-                {t('orca.rolePill.hardLimitHint', { count: hardLimit })}
-              </div>
-              {settingsEnabled && (
-                <button
-                  type="button"
-                  className="mt-1.5 inline-flex items-center gap-1 text-11 leading-snug text-[var(--text-primary)] underline hover:opacity-80"
-                  onClick={() => onOpenSettings()}
-                >
-                  {t('orca.rolePill.settingsCollaboration')}
-                  <ChevronRight size={10} />
-                </button>
-              )}
-            </div>
-          ) : activeCount >= softLimit ? (
-            /* soft warn */
-            <div className="px-4 py-2.5 rounded-b-xl">
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 text-left"
-                onClick={() => {
-                  onOpenCreate();
-                  closeDropdown();
-                }}
-              >
-                <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md bg-[var(--surface-chip)]">
-                  <Plus size={13} className="text-[var(--status-bar-accent)]" />
-                </span>
-                <span className="text-13 leading-snug text-[var(--status-bar-accent)]">
-                  {t('orca.rolePill.createWorker')}
-                </span>
-                {/* 不用 font-mono: 代码字体缺 ⌘ 等修饰键字形, 见 KeyboardShortcutsSection。
-                    用户删除绑定时 shortcutKey 为空串, 不渲染空占位。 */}
-                {shortcutKey && (
-                  <kbd className="ml-auto text-10 text-[var(--status-bar-accent)]">
-                    {shortcutKey}
-                  </kbd>
-                )}
-              </button>
-              <div className="mt-1 px-[30px] text-11 leading-snug text-[var(--text-tertiary)]">
-                {t('orca.rolePill.softLimitHint', { count: softLimit })}
-              </div>
-              {settingsEnabled && (
-                <div className="px-[30px]">
-                  <button
-                    type="button"
-                    className="mt-1 inline-flex items-center gap-1 text-11 leading-snug text-[var(--status-bar-accent)] underline hover:opacity-80"
-                    onClick={() => onOpenSettings()}
-                  >
-                    {t('orca.rolePill.settingsCollaboration')}
-                    <ChevronRight size={10} />
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            /* normal */
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-13 leading-snug text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] rounded-b-xl transition-colors"
-              onClick={() => {
-                onOpenCreate();
-                closeDropdown();
-              }}
-            >
-              <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md bg-[var(--surface-chip)]">
-                <Plus size={13} className="text-[var(--text-secondary)]" />
-              </span>
-              {t('orca.rolePill.createWorker')}
-              {shortcutKey && (
-                <kbd className="ml-auto text-10 text-[var(--text-tertiary)]">
-                  {shortcutKey}
-                </kbd>
-              )}
-            </button>
-          )}
         </div>
       )}
     </div>

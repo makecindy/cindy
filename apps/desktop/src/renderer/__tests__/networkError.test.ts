@@ -24,6 +24,8 @@ describe('isNetworkishErrorMessage', () => {
     'socket hang up',
     'Reconnecting... 2/5',
     'Reconnecting… 3/5 (stream disconnected before completion)',
+    'The operation timed out.',
+    'OpenAI Responses stream ended before a terminal response event',
   ])('matches networkish message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(true);
   });

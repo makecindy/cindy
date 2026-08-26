@@ -44,6 +44,7 @@ import {
   type PendingIssueConfirm,
   type PendingRenameSessionsConfirm,
   type PendingGhostGrantConfirm,
+  type PendingRemoteDesktopConfirmation,
   type PendingPlanReview,
   type PlanViewerState,
   type QueuedMessage,
@@ -55,6 +56,7 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { createLogger } from '@/lib/logger';
+import { isRemoteSessionSticky } from '@/lib/makerTransport';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 
 const log = createLogger('UseCCAgentChat');
@@ -254,6 +256,8 @@ interface UseCCAgentChatReturn {
   respondToRenameSessionsConfirm: (result: { confirmed: true } | { confirmed: false }) => void;
   /** ghost_grant_confirm: Currently pending ghost file-grant confirm card */
   pendingGhostGrantConfirm: PendingGhostGrantConfirm | null;
+  /** Device Link Desktop controller: read-only host confirmation status. */
+  pendingRemoteDesktopConfirmation: PendingRemoteDesktopConfirmation | null;
   /** ghost_grant_confirm: Respond to the pending ghost file-grant confirm card */
   respondToGhostGrantConfirm: (
     result: { confirmed: true; allowDirs?: boolean } | { confirmed: false },
@@ -748,6 +752,11 @@ export function useCCAgentChat(
     lightState.isStreaming ||
     lightState.agentStatus.isRunning ||
     hasPendingSteer ||
+    // 远程会话豁免 pendingTaskWake:device-link 与 SSH 镜像事件有设计内的丢失
+    // 窗口(断连/重连),taskUpdates 不在 reconcile 对账覆盖内,终态 drop 后无自愈
+    // 路径。与 makerChatStore.hasBackgroundAgentWork 的远程豁免同口径。
+    (lightState.pendingTaskWake > 0 && sessionId && !isRemoteSessionSticky(sessionId) && !makerChatStore.getSnapshot(sessionId)?.remoteHostId) ||
+    (sessionId != null && makerChatStore.hasBackgroundAgentWork(sessionId)) ||
     (pendingQueueLength > 0 && !lightState.queuePaused);
 
   const setQueueExpanded = useCallback(
@@ -879,6 +888,7 @@ export function useCCAgentChat(
     pendingRenameSessionsConfirm: lightState.pendingRenameSessionsConfirm,
     respondToRenameSessionsConfirm,
     pendingGhostGrantConfirm: lightState.pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation: lightState.pendingRemoteDesktopConfirmation,
     respondToGhostGrantConfirm,
     planViewerState: lightState.planViewerState,
     setPlanViewerState,

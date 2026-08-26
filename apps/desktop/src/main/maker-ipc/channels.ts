@@ -99,6 +99,8 @@ export const MAKER_INVOKE = {
    * → UNSUPPORTED_CAPABILITY。
    */
   STOP_AGENT_TASK: 'maker:agent-task:stop',
+  /** Send a message to one active Cindy-owned PI Subagent run. */
+  CONTROL_PI_SUBAGENT: 'maker:pi-subagent:control',
   /**
    * 列出会话当前仍在运行的后台任务({taskId, taskType?, toolUseId?, title?})。只读;
    * renderer 挂载或 reloadMessages 清空 taskUpdates 后,用它补回「订阅前已启动」的
@@ -169,6 +171,8 @@ export const MAKER_INVOKE = {
   EXECUTE_DESKTOP_COMMAND: 'maker:execute-desktop-command',
   LIST_AGENT_COMMANDS: 'maker:list-agent-commands',
   LIST_AGENT_SKILLS: 'maker:list-agent-skills',
+  PI_PACKAGES_LIST: 'maker:pi-packages:list',
+  PI_PACKAGES_MUTATE: 'maker:pi-packages:mutate',
   SCAN_AT_RESOURCES: 'maker:scan-at-resources',
   /**
    * "agent 自己认识的本地 customization 全集"。
@@ -202,6 +206,7 @@ export const MAKER_INVOKE = {
   SET_EFFORT: 'maker:set-effort',
   SET_PERMISSION_MODE: 'maker:set-permission-mode',
   SET_FAST_MODE: 'maker:set-fast-mode',
+  SET_THINKING_ENABLED: 'maker:set-thinking-enabled',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
   /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
@@ -260,6 +265,8 @@ export const MAKER_INVOKE = {
   AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
+  /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
+  PREDICT_PROMPT: 'maker:predict-prompt',
   HELP_ASK: 'maker:help:ask',
   /**
    * Help-assistant 反馈草稿 (Phase 1):用户对某条回答不满时,点 👎 → 弹小表单 →
@@ -309,6 +316,8 @@ export const MAKER_INVOKE = {
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
+  // SuperGrok 账号周用量 (cli-chat-proxy settings + billing?format=credits)
+  USAGE_XAI_SUBSCRIPTION: 'maker:usage:xai-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
   // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
@@ -348,17 +357,32 @@ export const MAKER_INVOKE = {
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
+  /** Global exact-model choices for short host-generated text tasks. */
+  AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
+  AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
+  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
+  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
+  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
+  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
+  SESSION_RUNTIME_FALLBACK_GET: 'maker:session-runtime-fallback:get',
+  SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
+  SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
   /**
-   * Claude Code 自动上下文压缩触发阈值 —— 存在 <userData>/compaction-settings.json。
-   * SET 后仅对新 session 生效, 已运行的 Claude Code 子进程 env 不变。
+   * Claude Code 的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
+   * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。
    */
   COMPACTION_GET_PCT: 'maker:compaction:get-pct',
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
+  PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
+  PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',
+  PI_COMPACTION_SET_PCT: 'maker:pi-compaction:set-pct',
+  PI_COMPACTION_RESET_PCT: 'maker:pi-compaction:reset-pct',
   /**
    * LSP Beta 开关 ——
    *  - GET: renderer 启动期同步 localStorage 镜像
@@ -369,12 +393,11 @@ export const MAKER_INVOKE = {
   LSP_MODE_GET: 'maker:lsp-mode:get',
   LSP_MODE_SET: 'maker:lsp-mode:set',
   /**
-   * 聊天嵌入开关 (Phase 1.2 chat-history-embedder) ——
-   *  - GET: 启动期 renderer 同步 localStorage 镜像
-   *  - SET: 用户 toggle 时落 <userData>/chat-embedding-settings.json, 立即触发
-   *         chat-history-embedder.setChatEmbeddingEnabled(); 第一次开启时
-   *         初始化 cutoff (embedding_meta.chat_embedding_started_at)。
-   * 默认 false (新装包不会自动产生 ~¥0.09/天 embedding 费用)。
+   * 对话语义索引开关 (chat-history-embedder) ——
+   *  - GET: 启动期及账号切换时同步 owner-scoped renderer 镜像
+   *  - SET: 用户 toggle 时写入当前 owner 的明确 override，并立即 reconcile runtime；
+   *         第一次开启时初始化 cutoff (embedding_meta.chat_embedding_started_at)。
+   *  - 默认:已认证企业组织账号开启，其余账号 / 本地模式 / 未登录关闭。
    */
   CHAT_EMBEDDING_GET: 'maker:chat-embedding:get',
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
@@ -478,6 +501,19 @@ export const MAKER_INVOKE = {
   PROVIDER_CUSTOM_CREATE: 'maker:provider:custom:create',
   PROVIDER_CUSTOM_UPDATE: 'maker:provider:custom:update',
   PROVIDER_CUSTOM_DELETE: 'maker:provider:custom:delete',
+  /** 本机模型（Ollama）探测 / 后台启动 / 列表 / 拉取。renderer 不传 URL 或路径。 */
+  LOCAL_MODEL_STATUS: 'maker:local-model:status',
+  LOCAL_MODEL_START: 'maker:local-model:start',
+  LOCAL_MODEL_LIST: 'maker:local-model:list',
+  LOCAL_MODEL_PULL: 'maker:local-model:pull',
+  LOCAL_MODEL_ABORT: 'maker:local-model:abort',
+  LOCAL_MODEL_ENSURE: 'maker:local-model:ensure',
+  LOCAL_MODEL_SET_IN_PICKER: 'maker:local-model:set-in-picker',
+  LOCAL_MODEL_DELETE: 'maker:local-model:delete',
+  LOCAL_MODEL_DISCARD_PAUSED: 'maker:local-model:discard-paused',
+  /** 在 Cindy 数据目录安装官方 Ollama 运行时。renderer 只传 consent=true，不传 URL。 */
+  LOCAL_MODEL_INSTALL: 'maker:local-model:install',
+  LOCAL_MODEL_INSTALL_ABORT: 'maker:local-model:install-abort',
   /**
    * 自定义 MCP 服务器 CRUD（配置入 localDb，可选 bearer token 另走通用 safe-storage IPC）。
    * list 无入参；create/update 入参 = CustomMcpConfig；delete 入参 = mcpId。
@@ -625,6 +661,7 @@ export const MAKER_INVOKE = {
   IOS_SIMULATOR_SET_AGENT_CONTROL: 'maker:ios-simulator:set-agent-control',
   IOS_SIMULATOR_SET_MUTATION_CONTROL: 'maker:ios-simulator:set-mutation-control',
   IOS_SIMULATOR_SET_VIEWER_VISIBILITY: 'maker:ios-simulator:set-viewer-visibility',
+  IOS_SIMULATOR_RETRY_NATIVE_ROUTE: 'maker:ios-simulator:retry-native-route',
   IOS_SIMULATOR_LATEST_FRAME: 'maker:ios-simulator:latest-frame',
   IOS_SIMULATOR_SET_STREAM_PROFILE: 'maker:ios-simulator:set-stream-profile',
   IOS_SIMULATOR_LIVE_TOUCH: 'maker:ios-simulator:live-touch',
@@ -783,6 +820,14 @@ export const MAKER_PUSH = {
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。
    */
   PROVIDER_CHANGED: 'maker:provider:changed',
+  /** 当前 owner 的对话语义索引设置由另一窗口 / 进程改动。payload 为 owner stamp。 */
+  CHAT_EMBEDDING_CHANGED: 'maker:chat-embedding:changed',
+  /** 本机 Ollama 运行态变化（设置页右栏 + 发消息前就绪）。 */
+  LOCAL_MODEL_STATUS: 'maker:local-model:status',
+  /** 本机 Ollama /api/pull 进度。 */
+  LOCAL_MODEL_PULL_PROGRESS: 'maker:local-model:pull-progress',
+  /** 官方 Ollama sidecar 安装进度。 */
+  LOCAL_MODEL_INSTALL_PROGRESS: 'maker:local-model:install-progress',
   /** 通用 OAuth Device Grant 的短期验证码进度（仅 renderer 展示，不落盘/不进日志）。 */
   PROVIDER_OAUTH_PROGRESS: 'maker:provider:oauth:progress',
   /**
@@ -790,6 +835,8 @@ export const MAKER_PUSH = {
    * 无 payload；收到即重拉 listCustomMcpServers。
    */
   MCP_CHANGED: 'maker:mcp:changed',
+  /** Cindy-owned Pi extension roster changed; renderer refetches settings and slash previews. */
+  PI_PACKAGES_CHANGED: 'maker:pi-packages:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
    * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。

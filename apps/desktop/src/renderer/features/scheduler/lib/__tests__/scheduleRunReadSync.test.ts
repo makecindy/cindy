@@ -59,7 +59,11 @@ describe('scheduleRunReadSync', () => {
     const listener = vi.fn();
     const off = subscribeScheduleRunReadSync(listener);
     try {
-      await expect(markScheduleRunsReadAndSync(['run-1', 'run-2'])).resolves.toBeUndefined();
+      await expect(markScheduleRunsReadAndSync(['run-1', 'run-2'])).resolves.toEqual({
+        processed: ['run-2'],
+        failed: ['run-1'],
+        firstError: 'already read (no-op)',
+      });
       expect(markRunRead).toHaveBeenCalledTimes(2);
       expect(listener).toHaveBeenCalledTimes(1);
     } finally {

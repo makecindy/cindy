@@ -13,6 +13,7 @@ export interface ScheduleSidebarIndexRun {
   sessionId?: string;
   status: ScheduleRun['status'];
   readAt?: number;
+  firedAt?: number;
 }
 
 /**

@@ -130,6 +130,7 @@ import {
   resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
+import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   detectComposerTrigger,
   filterAtResources,
@@ -165,6 +166,7 @@ import {
   type NewSessionDeviceOption,
   type NewSessionStoredPreferences,
 } from '@/session/newSession';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { newSessionText } from '@/session/newSessionMessages';
 import { i18n } from '@/i18n';
 import {
@@ -206,6 +208,7 @@ import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import {
   ComposerResizeGrabber,
+  ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
   MOBILE_COMPOSER_CONTROL_SIZE,
@@ -234,6 +237,8 @@ import {
 } from '@/session/composerVoiceHold';
 import { COMPOSER_TEXT_HORIZONTAL_PADDING } from '@/session/composerTextMetrics';
 import {
+  COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+  COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   COMPOSER_TEXT_PADDING_BOTTOM,
   COMPOSER_TEXT_PADDING_TOP,
 } from '@/session/composerTextPlatformMetrics';
@@ -493,6 +498,7 @@ export default function NewRemoteSessionScreen() {
   // Context 面板(+ 号弹出的可拖动 sheet):open + 子视图(主视图 / 截图列表 / 目标草稿)。
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
   const [contextSheetView, setContextSheetView] = useState<'main' | 'screenshots' | 'goal'>('main');
+  const contextSheetMediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
   // 目标模式(对齐桌面 NewMakerDraftRoute.handleCreateGoal):填完表单直接建会话 + setGoal,
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
   const [goalBusy, setGoalBusy] = useState(false);
@@ -3362,43 +3368,46 @@ export default function NewRemoteSessionScreen() {
     );
   };
 
-  // 工具条布局(对齐 Codex):左 = [+][权限图标][计划 chip];右 = [模型][语音][创建]。
+  // 工具条布局:左 = [+][权限][计划 chip][模型];右 = [语音][创建]。
+  // 模型放左侧组,不随创建按钮出现而横向跳动。
   const renderComposerToolbar = () => (
     <>
-      {renderAttachmentToggleButton()}
-      {renderPermissionIconButton()}
-      {planModeOn ? (
-        <PlanModeChip
-          disabled={creating}
-          onExit={() => togglePlanMode(false)}
-          testID="newSession.planModeChip"
-        />
-      ) : null}
-      <ComposerToolbarSpacer />
-      <Pressable
-        accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: modelSheetOpen || undefined }}
-        hitSlop={10}
-        onPress={toggleModelPicker}
-        style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
-        testID="newSession.modelIndicator"
-      >
-        {activeSourceProvider ? (
-          // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
-          <MobileModelIconMark
-            color={colors.textSecondary}
-            icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
-            name={activeSourceProvider.name}
-            providerId={activeSourceProvider.id}
-            routing={activeSourceProvider.routing}
-            logoKind={activeSourceProvider.logoKind}
+      <ComposerToolbarLeftGroup testID="newSession.composerToolbarLeft">
+        {renderAttachmentToggleButton()}
+        {renderPermissionIconButton()}
+        {planModeOn ? (
+          <PlanModeChip
+            disabled={creating}
+            onExit={() => togglePlanMode(false)}
+            testID="newSession.planModeChip"
           />
         ) : null}
-        <Text style={styles.modelPillText} numberOfLines={1}>{runtimeSummary.modelSummary}</Text>
-        {triggerFastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
-        <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      </Pressable>
+        <Pressable
+          accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: modelSheetOpen || undefined }}
+          hitSlop={10}
+          onPress={toggleModelPicker}
+          style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
+          testID="newSession.modelIndicator"
+        >
+          {activeSourceProvider ? (
+            // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
+            <MobileModelIconMark
+              color={colors.textSecondary}
+              icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
+              name={activeSourceProvider.name}
+              providerId={activeSourceProvider.id}
+              routing={activeSourceProvider.routing}
+              logoKind={activeSourceProvider.logoKind}
+            />
+          ) : null}
+          <Text style={styles.modelPillText} numberOfLines={1}>{runtimeSummary.modelSummary}</Text>
+          {triggerFastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
+          <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        </Pressable>
+      </ComposerToolbarLeftGroup>
+      <ComposerToolbarSpacer />
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
@@ -3408,7 +3417,10 @@ export default function NewRemoteSessionScreen() {
   const renderComposerInputOverlay = () => voiceIsListening ? (
     <ScrollView
       ref={voiceDraftScrollRef}
-      contentContainerStyle={styles.voiceDraftOverlayContent}
+      contentContainerStyle={[
+        styles.voiceDraftOverlayContent,
+        !composerCardActive && styles.voiceDraftOverlayContentGeometric,
+      ]}
       onContentSizeChange={() => {
         requestAnimationFrame(() => {
           voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
@@ -3776,14 +3788,56 @@ export default function NewRemoteSessionScreen() {
       testID="newSession.attachmentCollapsedBadge"
     />
   ) : null);
+
+  // 收起态把附件 + 号放在输入框左侧，避免用户必须先聚焦才能打开附件面板；
+  // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
+  const renderComposerCompactLeading = () => (
+    <View style={styles.composerCompactLeading}>
+      <Pressable
+        accessibilityLabel={t('session.common.openContextPanel')}
+        accessibilityRole="button"
+        disabled={creating}
+        onPress={() => {
+          setModelSheetOpen(false);
+          setAgentPickerOpen(false);
+          setPermissionSheetOpen(false);
+          setWorktreeBranchSheetOpen(false);
+          setContextSheetView('main');
+          setContextSheetOpen(true);
+        }}
+        style={({ pressed }) => [
+          styles.composerCompactAttachmentHit,
+          pressed && styles.pressed,
+        ]}
+        testID="newSession.attachmentToggleButton"
+      >
+        <View
+          pointerEvents="none"
+          style={[
+            styles.composerIconButton,
+            contextSheetOpen && styles.composerIconButtonActive,
+          ]}
+        >
+          <Plus
+            color={contextSheetOpen ? colors.textPrimary : colors.textSecondary}
+            size={iconSize.sm}
+            strokeWidth={iconStroke.regular}
+          />
+        </View>
+      </Pressable>
+      {renderComposerCollapsedAttachmentBadge()}
+    </View>
+  );
   // 面板关闭即丢弃未提交的待选(不产生任何上传副作用)。
   useEffect(() => {
     if (!contextSheetOpen) setPendingMediaAssets([]);
   }, [contextSheetOpen]);
-  // 进页面就静默预取最近照片(仅已授权时),打开 + 面板即刻出图。
+  // iOS 进页面就静默预取最近照片(仅已授权时),打开 + 面板即刻出图;Android 统一走系统选择器。
   useEffect(() => {
-    void prefetchContextSheetMediaAssets('recent');
-  }, []);
+    if (contextSheetMediaLibraryEnabled) {
+      void prefetchContextSheetMediaAssets('recent');
+    }
+  }, [contextSheetMediaLibraryEnabled]);
 
   // Context 面板「计划模式」入口,双路径(#494 迁移):
   //  - 新协议(capabilities.planMode.supported):本地布尔草稿态,创建会话后经
@@ -4341,10 +4395,10 @@ export default function NewRemoteSessionScreen() {
       });
     } catch (err) {
       if (!isCurrentOwner()) return;
-      // agent 未鉴权(电脑端没配 key / 没登录)是新会话失败的高频原因,
-      // 换成带引导的中文提示;其它错误维持原文。
+      // agent 未鉴权(电脑端没配 key / 没登录)是新任务失败的高频原因。
+      // state 保留结构化原文，渲染时再按当前语言生成引导，避免切换语言后缓存旧文案。
       const raw = formatRemoteError(err);
-      setError(describeAgentAuthError(raw) ?? raw);
+      setError(raw);
     } finally {
       releasePrecreatedRegistration?.();
       if (!handedOff) {
@@ -5002,10 +5056,23 @@ export default function NewRemoteSessionScreen() {
         if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       } catch {
         if (!isCurrentOwner() || !ensureDeviceAlive()) return;
-        session = sessionFromCreateResult(result, finalDraft);
+        session = sessionFromCreateResult(result, {
+          ...finalDraft,
+          firstMessage: input.objective,
+        });
+      }
+      if (isDefaultDraftSessionTitle(session.title)) {
+        const titled = sessionFromCreateResult(result, {
+          ...finalDraft,
+          firstMessage: input.objective,
+        });
+        session = { ...session, title: titled.title };
       }
       if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
+      if (session.title && !isDefaultDraftSessionTitle(session.title)) {
+        remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title);
+      }
       if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       // 目标流不带 composer 附件(与桌面一致),跳转即丢引用:已上传的中转对象在此
       // best-effort 回收,否则成为 OSS 孤儿直到桶生命周期清理(codex review #504)。
@@ -5550,7 +5617,9 @@ export default function NewRemoteSessionScreen() {
               </View>
             ) : null}
 
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            {error ? (
+              <Text style={styles.errorText}>{describeAgentAuthError(error) ?? error}</Text>
+            ) : null}
             {/* 发送前鉴权提示:选中 agent 在被控端无已连接供应商时提前告知;
                 error 已展示(含被门禁拦截的同款文案)时不重复出现。 */}
             {!error && agentAuthVerdict === 'unauthenticated' ? (
@@ -5631,7 +5700,7 @@ export default function NewRemoteSessionScreen() {
                   caretHidden={voiceIsListening}
                   cursorColor={colors.inputCaret}
                   inputRef={firstMessageInputRef}
-                  leading={renderComposerCollapsedAttachmentBadge()}
+                  leading={renderComposerCompactLeading()}
                   inputFrameHeight={composerResize.frameHeight}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
@@ -5690,15 +5759,17 @@ export default function NewRemoteSessionScreen() {
       >
         {contextSheetView === 'main' ? (
           <>
-            <RecentPhotosStrip
-              busyAssetIds={uploadingMediaAssetIds}
-              disabled={creating}
-              enabled={contextSheetOpen}
-              onToggleAsset={toggleMediaAssetAttachment}
-              pendingOrder={pendingMediaOrder}
-              selectedAssetIds={selectedMediaAssetIds}
-              testID="newSession.contextSheetPhotos"
-            />
+            {contextSheetMediaLibraryEnabled ? (
+              <RecentPhotosStrip
+                busyAssetIds={uploadingMediaAssetIds}
+                disabled={creating}
+                enabled={contextSheetOpen}
+                onToggleAsset={toggleMediaAssetAttachment}
+                pendingOrder={pendingMediaOrder}
+                selectedAssetIds={selectedMediaAssetIds}
+                testID="newSession.contextSheetPhotos"
+              />
+            ) : null}
             <ContextSheetGroup label={t('session.common.groupMode')}>
               {planModeSupported ? (
                 // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
@@ -5731,14 +5802,16 @@ export default function NewRemoteSessionScreen() {
                 onPress={() => void addLocalImageAttachments('library')}
                 testID="newSession.contextSheetPhotoRow"
               />
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.screenshot')}
-                onPress={() => setContextSheetView('screenshots')}
-                testID="newSession.contextSheetScreenshotsRow"
-                trailing="chevron"
-              />
+              {contextSheetMediaLibraryEnabled ? (
+                <ContextSheetRow
+                  disabled={creating}
+                  icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.common.screenshot')}
+                  onPress={() => setContextSheetView('screenshots')}
+                  testID="newSession.contextSheetScreenshotsRow"
+                  trailing="chevron"
+                />
+              ) : null}
               <ContextSheetRow
                 disabled={creating}
                 icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
@@ -5760,7 +5833,7 @@ export default function NewRemoteSessionScreen() {
               </Text>
             ) : null}
           </>
-        ) : contextSheetView === 'screenshots' ? (
+        ) : contextSheetView === 'screenshots' && contextSheetMediaLibraryEnabled ? (
           <ScreenshotsGrid
             busyAssetIds={uploadingMediaAssetIds}
             contentWidth={windowDimensions.width - 40}
@@ -6517,6 +6590,22 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: MOBILE_COMPOSER_CONTROL_SIZE,
   },
+  composerCompactLeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    marginRight: spacing.xs,
+    minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+  },
+  // 热区流内就是 44×44,祖先链不再靠负 margin / 溢出子节点。
+  // 可见加号仍是 34pt,与文字 / 麦克风共中线。
+  composerCompactAttachmentHit: {
+    alignItems: 'center',
+    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    justifyContent: 'center',
+    width: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+  },
   composerIconButtonActive: {
     backgroundColor: colors.surfaceChip,
     borderColor: colors.borderStrong,
@@ -6549,6 +6638,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM,
     paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
+  },
+  voiceDraftOverlayContentGeometric: {
+    paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+    paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   },
   voiceDraftMeasuredBlock: {
     minHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,

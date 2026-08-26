@@ -6,14 +6,21 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
-import { isValidEmail } from '@cindy/auth-client';
+import type {
+  AccountDeletionStatus,
+  CaptchaConfig,
+  SocialProvider,
+  VerificationKind,
+} from '@cindy/auth-client';
+import { captchaRequiredActionForVerificationKind, isValidEmail } from '@cindy/auth-client';
 
 import { cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
+import { setLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useLogin } from '@/hooks/useLogin';
 import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
@@ -29,6 +36,7 @@ import ssoIcon from '@/assets/login/icons/sso.svg';
 import ssoIconDark from '@/assets/login/icons/sso-dark.svg';
 
 import { LoginStage } from './LoginStage';
+import { LoginCaptchaOverlay } from './LoginCaptchaOverlay';
 import {
   LoginBackButton,
   LoginConsentDialog,
@@ -42,8 +50,10 @@ import {
   LoginSkipEntry,
   LoginSocialButton,
   LoginSocialRow,
+  LoginSsoOrgHistoryList,
   LoginTextLink,
   LoginTitleBlock,
+  ssoOrgHistoryOptionId,
 } from './LoginControls';
 import { useResendCountdown } from './useResendCountdown';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -60,6 +70,7 @@ import {
 } from './loginDesignTokens';
 import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
+import { getSsoOrgHistory } from '@/state/ssoOrgHistory';
 
 /**
  * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
@@ -110,7 +121,9 @@ export function LoginPage() {
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
     dispatch,
+    dispatchWithResult,
     clearError,
+    enterLocalMode,
   } = useLogin();
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
@@ -146,17 +159,19 @@ export function LoginPage() {
    * 在会话切过去之后落,不能由 requireConsent 提前落(竞态原因见那里的注释)。
    */
   const openLocalMode = async () => {
-    if (isLoading || localModePendingRef.current || !window.electronAPI?.authEnterLocal) return;
+    if (isLoading || localModePendingRef.current || !enterLocalMode) return;
     markLocalModeTransition(true);
     try {
-      await window.electronAPI.authEnterLocal();
+      // 必须走 AuthContext.enterLocalMode():它调同一条 IPC,并用返回值立刻改
+      // mode / canEnterApp。登录页自己调 authEnterLocal 只改主进程会话,界面
+      // 仍当自己没进来;广播一旦没赶上,再点一次也不会重播,登录页就钉死。
+      // GuestRoute 看到 mode === 'local' 后自己切走,不要在这里改 hash——
+      // canEnterApp 还是 false 时冲进受保护路由会被踢回 /login。
+      await enterLocalMode();
       // 顺序是硬要求:先 enter-local(main 侧 isLocalMode() 转真)再落同意,这样
       // acceptPrivacyConsent 广播出来的 allowed 恒为 false,TapDB 不会被拉起来发
       // device_login。反过来会开出一个真实的上报窗口(codex 审查 P1,#907)。
       persistPrivacyConsent();
-      // The auth state event normally redirects through GuestRoute. Keep the
-      // transition deterministic when the IPC response wins that race.
-      window.location.hash = '#/';
     } catch (error) {
       // 两个调用点都是 requireConsent(() => void openLocalMode()):抛出去没人接,
       // 会变成 unhandled rejection。IPC 失败(main 未就绪/通道异常)时停在登录页
@@ -331,7 +346,10 @@ export function LoginPage() {
   // (规则 9:能代码化的格式校验不甩给 server 往返);与 server errorCode 互斥展示
   // (本地错误优先),输入变更即清除。null = 无本地格式错误。
   const [identifierFormatError, setIdentifierFormatError] = useState<VerificationKind | null>(null);
-  const [ssoOrg, setSsoOrg] = useState('');
+  const [ssoOrgHistory, setSsoOrgHistory] = useState(() => getSsoOrgHistory());
+  const [ssoOrg, setSsoOrg] = useState(() => ssoOrgHistory[0] ?? '');
+  const [ssoOrgHistoryOpen, setSsoOrgHistoryOpen] = useState(false);
+  const [ssoOrgHistoryActiveIndex, setSsoOrgHistoryActiveIndex] = useState(-1);
   const [verificationCode, setVerificationCode] = useState('');
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
@@ -409,6 +427,19 @@ export function LoginPage() {
     setIdentifierFormatError(null);
   }, [loginState?.step]);
 
+  // 进入 verification-code 即起算 42s(含 AuthContext 自动发码、手机号提交)。
+  // 只认运行中的 step 沿,不认首帧注入(harness 直接挂验证码页仍保持可点重发)。
+  // 已在验证码页的重发成功仍走 dispatchRequestCode 的 arm。
+  const previousLoginStepRef = useRef(loginState?.step);
+  useEffect(() => {
+    const previous = previousLoginStepRef.current;
+    const step = loginState?.step;
+    previousLoginStepRef.current = step;
+    if (step === 'verification-code' && previous !== 'verification-code' && previous != null) {
+      armResendCountdown();
+    }
+  }, [loginState?.step, armResendCountdown]);
+
   const errorMessage = useMemo(() => {
     if (!errorCode) return null;
     return t(`login.errors.${errorCode}`, {
@@ -425,11 +456,126 @@ export function LoginPage() {
     void dispatch({ type: 'reset' });
   };
 
+  /* ── 人机验证前置闸(邮箱/短信发码防批量注册)──
+     providers.captcha 只随 identifier/realm-confirmation 步的 state 下发,而发码
+     动作发生在后续步骤(method-choice 个人行 / 验证码页重发),进 ref 存续——
+     登录流必经 identifier,ref 必然先就位。cn 构建 / 服务端未开启时字段缺席,
+     整条闸是 no-op；当前服务端只下发邮箱动作，未来下发短信动作即可启用。 */
+  const captchaConfigRef = useRef<CaptchaConfig | null>(null);
+  useEffect(() => {
+    if (loginState?.step === 'identifier' || loginState?.step === 'realm-confirmation') {
+      captchaConfigRef.current = loginState.providers.captcha ?? null;
+    }
+  }, [loginState]);
+  const [captchaChallenge, setCaptchaChallenge] = useState<{
+    baseUrl: string;
+    resolve: (token: string | null) => void;
+  } | null>(null);
+  // 挑战创建必须单飞：React 提交 overlay 前的快速重复触发不能覆盖 resolver。
+  // 后续并发调用按取消处理，避免同一枚单次 token 被两个发码请求重复消费。
+  const captchaChallengePendingRef = useRef(false);
+  /** 打开挑战 overlay 并等结果:token = 通过;null = 用户取消或挑战页地址不可得。 */
+  const obtainCaptchaToken = async (kind: VerificationKind): Promise<string | null> => {
+    if (captchaChallengePendingRef.current) return null;
+    captchaChallengePendingRef.current = true;
+    try {
+      let baseUrl: string;
+      try {
+        baseUrl = await window.electronAPI.authGetCaptchaChallengeUrl();
+        const target = new URL(baseUrl);
+        target.searchParams.set('action', captchaRequiredActionForVerificationKind(kind));
+        baseUrl = target.toString();
+      } catch (error) {
+        // IPC 面缺失/异常:视同取消(不发码,用户可重试);错误细节只进日志。
+        log.error('resolve captcha challenge url failed', error);
+        return null;
+      }
+      return await new Promise((resolve) => {
+        setCaptchaChallenge({
+          baseUrl,
+          resolve: (token) => {
+            setCaptchaChallenge(null);
+            resolve(token);
+          },
+        });
+      });
+    } finally {
+      captchaChallengePendingRef.current = false;
+    }
+  };
+  const captchaRequiredFor = (kind: VerificationKind) =>
+    captchaConfigRef.current?.requiredFor.includes(
+      captchaRequiredActionForVerificationKind(kind),
+    ) === true;
+
+  // AuthContext「唯一邮箱方式自动发码」快捷链的前置闸:那条链不经过下面的
+  // dispatchRequestCode,借用本组件的挑战 overlay。latest-ref 模式:注册一次,
+  // 回调恒取最新一帧的闸函数。
+  const captchaGateRef = useRef<() => Promise<string | null | undefined>>(() =>
+    Promise.resolve(undefined),
+  );
+  captchaGateRef.current = () =>
+    captchaRequiredFor('email') ? obtainCaptchaToken('email') : Promise.resolve(undefined);
+  useEffect(() => {
+    setLoginEmailCaptchaGate(() => captchaGateRef.current());
+    return () => setLoginEmailCaptchaGate(null);
+  }, []);
+
+  /**
+   * 邮箱 identifier 提交:discover(AuthContext 可能内联自动发码)+ captcha
+   * 错误兜底。providers 缓存旧于服务端开关时,自动链的闸拿不到 captcha 配置、
+   * 不带 token 发码吃到 CAPTCHA_REQUIRED——在此出题后带 token 直接重发发码
+   * (成功即进输码页,倒计时由 step 沿 effect 起算)。
+   */
+  const submitEmailDiscover = async (email: string) => {
+    const result = await dispatchWithResult({ type: 'discover', email });
+    if (
+      result.success ||
+      (result.code !== 'CAPTCHA_REQUIRED' && result.code !== 'CAPTCHA_INVALID')
+    ) {
+      return;
+    }
+    const token = await obtainCaptchaToken('email');
+    if (token === null) return;
+    await dispatchWithResult({
+      type: 'request-code',
+      kind: 'email',
+      identifier: email,
+      captchaToken: token,
+    });
+  };
+
   // request-code 类动作统一走这里:成功返回时刻 = 倒计时起算点(Step 3a);
   // 失败(含重发失败)不 arm → 保持当前 deadline。
   const dispatchRequestCode = async (kind: VerificationKind, value: string) => {
-    const ok = await dispatch({ type: 'request-code', kind, identifier: value });
-    if (ok) armResendCountdown();
+    let captchaToken: string | undefined;
+    if (captchaRequiredFor(kind)) {
+      const token = await obtainCaptchaToken(kind);
+      if (token === null) return; // 取消:不发码、不 arm、不报错
+      captchaToken = token;
+    }
+    let result = await dispatchWithResult({
+      type: 'request-code',
+      kind,
+      identifier: value,
+      captchaToken,
+    });
+    // 错误驱动兜底(providers 缓存旧于服务端开关,或 token 恰好过期):
+    // 重新出题一次后原参重试,仅一次防循环。
+    if (
+      !result.success &&
+      (result.code === 'CAPTCHA_REQUIRED' || result.code === 'CAPTCHA_INVALID')
+    ) {
+      const retryToken = await obtainCaptchaToken(kind);
+      if (retryToken === null) return;
+      result = await dispatchWithResult({
+        type: 'request-code',
+        kind,
+        identifier: value,
+        captchaToken: retryToken,
+      });
+    }
+    if (result.success) armResendCountdown();
   };
 
   const submitIdentifier = (event: FormEvent) => {
@@ -447,7 +593,7 @@ export function LoginPage() {
       setIdentifierFormatError(null);
       // 邮箱提交先过协议门(产品拍板 2026-07-24 二次:手机号/邮箱提交一律先弹协议
       // 弹窗,压过审查侧「discover 纯查询可放行」的建议;显式企业 SSO 入口仍豁免)
-      requireConsent(() => void dispatch({ type: 'discover', email: value }));
+      requireConsent(() => void submitEmailDiscover(value));
     } else {
       // 手机号:桌面不做客户端 +86/号段校验(#223 仅移动端做 cnPhone 本地拦截),
       // 输入原样透传服务端 request-code,由服务端校验号段合法性。
@@ -463,9 +609,51 @@ export function LoginPage() {
     if (localModePendingRef.current) return;
     const value = ssoOrg.trim();
     if (!value) return;
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
     // 组织区域先静默发现；仅当结果与安装包区域不一致时，main 状态机进入
     // realm-confirmation，由下方弹窗在继续 SSO 前向用户确认。
-    void dispatch({ type: 'discover-sso-org', org: value });
+    void dispatch({ type: 'discover-sso-org', org: value }).finally(() => {
+      setSsoOrgHistory(getSsoOrgHistory());
+    });
+  };
+
+  const openSsoOrgHistory = () => {
+    if (ssoOrgHistory.length <= 1) return;
+    setSsoOrgHistoryOpen(true);
+    setSsoOrgHistoryActiveIndex(-1);
+  };
+
+  const selectSsoOrgHistory = (entry: string) => {
+    setSsoOrg(entry);
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
+    clearError();
+  };
+
+  const handleSsoOrgHistoryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (ssoOrgHistory.length <= 1) return;
+    if (event.key === 'Escape') {
+      setSsoOrgHistoryOpen(false);
+      setSsoOrgHistoryActiveIndex(-1);
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setSsoOrgHistoryOpen(true);
+      setSsoOrgHistoryActiveIndex((current) => {
+        if (event.key === 'ArrowDown') {
+          return current < ssoOrgHistory.length - 1 ? current + 1 : 0;
+        }
+        return current > 0 ? current - 1 : ssoOrgHistory.length - 1;
+      });
+      return;
+    }
+    if (event.key === 'Enter' && ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0) {
+      event.preventDefault();
+      const selected = ssoOrgHistory[ssoOrgHistoryActiveIndex];
+      if (selected) selectSsoOrgHistory(selected);
+    }
   };
 
   /* ── identifier 主视图(680×620 组:面板 680×500 + 第三方圆钮行) ── */
@@ -576,6 +764,11 @@ export function LoginPage() {
               // 期间要自己挡:那道 guard 在 requireConsent 里,这条路径绕过了它。
               if (isLoading || localModePendingRef.current) return;
               clearError();
+              const nextHistory = getSsoOrgHistory();
+              setSsoOrgHistory(nextHistory);
+              if (!ssoOrg.trim()) setSsoOrg(nextHistory[0] ?? '');
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
               setSsoOrgMode(true);
             }}
           >
@@ -597,54 +790,86 @@ export function LoginPage() {
 
   /* ── 企业 SSO 入口子视图(sso-org empty/filled;面板 680×500,无跳过入口) ── */
   const renderSsoOrg = () => (
-    <LoginPanel testId="login-panel-sso-org">
-      <form onSubmit={submitSsoOrg} noValidate>
-        <LoginBackButton
-          disabled={isLoading}
-          label={t('login.back')}
-          onClick={() => {
-            clearError();
-            setSsoOrgMode(false);
-          }}
-        />
-        <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
-        <LoginInput
-          autoFocus
-          disabled={isLoading}
-          maxLength={253}
-          autoComplete="off"
+    <>
+      <LoginPanel testId="login-panel-sso-org">
+        <form onSubmit={submitSsoOrg} noValidate>
+          <LoginBackButton
+            disabled={isLoading}
+            label={t('login.back')}
+            onClick={() => {
+              clearError();
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+              setSsoOrgMode(false);
+            }}
+          />
+          <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
+          <LoginInput
+            autoFocus={ssoOrgHistory.length <= 1}
+            disabled={isLoading}
+            maxLength={253}
+            autoComplete="off"
+            value={ssoOrg}
+            onChange={(value) => {
+              setSsoOrg(value);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onFocus={openSsoOrgHistory}
+            onClick={openSsoOrgHistory}
+            onBlur={() => {
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onKeyDown={handleSsoOrgHistoryKeyDown}
+            role="combobox"
+            ariaControls="login-sso-org-history-list"
+            ariaExpanded={ssoOrgHistoryOpen}
+            ariaActiveDescendant={
+              ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0
+                ? ssoOrgHistoryOptionId(ssoOrgHistoryActiveIndex)
+                : undefined
+            }
+            placeholder={t('login.ssoOrgPlaceholder')}
+            error={!!errorCode}
+            testId="login-sso-org-input"
+          />
+          {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
+          <span
+            className="absolute line-clamp-2 text-center"
+            style={{
+              left: SSO_ORG_HINT.x,
+              top: SSO_ORG_HINT.y,
+              width: SSO_ORG_HINT.width,
+              height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
+              lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
+              fontSize: SSO_ORG_HINT.fontSize,
+              color: LOGIN_COLORS.secondaryText,
+            }}
+          >
+            {t('login.ssoOrgHint')}
+          </span>
+          <LoginPrimaryButton
+            type="submit"
+            disabled={!ssoOrg.trim()}
+            loading={isLoading}
+            testId="login-sso-org-continue"
+          >
+            {isLoading ? t('login.working') : t('login.continue')}
+          </LoginPrimaryButton>
+          {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
+        </form>
+      </LoginPanel>
+      {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 && (
+        <LoginSsoOrgHistoryList
+          entries={ssoOrgHistory}
           value={ssoOrg}
-          onChange={setSsoOrg}
-          placeholder={t('login.ssoOrgPlaceholder')}
-          error={!!errorCode}
-          testId="login-sso-org-input"
+          activeIndex={ssoOrgHistoryActiveIndex}
+          onActiveIndexChange={setSsoOrgHistoryActiveIndex}
+          onSelect={selectSsoOrgHistory}
+          listId="login-sso-org-history-list"
         />
-        {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
-        <span
-          className="absolute line-clamp-2 text-center"
-          style={{
-            left: SSO_ORG_HINT.x,
-            top: SSO_ORG_HINT.y,
-            width: SSO_ORG_HINT.width,
-            height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
-            lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
-            fontSize: SSO_ORG_HINT.fontSize,
-            color: LOGIN_COLORS.secondaryText,
-          }}
-        >
-          {t('login.ssoOrgHint')}
-        </span>
-        <LoginPrimaryButton
-          type="submit"
-          disabled={!ssoOrg.trim()}
-          loading={isLoading}
-          testId="login-sso-org-continue"
-        >
-          {isLoading ? t('login.working') : t('login.continue')}
-        </LoginPrimaryButton>
-        {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
-      </form>
-    </LoginPanel>
+      )}
+    </>
   );
 
   /* ── method-choice(含 sso-org-list 来源变体) ── */
@@ -1139,6 +1364,14 @@ export function LoginPage() {
           onDisagree={() => void dispatch({ type: 'cancel-sso-realm' })}
           onOpenTerms={() => undefined}
           onOpenPrivacy={() => undefined}
+        />
+      )}
+      {/* 人机验证挑战层(global 邮箱发码前置闸):独立分区 webview 装载
+          auth-server 托管的 Turnstile 页,结果经 resolve 回到 dispatchRequestCode。 */}
+      {captchaChallenge && (
+        <LoginCaptchaOverlay
+          challengeBaseUrl={captchaChallenge.baseUrl}
+          onResult={captchaChallenge.resolve}
         />
       )}
     </div>

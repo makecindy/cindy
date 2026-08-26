@@ -252,9 +252,15 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
   if (!isRecord(value)) {
     throw new Error('Invalid agent capabilities response');
   }
+  if (!Array.isArray(value.availableModels)) {
+    throw new Error('Invalid agent capabilities response');
+  }
+  // Same policy as the local model plane: drop a catalog row that cannot
+  // stand on its own (missing defaultEffort, extra junk) instead of
+  // rejecting the whole remote list. One stale model on the controlled
+  // machine was emptying the selector.
+  value.availableModels = value.availableModels.filter(isModelDescriptor);
   if (
-    !Array.isArray(value.availableModels) ||
-    !value.availableModels.every(isModelDescriptor) ||
     typeof value.hasFastMode !== 'boolean' ||
     !Array.isArray(value.effortLevels) ||
     !value.effortLevels.every(isNamedDescriptor) ||

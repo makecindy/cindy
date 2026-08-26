@@ -8,7 +8,16 @@ import {
   ORCA_NESTED_REPORT_ERROR_MESSAGE,
   toSessionDispatchOutcome,
 } from '@cindy/maker-core';
-import type { AgentEvent, AgentKind, Logger, Maker, McpProvider, McpProviderContext, Session } from '@cindy/maker-core';
+import type {
+  AgentEvent,
+  AgentKind,
+  Logger,
+  Maker,
+  McpProvider,
+  McpProviderContext,
+  Session,
+  SessionDispatchOutcome,
+} from '@cindy/maker-core';
 import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
@@ -288,7 +297,7 @@ function logOrcaSendNotDispatched(
 
 function makeOrcaDispatchToolError(
   meta: OrcaSendMeta,
-  reason: 'cancelled-before-dispatch',
+  reason: Extract<SessionDispatchOutcome, { dispatched: false }>['reason'],
   extra?: Record<string, unknown>,
 ): OrcaToolResult {
   return text({

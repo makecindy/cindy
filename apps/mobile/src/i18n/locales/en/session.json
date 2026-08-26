@@ -24,8 +24,149 @@
     "voiceStopRecording": "Stop Recording",
     "capabilitiesUnsupported": "Unsupported remote capability format"
   },
+  "presentation": {
+    "collaboration": {
+      "labelLead": "Collaboration Lead",
+      "labelWorker": "Collaboration Worker",
+      "labelRole": "Collaboration {{role}}",
+      "noticeLead": "This is an Orca Lead session from your computer. You can keep chatting on your phone; create workers, change focus, fork or rewind, edit the queue, and change session settings on your computer.",
+      "noticeWorker": "This is an Orca Worker session from your computer. The first mobile version is read-only and does not support sending messages, changing worker focus, archiving a worker, or stopping collaboration.",
+      "noticeOther": "This is a collaboration session from your computer. The first mobile version is read-only; manage collaboration on your computer.",
+      "readOnlyReason": "Collaboration is read-only on the first mobile version. Handle confirmations, queue edits, and session changes on your computer.",
+      "composerReadOnlyReason": "This collaboration subtask is read-only on mobile. Send messages from your computer."
+    },
+    "composer": {
+      "voice": {
+        "listening": "Listening",
+        "submitting": "Transcribing",
+        "refining": "Refining",
+        "error": "Voice error",
+        "idle": "Voice",
+        "sendingReason": "The message is being sent to your computer. Wait before recording.",
+        "processingReason": "Voice input is being processed. Wait before recording again."
+      },
+      "attachment": {
+        "count": "{{count}} attachments",
+        "collapse": "Hide attachments",
+        "label": "Attachments",
+        "busyReason": "Attachments are being processed. Wait before adding more.",
+        "sendingReason": "The message is being sent to your computer. Wait before changing attachments."
+      },
+      "input": {
+        "sendingReason": "The message is being sent to your computer."
+      },
+      "send": {
+        "sendingReason": "The message is being sent to your computer.",
+        "attachmentBusyReason": "Attachments are uploading. Wait for them to finish before sending.",
+        "voiceBusyReason": "Voice input is being processed. Wait for it to finish before sending.",
+        "emptyReason": "Enter text, add an attachment, or add a quote before sending.",
+        "sending": "Sending",
+        "label": "Send"
+      },
+      "stop": {
+        "queueBusyReason": "Queue changes are syncing, so the run can't be stopped yet.",
+        "unavailableReason": "There is no active run to stop on your computer.",
+        "processing": "Processing",
+        "label": "Stop"
+      },
+      "placeholder": {
+        "listening": "Listening…",
+        "submitting": "Transcribing voice input",
+        "refining": "Refining voice input",
+        "default": "Continue chatting…"
+      },
+      "guidance": {
+        "sending": "The message is being added to the desktop queue. Don't send it again until this finishes.",
+        "queueBusy": "Queue changes are syncing. The queue will refresh when this finishes.",
+        "listeningWithDraft": "Tap Send to stop voice input and send the current text, or tap the input box to stop voice input and open the keyboard.",
+        "listening": "Listening. Tap Send to stop voice input and send the recognized text, or tap the input box to stop voice input and open the keyboard.",
+        "submitting": "Voice input is being transcribed. The input box is temporarily locked.",
+        "refining": "Voice input is being refined. The input box will update when it finishes.",
+        "attachmentBusy": "Attachments are being checked or uploaded. They will appear in the attachment list when ready.",
+        "attachmentsWithText": "This will send {{count}} attachments and the text in the input box.",
+        "attachmentsOnly": "This will send only {{count}} attachments. You can also add a note before sending.",
+        "attachmentPickerOpen": "You can add photos, screenshots, or files from your phone.",
+        "draft": "Tap Send to add this message to the desktop queue using the current session settings.",
+        "quotesOnly": "This will send {{count}} quotes. You can also add a note before sending.",
+        "canStop": "Your computer is running the session. You can queue another message or tap Stop and keep the current queue.",
+        "empty": "Enter text to begin. Use / for commands and @ to reference project resources."
+      },
+      "status": {
+        "sending": "Sending to your computer",
+        "queueBusy": "Processing queue changes",
+        "attachmentBusy": "Processing attachments",
+        "ready": "Ready"
+      },
+      "operation": {
+        "sessionSyncing": "This session has not finished syncing yet.",
+        "pendingInteraction": "Handle the pending request from your computer before typing again."
+      }
+    },
+    "overview": {
+      "unavailable": "Unavailable",
+      "pendingCount": "{{count}} pending",
+      "readOnly": "Read-only",
+      "queuePaused": "Queue paused",
+      "status": { "active": "Active", "archived": "Archived", "deleted": "Deleted" },
+      "actions": {
+        "settings": { "label": "Settings", "a11y": "Open session settings" },
+        "usage": { "label": "Usage", "a11y": "View session usage" },
+        "files": { "label": "Files", "a11y": "Browse remote files" },
+        "queue": { "label": "Queue", "a11y": "Open queue panel" },
+        "search": { "label": "Search", "openA11y": "Search messages", "closeA11y": "Close message search" }
+      },
+      "disabled": {
+        "files": "This session has no remote working directory, so files can't be browsed.",
+        "search": "There are no messages to search yet.",
+        "queueUnavailable": "The controlled computer is temporarily unavailable. Sync again before viewing the queue.",
+        "queuePending": "Handle the pending request first; the queue panel will be restored afterward.",
+        "queuePausedEmpty": "The queue is paused, but there are no queued messages to resume.",
+        "queueEmpty": "There are no queued messages.",
+        "queueDefault": "The queue panel can't be opened in the current state."
+      },
+      "actionCopy": {
+        "pending": "Handle the pending request first; the input area will be restored afterward.",
+        "archived": "This session is archived. Restore it before sending more messages.",
+        "deleted": "This session is deleted and can't be changed.",
+        "queuePaused": "The queue is paused. Resume it from the queue panel."
+      }
+    },
+    "controls": {
+      "spend": {
+        "title": "Session usage",
+        "unavailable": "No session usage yet",
+        "taskCost": "This session {{cost}}",
+        "contextWithLimit": "Context {{used}} / {{total}} · {{percentage}}",
+        "context": "Context {{used}} tokens"
+      },
+      "context": {
+        "title": "Context usage",
+        "unavailable": "No context data"
+      },
+      "rateLimit": {
+        "plan": "Plan",
+        "remaining": "{{percent}} remaining",
+        "used": "{{percent}} used",
+        "resetsAt": "Resets at {{time}}",
+        "status": "Status",
+        "reached": "Account limit reached",
+        "account": "Account",
+        "availableResets": "Available resets",
+        "resetCount": "{{count}} resets",
+        "earliestExpiry": "Earliest expiry",
+        "window": {
+          "default": "Limit",
+          "days": "{{count}} days",
+          "week": "Week"
+        }
+      }
+    }
+  },
   "screen": {
     "thinking": "Thinking…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "Reconnecting…",
     "modelBusyRetrying": "Model service busy — retrying…",
     "rateLimitRetrying": "Request rate limited — retrying…",

@@ -179,6 +179,26 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain('clearManualName');
   });
 
+  it('hydrates the voice dictionary after the async desktop list arrives', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+    const dictionaryEffectIndex = source.indexOf(
+      'if (!dictionaryScreenOpen || desktopDevices.length === 0) return;',
+    );
+    const dictionaryOpenIndex = source.indexOf('const openVoiceDictionary = useCallback(() => {');
+    const hydrateIndex = source.indexOf(
+      'Promise.all(desktopDevices.map((host) => hydrateMobileVoiceDictionary(host.deviceId)))',
+      dictionaryEffectIndex,
+    );
+
+    expect(dictionaryEffectIndex).toBeGreaterThan(-1);
+    expect(dictionaryOpenIndex).toBeGreaterThan(-1);
+    expect(hydrateIndex).toBeGreaterThan(dictionaryEffectIndex);
+    expect(source).toContain('[desktopDevices, dictionaryScreenOpen, refreshVoiceDictionary]');
+    expect(source).toContain('[desktopDevices, invoke]');
+    expect(source).not.toContain('[desktopDevices, deviceLink]');
+    expect(source).toContain('subscribeMobileVoiceDictionaryCache(() => {');
+  });
+
   it('always shows privacy policy + user agreement (regional links via legalLinks) above the cn-only App filing number', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
     const filingCardIndex = source.indexOf("<SettingsGroup title={t('settings.legal.sectionTitle')}>");
@@ -230,6 +250,11 @@ describe('mobile settings overview', () => {
     expect(source).toContain("testID=\"settings.testFlightUpdateHint\"");
     expect(source).toContain("{t('settings.version.testFlightUpdateManaged')}");
     expect(source).toContain("{t('settings.version.bundleVersion', { version: appVersion })}");
+    expect(source).toContain('const showBetaBadge = betaReady && betaEnabled;');
+    expect(source).toContain('testID="settings.betaChannelBadge"');
+    expect(source).toContain("{t('settings.betaChannel.badge')}");
+    expect(source).toContain('backgroundColor: colors.betaChannelBadgeBackground');
+    expect(source).toContain('color: colors.betaChannelBadgeForeground');
     expect(source).toContain(
       "testID=\"settings.otaVersion\">{t('settings.version.otaVersion', { version: otaVersion })}",
     );

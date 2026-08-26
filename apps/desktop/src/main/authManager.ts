@@ -41,7 +41,9 @@ import {
   type ProviderConfig,
   type SocialProvider,
 } from '@cindy/auth-client';
-import { readReloginFlag, clearReloginFlag } from './updateService';
+import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
+import { probeBetaManifest } from './manifestService';
+import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
@@ -55,6 +57,11 @@ import {
 } from './authRefreshFailure';
 import { awaitWithStartupTimeout } from './authStartupGate';
 import { syncCanaryFlagAfterAuth } from './canaryFlagSync';
+import {
+  maybeEnableNonXdOrgBetaDefault,
+  maybeEnableXdOrgBetaDefault,
+  shouldAttemptOrgBetaDefault,
+} from './xdOrgBetaDefault';
 import { canRestoreAuthSessionForMembership } from './authRealmPolicy';
 import {
   createAuthBrowserAuthorizationSlot,
@@ -92,6 +99,7 @@ import {
   type DesktopLoginAction,
   type DesktopLoginActionResult,
 } from '../shared/authIpc';
+import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -289,6 +297,22 @@ let pendingAuthRealm: AuthRegion | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let sessionInvalidationPromise: Promise<void> | null = null;
+// Real owner change / logout: keep the renderer fail-closed even if a late
+// notifyRenderer() races the teardown. Same-owner Ghost repair must not set
+// this — that was the 55-minute /login flash.
+let ownerChangeShellPendingDepth = 0;
+
+function enterOwnerChangeShellPending(): void {
+  ownerChangeShellPendingDepth += 1;
+}
+
+function leaveOwnerChangeShellPending(): void {
+  ownerChangeShellPendingDepth = Math.max(0, ownerChangeShellPendingDepth - 1);
+}
+
+function isOwnerChangeShellPending(): boolean {
+  return ownerChangeShellPendingDepth > 0;
+}
 /**
  * 设备标识。默认绑定物理机(machineIdSync)。
  *
@@ -366,9 +390,9 @@ function createAuthClient(
  * 发生过一次,当时只把静默半死改成明确弹重登(见 authSessionExpiredDetection.test.ts),
  * 没有堵住 passive 的销毁权。
  *
- * packaged 恒不设置该 env(index.ts 启动时对 packaged / isolated 显式 delete 兜底,
- * 防 ambient env 污染),线上零影响;`--isolated` 沙箱有独立 userData 与 deviceId,
- * 本来就不共享,不受此闸门约束。
+ * packaged 恒不设置该 env(index.ts 启动时对 packaged / isolated-sandbox 显式
+ * delete 兜底,防 ambient env 污染),线上零影响。env 由解析后的 profileKind
+ * 不是 isolated-sandbox 且 passive 落地,覆盖正式目录与非隔离 custom 共库。
  */
 function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
@@ -383,6 +407,12 @@ function isPassiveSharedUserDataInstance(): boolean {
  * 直到用户在本进程显式登录或重启进程为止。
  */
 let passiveLocalSignOut = false;
+
+/**
+ * DEVICE_MISMATCH 后本进程已确认配不上磁盘 token。token 留给真正的设备,
+ * 但 initialize() 不能反复拿同一枚去撞 401。直到显式登录或进程重启为止。
+ */
+let foreignDeviceLocalSignOut = false;
 
 // ── safeStorage helpers ─────────────────────────────────────────────────────
 
@@ -846,6 +876,7 @@ async function withCloudOwnerCommit<T>(opts: {
     return withGhostSkillProjectionReadOnlyOwner(opts.nextOwnerId, opts.commit);
   }
   let releaseBoundary: (() => void) | null = null;
+  let heldOwnerChangeShell = false;
   // A same-owner projection repair tears down the owner-bound Ghost runtime but
   // keeps the same mode/owner, so commitActiveAppSession's same-owner early
   // return would NOT advance the owner generation — stale async work that
@@ -859,7 +890,14 @@ async function withCloudOwnerCommit<T>(opts: {
       previousOwnerId: opts.previousOwnerId,
       nextOwnerId: opts.nextOwnerId,
       prepareTransition: async ({ ownerChanged }) => {
-        notifyRendererAuthBoundaryPending();
+        // Same-owner Ghost repair (token refresh when the durable projection is
+        // unstable) is not a logout. Broadcasting snapshotLoggedOutAuthState()
+        // here bounced ProtectedRoute to /login every ~55 minutes.
+        if (ownerChanged) {
+          notifyRendererAuthBoundaryPending();
+          enterOwnerChangeShellPending();
+          heldOwnerChangeShell = true;
+        }
         releaseBoundary = beginAppSessionBoundary();
         if (ownerChanged) {
           await opts.prepareTransition();
@@ -887,6 +925,7 @@ async function withCloudOwnerCommit<T>(opts: {
   } finally {
     const release = releaseBoundary as (() => void) | null;
     release?.();
+    if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
     if (release) notifyRenderer();
   }
   if (committed) requestStableOwnerPostCommit('owner-commit');
@@ -915,6 +954,7 @@ async function withAccountFreeOwnerCommit(opts: {
 }): Promise<void> {
   let authCleared = opts.authAlreadyCleared ?? false;
   let releaseBoundary: (() => void) | null = null;
+  let heldOwnerChangeShell = false;
   // Same-owner account-free repair tears down the owner-bound Ghost runtime but
   // keeps the same mode/owner, so commitActiveAppSession's same-owner early
   // return would NOT advance the owner generation — stale async work that
@@ -952,6 +992,8 @@ async function withAccountFreeOwnerCommit(opts: {
       nextOwnerId: opts.nextMode === 'local' ? LOCAL_DATA_OWNER_ID : null,
       prepareTransition: async ({ ownerChanged }) => {
         notifyRendererAuthBoundaryPending();
+        enterOwnerChangeShellPending();
+        heldOwnerChangeShell = true;
         releaseBoundary = beginAppSessionBoundary();
         if (ownerChanged) {
           if (!authSessionTeardown) {
@@ -1020,6 +1062,7 @@ async function withAccountFreeOwnerCommit(opts: {
   } finally {
     const release = releaseBoundary as (() => void) | null;
     release?.();
+    if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
     if (release && notify) notifyRenderer();
   }
 
@@ -1407,6 +1450,11 @@ function scheduleCanaryFlagSync(input: {
     persistFlag: canaryFlagStore.sync,
   })
     .then((outcome) => {
+      scheduleNonXdOrgBetaDefault({
+        expectedAuthEpoch: input.expectedAuthEpoch,
+        expectedUserId: input.expectedUserId,
+        defaultEnableBeta: outcome.defaultEnableBeta,
+      });
       if (outcome.kind === 'synced') {
         log.info('canary feature flag synced: isCanary=%s', outcome.isCanary);
         // feature-flags 在登录态落地后异步返回；立即推送新快照，让 renderer
@@ -1429,6 +1477,112 @@ function scheduleCanaryFlagSync(input: {
       // non-fatal if that implementation changes later.
       log.error('canary feature flag sync threw unexpectedly', err);
     });
+}
+
+/**
+ * 登录态落地后为 xd 组织补一次设备级 beta 默认值,不阻塞进主界面。
+ *
+ * expectedAuthEpoch + expectedUserId 防止探测完成时已经登出 / 换号。
+ * 用户手动关过(isCustomized)后不再打开;probe 失败也不写盘,下次登录再试。
+ */
+function scheduleXdOrgBetaDefault(input: {
+  expectedAuthEpoch: number;
+  expectedUserId: string;
+}): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  const user = currentUser;
+  if (!user) return;
+  void maybeEnableXdOrgBetaDefault(
+    {
+      expectedAuthEpoch: input.expectedAuthEpoch,
+      expectedUserId: input.expectedUserId,
+      user: {
+        membershipKind: user.membershipKind,
+        orgName: user.orgName,
+        orgSlug: decodeAccessTokenOrgSlug(accessToken),
+      },
+    },
+    {
+      readCurrentAuthIdentity: () => ({
+        authEpoch: authStateEpoch,
+        userId: currentUser?.id ?? null,
+      }),
+      readChannelState: () => ({
+        enableBeta: readUpdateChannelSettings().enableBeta,
+        isCustomized: isEnableBetaUserCustomized(),
+      }),
+      probeBetaManifest,
+      enableBeta: () =>
+        enableUncustomizedBetaChannel(
+          () =>
+            authStateEpoch === input.expectedAuthEpoch && currentUser?.id === input.expectedUserId,
+        ),
+    },
+  )
+    .then((outcome) => {
+      if (outcome.kind === 'enabled') {
+        log.info('xd org beta channel default enabled');
+        return;
+      }
+      if (outcome.reason === 'stale-auth') {
+        log.debug('discarded stale xd org beta default');
+        return;
+      }
+      log.debug('xd org beta channel default skipped: reason=%s', outcome.reason);
+    })
+    .catch((err) => {
+      log.error('xd org beta channel default threw unexpectedly', err);
+    });
+}
+
+/** feature-flags 返回后，仅为非 xd 组织补一次设备级 beta 默认值。 */
+function scheduleNonXdOrgBetaDefault(input: {
+  expectedAuthEpoch: number;
+  expectedUserId: string;
+  defaultEnableBeta?: boolean;
+}): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  const user = currentUser;
+  if (!user) return;
+  const request = {
+    expectedAuthEpoch: input.expectedAuthEpoch,
+    expectedUserId: input.expectedUserId,
+    user: {
+      membershipKind: user.membershipKind,
+      orgName: user.orgName,
+      orgSlug: decodeAccessTokenOrgSlug(accessToken),
+    },
+  } as const;
+  if (
+    shouldAttemptOrgBetaDefault({
+      user: request.user,
+      defaultEnableBeta: input.defaultEnableBeta,
+    }) !== 'flag-enable'
+  ) {
+    return;
+  }
+  void maybeEnableNonXdOrgBetaDefault(request, {
+    readCurrentAuthIdentity: () => ({
+      authEpoch: authStateEpoch,
+      userId: currentUser?.id ?? null,
+    }),
+    readChannelState: () => ({
+      enableBeta: readUpdateChannelSettings().enableBeta,
+      isCustomized: isEnableBetaUserCustomized(),
+    }),
+    probeBetaManifest,
+    enableBeta: () =>
+      enableUncustomizedBetaChannel(
+        () =>
+          authStateEpoch === input.expectedAuthEpoch && currentUser?.id === input.expectedUserId,
+      ),
+  })
+    .then((outcome) => {
+      if (outcome.kind === 'enabled') log.info('feature-flag beta channel default enabled');
+      else if (outcome.reason === 'stale-auth') log.debug('discarded stale non-xd beta default');
+      else log.debug('non-xd beta channel default skipped: reason=%s', outcome.reason);
+    })
+    .catch((err) => log.error('non-xd beta channel default threw unexpectedly', err));
 }
 
 /**
@@ -1570,7 +1724,9 @@ function snapshotAuthState(): AuthState {
     mode: appSession.mode,
     dataOwnerId: appSession.dataOwnerId,
     ownerGeneration: appSession.generation,
-    canEnterApp: appSession.mode !== 'signed-out' && !isAppSessionBoundaryPending(),
+    // IPC pending is not a logout. Real owner change / logout still holds the
+    // shell closed so a late notifyRenderer() cannot remount the outgoing owner.
+    canEnterApp: appSession.mode !== 'signed-out' && !isOwnerChangeShellPending(),
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
     deviceId,
@@ -1895,6 +2051,15 @@ export function getAccessToken(): string | null {
 /** 当前已认证会话的数据区域；主进程长连接据此识别同账号的跨区切换。 */
 export function getActiveAuthRealm(): AuthRegion {
   return activeAuthRealm;
+}
+
+/**
+ * 登录页人机验证托管挑战页地址(不含 query)。邮箱发码固定走构建区域的 auth
+ * 部署(与 runLoginAction 的 startsBuildRealmFlow 口径一致),不看 activeAuthRealm。
+ * 惰性求值:端点清单可能在 app.ready 后被远程 manifest 回填,不得固化。
+ */
+export function getLoginCaptchaChallengeUrl(): string {
+  return authServerUrl(AUTH_REGION) + LOGIN_CAPTCHA_PAGE_PATH;
 }
 
 /** SkillHub v0.2.1: 返回当前登录用户 id（cuid），未登录时返回 null */
@@ -2317,6 +2482,11 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     commitVolatileAppSession('signed-out');
     return snapshotLoggedOutAuthState();
   }
+  if (foreignDeviceLocalSignOut) {
+    log.info('foreign-device instance stays signed out locally (tombstone)');
+    commitVolatileAppSession('signed-out');
+    return snapshotLoggedOutAuthState();
+  }
 
   // release-relogin-on-update: if the auto-updater dropped a relogin marker
   // for *this* version, wipe persisted auth and force the user back to the
@@ -2516,6 +2686,11 @@ async function runColdStartRefreshFlow(
           clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
         }
         resetActiveAuthRealmToBuild();
+      } else if (action.kind === 'foreign-device') {
+        log.warn(
+          'cold-start refresh: DEVICE_MISMATCH — this process starts logged out and keeps the persisted refresh token',
+        );
+        foreignDeviceLocalSignOut = true;
       } else if (action.kind === 'replacement-retry') {
         log.warn(
           `cold-start refresh failed for a stale token after ${attempts} attempt(s) — keeping latest refresh token, starting logged out`,
@@ -2581,6 +2756,10 @@ async function runColdStartRefreshFlow(
     });
     scheduleCanaryFlagSync({
       token: refreshData.accessToken,
+      expectedAuthEpoch: epochAtStart,
+      expectedUserId: refreshData.membership.id,
+    });
+    scheduleXdOrgBetaDefault({
       expectedAuthEpoch: epochAtStart,
       expectedUserId: refreshData.membership.id,
     });
@@ -2741,8 +2920,9 @@ async function completeLogin(
         clearReloginFlag();
       }
       accountDeletionRestoredNoticePending = deletionWasRestored;
-      // 显式登录解除 passive 本地登出墓碑(见 passiveLocalSignOut)。
+      // 显式登录解除本进程登出墓碑(passive / foreign-device)。
       passiveLocalSignOut = false;
+      foreignDeviceLocalSignOut = false;
       currentUser = nextUser;
       commitCloudAppSession(currentUser.id);
       pendingAuthRealm = null;
@@ -2750,6 +2930,10 @@ async function completeLogin(
   });
   scheduleCanaryFlagSync({
     token: outcome.accessToken,
+    expectedAuthEpoch: loginEpoch,
+    expectedUserId: nextUser.id,
+  });
+  scheduleXdOrgBetaDefault({
     expectedAuthEpoch: loginEpoch,
     expectedUserId: nextUser.id,
   });
@@ -2868,9 +3052,10 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       return { success: true, state: loginFlowState };
     }
 
-    // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
-    // 同区域直接进入连接选择；跨区域先进入确认状态，确认后才把连接写入
-    // start-browser 白名单并允许继续 SSO。
+    // 企业 SSO 入口（按组织 ID/slug/已验证域名）：同区域进入连接选择；
+    // 跨区域先进入确认状态，确认后才把连接写入 start-browser 白名单。
+    // 唯一 SSO 由 renderer 接到 method-choice 后直接派发 start-browser，
+    // 以便立刻投影 browser-redirect（确认框消失、露出取消）。
     if (action.type === 'discover-sso-org') {
       const discovery = await discoverOrganizationRealm(action.org.trim().toLowerCase());
       const methods = ssoOrgDiscoveryToMethods(discovery);
@@ -2904,7 +3089,9 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       if (action.kind === 'phone' && !providerConfig?.phone) {
         throw new AuthApiError('PHONE_LOGIN_DISABLED', 400, 'Phone login is disabled');
       }
-      await client.requestCode(action.kind, action.identifier);
+      await client.requestCode(action.kind, action.identifier, {
+        captchaToken: action.captchaToken,
+      });
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'code-requested',
         kind: action.kind,
@@ -3233,6 +3420,16 @@ export async function refresh(): Promise<boolean> {
           const previousUserId =
             currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
           await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));
+        } else if (action.kind === 'foreign-device') {
+          log.warn(
+            'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',
+          );
+          foreignDeviceLocalSignOut = true;
+          const previousUserId =
+            currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
+          await expireRuntimeAuth(previousUserId, 'device-mismatch', {
+            preservePersistedRefreshToken: true,
+          });
         } else if (action.kind === 'replacement-retry') {
           log.warn(
             `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — retrying in ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
@@ -3283,8 +3480,10 @@ export async function refresh(): Promise<boolean> {
         // otherwise renderer state could still show account A while API calls use B.
         persistedRefreshTokenNeedsIdentityCheck = true;
         const previousUserId = currentUser?.id ?? null;
+        const previousMembershipKind = currentUser?.membershipKind ?? null;
         const nextUser = mergeMembershipWithExisting(data.membership, currentUser);
         const accountSwitched = previousUserId !== null && previousUserId !== nextUser.id;
+        const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;
         if (accountSwitched) {
           log.warn(
             `runtime replacement refresh switched authenticated user from ${previousUserId} to ${nextUser.id}; reconciling auth state`,
@@ -3341,15 +3540,21 @@ export async function refresh(): Promise<boolean> {
           expectedAuthEpoch: refreshEpoch,
           expectedUserId: nextUser.id,
         });
+        scheduleXdOrgBetaDefault({
+          expectedAuthEpoch: refreshEpoch,
+          expectedUserId: nextUser.id,
+        });
         scheduleRefresh(data.accessToken);
         notifyRenderer();
-        if (previousUserId !== nextUser.id || authRealmChanged) {
+        if (previousUserId !== nextUser.id || authRealmChanged || membershipKindChanged) {
           notifyAuthListeners();
         }
         return true;
       }
 
+      const previousMembershipKind = currentUser?.membershipKind ?? null;
       const nextUser = mergeMembershipWithExisting(data.membership, currentUser);
+      const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;
       await withCloudOwnerCommit({
         previousOwnerId: getActiveAppSession().dataOwnerId,
         nextOwnerId: nextUser.id,
@@ -3375,7 +3580,7 @@ export async function refresh(): Promise<boolean> {
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
       notifyRenderer();
-      if (authRealmChanged) {
+      if (authRealmChanged || membershipKindChanged) {
         notifyAuthListeners();
       }
       return true;

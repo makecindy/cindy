@@ -8,6 +8,8 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from './agentIslandSessionPatch.js';
+import { withSessionRouteLock, withSessionRouteLocks } from './sessionRouteLock.js';
+import { cleanupSessionRuntimeForTerminalStatus } from './sessionRuntimeCleanup.js';
 
 const log = createLogger('orca-team-store');
 
@@ -246,9 +248,15 @@ export async function markTeamEnded(
  * orca_role 字段保留 'worker' 不动 — 历史上下文识别需要它。
  */
 export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
-  const updatedIds = await getDbClient().tx('orca.archiveWorkersByTeam', {
-    teamId,
-    now: Date.now(),
+  const candidateIds = await listActiveWorkerSessionIdsForTeam(teamId);
+  const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    const ids = await getDbClient().tx('orca.archiveWorkersByTeam', {
+      teamId,
+      sessionIds: candidateIds,
+      now: Date.now(),
+    });
+    for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
+    return ids;
   });
   for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
   return updatedIds;
@@ -283,9 +291,15 @@ export async function markWorkersStatusByTeam(
 export async function reconcileInactiveTeamWorkersForLead(
   leadSessionId: string,
 ): Promise<string[]> {
-  const updatedIds = await getDbClient().tx('orca.reconcileInactiveTeamWorkersForLead', {
-    leadSessionId,
-    now: Date.now(),
+  const candidateIds = await listActiveWorkerSessionIdsForInactiveTeams(leadSessionId);
+  const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    const ids = await getDbClient().tx('orca.reconcileInactiveTeamWorkersForLead', {
+      leadSessionId,
+      sessionIds: candidateIds,
+      now: Date.now(),
+    });
+    for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
+    return ids;
   });
   for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
   return updatedIds;
@@ -510,14 +524,44 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
  * 归档单个 worker session, 不牵连同 team 其他 worker。
  */
 export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  const result = await db
-    .update(sessions)
-    .set({ status: 'archived', updatedAt: now })
-    .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
-    .run();
-  if (result.changes > 0) broadcastSessionPatch(sessionId, { status: 'archived' });
+  const changed = await withSessionRouteLock(sessionId, async () => {
+    const result = await getDbClient().drizzle
+      .update(sessions)
+      .set({ status: 'archived', updatedAt: Date.now() })
+      .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
+      .run();
+    if (result.changes === 0) return false;
+    cleanupSessionRuntimeForTerminalStatus(sessionId, 'archived');
+    return true;
+  });
+  if (changed) broadcastSessionPatch(sessionId, { status: 'archived' });
+}
+
+async function listActiveWorkerSessionIdsForTeam(teamId: string): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ id: sessions.id })
+    .from(orcaWorkers)
+    .innerJoin(sessions, eq(orcaWorkers.sessionId, sessions.id))
+    .where(and(eq(orcaWorkers.teamId, teamId), eq(sessions.status, 'active')))
+    .orderBy(sessions.id);
+  return rows.map((row) => row.id);
+}
+
+async function listActiveWorkerSessionIdsForInactiveTeams(
+  leadSessionId: string,
+): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ id: sessions.id })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
+    .innerJoin(sessions, eq(orcaWorkers.sessionId, sessions.id))
+    .where(and(
+      eq(orcaTeams.leadSessionId, leadSessionId),
+      ne(orcaTeams.status, 'active'),
+      eq(sessions.status, 'active'),
+    ))
+    .orderBy(sessions.id);
+  return rows.map((row) => row.id);
 }
 
 export async function setSessionOrcaRole(

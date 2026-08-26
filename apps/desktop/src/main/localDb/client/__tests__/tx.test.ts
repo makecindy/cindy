@@ -42,6 +42,7 @@ CREATE TABLE sessions (
   orca_role TEXT,
   workspace_kind TEXT NOT NULL DEFAULT 'project',
   codex_history_has_product_prompt INTEGER,
+  codex_plan_json TEXT,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
   created_at INTEGER NOT NULL,
@@ -427,6 +428,52 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('claude.importMessages caps oversized tool_result content at the persistence limit', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      const cap = 8 * 1024;
+      const result = await client.tx('claude.importMessages', {
+        sessionId: 's1',
+        importClientIdPrefix: 'claude-import:',
+        sdkSessionId: 'sdk-1',
+        rows: [
+          {
+            lineNo: 8,
+            partIndex: 0,
+            role: 'tool_result',
+            content: 'z'.repeat(cap * 2),
+            toolUseId: 'tool-2',
+            agentMeta: null,
+            createdAt: 3100,
+          },
+          {
+            lineNo: 9,
+            partIndex: 0,
+            role: 'assistant',
+            content: { text: 'a'.repeat(cap * 2) },
+            toolUseId: null,
+            agentMeta: null,
+            createdAt: 3200,
+          },
+        ],
+      });
+
+      expect(result).toEqual({ changed: 2 });
+      const toolResult = (await client.queryOne(
+        'SELECT content FROM messages WHERE client_id = ?',
+        ['claude-import:8-0'],
+      )) as { content: string };
+      const storedText = JSON.parse(toolResult.content) as string;
+      expect(storedText.length).toBeLessThanOrEqual(cap);
+      expect(storedText).toContain('[tool result truncated');
+      const assistant = (await client.queryOne(
+        'SELECT content FROM messages WHERE client_id = ?',
+        ['claude-import:9-0'],
+      )) as { content: string };
+      expect((JSON.parse(assistant.content) as { text: string }).text.length).toBe(cap * 2);
+    });
+  });
+
   it('claude.importMessages does not rewrite rewound imported messages', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
@@ -468,40 +515,48 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('rewind.commit soft-deletes target-and-after messages and resets session context', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
-        ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
-      );
+  it.each([false, true])(
+    'rewind.commit soft-deletes messages and resets session context (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        await client.exec('UPDATE sessions SET codex_plan_json = ? WHERE id = ?', [
+          JSON.stringify({ turnId: 'turn-old', plan: [], state: 'sealed' }),
+          's1',
+        ]);
+        await client.exec(
+          'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+          ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
+        );
 
-      await client.tx('rewind.commit', {
-        sessionId: 's1',
-        targetCreatedAt: 200,
-        sdkSessionId: 'sdk-after-rewind',
-        now: 999,
-      });
+        await client.tx('rewind.commit', {
+          sessionId: 's1',
+          targetCreatedAt: 200,
+          sdkSessionId: 'sdk-after-rewind',
+          now: 999,
+        });
 
-      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
-        [
-          { id: 'm1', rewind_at: null },
-          { id: 'm2', rewind_at: 999 },
-        ],
-      );
-      await expect(
-        client.queryOne(
-          'SELECT user_send_at, context_tokens, context_window, sdk_session_id FROM sessions WHERE id = ?',
-          ['s1'],
-        ),
-      ).resolves.toEqual({
-        user_send_at: 999,
-        context_tokens: 0,
-        context_window: 0,
-        sdk_session_id: 'sdk-after-rewind',
-      });
-    });
-  });
+        await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
+          [
+            { id: 'm1', rewind_at: null },
+            { id: 'm2', rewind_at: 999 },
+          ],
+        );
+        await expect(
+          client.queryOne(
+            'SELECT user_send_at, context_tokens, context_window, sdk_session_id, codex_plan_json FROM sessions WHERE id = ?',
+            ['s1'],
+          ),
+        ).resolves.toEqual({
+          user_send_at: 999,
+          context_tokens: 0,
+          context_window: 0,
+          sdk_session_id: 'sdk-after-rewind',
+          codex_plan_json: null,
+        });
+      }, { useInlineWorker });
+    },
+  );
 
   it('rewind.commit uses target message id to avoid same-timestamp over-delete', async () => {
     await withClient(async (client) => {
@@ -1305,6 +1360,50 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('context.rebuild appends markers instead of deleting earlier rebuild boundaries', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['native-a', 's1']);
+      await client.tx('context.rebuild', {
+        sessionId: 's1',
+        markerId: 'rebuild-1',
+        markerClientId: 'rebuild-1',
+        markerContent: '{"reason":"context-overflow","sourceAgentKind":"cc"}',
+        markerCreatedAt: 1000,
+        updatedAt: 1000,
+      });
+      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['native-b', 's1']);
+      await client.tx('context.rebuild', {
+        sessionId: 's1',
+        markerId: 'rebuild-2',
+        markerClientId: 'rebuild-2',
+        markerContent: '{"reason":"context-overflow","sourceAgentKind":"codex"}',
+        markerCreatedAt: 2000,
+        updatedAt: 2000,
+      });
+      await expect(
+        client.query<{ id: string; content: string; rewind_at: number | null }>(
+          'SELECT id, content, rewind_at FROM messages WHERE session_id = ? AND role = ? ORDER BY created_at',
+          ['s1', 'context_rebuild'],
+        ),
+      ).resolves.toEqual([
+        {
+          id: 'rebuild-1',
+          content: '{"reason":"context-overflow","sourceAgentKind":"cc"}',
+          rewind_at: 1000,
+        },
+        {
+          id: 'rebuild-2',
+          content: '{"reason":"context-overflow","sourceAgentKind":"codex"}',
+          rewind_at: 2000,
+        },
+      ]);
+      await expect(
+        client.queryOne('SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({ sdk_session_id: null, updated_at: 2000 });
+    });
+  });
+
   it('session.agentSwitchFallback missing boundary rolls back sdk id clear', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
@@ -2002,11 +2101,16 @@ describe('db worker tx handlers', () => {
         }
 
         await expect(
-          client.tx('orca.archiveWorkersByTeam', { teamId: 'active-team', now: 100 }),
+          client.tx('orca.archiveWorkersByTeam', {
+            teamId: 'active-team',
+            sessionIds: ['active-worker'],
+            now: 100,
+          }),
         ).resolves.toEqual(['active-worker']);
         await expect(
           client.tx('orca.reconcileInactiveTeamWorkersForLead', {
             leadSessionId: 'lead',
+            sessionIds: ['orphan-worker'],
             now: 200,
           }),
         ).resolves.toEqual(['orphan-worker']);
@@ -2065,6 +2169,35 @@ describe('db worker tx handlers', () => {
       expect(results).toContainEqual({ ok: true, occupiedSlotsBefore: 0 });
       expect(results).toContainEqual({ ok: false, errorCode: 'WORKER_CREATION_IN_PROGRESS' });
     });
+  });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('rejects a worker link persisted after its team has ended in the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'late-worker', { orcaRole: 'worker' });
+      await client.exec(
+        'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ['team-1', 'lead', 'completed', 1, 2, 2],
+      );
+
+      await expect(client.tx('orca.upsertWorker', {
+        id: 'late-worker-link',
+        teamId: 'team-1',
+        sessionId: 'late-worker',
+        status: 'idle',
+        label: 'late',
+        role: 'reviewer',
+        focused: false,
+        now: 3,
+      })).rejects.toThrow('Orca team team-1 is no longer active');
+
+      await expect(
+        client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['late-worker-link']),
+      ).resolves.toBeUndefined();
+    }, { useInlineWorker });
   });
 
   it('counts terminal workers until their sessions are archived', async () => {

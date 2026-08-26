@@ -21,7 +21,10 @@ import {
   isBudgetModel,
   isChatEligible,
   isModelSelectableForNewRoute,
+  exclusiveXaiCatalogModelId,
+  isExclusiveXaiModelId,
   isSubscriptionDirectModel,
+  isSubscriptionDirectRoute,
   modelBadges,
   type ModelCategory,
 } from '../classification.js';
@@ -480,6 +483,35 @@ describe('isSubscriptionDirectModel(下沉自 shared/subscriptionModels,签名�
   });
   it('前缀清单恒为 chatgpt/ + xai/(路由/记账/排除三方共用,改动即破坏)', () => {
     expect(SUBSCRIPTION_DIRECT_MODEL_PREFIXES).toEqual(['chatgpt/', 'xai/']);
+  });
+});
+
+describe('isExclusiveXaiModelId / isSubscriptionDirectRoute', () => {
+  it('认 xai/ 前缀与裸 grok id,不认网关 x-ai/ 或其它厂商', () => {
+    expect(isExclusiveXaiModelId('xai/grok-4.6')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-4.6')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-4.6[1m]')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-build-0.1')).toBe(true);
+    expect(isExclusiveXaiModelId('x-ai/grok-4.6')).toBe(false);
+    expect(isExclusiveXaiModelId('xai/not-grok')).toBe(false);
+    expect(isExclusiveXaiModelId('claude-opus-5')).toBe(false);
+    expect(isExclusiveXaiModelId('chatgpt/gpt-5.5')).toBe(false);
+    expect(isExclusiveXaiModelId(null)).toBe(false);
+  });
+
+  it('isSubscriptionDirectRoute 覆盖前缀与独占裸 id', () => {
+    expect(isSubscriptionDirectRoute('xai/grok-4.6')).toBe(true);
+    expect(isSubscriptionDirectRoute('grok-4.6')).toBe(true);
+    expect(isSubscriptionDirectRoute('chatgpt/gpt-5.5')).toBe(true);
+    expect(isSubscriptionDirectRoute('x-ai/grok-4.6')).toBe(false);
+    expect(isSubscriptionDirectRoute('claude-opus-5')).toBe(false);
+  });
+
+  it('exclusiveXaiCatalogModelId 把裸 grok 归一成 xai/ 目录 id', () => {
+    expect(exclusiveXaiCatalogModelId('grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('xai/grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('x-ai/grok-4.6')).toBeNull();
+    expect(exclusiveXaiCatalogModelId('claude-opus-5')).toBeNull();
   });
 });
 

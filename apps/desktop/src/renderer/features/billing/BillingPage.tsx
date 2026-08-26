@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronUp,
   CircleDollarSign,
+  Copy,
   CreditCard,
   ExternalLink,
   PackageOpen,
@@ -141,12 +142,11 @@ function isAwaitingPaymentOrder(order: BillingPaymentOrder): boolean {
   return phaseForOrder(order) === 'AWAITING_PAYMENT';
 }
 
-/**
- * 订单号在界面上只做「认得出是哪一单」用,全长展示会把左列挤没 —— 截断展示、完整值
- * 挂 title。截断取头部:服务端订单号带随机前缀,头 8 位已足够区分。
- */
-function shortOrderId(orderId: string): string {
-  return orderId.length > 8 ? orderId.slice(0, 8) : orderId;
+/** 订单号展示保留首尾用于对单，中段固定脱敏；复制仍使用服务端返回的完整原值。 */
+function maskedOrderId(orderId: string): string {
+  if (orderId.length <= 2) return '*'.repeat(orderId.length);
+  const visibleEdgeLength = Math.min(8, Math.floor((orderId.length - 1) / 2));
+  return `${orderId.slice(0, visibleEdgeLength)}****${orderId.slice(-visibleEdgeLength)}`;
 }
 
 function decimalParts(value: string): { value: bigint; scale: number } | null {
@@ -1752,6 +1752,14 @@ function OrderHistoryCard({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const copyOrderId = async (orderId: string) => {
+    try {
+      await navigator.clipboard.writeText(orderId);
+      toast.success(t('billing.orders.copy.success'));
+    } catch {
+      toast.error(t('billing.orders.copy.failed'));
+    }
+  };
   /**
    * 支付方式只有在服务端还带着本单的支付动作时才知道 —— 订单投影(shared/billing.ts 的
    * BillingPaymentOrder)里没有收单渠道字段,终态订单通常也不再带 paymentAction。整批都
@@ -1788,13 +1796,25 @@ function OrderHistoryCard({
               <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
                 {formatLedgerTimestamp(order.createdAt, billingLocale)}
               </p>
-              {/* 订单号只用来对单,截断展示、完整值挂 title(客服场景要能复制全长)。 */}
-              <p
-                title={order.orderId}
-                className="mt-1 truncate font-mono text-10 text-[var(--text-tertiary)]"
+              {/* 可见值只露首尾；整块按钮含 Copy 图标，点击任一位置都复制完整订单号。 */}
+              <button
+                type="button"
+                onClick={() => void copyOrderId(order.orderId)}
+                aria-label={t('billing.orders.copy.action', {
+                  id: maskedOrderId(order.orderId),
+                })}
+                className={cn(
+                  '-ml-1.5 mt-0.5 inline-flex max-w-full cursor-pointer select-none items-center gap-1 rounded-full px-1.5 py-0.5 text-left',
+                  'font-mono text-10 text-[var(--text-tertiary)] transition-colors',
+                  'hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-secondary)]',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                )}
               >
-                {t('billing.orders.orderId', { id: shortOrderId(order.orderId) })}
-              </p>
+                <span className="min-w-0 break-all">
+                  {t('billing.orders.orderId', { id: maskedOrderId(order.orderId) })}
+                </span>
+                <Copy aria-hidden="true" size={11} className="shrink-0" />
+              </button>
             </div>
             <p className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]">
               {formatMoney(order.amount, order.currency, billingLocale)}

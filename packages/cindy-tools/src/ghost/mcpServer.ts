@@ -9,6 +9,7 @@ import type {
   CindyGhostSetupAssessment,
   CindyGhostSetupPlan,
   CindyGhostsMcpDeps,
+  CindyMediaCapability,
 } from "../types.js";
 import {
   buildForgeGuideToc,
@@ -66,13 +67,16 @@ const D_GHOST_CALL = [
   "call_tool 两个工具,具体操作(如 create_pull_request_review)不是顶层 tool,必须经 call_tool",
   '下发——ghost_call({ghost_id, tool:"call_tool", args:{name:"<操作名>", args:{...}}});',
   "把操作名当 tool 直接调会返回 TOOL_NOT_FOUND,此时按上述形态改写重试,不要判定插件无此能力。",
-  "执行发生在该插件的独立沙箱中(无文件/网络访问,用 AI 走主机统一通道)。",
+  "执行发生在该插件的独立沙箱中；插件不能直接访问 Host 文件、网络或进程。",
+  "当前 Agent 调用链内，插件可以凭主机下发的 callId 经 cindy.fs / cindy.fetch",
+  "请求工作目录文件或 HTTPS 能力；随包代码与 CLI 继续走插件已有的 Node 工作进程。",
+  "插件工具是否执行由 ghost_call 的现有 Agent 授权决定，不另设进程执行通道。",
   "用户的图片/媒体文件要交给插件处理时,把其地址放进顶层 attachments",
   "(不是塞进 args):主机会把图过户给该插件并以指纹注入 args.attachments,插件",
-  "声明的工具若接受图片输入即可使用——这是插件触碰用户图片的唯一通道。",
+  "声明的工具若接受媒体输入即可使用。生成结果仍由 Agent 显式交给插件,Host 不自动回调插件。",
   "要把一个本地目录或单个文件交给插件上传(如部署构建产物)时,把其**绝对路径**放进",
   "顶层 dir(不是塞进 args):主机会收集文件并以",
-  "一次性票据注入 args.dir_deposit,插件凭票上传——这是插件触碰用户目录的唯一通道。",
+  "一次性票据注入 args.dir_deposit,供需要把选定目录或单文件整体交给插件的工具上传。",
   "过户钳制(attachments / dir / save_dir 通用):路径在当前会话工作目录内直接放行;",
   "工作目录外若是本地 Full Access(bypassPermissions)会话则自动过户、不弹卡;其它权限档及",
   "远程会话仍向用户弹确认卡,被拒绝/超时后不要重试,转告用户即可。Full Access 自动交接",
@@ -89,15 +93,28 @@ const D_GHOST_CALL = [
   "DIR_INVALID(目录过户失败,查 message)/ INTERNAL。遇到 NOT_FOUND 类错误,已知目标时重查 ghost_info,否则用 ghost_list 看全量。",
 ].join("\n");
 
+const D_MEDIA = [
+  "Cindy Core 的低级媒体接口，供当前 Agent 执行插件提供的上层能力；插件负责场景语义和可选 UI，Core 负责模型调用与媒体交付。",
+  "常规链路是 Agent 先调用插件工具，读取插件返回的普通 JSON，再自行调用本工具；不存在 mediaIntent 等保留结果格式，Host 也不会自动把插件结果转成本工具调用。",
+  "如果插件需要消费最终结果，Agent 可在本工具成功后再调用插件声明的普通工具，并通过 ghost_call.attachments 显式交接；这不是生成请求的必经步骤。",
+  "模型存在性来自当前账号的 Model Access model group；list_models 只投影同时满足 Gateway modalities、Guide operation 与当前客户端协议支持度的可执行模型。",
+  "媒体生成必须由当前 Agent 通过本工具发起；插件面板和插件沙箱代码不得直接提交生成请求。",
+  "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
+  "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
+  "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
+  "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
+  "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
+].join("\n");
+
 const D_GHOST_FORGE_GUIDE = [
   "获取《插件(Ghost)编写手册》——为用户制作/修改插件(.cindy 能力包)前必读。",
-  "手册随主机版本走,包含:设计对齐提问清单、ghost.json 身份卡全字段、全部卡槽、",
+  "手册随主机版本走,包含:设计对齐提问清单、ghost.json 身份卡全字段、直接能力声明、",
   "管子 API(cindy.send)、面板与主题、沙箱红线、打包与测试流程。整本超出单次工具",
   '结果上限,分章取用:不传参数返回目录,传 section(章号如 "4.7" 或章标题关键词如',
   '"network")返回单章正文。用户说"帮我做一个 XX 插件 / 改一下某插件"时,先取目录、',
   "先按第 0 章「设计对齐」用带选项的提问卡片和用户确认界面形态(停靠面板/插件页内",
   "面板/纯工具)等关键决策,再按需读相关章;新插件可用 ghost_forge_scaffold 生成骨架,",
-  "修改完成后再用 ghost_forge_pack 打包装入。",
+  "修改完成后缺省用 ghost_forge_pack 校验并生成 .cindy 产物；只有用户明确要求直接安装或更新时，才调用独立的 ghost_forge_install。本工具自身不安装插件。",
 ].join("\n");
 
 const D_GHOST_FORGE_SCAFFOLD = [
@@ -108,14 +125,51 @@ const D_GHOST_FORGE_SCAFFOLD = [
 ].join("\n");
 
 const D_GHOST_FORGE_PACK = [
-  "把一个插件源码目录校验并打包成 .cindy,随后主机会弹出装入确认框(同 id 已装则显示",
-  '"更新 vX → vY")——装不装永远由用户在弹窗上决定,本工具不会私自装入。',
+  "把一个插件源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件。",
+  "缺省只打包并返回产物路径；intent=publish 时额外返回一次性 publishToken。",
+  "intent=publish 仅企业组织成员可用；个人账号仍可使用缺省的纯打包模式。",
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
   "隐藏文件 / *.cindy)。仅当用户明确选择 AI 生成图标时,可把图片工具结果的",
   "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入,失败保留默认图标继续打包。",
   "失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
-  "按 message 修正源码后重新打包即可。打包成功 ≠ 已装入:告知用户去点确认框。",
+  "按 message 修正源码后重新打包即可。成功只表示 cindyPath 对应的产物已经生成；",
+  "只有用户明确发起安装后，插件才会进入 Cindy。publish 同样不会触发装入。",
 ].join("\n");
+
+const D_GHOST_FORGE_INSTALL = [
+  "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 已安装时原位更新。",
+  "只有用户明确要求安装或更新当前插件时才调用。不要因为 scaffold 或 pack 成功就自动调用。",
+  "首次安装后直接启用；更新保留原有启用状态、配置、数据与面板位置，同版本也可覆盖。",
+  "dir 传当前会话工作目录内的插件源码目录绝对路径。成功返回本次真实执行的是 installed 还是 updated；",
+  "仅当用户明确选择 AI 生成图标时，可像 ghost_forge_pack 一样传 icon_source。",
+  "失败返回打包校验或 Host 安装事务的结构化错误。ghost_forge_pack 始终只打包，不受本工具影响。",
+].join("\n");
+
+const D_GHOST_FORGE_PUBLISH = [
+  "把 ghost_forge_pack(intent=publish) 刚打出的确切插件包发布到当前登录组织。token 传 pack 返回的一次性 publishToken,不能传文件路径。",
+  "仅企业组织成员可用;个人账号不可用。",
+  "本工具立即返回 transferId(以及稍后才有的 uploadId),传输在后台跑;",
+  "用 ghost_forge_publish_status 查阶段与结果。不要把它和 ghost_forge_pack 混成一次调用:",
+  "打包失败和发布失败语义不同。主机会弹出确认屏(组织 / 插件 id / 版本 / 大小),",
+  "用户确认后才真正开传。立即失败会返回结构化 code；传输开始后的失败看 status 的 message,",
+  "不要按固定枚举分支。",
+].join("\n");
+
+const D_GHOST_FORGE_PUBLISH_STATUS = [
+  "查询一次 ghost_forge_publish 后台传输的当前状态。transferId 来自 publish 的立即返回。",
+  "status 变成 succeeded 即可告知用户已提交、等待管理员审核并收口;不要守着轮询 reviewStatus,",
+  "等用户下次问起时再查一次。errorCode / message 是自由字符串,读 message 向用户说明,",
+  "不要按固定枚举分支。",
+].join("\n");
+
+export const ghostForgePublishInputSchema = z
+  .object({
+    token: z
+      .string()
+      .min(1)
+      .describe("ghost_forge_pack(intent=publish) 返回的一次性 publishToken"),
+  })
+  .strict();
 
 /**
  * 花名册 recall 召回线索(whenToUse 优先、description 回落)的截断上限,
@@ -479,6 +533,110 @@ function sanitizeGhostInfo(ghost: CindyGhostInfo): CindyGhostInfo {
     ...safeGhost,
     ...(setup ? { setup } : {}),
   };
+}
+
+const MEDIA_CAPABILITIES = new Set<CindyMediaCapability>([
+  "image.generate",
+  "image.edit",
+  "video.generate",
+  "video.image_to_video",
+]);
+
+/** Core media 工具 handler；只做 MCP snake_case 边界到 Host 稳定类型的转换。 */
+export async function handleMedia(
+  deps: CindyGhostsMcpDeps,
+  input: {
+    action: "list_models" | "prepare" | "request" | "poll";
+    capability?: CindyMediaCapability;
+    provider_id?: string;
+    model_id?: string;
+    invocation_id?: string;
+    body?: Record<string, unknown>;
+  },
+): Promise<McpTextResult> {
+  if (!deps.callMedia) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "MEDIA_NOT_SUPPORTED",
+        message: "当前 Cindy Host 尚未提供原生媒体调用能力。",
+      },
+      true,
+    );
+  }
+  if (input.capability && !MEDIA_CAPABILITIES.has(input.capability)) {
+    return textResult(
+      { ok: false, errorCode: "INVALID_INPUT", message: "capability 不受支持。" },
+      true,
+    );
+  }
+  try {
+    let result: Record<string, unknown>;
+    if (input.action === "list_models") {
+      result = await deps.callMedia({
+        action: "list_models",
+        ...(input.capability ? { capability: input.capability } : {}),
+      });
+    } else if (input.action === "prepare") {
+      if (!input.model_id || !input.capability) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: "INVALID_INPUT",
+            message: "prepare 必须提供 model_id 和 capability。",
+          },
+          true,
+        );
+      }
+      result = await deps.callMedia({
+        action: "prepare",
+        ...(input.provider_id ? { providerId: input.provider_id } : {}),
+        modelId: input.model_id,
+        capability: input.capability,
+      });
+    } else if (input.action === "request") {
+      if (!input.invocation_id || !input.body) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: "INVALID_INPUT",
+            message: "request 必须提供 invocation_id 和 body。",
+          },
+          true,
+        );
+      }
+      result = await deps.callMedia({
+        action: "request",
+        invocationId: input.invocation_id,
+        body: input.body,
+      });
+    } else {
+      if (!input.invocation_id) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: "INVALID_INPUT",
+            message: "poll 必须提供 invocation_id。",
+          },
+          true,
+        );
+      }
+      result = await deps.callMedia({
+        action: "poll",
+        invocationId: input.invocation_id,
+      });
+    }
+    return textResult(result, result.ok === false);
+  } catch (err) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      true,
+    );
+  }
 }
 
 /** ghost_list 的 handler 主体(导出供单测)。 */
@@ -894,11 +1052,12 @@ export async function handleForgeScaffold(
 /** ghost_forge_pack 的 handler 主体(导出供单测)。 */
 export async function handleForgePack(
   deps: CindyGhostsMcpDeps,
-  input: { dir: string; icon_source?: string },
+  input: { dir: string; icon_source?: string; intent?: "publish" },
 ): Promise<McpTextResult> {
   try {
     const result = await deps.forgePack({
       dir: input.dir,
+      ...(input.intent !== undefined ? { intent: input.intent } : {}),
       ...(input.icon_source !== undefined ? { iconSource: input.icon_source } : {}),
     });
     if (!result.ok) {
@@ -906,6 +1065,85 @@ export async function handleForgePack(
         dir: input.dir,
         errorCode: result.errorCode,
       });
+      return textResult(result, true);
+    }
+    return textResult(result);
+  } catch (err) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      true,
+    );
+  }
+}
+
+/** ghost_forge_install 的 handler 主体(导出供单测)。 */
+export async function handleForgeInstall(
+  deps: CindyGhostsMcpDeps,
+  input: { dir: string; icon_source?: string },
+): Promise<McpTextResult> {
+  try {
+    const result = await deps.forgeInstall({
+      dir: input.dir,
+      ...(input.icon_source !== undefined ? { iconSource: input.icon_source } : {}),
+    });
+    if (!result.ok) {
+      deps.logger?.warn("ghost_forge_install rejected", {
+        dir: input.dir,
+        errorCode: result.errorCode,
+      });
+      return textResult(result, true);
+    }
+    return textResult(result);
+  } catch (err) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      true,
+    );
+  }
+}
+
+/** ghost_forge_publish 的 handler 主体(导出供单测)。 */
+export async function handleForgePublish(
+  deps: CindyGhostsMcpDeps,
+  input: { token: string },
+): Promise<McpTextResult> {
+  try {
+    const result = await deps.forgePublish({ token: input.token });
+    if (!result.ok) {
+      deps.logger?.warn("ghost_forge_publish rejected", {
+        errorCode: result.errorCode,
+      });
+      return textResult(result, true);
+    }
+    return textResult(result);
+  } catch (err) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      true,
+    );
+  }
+}
+
+/** ghost_forge_publish_status 的 handler 主体(导出供单测)。 */
+export async function handleForgePublishStatus(
+  deps: CindyGhostsMcpDeps,
+  input: { transferId: string },
+): Promise<McpTextResult> {
+  try {
+    const result = await deps.forgePublishStatus({ transferId: input.transferId });
+    if (!result.ok) {
       return textResult(result, true);
     }
     return textResult(result);
@@ -984,14 +1222,14 @@ export function createCindyGhostsMcpServer(
         .boolean()
         .optional()
         .describe(
-          "可选:true = 本次调用只做 attachments 批量交接、不执行工具(tool/args/dir/save_dir 全部被忽略)。非 Full Access 下计划连续使用多个工作目录外文件时必须先走一次,attachments 上限放宽到 32 张,让用户在一张确认卡上批完。Full Access 下不弹卡,且该自动交接不会建立降档后仍生效的人工永久授权。",
+          "可选:true = 本次调用只做 attachments 批量交接、不执行工具(tool/args/dir/save_dir 全部被忽略)。非 Full Access 下计划连续使用多个工作目录外文件时必须先走一次,attachments 上限放宽到 32 项,让用户在一张确认卡上批完。Full Access 下不弹卡,且该自动交接不会建立降档后仍生效的人工永久授权。",
         ),
       attachments: z
         .array(z.string())
         .max(32)
         .optional()
         .describe(
-          "可选,普通调用 ≤4 张(grant_only 批量交接 ≤32 张):要交给插件的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径——工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。仅在用户明确要拿自己的文件给插件处理时使用;非媒体类型文件改用顶层 dir。",
+          "可选,普通调用 ≤4 项(grant_only 批量交接 ≤32 项):要交给插件处理或收录的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径——工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。用户明确交出的媒体与当前 Agent / Core 工具刚生成、目标插件工具明确要求接收的结果都可使用;非媒体类型文件改用顶层 dir。",
         ),
       dir: z
         .string()
@@ -1013,6 +1251,45 @@ export function createCindyGhostsMcpServer(
     },
     async (input, extra) =>
       handleGhostCall(deps, input, extractAgentToolUseId(extra)),
+  );
+
+  server.tool(
+    "media",
+    D_MEDIA,
+    {
+      action: z
+        .enum(["list_models", "prepare", "request", "poll"])
+        .describe("要执行的媒体调用阶段"),
+      capability: z
+        .enum([
+          "image.generate",
+          "image.edit",
+          "video.generate",
+          "video.image_to_video",
+        ])
+        .optional()
+        .describe("list_models 的可选筛选项；prepare 时必填"),
+      model_id: z
+        .string()
+        .max(256)
+        .optional()
+        .describe("prepare 时必填；使用插件返回的已配置 model_id，或来自本次 list_models"),
+      provider_id: z
+        .string()
+        .max(128)
+        .optional()
+        .describe("prepare 时可选；插件或 list_models 返回 provider_id 时必须原样传入，以区分同名模型的执行来源"),
+      invocation_id: z
+        .string()
+        .max(128)
+        .optional()
+        .describe("request / poll 时必填；必须来自 prepare 返回"),
+      body: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe("request 时必填；严格按 prepare 返回的说明组装，不含 model/endpoint/header"),
+    },
+    async (input) => handleMedia(deps, input),
   );
 
   server.tool(
@@ -1060,8 +1337,47 @@ export function createCindyGhostsMcpServer(
         .describe(
           "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败会保留默认图标继续打包",
         ),
+      intent: z
+        .enum(["publish"])
+        .optional()
+        .describe(
+          "缺省不传:只打包并返回产物路径；publish:额外返回一次性发布票据。publish 仅企业组织成员可用，个人账号仍可使用缺省的纯打包模式",
+        ),
     },
     async (input) => handleForgePack(deps, input),
+  );
+
+  server.tool(
+    "ghost_forge_install",
+    D_GHOST_FORGE_INSTALL,
+    {
+      dir: z.string().describe("插件源码目录的绝对路径(目录里须有 ghost.json)"),
+      icon_source: z
+        .string()
+        .optional()
+        .describe(
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 cindy-media:// 地址；失败会保留默认图标继续安装",
+        ),
+    },
+    async (input) => handleForgeInstall(deps, input),
+  );
+
+  server.registerTool(
+    "ghost_forge_publish",
+    {
+      description: D_GHOST_FORGE_PUBLISH,
+      inputSchema: ghostForgePublishInputSchema,
+    },
+    async (input) => handleForgePublish(deps, input),
+  );
+
+  server.tool(
+    "ghost_forge_publish_status",
+    D_GHOST_FORGE_PUBLISH_STATUS,
+    {
+      transferId: z.string().describe("ghost_forge_publish 立即返回的 transferId"),
+    },
+    async (input) => handleForgePublishStatus(deps, input),
   );
 
   return server;

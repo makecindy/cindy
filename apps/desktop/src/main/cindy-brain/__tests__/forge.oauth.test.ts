@@ -32,13 +32,24 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
     expect(FORGE_GUIDE).toContain('`/secrets`、`/oauth`、`/wake`');
   });
 
-  it('redirectPort / tokenBroker 两个授权细节字段在场(§2 样例 + §4.7 说明 + 拒装原因)', () => {
+  it('redirectPort 与 tokenBroker 三路资格在场(§2 样例 + §4.7 说明 + 拒装原因)', () => {
     for (const marker of [
       '"redirectPort"',
       '"tokenBroker"',
       'redirectPort 不是 1024–65535 整数',
-      'tokenBroker 与 clientSecret 同时声明',
-      '仅第一方官方意识可用',
+      'tokenBroker 没同时声明 redirectPort',
+      '或与 clientSecret 同时声明',
+      '三路资格',
+      '静态官方前缀照旧放行',
+      '当前组织的服务端',
+      'organization market 包已安装',
+      'organizationId 与当前组织一致',
+      'release sha256 与批准 receipt 的 packageSha256 相等',
+      '企业作者通过 `ghost_forge_install` 明确安装',
+      '手动导入不属于 Forge 路径',
+      '只给 Broker',
+      '不给宿主原语',
+      '总长不得超过 64 字符',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

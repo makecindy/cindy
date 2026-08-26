@@ -43,6 +43,8 @@ export type SendToSessionCallback = (params: {
       wakeKind: "resumed" | "already-active" | "created" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
+      /** jump 进入队列时的可寻址句柄，可用于本人编辑/撤回。 */
+      queuedMessageId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
       worktreePath?: string | null;
       model?: string;
@@ -218,6 +220,7 @@ export function registerSendToSessionTool(
         wake_kind: result.wakeKind,
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
+        ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
         worktree_path: result.worktreePath ?? null,
         ...(result.model !== undefined ? { model: result.model } : {}),
         ...(result.effort !== undefined ? { effort: result.effort } : {}),

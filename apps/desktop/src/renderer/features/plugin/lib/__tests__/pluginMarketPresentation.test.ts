@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PluginMarketItem } from '../../../../../shared/pluginMarket';
 import {
+  canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
   orderPluginCatalogItems,
@@ -84,9 +85,9 @@ describe('pluginPresentationOrigin', () => {
   });
 
   it('maps organization plugins to their organization source', () => {
-    expect(
-      pluginPresentationOrigin({ scope: 'organization', sourceType: 'server' }),
-    ).toBe('organization');
+    expect(pluginPresentationOrigin({ scope: 'organization', sourceType: 'server' })).toBe(
+      'organization',
+    );
   });
 
   it('keeps personal plugins out of the client-facing market taxonomy', () => {
@@ -94,9 +95,7 @@ describe('pluginPresentationOrigin', () => {
   });
 
   it('maps custom market sources to the custom origin regardless of scope', () => {
-    expect(pluginPresentationOrigin({ scope: 'public', sourceType: 'git-market' })).toBe(
-      'custom',
-    );
+    expect(pluginPresentationOrigin({ scope: 'public', sourceType: 'git-market' })).toBe('custom');
     expect(pluginPresentationOrigin({ scope: 'public', sourceType: 'local-market' })).toBe(
       'custom',
     );
@@ -203,5 +202,14 @@ describe('orderPluginCatalogItems', () => {
     expect(
       ordered.map(({ kind, item }) => `${kind}:${kind === 'installed' ? item.id : item.ghostId}`),
     ).toEqual(['market:first', 'installed:third']);
+  });
+});
+
+describe('canOfferMarketInstall', () => {
+  it('hides install for signed-out browsing and local account-managed plugins', () => {
+    expect(canOfferMarketInstall('signed-out', 'cindy-test')).toBe(false);
+    expect(canOfferMarketInstall('local', 'cindy-art')).toBe(false);
+    expect(canOfferMarketInstall('local', 'cindy-test')).toBe(true);
+    expect(canOfferMarketInstall('cloud', 'cindy-art')).toBe(true);
   });
 });

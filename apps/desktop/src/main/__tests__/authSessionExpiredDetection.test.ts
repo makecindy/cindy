@@ -185,7 +185,7 @@ describe('desktop auth session-expiry detection', () => {
     );
   });
 
-  it('requires every Ghost runtime lookup to match the durable projection owner', () => {
+  it('gates Ghost runtime lookups only on the process-local AppSession boundary', () => {
     const ghostSource = readFileSync(
       resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
       'utf8',
@@ -193,12 +193,23 @@ describe('desktop auth session-expiry detection', () => {
     const start = ghostSource.indexOf('export function isGhostAvailableForActiveSession(');
     const end = ghostSource.indexOf('\n}\n', start);
     const body = ghostSource.slice(start, end);
-    expect(body).toContain('isGhostSkillProjectionBoundaryStableForOwner(activeOwner)');
+    expect(body).toContain('isAppSessionBoundaryPending()');
+    expect(body).toContain('getAppCapabilities().canUseCindyAccountServices');
+    expect(body).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
 
     const requireStart = ghostSource.indexOf('function requireGhostAvailableForActiveSession(');
     const requireEnd = ghostSource.indexOf('\n}\n', requireStart);
     const requireBody = ghostSource.slice(requireStart, requireEnd);
     expect(requireBody).toContain("throwIpcError(\n        'PRECONDITION_FAILED'");
     expect(requireBody).toContain('isAppSessionBoundaryPending()');
+    expect(requireBody).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
+    // The durable Ghost projection is shared by sibling instances and is not a
+    // runtime authorization source. Only this process's active owner switch is
+    // retryable; a settled session without account capability remains denied.
+    const boundaryPendingIndex = requireBody.indexOf('isAppSessionBoundaryPending()');
+    const permissionDeniedIndex = requireBody.indexOf("'PERMISSION_DENIED'");
+    expect(boundaryPendingIndex).toBeGreaterThan(-1);
+    expect(permissionDeniedIndex).toBeGreaterThan(-1);
+    expect(boundaryPendingIndex).toBeLessThan(permissionDeniedIndex);
   });
 });

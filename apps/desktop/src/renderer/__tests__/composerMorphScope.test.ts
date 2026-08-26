@@ -32,6 +32,15 @@ describe('composer morph scope', () => {
     expect(modelSelector).toContain('<PopoverTrigger asChild>{trigger}</PopoverTrigger>');
   });
 
+  it('composer 选完模型后把焦点送回输入框;设置页不传 restoreFocusTarget', () => {
+    expect(chatInput).toContain('restoreFocusTarget={composerSuggestionFocusTarget}');
+    expect(modelSelector).toContain('restoreFocusTarget?: () => HTMLElement | null');
+    expect(modelSelector).toContain('onMouseDown={morphEnabled ? (event) => event.preventDefault() : undefined}');
+    expect(settingsModel).not.toContain('restoreFocusTarget');
+    expect(subagentModel).not.toContain('restoreFocusTarget');
+    expect(createWorker).not.toContain('restoreFocusTarget');
+  });
+
   it('PermissionSelector / ExtraDirsButton 仅 composer 使用,恒走脱身上浮 morph(无 opt-in、无 Radix 回退)', () => {
     expect(permissionSelector).not.toContain('useMorphPopover');
     expect(extraDirsButton).not.toContain('useMorphPopover');
@@ -67,5 +76,18 @@ describe('设置字段里的 AgentSelect 宽度契约', () => {
     const morph = read('components/ui/morph-popover.tsx');
     expect(morph).toContain("panelWidthMode?: 'content' | 'trigger'");
     expect(morph).toContain('desiredW = chipRect.width;');
+  });
+});
+
+// + 菜单嵌在 480 宽、1px 边框的 Morph 壳里。内层再写死 480 会横向溢出 2px,
+// 打开瞬间 scrollIntoView 点亮 .is-scrolling,底部闪 2 秒横向滚动条。
+describe('+ 菜单 embedded 宽度契约', () => {
+  it('embedded AtMentionPanel 跟 Morph 壳等宽,横轴 overflow 显式 hidden', () => {
+    const atMention = read('components/new-chat/AtMentionPanel.tsx');
+    const morph = read('components/ui/morph-popover.tsx');
+    expect(atMention).toContain("embedded ? 'w-full min-w-0' : 'w-[480px]'");
+    expect(atMention).toContain('overflow-x-hidden overflow-y-auto');
+    expect(morph).toContain('overflow-x-hidden overflow-y-hidden');
+    expect(morph).toContain("content.style.overflowX = 'hidden'");
   });
 });

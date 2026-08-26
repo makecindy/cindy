@@ -14,6 +14,7 @@ const i18n = {
 };
 
 const uiMocks = vi.hoisted(() => ({
+  clipboardWriteText: vi.fn(),
   confirm: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
@@ -103,6 +104,11 @@ import { BillingPage } from '../BillingPage';
 import * as QRCode from 'qrcode';
 
 beforeEach(() => {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: uiMocks.clipboardWriteText },
+  });
+  uiMocks.clipboardWriteText.mockReset().mockResolvedValue(undefined);
   uiMocks.confirm.mockReset().mockResolvedValue(false);
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
@@ -2772,22 +2778,93 @@ describe('BillingPage order history', () => {
     return listOrders;
   };
 
-  it('lists the most recent orders with amount, id and status', async () => {
-    install([order()]);
+  it('lists the most recent orders with amount, masked id and status', async () => {
+    const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
+    install([order({ orderId: fullOrderId })]);
 
     render(<BillingPage />);
 
     expect(await screen.findByText('billing.orders.title')).toBeTruthy();
     expect(screen.getByText('billing.orders.count:{"count":1}')).toBeTruthy();
     expect(screen.getByText('billing.orders.description')).toBeTruthy();
-    // 订单号截断展示、完整值挂 title(客服场景要能复制全长)。
-    expect(screen.getByText('billing.orders.orderId:{"id":"ord_8f21"}').title).toBe(
-      'ord_8f21c4de9a',
-    );
+    // 展示首尾并固定脱敏中段，不把完整订单号写进可见文本或原生 title。
+    const orderIdButton = screen.getByRole('button', {
+      name: 'billing.orders.copy.action:{"id":"c2309a98****51f13c7f"}',
+    });
     expect(
-      screen.getByText(new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' }).format(33)),
+      within(orderIdButton).getByText('billing.orders.orderId:{"id":"c2309a98****51f13c7f"}'),
+    ).toBeTruthy();
+    expect(orderIdButton.getAttribute('title')).toBeNull();
+    expect(screen.queryByText(`billing.orders.orderId:{"id":"${fullOrderId}"}`)).toBeNull();
+    expect(orderIdButton.querySelector('svg')).toBeTruthy();
+    expect(
+      screen.getByText(
+        new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' }).format(33),
+      ),
     ).toBeTruthy();
     expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+  });
+
+  it('copies the complete order id from both the id text and copy icon', async () => {
+    const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
+    install([order({ orderId: fullOrderId })]);
+
+    render(<BillingPage />);
+
+    const orderIdButton = await screen.findByRole('button', {
+      name: 'billing.orders.copy.action:{"id":"c2309a98****51f13c7f"}',
+    });
+    const maskedText = within(orderIdButton).getByText(
+      'billing.orders.orderId:{"id":"c2309a98****51f13c7f"}',
+    );
+    const copyIcon = orderIdButton.querySelector('svg');
+    expect(copyIcon).toBeTruthy();
+
+    fireEvent.click(maskedText);
+    await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith(fullOrderId));
+    expect(uiMocks.toastSuccess).toHaveBeenCalledWith('billing.orders.copy.success');
+
+    uiMocks.clipboardWriteText.mockClear();
+    fireEvent.click(copyIcon!);
+    await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith(fullOrderId));
+  });
+
+  it('masks short ids, distinguishes copy targets and keeps the control shrinkable', async () => {
+    const shortOrderId = 'ord_8f21c4de9a';
+    const otherOrderId = '1234567890abcdefghi';
+    install([order({ orderId: shortOrderId }), order({ orderId: otherOrderId })]);
+
+    render(<BillingPage />);
+
+    const shortOrderButton = await screen.findByRole('button', {
+      name: 'billing.orders.copy.action:{"id":"ord_8f****c4de9a"}',
+    });
+    expect(
+      within(shortOrderButton).getByText('billing.orders.orderId:{"id":"ord_8f****c4de9a"}'),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: 'billing.orders.copy.action:{"id":"12345678****bcdefghi"}',
+      }),
+    ).toBeTruthy();
+    expect(shortOrderButton.className).toContain('max-w-full');
+    expect(shortOrderButton.querySelector('span')?.className).toContain('break-all');
+  });
+
+  it('explains how to recover when copying an order id fails', async () => {
+    uiMocks.clipboardWriteText.mockRejectedValueOnce(new Error('clipboard denied'));
+    install([order()]);
+
+    render(<BillingPage />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'billing.orders.copy.action:{"id":"ord_8f****c4de9a"}',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(uiMocks.toastError).toHaveBeenCalledWith('billing.orders.copy.failed'),
+    );
   });
 
   it('asks the server for exactly the ten most recent orders', async () => {

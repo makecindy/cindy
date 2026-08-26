@@ -23,4 +23,9 @@ describe('Pinned sidebar section', () => {
     expect(titleButtonBlock).not.toContain('text-[var(--text-tertiary)]');
     expect(titleButtonBlock).not.toContain('hover:text-[var(--text-secondary)]');
   });
+
+  it('passes source labels to pinned list cards as well as text rows', () => {
+    expect(pinnedSectionSource).toContain('sourceLabel={sourceLabelMap.get(session.id)}');
+    expect(pinnedSectionSource).toContain('sourceLabel={sourceLabelMap.get(entry.session.id)}');
+  });
 });

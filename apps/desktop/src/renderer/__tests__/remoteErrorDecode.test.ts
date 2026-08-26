@@ -29,4 +29,14 @@ describe('decodeRemoteErrorMessage', () => {
   it('decodes remote agent errors while preserving fallback text for missing keys', () => {
     expect(decodeRemoteErrorMessage('[REMOTE_UNKNOWN] fallback message')).toBe('fallback message');
   });
+
+  it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
+    expect(
+      decodeRemoteErrorMessage(
+        '[AUTO_REVIEW_CONFIRM_UNDELIVERED] Automatic review was unavailable, and the confirmation request was not completed.',
+      ),
+    ).toBe(
+      'Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.',
+    );
+  });
 });

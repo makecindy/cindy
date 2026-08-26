@@ -1,4 +1,5 @@
 import type { InvokeResultPayload, PresenceSnapshot } from '@cindy/device-link';
+export { isPresenceEligibleForRemoteRequest } from '@cindy/maker-shared/device-responsiveness';
 
 type PresenceAvailabilitySnapshot = Pick<PresenceSnapshot, 'deviceId' | 'online' | 'remoteControlEnabled'>;
 
@@ -62,10 +63,13 @@ export function getOrCreatePresenceTrackedRequest<T>(
   options: {
     /** 成功的 link 在当前 presence / 连接代保持可复用；失败仍立即清除。 */
     retainSuccessful?: boolean;
+    /** 重试已失效的 link 时替换已结算缓存；仍复用当前在途请求以保持单飞。 */
+    refreshSettled?: boolean;
   } = {},
 ): PresenceTrackedRequest<T> {
   const existing = inFlight.get(deviceId);
-  if (existing) return existing;
+  if (existing && (!options.refreshSettled || existing.pending)) return existing;
+  if (existing) inFlight.delete(deviceId);
 
   const tracked: PresenceTrackedRequest<T> = {
     capturedPresenceEpoch: capturePresenceAvailabilityEpoch(epochs, deviceId),
@@ -291,15 +295,6 @@ export function reconcileAvailabilityAfterInboundFrame(
     cleared = true;
   }
   return cleared;
-}
-
-export function isPresenceEligibleForRemoteRequest(
-  availabilityByDevice: ReadonlyMap<string, boolean>,
-  deviceId: string,
-): boolean {
-  // 首次尚未收到 presence 时保留既有乐观尝试;只有 relay 已明确声明 unavailable
-  // 才拦住 rehydrate / half-open probe,避免对离线设备立即重放请求风暴。
-  return availabilityByDevice.get(deviceId) !== false;
 }
 
 export function resetPresenceAvailabilityForConnection(

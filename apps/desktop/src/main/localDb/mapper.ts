@@ -63,6 +63,13 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
+type SessionRuntimeProjector = (session: Session) => Partial<Session>;
+let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
+
+export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
+  sessionRuntimeProjector = projector;
+}
+
 /**
  * SessionRow + 同 session 下 messages 总条数。IPC handler 必须通过 LEFT JOIN + GROUP BY
  * 或子查询同时带出 messageCount，再交给 `sessionToCamel`。
@@ -84,6 +91,8 @@ export type SessionRowWithCount = SessionRow & {
 
 /** preview 最大长度（字符）。渲染端 3 行 line-clamp 之外的兜底硬上限。 */
 const PREVIEW_MAX_CHARS = 140;
+/** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
+const PREVIEW_CONTENT_BOUND_CHARS = 4096;
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -122,6 +131,36 @@ export function extractMessagePreview(
 }
 
 /**
+ * Bound oversized serialized message bodies before they enter the mapper.
+ * Truncate the extracted text, then re-encode, so JSON objects stay valid and
+ * `extractMessagePreview` still sees `.text` instead of a cut-off document.
+ */
+export function boundSerializedMessageContent(
+  raw: string | null | undefined,
+  maxChars = PREVIEW_CONTENT_BOUND_CHARS,
+): string | null | undefined {
+  if (raw == null || raw.length <= maxChars) return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'string') {
+      return JSON.stringify(parsed.slice(0, maxChars));
+    }
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as { text?: unknown };
+      if (typeof record.text === 'string') {
+        return JSON.stringify({
+          ...record,
+          text: record.text.length > maxChars ? record.text.slice(0, maxChars) : record.text,
+        });
+      }
+    }
+    return raw;
+  } catch {
+    return raw.slice(0, maxChars);
+  }
+}
+
+/**
  * Session 行 → 与原 HTTP 响应同形的 camel + ISO 对象。
  *
  * 注意：原 HTTP `Session` 类型有 `userId` 字段，本地 db 不存（按 db 文件已经按 userId 隔离）。
@@ -151,7 +190,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
   const legacyUsdProjection =
     row.totalCostUsd +
     (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
-  return {
+  const base: Session = {
     id: row.id,
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
@@ -189,9 +228,13 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
     _count: { messages: row.messageCount },
-    preview: extractMessagePreview(row.latestMessageContent, row.latestMessageRole),
+    preview: extractMessagePreview(
+      boundSerializedMessageContent(row.latestMessageContent),
+      row.latestMessageRole,
+    ),
     summary: row.summary ?? null,
   };
+  return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
 }
 
 export function messageToCamel(row: MessageRow): Message {

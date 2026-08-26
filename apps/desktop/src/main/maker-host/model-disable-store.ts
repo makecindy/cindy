@@ -15,7 +15,11 @@
  *   @cindy/model-providers 的 disableOverrides.ts 头注。
  */
 
-import { modelDisableKey, type ModelDisableOverrides } from '@cindy/model-providers';
+import {
+  isModelDisabled,
+  modelDisableKey,
+  type ModelDisableOverrides,
+} from '@cindy/model-providers';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
@@ -126,6 +130,38 @@ export function setModelsDisabled(
   if (!changed) return;
   store.writePatch({ disabledModels });
   log.info('model access override written', { providerId, count: modelIds.length, disabled });
+}
+
+/**
+ * 将旧版媒体裸 ID 的停用项迁移到当前唯一的 namespaced modelId。迁移幂等且只在
+ * 唯一匹配时落盘，避免同 basename 多模型时把用户选择错误套到另一条路由。
+ */
+export function migrateLegacyNamespacedModelDisableOverrides(
+  providerId: string,
+  modelIds: readonly string[],
+): void {
+  if (!providerId || modelIds.length === 0) return;
+  store.invalidateIfChanged();
+  const current = store.read();
+  const disabledModels = { ...current.disabledModels };
+  let migrated = 0;
+  const uniqueModelIds = [...new Set(modelIds)];
+  for (const modelId of uniqueModelIds) {
+    const slash = modelId.lastIndexOf('/');
+    if (slash < 0 || slash === modelId.length - 1) continue;
+    const basename = modelId.slice(slash + 1);
+    if (!isModelDisabled(current, providerId, basename)) continue;
+    const basenameMatches = uniqueModelIds.filter(
+      (candidate) => candidate.slice(candidate.lastIndexOf('/') + 1) === basename,
+    );
+    if (basenameMatches.length !== 1 || basenameMatches[0] !== modelId) continue;
+    disabledModels[modelDisableKey(providerId, modelId)] = true;
+    delete disabledModels[modelDisableKey(providerId, basename)];
+    migrated += 1;
+  }
+  if (migrated === 0) return;
+  store.writePatch({ disabledModels });
+  log.info('legacy namespaced model disable overrides migrated', { providerId, migrated });
 }
 
 /** 测试专用:纯函数导出(normalize 坏形态清洗;读写链路由 providerHandlers 测试覆盖)。 */

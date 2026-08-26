@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   Check,
   CornerDownLeft,
@@ -92,6 +93,8 @@ const LOCALIZED_INTERACTION_KINDS = new Set([
   'ask_user_question',
   'plan_review',
   'issue_confirm',
+  'rename_sessions_confirm',
+  'ghost_grant_confirm',
   'plugin_setup',
 ]);
 
@@ -172,7 +175,7 @@ export function InteractionPanel({
   const queuePresentation = buildPendingInteractionQueuePresentation(sortedInteractions, {
     maxVisible: sortedInteractions.length || 1,
     readOnly: !!readOnlyReason,
-  });
+  }, mobilePresentationLocalizer);
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
     ?? queuePresentation.active;
@@ -537,10 +540,10 @@ function InteractionItem({
       />
     );
   }
-  if (kind === 'issue_confirm') {
+  if (kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm') {
     return (
       <UnsupportedCard
-        message={t('interaction.panel.issueConfirmUnsupported')}
+        message={t('interaction.panel.desktopConfirmUnsupported')}
         request={item.request}
         touchLayout={touchLayout}
       />
@@ -596,8 +599,11 @@ function PermissionCard({
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const { t } = useTranslation();
-  const presentation = useMemo(() => buildPermissionReviewPresentation(item.request), [item.request]);
+  const { t, i18n: i18nInstance } = useTranslation();
+  const presentation = useMemo(
+    () => buildPermissionReviewPresentation(item.request, mobilePresentationLocalizer),
+    [i18nInstance.language, item.request],
+  );
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
@@ -703,8 +709,12 @@ function PermissionEvidence({
           {presentation.toolName}
         </Text>
       </View>
-      {presentation.description ? (
-        <Text style={styles.permissionDescription}>{presentation.description}</Text>
+      {presentation.autoReviewUnavailable || presentation.description ? (
+        <Text style={styles.permissionDescription}>
+          {presentation.autoReviewUnavailable
+            ? t('interaction.permission.autoReviewUnavailable')
+            : presentation.description}
+        </Text>
       ) : null}
       {riskWarningText ? (
         <View
@@ -735,7 +745,7 @@ function AskUserQuestionCard({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const requestId = readRequestId(item) ?? '';
   const questions = useMemo(() => normalizeAskQuestions(item.request.questions), [item.request.questions]);
   const draftCompletedRef = useRef(false);
@@ -748,7 +758,7 @@ function AskUserQuestionCard({
   const presentation = useMemo(() => buildAskQuestionReviewPresentation({
     currentIndex,
     questions,
-  }), [currentIndex, questions]);
+  }, mobilePresentationLocalizer), [currentIndex, i18nInstance.language, questions]);
   const current = presentation.current;
 
   useEffect(() => {
@@ -1074,7 +1084,7 @@ function PlanReviewCard({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const requestId = readRequestId(item) ?? '';
   const [planText, setPlanText] = useState(() =>
     readPlanReviewDraft(requestId)?.planText ?? planReviewPlan(item.request)
@@ -1095,7 +1105,7 @@ function PlanReviewCard({
     filePath,
     maxOutlineItems: 8,
     plan: planText,
-  }), [filePath, originalPlan, planText]);
+  }, mobilePresentationLocalizer), [filePath, i18nInstance.language, originalPlan, planText]);
   const isEdit = viewerState === 'edit';
   const isMinimized = viewerState === 'minimized';
   const expandedPlan = viewerState === 'expanded' || viewerState === 'edit';
@@ -1604,7 +1614,7 @@ function ResolveButton({
     invalidReason,
     label,
     requestId,
-  });
+  }, mobilePresentationLocalizer);
   const buttonStyle = variant === 'primary'
     ? styles.primaryButton
     : variant === 'secondary'

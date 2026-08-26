@@ -38,7 +38,9 @@ import { cn } from '@/lib/utils';
  *   Chromium "ResizeObserver loop" 告警)。
  * - prefers-reduced-motion 降级为直切(红线 a);焦点/Esc/outside-click 语义
  *   与 §14.2 相同(红线 d):打开聚焦 [data-morph-autofocus] → 首个 input →
- *   面板容器,关闭后焦点归还 trigger。
+ *   面板容器,关闭后焦点归还 trigger。composer 工具条可另传 restoreFocusTarget:
+ *   仅指针关闭(选完模型 / 点空白)在收合一开始就把焦点送回输入框;Esc 等键盘关闭
+ *   仍回 trigger(§14.2)。其它控件已接走焦点时仍不抢。
  * - Esc 分层:面板内嵌套的 Radix 浮层(role=dialog,如模型行 effort 子面板)
  *   开着时先让内层关。必须挂 capture —— keydown 是 discrete 事件,Radix 的
  *   capture 处理器关层后 React 同步 flush DOM 移除,bubble 阶段已看不到 dialog;
@@ -47,6 +49,17 @@ import { cn } from '@/lib/utils';
  * 职责边界:本组件只管几何形变与开合语义;面板内容的 role(listbox/menu)、
  * 行高亮、i18n 全部由调用方提供。业务不进这里。
  */
+
+/**
+ * 内容侧主动请求重量的自定义事件名(从内容任意节点冒泡派发即可)。
+ *
+ * 为什么需要它:面板内容若被「不超过宿主高度」的钳制链约束(如统一模型选择器的
+ * min-h-0 弹性列),内容**增长**时元素尺寸被钳住不变,ResizeObserver 看不到任何
+ * 变化 —— 切到条目更多的视图后面板永远卡在小尺寸(2026-08-14 实机自查:xAI 视图
+ * 收缩到 243px,切回「全部」不再长回)。收缩能被 RO 看到,增长必须由内容侧吱声。
+ * 非 morph 宿主(Radix 分支)收不到此事件,无副作用。
+ */
+export const MORPH_CONTENT_RESIZE_EVENT = 'cindy:morph-content-resize';
 
 const MORPH_MS = 220;
 const MORPH_EASE = 'cubic-bezier(0.3, 0.9, 0.25, 1)';
@@ -94,6 +107,19 @@ interface MorphPopoverProps {
    * hug, 面板按内容/panelWidth 展开。
    */
   panelWidthMode?: 'content' | 'trigger';
+  /**
+   * 一次打开内**宽度只进不退**:打开后的重量(RO / 内容重量请求)允许面板变宽,
+   * 不允许回缩;下次打开重新起算。给「面板内还有视图筛选」的调用方(统一模型
+   * 选择器):筛选把内容变窄时面板宽度跳变,rail 图标会在指针底下移位
+   * (Chris 2026-08-14 实测反馈)。高度不受影响,继续双向跟随内容。
+   */
+  stickyWidth?: boolean;
+  /**
+   * stickyWidth 的**形态代际**:值变化 = 调用方声明面板整体换了形态(如统一模型
+   * 选择器的列表样式切换),宽度水位当场清零、允许面板回缩重新贴内容。只进不退
+   * 防的是同形态内筛选抖动,不该把上一形态(如带侧栏)的宽度扛进下一形态。
+   */
+  stickyWidthKey?: unknown;
   /** 面板形变起点底色/边色(= chip 的),默认 composer pill 规格。 */
   startBg?: string;
   startBorderColor?: string;
@@ -113,6 +139,26 @@ interface MorphPopoverProps {
   panelAriaLabel?: string;
   /** 打开完成后的外部焦点目标；未提供时按面板内默认规则聚焦。 */
   autoFocusTarget?: () => HTMLElement | null;
+  /**
+   * 指针关闭时的回焦目标。composer 工具条用它在选完模型 / 点空白后立刻把焦点
+   * 送回输入框(收合动画一开始就回,不等卸掉)。键盘关闭(Esc)仍回 trigger,
+   * 遵守 §14.2。未提供时指针关闭不回焦。目标已被其它控件接走时仍不抢。
+   */
+  restoreFocusTarget?: () => HTMLElement | null;
+}
+
+/** 焦点是否已被面板 / trigger 之外的控件接走(body 不算)。 */
+function isFocusClaimedElsewhere(
+  active: Element | null,
+  panel: HTMLElement,
+  wrap: HTMLElement,
+): boolean {
+  return (
+    active instanceof Node &&
+    active !== document.body &&
+    !panel.contains(active) &&
+    !wrap.contains(active)
+  );
 }
 
 /** 是否处于 reduced-motion(SSR/jsdom 无 matchMedia 时按 false) */
@@ -120,6 +166,16 @@ function prefersReducedMotion(): boolean {
   return (
     typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   );
+}
+
+/** overflow-y:auto/hidden 会把 visible 的 overflow-x 算成 auto;横轴必须显式 hidden。 */
+function setContentOverflowY(
+  content: HTMLDivElement | null,
+  overflowY: 'auto' | 'hidden',
+): void {
+  if (!content) return;
+  content.style.overflowY = overflowY;
+  content.style.overflowX = 'hidden';
 }
 
 export function MorphPopover({
@@ -131,6 +187,8 @@ export function MorphPopover({
   align = 'start',
   panelWidth,
   panelWidthMode = 'content',
+  stickyWidth = false,
+  stickyWidthKey,
   startBg = 'var(--composer-pill-bg)',
   startBorderColor = 'var(--border-default)',
   endBg = 'var(--model-dropdown-bg)',
@@ -140,6 +198,7 @@ export function MorphPopover({
   wrapperClassName,
   panelAriaLabel,
   autoFocusTarget,
+  restoreFocusTarget,
 }: MorphPopoverProps) {
   // mounted 独立于 open:关闭时先播收合动画,动画完再卸载 portal
   const [mounted, setMounted] = useState(false);
@@ -157,6 +216,15 @@ export function MorphPopover({
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
   const settledRef = useRef(false);
+  // stickyWidth 的本次打开宽度水位(见 prop 注释);开场重置。
+  const stickyWidthRef = useRef(0);
+  // stickyWidthKey 换代 → 水位清零(render 期 ref 比对:重置必须发生在切换引发的
+  // ResizeObserver 补量之前,effect 会晚于它)。
+  const stickyWidthKeyRef = useRef(stickyWidthKey);
+  if (stickyWidthKeyRef.current !== stickyWidthKey) {
+    stickyWidthKeyRef.current = stickyWidthKey;
+    stickyWidthRef.current = 0;
+  }
   // 指针驱动的关闭(菜单动作、trigger toggle、outside 交接)不把焦点归还 trigger:
   // 否则旧层会在收合结束时抢走下一层交互面的焦点。键盘关闭仍按 §14.2 回焦。
   const pointerInteractionRef = useRef(false);
@@ -190,7 +258,14 @@ export function MorphPopover({
         align === 'end'
           ? chipRect.right - VIEWPORT_PADDING
           : window.innerWidth - chipRect.left - VIEWPORT_PADDING;
-      const targetW = Math.min(desiredW, viewportMaxW, Math.max(chipRect.width, sideAvailW));
+      // stickyWidth:同一次打开内宽度只进不退(视口/锚点钳制仍最优先)。
+      const stickyFloor = stickyWidth ? stickyWidthRef.current : 0;
+      const targetW = Math.min(
+        Math.max(desiredW, stickyFloor),
+        viewportMaxW,
+        Math.max(chipRect.width, sideAvailW),
+      );
+      if (stickyWidth && targetW > stickyWidthRef.current) stickyWidthRef.current = targetW;
       panel.style.width = `${targetW}px`;
       // 可视高度钳制:停靠位到视口边缘的可用空间(内容区自滚)。avail 夹到 ≥0——
       // chip 极靠近视口边(如 side='top' 且距顶 <14px)时 avail 会为负,负 height
@@ -204,7 +279,7 @@ export function MorphPopover({
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
     },
-    [align, panelWidth, panelWidthMode, side],
+    [align, panelWidth, panelWidthMode, side, stickyWidth],
   );
 
   /**
@@ -272,6 +347,7 @@ export function MorphPopover({
     if (open) {
       settledRef.current = false;
       pointerInteractionRef.current = false;
+      stickyWidthRef.current = 0; // stickyWidth 水位按「一次打开」起算
       const rect = wrap.getBoundingClientRect();
       chipRectRef.current = rect;
       // 1) 面板落到 chip 精确几何(与 chip 重合的起点),transition 关闭防测量污染。
@@ -283,7 +359,7 @@ export function MorphPopover({
       // 形变期间内容区禁滚:高度未长够时滚动条短暂出现会把行宽压窄 ~10px,
       // 高度到位后又弹回 —— 行尾元素(对勾/选中条)看起来往右抖一下
       // (2026-07-22 用户反馈)。动画完成(settle)后再开自滚。
-      if (contentRef.current) contentRef.current.style.overflowY = 'hidden';
+      setContentOverflowY(contentRef.current, 'hidden');
       panel.dataset.state = 'closed';
       // 开场解除 inert(收合分支置上):closed 态面板必须整体退出 tab order,见 else 分支。
       panel.inert = false;
@@ -319,7 +395,7 @@ export function MorphPopover({
       const focusDelay = reduced ? 0 : MORPH_MS;
       closeTimerRef.current = setTimeout(() => {
         settledRef.current = true;
-        if (contentRef.current) contentRef.current.style.overflowY = 'auto';
+        setContentOverflowY(contentRef.current, 'auto');
         // RO 在 opening 期间收到的尺寸变化不会在 settled 后自动重发,这里补量一次
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
         syncPanelToContent();
@@ -350,16 +426,16 @@ export function MorphPopover({
       if (rect) chipRectRef.current = rect;
       const reducedClose = reduced || !rect;
       panel.dataset.state = 'closed';
-      if (contentRef.current) contentRef.current.style.overflowY = 'hidden';
+      setContentOverflowY(contentRef.current, 'hidden');
       if (rect) applyChipGeometry(panel, rect);
       panel.style.opacity = '0';
       // 焦点归还判定(§14.2)延迟一拍快照,不在本 layout effect 里同步做:outside
       // pointerdown 走 capture 先触发关闭,浏览器把焦点移交给被点控件的默认动作发生在
       // 事件派发结束之后 —— 同步快照会误判"焦点还在面板内",动画完抢回 trigger,偷走
       // 用户刚点的控件焦点(codex P2)。setTimeout(0) 落在默认聚焦之后:此刻焦点仍在
-      // 面板 / trigger 内 = 键盘关闭(Enter/Space 选项、Esc、点 trigger 收起)→ 归还
-      // trigger;已被外部控件 / body 接走(点空白、动作交接)→ 不抢回,避免点空白
-      // 关闭后凭空冒 trigger 的 tooltip。
+      // 面板 / trigger 内 = 键盘关闭(Enter/Space 选项、Esc)→ 收合结束后归还 trigger;
+      // 指针关闭(选模型 / 点空白)inert 后焦点掉到 body → 立刻送回 restoreFocusTarget
+      // (不等 240ms 卸掉,否则选完接着打的字会丢);已被外部控件接走 → 不抢。
       let ownedFocusAtClose = false;
       focusSnapTimerRef.current = setTimeout(() => {
         focusSnapTimerRef.current = null;
@@ -371,23 +447,21 @@ export function MorphPopover({
         // pointer-events-none 只挡鼠标不挡 Tab,键盘用户 Esc/选完后立刻 Tab 会摸进
         // 隐形面板里的按钮/选项(codex P2)。inert 把收合余辉整体移出 tab order 与辅助树。
         panel.inert = true;
+        if (ownedFocusAtClose) return;
+        if (isFocusClaimedElsewhere(document.activeElement, panel, wrap)) return;
+        const preferredHome = restoreFocusTarget?.();
+        if (preferredHome instanceof HTMLElement && preferredHome.isConnected) {
+          preferredHome.focus({ preventScroll: true });
+        }
       }, 0);
       closeTimerRef.current = setTimeout(
         () => {
           setMounted(false);
-          if (ownedFocusAtClose) {
-            const active = document.activeElement;
-            const focusClaimedElsewhere =
-              active instanceof Node &&
-              active !== document.body &&
-              !panel.contains(active) &&
-              !wrap.contains(active);
-            if (!focusClaimedElsewhere) {
-              wrap.querySelector<HTMLElement>('button, [tabindex]')?.focus({
-                preventScroll: true,
-              });
-            }
-          }
+          if (!ownedFocusAtClose) return;
+          if (isFocusClaimedElsewhere(document.activeElement, panel, wrap)) return;
+          wrap.querySelector<HTMLElement>('button, [tabindex]')?.focus({
+            preventScroll: true,
+          });
         },
         reducedClose ? 0 : MORPH_MS + 20,
       );
@@ -408,6 +482,7 @@ export function MorphPopover({
     endBorderColor,
     syncPanelToContent,
     autoFocusTarget,
+    restoreFocusTarget,
   ]);
 
   /** 打开稳定后跟随内容尺寸变化(搜索过滤 / Edit 面板展宽),同曲线平滑过渡 */
@@ -428,9 +503,21 @@ export function MorphPopover({
       });
     });
     ro.observe(content);
+    // 内容侧的显式重量请求(MORPH_CONTENT_RESIZE_EVENT):内容增长被钳制链挡住时
+    // RO 无事件,由内容自己吱声;与 RO 走同一条 settle 门 + rAF 合并。
+    const onResizeRequest = () => {
+      if (roRaf) return;
+      roRaf = requestAnimationFrame(() => {
+        roRaf = 0;
+        if (!settledRef.current) return;
+        syncPanelToContent();
+      });
+    };
+    content.addEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     return () => {
       if (roRaf) cancelAnimationFrame(roRaf);
       ro.disconnect();
+      content.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     };
   }, [mounted, open, syncPanelToContent]);
 
@@ -535,7 +622,10 @@ export function MorphPopover({
             <div
               ref={contentRef}
               className={cn(
-                'max-h-full overflow-y-hidden',
+                // overflow-x must stay hidden: overflow-y:auto/hidden otherwise
+                // computes overflow-x to auto (CSS overflow pairing), and a 1px
+                // border-box mismatch flashes a 2s horizontal scrollbar thumb.
+                'max-h-full overflow-x-hidden overflow-y-hidden',
                 side === 'top' ? 'translate-y-[5px]' : 'translate-y-[-5px]',
                 'opacity-0 transition-[opacity,transform] delay-[50ms] duration-[140ms] ease-out',
                 'group-data-[state=open]:translate-y-0 group-data-[state=open]:opacity-100',

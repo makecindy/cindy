@@ -46,6 +46,9 @@ import {
   resolveSubagentModelDefault,
   type ResolveSubagentModelDefaultResult,
 } from './subagent-model-default.js';
+import {
+  buildClaudeSubagentModelGuardHooks,
+} from './subagent-model-access.js';
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
 import {
@@ -93,12 +96,13 @@ import {
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
-import { AutoCompactController } from '../shared/auto-compact-controller.js';
+import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palette-scanner.js';
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
+import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import {
@@ -109,18 +113,24 @@ import {
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
+  buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
   buildClaudeRemoteOrcaCallerGuards,
+  buildClaudeRemoteRootOnlyToolGuards,
   buildClaudeRemoteToolGuards,
   mergeClaudeHookSets,
 } from './capability-routing.js';
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
+  annotatePermissionRequestForUnavailableReview,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
+  createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
+  isAutoReviewUnavailableMetadata,
+  isSystemPermissionDenialReason,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -135,6 +145,7 @@ import { findClaudeSessionJsonl } from './claude-projects-fs.js';
 import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
+import { resetClaudeGenerationTiming } from './generation-timing.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
 import type {
   ScanAtResourcesOptions,
@@ -232,18 +243,28 @@ function legacyToSdkModelString(model: string): string {
   return model;
 }
 
-/**
- * ToolLoopGuard 必须基于 maker-core 对外暴露的 model id 判断。
- * SDK 字符串会被 toSdkModelString 改写(例如 Sonnet 5 变成 claude-sonnet-5[1m]),
- * 容易把 provider 细节和公开模型选择混在一起; host 注入的 DeepSeek id
- * 当前为 deepseek/deepseek-v4-pro 与 deepseek/deepseek-v4-flash。
- */
-function isDeepSeekModel(model: string): boolean {
-  return model.startsWith('deepseek/');
-}
-
 function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
+}
+
+/**
+ * 结果感知的硬中断目前覆盖 DeepSeek、原生 Claude 与 xai Grok 系列
+ * (Grok 为 2026-08 维护者确认新增:单 turn 在 4 个不同 Grep 里轮转上千次调用的实锤)。
+ * 其他 provider-routed 模型需要独立确认产品口径,不能因共用 Claude Code harness
+ * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…、xai/…);
+ * sidechain 的判断来自 SDK 流内的原始 id(可能是裸 deepseek-… / grok-… 形态,
+ * 同 toSdkModelString 的双形态),因此按家族前缀匹配,不带 [1m] 的 SDK 改写。
+ * grok 家族按 model-providers classification 口径同时认三种形态:xai/(订阅直连)、
+ * x-ai/(网关命名空间,toSdkModelString 原样透传)与裸 grok-(sidechain 原始 id)。
+ */
+function shouldUseToolLoopGuard(model: string): boolean {
+  return (
+    model.startsWith('deepseek')
+    || model.startsWith('claude-')
+    || model.startsWith('xai/')
+    || model.startsWith('x-ai/')
+    || model.startsWith('grok-')
+  );
 }
 
 /** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
@@ -553,7 +574,11 @@ export async function toClaudeSdkContent(
   });
 
   const prefix = refs.length > 0 ? `${refs.join(' ')} ` : '';
-  const text = `${prefix}${textParts.join('\n')}`.trim();
+  const managedImageReferences = formatManagedImageReferences(content);
+  const textBody = managedImageReferences
+    ? [...textParts, managedImageReferences].join('\n')
+    : textParts.join('\n');
+  const text = `${prefix}${textBody}`.trim();
   const imageBlocks = [...resolvedImages.values()].flatMap(({ block }) => (block ? [block] : []));
   if (imageBlocks.length === 0) return text || prefix.trim();
   return text ? [...imageBlocks, { type: 'text', text }] : imageBlocks;
@@ -659,6 +684,13 @@ function isInvalidCompactPreservedSegmentForkError(err: unknown): boolean {
  * 少停不误停,启发式后台活动检测兜底)。
  */
 const WAKE_BACKGROUND_TASK_TYPES: ReadonlySet<string> = new Set(['local_agent', 'local_workflow']);
+/**
+ * Wake 契约对账宽限:claim 内全部 wake 任务到终态(completed/failed)后,留给 SDK
+ * 启动自动续跑段的窗口。健康路径里 dequeue → 顶层活动只需数秒;宽限内没有任何
+ * 激活即判定契约失守(CLI 在「子代理于主 turn 运行中完成」时会把通知当 mid-turn
+ * 附件消费,续跑段永远不会来),取消 claim 收口产品 turn。只影响终态低频路径。
+ */
+export const WAKE_CONTRACT_GRACE_MS = 60_000;
 
 // ── 能力声明 ──────────────────────────────────────────────────────────────────
 
@@ -1071,6 +1103,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     );
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
+      sessionProviderId: opts.providerId ?? null,
       modelContextWindows: providerRoutedModels,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
@@ -1137,12 +1170,23 @@ export class ClaudeCodeAgent extends BaseAgent {
     }
     // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
     applySubagentModelEnv(env, subagentDefault.envSubagentModel ?? null);
+    // 每次 Agent/Task 调用都重新读取 host 的当前账号与路由事实。静态 capabilities
+    // 只负责展示，不参与 deny；账号切换时 resolver 会立即看到新快照或 unknown。
+    const resolveSubagentModelAccess = this.deps.resolveClaudeSubagentModelAccess
+      ? (model: string) => this.deps.resolveClaudeSubagentModelAccess!({
+          providerId: opts.providerId ?? null,
+          parentModel: opts.model,
+          credentialMode: effectiveCredentialMode,
+          model,
+        })
+      : undefined;
     // 远端单独一份 env:用 'remote' 模式从空字典起(不继承 desktop OS env),否则
     // Windows HOME=C:\Users\Lizi 之类污染远端 cc CLI 的 ~ 展开(session/memory
     // 落怪路径)。详见 env-builder.ts buildClaudeEnv 文档。
     const remoteEnv = opts.remoteHostId
       ? await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
           credentialMode,
+          sessionProviderId: opts.providerId ?? null,
           mode: 'remote',
           modelContextWindows: providerRoutedModels,
           // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
@@ -1224,6 +1268,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'claude-code',
             getThresholdPct: getAutoCompactThresholdPct,
+            compactWhenFull: Boolean(opts.remoteHostId),
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。
@@ -1502,6 +1547,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     const localClaudeHooks = reviewMode
       ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
       : mergeClaudeHookSets(
+          // 账号/模型准入是执行前提，不是用户工具权限。放在 PreToolUse，确保
+          // Full access 也无法绕过。
+          buildClaudeSubagentModelGuardHooks(
+            resolveSubagentModelAccess,
+            subagentDefault.envSubagentModel,
+            (model) => {
+              log.warn('subagent model denied by account access preflight', { model });
+            },
+          ),
           buildClaudeLocalToolGuardHooks(
             this.deps.capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -1523,6 +1577,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // rely on their observable order. The exact-match Orca provenance guard
           // still runs for send_to_lead after those hooks and denies descendants.
           buildClaudeOrcaCallerProvenanceHooks(),
+          buildClaudeAskUserQuestionCallerProvenanceHooks(),
           this.deps.claudeHooks,
         );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -1568,6 +1623,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       settled: boolean;
       /** prompt-each-time 高风险审批: 切到宽松模式时也不接受 dismissAllPending('allow')。 */
       forcePrompt?: boolean;
+      /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
+      unavailableHandoff?: boolean;
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
@@ -1595,6 +1652,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           resolve,
           settled: false,
           ...(opts?.forcePrompt ? { forcePrompt: true } : {}),
+          ...(req.kind === 'permission' && isAutoReviewUnavailableMetadata(req.metadata)
+            ? { unavailableHandoff: true }
+            : {}),
         };
         pendingInteractions.set(req.requestId, entry);
         const finalize = (d: InteractionDecision) => {
@@ -1632,6 +1692,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         const decision = effectiveResolveAs === 'allow' && entry.kind !== 'ask_user_question'
           ? ({ kind: entry.kind, behavior: 'allow' } as InteractionDecision)
           : safeDefaultDecision(entry.kind, reason);
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+          autoReviewConfirmUndeliveredNotice.notify();
+        }
         entry.settled = true;
         pendingInteractions.delete(requestId);
         entry.resolve(decision);
@@ -1647,6 +1710,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     function dismissSinglePending(requestId: string, reason: string): void {
       const entry = pendingInteractions.get(requestId);
       if (!entry || entry.settled) return;
+      if (entry.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
       entry.settled = true;
       pendingInteractions.delete(requestId);
       entry.resolve(safeDefaultDecision(entry.kind, reason));
@@ -1767,6 +1831,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const decision = await dispatchInteraction({
           kind: 'ask_user_question',
           requestId: options.toolUseID,
+          toolUseId: options.toolUseID,
           questions,
         });
         if (decision.kind !== 'ask_user_question') {
@@ -1802,6 +1867,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const decision = await dispatchInteraction({
           kind: 'plan_review',
           requestId: options.toolUseID,
+          toolUseId: options.toolUseID,
           plan,
           planFilePath,
         });
@@ -1894,6 +1960,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
       const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = turnPolicyForcePrompt;
+      let unavailableHandoff = false;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
@@ -1928,7 +1995,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           // AI `ask` and deterministic red-line verdicts are never persisted.
           // 审阅器故障降级来的 ask 额外发一条会话级提示:用户需要知道自己为什么
           // 突然开始被问,否则 Auto 档看起来像坏了。
-          if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+          if (autoDecision.unavailable) {
+            autoReviewUnavailableNotice.notify();
+            unavailableHandoff = true;
+          }
           forcePrompt = true;
         }
       } else {
@@ -1937,9 +2007,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         forcePrompt = forcePrompt || mcpApprovalPolicy === 'prompt-each-time';
       }
-      const decision = await dispatchInteraction({
-        kind: 'permission',
+      const permissionRequest = {
+        kind: 'permission' as const,
         requestId: options.toolUseID,
+        toolUseId: options.toolUseID,
         toolName,
         input: input as Record<string, unknown>,
         title: hostApprovalPresentation?.title ?? options.title,
@@ -1955,7 +2026,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),
           ...(options.agentID ? { agentID: options.agentID } : {}),
         },
-      }, { forcePrompt });
+      };
+      const decision = await dispatchInteraction(
+        unavailableHandoff
+          ? annotatePermissionRequestForUnavailableReview(permissionRequest)
+          : permissionRequest,
+        { forcePrompt },
+      );
+      notifyIfAutoReviewConfirmUndelivered(unavailableHandoff, decision);
       if (decision.kind !== 'permission') {
         log.warn('permission got mismatched decision', { tool: toolName, decKind: decision.kind });
         return { behavior: 'deny', message: 'resolver kind mismatch' };
@@ -2096,16 +2174,33 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574)。走既有的非终止 error 事件 +
     // `[CODE]` 约定,不新增事件类型;逐条提示会把 Auto 退化成比 Ask 更烦的东西,所以去重。
-    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+    const emitAutoReviewRuntimeNotice = (message: string): void => {
       eventQueue.push({
         type: 'error',
         data: { message, isTerminal: false },
         source: 'claude-code',
       });
-    });
+    };
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
+    const autoReviewConfirmUndeliveredNotice =
+      createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
+    const notifyIfAutoReviewConfirmUndelivered = (
+      unavailableHandoff: boolean,
+      decision: InteractionDecision,
+    ): void => {
+      if (!unavailableHandoff) return;
+      if (decision.kind !== 'permission') {
+        autoReviewConfirmUndeliveredNotice.notify();
+        return;
+      }
+      if (decision.behavior === 'deny' && isSystemPermissionDenialReason(decision.reason)) {
+        autoReviewConfirmUndeliveredNotice.notify();
+      }
+    };
     const reviewAutoAction = (
       action: ReviewableAction,
       workspaceRoots: string[],
@@ -2131,9 +2226,38 @@ export class ClaudeCodeAgent extends BaseAgent {
       autoReviewDecisionCache.set(key, pending);
       return pending;
     };
-    let toolLoopGuard: ToolLoopGuard | null = isDeepSeekModel(mutableModel)
-      ? new ToolLoopGuard()
-      : null;
+    // guard 桶常驻(每 turn 清空):适用性不再是会话级一票制,而是每个 scope 单独判。
+    const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
+    /**
+     * guard 适用性判定用的模型:sidechain 用该 subagent 的实际模型
+     * (Agent 异步回执的 resolvedModel 优先,其次 sidechain 流内消息的 model),
+     * 两者都未知时回落会话模型(维持旧行为);顶层恒用会话模型。
+     * 否则 claude 会话下的 provider-routed subagent 会被越权硬中断,
+     * provider-routed 会话下的 claude subagent 反而失去保护(PR #2779 review 指出)。
+     * runtimeState 声明在后,仅在 forward loop 回调期调用,无 TDZ 风险。
+     */
+    const toolLoopGuardModelForScope = (parentToolUseId?: string): string => {
+      if (parentToolUseId) {
+        const sidechainModel =
+          runtimeState.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
+          ?? runtimeState.streamModelByParentToolUseId.get(parentToolUseId);
+        if (sidechainModel) return sidechainModel;
+      }
+      return mutableModel;
+    };
+    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard | null => {
+      if (!shouldUseToolLoopGuard(toolLoopGuardModelForScope(parentToolUseId))) return null;
+      const scopeKey = parentToolUseId ?? null;
+      let guard = toolLoopGuards.get(scopeKey);
+      if (!guard) {
+        guard = new ToolLoopGuard();
+        toolLoopGuards.set(scopeKey, guard);
+      }
+      return guard;
+    };
+    const resetToolLoopGuards = (): void => {
+      toolLoopGuards.clear();
+    };
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'default';
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
@@ -2224,18 +2348,25 @@ export class ClaudeCodeAgent extends BaseAgent {
       generation: 0,
       interruptGeneration: 0,
       lastAssistantMsgHadSubstance: true,
+      nextRequestPriceVariant: 'standard',
     };
     const runtimeState: RuntimeState = newRuntimeState();
-    const beginNewTurn = (): void => {
+    const beginNewTurn = (priceVariant: 'standard' | 'priority' = mutableFastMode ? 'priority' : 'standard'): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
+      resetClaudeGenerationTiming(runtimeState.generation);
+      runtimeState.activeUsageSegmentByParent.clear();
+      runtimeState.activeUsagePriceVariantByParent.clear();
+      runtimeState.pendingUsagePriceVariantByParent.clear();
+      turnState.nextRequestPriceVariant = priceVariant;
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
       turnState.sawCompactBoundary = false;
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
+      runtimeState.streamStopTokenByKey.clear();
       turnState.pendingApiError = null;
       turnState.lastAssistantRequestId = undefined;
       turnState.lastAssistantMsgHadSubstance = true;
@@ -2282,6 +2413,9 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 的边界事件正常放行、清 turnInFlight。计数 = "已注入但 SDK 还没跑完的桥接 turn 数"。
      */
     let queuedBridgeTurns = 0;
+    // 用户 turn 结束后由 completeTranslatedTurnEnd / setModel 注入的静默 /compact。
+    // 不能复用 queuedBridgeTurns：那会 suppress 终态、并把 isTurnRunning 卡在 true。
+    let hostAutoCompactInFlight = false;
     type ActiveBridgeKind = 'rewind' | 'cancellation';
     let activeBridgeKind: ActiveBridgeKind | null = null;
     // Bridge /compact 由 rewind 或 cancellation rebuild 尾部注入。若用户 Stop 打在该 bridge turn
@@ -2293,6 +2427,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const bridgeStateActive = (): boolean =>
       queuedBridgeTurns > 0 || activeBridgeKind !== null || activeBridgeRewindResumeAt !== undefined;
     let q: Query;
+    // Query-scoped lifecycle fact: modelUsage is cumulative within the SDK
+    // process. A query created without a resume id starts that counter at zero;
+    // resumed queries may include prior transcript usage and must establish a
+    // baseline unless request segments prove the delta independently.
+    const modelUsageStartsAtZeroQueries = new WeakSet<Query>();
     function restoreBridgeAutoCompactSnapshot(reason: string): void {
       const snapshot = bridgeCompactUsageSnapshot;
       bridgeCompactUsageSnapshot = null;
@@ -2461,6 +2600,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
         source: 'claude-code',
       });
+      cancelIdleHostAutoCompact('host_auto_compact_idle_timeout');
       // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
       // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
       turnInFlight = false;
@@ -2489,8 +2629,10 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 检查是否需要 auto-compact, 需要时把 /compact push 到 inputQueue。返回是否实际 push。
      * 调用方在 rebuild 尾部的 "compact→user 桥接场景" 中据此把 queuedBridgeTurns++,
      * 让后续中间 turn 边界事件被 suppress、turnInFlight 跨排队 turn 保持。
+     * origin=idle 是用户 turn 结束后的静默压缩，失败要 latch/cancel；origin=bridge 由
+     * queuedBridgeTurns 分支处理，不要再标 hostAutoCompactInFlight。
      */
-    function triggerAutoCompactIfNeeded(): boolean {
+    function triggerAutoCompactIfNeeded(origin: 'idle' | 'bridge' = 'idle'): boolean {
       if (closed || turnInFlight) return false;
       if (!autoCompactController?.shouldCompactNow()) return false;
       const snapshot = autoCompactController.getLatestSnapshot();
@@ -2502,15 +2644,32 @@ export class ClaudeCodeAgent extends BaseAgent {
         contextWindow: snapshot?.contextWindow,
         sdkSessionId,
       });
-      beginNewTurn();
-      toolLoopGuard?.resetTurn();
+      beginNewTurn(mutableFastMode ? 'priority' : 'standard');
+      resetToolLoopGuards();
       turnInFlight = true;
+      if (origin === 'idle') hostAutoCompactInFlight = true;
       inputQueue.push({
         type: 'user',
         message: { role: 'user', content: '/compact' },
         parent_tool_use_id: null,
       });
       armUpstreamResponseIdle();
+      return true;
+    }
+
+    function noteHostAutoCompactTerminalFailure(message: string): void {
+      if (!hostAutoCompactInFlight) return;
+      if (!opts.remoteHostId && isDeterministicHostCompactFailure(message)) {
+        autoCompactController?.markNeedsRollover('host_auto_compact_failed');
+      } else {
+        autoCompactController?.onCompactCanceled('host_auto_compact_failed');
+      }
+    }
+
+    function cancelIdleHostAutoCompact(reason: string): boolean {
+      if (!hostAutoCompactInFlight) return false;
+      autoCompactController?.onCompactCanceled(reason);
+      // 只清 fired。hostAutoCompactInFlight 留给 onTurnEnd，避免取消收尾立刻再注入。
       return true;
     }
 
@@ -2523,11 +2682,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       const snapshot = autoCompactController?.getLatestSnapshot();
       const threshold = autoCompactController?.getCurrentThresholdPct();
       return snapshot !== null && snapshot !== undefined &&
-        threshold !== undefined && snapshot.ratio >= threshold / 100;
+        threshold !== undefined &&
+        snapshot.ratio >= threshold / 100 &&
+        snapshot.ratio < 1 &&
+        autoCompactController?.needsRollover() !== true;
     }
 
     function queueAutoCompactBridge(kind: ActiveBridgeKind, resumeAt?: string): boolean {
-      const queued = triggerAutoCompactIfNeeded();
+      const queued = triggerAutoCompactIfNeeded('bridge');
       if (!queued) return false;
       bridgeCompactUsageSnapshot = autoCompactController?.getLatestSnapshot() ?? null;
       activeBridgeKind = kind;
@@ -2592,6 +2754,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // resume 优先用当前的 sdkSessionId (rewind 重启时它指向上一轮 SDK 给的 id);
       // 缺省回到 startSession 入参的 resumeSessionId (新会话首次起 query 时用)。
       let resumeSdkSid = sdkSessionId ?? configuredResumeSessionId;
+      let modelUsageCumulativeStartsAtZero = !resumeSdkSid;
 
       // ── 远端 cc 分支 (Phase 4.3) ──
       // session 标了 remoteHostId 且 host 注入了 remoteCcQueryFactory → 走远端
@@ -2711,6 +2874,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = [
           ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteRootOnlyToolGuards(),
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
 
@@ -2835,6 +2999,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               const decision = await dispatchWithTimeout({
                 kind: 'ask_user_question',
                 requestId: params.requestId,
+                toolUseId: params.requestId,
                 questions: (params.questions ?? askInput.questions ?? []) as AskUserQuestionItem[],
               });
               if (decision.kind !== 'ask_user_question') {
@@ -2859,6 +3024,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               const decision = await dispatchWithTimeout({
                 kind: 'plan_review',
                 requestId: params.requestId,
+                toolUseId: params.requestId,
                 plan,
                 planFilePath: params.planFilePath ?? planInput.planFilePath,
               });
@@ -2945,6 +3111,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               params.input ?? {},
             );
             let remoteForcePrompt = remoteTurnPolicyForcePrompt;
+            let remoteUnavailableHandoff = false;
             if (
               mutablePermissionMode === 'auto'
               && remoteToolName
@@ -2969,7 +3136,10 @@ export class ClaudeCodeAgent extends BaseAgent {
                 };
               }
               // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
-              if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+              if (autoDecision.unavailable) {
+                autoReviewUnavailableNotice.notify();
+                remoteUnavailableHandoff = true;
+              }
               remoteForcePrompt = true;
             } else {
               if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
@@ -2977,9 +3147,10 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';
             }
-            const decision = await dispatchWithTimeout({
-              kind: 'permission',
+            const remotePermissionRequest = {
+              kind: 'permission' as const,
               requestId: params.requestId,
+              toolUseId: params.requestId,
               toolName: params.toolName ?? 'unknown',
               input: params.input ?? {},
               title: remoteHostApprovalPresentation?.title ?? params.title,
@@ -2989,7 +3160,20 @@ export class ClaudeCodeAgent extends BaseAgent {
                 ? undefined
                 : this.normalizeSessionPermissionSuggestions(params.suggestions),
               metadata: params.metadata ?? {},
-            }, { forcePrompt: remoteForcePrompt });
+            };
+            let decision: InteractionDecision;
+            try {
+              decision = await dispatchWithTimeout(
+                remoteUnavailableHandoff
+                  ? annotatePermissionRequestForUnavailableReview(remotePermissionRequest)
+                  : remotePermissionRequest,
+                { forcePrompt: remoteForcePrompt },
+              );
+            } catch {
+              if (remoteUnavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+              return { kind: 'permission', behavior: 'deny', reason: 'approval_timeout' };
+            }
+            notifyIfAutoReviewConfirmUndelivered(remoteUnavailableHandoff, decision);
             if (decision.kind !== 'permission') {
               return { kind: 'permission', behavior: 'deny', reason: 'resolver kind mismatch' };
             }
@@ -3005,6 +3189,18 @@ export class ClaudeCodeAgent extends BaseAgent {
               permissionUpdates: remoteForcePrompt ? undefined : decision.permissionUpdates,
               reason: decision.reason,
             };
+          },
+          onSubagentModelAccessRequest: async (rawParams: unknown) => {
+            const params = typeof rawParams === 'object' && rawParams !== null
+              ? rawParams as Record<string, unknown>
+              : {};
+            const model = typeof params.model === 'string' ? params.model : '';
+            if (!model || !resolveSubagentModelAccess) return { status: 'unknown' };
+            try {
+              return await resolveSubagentModelAccess(model);
+            } catch {
+              return { status: 'unknown' };
+            }
           },
           // 订阅 token 到期续命(远端版,对齐本地 SDK options 的 getOAuthToken 回调,
           // 见 buildQuery 本地分支):远端 cc 中途 401 → daemon 发 oauth/refresh 反向
@@ -3072,6 +3268,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         })().catch(() => undefined);
 
         if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
+        if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(remoteQuery);
         return remoteQuery;
       }
 
@@ -3137,6 +3334,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               resumeRecoveryAttempted = false;
               freshSessionValidationPending = true;
               resumeSdkSid = undefined;
+              modelUsageCumulativeStartsAtZero = true;
             } else {
               log.warn('resume transcript not found in any project dir (CLI resume may fail)', {
                 resumeSdkSid,
@@ -3273,6 +3471,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       });
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
+      if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
       return query;
     };
 
@@ -3287,6 +3486,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     function teardownDeadHandle(logLabel: string): void {
       // Provider death is not a successful user cancellation. Session status
       // and the queued terminal error/done must decide observer settlement.
+      resetClaudeGenerationTiming(runtimeState.generation);
       discardActiveContinuation(logLabel);
       turnInFlight = false;
       // handle 死透 → 后续没有排队 turn 可跑, counter 归零避免残留污染下一 handle 重建
@@ -3320,6 +3520,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let bridgeSuppressedDoneData: Record<string, unknown> | undefined;
     function clearBridgeState(): void {
       queuedBridgeTurns = 0;
+      hostAutoCompactInFlight = false;
       activeBridgeKind = null;
       activeBridgeRewindResumeAt = undefined;
       bridgeCompactUsageSnapshot = null;
@@ -3454,6 +3655,14 @@ export class ClaudeCodeAgent extends BaseAgent {
      */
     let stopTerminalEmittedGeneration: number | null = null;
     let continuationCancellationRequiresQueryRebuild = false;
+    // Wake 契约对账定时器:见 WAKE_CONTRACT_GRACE_MS。claim 激活 / 取消 / 结算 /
+    // 丢弃 / query 换代时必须清掉,防止陈旧定时器误杀后继 claim。
+    let wakeContractReconcileTimer: NodeJS.Timeout | null = null;
+    const clearWakeContractReconciliation = (): void => {
+      if (!wakeContractReconcileTimer) return;
+      clearTimeout(wakeContractReconcileTimer);
+      wakeContractReconcileTimer = null;
+    };
     const continuationClaims = new Map<number, ContinuationClaim>();
     const continuationListeners = new Set<(
       continuationId: number,
@@ -3491,6 +3700,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       claim.state = 'cancelled';
       claim.settled = true;
       activeContinuationId = null;
+      clearWakeContractReconciliation();
       log.info('turn continuation cancelled', { reason, continuationId: claim.id });
       emitContinuationState(claim.id, 'cancelled');
       releaseSettledContinuationClaim(claim);
@@ -3501,6 +3711,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (!claim || claim.state !== 'active') return;
       claim.settled = true;
       activeContinuationId = null;
+      clearWakeContractReconciliation();
       log.info('turn continuation settled without a follow-up turn', {
         reason,
         continuationId: claim.id,
@@ -3508,6 +3719,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       releaseSettledContinuationClaim(claim);
     };
     const discardActiveContinuation = (reason: string, forceRelease = false): void => {
+      clearWakeContractReconciliation();
       if (continuationClaims.size > 0) {
         log.debug('discarding turn continuation claims', {
           reason,
@@ -3596,6 +3808,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       continuationClaims.set(claim.id, claim);
       activeContinuationId = claim.id;
       event.turnContinuationId = claim.id;
+      // 从 active 前任 carry 出来的 completed/failed 任务可能已全部终态 —— 下一
+      // 个 continuation 段同样受 wake 契约保护,创建即武装对账。
+      armWakeContractReconciliation(claim);
       // 探针:claim 创建是「continuation 悬挂」vs「done 未到达」的关键区分点。
       // 只记 id / taskId / state 枚举,不记消息文本与 task prompt(脱敏红线)。
       log.info('turn continuation claim created', {
@@ -3614,6 +3829,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       const states = [...claim.tasks.values()];
       // A completed/failed wake task still has the SDK continuation contract;
       // only an all-stopped group proves that a second `done` cannot arrive.
+      // (All-terminal-but-not-stopped groups fall through here and rely on the
+      // timed WAKE_CONTRACT_GRACE_MS reconciliation above: no continuation
+      // activity within the grace window means the contract is broken.)
       // Authority model: q.interrupt ACK is required when user Stop has no
       // provider confirmation and must revoke a completed/failed continuation
       // contract itself. An all-stopped snapshot is already provider-confirmed
@@ -3709,7 +3927,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           (prev?.wake || claim.tasks.has(taskId))
         ) {
           claim.tasks.set(taskId, status);
-          if (claim.state === 'awaiting') return reconcileActiveContinuation();
+          if (claim.state === 'awaiting') {
+            const cancelledClaim = reconcileActiveContinuation();
+            if (!cancelledClaim) armWakeContractReconciliation(claim);
+            return cancelledClaim;
+          }
         }
       }
       return null;
@@ -3734,6 +3956,43 @@ export class ClaudeCodeAgent extends BaseAgent {
         continuationCancellationGeneration = turnState.generation;
         continuationCancellationRequiresQueryRebuild = true;
       }
+    };
+    const claimTasksAllTerminal = (claim: ContinuationClaim): boolean => {
+      if (claim.tasks.size === 0) return false;
+      for (const state of claim.tasks.values()) {
+        if (state === 'running') return false;
+      }
+      return true;
+    };
+    /**
+     * Wake 契约对账:awaiting claim 的全部任务都到终态后,按 task_notification 续跑
+     * 契约顶层 continuation 段应随即开始。起表等待 WAKE_CONTRACT_GRACE_MS,期间
+     * claim 激活/结算/取消/换代都会清表;超时仍未激活即判定契约失守,走与用户 Stop
+     * 相同的取消路径(合成 turn_continuation_cancelled 终态 + cancelled-tail fence),
+     * 让宿主侧收口产品 turn,不再无限等待。
+     */
+    const armWakeContractReconciliation = (claim: ContinuationClaim): void => {
+      if (claim.state !== 'awaiting' || !claimTasksAllTerminal(claim)) return;
+      clearWakeContractReconciliation();
+      wakeContractReconcileTimer = setTimeout(() => {
+        wakeContractReconcileTimer = null;
+        const current = activeContinuationClaim();
+        if (
+          !current ||
+          current.id !== claim.id ||
+          current.state !== 'awaiting' ||
+          !claimTasksAllTerminal(current)
+        ) {
+          return;
+        }
+        log.info('wake contract unfulfilled: all wake tasks terminal without continuation activity', {
+          continuationId: current.id,
+          tasks: [...current.tasks.entries()],
+        });
+        cancelActiveContinuation('wake_contract_unfulfilled');
+        emitCancelledContinuationBoundary(current, 'wake_contract_unfulfilled');
+      }, WAKE_CONTRACT_GRACE_MS);
+      (wakeContractReconcileTimer as unknown as { unref?: () => void }).unref?.();
     };
 
     const releaseEventAccounting = (event: AgentEvent): void => {
@@ -3773,19 +4032,22 @@ export class ClaudeCodeAgent extends BaseAgent {
         continuationClaims.clear();
         continuationListeners.clear();
         pendingContinuationTerminalBoundaries = 0;
+        clearWakeContractReconciliation();
       }
     };
     // 逐个发起 stopTask,但不在这里等待 RPC:interrupt 必须先按控制通道顺序发出。
     // 返回每个 RPC 的 promise,供 interrupt ACK 后只退休真正成功的任务;失败任务
     // 仍留在本地账中,等待 provider 的真实 completed/stopped 事件继续记账。
+    const runningWakeTaskIds = (): string[] =>
+      [...runningBackgroundTasks.entries()]
+        .filter(([, info]) => info.wake)
+        .map(([taskId]) => taskId);
+
     function stopRunningWakeBackgroundTasks(
       reason: string,
     ): Array<{ taskId: string; promise: Promise<void> }> {
       if (runningBackgroundTasks.size === 0) return [];
-      const wakeIds: string[] = [];
-      for (const [taskId, info] of runningBackgroundTasks) {
-        if (info.wake) wakeIds.push(taskId);
-      }
+      const wakeIds = runningWakeTaskIds();
       if (wakeIds.length === 0) return [];
       // 远端老 daemon / 老 SDK 没有 stopTask:退化为原行为(interrupt-only),
       // proxy 活动检测 + 「全部停止」兜底仍在。
@@ -3829,6 +4091,45 @@ export class ClaudeCodeAgent extends BaseAgent {
         requests.push({ taskId, promise });
       }
       return requests;
+    }
+
+    async function settleWakeStopRequests(
+      requests: Array<{ taskId: string; promise: Promise<void> }>,
+    ): Promise<{ fulfilledWakeIds: string[]; rejectedWakeIds: string[] }> {
+      const settled = await Promise.allSettled(requests.map(({ promise }) => promise));
+      const fulfilledWakeIds: string[] = [];
+      const rejectedWakeIds: string[] = [];
+      requests.forEach(({ taskId }, index) => {
+        if (settled[index]?.status === 'fulfilled') fulfilledWakeIds.push(taskId);
+        else rejectedWakeIds.push(taskId);
+      });
+      return { fulfilledWakeIds, rejectedWakeIds };
+    }
+
+    async function waitForGracefulStopStep<T>(
+      promise: Promise<T>,
+      signal?: AbortSignal,
+    ): Promise<T> {
+      if (!signal) return promise;
+      if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+      return new Promise<T>((resolve, reject) => {
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException('aborted', 'AbortError'));
+        };
+        const cleanup = () => signal.removeEventListener('abort', onAbort);
+        signal.addEventListener('abort', onAbort, { once: true });
+        void promise.then(
+          (value) => {
+            cleanup();
+            resolve(value);
+          },
+          (error) => {
+            cleanup();
+            reject(error);
+          },
+        );
+      });
     }
 
     // ── Middle-turn 事件过滤 (Codex review 3534925347 / 3535259132 / 3535293200) ──
@@ -3925,9 +4226,30 @@ export class ClaudeCodeAgent extends BaseAgent {
               queuedBridgeTurns,
             });
             restoreBridgeAutoCompactSnapshot('bridge_compact_failed');
-            autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            const compactError =
+              typeof (e.data as { message?: unknown }).message === 'string'
+                ? (e.data as { message: string }).message
+                : '';
+            if (!opts.remoteHostId && isDeterministicHostCompactFailure(compactError)) {
+              autoCompactController?.markNeedsRollover('bridge_compact_failed');
+            } else {
+              autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            }
             return true;
           }
+        }
+        if (hostAutoCompactInFlight && e.type === 'error' && isTerminalAgentErrorEvent(e)) {
+          const compactError =
+            typeof (e.data as { message?: unknown }).message === 'string'
+              ? (e.data as { message: string }).message
+              : '';
+          log.warn('host auto-compact turn failed', {
+            reason: (e.data as { reason?: unknown } | null | undefined)?.reason,
+            message: compactError,
+          });
+          noteHostAutoCompactTerminalFailure(
+            compactError || 'Error during compaction: unknown host auto-compact failure',
+          );
         }
         if (e.type === 'status') {
           const data = e.data as { isRunning?: unknown } | null | undefined;
@@ -4013,6 +4335,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const getClaudeSubagentTaskUsage = this.deps.getClaudeSubagentTaskUsage;
     function completeTranslatedTurnEnd(): void {
       pendingToolIds.clear();
+      const endingHostAutoCompact = hostAutoCompactInFlight;
+      hostAutoCompactInFlight = false;
       if (queuedBridgeTurns > 0) {
         queuedBridgeTurns -= 1;
         log.debug('onTurnEnd: consumed one bridge turn, keeping turnInFlight + plan state', {
@@ -4037,7 +4361,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       turnInFlight = false;
       clearUpstreamResponseIdle();
-      triggerAutoCompactIfNeeded();
+      // 本轮已经是静默 /compact。瞬时失败由 onCompactCanceled 打开重试，等下一轮用户
+      // turn 结束再压；这里立刻再注入会把 401/过载打成紧循环。
+      if (!endingHostAutoCompact) triggerAutoCompactIfNeeded();
     }
     function startForwardLoop(currentQ: Query): void {
       // q 换代: 上一代 q 的 pending interrupted result 不可能从新 q drain 出来,
@@ -4151,7 +4477,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 消息"(assistant / stream_event)为证据补登记；若 provider 已给上一
             // done 锁存 continuation claim，result-only 也能证明自动续 turn 已开始。
             // 随后镜像 send 入口的
-            // per-turn 状态重置(beginNewTurn + toolLoopGuard.resetTurn),否则 guard
+            // per-turn 状态重置(beginNewTurn + resetToolLoopGuards),否则 guard
             // 会带着上一轮的陈旧计数误判。
             // 排除两种非新 turn 场景:
             //  - interruptRequested:watchdog / tool-loop 已 q.interrupt(),SDK 残留
@@ -4188,13 +4514,14 @@ export class ClaudeCodeAgent extends BaseAgent {
                 consumeTaskNotificationsForActiveSegment(claim);
                 claim.state = 'active';
                 emitContinuationState(claim.id, 'active');
+                clearWakeContractReconciliation();
               }
               log.debug('SDK ▶ turn activity without send — marking auto-continued turn in-flight', {
                 rawType,
                 sdkSessionId,
               });
-              beginNewTurn();
-              toolLoopGuard?.resetTurn();
+              beginNewTurn(mutableFastMode ? 'priority' : 'standard');
+              resetToolLoopGuards();
               turnInFlight = true;
             }
             noteUpstreamResponseActivity(typeof rawType === 'string' ? rawType : 'unknown');
@@ -4208,10 +4535,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               turn: turnState,
               log,
               getModel: () => mutableModel,
+              getProviderId: () => mutableProviderId,
               getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
+              getFastMode: () => mutableFastMode,
               getSdkSessionId: () => sdkSessionId,
+              modelUsageCumulativeStartsAtZero: () =>
+                modelUsageStartsAtZeroQueries.has(currentQ),
               getLogTitle: () => lastSendTitle,
               tracker: usageTracker,
               onSessionId: (sid) => {
@@ -4234,19 +4565,26 @@ export class ClaudeCodeAgent extends BaseAgent {
                 }
                 completeTranslatedTurnEnd();
               },
-              onToolUseStart: (id: string, toolName?: unknown, input?: unknown) => {
+              onToolUseStart: (
+                id: string,
+                toolName?: unknown,
+                input?: unknown,
+                parentToolUseId?: string,
+              ) => {
                 pendingToolIds.add(id);
-                toolLoopGuard?.onToolUse(id, toolName, input);
+                getToolLoopGuard(parentToolUseId)?.onToolUse(id, toolName, input);
                 clearUpstreamResponseIdle();
               },
-              onToolResultDone: (id: string, output: string) => {
+              onToolResultDone: (id: string, output: string, parentToolUseId?: string) => {
                 pendingToolIds.delete(id);
                 if (turnInFlight) {
-                  const verdict = toolLoopGuard?.onToolResult(id, output);
+                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(id, output);
                   if (verdict?.kind === 'hard') {
                     const loopHint = verdict.reason === 'consecutive'
                       ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
                       : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
+                    // 报错归属:sidechain 命中时报 subagent 实际模型,不冤枉会话模型。
+                    const loopModel = toolLoopGuardModelForScope(parentToolUseId);
                     // 与 upstream-idle watchdog 同款兜底: tool-loop 中断 = "整个 turn 序列已死",
                     // bridge counter 归零避免 filter 吞掉本条 error / counter 永久停在 >0。
                     // 实践上 bridge /compact turn 不用 tool, 该分支难以触发, 归零是防御性一致。
@@ -4267,14 +4605,14 @@ export class ClaudeCodeAgent extends BaseAgent {
                       type: 'error',
                       data: {
                         message:
-                          `上游模型 ${mutableModel} ${loopHint},疑似陷入死循环,` +
+                          `上游模型 ${loopModel} ${loopHint},疑似陷入死循环,` +
                           `已自动中断当前 turn。可以直接发下一条消息继续,` +
                           `已完成的 tool result 都保留。`,
                         isTerminal: true,
                         reason: 'tool_use_loop_detected',
                         loopKind: verdict.reason,
                         loopCount: verdict.count,
-                        model: mutableModel,
+                        model: loopModel,
                       },
                       source: 'claude-code',
                     });
@@ -4303,6 +4641,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                       autoCompactController?.onUsageUpdate(used, window);
                     },
                     onCompactBoundary: () => {
+                      hostAutoCompactInFlight = false;
                       memoryFlushController?.onCompactBoundary();
                       autoCompactController?.onCompactBoundary();
                     },
@@ -4607,8 +4946,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       // turnInFlight,否则 isTurnRunning() 会在没有 turn 运行时误报为忙。无 replay 的
       // 全新 query + startForwardLoop 等价于 startSession 首次起 q 的空闲态。
       if (replayInput) {
-        beginNewTurn();
-        toolLoopGuard?.resetTurn();
+        beginNewTurn(runtimeSnapshot.fastMode ? 'priority' : 'standard');
+        resetToolLoopGuards();
         turnInFlight = true;
       }
       try {
@@ -5144,8 +5483,8 @@ export class ClaudeCodeAgent extends BaseAgent {
 
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
-        beginNewTurn();
-        toolLoopGuard?.resetTurn();
+        beginNewTurn(mutableFastMode ? 'priority' : 'standard');
+        resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
         sendInAcceptPhase = true;
@@ -5317,6 +5656,59 @@ export class ClaudeCodeAgent extends BaseAgent {
         armUpstreamResponseIdle();
       },
 
+      async requestGracefulStop(stopOpts) {
+        if (canceledBridgeQueries.has(q)) {
+          throw new Error('Claude query is no longer active');
+        }
+        const awaitingContinuation = activeContinuationClaim();
+        if (!turnInFlight && awaitingContinuation?.state !== 'awaiting') {
+          throw new Error('No active Claude turn to stop');
+        }
+        const generation = turnState.generation;
+        turnState.interruptRequested = true;
+        turnState.interruptGeneration = generation;
+        cancelIdleHostAutoCompact('host_auto_compact_graceful_stop');
+        dismissAllPending('graceful_stop', 'deny');
+        // A parent result can leave the foreground idle while wake tasks still
+        // own an awaiting continuation. Interrupting that idle Query alone does
+        // not revoke the task-triggered follow-up turn. Share the same stopTask
+        // accounting as hard Stop, but keep graceful-stop fail-safe semantics:
+        // only confirmed task stops may close the local continuation contract,
+        // and any unsupported/rejected control request remains unconfirmed
+        // without closing the provider process.
+        const wakeIds = runningWakeTaskIds();
+        const stopRequests = stopRunningWakeBackgroundTasks('graceful_stop');
+        try {
+          await waitForGracefulStopStep(Promise.resolve().then(() => q.interrupt()), stopOpts?.signal);
+          const { fulfilledWakeIds, rejectedWakeIds } = await waitForGracefulStopStep(
+            settleWakeStopRequests(stopRequests),
+            stopOpts?.signal,
+          );
+          if (turnState.generation !== generation) return;
+          const fulfilledWakeIdSet = new Set(fulfilledWakeIds);
+          const unconfirmedWakeIds = runningWakeTaskIds().filter(
+            (taskId) => !fulfilledWakeIdSet.has(taskId),
+          );
+          if (
+            stopRequests.length !== wakeIds.length ||
+            rejectedWakeIds.length > 0 ||
+            unconfirmedWakeIds.length > 0
+          ) {
+            throw new Error('Claude graceful stop could not confirm all background task stops');
+          }
+          const stoppedClaim = markWakeTasksStopped(fulfilledWakeIds, 'graceful_stop');
+          const cancelledContinuation =
+            stoppedClaim ?? cancelActiveContinuation('graceful_stop');
+          if (cancelledContinuation) {
+            retireContinuationTasks(cancelledContinuation);
+            emitCancelledContinuationBoundary(cancelledContinuation, 'graceful_stop');
+          }
+        } catch (error) {
+          if (turnState.generation === generation) turnState.interruptRequested = false;
+          throw error;
+        }
+      },
+
       async abort() {
         // 只 interrupt 当前 turn, 不能 abortController.abort() ——
         // 那会杀掉整个 SDK Query, 让 streaming-input 流断开 (for await 抛
@@ -5382,6 +5774,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 前台仍在跑或 provider continuation 正在 awaiting 时都要锁定本代 Stop。
         // 后者的 turnInFlight 已经是 false，但 interrupt ACK 前的迟到 result 同样
         // 不得重新铸造 continuation claim。
+        cancelIdleHostAutoCompact('host_auto_compact_aborted');
         const awaitingContinuationAtUserStop = activeContinuationClaim();
         if (turnInFlight || awaitingContinuationAtUserStop?.state === 'awaiting') {
           turnState.interruptRequested = true;
@@ -5418,10 +5811,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // stopTask and interrupt share an ordered control channel: an
           // interrupt ACK guarantees these earlier stop requests have settled,
           // so allSettled intentionally has no extra timeout here.
-          const settledStops = await Promise.allSettled(stopRequests.map(({ promise }) => promise));
-          const fulfilledWakeIds = stopRequests
-            .filter((_, index) => settledStops[index]?.status === 'fulfilled')
-            .map(({ taskId }) => taskId);
+          const { fulfilledWakeIds } = await settleWakeStopRequests(stopRequests);
           // interrupt ACK authorizes retiring only wake tasks whose stop RPC
           // also succeeded. Rejected stops remain tracked for provider events,
           // preserving their continuation contract instead of creating an
@@ -5581,6 +5971,22 @@ export class ClaudeCodeAgent extends BaseAgent {
         }));
       },
 
+      countPendingWakeContinuations() {
+        // 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+        // runningBackgroundTasks 在任务终态时立即出表(noteBackgroundTaskEvent),
+        // 因此 listBackgroundTasks() 的空快照**不能**证明后续没有 wake turn ——
+        // renderer 的唤醒桥接对账必须以本计数为权威依据(为 0 才允许收口),
+        // 而不是把「没有仍在运行的任务」当成「没有待启动的 continuation」。
+        // cancelled 不计(不会再有 wake turn 跟进);awaiting / active 都计
+        // (active 期间主 turn isRunning 本就为 true,双重保护)。
+        if (closed) return 0;
+        let n = 0;
+        for (const claim of continuationClaims.values()) {
+          if (claim.state === 'awaiting' || claim.state === 'active') n += 1;
+        }
+        return n;
+      },
+
       beginTurnContinuationWait(continuationId?: number) {
         if (continuationId === undefined) return null;
         return continuationClaims.get(continuationId)?.state ?? null;
@@ -5600,6 +6006,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (closed) return;
         // Closing/dead sessions settle through Session status (or their queued
         // terminal event), never through the successful task-stop path.
+        resetClaudeGenerationTiming(runtimeState.generation);
         discardActiveContinuation('session_closed');
         clearUpstreamResponseIdle();
         pendingToolIds.clear();
@@ -5635,6 +6042,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? {
             async detach() {
               if (closed) return;
+              resetClaudeGenerationTiming(runtimeState.generation);
               discardActiveContinuation('session_detached', true);
               clearUpstreamResponseIdle();
               pendingToolIds.clear();
@@ -5669,7 +6077,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 走 tracker —— translator 在 message_delta 时 ingest, result 时 endTurn 锁定;
         // 这里读到的就是最新值 (mid-turn 反映累加, turn end 后 reset 前是 turn aggregate,
         // 下一 turn beginTurn 后 reset 为 0)。
-        return usageTracker.snapshot();
+        return {
+          ...usageTracker.snapshot(),
+          ...(autoCompactController?.needsRollover() ? { needsRollover: true } : {}),
+        };
       },
 
       async getContextUsage() {
@@ -5814,6 +6225,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因(目录解析失败、provider 被停用
         // 等);若换完又不可用,值得再提醒一次。
         autoReviewUnavailableNotice.reset();
+        autoReviewConfirmUndeliveredNotice.reset();
         if (
           !isControlBlocked
           && mutablePermissionMode === 'auto'
@@ -5853,7 +6265,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             triggerAutoCompactIfNeeded();
           }
         }
-        toolLoopGuard = isDeepSeekModel(mutableModel) ? new ToolLoopGuard() : null;
+        // 适用性在 getToolLoopGuard 里按已更新的 mutableModel 逐 scope 判,这里只清状态。
+        resetToolLoopGuards();
       },
 
       async setEffort(newEffort: Effort) {
@@ -5898,6 +6311,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         mutableFastMode = enabled;
       },
 
+      getEffort() {
+        return mutableEffort;
+      },
+
       getFastMode() {
         return mutableFastMode;
       },
@@ -5918,6 +6335,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (newMode !== mutablePermissionMode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewConfirmUndeliveredNotice.reset();
         }
         // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
         // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。

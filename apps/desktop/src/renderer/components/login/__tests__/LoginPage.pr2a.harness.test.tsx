@@ -29,6 +29,7 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   },
 }));
@@ -63,6 +64,11 @@ function scenarioClient(scenario: string, region: 'cn' | 'global' = 'cn') {
   });
 }
 
+async function identifierState(scenario = 'providers:both') {
+  const providers = await scenarioClient(scenario).getProviders();
+  return reduceAuthFlow(null, { type: 'providers-loaded', providers });
+}
+
 async function methodChoiceState(scenario: string, email = 'user@example-corp.com') {
   const methods = await scenarioClient(scenario).discover(email);
   return reduceAuthFlow(null, { type: 'discovery-loaded', email, methods });
@@ -92,6 +98,7 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
     errorCode: null,
     loginState: state,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
     ...extra,
   };
@@ -237,15 +244,30 @@ describe('verification-code', () => {
     expect(spin.className).toContain('motion-reduce:animate-none');
   });
 
+  it('identifier → verification-code 自动起算 42s(含 AuthContext 自动发码路径)', async () => {
+    const view = mount(await identifierState());
+    expect(screen.queryByTestId('login-resend-countdown')).toBeNull();
+    loginHook.value = {
+      ...loginHook.value,
+      loginState: await verificationState(),
+    };
+    view.rerender(<LoginPage />);
+    expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
+      'login.resendCountdown#42',
+    );
+  });
+
   it('重发成功重置 / 失败保持(dispatch 返回值驱动 arm)', async () => {
     vi.useFakeTimers();
-    const dispatch = vi.fn(async () => true);
-    mount(await verificationState(), { dispatch });
+    // request-code 走 dispatchWithResult(captcha 兜底需要读失败码),arm 由其
+    // success 驱动
+    const dispatchWithResult = vi.fn(async () => ({ success: true, code: null as string | null }));
+    mount(await verificationState(), { dispatchWithResult });
     // 初始无倒计时(直接注入态未经历 request-code) → 链接可点
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));
     });
-    expect(dispatch).toHaveBeenCalledWith(
+    expect(dispatchWithResult).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'request-code', kind: 'email' }),
     );
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
@@ -253,7 +275,7 @@ describe('verification-code', () => {
     );
     // 走到 0 → 再点一次但失败:不 arm,链接保持
     act(() => vi.advanceTimersByTime(42_000));
-    dispatch.mockResolvedValueOnce(false);
+    dispatchWithResult.mockResolvedValueOnce({ success: false, code: 'RATE_LIMITED' });
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));
     });

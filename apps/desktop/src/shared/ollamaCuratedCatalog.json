@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "qwen38": {
+    "id": "qwen38-27b",
+    "name": "Qwen3.8 27B",
+    "aliases": ["qwen", "qwen3.8", "qwen3", "tongyi", "qwq", "通义", "通義", "千问", "千問"],
+    "mxfp8": {
+      "libraryName": "qwen3.8:27b-mxfp8",
+      "sizeBytes": 34359738368,
+      "minUnifiedMemoryGb": 64,
+      "appleSiliconOnly": true
+    },
+    "mlx": {
+      "libraryName": "qwen3.8:27b-mlx",
+      "sizeBytes": 19327352832,
+      "minUnifiedMemoryGb": 32,
+      "appleSiliconOnly": true
+    },
+    "generic": {
+      "libraryName": "qwen3.8:27b",
+      "sizeBytes": 19327352832,
+      "minUnifiedMemoryGb": 32,
+      "appleSiliconOnly": false
+    }
+  },
+  "featuredIds": ["qwen38-27b", "gpt-oss-20b"],
+  "featuredCoderId": "ornith15-35b",
+  "models": [
+    {
+      "id": "gpt-oss-20b",
+      "name": "gpt-oss 20B",
+      "libraryName": "gpt-oss:20b",
+      "aliases": ["gpt", "openai", "oss", "gpt-oss"],
+      "sizeBytes": 15032385536,
+      "minUnifiedMemoryGb": 16
+    },
+    {
+      "id": "gemma4-e2b",
+      "name": "Gemma 4 E2B",
+      "libraryName": "gemma4:e2b",
+      "appleLibraryName": "gemma4:e2b-mlx",
+      "aliases": ["gemma", "gemma4", "google", "宝石", "寶石"],
+      "sizeBytes": 6657199309,
+      "minUnifiedMemoryGb": 8
+    },
+    {
+      "id": "gemma4-e4b",
+      "name": "Gemma 4 E4B",
+      "libraryName": "gemma4:e4b",
+      "appleLibraryName": "gemma4:e4b-mlx",
+      "aliases": ["gemma", "gemma4", "google", "宝石", "寶石"],
+      "sizeBytes": 7730941132,
+      "minUnifiedMemoryGb": 12
+    },
+    {
+      "id": "gemma4-12b",
+      "name": "Gemma 4 12B",
+      "libraryName": "gemma4:12b",
+      "appleLibraryName": "gemma4:12b-mlx",
+      "aliases": ["gemma", "gemma4", "google", "宝石", "寶石"],
+      "sizeBytes": 9126805504,
+      "minUnifiedMemoryGb": 16
+    },
+    {
+      "id": "gemma4-31b",
+      "name": "Gemma 4 31B",
+      "libraryName": "gemma4:31b",
+      "appleLibraryName": "gemma4:31b-mlx",
+      "aliases": ["gemma", "gemma4", "google", "宝石", "寶石"],
+      "sizeBytes": 21474836480,
+      "minUnifiedMemoryGb": 32
+    },
+    {
+      "id": "gemma4-26b",
+      "name": "Gemma 4 26B",
+      "libraryName": "gemma4:26b",
+      "appleLibraryName": "gemma4:26b-mlx",
+      "aliases": ["gemma", "gemma4", "google", "宝石", "寶石"],
+      "sizeBytes": 19327352832,
+      "minUnifiedMemoryGb": 32
+    },
+    {
+      "id": "ornith15-35b",
+      "name": "Ornith 1.5 35B",
+      "libraryName": "hf.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF:Q4_K_M",
+      "aliases": ["ornith", "coder", "code", "coding", "agent", "编程", "程式", "コード"],
+      "sizeBytes": 23301691187,
+      "minUnifiedMemoryGb": 32
+    },
+    {
+      "id": "glm-47-flash",
+      "name": "GLM-4.7 Flash",
+      "libraryName": "glm-4.7-flash",
+      "aliases": ["glm", "flash", "coder", "code", "coding", "zhipu", "智谱", "智譜", "编程", "程式", "コード"],
+      "sizeBytes": 20401094656,
+      "minUnifiedMemoryGb": 32
+    }
+  ]
+}

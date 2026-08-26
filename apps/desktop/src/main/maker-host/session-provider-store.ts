@@ -35,6 +35,11 @@ export function getSessionProvider(sessionId: string): string | null {
   return bySession.get(sessionId) ?? null;
 }
 
+/** 内存里是否已有该会话的来源条目(含显式 null)。未 hydrate 时为 false。 */
+export function hasSessionProvider(sessionId: string): boolean {
+  return bySession.has(sessionId);
+}
+
 /**
  * 从持久化值回填(会话加载时调用)。仅在内存尚无该会话条目时写入,
  * 不覆盖运行中已有的更新值(避免 DB 旧值盖掉本次 turn 刚切的供应商)。
@@ -48,4 +53,9 @@ export function hydrateSessionProvider(sessionId: string, providerId: string | n
 /** 会话关闭/销毁时清理内存条目。 */
 export function clearSessionProvider(sessionId: string): void {
   bySession.delete(sessionId);
+}
+
+/** 账户 / app-session 边界清理全部 owner-scoped 路由。 */
+export function clearAllSessionProviders(): void {
+  bySession.clear();
 }

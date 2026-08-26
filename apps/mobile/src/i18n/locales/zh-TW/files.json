@@ -46,6 +46,34 @@
     "a11yPreviewName": "預覽 {{name}}",
     "a11yPreviewNameLine": "預覽 {{name}} 第 {{line}} 行"
   },
+  "presentation": {
+    "grid": {
+      "today": "今天 {{time}}", "yesterday": "昨天 {{time}}", "empty": "資料夾是空的",
+      "summaryMixed": "{{dirs}} 個資料夾、{{files}} 個檔案", "summaryDirs": "{{count}} 個資料夾", "summaryFiles": "{{count}} 個檔案", "workdir": "工作目錄"
+    },
+    "preview": {
+      "nonText": {
+        "pdf": "PDF 檔案暫不支援在手機版內嵌預覽；請複製路徑，在電腦端或系統 PDF 閱讀器中開啟。",
+        "drawio": "Draw.io 檔案暫不支援在手機版內嵌預覽；請複製路徑，在電腦端繼續查看或編輯。",
+        "office": "Office 檔案暫不支援在手機版內嵌預覽；請複製路徑，在電腦端或系統應用程式中開啟。",
+        "binary": "目前檔案不是文字格式，手機版暫不讀取內容；可複製路徑到電腦端開啟。",
+        "unknown": "目前無法確認檔案類型，手機版暫不讀取內容；可複製路徑到電腦端開啟。",
+        "text": "可以視需要載入文字預覽。"
+      },
+      "pathOnly": "目前檔案只有路徑資訊，無法從遠端電腦讀取預覽。",
+      "loading": "正在從遠端電腦讀取文字預覽",
+      "ready": "已載入文字預覽 · {{size}}",
+      "idle": "視需要讀取遠端文字預覽，不會在訊息清單中批次擷取檔案內容。",
+      "failure": {
+        "oversize": "檔案超過遠端預覽上限 · {{limit}} · 目前 {{size}}",
+        "forbidden": "受控電腦拒絕讀取這個路徑。",
+        "notFound": "受控電腦上找不到這個檔案。",
+        "readFailed": "讀取失敗。",
+        "readFailedWithError": "讀取失敗：{{error}}",
+        "default": "目前無法預覽這個檔案。"
+      }
+    }
+  },
   "preview": {
     "done": "完成",
     "a11yShare": "匯出分享",

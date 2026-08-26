@@ -66,6 +66,15 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(channelDisclosureRule);
   });
 
+  it('requires Lead review without prescribing a harness-specific simplify command', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      'review the output, then synthesize the final report for the user.',
+    );
+    expect(prompt).not.toContain('/simplify');
+  });
+
   it('declares create_workers while preserving batch result reporting boundaries', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 

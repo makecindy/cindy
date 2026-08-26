@@ -8,7 +8,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
 import type { AgentDeps } from '../../base-agent.js';
@@ -74,5 +74,32 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     const result = await agent.listAgentSkills({ workingDir });
     // 真实环境可能有用户级 ~/.agents/skills,故只断言"不抛 + 是数组",不断言空。
     expect(Array.isArray(result.skills)).toBe(true);
+  });
+
+  it('includes Cindy-managed package skills only when the host explicitly allows them', async () => {
+    const resolver = vi.fn(async () => ({
+      extensions: [],
+      skills: [{ path: '/managed/sample/SKILL.md', name: 'managed-sample' }],
+      promptTemplates: [],
+      packageRoots: ['/managed/sample'],
+    }));
+    const agent = new PiAgent({ ...buildDeps(), resolvePiManagedPackageResources: resolver });
+
+    const isolated = await agent.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: false,
+    });
+    expect(isolated.skills.some((skill) => skill.name === 'managed-sample')).toBe(false);
+    expect(resolver).not.toHaveBeenCalled();
+
+    const ordinary = await agent.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: true,
+    });
+    expect(ordinary.skills).toContainEqual(expect.objectContaining({
+      name: 'managed-sample',
+      runtimeStatus: 'approved',
+    }));
+    expect(resolver).toHaveBeenCalledOnce();
   });
 });

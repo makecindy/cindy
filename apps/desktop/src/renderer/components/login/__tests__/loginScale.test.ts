@@ -7,6 +7,7 @@ import {
   PANEL_FIXED_SCALE,
   sloganShiftX,
 } from '../loginScale';
+import { CONTROL, PANEL, SSO_ORG_HISTORY } from '../loginDesignTokens';
 
 /**
  * 缩放公式行为单测(implementation-plan Step 2 WHAT1 锚点数值,demo v3.1 拍板)。
@@ -83,6 +84,22 @@ describe('panelPlacement(面板恒定 1x,用户拍板 2026-07-23,design.md §11)
 
   it('水平中心 = 视口中线 + 组中心偏移 0.5 设计px × 0.5', () => {
     expect(panelPlacement(1280, 800, 1229).centerX).toBeCloseTo(640.25, 6);
+  });
+
+  it.each([
+    ['小窗口', 800, 600],
+    ['16 寸级大窗口', 1728, 1117],
+  ])('%s下 SSO 候选层都锚定输入框下沿并收在面板内', (_label, width, height) => {
+    const placement = panelPlacement(width, height, 1227);
+    const inputBottom =
+      placement.topY + (CONTROL.inputY + CONTROL.height) * placement.scale;
+    const historyTop = placement.topY + SSO_ORG_HISTORY.y * placement.scale;
+    const historyBottom =
+      historyTop + SSO_ORG_HISTORY.maxHeight * placement.scale;
+    const panelBottom = placement.topY + PANEL.height * placement.scale;
+
+    expect(historyTop - inputBottom).toBe(8 * placement.scale);
+    expect(historyBottom).toBeLessThanOrEqual(panelBottom);
   });
 });
 

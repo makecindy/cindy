@@ -15,7 +15,7 @@ import type { InstalledGhost } from '../../../shared/ghost';
 
 function ghost(
   id: string,
-  opts: { enabled?: boolean; slots?: string[]; badge?: boolean } = {},
+  opts: { enabled?: boolean; notify?: boolean; badge?: boolean } = {},
 ): InstalledGhost {
   const badge = opts.badge ?? true;
   return {
@@ -26,7 +26,9 @@ function ghost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: badge ? [...(opts.slots ?? ['panel', 'notify']), 'badge'] : (opts.slots ?? ['panel', 'notify']),
+      panel: { html: 'panel.html' },
+      ...(opts.notify === false ? {} : { notify: true }),
+      ...(badge ? { badge: true } : {}),
 
     },
     dir: `/fake/${id}`,
@@ -39,8 +41,8 @@ describe('ghostUnreadProjection', () => {
     expect(ghostDeclaresBadge(ghost('a'))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { enabled: false }))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { badge: false }))).toBe(false);
-    // 没有 notify 槽照样算数——绿点与 toast 是并列的两档权限。
-    expect(ghostDeclaresBadge(ghost('a', { slots: ['panel'] }))).toBe(true);
+    // 没有 notify 能力照样算数——绿点与 toast 是并列的两档权限。
+    expect(ghostDeclaresBadge(ghost('a', { notify: false }))).toBe(true);
     expect(ghostDeclaresBadge(null)).toBe(false);
   });
 
@@ -60,8 +62,8 @@ describe('ghostUnreadProjection', () => {
     const entries = [{ ghostId: 'revoked' }, { ghostId: 'noslot' }, { ghostId: 'gone' }, { ghostId: 'ok' }];
     const ids = selectRevokedGhostUnreadIds(entries, [
       ghost('revoked', { badge: false }),
-      // 只丢了 notify 槽但 badge 还在 → **不算**撤销(两档权限彼此独立)。
-      ghost('noslot', { slots: ['panel'] }),
+      // 只丢了 notify 但 badge 还在 → **不算**撤销(两档权限彼此独立)。
+      ghost('noslot', { notify: false }),
       ghost('ok'),
     ]);
     expect(ids.sort()).toEqual(['gone', 'revoked']);

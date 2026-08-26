@@ -367,7 +367,7 @@ MVP 内置一个 adapter：`claude-code`。
 
 ### Cindy Desktop（本仓库默认 harness，开箱即用）
 
-Cindy Desktop 已内置自动注入：每次创建新 cc-agent / codex session 时，main 进程会探测 cwd 下是否有 `.cindy/project-knowledge/TOC.md`，存在就把这份预渲染 TOC 包成 `<project-context-toc>` wrapper 注入，缺失则 silently skip。
+Cindy Desktop 已内置自动入口：每次创建新的 Claude Code、Codex 或 Pi session 时，main 进程会探测 cwd 下是否有 `.cindy/project-knowledge/TOC.md`。存在且非空时，只把这个文件的短路径提示包成 `<project-context-toc>` wrapper；agent 在任务相关时再读取 TOC 和对应知识文件。TOC 正文不再占用每个 session 的启动上下文，缺失则 silently skip。
 
 - **无需任何 UI 开关**：所有用户默认启用（不再走"实验功能"入口）
 - **目录探测**：以 cwd 为根，命中 `.cindy/project-knowledge/TOC.md` 才触发

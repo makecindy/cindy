@@ -1,6 +1,6 @@
 import type { Session } from '@/lib/ccAgent.types';
 
-import type { FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
+import type { FilterProjectOrder, FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import { sessionActivityMs } from './dateSessionGrouping';
 import type { ProjectNode } from './projectGrouping';
@@ -26,13 +26,14 @@ export function sortProjectsForSidebar(
   projects: readonly ProjectNode[],
   sortBy: FilterSortBy,
   manualProjectOrder: readonly string[],
+  projectOrder: FilterProjectOrder = 'activity',
 ): ProjectNode[] {
   const withSortedSessions = projects.map((project) => ({
     ...project,
     sessions: sortSessionsForSidebar(project.sessions, sortBy),
   }));
 
-  if (sortBy === 'manual') {
+  if (projectOrder === 'custom') {
     const normalizedOrder = normalizeManualProjectOrder(
       manualProjectOrder,
       projects.map((project) => project.projectKey),

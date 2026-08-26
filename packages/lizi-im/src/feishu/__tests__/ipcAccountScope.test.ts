@@ -29,6 +29,7 @@ vi.mock('../wsClient.js', () => ({
   QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS: 4500,
   getCurrentStatus: mocks.getCurrentStatus,
   setLifecycleAnnouncement: vi.fn(),
+  clearOrphanRetriesForCredentialClear: vi.fn(),
   stop: mocks.stop,
   start: mocks.start,
 }));

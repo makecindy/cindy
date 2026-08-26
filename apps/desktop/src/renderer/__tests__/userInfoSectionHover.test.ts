@@ -23,7 +23,12 @@ const source = readFileSync(sourcePath, 'utf8');
 const localePath = resolve(__dirname, '..', 'i18n', 'locales', 'zh-CN', 'common.json');
 const locale = JSON.parse(readFileSync(localePath, 'utf8')) as {
   sidebar: {
-    user: { settingsLink: string; canaryBadge: string; downloadMobile: string };
+    user: {
+      settingsLink: string;
+      settingsLinkBeta: string;
+      canaryBadge: string;
+      downloadMobile: string;
+    };
     mobileDownload: { title: string };
   };
 };
@@ -32,12 +37,12 @@ const locale = JSON.parse(readFileSync(localePath, 'utf8')) as {
 
 describe('UserInfoSection — outer wrapper takes over full-row hover', () => {
   it('outer div keeps the sidebar footer slot', () => {
-    expect(source).toContain('mt-auto pt-1');
+    expect(source).toContain('mt-auto px-3 pb-3 pt-2');
   });
 
-  it('visible user card uses the tokenized capsule style with 12px container radius', () => {
+  it('visible user card uses the rounded tokenized capsule style', () => {
     expect(source).toContain(
-      'flex h-12 items-center rounded-xl border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',
+      'flex h-10 items-center rounded-full border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] px-[7px]',
     );
   });
 
@@ -80,6 +85,17 @@ describe('UserInfoSection — version label', () => {
     expect(source).toContain('{appVersionLabel}');
     expect(source).toContain('title={appVersionLabelDetail}');
   });
+
+  it('shows the Beta badge only after the persisted channel state has loaded', () => {
+    expect(source).toContain("import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';");
+    expect(source).toContain(
+      'const showBetaBadge = !betaChannelState.loading && betaChannelState.enableBeta;',
+    );
+    expect(source).toContain('data-testid="sidebar-beta-channel-badge"');
+    expect(source).toContain('bg-[var(--beta-channel-badge-bg)]');
+    expect(source).toContain('text-[var(--beta-channel-badge-fg)]');
+    expect(source).toContain("t('settings.betaChannel.badge')");
+  });
 });
 
 describe('UserInfoSection — Canary avatar badge', () => {
@@ -94,6 +110,18 @@ describe('UserInfoSection — Canary avatar badge', () => {
     expect(source).not.toContain("user.role === 'admin'");
     expect(locale.sidebar.user.canaryBadge).toBe('灰度用户');
   });
+
+  it('keeps the collapsed settings Tip from overlapping the Canary native title', () => {
+    expect(
+      source.match(/title=\{isCanary \? t\('sidebar\.user\.canaryBadge'\) : undefined\}/g),
+    ).toHaveLength(1);
+    expect(source).toMatch(
+      /className="relative h-\[27px\] w-\[27px\] shrink-0"\s+title=\{isCanary \? t\('sidebar\.user\.canaryBadge'\) : undefined\}/,
+    );
+    expect(source).not.toMatch(
+      /className="relative h-9 w-9 shrink-0"\s+title=\{isCanary \? t\('sidebar\.user\.canaryBadge'\) : undefined\}/,
+    );
+  });
 });
 
 describe('UserInfoSection — 未登录态头像兜底', () => {
@@ -101,13 +129,13 @@ describe('UserInfoSection — 未登录态头像兜底', () => {
     // 状态名四语各不相同(未登录 / Not signed in / 未ログイン / 로그인하지 않음),
     // 取首字会渲染成「未」/「N」这类无意义字符,所以这里必须走图标分支。
     expect(source).toContain('const showNotSignedInGlyph = !user && isLocal;');
-    // 折叠 rail(36px 圆)与展开胶囊(40px 圆)两处兜底都要接上
-    const matchCount = (
-      source.match(
-        /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{18\}/g,
-      ) ?? []
-    ).length;
-    expect(matchCount).toBe(2);
+    // 折叠 rail(36px 圆)与展开胶囊(27px 圆)两处兜底都要接上
+    expect(source).toMatch(
+      /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{18\}/,
+    );
+    expect(source).toMatch(
+      /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{15\}/,
+    );
   });
 
   it('已登录用户仍使用姓名首字兜底', () => {
@@ -119,12 +147,13 @@ describe('UserInfoSection — 未登录态头像兜底', () => {
 });
 
 describe('UserInfoSection — mobile download entry', () => {
-  it('uses the local Lucide Smartphone icon in a matching action button', () => {
+  it('uses the local Lucide Smartphone icon in a matching 22x22 capsule action', () => {
     expect(source).toContain(
       "import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';",
     );
-    expect(source).toMatch(/mobile-download-btn',\s*\r?\n\s*'flex shrink-0[\s\S]*isCollapsed \? 'h-8 w-8' : 'h-9 w-9'/);
-    expect(source).toContain('<Smartphone className="h-5 w-5" aria-hidden="true" />');
+    expect(source).toMatch(/'mobile-download-btn',\s*\n\s*'flex h-\[22px\] w-\[22px\]/);
+    expect(source).toContain("!isCollapsed && 'mr-1'");
+    expect(source).toContain('<Smartphone className="h-3 w-3" aria-hidden="true" />');
   });
 
   it('suppresses capsule hover while the mobile button owns the hover state', () => {
@@ -143,7 +172,7 @@ describe('UserInfoSection — mobile download entry', () => {
 
   it('keeps the same entry and dialog available in the collapsed sidebar', () => {
     expect(source).toContain(
-      'className="mt-auto flex h-[76px] flex-col items-center justify-center gap-1 px-3"',
+      'className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3"',
     );
     expect(source).toContain('{mobileDownloadEntry}');
   });
@@ -175,8 +204,21 @@ describe('UserInfoSection — inner main button no longer owns hover background'
   it('main button preserves onClick / role="link" / aria-label (跳转和无障碍不破)', () => {
     expect(source).toContain('onClick={handleClick}');
     expect(source).toContain('role="link"');
-    expect(source).toContain("aria-label={t('sidebar.user.settingsLink', { name: displayName })}");
+    expect(source).toContain(
+      "const settingsLinkLabel = t('sidebar.user.settingsLink', { name: displayName });",
+    );
+    expect(source).toContain('aria-label={settingsLinkLabel}');
     expect(locale.sidebar.user.settingsLink).toBe('设置，当前用户：{{name}}');
+  });
+
+  it('announces the enabled Beta channel from the expanded settings link', () => {
+    expect(source).toContain(
+      "? t('sidebar.user.settingsLinkBeta', { name: displayName })",
+    );
+    expect(source).toContain('aria-label={settingsLinkAriaLabel}');
+    expect(locale.sidebar.user.settingsLinkBeta).toBe(
+      '设置，当前用户：{{name}}，Beta 测试渠道已开启',
+    );
   });
 });
 
@@ -185,7 +227,7 @@ describe('UserInfoSection — inner main button no longer owns hover background'
 describe('UserInfoSection — Flame button carries .flame-btn marker class', () => {
   it("Flame button className list includes 'flame-btn' as the first entry", () => {
     // 关键: 外层 div 的 has-[.flame-btn:hover] 选择器必须能钩到这个 class
-    expect(source).toMatch(/'flame-btn',\s*\n\s*'flex h-9 w-9/);
+    expect(source).toMatch(/'flame-btn',\s*\n\s*'flex h-\[22px\] w-\[22px\]/);
   });
 
   it('Flame button retains its own hover:bg-sidebar-item-hover (capsule highlight when hovered)', () => {
@@ -193,9 +235,12 @@ describe('UserInfoSection — Flame button carries .flame-btn marker class', () 
     expect(source).toMatch(/'transition-colors hover:bg-sidebar-item-hover'/);
   });
 
-  it('Flame button keeps correct size and rounded-full inside the account capsule', () => {
+  it('Flame button keeps rounded-full + 22x22 size inside the account capsule', () => {
     expect(source).toContain(
-      'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+      'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
+    );
+    expect(source).toContain(
+      'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
     );
   });
 });

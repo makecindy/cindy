@@ -90,6 +90,7 @@ export {
 export {
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
+  type ModelDescriptor,
 } from './list_available_models.js';
 // history tools (split out from xdt-helper but kept exports here)
 export {
@@ -100,6 +101,25 @@ export {
   registerListSessionsTool,
   type ListSessionsToolDeps,
 } from './list_sessions.js';
+export {
+  registerListSessionQueueTool,
+  type SessionQueueDeps,
+  type SessionQueuedMessageEntry,
+} from './list_session_queue.js';
+export {
+  registerUpdateSessionQueuedMessageTool,
+  registerCancelSessionQueuedMessageTool,
+  registerSteerSessionTool,
+  registerStopSessionTurnTool,
+  registerGetSessionRuntimeTool,
+  registerSetSessionRuntimeTool,
+  type SessionControlDeps,
+  type SessionQueueControlErrorCode,
+  type SessionRuntimeProfile,
+  type SessionRuntimeSnapshot,
+  type SessionSteerErrorCode,
+  type SessionStopErrorCode,
+} from './session_control.js';
 export {
   registerGetChatHistoryTool,
   type GetChatHistoryToolDeps,

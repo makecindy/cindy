@@ -30,7 +30,12 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import {
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isCindyGatewayProviderId,
+  isGatewayProxyTokenInvalidError,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 import {
   formatRemoteError,
   isDeviceUnresponsiveRemoteError,
@@ -44,7 +49,9 @@ import {
   markCodexPlanTurnFailed,
 } from '@cindy/maker-shared/message-render';
 import {
+  normalizeAgentTaskTerminalStatus,
   normalizeWorkflowProgressEntries,
+  type AgentTaskTerminalStatus,
   type WorkflowProgressEntry,
 } from '@cindy/maker-shared/agent-task';
 import {
@@ -119,11 +126,13 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
+import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   markSessionAutomaticHistoryLoadCompleted,
   resetSessionAutomaticHistoryLoadCompletion,
 } from '@/lib/sessionScrollStore';
+import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { extractIpcError } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
@@ -196,6 +205,7 @@ const DEVICE_LINK_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
 const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   // Auto 档下审阅器没跑起来(与「模型判定动作危险」不同,后者刻意保持静默)。
   'AUTO_REVIEW_UNAVAILABLE',
+  'AUTO_REVIEW_CONFIRM_UNDELIVERED',
 ] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
@@ -344,6 +354,8 @@ export interface AskUserQuestionItem {
 
 export interface ChatMessage {
   clientId: string;
+  /** Server message id when this row came from history; used as a pagination cursor. */
+  id?: string;
   /** chat-text-quote:开头 blockquote 为引用功能产出(渲染判据),见 imageRef.ts。 */
   quotesEncoded?: boolean;
   /** Hidden semantic projection metadata for rich user-message references. */
@@ -372,6 +384,8 @@ export interface ChatMessage {
   toolUseId?: string;
   toolName?: string;
   toolInput?: unknown;
+  /** Durable Agent/Task terminal state restored from the tool_use row. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /**
    * Renderer-local timestamp for the latest in-place `update_plan` payload.
    * `createdAt` remains the persisted message creation time and must not be
@@ -473,7 +487,8 @@ export interface ChatMessage {
      * 派生、重开会话仍在;这条只活在退避那几秒,补发一发出就撤掉。
      */
     | 'auto-resume-pending'
-    | 'agent-switch';
+    | 'agent-switch'
+    | 'context-rebuild';
   systemCardData?: Record<string, unknown>;
   /** FP-3: plan_review message fields */
   planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
@@ -625,6 +640,14 @@ export interface AgentStatus {
   contextWindow: number;
   isRunning: boolean;
   startedAt: number | null;
+  /** Turn-cumulative output tokens for live TPS. */
+  outputTokens?: number;
+  /** Generation-only milliseconds including any open interval at emit time. */
+  generationDurationMs?: number;
+  /** True while the model currently owns the turn. */
+  generationActive?: boolean;
+  /** False hides live TPS. Omitted on placeholder status frames. */
+  generationReliable?: boolean;
   /**
    * Side-channel running (mivo MJ 按钮等不走 LLM 的后台任务)。
    * RunningStatusBar 据此把 token 计数行隐藏掉, 避免显示"上一轮残留 718 tokens"
@@ -642,6 +665,7 @@ export interface PendingPermission {
   displayName?: string;
   description?: string;
   suggestions?: unknown[];
+  autoReviewUnavailable?: boolean;
 }
 
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
@@ -811,6 +835,17 @@ export interface PendingRenameSessionsConfirm {
   }>;
 }
 
+/**
+ * Device Link 控制端对 Desktop-only 确认的只读投影。
+ *
+ * 真实 requestId 与确认内容只留在被控 Desktop；控制端只持有不可用于 resolve 的
+ * opaque id，以便显示等待状态并和 INTERACTION_DISMISSED 收敛。
+ */
+export interface PendingRemoteDesktopConfirmation {
+  requestId: string;
+  kind: 'issue_confirm' | 'rename_sessions_confirm' | 'ghost_grant_confirm';
+}
+
 /** FP-3: Plan Viewer Card display state. */
 export type PlanViewerState = 'expanded' | 'half' | 'minimized' | 'edit';
 
@@ -915,6 +950,40 @@ interface RemoteOptimisticSendScope {
 }
 
 let nextRemoteOptimisticRecoverySequence = 0;
+
+/** 各 session「正在识别图片中」toast id（duration 0 手动 dismiss），按 sessionId 隔离，
+ *  避免不同会话/窗口的输出互相误 dismiss；agent 首个输出或失败收口时清理对应 session。 */
+const _visionBridgeToastIds = new Map<string, string>();
+
+/** 清理指定 session 的「正在识别图片中」toast（dismiss 找不到 id 时是 no-op，安全）。 */
+function dismissVisionBridgeToast(sessionId: string): void {
+  const id = _visionBridgeToastIds.get(sessionId);
+  if (id) {
+    toast.dismiss(id);
+    _visionBridgeToastIds.delete(sessionId);
+  }
+}
+
+/** 视觉桥用户提示事件 reason 枚举（识别中 / fallback / 不可用）。 */
+const VISION_BRIDGE_REASONS = new Set([
+  'vision-bridge-recognizing',
+  'vision-bridge-fallback',
+  'vision-bridge-unavailable',
+]);
+
+/**
+ * 视觉桥提示事件判定：reason 命中枚举 且 source 是 main 合成的 'vision-bridge' 专用来源
+ * 且 isTerminal === false。三重校验避免把普通 agent / 远程转发的 error（含伪造 reason）
+ * 误当视觉桥提示弹 toast，或吞掉真实终态错误。
+ */
+function isVisionBridgeReason(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  const { type, data, source } = event as { type?: string; data?: unknown; source?: unknown };
+  if (type !== 'error' || source !== 'vision-bridge') return false;
+  const reason = (data as { reason?: unknown } | null)?.reason;
+  if (typeof reason !== 'string' || !VISION_BRIDGE_REASONS.has(reason)) return false;
+  return (data as { isTerminal?: unknown } | null)?.isTerminal === false;
+}
 
 function captureRemoteOptimisticSendScope(
   sessionId: string,
@@ -2255,6 +2324,12 @@ export interface SessionChatState {
    * agent 据此选 transport (stdio vs SSH-bridged daemon)。
    */
   remoteHostId: string | null;
+  /**
+   * 当前会话显式选定的供应商。undefined = 尚未从 session 行水合；
+   * null = 隐式 Cindy 网关默认来源。只用于给新排队项打 createOpts.providerId 快照，
+   * 不能拿来给历史 error 行重新分类。
+   */
+  sessionProviderId?: string | null;
   /** Internal: prevents infinite auth-retry loops for remote sessions. */
   _authRetryInFlight?: boolean;
   /** Internal: clientId of the last user message that triggered auth-retry (prevents re-retrying same message). */
@@ -2265,6 +2340,8 @@ export interface SessionChatState {
     data: Record<string, unknown> | null;
     agentMeta: Record<string, unknown> | null;
   };
+  /** Internal: root user input whose rejected Cindy gateway credential was already retried. */
+  _gatewayProxyTokenRetriedRootClientId?: string;
   /**
    * Internal: consecutive auto-retry count for this session. Hard cap against
    * the rare loop where the key refreshes successfully every time but the
@@ -2409,6 +2486,10 @@ export interface SessionChatState {
   pendingRenameSessionsConfirm: PendingRenameSessionsConfirm | null;
   /** ghost_grant_confirm: ghost_call 过户 workdir 外文件的确认卡片; null when none. */
   pendingGhostGrantConfirm: PendingGhostGrantConfirm | null;
+  /** Device Link 控制端上的 Desktop-only 只读确认提示; null when none. */
+  pendingRemoteDesktopConfirmation: PendingRemoteDesktopConfirmation | null;
+  /** 同一会话内其余 Desktop-only 只读确认，按首次收到顺序等待展示。 */
+  pendingRemoteDesktopConfirmationQueue: PendingRemoteDesktopConfirmation[];
   /** FP-3: Plan Viewer Card display state (only meaningful when pendingPlanReview != null). */
   planViewerState: PlanViewerState;
   /** FP-3: Last non-minimized state — used to restore from minimized via the "+" button. */
@@ -2508,13 +2589,70 @@ export interface SessionChatState {
    * 转换,误发「会话已完成」通知 + 侧栏 spinner 抖动。
    *
    * 置位:agent_task_update 里 wake 型任务(local_agent / local_workflow)到达
-   *   completed / failed 终态、且当时没有 turn 在跑(!agentStatus.isRunning)。
+   *   completed / failed 终态即置位——无论当时主 turn 是否还在跑。wake 任务若在
+   *   主 turn 仍 running 时终态,桥接仍需在主 turn Done 之后继续存活,直到 wake
+   *   turn 启动,避免 ChatInput 用不完整上下文发起预测。
    *   stopped(killed)不置位——interrupt 杀掉的任务不会有 wake turn 跟进。
    * 清除:真实 turn 的任意 status update(wake turn 的 message_start 必发
    *   isRunning:true)/ stopSession / session closed 兜底 / clearSession /
    *   reloadMessages。
    */
-  pendingTaskWake: boolean;
+  pendingTaskWake: number;
+  /**
+   * 唤醒桥接的「跨主 turn」标记:记录 pendingTaskWake 是否是在主 turn 仍 running
+   * (agentStatus.isRunning === true)时置位的。
+   *
+   * 背景(见 pendingTaskWake):桥接在「wake 任务终态 → wake turn 启动」的空窗撑住
+   * running 快照。但「主 turn 的 Done」与「wake turn 失败的 Done」从 renderer 视角
+   * 都是 status='Done' + isRunning=false,只能靠置位时主 turn 是否还在跑来区分:
+   * - 主 turn 还在跑时置位 → 紧接着的 Done 是主 turn 自己的 Done,桥接必须跨过它
+   *   继续存活,直到 wake turn 真正启动(isRunning:true)才清除;标记自身则在主轮
+   *   Done 越过时立即退休(只清标记、不清桥接),好让后续 wake turn 失败的 Done
+   *   能正常清除桥接;
+   * - 主 turn 已结束(!isRunning)才置位 → 下一个 Done 只能是 wake turn 失败的 Done
+   *   (wake turn 从未启动),此时应清除桥接,否则 running 快照永久转圈。
+   *
+   * 为什么需要这个标记:主轮结束前,SDK 可能先推一个 isRunning=false 且
+   * status !== 'Done' 的中间 status 事件(把 agentStatus.isRunning 提前翻 false),
+   * 此时若只用「Done 时 agentStatus.isRunning 是否为 false」来判断是否清除桥接,
+   * 会把主轮自己的 Done 误判成 wake 失败、提前撤销桥接,导致 ChatInput 在 wake 最终
+   * 回复到达前就用不完整上下文发起一次付费预测。
+   */
+  pendingTaskWakeDuringTurn: number;
+  /**
+   * 唤醒桥接的「isTurnStart 已消费」标记:记录当前 wake turn 是否已通过 isTurnStart
+   * 消费了一个桥接计数。当 SDK 在 Done 之前推送中间 isRunning=false 时，
+   * Done 分支会因 !agentStatus.isRunning 为 true 而误判为 wake turn 失败，
+   * 重复消费下一个任务的桥接计数。本标记阻断此路径:
+   * - isTurnStart 且 pendingTaskWake > 0 → 置 true（已消费）
+   * - isTurnComplete → 置 false（清理）
+   * - Done 分支消费桥接前检查本标记:若为 true 则跳过（本轮已消费过）
+   *
+   * 仅运行时使用，不持久化。
+   */
+  pendingTaskWakeStarted: boolean;
+  /**
+   * 唤醒桥接最近一次置位时刻(ms)。仅 wakesAfterTerminal 置位时刷新,清零路径
+   * 顺带置 null(残留旧值无害:所有读取方都以 pendingTaskWake > 0 为前置)。
+   * 用途:桥接对账收口的最小年龄闸 —— 距最近置位不足
+   * WAKE_BRIDGE_RECONCILE_MIN_AGE_MS 时不收口,防止把「合法但启动慢于对账
+   * 延迟的 wake 空窗」误判为泄漏(bot review:旧快照不得清新桥接)。
+   */
+  pendingTaskWakeArmedAt: number | null;
+  /**
+   * 唤醒桥接置位代次:仅 wakesAfterTerminal 置位时自增,消费 / 清零不动。
+   * 用途:桥接对账的代际标识 —— 收口要求「计数与代际捕获值一致 **且** 代次未变」。
+   * 只比计数会被 ABA 碰撞骗过(快照响应在飞超长时,旧桥接被消费、新终态又把
+   * 计数恢复到捕获值),代次单调递增使「期间有过新置位」必然可见(bot review P1)。
+   */
+  pendingTaskWakeGen: number;
+  /**
+   * 用户主动 Stop 标记:会话级(非组件级),确保同一 session 在多窗口打开时
+   * 任一窗口的 Stop 都能阻止其他窗口触发预测等后续行为。
+   * 置位:stopSession(用户主动 Stop 时)。
+   * 清除:新 turn 启动(isRunning false→true)时复位。
+   */
+  turnStoppedByUser: boolean;
   /**
    * agent-meta: 上一条 SDK assistant message 的 cc 元信息——mid-turn 抢救
    * assistant 累积流（tool_use / ask_user / plan_review 切流时把累积文本落
@@ -2553,6 +2691,7 @@ export type SessionChatLightState = Pick<
   | 'pendingIssueConfirm'
   | 'pendingRenameSessionsConfirm'
   | 'pendingGhostGrantConfirm'
+  | 'pendingRemoteDesktopConfirmation'
   | 'planViewerState'
   | 'lastExpandedPlanViewerState'
   | 'pendingQueue'
@@ -2562,6 +2701,9 @@ export type SessionChatLightState = Pick<
   | 'fastMode'
   | 'planModeEnabled'
   | 'agentSwitchIntent'
+  | 'pendingTaskWake'
+  | 'pendingTaskWakeStarted'
+  | 'turnStoppedByUser'
 >;
 
 function createInitialState(): SessionChatState {
@@ -2611,6 +2753,8 @@ function createInitialState(): SessionChatState {
     pendingIssueConfirm: null,
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
+    pendingRemoteDesktopConfirmation: null,
+    pendingRemoteDesktopConfirmationQueue: [],
     planViewerState: 'expanded',
     lastExpandedPlanViewerState: 'expanded',
     oldestMessageId: null,
@@ -2627,7 +2771,12 @@ function createInitialState(): SessionChatState {
     planModeEnabled: false,
     planModeRev: 0,
     lastStopWasSideTask: false,
-    pendingTaskWake: false,
+    pendingTaskWake: 0,
+    pendingTaskWakeDuringTurn: 0,
+    pendingTaskWakeStarted: false,
+    pendingTaskWakeArmedAt: null,
+    pendingTaskWakeGen: 0,
+    turnStoppedByUser: false,
     lastAgentMeta: null,
   };
 }
@@ -2682,6 +2831,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   pendingIssueConfirm: null,
   pendingRenameSessionsConfirm: null,
   pendingGhostGrantConfirm: null,
+  pendingRemoteDesktopConfirmation: null,
+  pendingRemoteDesktopConfirmationQueue: [],
   planViewerState: 'expanded',
   lastExpandedPlanViewerState: 'expanded',
   pendingQueue: [],
@@ -2695,7 +2846,12 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   planModeEnabled: false,
   planModeRev: 0,
   lastStopWasSideTask: false,
-  pendingTaskWake: false,
+  pendingTaskWake: 0,
+  pendingTaskWakeDuringTurn: 0,
+  pendingTaskWakeStarted: false,
+  pendingTaskWakeArmedAt: null,
+  pendingTaskWakeGen: 0,
+  turnStoppedByUser: false,
   lastAgentMeta: null,
 }) as SessionChatState;
 
@@ -3169,9 +3325,16 @@ function isBeforeOrAtRendererClearBoundary(sessionId: string, createdAt: string)
  * explicitly free a specific session.
  */
 function _purgeSession(sessionId: string): void {
+  // session 删除/归档/驱逐：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   discardPendingTextDelta(sessionId);
   discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
+  // Invalidate background-task snapshots too: an in-flight response must not
+  // recreate a purged session or schedule a retry for its old lifecycle.
+  invalidateBackgroundTaskReconcile(sessionId);
+  cancelBackgroundTaskReconcile(sessionId);
+  backgroundTaskStaleRetrySessions.delete(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   invalidateMessageHistoryWindow(sessionId);
@@ -3180,6 +3343,8 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
+  clearWakeBridgeReconcileTimer(sessionId);
+  cancelIdlePlanDiscovery(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
   pendingLocalRetryIntents.delete(sessionId);
@@ -3267,8 +3432,47 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
     s.pendingRenameSessionsConfirm ||
-    s.pendingGhostGrantConfirm
+    s.pendingGhostGrantConfirm ||
+    s.pendingRemoteDesktopConfirmation ||
+    s.pendingRemoteDesktopConfirmationQueue.length > 0
   );
+}
+
+/**
+ * 已加载窗口里最新连续段的最老一行。
+ *
+ * `messages` 是 oldest-first。窗口可能是「更老的孤岛 + 缺口 + 最新连续尾段」，
+ * 此时 `messages[0]` 是孤岛边缘，不是向上翻页该用的游标。切段尺子与渲染层相同
+ * (`HISTORY_GAP_SPLIT_MS`)；没有超过该阈值的空洞时，整窗都算最新连续段。
+ */
+function oldestMessageOfNewestContiguousRun(messages: ChatMessage[]): ChatMessage | null {
+  if (messages.length === 0) return null;
+  let runStart = 0;
+  for (let i = 1; i < messages.length; i++) {
+    const prev = messageTime(messages[i - 1].createdAt);
+    const next = messageTime(messages[i].createdAt);
+    if (!Number.isFinite(prev) || !Number.isFinite(next)) continue;
+    if (next - prev > HISTORY_GAP_SPLIT_MS) runStart = i;
+  }
+  return messages[runStart] ?? null;
+}
+
+function messageMatchesHistoryCursor(
+  message: ChatMessage,
+  cursorId: string,
+): boolean {
+  return message.clientId === cursorId || message.id === cursorId;
+}
+
+function retainedWindowKeepsGapCursor(
+  retained: ChatMessage[],
+  oldestMessageId: string | null,
+): boolean {
+  if (typeof oldestMessageId !== 'string' || oldestMessageId.length === 0) return false;
+  const cursorIndex = retained.findIndex((message) =>
+    messageMatchesHistoryCursor(message, oldestMessageId),
+  );
+  return cursorIndex > 0;
 }
 
 function _trimMessagesIfNeeded(sessionId: string): void {
@@ -3277,11 +3481,10 @@ function _trimMessagesIfNeeded(sessionId: string): void {
   if (_isSessionBusy(sessionId, state)) return;
   if (_activeViewSessions.has(sessionId)) return;
 
-  // 裁剪等于一次代际重置:它砍掉窗口中段、把 oldestMessageId 清空,in-flight 的翻页 /
-  // 跳转补齐若仍按 pre-trim 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉
-  // 的区间成了新的空洞,而补齐还可能据此判 covered 并清掉孤岛标记(#676 review)。
-  // 所以照 reloadMessages / clear / edit-last 同一规矩:bump epoch 作废 in-flight,并由
-  // 本次重置自己释放分页锁。
+  // 裁剪等于一次代际重置:它砍掉窗口中段。in-flight 的翻页 / 跳转补齐若仍按 pre-trim
+  // 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉的区间成了新的空洞,
+  // 而补齐还可能据此判 covered 并清掉孤岛标记(#676 review)。所以照 reloadMessages /
+  // clear / edit-last 同一规矩:bump epoch 作废 in-flight,并由本次重置自己释放分页锁。
   bumpMessagesEpoch(sessionId);
   setState(sessionId, (s) => {
     // 兜底早返(当前不可达:上面三道守卫都在 bump 之前,而 setState 是同步的、拿到的就是
@@ -3290,21 +3493,21 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
-    const preTrimPlanState = getLatestMessageTodoState(s.messages);
-    const trimmedMessages = s.messages.slice(-TRIM_TARGET);
-    const trimmedPlanState = getLatestMessageTodoState(trimmedMessages);
-    const needsPlanReloadAfterTrim =
-      s.historyLoaded &&
-      preTrimPlanState.insertion !== null &&
-      (!trimmedPlanState.hasPlanEvent || !trimmedPlanState.isResolved);
-
+    const retained = s.messages.slice(-TRIM_TARGET);
+    // 连续尾段被裁短、孤岛已不在保留窗口里:游标清成 null,loadOlderMessages 走
+    // beforeTs(messages[0]),从新的窗口下沿接着往更早翻。
+    // 保留窗口里还夹着孤岛(最新连续尾段不足 200 行):必须留下「最新连续段最老一行」
+    // 的精确游标。清成 null 后空闲恢复会拿 messages[0](孤岛)当 beforeTs,向更老处
+    // 翻页,填不了孤岛与尾段之间的缺口,未解析计划会一直缺席到整窗重载。
+    const keepGapCursor =
+      s.historyWindowHasIsland === true &&
+      retainedWindowKeepsGapCursor(retained, s.oldestMessageId);
     return {
       ...s,
-      messages: trimmedMessages,
+      messages: retained,
       hasMoreMessages: true,
-      oldestMessageId: null,
+      oldestMessageId: keepGapCursor ? s.oldestMessageId : null,
       isLoadingMore: false,
-      ...(needsPlanReloadAfterTrim ? { historyLoaded: false } : {}),
       // 孤岛标记**保持原值**:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
       // 连续 —— 若先前几次深跳留下多个孤岛、而真正连续的尾段不足 200 行,裁剪结果里就还夹着
       // 孤岛。清掉标记会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,而从孤岛
@@ -3312,8 +3515,6 @@ function _trimMessagesIfNeeded(sessionId: string): void {
       //
       // 代价是出现过孤岛的会话在裁剪后仍会多做补齐尝试;方向上是安全的那一侧。
       // 真正清零只发生在"整窗从最新重建"的路径(reloadMessages / clear / demote / purge)。
-      // 注意游标被清成 null:此时补齐会从最新页重新起翻(见 backfillHistoryUntil 的首页分支),
-      // 恰好能穿过缺失区间自愈。
     };
   });
 }
@@ -3346,10 +3547,59 @@ const _activeViewSessions = new Map<string, number>();
 // reloaded history shows only the persisted ErrorMessageCard.
 const _pendingErrorClearOnLeave = new Set<string>();
 
+/** Terminal error 后、配对 done 到达前，凭据刷新必须等 host 空闲。 */
+const GATEWAY_PROXY_TOKEN_TURN_SETTLE_MS = 5_000;
+const gatewayProxyTokenTurnSettledWaiters = new Map<string, Array<() => void>>();
+
+function notifyGatewayProxyTokenTurnSettled(sessionId: string): void {
+  const waiters = gatewayProxyTokenTurnSettledWaiters.get(sessionId);
+  if (!waiters || waiters.length === 0) return;
+  gatewayProxyTokenTurnSettledWaiters.delete(sessionId);
+  for (const waiter of waiters) waiter();
+}
+
+function waitForGatewayProxyTokenTurnSettled(
+  sessionId: string,
+  dataOwnerAtIngress: DataOwnerGeneration,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const remaining = gatewayProxyTokenTurnSettledWaiters.get(sessionId);
+      if (remaining) {
+        const next = remaining.filter((waiter) => waiter !== finish);
+        if (next.length === 0) gatewayProxyTokenTurnSettledWaiters.delete(sessionId);
+        else gatewayProxyTokenTurnSettledWaiters.set(sessionId, next);
+      }
+      resolve();
+    };
+    const timer = setTimeout(finish, GATEWAY_PROXY_TOKEN_TURN_SETTLE_MS);
+    const waiters = gatewayProxyTokenTurnSettledWaiters.get(sessionId) ?? [];
+    waiters.push(finish);
+    gatewayProxyTokenTurnSettledWaiters.set(sessionId, waiters);
+    if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) finish();
+  });
+}
+
+function resolveGatewayRecoveryProviderId(
+  createOpts: { providerId?: string | null } | undefined,
+  session: Pick<SessionChatState, 'agentSwitchIntent' | 'sessionProviderId'>,
+): string | null | undefined {
+  if (createOpts && Object.prototype.hasOwnProperty.call(createOpts, 'providerId')) {
+    return createOpts.providerId ?? null;
+  }
+  if (session.agentSwitchIntent) return session.agentSwitchIntent.providerId;
+  return session.sessionProviderId;
+}
+
 function enterView(sessionId: string): () => void {
   _activeViewSessions.set(sessionId, (_activeViewSessions.get(sessionId) ?? 0) + 1);
   _lastViewedAt.delete(sessionId);
   _ensureDemoteTimer();
+  scheduleIdlePlanDiscoveryIfNeeded(sessionId);
   return () => leaveView(sessionId);
 }
 
@@ -3362,6 +3612,7 @@ function leaveView(sessionId: string): void {
     return;
   }
   _activeViewSessions.delete(sessionId);
+  cancelIdlePlanDiscovery(sessionId);
   _lastViewedAt.set(sessionId, Date.now());
   if (_pendingErrorClearOnLeave.has(sessionId)) {
     _pendingErrorClearOnLeave.delete(sessionId);
@@ -3392,6 +3643,7 @@ function _demoteIdleSessions(): void {
     // 等于代际重置,必须 bump epoch 作废 in-flight 的翻页 / 跳转补齐,并由本次重置释放
     // 分页锁。漏 bump 的后果是 in-flight 那一页按 demote 前的游标提交,把一段脱离上下文
     // 的旧历史 merge 进空切片(或重开后的新切片),最近的消息反而缺席(#676 review)。
+    cancelIdlePlanDiscovery(sessionId);
     invalidateMessageHistoryWindow(sessionId);
     setState(sessionId, (s) => ({
       ...s,
@@ -3462,6 +3714,49 @@ function setState(
   // messages:created 的侧栏时间戳与 chat state 保持原有先后：先通知消息，再 patch 列表。
   flushPendingMessageCreatedPatch(sessionId);
   if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
+}
+
+/**
+ * 唤醒桥接对账(见 pendingTaskWake 字段注释):桥接在「wake 任务终态 → wake turn
+ * 启动」的窗口里撑住 running 快照,但上游 CLI 在「后台子 agent 于主 turn 运行中完成」
+ * 的时机会把 task-notification 当 mid-turn 附件消费掉,续跑 turn 永远不会来 —— 桥接
+ * 便在主 turn Done 之后无限期等待,sidebar 永久转圈。桥接挂起(计数 > 0 且会话非
+ * running)时起表:宽限期内 isTurnStart 照常消费计数(isRunning 翻 true 即解除);
+ * 超时仍未启动则清空桥接,让 running 快照收敛为事实 —— 任务卡早已显示终态,不丢信息。
+ */
+export const WAKE_BRIDGE_RECONCILE_MS = 60_000;
+const wakeBridgeReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearWakeBridgeReconcileTimer(sessionId: string): void {
+  const timer = wakeBridgeReconcileTimers.get(sessionId);
+  if (!timer) return;
+  clearTimeout(timer);
+  wakeBridgeReconcileTimers.delete(sessionId);
+}
+
+function scheduleWakeBridgeReconciliation(sessionId: string): void {
+  const state = sessions.get(sessionId);
+  if (!state || state.pendingTaskWake <= 0 || state.agentStatus.isRunning) {
+    clearWakeBridgeReconcileTimer(sessionId);
+    return;
+  }
+  // 已在计时:保持首次挂起时刻的截止线,后续无关事件不刷新窗口。
+  if (wakeBridgeReconcileTimers.has(sessionId)) return;
+  const timer = setTimeout(() => {
+    wakeBridgeReconcileTimers.delete(sessionId);
+    // slice 可能已被 clearSession / LRU 逐出;setState 会重建 slice,先探测再动。
+    if (!sessions.has(sessionId)) return;
+    setState(sessionId, (s) => {
+      if (s.pendingTaskWake <= 0 || s.agentStatus.isRunning) return s;
+      return {
+        ...s,
+        pendingTaskWake: 0,
+        pendingTaskWakeDuringTurn: 0,
+        pendingTaskWakeStarted: false,
+      };
+    });
+  }, WAKE_BRIDGE_RECONCILE_MS);
+  wakeBridgeReconcileTimers.set(sessionId, timer);
 }
 
 function notify(sessionId: string): void {
@@ -4203,7 +4498,7 @@ function isTerminalErrorData(data: unknown): boolean {
 
 function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex' | 'pi',
+  source?: string,
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -4337,15 +4632,15 @@ function hasRunningWakeTask(state: SessionChatState): boolean {
  * 折算总入口:该会话是否有「本地」后台 agent 工作(wake 任务在跑 / 唤醒桥接中)。
  * getRunningSnapshot / _isSessionBusy / _evictLruIfNeeded 统一走这里。
  *
- * 远程(device-link 控制端)会话豁免(review P1):mirror 事件有设计内的丢失
+ * 远程(device-link 控制端 / SSH)会话豁免(review P1):mirror 事件有设计内的丢失
  * 窗口(断连/重连),而 taskUpdates 不在 reconcile 对账覆盖内、stall 看门狗只认
  * agentStatus.isRunning——终态事件掉在窗口里的话 spinner 会永久转且无自愈路径,
  * demote 兜底还会被 busy 守卫自己挡掉。远程侧宁可保持修复前行为(空窗期不转),
  * 换确定性;被控端本机的 sidebar 折算不受影响。
  */
 function hasBackgroundAgentWork(sessionId: string, state: SessionChatState): boolean {
-  if (!state.pendingTaskWake && !hasRunningWakeTask(state)) return false;
-  return !isRemoteSession(sessionId);
+  if (state.pendingTaskWake === 0 && !hasRunningWakeTask(state)) return false;
+  return !isRemoteSessionSticky(sessionId) && !state.remoteHostId;
 }
 
 /**
@@ -4493,7 +4788,7 @@ export function handleStreamEvent(
       : null;
   const isCodexReconnectProgress =
     event.type === 'error' &&
-    event.source === 'codex' &&
+    (event.source === 'codex' || event.source === 'pi') &&
     !isTerminalErrorData(event.data) &&
     reconnectAttempt !== null &&
     !isCodexUserActionableRetryError(event.data);
@@ -4534,6 +4829,7 @@ export function handleStreamEvent(
   };
   switch (event.type) {
     case 'text': {
+      dismissVisionBridgeToast(event.sessionId);
       const { text, isFinal, isFullText } = event.data as {
         text: string;
         isFinal: boolean;
@@ -4806,23 +5102,69 @@ export function handleStreamEvent(
       // 空窗里到达 completed / failed 终态 → SDK 马上会自动开 wake turn,置位
       // 桥接标记撑住 running 快照,防止空窗里闪出假的 running→stopped 转换。
       // stopped(interrupt 杀掉)不置位——不会有 wake turn 跟进,置了就永久转圈。
-      // 已知竞态(有意接受):任务终态若恰在主 turn Done 前一瞬到达(isRunning
-      // 仍 true),不置桥接 → 紧跟的 Done 会提前发一次 done 通知,wake turn 结束
-      // 再发一次(即退化为修复前行为,不劣于现状;反向置位会被紧跟的 Done 清掉,
-      // renderer 侧无法彻底关死)。
+      // 任务终态若在主 turn 仍 running 时到达,仍置桥接标记,让 Done 后的
+      // hasBackgroundAgentWork 返回 true,阻止 ChatInput 用不完整上下文发起预测。
+      // 后续 wake turn 启动(isRunning:true)时 handleStatusUpdate 通过
+      // isTurnStart 分支清除 pendingTaskWake,桥接不会永久撑住 running 快照。
+      // 终态重复帧(replay / 延迟到达)不得当成新的「终态转译」:任务此前已经
+      // completed / failed 时,这一帧只是同一终态的重复投递。若在 wake turn 已启动
+      // (isRunning:true)之后才重放,仍把 already-terminal 的任务当 fresh wakesAfterTerminal
+      // 会误置 pendingTaskWakeDuringTurn,wake turn 的 Done 只退休了标记却留下
+      // pendingTaskWake,会话永久卡 running/Stop。这里只在「非终态 → 终态」的真实转译
+      // 时置桥接,重复的终态帧不重新标记。
+      const wasAlreadyTerminal =
+        existing?.status === 'completed' || existing?.status === 'failed';
       const wakesAfterTerminal =
+        !wasAlreadyTerminal &&
+        !state.turnStoppedByUser &&
         (merged.status === 'completed' || merged.status === 'failed') &&
-        isWakeAgentTask(merged) &&
-        !state.agentStatus.isRunning;
+        isWakeAgentTask(merged);
+      const nextWake = state.pendingTaskWake + (wakesAfterTerminal ? 1 : 0);
+      // 主 turn 的终态 Done 是否尚未越过:仍 running,或已进入「pre-Done 空闲」
+      // (isRunning 已提前翻 false 但 status 还不是 'Done')。只有在这个窗口内到达
+      // 的 wake 终态才算「跨主 turn」——紧接着的 Done 是主轮自己的 Done,桥接必须
+      // 跨过它继续存活。主轮 Done 已经越过(!isRunning && status==='Done')之后才到
+      // 的 wake 终态属于「wake turn 从未启动即失败」,不标记,好让后续 Done 能清除桥接。
+      // status==='' 是初始态(本 renderer 从未观察到任何 turn):LRU 降级/重开后
+      // seedBackgroundTaskSnapshots 重建 running 任务时 agentStatus 仍是初始值,若把
+      // 它也当成「pre-Done 空闲」,会把重建的 wake 任务误标成跨主 turn,wake turn 失败
+      // 后桥接无法清除、会话永久卡 running/Stop。初始态不算「主 turn 尚未越过」。
+      const mainTurnDoneNotCrossed =
+        !state.turnStoppedByUser &&
+        (state.agentStatus.isRunning ||
+          (state.agentStatus.status !== 'Done' && state.agentStatus.status !== ''));
+      // 主轮 Done 已越过后才置位的桥接:设计上等「wake turn 启动(isTurnStart 消费)」
+      // 或「wake turn 失败的 Done(终态分支消费)」收尾;但跨会话误投 / 重放的迟到
+      // 终态不会有任何后续事件跟进(fork 会话收到父会话任务的终态等),两条清除路径
+      // 都永远不来,桥接会永久撑住 running 快照(spinner 永转),且 pendingTaskWake
+      // 不在 reconcileStaleRunningTasks 的对账覆盖内(它只收 taskUpdates 的 running
+      // 残留,而迟到终态本身就是 completed)。这里按「活动熄灭延迟对账」同款机制补
+      // 一次权威对账兜底:到点后若 wake turn 已启动(桥接被消费)对账自然空转;只有
+      // 确认「无 turn 在跑 + main 权威表无 wake 任务」才收口(见
+      // seedBackgroundTaskSnapshots 的 reconcileWakeBridge)。
+      if (wakesAfterTerminal && !mainTurnDoneNotCrossed) {
+        scheduleBackgroundTaskReconcile(event.sessionId);
+      }
       return {
         ...state,
         lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
         taskUpdates: nextMap,
-        pendingTaskWake: state.pendingTaskWake || wakesAfterTerminal,
+        pendingTaskWake: nextWake,
+        // 跨主 turn 标记:桥接一旦在主 turn 仍 running 或 pre-Done 空闲里被置位就保持,
+        // 直到唤醒桥接整体被清除。
+        pendingTaskWakeDuringTurn:
+          nextWake > 0
+          ? (state.pendingTaskWakeDuringTurn + (wakesAfterTerminal && mainTurnDoneNotCrossed ? 1 : 0))
+          : 0,
+        // 最小年龄闸的时钟起点:每次真实置位都刷新(见字段注释)。
+        pendingTaskWakeArmedAt: wakesAfterTerminal ? Date.now() : state.pendingTaskWakeArmedAt,
+        // 置位代次:对账收口的 ABA 防护(见字段注释)。
+        pendingTaskWakeGen: state.pendingTaskWakeGen + (wakesAfterTerminal ? 1 : 0),
       };
     }
 
     case 'tool_use': {
+      dismissVisionBridgeToast(event.sessionId);
       const { toolUseId, toolName, input } = event.data as {
         toolUseId: string;
         toolName: string;
@@ -4919,6 +5261,9 @@ export function handleStreamEvent(
     }
 
     case 'done': {
+      // turn 终态兜底清理：done 时清掉该 session 的「正在识别图片中」toast，
+      // 即使没有 text/tool_use 也不残留（视觉桥要么已结束要么被放弃）。
+      dismissVisionBridgeToast(event.sessionId);
       // silent-stop:上游空内容消息静默收尾,main 守卫 1.5s 后会自动续跑(或弹耗尽横幅)。
       // 保持 isRunning=true,避免 renderer 的 500ms 完成去抖触发假完成通知。守卫非续跑
       // 决策通过 exhausted terminal error 广播到达 renderer,那时才正确设 isRunning=false。
@@ -4960,11 +5305,19 @@ export function handleStreamEvent(
       // Claude 的 plan_review 发生在 turn 内(ExitPlanMode 阻塞中),done 必然晚于决策,
       // 清扫语义不变。真正的放弃路径(abort/close)由 main 的 interaction dismissal
       // (permission_dismissed 事件)负责标 expired,不依赖这里。
+      //
+      // Codex ask_user 同款:code-mode 可能在提问 RPC 未决时就 turn/completed。
+      // 卡片必须跨 done 存活,等用户回答后走 detached continuation。
       const keepPlanReviewAcrossDone = state.agentKind === 'codex';
+      const keepAskUserAcrossDone = state.agentKind === 'codex';
       const cleanedMessages = finalized.messages.map((m) => {
         let next = m;
         if (m.isStreaming) next = { ...next, isStreaming: false };
-        if (m.role === 'ask_user' && m.askUserStatus === 'pending') {
+        if (
+          !keepAskUserAcrossDone &&
+          m.role === 'ask_user' &&
+          m.askUserStatus === 'pending'
+        ) {
           next = { ...next, askUserStatus: 'expired' as const };
         }
         if (
@@ -4978,12 +5331,16 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
         | null
         | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
+      const terminalCancelled =
+        terminalData?.cancelled === true ||
+        terminalData?.reason === 'turn_continuation_cancelled' ||
+        terminalData?.reason === 'user_stop_unconfirmed_wake_tasks';
       const doneMessages =
         event.source === 'codex'
           ? applyCodexPlanSnapshotOnDone(
@@ -4992,7 +5349,7 @@ export function handleStreamEvent(
               terminalTurnId,
               terminalTurnStatus,
               Date.now(),
-              terminalData?.cancelled === true,
+              terminalCancelled,
             ).messages
           : cleanedMessages;
 
@@ -5010,21 +5367,26 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
-        pendingAskUser: null,
+        pendingAskUser: keepAskUserAcrossDone ? state.pendingAskUser : null,
         continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
         // pending question is gone, reset so the next one starts expanded.
-        askUserViewerState: 'expanded',
+        askUserViewerState: keepAskUserAcrossDone ? state.askUserViewerState : 'expanded',
         // F-AUQ-DRAFT: pending question gone → in-progress wizard draft is
         // meaningless, drop it so the next question starts clean.
-        askUserDraft: null,
+        askUserDraft: keepAskUserAcrossDone ? state.askUserDraft : null,
         pendingPlanReview: keepPlanReviewAcrossDone ? state.pendingPlanReview : null,
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
         pendingGhostGrantConfirm: null,
+        pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
+        // cancelled terminal 会广播到同一 session 的所有窗口；把它投影成 session 级
+        // Stop 标记，避免非发起窗口把不完整回复误当正常完成并触发付费推荐。
+        turnStoppedByUser: state.turnStoppedByUser || terminalCancelled,
         agentStatus: {
           ...state.agentStatus,
           isRunning: false,
@@ -5038,11 +5400,40 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
+        imageCount,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
+        imageCount?: number;
       };
+      // 视觉桥用户提示（正在识别 / fallback / 不可用）：toast 展示，完全不改 turn 状态
+      // （不设 recoverableError、不阻断开流），零阻断。用 isVisionBridgeReason 三重校验
+      // （source==='vision-bridge' + isTerminal:false + reason 枚举）——普通 agent / 远程
+      // 转发的同名 reason error 不通过校验，继续走普通 error 处理（不吞真实错误）。
+      if (isVisionBridgeReason(event)) {
+        if (reason === 'vision-bridge-recognizing') {
+          const count = typeof imageCount === 'number' && imageCount > 0 ? imageCount : 1;
+          // 先清旧 id 再存新：连续 recognizing（多图/多 turn）不残留上一张的 loading toast。
+          dismissVisionBridgeToast(event.sessionId);
+          _visionBridgeToastIds.set(
+            event.sessionId,
+            toast.info(i18n.t('chat.visionBridge.analyzing', { count }), { duration: 0 }),
+          );
+          return state;
+        }
+        // fallback / unavailable：识别结束（失败或降级），清掉对应 session 的 loading toast，
+        // 避免「正在识别中」与「已回退」同时挂着。
+        dismissVisionBridgeToast(event.sessionId);
+        if (reason === 'vision-bridge-fallback') {
+          toast.warning(i18n.t('chat.visionBridge.fallback'), { duration: 5000 });
+          return state;
+        }
+        if (reason === 'vision-bridge-unavailable') {
+          toast.warning(i18n.t('chat.visionBridge.unavailable'), { duration: 6000 });
+          return state;
+        }
+      }
       const safeErrMsgRaw = redactSensitiveText(errMsgRaw);
       const safeErrMsg =
         typeof errorStatus === 'number' &&
@@ -5066,6 +5457,9 @@ export function handleStreamEvent(
                 ? i18n.t('logic.errors.codexAutoReviewUnavailable')
                 : decodeRemoteErrorMessage(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
+      // 终态错误 = turn 收口（含失败）：清掉该 session 的「正在识别图片中」toast，
+      // 避免视觉桥未输出就终结时 loading toast 残留（done/abort/terminal error 兜底）。
+      if (isTerminalError) dismissVisionBridgeToast(event.sessionId);
       if (!isTerminalError) {
         // Codex app-server 的有限重连进度是进行态，不是用户需要处理的错误。
         // 复用 Cindy 自动接管活动行的视觉通道，固定 clientId 原地更新 N/M；
@@ -5194,6 +5588,8 @@ export function handleStreamEvent(
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
         pendingGhostGrantConfirm: null,
+        pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
         // agent-meta: turn 异常结束也清空。
         lastAgentMeta: null,
         // 出错也是 turn 终结：清掉 isRunning，否则 RunningStatusBar 会一直停在
@@ -5215,6 +5611,7 @@ export function handleStreamEvent(
         displayName?: string;
         description?: string;
         suggestions?: unknown[];
+        autoReviewUnavailable?: boolean;
       };
       return {
         ...state,
@@ -5226,6 +5623,7 @@ export function handleStreamEvent(
           displayName: data.displayName,
           description: data.description,
           suggestions: data.suggestions,
+          autoReviewUnavailable: data.autoReviewUnavailable === true,
         },
       };
     }
@@ -5279,22 +5677,48 @@ export function handleStreamEvent(
         // ghost 过户确认卡被 main 兜底关闭(超时/会话清理),ephemeral 无落库,直接清。
         return { ...state, pendingGhostGrantConfirm: null };
       }
-      if (state.pendingAskUser?.requestId === data.requestId) {
-        // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
-        // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
-        const answers = resolved?.answers as Record<string, string> | undefined;
-        const askUserReply = answers ? formatAskUserReply(answers) : '';
+      if (state.pendingRemoteDesktopConfirmation?.requestId === data.requestId) {
+        const [next = null, ...remaining] = state.pendingRemoteDesktopConfirmationQueue;
         return {
           ...state,
-          pendingAskUser: null,
-          askUserViewerState: 'expanded',
-          // F-AUQ-DRAFT: question dismissed → drop draft.
-          askUserDraft: null,
+          pendingRemoteDesktopConfirmation: next,
+          pendingRemoteDesktopConfirmationQueue: remaining,
+        };
+      }
+      if (
+        state.pendingRemoteDesktopConfirmationQueue.some(
+          (confirmation) => confirmation.requestId === data.requestId,
+        )
+      ) {
+        return {
+          ...state,
+          pendingRemoteDesktopConfirmationQueue:
+            state.pendingRemoteDesktopConfirmationQueue.filter(
+              (confirmation) => confirmation.requestId !== data.requestId,
+            ),
+        };
+      }
+      if (
+        state.pendingAskUser?.requestId === data.requestId ||
+        state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
+      ) {
+        // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
+        // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
+        // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
+        const answers = resolved?.answers as Record<string, string> | undefined;
+        const dismissed = resolved?.dismissed === true;
+        const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
+        return {
+          ...state,
+          pendingAskUser:
+            state.pendingAskUser?.requestId === data.requestId ? null : state.pendingAskUser,
+          askUserViewerState:
+            state.pendingAskUser?.requestId === data.requestId ? 'expanded' : state.askUserViewerState,
+          askUserDraft:
+            state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
           messages: state.messages.map((m) =>
-            m.role === 'ask_user' &&
-            m.askUserRequestId === data.requestId &&
-            m.askUserStatus === 'pending'
-              ? answers
+            m.role === 'ask_user' && m.askUserRequestId === data.requestId
+              ? answers && !dismissed
                 ? {
                     ...m,
                     askUserStatus: 'answered' as const,
@@ -5500,11 +5924,14 @@ export function handleStreamEvent(
       if (boundaryId && state.messages.some((message) => message.clientId === clientId)) {
         return state;
       }
-      const finalized = finalizeStreamingInState(state);
+      // Background compact belongs to the previous idle cycle. Finalizing here
+      // would seal a product turn that started after compaction_start.
+      const nextState =
+        event.turnScope === 'background' ? state : finalizeStreamingInState(state);
       return {
-        ...finalized,
+        ...nextState,
         messages: [
-          ...finalized.messages,
+          ...nextState.messages,
           {
             clientId,
             role: 'assistant' as const,
@@ -5566,11 +5993,13 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.pendingIssueConfirm &&
     !state.pendingRenameSessionsConfirm &&
     !state.pendingGhostGrantConfirm &&
+    !state.pendingRemoteDesktopConfirmation &&
+    state.pendingRemoteDesktopConfirmationQueue.length === 0 &&
     !state.messages.some((m) => m.isStreaming) &&
     !state.queueAbortPending &&
     state.steeringQueueClientIds.length === 0 &&
     state.continuationTurnClientId === null &&
-    !state.pendingTaskWake &&
+    state.pendingTaskWake === 0 &&
     !state.messages.some(
       (message) =>
         message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID ||
@@ -5619,17 +6048,112 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingIssueConfirm: null,
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
+    pendingRemoteDesktopConfirmation: null,
+    pendingRemoteDesktopConfirmationQueue: [],
     queueAbortPending: false,
     steeringQueueClientIds: [],
     continuationTurnClientId: null,
     // session 都关了,后台任务事件流已断:running 残留任务标 stopped、唤醒桥接
     // 清零,否则 running 快照(折算了后台任务)会让 spinner 永久转下去。
     taskUpdates: stoppedTasks,
-    pendingTaskWake: false,
+    pendingTaskWake: 0,
+    pendingTaskWakeDuringTurn: 0,
+    pendingTaskWakeStarted: false,
+    pendingTaskWakeArmedAt: null,
+    pendingTaskWakeGen: state.pendingTaskWakeGen,
+    turnStoppedByUser: false,
     agentStatus: {
       ...finalized.agentStatus,
       isRunning: false,
       startedAt: null,
+    },
+  };
+}
+
+function mergeLiveGenerationStatus(
+  isTurnStart: boolean,
+  update: CCAgentStatusUpdate,
+  previous: AgentStatus,
+): Pick<
+  AgentStatus,
+  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable'
+> {
+  // Turn start drops leftover metrics from the previous turn, then keeps any
+  // live fields carried by this same status. A reconnect-shaped first event
+  // (isRunning false→true with output / duration already present) must not
+  // zero the values that just arrived.
+  const baseline = isTurnStart
+    ? {
+        outputTokens: 0,
+        generationDurationMs: 0,
+        generationActive: false,
+        generationReliable: true,
+      }
+    : previous;
+  const hasLiveFields =
+    typeof update.outputTokens === 'number' ||
+    typeof update.generationDurationMs === 'number' ||
+    typeof update.generationActive === 'boolean' ||
+    typeof update.generationReliable === 'boolean';
+  if (!hasLiveFields) {
+    return {
+      outputTokens: baseline.outputTokens,
+      generationDurationMs: baseline.generationDurationMs,
+      generationActive: update.isRunning ? baseline.generationActive : false,
+      generationReliable: baseline.generationReliable,
+    };
+  }
+  const merged = {
+    outputTokens:
+      typeof update.outputTokens === 'number' ? update.outputTokens : baseline.outputTokens,
+    generationDurationMs:
+      typeof update.generationDurationMs === 'number'
+        ? update.generationDurationMs
+        : baseline.generationDurationMs,
+    generationActive:
+      typeof update.generationActive === 'boolean'
+        ? update.generationActive
+        : baseline.generationActive,
+    generationReliable:
+      typeof update.generationReliable === 'boolean'
+        ? update.generationReliable
+        : baseline.generationReliable,
+  };
+  if (!update.isRunning) {
+    return { ...merged, generationActive: false };
+  }
+  return merged;
+}
+
+/** Idle compact / late background status may refresh copy and context tokens without flipping the product turn. */
+function applyBackgroundStatus(
+  state: SessionChatState,
+  data: Record<string, unknown>,
+): SessionChatState {
+  const rawStatus = typeof data.status === 'string' ? data.status.trim() : '';
+  // A late idle-compact Done must not paint the product turn as finished.
+  const status =
+    !rawStatus || (rawStatus === 'Done' && state.agentStatus.isRunning)
+      ? state.agentStatus.status
+      : rawStatus;
+  let contextTokens = state.agentStatus.contextTokens;
+  let contextWindow = state.agentStatus.contextWindow;
+  if (
+    typeof data.contextWindow === 'number' &&
+    data.contextWindow > 0 &&
+    typeof data.contextTokens === 'number' &&
+    data.contextTokens >= 0
+  ) {
+    contextTokens = data.contextTokens;
+    contextWindow = data.contextWindow;
+  }
+  return {
+    ...state,
+    agentStatus: {
+      ...state.agentStatus,
+      status,
+      contextTokens,
+      contextWindow,
     },
   };
 }
@@ -5710,10 +6234,35 @@ function handleStatusUpdate(
     ...state,
     // 真实 turn 的起/止都把 side-task 标记复位(它只描述「最近一次 stop」)。
     lastStopWasSideTask: false,
-    // 真实 turn 的任意 status 都终结唤醒桥接:wake turn 启动(message_start 发
-    // isRunning:true)是正常路径;wake turn 秒挂(只来 error + Done)也在这里
-    // 收口,防止桥接标记漏网永久撑住 running 快照。skipTurnReset 已提前 return。
-    pendingTaskWake: false,
+    // 唤醒桥接:仅在 wake turn 真正启动(isRunning:true)时消费一个计数,或 wake turn
+    // 失败时消费——后者表现为 Done + !isRunning 且主 turn 已经结束
+    // (state.agentStatus.isRunning 已为 false),此时 isTurnStart 永远不会
+    // 变 true,若不清除 pendingTaskWake 会永久撑住 running 快照。
+    // 多任务并发时只消费一个计数(Math.max(0, count - 1)),剩余桥接留给后续 turn。
+    // 主 turn Done(isTurnComplete)时若桥接是在主 turn 仍 running 时置位的
+    // (pendingTaskWakeDuringTurn),不清除:桥接必须跨过主 turn 自己的 Done 继续
+    // 存活,直到 wake turn 启动或失败。仅靠 agentStatus.isRunning 判断会把「主轮
+    // Done 前 SDK 先推了 isRunning=false 的中间 status」误判成 wake 失败。
+    // pendingTaskWakeStarted:isTurnStart 已消费桥接时置 true,防止 Done 分支
+    // 因 SDK 中间 isRunning=false 而重复消费下一个任务的桥接计数。
+    pendingTaskWake: isTurnStart ? Math.max(0, state.pendingTaskWake - 1) :
+      (isTurnComplete && state.pendingTaskWake > 0 && !state.agentStatus.isRunning && state.pendingTaskWakeDuringTurn === 0 && !state.pendingTaskWakeStarted) ? Math.max(0, state.pendingTaskWake - 1) :
+      state.pendingTaskWake,
+    // 跨主 turn 标记:主 turn 自己的 Done 越过(标记仍为 true 时到达的首个 Done)后,
+    // 标记使命已尽、立即退休。否则 wake turn 失败(从未 isRunning:true、无 isTurnStart)
+    // 时,终态 Done 会因 !pendingTaskWakeDuringTurn 恒为 false 而永远无法清除
+    // pendingTaskWake,会话永久卡在 running/Stop 态。退休只清标记、不清桥接:
+    // 桥接(pendingTaskWake)仍存活,直到 wake turn 真正启动或失败。
+    pendingTaskWakeDuringTurn: isTurnStart ? 0 :
+      (isTurnComplete && state.pendingTaskWakeDuringTurn > 0) ? 0 :
+      state.pendingTaskWakeDuringTurn,
+    // isTurnStart 已消费标记:isTurnStart 且 pendingTaskWake > 0 时置 true(本轮
+    // 桥接已消费),isTurnComplete 时复位。防止 SDK 中间推送 isRunning=false 后,
+    // Done 分支再消费下一个任务的桥接(多任务并发场景)。
+    pendingTaskWakeStarted: isTurnStart && state.pendingTaskWake > 0 ? true :
+      isTurnComplete ? false :
+      state.pendingTaskWakeStarted,
+    turnStoppedByUser: isTurnStart ? false : state.turnStoppedByUser,
     agentStatus: {
       status: update.status,
       tokenUsage: tu,
@@ -5722,6 +6271,7 @@ function handleStatusUpdate(
       contextWindow: cw,
       isRunning: update.isRunning,
       startedAt,
+      ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
     continuationTurnClientId: update.isRunning ? state.continuationTurnClientId : null,
@@ -5766,9 +6316,10 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi';
+    source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
+    turnScope?: 'turn' | 'background';
   };
   persistId?: string;
   resolvedContent?: string;
@@ -5814,7 +6365,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -5828,7 +6379,29 @@ let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 // 事件 / wake turn 落地留窗口,到点后拉一次快照走 seed+对账;每会话至多一个
 // 待执行定时器(防抖),active:true 到达即取消。只在翻转沿触发,不轮询。
 const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
+
+/**
+ * 唤醒桥接对账收口的最小年龄:距最近一次桥接置位不足此时长时一律不收口
+ * (改为重新调度下一轮对账)。正常 wake 空窗是毫秒~秒级,10s 给慢机 / 高负载
+ * 下的合法 wake turn 留足启动余量;真泄漏(误投 / 重放,永远无 wake 跟进)
+ * 只是晚 ~10s 熄灭,仍远好于修复前的永久转圈。
+ */
+const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const backgroundTaskReconcileEpoch = new Map<string, number>();
+
+function invalidateBackgroundTaskReconcile(sessionId: string): number {
+  const next = (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) + 1;
+  backgroundTaskReconcileEpoch.set(sessionId, next);
+  return next;
+}
+
+/**
+ * A local_bash task may outlive the first active:false snapshot. Allow one
+ * bounded follow-up snapshot so a later missing terminal event can still be
+ * reconciled, without turning this lifecycle hook into polling.
+ */
+const backgroundTaskStaleRetrySessions = new Set<string>();
 
 function cancelBackgroundTaskReconcile(sessionId: string): void {
   const timer = backgroundTaskReconcileTimers.get(sessionId);
@@ -5840,10 +6413,12 @@ function cancelBackgroundTaskReconcile(sessionId: string): void {
 
 function scheduleBackgroundTaskReconcile(sessionId: string): void {
   cancelBackgroundTaskReconcile(sessionId);
+  const reconcileEpochAtSchedule = backgroundTaskReconcileEpoch.get(sessionId) ?? 0;
   backgroundTaskReconcileTimers.set(
     sessionId,
     setTimeout(() => {
       backgroundTaskReconcileTimers.delete(sessionId);
+      if ((backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule) return;
       // 触发沿复查远程归属(粘滞版):调度沿已筛过,但 3s 窗口内会话可能被识别
       // 为远程(启动期 registry 迟到水合等)。误放行的代价是拿本机空快照把镜像
       // 里真实在跑的任务错误收口,必须再拦一次。
@@ -5852,17 +6427,57 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
       // 已无 running 条目则无账可对,不发无谓 IPC。定时器只在 store 对象初始化
       // 之后才可能到点,前向引用 makerChatStore 安全。
       const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
-      if (staleRunningCandidates.size === 0) return;
+      // 桥接泄漏时 taskUpdates 里往往已无 running 条目(迟到终态本身就是 completed),
+      // 只看 running 候选会把桥接对账挡在门外 —— pendingTaskWake > 0 时同样放行。
+      // 桥接代际在请求发起前捕获(计数 + 置位代次):收口只在「响应落地时计数与
+      // 代际完全一致且代次未变」时发生 —— 请求在飞窗口内新置位的桥接绝不被旧快照
+      // 清除,代次单调另挡 ABA 碰撞(bot review:旧快照不得清新桥接 / P1 ABA)。
+      const capturedWakeBridge = makerChatStore.capturePendingWakeBridge(sessionId);
+      if (staleRunningCandidates.size === 0 && capturedWakeBridge.count === 0) return;
       const api = window.electronAPI?.maker;
       if (!api?.listSessionBackgroundTasks) return;
       void api
         .listSessionBackgroundTasks(sessionId)
-        .then(({ tasks }) => {
+        .then(({ tasks, pendingContinuations }) => {
           if (!Array.isArray(tasks)) return;
+          // active:true / a new lifecycle edge / purge invalidates the request
+          // even if the transport response itself arrives successfully.
+          if (
+            (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule
+          ) {
+            return;
+          }
           // 响应落地前再复查一次:请求在飞期间远程注册表才完成会话水合的话,
           // 本机「查无此会话」的空表不可用于收口镜像任务。
           if (isRemoteSessionSticky(sessionId)) return;
-          makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, { staleRunningCandidates });
+          makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, {
+            staleRunningCandidates,
+            reconcileWakeBridge: capturedWakeBridge,
+            // main 权威的「任务已终态、wake turn 尚未启动或仍在跑」continuation
+            // 计数。旧 main(字段缺失)按「信号不可用」处理 —— 不收口,只重试,
+            // 绝不退化回「拿空任务表当无后续」的旧判据。
+            authorityPendingContinuations:
+              typeof pendingContinuations === 'number' ? pendingContinuations : null,
+          });
+
+          // A task that is still present in this first snapshot may finish
+          // after the activity edge and lose its terminal event. Take exactly
+          // one bounded follow-up snapshot; the next response either sees the
+          // task again (and leaves it alone) or proves it stale and stops it.
+          const candidateStillAlive = tasks.some(
+            (task) =>
+              (typeof task.taskId === 'string' && staleRunningCandidates.has(task.taskId)) ||
+              (typeof task.toolUseId === 'string' && staleRunningCandidates.has(task.toolUseId)),
+          );
+          const hasRetriedStaleCandidates = backgroundTaskStaleRetrySessions.has(sessionId);
+          if (candidateStillAlive && !hasRetriedStaleCandidates) {
+            backgroundTaskStaleRetrySessions.add(sessionId);
+            scheduleBackgroundTaskReconcile(sessionId);
+          } else {
+            // The bounded retry window is complete, whether the task was
+            // stopped or remained alive. Do not retain session IDs forever.
+            backgroundTaskStaleRetrySessions.delete(sessionId);
+          }
         })
         .catch(() => {
           // 静默:与其余快照拉取失败同口径(失败不对账,下次翻转沿 / 挂载重试)。
@@ -5930,11 +6545,13 @@ function dispatchStreamEventPayload(
     ...(event.turnContinuationId !== undefined
       ? { turnContinuationId: event.turnContinuationId }
       : {}),
+    ...(event.turnScope !== undefined ? { turnScope: event.turnScope } : {}),
     persistId,
     resolvedContent,
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
   setState(sessionId, (s) => handleStreamEvent(s, streamEvent), { deferNotification });
+  scheduleWakeBridgeReconciliation(sessionId);
 }
 
 function clearTextDeltaFlushTimer(): void {
@@ -6275,6 +6892,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const persistId = payload.persistId;
     const resolvedContent = payload.resolvedContent;
 
+    // 视觉桥提示只信本机 main 直发：远端（device-link 转发）入站的 source:'vision-bridge'
+    // 事件一律丢弃——source 是 main 合成标记不是防伪签名，已配对远端可伪造；不转发远端
+    // 视觉桥提示（它属于发起会话所在设备的本地 UI 反馈）。
+    if (ingress.remoteDeviceId && isVisionBridgeReason(event)) {
+      return;
+    }
+
     if (isTextDeltaEvent(event)) {
       enqueueTextDeltaPayload(sessionId, event, persistId, ingress);
       return;
@@ -6302,9 +6926,14 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // 持久化 (totalCostUsd / contextTokens / contextWindow → sessions 表) 已搬到 main 端的
     // sessionSpendBroadcaster, renderer 只更新 in-memory agentStatus, 不再 IPC 写库 (避免多 window 竞写)。
     if (event.type === 'status') {
+      const data = event.data as Record<string, unknown>;
+      if (event.turnScope === 'background') {
+        setState(sessionId, (s) => applyBackgroundStatus(s, data));
+        return;
+      }
       const update = {
         sessionId,
-        ...(event.data as Record<string, unknown>),
+        ...data,
         ...(event.turnContinuationId !== undefined
           ? { turnContinuationId: event.turnContinuationId }
           : {}),
@@ -6313,6 +6942,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
       }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
+      scheduleWakeBridgeReconciliation(sessionId);
       return;
     }
 
@@ -6326,35 +6956,72 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // Legacy CC/XD remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
     if (event.type === 'error') {
       const errData =
-        (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
+        (event.data as {
+          sdkError?: string;
+          message?: string;
+          errorStatus?: number;
+          reason?: string;
+        }) ?? {};
       const isAuthError =
         errData.sdkError === 'authentication_failed' ||
         errData.errorStatus === 401 ||
         /authentication_error|invalid.*api.key|401/i.test(errData.message ?? '');
+      const isGatewayProxyTokenInvalid =
+        errData.reason === GATEWAY_PROXY_TOKEN_INVALID_REASON ||
+        isGatewayProxyTokenInvalidError(errData.message ?? '');
       const preSnap = getOrCreateState(sessionId);
       const authRetryCount = preSnap._authRetryCount ?? 0;
-      if (
+      const ownsGatewayProxyTokenRecovery = ownsRemoteAuthRetry && !ingress.remoteDeviceId;
+      const recoveryProviderId =
+        preSnap.inputRecovery?.kind === 'active-turn'
+          ? resolveGatewayRecoveryProviderId(preSnap.inputRecovery.item.createOpts, preSnap)
+          : undefined;
+      const translatorClassifiedGateway =
+        errData.reason === GATEWAY_PROXY_TOKEN_INVALID_REASON;
+      const explicitCustomGatewayProvider =
+        recoveryProviderId !== undefined && !isCindyGatewayProviderId(recoveryProviderId);
+      const gatewayRecovery =
+        isGatewayProxyTokenInvalid &&
+        preSnap.inputRecovery?.kind === 'active-turn' &&
+        (translatorClassifiedGateway || !explicitCustomGatewayProvider)
+          ? preSnap.inputRecovery
+          : null;
+      const isCindyGatewayProxyTokenInvalid =
+        translatorClassifiedGateway || gatewayRecovery !== null;
+      const gatewayRetryRootClientId = gatewayRecovery
+        ? (gatewayRecovery.item.supersedesUserClientId ?? gatewayRecovery.item.clientId)
+        : null;
+      const canRecoverGatewayProxyToken =
+        ownsGatewayProxyTokenRecovery &&
+        gatewayRecovery !== null &&
+        gatewayRetryRootClientId !== null &&
+        !preSnap._authRetryInFlight &&
+        preSnap._gatewayProxyTokenRetriedRootClientId !== gatewayRetryRootClientId;
+      const canRecoverRemoteCcAuth =
         ownsRemoteAuthRetry &&
         isAuthError &&
-        preSnap.remoteHostId &&
+        !isGatewayProxyTokenInvalid &&
+        Boolean(preSnap.remoteHostId) &&
         preSnap.agentKind === 'claude-code' &&
         !preSnap._authRetryInFlight &&
-        authRetryCount < MAX_REMOTE_AUTH_RETRIES
-      ) {
+        authRetryCount < MAX_REMOTE_AUTH_RETRIES;
+      if (canRecoverGatewayProxyToken || canRecoverRemoteCcAuth) {
         const lastUser = [...preSnap.messages].reverse().find((m) => m.role === 'user');
-        const lastUserClientId = lastUser?.clientId;
+        const retryOwnerClientId = gatewayRecovery?.item.clientId ?? lastUser?.clientId;
         // Per-message retry guard: same user message only auto-retried once.
         // Session-level count guard (_authRetryCount): hard cap on consecutive
         // retries — the per-message guard can't stop a chain because each retry
         // sends a fresh user message with a new clientId.
-        if (lastUserClientId && preSnap._authRetryAttemptedClientId === lastUserClientId) {
+        if (retryOwnerClientId && preSnap._authRetryAttemptedClientId === retryOwnerClientId) {
           // Already retried this message — show error, don't loop.
         } else {
           setState(sessionId, (s) => ({
             ...s,
             _authRetryInFlight: true,
-            _authRetryAttemptedClientId: lastUserClientId,
-            _authRetryCount: (s._authRetryCount ?? 0) + 1,
+            _authRetryAttemptedClientId: retryOwnerClientId,
+            ...(isGatewayProxyTokenInvalid
+              ? { _gatewayProxyTokenRetriedRootClientId: gatewayRetryRootClientId ?? undefined }
+              : { _authRetryCount: (s._authRetryCount ?? 0) + 1 }),
           }));
           const retryText =
             lastUser && typeof lastUser.content === 'string' && lastUser.content.length > 0
@@ -6372,21 +7039,56 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           void (async () => {
             try {
               if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              // 本地 only:网关 key 不再有服务器副本可拉。改为校验本机 safeStorage 是否
-              // 有 key —— 有则关闭并重发会话(重连时把本机 key 重新下发给 remote host);
-              // 没有则中止重试,让 error banner 浮现,提示用户在本机重填 key。
-              const localKey = await window.electronAPI.safeStorageRead(
-                providerSecretStorageKey('xd'),
-              );
-              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              if (!localKey) {
-                throw new Error('no local api key available');
+              if (isGatewayProxyTokenInvalid) {
+                await waitForGatewayProxyTokenTurnSettled(sessionId, dataOwnerAtIngress);
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                if (
+                  !translatorClassifiedGateway &&
+                  recoveryProviderId === undefined
+                ) {
+                  const row = await sessionService.get(sessionId);
+                  if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                  if (!isCindyGatewayProviderId(row.providerId ?? null)) {
+                    throw new Error('custom provider owns this LiteLLM token error');
+                  }
+                }
+                const status = await window.electronAPI.modelAccess.retry();
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                if (status.state !== 'ok') {
+                  throw new Error('model-access credentials retry failed');
+                }
               }
-              // preserveWorkspace: 鉴权重连是瞬态 close+resend,会话继续,工作区必须保留。
-              await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
-              await new Promise((r) => setTimeout(r, 1500));
-              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              if (hasRetryPayload) {
+              // 本机 Claude gateway-spawn 把 ANTHROPIC_API_KEY 冻在子进程里，
+              // proxy 对隐式/默认 Cindy 网关是 x-api-key passthrough。只重拉凭据
+              // 不重建会话的话，retryLastError 仍会带上已被拒的旧 token。
+              const recreateLocalClaudeGatewaySession =
+                isGatewayProxyTokenInvalid &&
+                !preSnap.remoteHostId &&
+                preSnap.agentKind === 'claude-code';
+              if (preSnap.remoteHostId || recreateLocalClaudeGatewaySession) {
+                if (preSnap.remoteHostId) {
+                  const localKey = await window.electronAPI.safeStorageRead(
+                    providerSecretStorageKey('xd'),
+                  );
+                  if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                  if (!localKey) {
+                    throw new Error('no local api key available');
+                  }
+                }
+                await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
+                if (preSnap.remoteHostId) {
+                  await new Promise((r) => setTimeout(r, 1500));
+                }
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+              }
+              if (isGatewayProxyTokenInvalid) {
+                await retryLastError(sessionId);
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                const postRetry = getOrCreateState(sessionId);
+                if (postRetry.error !== null || postRetry.inputRecovery !== null) {
+                  throw new Error('gateway credential retry did not take effect');
+                }
+              } else if (hasRetryPayload) {
                 const row = await sessionService.get(sessionId);
                 if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
                 if (row.workingDir && row.model) {
@@ -6420,14 +7122,16 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
               }
             } catch {
               if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-              // 重试失败——main 侧已跳过持久化（isRemoteAuthRetry），在此补落。
-              // device-link 控制端经 makerApiFor 路由到被控端 main（不直调本地 IPC）;
-              // 同时透传 agentMeta 供 flushAssistantBlock 边界 meta 兜底与 dedup key。
-              void makerApiFor(sessionId).input.persistTurnErrorDeferred(
-                sessionId,
-                event.data as Record<string, unknown> | null,
-                event.agentMeta ?? null,
-              );
+              if (
+                isCindyGatewayProxyTokenInvalid ||
+                (preSnap.remoteHostId && preSnap.agentKind === 'claude-code')
+              ) {
+                void makerApiFor(sessionId).input.persistTurnErrorDeferred(
+                  sessionId,
+                  event.data as Record<string, unknown> | null,
+                  event.agentMeta ?? null,
+                );
+              }
               const terminalErrorEvent = {
                 sessionId,
                 type: 'error',
@@ -6457,9 +7161,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       //     等价于旧行为（重启后错误丢失）—— 保守起见不做 deferred。
       if (
         ownsRemoteAuthRetry &&
-        isAuthError &&
-        preSnap.remoteHostId &&
-        preSnap.agentKind === 'claude-code' &&
+        ((ownsGatewayProxyTokenRecovery && isCindyGatewayProxyTokenInvalid) ||
+          (isAuthError && preSnap.remoteHostId && preSnap.agentKind === 'claude-code')) &&
         !preSnap._authRetryInFlight
       ) {
         void makerApiFor(sessionId).input.persistTurnErrorDeferred(
@@ -6474,6 +7177,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
 
     // done / error 副作用 (从老 stream listener 搬过来)
     if (isProductTurnDoneEvent(event)) {
+      notifyGatewayProxyTokenTurnSettled(sessionId);
       if (
         event.source === 'codex' &&
         (event.data as { silentStop?: boolean } | null | undefined)?.silentStop !== true
@@ -6492,6 +7196,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       );
       // MEM-OPT-1: trim non-active sessions after turn completes
       queueMicrotask(() => _trimMessagesIfNeeded(sessionId));
+    }
+    // 视觉桥用户提示事件（source==='vision-bridge' + reason 枚举 + isTerminal:false）：
+    // 已在 dispatchStreamEventPayload 的 case 'error' 分流为 toast，不进 error-banner /
+    // recoverableError 链路（否则会被误渲染成「SDK error surfaced」错误横幅）。三重校验
+    // 保证不吞真实终态错误、不把普通 agent/远程 error 误当视觉桥提示。
+    if (event.type === 'error' && isVisionBridgeReason(event)) {
+      return;
     }
     if (event.type === 'error') {
       const errData = (event.data as { message?: string; sdkError?: string }) ?? {};
@@ -6593,7 +7304,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   );
 
   // ── Maker interaction request: permission/ask/plan 三合一,按 kind 分发 ──
-  const handleInteractionRequestRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
+  const handleInteractionRequestRaw = (
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+    remoteSnapshotDeviceId?: string,
+  ) => {
     if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as {
       sessionId?: string;
@@ -6622,7 +7337,51 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // 用它当气泡 clientId(permission 无此字段)。
     const persistId = payload.persistId;
 
+    if (
+      (ingress.remoteDeviceId || remoteSnapshotDeviceId) &&
+      (kind === 'issue_confirm' ||
+        kind === 'rename_sessions_confirm' ||
+        kind === 'ghost_grant_confirm')
+    ) {
+      setState(sessionId, (s) => {
+        const confirmation: PendingRemoteDesktopConfirmation = {
+          kind,
+          requestId: request.requestId,
+        };
+        const current = s.pendingRemoteDesktopConfirmation;
+        if (!current) {
+          return {
+            ...s,
+            pendingIssueConfirm: null,
+            pendingRenameSessionsConfirm: null,
+            pendingGhostGrantConfirm: null,
+            pendingRemoteDesktopConfirmation: confirmation,
+          };
+        }
+        if (current.requestId === confirmation.requestId) {
+          return { ...s, pendingRemoteDesktopConfirmation: confirmation };
+        }
+        const queuedIndex = s.pendingRemoteDesktopConfirmationQueue.findIndex(
+          (queued) => queued.requestId === confirmation.requestId,
+        );
+        if (queuedIndex >= 0) {
+          const nextQueue = s.pendingRemoteDesktopConfirmationQueue.slice();
+          nextQueue[queuedIndex] = confirmation;
+          return { ...s, pendingRemoteDesktopConfirmationQueue: nextQueue };
+        }
+        return {
+          ...s,
+          pendingRemoteDesktopConfirmationQueue: [
+            ...s.pendingRemoteDesktopConfirmationQueue,
+            confirmation,
+          ],
+        };
+      });
+      return;
+    }
+
     if (request.kind === 'permission') {
+      const metadata = request.metadata as Record<string, unknown> | undefined;
       const data: CCAgentPermissionRequestPayload = {
         sessionId,
         requestId: request.requestId,
@@ -6632,6 +7391,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         displayName: typeof request.displayName === 'string' ? request.displayName : undefined,
         description: typeof request.description === 'string' ? request.description : undefined,
         suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
+        autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
       };
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'permission_request', data }),
@@ -6739,6 +7499,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           githubUserIdentity,
           suggestedPublicName,
         },
+        pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -6754,6 +7516,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       setState(sessionId, (s) => ({
         ...s,
         pendingRenameSessionsConfirm: { requestId: request.requestId, changes },
+        pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -6762,13 +7526,26 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // ephemeral 卡片(同 permission 语义,无 persistId 不落库),直接写 state。
       const parsed = parseGhostGrantConfirmRequest(request);
       if (!parsed) return;
-      setState(sessionId, (s) => ({ ...s, pendingGhostGrantConfirm: parsed }));
+      setState(sessionId, (s) => ({
+        ...s,
+        pendingGhostGrantConfirm: parsed,
+        pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
+      }));
       return;
     }
   };
 
   const handleLiveInteractionRequestRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
-    if (!isCurrentLiveIngress(ingress)) return;
+    if (!isCurrentLiveIngress(ingress)) {
+      const payload = raw as { sessionId?: unknown; request?: { requestId?: unknown; kind?: unknown } } | null;
+      log.warn('dropped stale live interaction request', {
+        sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
+        requestId: typeof payload?.request?.requestId === 'string' ? payload.request.requestId : undefined,
+        kind: typeof payload?.request?.kind === 'string' ? payload.request.kind : undefined,
+      });
+      return;
+    }
     const sessionId = (raw as { sessionId?: unknown } | null)?.sessionId;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
       bumpInteractionReconcileEpoch(sessionId);
@@ -6786,7 +7563,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   );
   // 模块级桥接:供 reconcilePendingInteractions(打开/重连会话时的快照重建)复用同一套
   // 按 kind 分发逻辑。handler 只依赖模块级 setState/handleStreamEvent,无闭包局部状态,引用安全。
-  applyInteractionRequestRef = handleInteractionRequestRaw;
+  applyInteractionRequestRef = (raw, source) =>
+    handleInteractionRequestRaw(raw, {}, source?.remoteDeviceId);
 
   // ── Maker interaction dismissed: setPermissionMode 切换 / close 时关掉对话框 ──
   const handleInteractionDismissedRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
@@ -7669,12 +8447,23 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       const p = raw as { sessionId?: string; active?: boolean } | null;
       if (!p || typeof p.sessionId !== 'string' || !p.sessionId) return;
       if (p.active) {
+        invalidateBackgroundTaskReconcile(p.sessionId);
+        backgroundTaskStaleRetrySessions.delete(p.sessionId);
         cancelBackgroundTaskReconcile(p.sessionId);
         return;
       }
+      // A new inactive edge starts a fresh, bounded stale-task retry window and
+      // invalidates any response from the previous activity lifecycle.
+      invalidateBackgroundTaskReconcile(p.sessionId);
+      backgroundTaskStaleRetrySessions.delete(p.sessionId);
       if (isRemoteSessionSticky(p.sessionId)) return;
       // 调度前粗筛:没有 running 条目就不必挂定时器;到点后还会再次捕获候选集。
-      if (makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0) return;
+      // 唤醒桥接(pendingTaskWake)泄漏时 running 条目为空,同样需要对账,放行。
+      if (
+        makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0 &&
+        makerChatStore.capturePendingWakeBridge(p.sessionId).count === 0
+      )
+        return;
       scheduleBackgroundTaskReconcile(p.sessionId);
     },
     'session-background-activity-reconcile',
@@ -7776,6 +8565,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     pendingIssueConfirm: state.pendingIssueConfirm,
     pendingRenameSessionsConfirm: state.pendingRenameSessionsConfirm,
     pendingGhostGrantConfirm: state.pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation: state.pendingRemoteDesktopConfirmation,
     planViewerState: state.planViewerState,
     lastExpandedPlanViewerState: state.lastExpandedPlanViewerState,
     pendingQueue: state.pendingQueue,
@@ -7784,6 +8574,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     queueExpanded: state.queueExpanded,
     fastMode: state.fastMode,
     planModeEnabled: state.planModeEnabled,
+    pendingTaskWake: state.pendingTaskWake,
+    pendingTaskWakeStarted: state.pendingTaskWakeStarted,
+    turnStoppedByUser: state.turnStoppedByUser,
   };
 }
 
@@ -7817,6 +8610,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.pendingIssueConfirm === b.pendingIssueConfirm &&
     a.pendingRenameSessionsConfirm === b.pendingRenameSessionsConfirm &&
     a.pendingGhostGrantConfirm === b.pendingGhostGrantConfirm &&
+    a.pendingRemoteDesktopConfirmation === b.pendingRemoteDesktopConfirmation &&
     a.planViewerState === b.planViewerState &&
     a.lastExpandedPlanViewerState === b.lastExpandedPlanViewerState &&
     a.pendingQueue === b.pendingQueue &&
@@ -7824,7 +8618,10 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.queuePaused === b.queuePaused &&
     a.queueExpanded === b.queueExpanded &&
     a.fastMode === b.fastMode &&
-    a.planModeEnabled === b.planModeEnabled
+    a.planModeEnabled === b.planModeEnabled &&
+    a.pendingTaskWake === b.pendingTaskWake &&
+    a.pendingTaskWakeStarted === b.pendingTaskWakeStarted &&
+    a.turnStoppedByUser === b.turnStoppedByUser
   );
 }
 
@@ -7860,6 +8657,39 @@ function getSnapshot(sessionId: string): SessionChatState {
 function hasPausedQueue(sessionId: string): boolean {
   const state = sessions.get(sessionId);
   return state ? isQueuePausedWithPending(state) : false;
+}
+
+/**
+ * 输入框推荐提示词在全局 running→stopped 边沿后读取的终态资格快照。
+ * 必须是 non-creating read：后台会话可能已被 demote / LRU，不能为了补推荐
+ * materialize 空 state 并把 Stop / error 等守卫误读成默认值。
+ */
+export interface PromptRecommendationCompletionStatus {
+  turnStoppedByUser: boolean;
+  hasTerminalError: boolean;
+  sideTask: boolean;
+  hasBackgroundAgentWork: boolean;
+  hasAutoDrainingQueue: boolean;
+}
+
+function getPromptRecommendationRunStartedAt(sessionId: string): number | null {
+  return sessions.get(sessionId)?.agentStatus.startedAt ?? null;
+}
+
+function getPromptRecommendationCompletionStatus(
+  sessionId: string,
+): PromptRecommendationCompletionStatus | null {
+  const state = sessions.get(sessionId);
+  if (!state) return null;
+  return {
+    turnStoppedByUser: state.turnStoppedByUser,
+    hasTerminalError: !!state.error && !state.lastStopWasSideTask,
+    sideTask: state.lastStopWasSideTask,
+    hasBackgroundAgentWork: hasBackgroundAgentWork(sessionId, state),
+    // 与 useCCAgentChat.isAgentBusy 对齐：暂停队列允许当前完成轮展示推荐，
+    // 自动续跑队列则等最终一轮结束后再生成。
+    hasAutoDrainingQueue: state.pendingQueue.length > 0 && !state.queuePaused,
+  };
 }
 
 /**
@@ -8071,7 +8901,7 @@ function getRunningSnapshot(): ReadonlyMap<string, SessionStatusInfo> {
 /** 最近一次 running→stopped 是否来自 side-task(见 lastStopWasSideTask)。
  * useSessionRunningStatus 在 transition entry 已被调度清除后以此兜底,
  * 使 side-task 结束不触发 done/error 终态通知。 */
-function wasLastStopSideTask(sessionId: string): boolean {
+export function wasLastStopSideTask(sessionId: string): boolean {
   return !!sessions.get(sessionId)?.lastStopWasSideTask;
 }
 
@@ -8154,7 +8984,8 @@ function setTitleUpdateCallback(sessionId: string, cb: (() => void) | undefined)
  * initGlobalListeners 注入的「interaction-request 分发」引用,供 reconcilePendingInteractions
  * 复用(打开/重连会话时把当前挂起交互重建成可操作面板)。handler 无闭包局部依赖。
  */
-let applyInteractionRequestRef: ((raw: unknown) => void) | null = null;
+let applyInteractionRequestRef:
+  ((raw: unknown, source?: { remoteDeviceId?: string }) => void) | null = null;
 
 /**
  * 快照重建:拉取某会话当前挂起的交互(permission/ask/plan)并重建可操作面板。
@@ -8215,6 +9046,7 @@ function reconcilePendingInteractions(
       // a Device Link reconnect cannot leave cards that the Host already closed.
       // Other interaction kinds keep their existing replay semantics.
       const authoritativePluginSetupIds = new Set<string>();
+      const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
         if (
@@ -8223,6 +9055,15 @@ function reconcilePendingInteractions(
           request.requestId.length > 0
         ) {
           authoritativePluginSetupIds.add(request.requestId);
+        }
+        if (
+          (request?.kind === 'issue_confirm' ||
+            request?.kind === 'rename_sessions_confirm' ||
+            request?.kind === 'ghost_grant_confirm') &&
+          typeof request.requestId === 'string' &&
+          request.requestId.length > 0
+        ) {
+          authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
@@ -8247,8 +9088,40 @@ function reconcilePendingInteractions(
           authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
             ? state.pluginSetupCommandInFlight
             : null;
+        const nextRemoteDesktopConfirmation =
+          stickyDeviceAtStart || interactionOriginAtStart
+            ? state.pendingRemoteDesktopConfirmation &&
+              authoritativeRemoteDesktopConfirmationIds.has(
+                state.pendingRemoteDesktopConfirmation.requestId,
+              )
+              ? state.pendingRemoteDesktopConfirmation
+              : null
+            : state.pendingRemoteDesktopConfirmation;
+        const nextRemoteDesktopConfirmationQueue =
+          stickyDeviceAtStart || interactionOriginAtStart
+            ? state.pendingRemoteDesktopConfirmationQueue.filter((confirmation) =>
+                authoritativeRemoteDesktopConfirmationIds.has(confirmation.requestId),
+              )
+            : state.pendingRemoteDesktopConfirmationQueue;
+        const [promotedRemoteDesktopConfirmation = null, ...remainingRemoteConfirmations] =
+          nextRemoteDesktopConfirmation
+            ? [nextRemoteDesktopConfirmation, ...nextRemoteDesktopConfirmationQueue]
+            : nextRemoteDesktopConfirmationQueue;
+        const remoteQueueChanged =
+          remainingRemoteConfirmations.length !==
+            state.pendingRemoteDesktopConfirmationQueue.length ||
+          remainingRemoteConfirmations.some(
+            (confirmation, index) =>
+              confirmation !== state.pendingRemoteDesktopConfirmationQueue[index],
+          );
 
-        if (!currentChanged && !queueChanged && nextCommand === state.pluginSetupCommandInFlight) {
+        if (
+          !currentChanged &&
+          !queueChanged &&
+          nextCommand === state.pluginSetupCommandInFlight &&
+          promotedRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation &&
+          !remoteQueueChanged
+        ) {
           return state;
         }
         return {
@@ -8257,15 +9130,22 @@ function reconcilePendingInteractions(
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
           pluginSetupCommandInFlight: nextCommand,
+          pendingRemoteDesktopConfirmation: promotedRemoteDesktopConfirmation,
+          pendingRemoteDesktopConfirmationQueue: remainingRemoteConfirmations,
         };
       });
       for (const item of list) {
         if (!isCurrentInteractionReconcile()) return 0;
-        applyInteractionRequestRef?.({
-          sessionId,
-          request: item.request,
-          persistId: item.persistId,
-        });
+        applyInteractionRequestRef?.(
+          {
+            sessionId,
+            request: item.request,
+            persistId: item.persistId,
+          },
+          {
+            remoteDeviceId: stickyDeviceAtStart ?? interactionOriginAtStart ?? undefined,
+          },
+        );
       }
       return list.length;
     });
@@ -8881,6 +9761,10 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
   // Retire the outbox ref afterwards so media protection transfers without a
   // cleanup-eligible gap in main's renderer registry.
   clearRemoteOptimisticSend(sessionId, clientId);
+  // 同会话还有其它乐观发送在飞时不能清 starting,否则后一条会提前退出运行中档。
+  if (!remoteOptimisticSendRecords(sessionId)?.size) {
+    clearSessionStarting(sessionId);
+  }
   setState(sessionId, (s) => ({
     ...s,
     pendingQueue: s.pendingQueue.filter((item) => item.clientId !== clientId),
@@ -9247,6 +10131,10 @@ function ensureInitialMessages(sessionId: string): void {
         if (s.remoteHostId !== nextRemoteHostId) {
           updates.remoteHostId = nextRemoteHostId;
         }
+        const nextSessionProviderId = session.providerId ?? null;
+        if (s.sessionProviderId !== nextSessionProviderId) {
+          updates.sessionProviderId = nextSessionProviderId;
+        }
         if (session.sdkSessionId && s.sdkSessionId !== session.sdkSessionId) {
           updates.sdkSessionId = session.sdkSessionId;
         }
@@ -9367,13 +10255,11 @@ function ensureInitialMessages(sessionId: string): void {
       //   - 计划工具行:计划只在输入框上方的胶囊呈现,不在消息流中留锚点;
       //   - 合成指令行:渲染 null,混在这些行里同样撑不出可见锚点。
       //
-      // PinnedPlanPanel 的唯一数据源同样是当前消息窗口。计划工具行不再在消息流中渲染,
-      // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
-      // 往前翻到最近 plan 边界,保证初始窗口能派生当前计划快照。
-      //
-      // 无锚点按 10 页(500 行)兜底。计划胶囊分两段:
-      //   - 当前窗口没有任何计划事件时,最多探测 10 页,避免从未使用计划的长会话全量拉历史;
-      //   - 已看到计划事件但最新 TaskUpdate 还缺创建/列表边界时,最多再补 10 页。
+      // 计划 UI(胶囊或流内卡)都从当前消息窗口派生。打开路径不再为「第一页没看到
+      // plan」去翻 10 页:绝大多数任务根本没有 plan,那次固定税会把单线程 DB worker
+      // 堵住。无锚点仍按 10 页兜底;已经看到计划事件但最新 TaskUpdate 还缺创建/列表
+      // 边界时继续补页。没看到 plan 的任务改到空闲后再最多翻 1 页
+      // (见 scheduleIdlePlanDiscoveryIfNeeded)。窗口不完整时由渲染层决定不画半截卡。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -9404,7 +10290,6 @@ function ensureInitialMessages(sessionId: string): void {
       }
       let hasMore = serverMessagePageHasMore(existing);
       const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
-      const MAX_PLAN_DISCOVERY_BACKFILL_PAGES = 10;
       const MAX_PLAN_RESOLUTION_BACKFILL_PAGES = 10;
 
       // Make the newest page visible as soon as it arrives. `historyLoaded`
@@ -9417,8 +10302,7 @@ function ensureInitialMessages(sessionId: string): void {
       const initialNeedsBackfill =
         hasMore &&
         (existing.every(isNonAnchorHistoryRow) ||
-          !initialPlanState.hasPlanEvent ||
-          !initialPlanState.isResolved);
+          (initialPlanState.hasPlanEvent && !initialPlanState.isResolved));
       if (initialHasVisibleAnchor) {
         const initialMapped = mapServerMessages(existing);
         const initialOldestId = oldestRow.id;
@@ -9467,10 +10351,7 @@ function ensureInitialMessages(sessionId: string): void {
           planState.hasPlanEvent &&
           !planState.isResolved &&
           planResolutionPagesFetched < MAX_PLAN_RESOLUTION_BACKFILL_PAGES;
-        const needsPlanBackfill = planState.hasPlanEvent
-          ? needsPlanResolution
-          : pagesFetched < MAX_PLAN_DISCOVERY_BACKFILL_PAGES;
-        if (!needsAnchorBackfill && !needsPlanBackfill) break;
+        if (!needsAnchorBackfill && !needsPlanResolution) break;
 
         pagesFetched += 1;
         if (needsPlanResolution) planResolutionPagesFetched += 1;
@@ -9583,6 +10464,7 @@ function ensureInitialMessages(sessionId: string): void {
       // 历史加载完 → 重建当前挂起交互:历史里被转 expired 的 ask/plan 在此翻回 pending
       // (按 requestId 去重,不重复),permission 重新置 pendingPermission。
       void reconcilePendingInteractions(sessionId, isCurrentHistoryLoad).catch(() => undefined);
+      scheduleIdlePlanDiscoveryIfNeeded(sessionId);
     })
     .catch(() => {
       if (
@@ -9610,6 +10492,72 @@ function ensureInitialMessages(sessionId: string): void {
       releaseCacheHydrationAfterFailure(sessionId);
       setState(sessionId, (s) => ({ ...s, historyLoaded: false }));
     });
+}
+
+const IDLE_PLAN_DISCOVERY_DELAY_MS = 200;
+const _idlePlanDiscoveryHandles = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelIdlePlanDiscovery(sessionId: string): void {
+  const handle = _idlePlanDiscoveryHandles.get(sessionId);
+  if (handle === undefined) return;
+  _idlePlanDiscoveryHandles.delete(sessionId);
+  clearTimeout(handle);
+}
+
+function scheduleIdlePlanDiscoveryIfNeeded(sessionId: string): void {
+  if (!_activeViewSessions.has(sessionId)) return;
+  const state = sessions.get(sessionId);
+  if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) return;
+  const planState = getLatestMessageTodoState(state.messages, {
+    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+  });
+  if (planState.hasPlanEvent && planState.isResolved) return;
+  if (_idlePlanDiscoveryHandles.has(sessionId)) return;
+
+  const run = () => {
+    _idlePlanDiscoveryHandles.delete(sessionId);
+    void loadOneOlderPageForPlanDiscovery(sessionId);
+  };
+
+  _idlePlanDiscoveryHandles.set(sessionId, setTimeout(run, IDLE_PLAN_DISCOVERY_DELAY_MS));
+}
+
+function loadOneOlderPageForPlanDiscovery(sessionId: string): Promise<boolean> {
+  if (!_activeViewSessions.has(sessionId)) return Promise.resolve(false);
+  const state = sessions.get(sessionId);
+  if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) {
+    return Promise.resolve(false);
+  }
+  const planState = getLatestMessageTodoState(state.messages, {
+    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+  });
+  if (planState.hasPlanEvent && planState.isResolved) return Promise.resolve(false);
+  if (planState.hasPlanEvent && !planState.isResolved) {
+    return continuePlanResolutionAfterIdleDiscovery(sessionId).then(() => true);
+  }
+  // 先只翻 1 页。若这一页首次露出未解析完的 plan,再转入与首拉相同的有界 resolution
+  // 回填;没有 plan 的长任务仍只付这一页。automatic=false:不消耗视口自动补载预算。
+  return loadOlderMessages(sessionId, false, 1).then(async (advanced) => {
+    if (!advanced) return false;
+    await continuePlanResolutionAfterIdleDiscovery(sessionId);
+    return advanced;
+  });
+}
+
+const MAX_IDLE_PLAN_RESOLUTION_PAGES = 10;
+
+async function continuePlanResolutionAfterIdleDiscovery(sessionId: string): Promise<void> {
+  for (let page = 0; page < MAX_IDLE_PLAN_RESOLUTION_PAGES; page += 1) {
+    if (!_activeViewSessions.has(sessionId)) return;
+    const state = sessions.get(sessionId);
+    if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) return;
+    const planState = getLatestMessageTodoState(state.messages, {
+      taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+    });
+    if (!planState.hasPlanEvent || planState.isResolved) return;
+    const advanced = await loadOlderMessages(sessionId, false, 1);
+    if (!advanced) return;
+  }
 }
 
 /**
@@ -9662,7 +10610,10 @@ function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean 
       // the authoritative history window resets.
       messages: optimisticMessages,
       taskUpdates: new Map(),
-      pendingTaskWake: false,
+      pendingTaskWake: 0,
+      pendingTaskWakeDuringTurn: 0,
+      pendingTaskWakeStarted: false,
+      turnStoppedByUser: false,
       historyLoaded: false,
       hasMoreMessages: false,
       oldestMessageId: null,
@@ -10168,7 +11119,11 @@ const MAX_LOAD_OLDER_PAGES = 10;
  * 行首守卫、空页、全程失败、代际作废和提交异常都返回 false。
  * automatic=true 时只在推进成功后耗尽该缓存窗口的跨 mount 自动补载预算。
  */
-function loadOlderMessages(sessionId: string, automatic = false): Promise<boolean> {
+function loadOlderMessages(
+  sessionId: string,
+  automatic = false,
+  maxPages = MAX_LOAD_OLDER_PAGES,
+): Promise<boolean> {
   const state = getOrCreateState(sessionId);
   if (state.isLoadingMore || !state.hasMoreMessages) return Promise.resolve(false);
 
@@ -10176,7 +11131,12 @@ function loadOlderMessages(sessionId: string, automatic = false): Promise<boolea
   if (state.oldestMessageId) {
     firstPageOpts = { limit: 50, before: state.oldestMessageId };
   } else if (state.messages.length > 0) {
-    const oldest = state.messages[0];
+    // 无 ID 时默认用 messages[0]。有孤岛时那是孤岛最老行,beforeTs 会翻到缺口
+    // 更早的一侧;改用最新连续段下沿,才能填孤岛与尾段之间的洞。
+    const oldest =
+      state.historyWindowHasIsland === true
+        ? (oldestMessageOfNewestContiguousRun(state.messages) ?? state.messages[0])
+        : state.messages[0];
     if (!oldest.createdAt) return Promise.resolve(false);
     const ts = new Date(oldest.createdAt).getTime();
     if (!Number.isFinite(ts)) return Promise.resolve(false);
@@ -10205,7 +11165,7 @@ function loadOlderMessages(sessionId: string, automatic = false): Promise<boolea
       let hasMore = true;
       let oldestId: string | null = state.oldestMessageId;
       try {
-        for (let page = 0; page < MAX_LOAD_OLDER_PAGES; page++) {
+        for (let page = 0; page < maxPages; page++) {
           const rows = await listMessagesFor(sessionId, pageOpts);
           if (rows.length === 0) {
             hasMore = false;
@@ -10987,6 +11947,11 @@ export function buildCreateOptsForCurrentSession(
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
+    ...(current.agentSwitchIntent
+      ? { providerId: current.agentSwitchIntent.providerId }
+      : current.sessionProviderId !== undefined
+        ? { providerId: current.sessionProviderId }
+        : {}),
   };
 }
 
@@ -11001,6 +11966,8 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       ? { workingDir, userSendAt: userSendAtIso, updatedAt: userSendAtIso }
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
+  // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
+  markSessionStarting(sessionId);
 }
 
 /**
@@ -11498,6 +12465,15 @@ function sendMessage(
           ),
       );
     },
+  ).then(
+    (ok) => {
+      if (!ok) clearSessionStarting(sessionId);
+      return ok;
+    },
+    (err) => {
+      clearSessionStarting(sessionId);
+      throw err;
+    },
   );
 }
 
@@ -11675,6 +12651,16 @@ async function sendMessageCore(
       }
       const applied = applyInputProjectionOperationResponse(sessionId, operation, projection);
       if (applied) markSessionHasUserMessage(sessionId);
+      // 暂停 / 输入锁 / 凭证切换等待只把消息收下,不会马上派发。starting
+      // 表示「预期会跑」,不能把明确未派发的任务标成运行中。
+      if (
+        projection.pendingQueue.some((item) => item.clientId === queued.clientId)
+        && (projection.queuePaused
+          || Boolean(projection.credentialSwitchWait)
+          || projection.queueInteractionLocks.length > 0)
+      ) {
+        clearSessionStarting(sessionId);
+      }
       return true;
     })
     .catch((err) => {
@@ -12223,6 +13209,9 @@ function stopSession(
   },
 ): void {
   if (!sessionId) return;
+  // Stop/abort 乐观终态：立即清掉该 session 的「正在识别图片中」toast，
+  // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
+  dismissVisionBridgeToast(sessionId);
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
@@ -12285,7 +13274,10 @@ function stopSession(
       // 全标会造成 tasks 面板窗口期显示错(review P2)。若 SDK 侧任务实际还活着,
       // 后续 task_progress 会把条目翻回 running,状态自愈。
       taskUpdates: stopRunningAgentTasks(s.taskUpdates, 'wake'),
-      pendingTaskWake: false,
+      pendingTaskWake: 0,
+      pendingTaskWakeDuringTurn: 0,
+      pendingTaskWakeStarted: false,
+      turnStoppedByUser: true,
       agentStatus: {
         status: 'Idle',
         // Preserve all token/cost values — ring keeps showing last known context capacity
@@ -12575,6 +13567,8 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
 }
 
 async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string): Promise<void> {
+  // /clear 清空会话：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   // Pin the clear lifecycle to the last known device before any await. The
   // mirror is intentionally cleared below, so live origin lookup is no longer
   // reliable for either clearSession or closeSession.
@@ -12687,7 +13681,10 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
         (message) => message.isPendingPersist && postClearOptimisticClientIds.has(message.clientId),
       ),
       taskUpdates: new Map(),
-      pendingTaskWake: false,
+      pendingTaskWake: 0,
+      pendingTaskWakeDuringTurn: 0,
+      pendingTaskWakeStarted: false,
+      turnStoppedByUser: false,
       streamingClientId: null,
       streamingText: '',
       isStreaming: false,
@@ -12720,6 +13717,8 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       askUserDraft: null,
       pendingPlanReview: null,
       pendingIssueConfirm: null,
+      pendingRemoteDesktopConfirmation: null,
+      pendingRemoteDesktopConfirmationQueue: [],
       pendingQueue: s.pendingQueue.filter((item) =>
         postClearOptimisticClientIds.has(item.clientId),
       ),
@@ -12885,11 +13884,6 @@ function answerUserQuestion(
   // Build a human-readable reply summary
   const replySummary = formatAskUserReply(answers);
 
-  // Find the clientId for persistence update
-  const askMsg = state.messages.find(
-    (m) => m.askUserRequestId === requestId && m.askUserStatus === 'pending',
-  );
-
   // Update message to answered + clear pendingAskUser
   setState(sessionId, (s) => ({
     ...s,
@@ -12911,21 +13905,8 @@ function answerUserQuestion(
     ),
   }));
 
-  // F7.6: Persist answered state via PATCH API。
-  // device-link 远程会话:被控端在 RESOLVE_INTERACTION 里权威落库(onInteractionResolved),
-  // 控制端再写就是写自己的空库(dead write + 错误日志)→ 远程跳过,只本机会话走这条。
-  if (askMsg && !isRemoteSession(sessionId)) {
-    messageService
-      .updateContent(sessionId, askMsg.clientId, {
-        requestId,
-        questions: askMsg.askUserQuestions ?? null,
-        status: 'answered',
-        answers,
-      })
-      .catch((err) => log.error('Failed to persist ask_user answered state:', err));
-  }
-
-  // Send to maker (InteractionDecision kind: 'ask_user_question')
+  // 落库只走 main 的 onInteractionResolved。renderer 先写会让多窗口输家/
+  // Stop-vs-answer 的迟到 updateContent 覆盖赢家或 cancelled。
   makerApiFor(sessionId)
     .resolveInteraction(requestId, { kind: 'ask_user_question', answers })
     .catch((err) => log.error('Failed to answer user question:', err));
@@ -13583,6 +14564,8 @@ function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
  */
 function closeSessionQuery(sessionId: string): void {
   if (!sessionId) return;
+  // 会话关闭：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   makerApiFor(sessionId)
     .closeSession(sessionId)
     .catch((err) => log.warn('maker.closeSession failed:', err));
@@ -13747,20 +14730,26 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
  */
 function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi'): void {
   if (!sessionId) return;
-  setState(sessionId, (s) =>
-    s.agentKind === agentKind && s.sdkSessionId === null && s.agentSwitchIntent === null
-      ? s
-      : {
-          ...s,
-          agentKind,
-          sdkSessionId: null,
-          agentSwitchIntent: null,
-          // 意图被真实切换消费掉也是一次变更,在途读回据此作废。
-          ...(s.agentSwitchIntent === null
-            ? {}
-            : { agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }),
-        },
-  );
+  setState(sessionId, (s) => {
+    const nextProviderId = s.agentSwitchIntent ? s.agentSwitchIntent.providerId : s.sessionProviderId;
+    if (
+      s.agentKind === agentKind &&
+      s.sdkSessionId === null &&
+      s.agentSwitchIntent === null &&
+      s.sessionProviderId === nextProviderId
+    ) {
+      return s;
+    }
+    return {
+      ...s,
+      agentKind,
+      sdkSessionId: null,
+      agentSwitchIntent: null,
+      ...(s.agentSwitchIntent ? { sessionProviderId: s.agentSwitchIntent.providerId } : {}),
+      // 意图被真实切换消费掉也是一次变更,在途读回据此作废。
+      ...(s.agentSwitchIntent === null ? {} : { agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }),
+    };
+  });
 }
 
 /**
@@ -13944,6 +14933,7 @@ function mirrorSessionFields(
         fastMode?: unknown;
         planModeEnabled?: unknown;
         agentKind?: unknown;
+        providerId?: unknown;
         agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
       }
@@ -13971,11 +14961,29 @@ function mirrorSessionFields(
         agentKind: nextKind,
         sdkSessionId: null,
         // 意图被真实切换消费 = 一次意图变更,推进修订号让在途读回作废。
+        // 同时把目标 provider 写进 createOpts 快照,避免后续排队项仍带旧来源。
         ...(intentApplied
-          ? { agentSwitchIntent: null, agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }
+          ? {
+              agentSwitchIntent: null,
+              agentSwitchIntentRev: s.agentSwitchIntentRev + 1,
+              sessionProviderId: s.agentSwitchIntent?.providerId,
+            }
           : {}),
       };
     });
+  }
+  if ('providerId' in patch) {
+    const nextProviderId =
+      typeof patch.providerId === 'string'
+        ? patch.providerId
+        : patch.providerId === null
+          ? null
+          : undefined;
+    if (nextProviderId !== undefined) {
+      setState(sessionId, (s) =>
+        s.sessionProviderId === nextProviderId ? s : { ...s, sessionProviderId: nextProviderId },
+      );
+    }
   }
   if (typeof patch.fastMode === 'boolean') {
     const next = patch.fastMode;
@@ -14001,6 +15009,22 @@ export const makerChatStore = {
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,
+  /** 查询会话是否有正在运行的 wake 型后台任务 (local_agent / local_workflow)。 */
+  hasRunningWakeTask: (sessionId: string): boolean => {
+    const state = sessions.get(sessionId);
+    if (!state) return false;
+    return hasRunningWakeTask(state);
+  },
+  /**
+   * 查询会话是否有本地后台 agent 工作（wake 任务在跑 / 唤醒桥接 pending）。
+   * 远程会话豁免（镜像事件有丢失窗口，终态 drop 后无自愈路径）。
+   * 与 hasBackgroundAgentWork 内部函数同口径，但暴露为公共 API。
+   */
+  hasBackgroundAgentWork: (sessionId: string): boolean => {
+    const state = sessions.get(sessionId);
+    if (!state) return false;
+    return hasBackgroundAgentWork(sessionId, state);
+  },
   mirrorSessionFields,
   /** F-SB-7: Subscribe to all session changes (for Sidebar running indicators). */
   subscribeAll,
@@ -14009,6 +15033,10 @@ export const makerChatStore = {
   /** F-SB-7: Authoritative terminal-error read, immune to snapshot-generation races. */
   hasSessionTerminalError,
   wasLastStopSideTask,
+  /** 输入框推荐后台完成配对用的 non-creating turn 起点。 */
+  getPromptRecommendationRunStartedAt,
+  /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
+  getPromptRecommendationCompletionStatus,
   ensureInitialMessages,
   reloadMessages,
   /** 消息菜单:本地移除一次删除动作覆盖的整轮记录。 */
@@ -14128,6 +15156,19 @@ export const makerChatStore = {
     return out;
   },
   /**
+   * 捕获该会话当前的唤醒桥接代际(计数 + 置位代次)。
+   * 用途:活动熄灭延迟对账 —— ①粗筛放行:桥接泄漏时 taskUpdates 里往往已无
+   * running 条目(迟到终态本身就是 completed),只看 running 候选会把桥接对账
+   * 挡在门外;②桥接代际:必须在发起 listSessionBackgroundTasks **之前**捕获,
+   * 收口只在「响应落地时计数与代际一致且置位代次未变」时发生 —— 请求在飞窗口
+   * 内新置位 / 被 isTurnStart 消费过的桥接都不收;代次单调递增另挡「消费后又
+   * 置位恰好回到原计数」的 ABA 碰撞(见 seedBackgroundTaskSnapshots)。
+   */
+  capturePendingWakeBridge: (sessionId: string): { count: number; gen: number } => {
+    const s = sessions.get(sessionId);
+    return { count: s?.pendingTaskWake ?? 0, gen: s?.pendingTaskWakeGen ?? 0 };
+  },
+  /**
    * 后台任务快照水合:把 main 的 listSessionBackgroundTasks 结果补进 taskUpdates。
    * 只补「store 里完全没见过」的任务 —— 事件流是唯一实时源,快照可能落后于刚到
    * 的终态事件,已存在的条目(无论何状态)绝不用快照的 running 覆盖复活。
@@ -14139,14 +15180,47 @@ export const makerChatStore = {
    * running 且不在快照中的条目标 stopped(终态事件丢失的自愈,时序论证见
    * reconcileStaleRunningTasks)。仅本机会话可传:device-link 镜像会话的快照
    * 有降级空表窗口,不可当权威(与远程豁免 running 折算同口径)。
+   *
+   * opts.reconcileWakeBridge(可选):唤醒桥接对账收口 —— 仅活动熄灭延迟对账
+   * 路径可传(同 staleRunningCandidates 的本机会话口径),值为**发起快照请求前**
+   * 捕获的桥接代际(计数 + 置位代次)。快照落地后,同时满足以下全部条件才把
+   * 桥接清零,否则(计数仍 > 0 时)重新调度下一轮对账、留待复查:
+   *   1. 当前计数与代际捕获值完全一致 —— 在飞窗口内无新增置位、也无 isTurnStart
+   *      消费,旧快照绝不清新桥接、也不吞多 wake 场景里尚待依次消费的合法计数;
+   *   2. 置位代次未变 —— 单调代次挡「在飞窗口内先消费后置位、计数恰好回到捕获值」
+   *      的 ABA 碰撞(bot review P1);
+   *   3. 主 turn 不在跑;
+   *   4. 距最近一次置位已超过 WAKE_BRIDGE_RECONCILE_MIN_AGE_MS —— 给慢机 /
+   *      高负载下合法 wake turn 留足启动余量;
+   *   5. main 权威表里没有任何 wake 型任务;
+   *   6. opts.authorityPendingContinuations === 0 —— main 权威的「任务已终态、
+   *      wake turn 尚未启动或仍在跑」continuation claim 数。这是收口的**决定性
+   *      判据**:任务终态后立即从运行表出表,条件 5 的空表不能证明没有待启动的
+   *      continuation(bot review P2 两条);信号缺失(null,旧 main)按不可用
+   *      处理 —— 不收口,只重试。
+   * 全部满足时,仍挂着的桥接只能是「不会再有 wake turn 跟进」的迟到 / 误投终态
+   * 留下的泄漏(fork 会话收到父会话任务终态、重连重放等)—— 不清会永久撑住
+   * running 快照(spinner 永转)。wake turn 真要启动时 isTurnStart 本来就会消费
+   * 桥接,收口只影响空窗显示,不改变任何 turn 语义。
    */
   seedBackgroundTaskSnapshots: (
     sessionId: string,
-    tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>,
-    opts?: { staleRunningCandidates?: ReadonlySet<string> },
+    tasks: Array<{
+      taskId: string;
+      taskType?: string;
+      toolUseId?: string;
+      title?: string;
+      provider?: 'pi' | 'claude-code';
+    }>,
+    opts?: {
+      staleRunningCandidates?: ReadonlySet<string>;
+      reconcileWakeBridge?: { count: number; gen: number };
+      authorityPendingContinuations?: number | null;
+    },
   ): void => {
     const candidates = opts?.staleRunningCandidates;
-    if (!tasks.length && !(candidates && candidates.size > 0)) return;
+    if (!tasks.length && !(candidates && candidates.size > 0) && !opts?.reconcileWakeBridge?.count)
+      return;
     setState(sessionId, (s) => {
       let next = s;
       for (const t of tasks) {
@@ -14155,12 +15229,13 @@ export const makerChatStore = {
           next.taskUpdates?.has(t.taskId) ||
           (t.toolUseId ? next.taskUpdates?.has(t.toolUseId) : false);
         if (seen) continue;
+        const provider = t.provider === 'pi' ? 'pi' : 'claude-code';
         next = handleStreamEvent(next, {
           sessionId,
           type: 'agent_task_update',
-          source: 'claude-code',
+          source: provider,
           data: {
-            provider: 'claude-code',
+            provider,
             taskId: t.taskId,
             status: 'running',
             ...(t.taskType ? { taskType: t.taskType } : {}),
@@ -14171,6 +15246,41 @@ export const makerChatStore = {
       }
       if (candidates && candidates.size > 0) {
         next = reconcileStaleRunningTasks(next, tasks, candidates);
+      }
+      // 唤醒桥接对账收口(六条件语义见方法头注释的 reconcileWakeBridge 段)。
+      const capturedWakeBridge = opts?.reconcileWakeBridge;
+      if (capturedWakeBridge && capturedWakeBridge.count > 0 && next.pendingTaskWake > 0) {
+        const bridgeSettled =
+          next.pendingTaskWake === capturedWakeBridge.count &&
+          next.pendingTaskWakeGen === capturedWakeBridge.gen;
+        const bridgeAgedOut =
+          next.pendingTaskWakeArmedAt !== null &&
+          Date.now() - next.pendingTaskWakeArmedAt >= WAKE_BRIDGE_RECONCILE_MIN_AGE_MS;
+        const authorityHasWakeTask = tasks.some(
+          (t) => typeof t.taskType === 'string' && WAKE_AGENT_TASK_TYPES.has(t.taskType),
+        );
+        // 决定性判据:main 权威 continuation 计数明确为 0 才允许收口。
+        const authorityConfirmsNoContinuation = opts?.authorityPendingContinuations === 0;
+        if (
+          bridgeSettled &&
+          bridgeAgedOut &&
+          !next.agentStatus.isRunning &&
+          !authorityHasWakeTask &&
+          authorityConfirmsNoContinuation
+        ) {
+          next = {
+            ...next,
+            pendingTaskWake: 0,
+            pendingTaskWakeDuringTurn: 0,
+            pendingTaskWakeStarted: false,
+            pendingTaskWakeArmedAt: null,
+          };
+        } else {
+          // 条件未齐(在飞变动 / 年龄不足 / turn 在跑 / 权威表仍有 wake 任务):
+          // 本轮不动,重新调度下一轮对账复查。真泄漏最终会静止、超龄、表空,
+          // 收口收敛;合法 wake 则会经 isTurnStart 消费计数,后续对账自然空转。
+          scheduleBackgroundTaskReconcile(sessionId);
+        }
       }
       return next;
     });
@@ -14194,6 +15304,7 @@ export const makerChatStore = {
   __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void => {
     supersedeInputProjectionOnTerminalEvent(sessionId, event);
     setState(sessionId, (s) => handleStreamEvent(s, event));
+    scheduleWakeBridgeReconciliation(sessionId);
   },
   /** Exposed for tests only: 把 status update 打进真实 store。 */
   __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
@@ -14201,6 +15312,7 @@ export const makerChatStore = {
       supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
     }
     setState(sessionId, (s) => handleStatusUpdate(s, update));
+    scheduleWakeBridgeReconciliation(sessionId);
   },
   /** Exposed for tests only. */
   __hydratePersistedMessageForTest: hydratePersistedMessage,
@@ -14679,6 +15791,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   // mapped ChatMessage uniformly (each branch below builds a different
   // shape, easier to attach the timestamp once at the end).
   const createdAtById = new Map(serverMsgs.map((m) => [m.clientId, m.createdAt]));
+  const serverIdByClientId = new Map(serverMsgs.map((m) => [m.clientId, m.id]));
   const rowidById = new Map(serverMsgs.map((m) => [m.clientId, m.rowid]));
   const remoteContentTruncatedById = new Map(
     serverMsgs.map((m) => [m.clientId, m.agentMeta?.remoteContentTruncated === true]),
@@ -14694,6 +15807,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const c = m.content as Record<string, unknown>;
       const toolName = typeof c.toolName === 'string' ? c.toolName : '';
       const toolInput = c.input ?? null;
+      const agentTaskStatus = normalizeAgentTaskTerminalStatus(m.agentMeta?.agentTaskStatus);
       // toolUseId 来源:DB 列(新数据) → fallback 旧数据存在 content.toolUseId 里
       const toolUseId =
         (typeof m.toolUseId === 'string' && m.toolUseId.length > 0 ? m.toolUseId : undefined) ??
@@ -14705,6 +15819,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
               terminalPlanSnapshot: true,
@@ -14874,6 +15989,25 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(errorProviderId ? { errorProviderId } : {}),
         // interrupted-turn-resume:「忽略」的持久化标记(updateContent 写入)。
         ...(c.dismissed === true ? { errorDismissed: true } : {}),
+      };
+    }
+    // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
+    const contextRebuild =
+      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
+        ? (m.agentMeta as { contextRebuild?: unknown }).contextRebuild
+        : undefined;
+    if (contextRebuild && typeof contextRebuild === 'object') {
+      const c = contextRebuild as Record<string, unknown>;
+      return {
+        clientId: m.clientId,
+        role: 'assistant' as const,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'context-rebuild' as const,
+        systemCardData: {
+          reason: typeof c.reason === 'string' ? c.reason : 'context-overflow',
+          handoff: typeof c.handoff === 'string' ? c.handoff : '',
+        },
       };
     }
     // session-agent-switch:引擎切换边界行 → 'agent-switch' system card(与
@@ -15137,6 +16271,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   return mapped.map((cm): ChatMessage => {
     const ts = createdAtById.get(cm.clientId);
     const iso = mapServerCreatedAt(cm, ts);
+    const serverId = serverIdByClientId.get(cm.clientId);
     const rowid = rowidById.get(cm.clientId);
     const remoteContentTruncated = remoteContentTruncatedById.get(cm.clientId) === true;
     const remoteRowsTrimmed = remoteRowsTrimmedById.get(cm.clientId) === true;
@@ -15146,7 +16281,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       rowid === undefined &&
       !remoteContentTruncated &&
       !remoteRowsTrimmed &&
-      !legacyUserTurnCost
+      !legacyUserTurnCost &&
+      !serverId
     ) {
       return cm;
     }
@@ -15154,6 +16290,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...cm,
       ...(legacyUserTurnCost ?? {}),
       ...(iso ? { createdAt: iso } : {}),
+      ...(typeof serverId === 'string' && serverId.length > 0 ? { id: serverId } : {}),
       ...(rowid !== undefined ? { rowid } : {}),
       ...(remoteContentTruncated ? { remoteContentTruncated: true } : {}),
       ...(remoteRowsTrimmed ? { remoteRowsTrimmed: true } : {}),
