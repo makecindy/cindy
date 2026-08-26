@@ -3086,6 +3086,7 @@ describe('统一面板 · 付费锁定行', () => {
     expect(paymentUnlock?.className).toContain('group-hover/row:visible');
     expect(paymentUnlock?.closest('[data-model-row-meta]')).not.toBeNull();
     fireEvent.pointerEnter(option);
+    fireEvent.focus(option);
     fireEvent.click(option);
     fireEvent.keyDown(option, { key: 'Enter' });
     expect(onReveal).not.toHaveBeenCalled();

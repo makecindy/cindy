@@ -261,7 +261,9 @@ export function UnifiedModelRow({
     onPointerEnter: reveal,
     onPointerMove: reveal,
     onPointerLeave: onLeave,
-    onFocus: (event: ReactFocusEvent<HTMLDivElement>) => onReveal(anchor, event.currentTarget),
+    onFocus: (event: ReactFocusEvent<HTMLDivElement>) => {
+      if (!paymentRequired) onReveal(anchor, event.currentTarget);
+    },
     onBlur: (event: ReactFocusEvent<HTMLDivElement>) => onBlurAway(event.relatedTarget),
     onClick: paymentRequired ? onPaymentRequired : onSelect,
     onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
