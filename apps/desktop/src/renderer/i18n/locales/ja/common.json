@@ -9628,7 +9628,10 @@
     }
   },
   "commandPalette": {
-    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
+    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。",
+    "skillUnavailableForNewTask": "選択した Skill を安全に読み込めませんでした。最初のメッセージを復元しました。Skill を選び直して、もう一度お試しください。",
+    "projectSkillUnavailableForNewTask": "選択したプロジェクト Skill を安全に読み込めませんでした。最初のメッセージは保持されています。再起動するか Skill を選び直して、もう一度お試しください。",
+    "projectSkillMissingInWorktree": "新しい worktree から選択したプロジェクト Skill を読み込めませんでした。最初のメッセージを復元しました。対象ブランチに Skill が含まれていることを確認して、もう一度お試しください。"
   },
   "skillhub": {
     "home": {

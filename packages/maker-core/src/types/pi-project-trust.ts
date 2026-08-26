@@ -16,6 +16,14 @@ export type PiProjectTrustScope = 'working-dir' | 'repo-root';
 
 export type PiProjectWindowsCaseComparison = 'ordinal-insensitive' | 'case-sensitive' | 'unavailable';
 
+/** Host-proven path semantics safe to reuse after identity resolution succeeds. */
+export type PiProjectPathComparisonIdentity =
+  | Readonly<{ platform: 'posix'; windowsCaseComparison?: never }>
+  | Readonly<{
+      platform: 'win32';
+      windowsCaseComparison: Exclude<PiProjectWindowsCaseComparison, 'unavailable'>;
+    }>;
+
 export type PiProjectResourceKind = 'skills' | 'settings' | 'packages' | 'extensions';
 
 export type PiProjectResourceDisposition = 'eligible' | 'discovered' | 'blocked';

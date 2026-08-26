@@ -111,6 +111,7 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
+import { resolveDesktopPiProjectTrustInput } from './pi-project-skill-admission-resolver.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -1851,6 +1852,9 @@ export function getMaker(): Maker {
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,
+      // Host-owned, skills-only admission. This resolver is evaluated once for
+      // every new Pi runtime and never derives approval from permission mode.
+      resolvePiProjectTrustInput: resolveDesktopPiProjectTrustInput,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
       resolvePiVisionBridgeEnv: (model) =>
         buildPiVisionBridgeEnv(

@@ -144,7 +144,7 @@ import type { MemoryResetResult, MemorySetResult, MemoryStatus } from '../../typ
 import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../types/common.js';
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
-import { scanPiCustomizations } from './customization-scanner.js';
+import { piUserSkillRoot, scanPiCustomizations } from './customization-scanner.js';
 import {
   DoctorCommandActivity,
   findContextModePackageRoot,
@@ -170,6 +170,7 @@ import {
 } from './runtime-capabilities.js';
 import {
   assembleApprovedPiProjectResources,
+  PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS,
   reconcilePiProjectResourceRuntime,
   stageApprovedPiProjectResources,
   unavailablePiProjectResourceAssembly,
@@ -2570,8 +2571,22 @@ export class PiAgent extends BaseAgent {
           workingDir: opts.workingDir,
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
         });
-        projectResourceAssembly = await assembleApprovedPiProjectResources(trustInput, opts.workingDir);
-        projectResourceAssembly = await stageApprovedPiProjectResources(projectResourceAssembly, configHome);
+        const projectResourceDeadlineAtMs =
+          Date.now() + PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS;
+        const remainingProjectResourceDeadlineMs = (): number => Math.max(
+          0,
+          projectResourceDeadlineAtMs - Date.now(),
+        );
+        projectResourceAssembly = await assembleApprovedPiProjectResources(
+          trustInput,
+          opts.workingDir,
+          { deadlineMs: remainingProjectResourceDeadlineMs() },
+        );
+        projectResourceAssembly = await stageApprovedPiProjectResources(
+          projectResourceAssembly,
+          configHome,
+          { deadlineMs: remainingProjectResourceDeadlineMs() },
+        );
       } catch {
         projectResourceAssembly = unavailablePiProjectResourceAssembly('approval-resolver-failed');
         this.deps.logger.warn('pi project approval resolver failed closed', {
@@ -4250,6 +4265,7 @@ export class PiAgent extends BaseAgent {
     // 仍持有本会话的 MCP 路由),再把原始错误抛给调用方。
     let sdkSessionId = '';
     let runtimeCapabilityRefreshPromise: Promise<void> | undefined;
+    let runtimeCapabilityRetryPromise: Promise<void> | undefined;
     const refreshRuntimeCapabilities = async (stage: 'ready' | 'switch_session' | 'fork'): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
       const capturedManifest = await capturePiRuntimeCapabilityManifest(
@@ -4260,6 +4276,11 @@ export class PiAgent extends BaseAgent {
         },
         generation,
         stage,
+        {
+          userSkillBaseDirs: remote
+            ? []
+            : [path.dirname(piUserSkillRoot()), configHome],
+        },
       );
       const managedPackageCommandNames = identifyManagedPiPackageCommandNames(
         capturedManifest.commands,
@@ -4284,6 +4305,31 @@ export class PiAgent extends BaseAgent {
       });
       runtimeCapabilityRefreshPromise = tracked;
       return tracked;
+    };
+    const refreshRuntimeCapabilitiesIfRetryableUnknown = async (): Promise<void> => {
+      // A force-reload may race the ready capture. Join it first, then retry only
+      // transient timeout/provenance-I/O failures. Unsupported or malformed
+      // catalogs are deterministic for this runtime and must not be rescanned.
+      if (runtimeCapabilityRetryPromise) {
+        await runtimeCapabilityRetryPromise;
+        return;
+      }
+      await runtimeCapabilityRefreshPromise;
+      if (runtimeCapabilityRetryPromise) {
+        await runtimeCapabilityRetryPromise;
+        return;
+      }
+      if (
+        closed
+        || runtimeCapabilityManifest?.status !== 'unknown'
+        || runtimeCapabilityManifest.error?.code !== 'timeout'
+      ) return;
+      const retry = scheduleRuntimeCapabilityRefresh('ready');
+      const trackedRetry = retry.finally(() => {
+        if (runtimeCapabilityRetryPromise === trackedRetry) runtimeCapabilityRetryPromise = undefined;
+      });
+      runtimeCapabilityRetryPromise = trackedRetry;
+      await trackedRetry;
     };
     const awaitRuntimeCapabilitiesForSlashCommand = async (text: string): Promise<void> => {
       const trimmed = text.trimStart();
@@ -5067,6 +5113,7 @@ export class PiAgent extends BaseAgent {
         notifyRuntimeCapabilityListener(listener, runtimeCapabilityManifest);
         return () => runtimeCapabilityListeners.delete(listener);
       },
+      refreshRuntimeCapabilitiesIfRetryableUnknown,
 
       // 每轮权限策略(IM 群 / 个人微信等)是 host 侧的 forceConfirmToolCall 回调,必须在
       // 工具执行前的审批边界强制执行。ask/auto 下 cindy-bridge 会把非只读内置工具与桥接

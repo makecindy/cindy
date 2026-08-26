@@ -16,7 +16,8 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
-import fs from 'node:fs';
+import type { BigIntStats } from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
 
@@ -35,8 +36,14 @@ import type {
   ListCustomizationsResult,
 } from './types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
+import type { PiProjectPathComparisonIdentity } from './types/pi-project-trust.js';
 import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
-import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
+import {
+  fingerprintPiProjectSkillEntrypoint,
+  MAX_PI_PROJECT_SKILL_FINGERPRINT_ENTRIES,
+  MAX_PI_PROJECT_SKILL_SNAPSHOT_FILE_BYTES,
+  PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS,
+} from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
@@ -167,25 +174,248 @@ function capabilitiesForSession(
   };
 }
 
-function canonicalPiRuntimePath(value: string): string {
+// Admission permits 10,000 entries across the complete project Skill set.
+// Palette freshness deliberately fingerprints every tree twice to reject a
+// concurrent mutation, so its shared accounting must cover two complete
+// passes of every tree admitted at launch. Use the same deadline as launch;
+// otherwise a valid large Skill can start but can never become selectable.
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS =
+  PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS;
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET =
+  MAX_PI_PROJECT_SKILL_FINGERPRINT_ENTRIES * 2;
+const PI_SKILL_CATALOG_TIMEOUT = 'PI_SKILL_CATALOG_TIMEOUT';
+const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
+  'cindy.pi.runtime-user-skill-canonical-source',
+);
+
+interface FrozenUserSkillFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+interface FrozenUserSkillSourceProof {
+  readonly canonicalSourcePath: string;
+  readonly entry: FrozenUserSkillFileIdentity;
+  readonly target: FrozenUserSkillFileIdentity;
+  readonly entrypointPath: string;
+  readonly entrypoint: FrozenUserSkillFileIdentity;
+}
+
+interface LoadedUserSkillRuntimeMatch {
+  readonly commandName: string;
+  readonly proof: FrozenUserSkillSourceProof;
+}
+
+function isFrozenUserSkillFileIdentity(value: unknown): value is FrozenUserSkillFileIdentity {
+  if (typeof value !== 'object' || value === null || !Object.isFrozen(value)) return false;
+  const identity = value as Record<string, unknown>;
+  return ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs']
+    .every((key) => typeof identity[key] === 'bigint')
+    && identity.ino !== 0n;
+}
+
+function frozenUserSkillSourceProof(value: unknown): FrozenUserSkillSourceProof | null {
+  if (typeof value !== 'object' || value === null || !Object.isFrozen(value)) return null;
+  const proof = value as Partial<FrozenUserSkillSourceProof>;
+  if (
+    typeof proof.canonicalSourcePath !== 'string'
+    || !path.isAbsolute(proof.canonicalSourcePath)
+    || proof.canonicalSourcePath.includes('\0')
+    || typeof proof.entrypointPath !== 'string'
+    || !path.isAbsolute(proof.entrypointPath)
+    || proof.entrypointPath.includes('\0')
+    || !isFrozenUserSkillFileIdentity(proof.entry)
+    || !isFrozenUserSkillFileIdentity(proof.target)
+    || !isFrozenUserSkillFileIdentity(proof.entrypoint)
+  ) return null;
+  return proof as FrozenUserSkillSourceProof;
+}
+
+function piSkillCatalogTimeoutError(): Error & { code: string } {
+  return Object.assign(new Error('Pi skill catalog validation deadline expired'), {
+    code: PI_SKILL_CATALOG_TIMEOUT,
+  });
+}
+
+function isPiSkillCatalogTimeout(error: unknown): boolean {
+  return !!error && typeof error === 'object'
+    && (error as { code?: unknown }).code === PI_SKILL_CATALOG_TIMEOUT;
+}
+
+async function awaitPiSkillCatalogStep<T>(
+  operation: () => Promise<T>,
+  deadlineAtMs: number,
+): Promise<T> {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) throw piSkillCatalogTimeoutError();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(piSkillCatalogTimeoutError()), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
-// Windows realpath/stat calls can legitimately take longer than 250 ms under
-// concurrent CI or endpoint scanning even for a tiny skill tree. Keep the
-// entry budget as the complexity bound, but give the fail-closed fingerprint
-// enough wall-clock time to preserve an unchanged launch snapshot's loaded
-// status across supported platforms.
-const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 1_000;
-const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET = 2_048;
+function frozenUserSkillFileIdentity(stat: BigIntStats): FrozenUserSkillFileIdentity {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+
+function sameFrozenUserSkillFileIdentity(
+  first: FrozenUserSkillFileIdentity,
+  second: FrozenUserSkillFileIdentity,
+): boolean {
+  return first.ino !== 0n
+    && first.dev === second.dev
+    && first.ino === second.ino
+    && first.mode === second.mode
+    && first.size === second.size
+    && first.mtimeNs === second.mtimeNs
+    && first.ctimeNs === second.ctimeNs;
+}
+
+async function currentFrozenUserSkillSourcePath(
+  value: unknown,
+  deadlineAtMs: number,
+): Promise<string | null> {
+  const proof = frozenUserSkillSourceProof(value);
+  if (!proof) return null;
+  const sourceEntry = path.dirname(proof.entrypointPath);
+  if (
+    path.resolve(proof.entrypointPath) !== proof.entrypointPath
+    || !['SKILL.md', 'skill.md'].includes(path.basename(proof.entrypointPath))
+  ) return null;
+  try {
+    const [entryBefore, targetBefore, entrypointBefore] = await Promise.all([
+      awaitPiSkillCatalogStep(() => fs.lstat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(proof.entrypointPath, { bigint: true }), deadlineAtMs),
+    ]);
+    const [entryAfter, targetAfter, entrypointAfter, canonicalAfter] = await Promise.all([
+      awaitPiSkillCatalogStep(() => fs.lstat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(proof.entrypointPath, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.realpath(sourceEntry), deadlineAtMs),
+    ]);
+    return canonicalAfter === proof.canonicalSourcePath
+      && (entryBefore.isDirectory() || entryBefore.isSymbolicLink())
+      && targetBefore.isDirectory()
+      && entrypointBefore.isFile()
+      && sameFrozenUserSkillFileIdentity(proof.entry, frozenUserSkillFileIdentity(entryBefore))
+      && sameFrozenUserSkillFileIdentity(proof.entry, frozenUserSkillFileIdentity(entryAfter))
+      && sameFrozenUserSkillFileIdentity(proof.target, frozenUserSkillFileIdentity(targetBefore))
+      && sameFrozenUserSkillFileIdentity(proof.target, frozenUserSkillFileIdentity(targetAfter))
+      && sameFrozenUserSkillFileIdentity(proof.entrypoint, frozenUserSkillFileIdentity(entrypointBefore))
+      && sameFrozenUserSkillFileIdentity(proof.entrypoint, frozenUserSkillFileIdentity(entrypointAfter))
+      ? canonicalAfter
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function canonicalPiRuntimePath(value: string, deadlineAtMs: number): Promise<string> {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) throw piSkillCatalogTimeoutError();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fs.realpath(value).catch(() => path.resolve(value)),
+      new Promise<string>((_, reject) => {
+        timeout = setTimeout(() => reject(piSkillCatalogTimeoutError()), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function pathfulUserSkillRuntimeMatch(
+  command: PiRuntimeCapabilityManifest['commands'][number],
+  sourcePath: string,
+  deadlineAtMs: number,
+): Promise<LoadedUserSkillRuntimeMatch | null> {
+  const runtimePath = command.sourceInfo.path;
+  const baseDir = command.sourceInfo.baseDir;
+  if (
+    command.source !== 'skill'
+    || !/^skill:[^\s/\\\0]+$/.test(command.name)
+    || command.sourceInfo.scope !== 'user'
+    || command.sourceInfo.source !== 'auto'
+    || typeof runtimePath !== 'string'
+    || !path.isAbsolute(runtimePath)
+    || runtimePath.includes('\0')
+    || typeof baseDir !== 'string'
+    || !path.isAbsolute(baseDir)
+    || baseDir.includes('\0')
+  ) return null;
+  const proof = frozenUserSkillSourceProof(Reflect.get(
+    command,
+    PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE,
+  ));
+  if (!proof) return null;
+  const resolvedRuntimePath = path.resolve(runtimePath);
+  const selectedEntry = path.resolve(sourcePath);
+  try {
+    const [canonicalRuntimePath, canonicalBaseDir, canonicalSelected, frozenSource] = await Promise.all([
+      awaitPiSkillCatalogStep(() => fs.realpath(resolvedRuntimePath), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.realpath(path.resolve(baseDir)), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.realpath(selectedEntry), deadlineAtMs),
+      currentFrozenUserSkillSourcePath(proof, deadlineAtMs),
+    ]);
+    const canonicalSource = path.basename(canonicalRuntimePath).toLowerCase() === 'skill.md'
+      ? path.dirname(canonicalRuntimePath)
+      : canonicalRuntimePath;
+    const derivedFromBase = await awaitPiSkillCatalogStep(
+      () => fs.realpath(path.join(canonicalBaseDir, 'skills', path.basename(selectedEntry))),
+      deadlineAtMs,
+    );
+    return derivedFromBase === canonicalSelected
+      && canonicalSource === canonicalSelected
+      && frozenSource === canonicalSelected
+      ? { commandName: command.name, proof }
+      : null;
+  } catch (error) {
+    if (isPiSkillCatalogTimeout(error)) throw error;
+    return null;
+  }
+}
+
+function runtimePathComparisonIdentity(value: unknown): PiProjectPathComparisonIdentity | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as { platform?: unknown; windowsCaseComparison?: unknown };
+  if (candidate.platform === 'posix') {
+    return candidate.windowsCaseComparison === undefined ? { platform: 'posix' } : null;
+  }
+  return candidate.platform === 'win32'
+    && (candidate.windowsCaseComparison === 'ordinal-insensitive'
+      || candidate.windowsCaseComparison === 'case-sensitive')
+    ? {
+        platform: 'win32',
+        windowsCaseComparison: candidate.windowsCaseComparison,
+      }
+    : null;
+}
 
 async function fingerprintPiProjectSkillForPalette(
   sourcePath: string,
   canonicalRepoRoot: string,
+  pathComparisonIdentity: PiProjectPathComparisonIdentity,
   budget: { remainingEntries: number; deadlineAtMs: number },
 ): ReturnType<typeof fingerprintPiProjectSkillEntrypoint> {
   const remainingMs = budget.deadlineAtMs - Date.now();
@@ -193,7 +423,10 @@ async function fingerprintPiProjectSkillForPalette(
   let timeout: number | NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      fingerprintPiProjectSkillEntrypoint(sourcePath, canonicalRepoRoot, { budget }),
+      fingerprintPiProjectSkillEntrypoint(sourcePath, canonicalRepoRoot, {
+        budget,
+        pathComparisonIdentity,
+      }),
       new Promise<null>((resolve) => {
         timeout = setNodeTimeout(() => resolve(null), remainingMs);
       }),
@@ -206,6 +439,7 @@ async function fingerprintPiProjectSkillForPalette(
 async function mergePiRuntimeSkillStatuses(
   result: ListAgentSkillsResult,
   manifest: PiRuntimeCapabilityManifest | undefined,
+  deadlineAtMs = Date.now() + PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS,
 ): Promise<ListAgentSkillsResult> {
   // The global managed-package store can change while a task is running. An
   // active Pi task must expose only its launch-time roster, never a fresh scan
@@ -237,20 +471,30 @@ async function mergePiRuntimeSkillStatuses(
   if (manifest?.status !== 'loaded') return sessionResult;
   const loadedExplicitSkills = new Map<string, string>();
   const loadedLegacyProjectSkills = new Map<string, string>();
+  const loadedUserSkills = new Map<string, LoadedUserSkillRuntimeMatch | null>();
+  const pathfulUserCommands: PiRuntimeCapabilityManifest['commands'][number][] = [];
   const changedProjectSkills = new Map<string, string>();
   const fingerprintBudget = {
     remainingEntries: PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET,
-    deadlineAtMs: Date.now() + PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS,
+    deadlineAtMs,
+    maxFileBytes: MAX_PI_PROJECT_SKILL_SNAPSHOT_FILE_BYTES,
   };
   for (const skill of manifest.projectResources?.loadedSkills ?? []) {
-    const canonicalSourcePath = canonicalPiRuntimePath(skill.sourcePath);
-    if (!skill.snapshotDigest || !skill.sourceFingerprint || !skill.canonicalRepoRoot) {
+    const canonicalSourcePath = await canonicalPiRuntimePath(skill.sourcePath, deadlineAtMs);
+    const pathComparisonIdentity = runtimePathComparisonIdentity(skill.pathComparisonIdentity);
+    if (
+      !skill.snapshotDigest
+      || !skill.sourceFingerprint
+      || !skill.canonicalRepoRoot
+      || !pathComparisonIdentity
+    ) {
       changedProjectSkills.set(canonicalSourcePath, skill.sourcePath);
       continue;
     }
     const currentFingerprint = await fingerprintPiProjectSkillForPalette(
       skill.sourcePath,
       skill.canonicalRepoRoot,
+      pathComparisonIdentity,
       fingerprintBudget,
     );
     if (
@@ -266,9 +510,49 @@ async function mergePiRuntimeSkillStatuses(
     const baseDir = command.sourceInfo.baseDir;
     if (command.source !== 'skill' || !command.name.startsWith('skill:')) continue;
     const skillName = command.name.slice('skill:'.length);
+    const frozenUserSource = Reflect.get(
+      command,
+      PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE,
+    );
+    const frozenUserProof = frozenUserSkillSourceProof(frozenUserSource);
+    const frozenUserSourcePath = await currentFrozenUserSkillSourcePath(
+      frozenUserSource,
+      deadlineAtMs,
+    );
+    if (
+      command.sourceInfo.scope === 'user'
+      && command.sourceInfo.source === 'auto'
+      && command.sourceInfo.path === undefined
+      && frozenUserProof
+      && frozenUserSourcePath
+    ) {
+      const canonicalSource = path.resolve(frozenUserSourcePath);
+      const current = loadedUserSkills.get(canonicalSource);
+      if (current === undefined) {
+        loadedUserSkills.set(canonicalSource, {
+          commandName: command.name,
+          proof: frozenUserProof,
+        });
+      } else if (
+        current === null
+        || current.commandName !== command.name
+        || current.proof !== frozenUserProof
+      ) {
+        loadedUserSkills.set(canonicalSource, null);
+      }
+      continue;
+    }
+    if (
+      command.sourceInfo.scope === 'user'
+      && command.sourceInfo.source === 'auto'
+      && command.sourceInfo.path !== undefined
+    ) {
+      pathfulUserCommands.push(command);
+      continue;
+    }
     if (command.sourceInfo.scope === 'project' && typeof baseDir === 'string') {
       loadedLegacyProjectSkills.set(
-        [skillName, canonicalPiRuntimePath(baseDir)].join('\0'),
+        [skillName, await canonicalPiRuntimePath(baseDir, deadlineAtMs)].join('\0'),
         command.name,
       );
       continue;
@@ -280,36 +564,72 @@ async function mergePiRuntimeSkillStatuses(
     // their containing folder names.
     const explicitPath = piExplicitSkillRuntimePath(command);
     if (explicitPath) {
-      loadedExplicitSkills.set(canonicalPiRuntimePath(explicitPath), command.name);
+      loadedExplicitSkills.set(
+        await canonicalPiRuntimePath(explicitPath, deadlineAtMs),
+        command.name,
+      );
     }
   }
   if (
     loadedExplicitSkills.size === 0
     && loadedLegacyProjectSkills.size === 0
+    && loadedUserSkills.size === 0
+    && pathfulUserCommands.length === 0
     && changedProjectSkills.size === 0
   ) return sessionResult;
   const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
     path: skillPath,
     message: 'Project skill changed after this Pi session started; restart the session to load the current version.',
   }));
-  return {
-    ...sessionResult,
-    skills: sessionResult.skills.map((skill) => {
-      let runtimeCommandName: string | undefined;
-      if (skill.scope === 'repo' && skill.path) {
-        const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
-        if (!changedProjectSkills.has(canonicalSkillPath)) {
-          runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath)
-            ?? [skill.path, path.dirname(path.dirname(skill.path))]
-              .map(canonicalPiRuntimePath)
-              .map((skillPath) => loadedLegacyProjectSkills.get([skill.name, skillPath].join('\0')))
-              .find((commandName) => commandName !== undefined);
+  const skills: ListAgentSkillsResult['skills'] = [];
+  for (const skill of sessionResult.skills) {
+    let runtimeCommandName: string | undefined;
+    if (skill.scope === 'user' && skill.path) {
+      const canonicalSkillPath = await canonicalPiRuntimePath(skill.path, deadlineAtMs);
+      let userMatch = loadedUserSkills.get(canonicalSkillPath);
+      for (const command of pathfulUserCommands) {
+        const candidate = await pathfulUserSkillRuntimeMatch(
+          command,
+          skill.path,
+          deadlineAtMs,
+        );
+        if (!candidate) continue;
+        if (userMatch === undefined) {
+          userMatch = candidate;
+        } else if (
+          userMatch !== null
+          && (
+            userMatch.commandName !== candidate.commandName
+            || userMatch.proof !== candidate.proof
+          )
+        ) {
+          userMatch = null;
         }
       }
-      return runtimeCommandName
-        ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
-        : skill;
-    }),
+      runtimeCommandName = userMatch?.commandName;
+    } else if (skill.scope === 'repo' && skill.path) {
+      const canonicalSkillPath = await canonicalPiRuntimePath(skill.path, deadlineAtMs);
+      if (!changedProjectSkills.has(canonicalSkillPath)) {
+        runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath);
+        if (!runtimeCommandName) {
+          for (const candidate of [skill.path, path.dirname(path.dirname(skill.path))]) {
+            const canonicalCandidate = await canonicalPiRuntimePath(candidate, deadlineAtMs);
+            runtimeCommandName = loadedLegacyProjectSkills.get([
+              skill.name,
+              canonicalCandidate,
+            ].join('\0'));
+            if (runtimeCommandName) break;
+          }
+        }
+      }
+    }
+    skills.push(runtimeCommandName
+      ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
+      : skill);
+  }
+  return {
+    ...sessionResult,
+    skills,
     ...(changedSkillErrors.length > 0
       ? { errors: [...(sessionResult.errors ?? []), ...changedSkillErrors] }
       : {}),
@@ -1133,11 +1453,33 @@ export class Maker {
     if (
       session?.agentKind !== 'pi'
       || !opts.workingDir
-      || canonicalPiRuntimePath(opts.workingDir) !== canonicalPiRuntimePath(session.workDir)
     ) {
       return result;
     }
-    return mergePiRuntimeSkillStatuses(result, session.getRuntimeCapabilities());
+    const deadlineAtMs = Date.now() + PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS;
+    try {
+      if (
+        await canonicalPiRuntimePath(opts.workingDir, deadlineAtMs)
+        !== await canonicalPiRuntimePath(session.workDir, deadlineAtMs)
+      ) return result;
+      if (opts.forceReload) {
+        await session.refreshRuntimeCapabilitiesIfRetryableUnknown();
+      }
+      return await mergePiRuntimeSkillStatuses(
+        result,
+        session.getRuntimeCapabilities(),
+        deadlineAtMs,
+      );
+    } catch (error) {
+      if (!isPiSkillCatalogTimeout(error)) throw error;
+      return {
+        ...result,
+        errors: [
+          ...(result.errors ?? []),
+          { message: error instanceof Error ? error.message : String(error) },
+        ],
+      };
+    }
   }
 
   /** ChatInput `@` palette entries, routed by agent kind. */

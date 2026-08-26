@@ -9641,7 +9641,10 @@
     }
   },
   "commandPalette": {
-    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
+    "skillUnavailableForNewTask": "The selected Skill could not be loaded safely. The first message was restored; reselect the Skill and try again.",
+    "projectSkillUnavailableForNewTask": "The selected project Skill could not be loaded safely. The first message was kept; restart or reselect the Skill and try again.",
+    "projectSkillMissingInWorktree": "The selected project Skill was not loaded from the new worktree. The first message was restored; make sure the target branch contains the Skill and try again."
   },
   "skillhub": {
     "home": {

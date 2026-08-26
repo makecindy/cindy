@@ -1,11 +1,21 @@
-# Cindy 管理的 Pi project trust 契约（#2013）
+# Cindy 管理的 Pi 项目资源准入契约（#2013）
 
-本文件定义 PR4（#2014）可消费的输入/输出契约；本 Issue 不改变 Pi 运行时行为。
+本文件定义 Pi 项目资源发现、自动准入与隔离装配共同遵守的输入/输出契约。
 
-## 真源与生命周期
+## 决策真源与生命周期
 
-- trust 输入只能来自 Cindy 已有、可审计的项目 approval。当前 `origin/main` 尚未提供通用 project approval store，因此实现必须通过 host 注入 `PiProjectApprovalSnapshot`，不得把 `permissionMode`、工具审批、MCP approval、插件启用状态或 Pi 用户设置解释为项目 trust。
-- approval 在新建、重启、fork 或切换到新 `workingDir` 时重新求值；一个运行中的 Pi 进程使用启动时快照。撤销或失效对下一次新会话生效，不声称热卸载已加载资源。
+- 当前产品决策是：**本地项目中的目录型 Skill 默认自动准入，不弹普通授权窗**。这是一条
+  Cindy 管理的 skills-only 资源策略，不是对整个项目授予信任，也不是用户工具权限批准。
+  host 只有在项目身份、目录来源、realpath containment 与两次扫描快照均稳定时，才可生成
+  `PiProjectApprovalSnapshot(status: approved)`；这里的 `approved` 仅表示该批 Skill 通过自动
+  准入策略，不能被解释为 Full access、Pi `--approve`、工具审批、MCP approval、插件启用状态
+  或项目 packages/extensions/settings 的批准。未来若提供“完全信任项目”，必须走独立、明确
+  标注风险的高级入口，不得复用本快照静默放宽其它资源面。
+- 自动准入在新建、重启、fork 或切换到新 `workingDir` 时重新求值；一个运行中的 Pi 进程使用
+  启动时不可变快照。目录消失、身份变化、越界 symlink、扫描不稳定或快照物化失败时，下一次
+  启动 fail closed。`approval.revision` 必须绑定 canonical 项目身份与完整 Skill evidence，运行期
+  manifest 必须记录最终 loaded／拒绝原因，使每次准入结果可追踪；本阶段不新增持久化人工批准
+  状态，也不修改审批权限 UI。
 - `workingDir` 与 git repo root 必须先做 `realpath`/规范化，host 必须同时提供可信的 `platform`（`posix` / `win32`），不得从路径字符串猜测或缺省为 POSIX。POSIX canonical bytes 只有能无损往返 UTF-8 时才可标记 `utf8-lossless`；Windows canonical path 只有能无损往返 host Unicode string 时才可标记 `utf16-lossless`。编码标记与平台不匹配、含替换字符或无法证明无损时必须标记 `unavailable`，不得用有损字符串生成 approval key。解析失败、目录消失、repo 边界变化、symlink 指向变化均 fail closed。默认作用域是 `repo-root + workingDir`；只有 approval 明确声明 `repo-root` 才能让同一仓库的多个 workingDir 共享批准。`extraDirs`、引用目录和其他 workspace root 不继承。
 - 当前纯函数只在 host 明确提供 `windowsCaseComparison: ordinal-insensitive` 时对 ASCII Windows canonical path 做比较 key 的分隔符、扩展长度前缀和大小写归一化；若 host 报告 `case-sensitive`，则保留 comparison key 大小写；缺省、`unavailable` 或无法证明比较语义时统一 fail closed。比较 key 归一化不得覆盖 host 提供的 canonical I/O path，eligible 输出必须保留扩展长度前缀及尾随空格/点。`ordinal-insensitive` 下的非 ASCII Windows path 因 JavaScript Unicode folding 不等同于 Win32 ordinal comparison，也必须 fail closed 为 `unavailable`，直到 host 提供独立的 Win32 comparison identity。
 - `projectKey` 为 `${canonicalRepoRoot}\0${canonicalWorkingDir}`；Windows 比较身份决定是否折叠大小写，分隔符始终归一化。approval 的 `scopeKey` 对 `repo-root` 是 canonical root，对 `working-dir` 是同样的复合 key。

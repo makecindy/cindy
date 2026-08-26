@@ -71,6 +71,12 @@ export interface DetectCwdSnapshot extends DetectCwdState {
   target: DetectCwdTarget | null;
 }
 
+export function projectRepoRootFromDetectCwd(
+  data: DetectCwdResp | null,
+): string | null {
+  return data?.gitInstalled && data.isGitRepo ? (data.repoRoot ?? null) : null;
+}
+
 /**
  * 只向当前设备/目录/重探代次暴露同 target 的探测结果。effect 要到 commit 后才会重置
  * state；render 阶段先做同步 fence，切项目、设备或同目标重连后的首帧不会复用旧结果。

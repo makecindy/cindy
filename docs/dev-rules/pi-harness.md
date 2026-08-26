@@ -100,7 +100,9 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 7. **统一会话树真相**:Cindy `parentSessionId` 是外层独立会话分叉;Pi JSONL entry tree 是当前
    Pi 会话内分支。Pi 导航后必须通过 `session.treeRehydrate` 原子替换 SQLite 可见投影,旧行仅
    soft-hide;切换只改对话上下文,不得声称或尝试回滚工作区文件。
-8. **项目资源显式装配**:root、只读 subagent 与离线 fork 启动 Pi 时都必须显式传
+8. **项目 Skill 自动准入与显式装配**:本地项目中的目录型 Skill 按 Cindy 的 skills-only
+   策略默认自动准入，不弹普通授权窗；这不等价于项目 trust、工具权限放宽或 Pi
+   `--approve`。root、只读 subagent 与离线 fork 启动 Pi 时都必须显式传
    `--no-approve --no-extensions`;root 仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent
    与 pinned plan-mode，并仅用重复 `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
    的项目 skill 目录。eligible canonical 目录必须先完整物化到当前会话 `configHome` 的非自动
@@ -109,8 +111,8 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
    `.pi/settings.json`，不得传 `--approve`，
    不得依赖 `PI_OFFLINE=1` 代替 packages/extensions 硬门。root 不传 `--no-skills`，以保留现有
    user/global skill 行为；项目 skill 的 `loaded` 只能由当前会话 `get_commands` 对隔离快照路径
-   的 exact temporary/local provenance 证明。approval 真源缺失、异常、撤销、失效、路径消失
-   或快照失败时，新会话
+   的 exact temporary/local provenance 证明。自动准入所需的项目身份或完整 evidence 缺失、
+   异常、失效、路径消失或快照失败时，新会话
    一律不带项目 `--skill`，并在 per-session runtime manifest 记录诊断原因。
 9. **Pi bash bounded timeout**:Cindy 覆盖的模型可调 `bash` 在 execute 入口强制默认
    `300s`、上限 `1800s`。缺省或非正数用默认;大于上限或非有限数字 fail-fast(参数错误,

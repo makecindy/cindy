@@ -272,6 +272,21 @@ describe('agentInputQueue', () => {
     expect(updated.chatMessage.slashCommandRanges).toEqual([]);
   });
 
+  it('retains a Pi Skill runtime mapping only while a queue edit keeps the same alias', () => {
+    const entry = queuedMessage(undefined);
+    entry.text = '/demo old args';
+    entry.chatMessage.content = entry.text;
+    entry.agentSkillInvocation = { name: 'demo', runtimeCommandName: 'skill:demo' };
+
+    expect(updateQueuedMessageText(entry, '/demo new args').agentSkillInvocation).toEqual(
+      entry.agentSkillInvocation,
+    );
+    expect(updateQueuedMessageText(entry, '  \n/demo new args').agentSkillInvocation).toEqual(
+      entry.agentSkillInvocation,
+    );
+    expect(updateQueuedMessageText(entry, '/other new args').agentSkillInvocation).toBeUndefined();
+  });
+
   it('trims sentence punctuation from anchored session links', () => {
     expect(reconcileSessionRefsForText(
       '请查看 cindy://session/current?message=client-1.',
@@ -411,6 +426,107 @@ describe('agentInputQueue', () => {
     expect(entry.text).toBe(text);
     expect(entry.persistedContent).toBe(JSON.stringify({ text, quotesEncoded: true }));
     expect(entry.chatMessage).toMatchObject({ content: text, quotesEncoded: true });
+  });
+
+  it('keeps the visible Pi Skill alias while sending its runtime command to the Agent', () => {
+    const entry = queuedMessage(undefined);
+    entry.createOpts.agentKind = 'pi';
+    entry.text = '/demo inspect this';
+    entry.persistedContent = JSON.stringify({
+      text: entry.text,
+      slashCommandRanges: [{ start: 0, end: 5 }],
+    });
+    entry.chatMessage.content = entry.text;
+    entry.chatMessage.slashCommandRanges = [{ start: 0, end: 5 }];
+    entry.agentSkillInvocation = {
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+    };
+
+    expect(getAgentFacingText(entry)).toBe('/demo inspect this');
+    expect(buildMakerUserMessage(entry)).toEqual({
+      type: 'user',
+      content: '/skill:demo inspect this',
+    });
+    expect(entry.text).toBe('/demo inspect this');
+    expect(entry.chatMessage).toMatchObject({
+      content: '/demo inspect this',
+      slashCommandRanges: [{ start: 0, end: 5 }],
+    });
+    expect(JSON.parse(entry.persistedContent)).toEqual({
+      text: '/demo inspect this',
+      slashCommandRanges: [{ start: 0, end: 5 }],
+    });
+  });
+
+  it('preserves leading whitespace while sending a Pi Skill runtime command', () => {
+    const entry = queuedMessage(undefined);
+    entry.createOpts.agentKind = 'pi';
+    entry.text = '  \n/demo inspect this';
+    entry.persistedContent = JSON.stringify({
+      text: entry.text,
+      slashCommandRanges: [{ start: 3, end: 8 }],
+    });
+    entry.chatMessage.content = entry.text;
+    entry.chatMessage.slashCommandRanges = [{ start: 3, end: 8 }];
+    entry.agentSkillInvocation = {
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+    };
+
+    expect(buildMakerUserMessage(entry)).toEqual({
+      type: 'user',
+      content: '  \n/skill:demo inspect this',
+    });
+    expect(entry.text).toBe('  \n/demo inspect this');
+    expect(entry.chatMessage.content).toBe('  \n/demo inspect this');
+  });
+
+  it('does not let a queue content edit introduce or replace a Pi Skill runtime mapping', () => {
+    const old = queuedMessage(undefined);
+    old.createOpts.agentKind = 'pi';
+    old.text = '/demo old args';
+    old.chatMessage.content = old.text;
+    old.agentSkillInvocation = { name: 'demo', runtimeCommandName: 'skill:demo' };
+
+    const edited = queuedMessage(undefined);
+    edited.text = '/demo new args';
+    edited.chatMessage.content = edited.text;
+    edited.agentSkillInvocation = { name: 'demo', runtimeCommandName: 'skill:other' };
+    expect(updateQueuedMessageContent(old, edited).agentSkillInvocation).toEqual(
+      old.agentSkillInvocation,
+    );
+
+    edited.text = '  \n/demo new args';
+    edited.chatMessage.content = edited.text;
+    expect(updateQueuedMessageContent(old, edited).agentSkillInvocation).toEqual(
+      old.agentSkillInvocation,
+    );
+
+    const plain = queuedMessage(undefined);
+    plain.createOpts.agentKind = 'pi';
+    const forged = queuedMessage(undefined);
+    forged.text = '/demo args';
+    forged.chatMessage.content = forged.text;
+    forged.agentSkillInvocation = { name: 'demo', runtimeCommandName: 'skill:other' };
+    expect(updateQueuedMessageContent(plain, forged).agentSkillInvocation).toBeUndefined();
+  });
+
+  it('fails closed for malformed or non-Pi runtime Skill mappings', () => {
+    const entry = queuedMessage(undefined);
+    entry.text = '/demo inspect this';
+    entry.chatMessage.content = entry.text;
+    entry.agentSkillInvocation = {
+      name: 'demo',
+      runtimeCommandName: 'other-command',
+    };
+
+    expect(getAgentFacingText(entry)).toBe('/demo inspect this');
+    entry.createOpts.agentKind = 'pi';
+    expect(getAgentFacingText(entry)).toBe('/demo inspect this');
+    entry.agentSkillInvocation.runtimeCommandName = 'skill:demo';
+    entry.text = '/different inspect this';
+    expect(getAgentFacingText(entry)).toBe('/different inspect this');
   });
 
   it('keeps a hand-written marker when quotesEncoded is false', () => {

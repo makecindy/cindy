@@ -53,6 +53,10 @@ import {
 import { getActiveControllers } from './dispatch';
 import { rewriteOutboundMedia } from './outboundMedia';
 import {
+  outboundPiSkillInvocationRequested,
+  rewriteOutboundPiSkillInvocationForLegacyTarget,
+} from './outboundPiSkillInvocation';
+import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
   stripOutboundSessionReferenceSideChannels,
@@ -637,6 +641,47 @@ export async function handleInvoke(
         });
         callArgs = stripOutboundSessionReferenceSideChannels(channel, callArgs);
       }
+    }
+  }
+
+  if (outboundPiSkillInvocationRequested(channel, callArgs)) {
+    let capability: InvokeResultPayload;
+    try {
+      capability = await deps.invoke(normalizedDeviceId, 'maker:get-capabilities', ['pi']);
+    } catch (err) {
+      rethrowDeviceLinkError(err);
+    }
+    assertControlTargetEnabled(deps, normalizedDeviceId);
+    if (!capability.ok) {
+      if (capability.error.code === 'IPC_ERROR') throw new Error(capability.error.message);
+      throwIpcError(
+        DEVICE_LINK_CODE_MAP[capability.error.code] ?? 'INTERNAL',
+        capability.error.message,
+      );
+    }
+    if (!capability.result || typeof capability.result !== 'object' || Array.isArray(capability.result)) {
+      throwIpcError(
+        'DEVICE_LINK_VERSION_MISMATCH',
+        'Target Skill invocation capability is unavailable.',
+      );
+    }
+    const declaredSupport = (capability.result as Record<string, unknown>)
+      .supportsPiSkillInvocationReceipt;
+    if (declaredSupport !== undefined && typeof declaredSupport !== 'boolean') {
+      throwIpcError(
+        'DEVICE_LINK_VERSION_MISMATCH',
+        'Target Skill invocation capability is malformed.',
+      );
+    }
+    if (declaredSupport !== true) {
+      const legacyArgs = rewriteOutboundPiSkillInvocationForLegacyTarget(channel, callArgs);
+      if (!legacyArgs) {
+        throwIpcError(
+          'DEVICE_LINK_VERSION_MISMATCH',
+          'Target cannot safely consume this Skill invocation.',
+        );
+      }
+      callArgs = legacyArgs;
     }
   }
 

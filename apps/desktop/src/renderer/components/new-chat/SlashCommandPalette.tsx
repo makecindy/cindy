@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import {
   filterSlashCommands,
   isSlashCommandUnavailable,
+  isSlashCommandSelectable,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 
@@ -49,6 +50,8 @@ interface SlashCommandPaletteProps {
   onTooltipHoverChange?: (hovered: boolean) => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
+  /** New Maker may select a discovered Pi project Skill that startup will load before send. */
+  allowPendingProjectSkillSelection?: boolean;
 }
 
 /** 右侧小标签文案 —— skill 显示 source(user/skill), agent-builtin 显示 'agent-cmd'
@@ -68,6 +71,7 @@ export function SlashCommandPalette({
   onClose,
   onTooltipHoverChange,
   maxHeight = 400,
+  allowPendingProjectSkillSelection = false,
 }: SlashCommandPaletteProps) {
   const { t } = useTranslation();
   const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
@@ -230,7 +234,10 @@ export function SlashCommandPalette({
         ) : (
           filtered.map((cmd, idx) => {
             const focused = idx === focusedIndex;
-            const unavailable = isSlashCommandUnavailable(cmd);
+            const unavailable = !isSlashCommandSelectable(
+              cmd,
+              allowPendingProjectSkillSelection,
+            );
             return (
               <button
                 key={cmd.name}
@@ -294,7 +301,7 @@ export function SlashCommandPalette({
             {focusedCmd.name}
           </div>
           <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
-            {isSlashCommandUnavailable(focusedCmd)
+            {!isSlashCommandSelectable(focusedCmd, allowPendingProjectSkillSelection)
               ? t('commandPalette.projectSkillNotLoaded')
               : focusedCmd.description}
           </div>

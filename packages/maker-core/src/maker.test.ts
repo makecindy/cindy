@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   mkdirSync,
   mkdtempSync,
-  promises as fsPromises,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -21,7 +22,16 @@ import {
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
 import type { AgentKind, PermissionMode } from './types/common.js';
 import type { AgentEvent } from './types/events.js';
-import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
+import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
+import {
+  fingerprintPiProjectSkillEntrypoint,
+  PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS,
+} from './agents/pi/project-resource-assembly.js';
+import { capturePiRuntimeCapabilityManifest } from './agents/pi/runtime-capabilities.js';
+
+const nativePathComparisonIdentity = process.platform === 'win32'
+  ? { platform: 'win32' as const, windowsCaseComparison: 'ordinal-insensitive' as const }
+  : { platform: 'posix' as const };
 
 /** A generator that never completes — simulates a live session handle. */
 async function* neverEndingIterator(): AsyncGenerator<AgentEvent> {
@@ -1303,6 +1313,339 @@ describe('Maker session capabilities', () => {
 });
 
 describe('Maker Pi runtime skill status', () => {
+  it('uses forceReload to retry a live matching session runtime catalog', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-runtime-retry-')));
+    try {
+      const otherRoot = path.join(root, 'other');
+      mkdirSync(otherRoot);
+      let runtimeManifest: PiRuntimeCapabilityManifest = {
+        sessionId: 'runtime-retry',
+        capturedAt: '2026-08-24T00:00:00.000Z',
+        generation: 1,
+        status: 'unknown',
+        source: 'pi:get_commands',
+        commands: [],
+        error: {
+          stage: 'ready',
+          code: 'timeout',
+          message: 'Pi runtime command discovery timed out',
+        },
+      };
+      const retry = vi.fn(async () => {
+        runtimeManifest = {
+          sessionId: 'runtime-retry',
+          capturedAt: '2026-08-24T00:00:01.000Z',
+          generation: 2,
+          status: 'loaded',
+          source: 'pi:get_commands',
+          commands: [],
+        };
+      });
+      const agent = createAgent(async () => {
+        const handle = createHandle({ id: 'pi-runtime-retry', agentKind: 'pi' });
+        handle.getRuntimeCapabilities = () => runtimeManifest;
+        handle.refreshRuntimeCapabilitiesIfRetryableUnknown = retry;
+        return handle;
+      }, 'pi');
+      agent.listAgentSkills = vi.fn(async () => ({ skills: [] }));
+      const maker = new Maker({
+        agents: { pi: agent },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      await maker.createSession({
+        id: 'runtime-retry',
+        agentKind: 'pi',
+        workingDir: root,
+        model: 'm',
+      });
+
+      await maker.listAgentSkills('pi', { workingDir: root, sessionId: 'runtime-retry' });
+      expect(retry).not.toHaveBeenCalled();
+
+      await maker.listAgentSkills('pi', {
+        workingDir: otherRoot,
+        sessionId: 'runtime-retry',
+        forceReload: true,
+      });
+      expect(retry).not.toHaveBeenCalled();
+
+      await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'runtime-retry',
+        forceReload: true,
+      });
+      expect(retry).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('maps a user Skill directory to its frontmatter runtime command by frozen source', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-user-skill-')));
+    const sourcePath = path.join(root, 'pi-home', 'skills', 'directory-name');
+    const replacementPath = path.join(root, 'replacement');
+    const oldSourcePath = path.join(root, 'old-source');
+    try {
+      mkdirSync(sourcePath, { recursive: true });
+      mkdirSync(replacementPath, { recursive: true });
+      writeFileSync(
+        path.join(sourcePath, 'SKILL.md'),
+        '---\nname: frontmatter-name\n---\n# User Skill\n',
+      );
+      writeFileSync(
+        path.join(replacementPath, 'SKILL.md'),
+        '---\nname: frontmatter-name\n---\n# Replacement Skill\n',
+      );
+      const runtimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:frontmatter-name',
+                source: 'skill',
+                sourceInfo: {
+                  source: 'auto',
+                  scope: 'user',
+                  baseDir: path.join(root, 'pi-home'),
+                },
+              }],
+            },
+          }),
+        },
+        { sessionId: 'user-frontmatter' },
+        1,
+        'ready',
+        { userSkillBaseDirs: [path.join(root, 'pi-home')] },
+      );
+      const agent = createAgent(async () => {
+        const handle = createHandle({ id: 'pi-user-frontmatter', agentKind: 'pi' });
+        handle.getRuntimeCapabilities = () => runtimeManifest;
+        return handle;
+      }, 'pi');
+      agent.listAgentSkills = vi.fn(async () => ({
+        skills: [{
+          kind: 'agent-skill' as const,
+          name: 'directory-name',
+          source: 'skill' as const,
+          scope: 'user' as const,
+          path: sourcePath,
+        }],
+      }));
+      const maker = new Maker({
+        agents: { pi: agent },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      await maker.createSession({
+        id: 'user-frontmatter',
+        agentKind: 'pi',
+        workingDir: root,
+        model: 'm',
+      });
+
+      await expect(maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-frontmatter',
+      })).resolves.toMatchObject({
+        skills: [{
+          name: 'directory-name',
+          runtimeStatus: 'loaded',
+          runtimeCommandName: 'skill:frontmatter-name',
+        }],
+      });
+
+      renameSync(sourcePath, oldSourcePath);
+      renameSync(replacementPath, sourcePath);
+      const replacedResult = await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-frontmatter',
+      });
+      expect(replacedResult.skills).toHaveLength(1);
+      expect(replacedResult.skills[0]).toMatchObject({ name: 'directory-name' });
+      expect(replacedResult.skills[0]).not.toHaveProperty('runtimeStatus');
+      expect(replacedResult.skills[0]).not.toHaveProperty('runtimeCommandName');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('maps a pathful auto-loaded user Skill by its runtime entrypoint', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-user-pathful-')));
+    const sourcePath = path.join(root, 'pi-home', 'skills', 'directory-name');
+    const entrypointPath = path.join(sourcePath, 'skill.md');
+    const replacementPath = path.join(root, 'replacement');
+    const originalPath = path.join(root, 'original');
+    try {
+      mkdirSync(sourcePath, { recursive: true });
+      writeFileSync(entrypointPath, '---\nname: frontmatter-name\n---\n# User Skill\n');
+      mkdirSync(replacementPath, { recursive: true });
+      writeFileSync(
+        path.join(replacementPath, 'skill.md'),
+        '---\nname: frontmatter-name\n---\n# Replacement Skill\n',
+      );
+      let runtimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:frontmatter-name',
+                source: 'skill',
+                sourceInfo: {
+                  source: 'auto',
+                  scope: 'user',
+                  baseDir: path.join(root, 'pi-home'),
+                  path: entrypointPath,
+                },
+              }],
+            },
+          }),
+        },
+        { sessionId: 'user-pathful' },
+        1,
+        'ready',
+        { userSkillBaseDirs: [path.join(root, 'pi-home')] },
+      );
+      const agent = createAgent(async () => {
+        const handle = createHandle({ id: 'pi-user-pathful', agentKind: 'pi' });
+        handle.getRuntimeCapabilities = () => runtimeManifest;
+        return handle;
+      }, 'pi');
+      agent.listAgentSkills = vi.fn(async () => ({
+        skills: [{
+          kind: 'agent-skill' as const,
+          name: 'directory-name',
+          source: 'skill' as const,
+          scope: 'user' as const,
+          path: sourcePath,
+        }],
+      }));
+      const maker = new Maker({
+        agents: { pi: agent },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      await maker.createSession({
+        id: 'user-pathful',
+        agentKind: 'pi',
+        workingDir: root,
+        model: 'm',
+      });
+
+      await expect(maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-pathful',
+      })).resolves.toMatchObject({
+        skills: [{
+          name: 'directory-name',
+          runtimeStatus: 'loaded',
+          runtimeCommandName: 'skill:frontmatter-name',
+        }],
+      });
+
+      renameSync(sourcePath, originalPath);
+      renameSync(replacementPath, sourcePath);
+      const replaced = await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-pathful',
+      });
+      expect(replaced.skills[0]).not.toHaveProperty('runtimeStatus');
+      expect(replaced.skills[0]).not.toHaveProperty('runtimeCommandName');
+
+      runtimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [
+                ...runtimeManifest.commands,
+                {
+                  name: 'skill:frontmatter-name',
+                  source: 'skill',
+                  sourceInfo: {
+                    source: 'auto',
+                    scope: 'user',
+                    baseDir: path.join(root, 'pi-home'),
+                  },
+                },
+              ],
+            },
+          }),
+        },
+        { sessionId: 'user-pathful' },
+        2,
+        'ready',
+        { userSkillBaseDirs: [path.join(root, 'pi-home')] },
+      );
+      const equivalent = await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-pathful',
+      });
+      expect(equivalent.skills[0]).toMatchObject({
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:frontmatter-name',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when runtime path canonicalization exceeds its deadline', async () => {
+    const workingDir = '/hung/repo';
+    const agent = createAgent(async () => createHandle({ id: 'pi-timeout', agentKind: 'pi' }), 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({
+      skills: [{
+        kind: 'agent-skill' as const,
+        name: 'demo',
+        source: 'skill' as const,
+        scope: 'repo' as const,
+        path: `${workingDir}/.pi/skills/demo`,
+        runtimeStatus: 'discovered' as const,
+      }],
+    }));
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'runtime-path-timeout',
+      agentKind: 'pi',
+      workingDir,
+      model: 'm',
+    });
+    const realpath = vi.spyOn(fsPromises, 'realpath').mockImplementation(async (candidate) => {
+      if (String(candidate) === workingDir) return await new Promise<string>(() => {});
+      return String(candidate);
+    });
+
+    vi.useFakeTimers();
+    try {
+      const pending = maker.listAgentSkills('pi', {
+        sessionId: 'runtime-path-timeout',
+        workingDir,
+      });
+      await vi.advanceTimersByTimeAsync(PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS);
+
+      await expect(pending).resolves.toMatchObject({
+        skills: [{ name: 'demo', runtimeStatus: 'discovered' }],
+        errors: [{ message: 'Pi skill catalog validation deadline expired' }],
+      });
+      expect(realpath).toHaveBeenCalledWith(workingDir);
+    } finally {
+      vi.useRealTimers();
+      realpath.mockRestore();
+    }
+  });
+
   it('keeps managed skills pinned to the active session launch snapshot', async () => {
     const managedPath = '/managed/context-mode/SKILL.md';
     const agent = createAgent(async (opts) => {
@@ -1542,11 +1885,16 @@ describe('Maker Pi runtime skill status', () => {
     try {
       writeSkill(sourcePath, '# approved\n', 'approved asset\n');
       writeSkill(runtimePath, '# approved\n', 'approved asset\n');
-      const snapshotFingerprint = await fingerprintPiProjectSkillEntrypoint(runtimePath, runtimePath);
-      const sourceFingerprint = await fingerprintPiProjectSkillEntrypoint(sourcePath, repoRoot);
+      const snapshotFingerprint = await fingerprintPiProjectSkillEntrypoint(runtimePath, runtimePath, {
+        pathComparisonIdentity: nativePathComparisonIdentity,
+      });
+      const sourceFingerprint = await fingerprintPiProjectSkillEntrypoint(sourcePath, repoRoot, {
+        pathComparisonIdentity: nativePathComparisonIdentity,
+      });
       expect(snapshotFingerprint?.contentDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(sourceFingerprint?.sourceStateDigest).toMatch(/^[a-f0-9]{64}$/);
 
+      let runtimePathComparisonIdentity: unknown = nativePathComparisonIdentity;
       const agent = createAgent(async (opts) => {
         const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
         handle.getRuntimeCapabilities = () => ({
@@ -1568,6 +1916,7 @@ describe('Maker Pi runtime skill status', () => {
               snapshotDigest: snapshotFingerprint!.contentDigest,
               sourceFingerprint: sourceFingerprint!.sourceStateDigest,
               canonicalRepoRoot: repoRoot,
+              pathComparisonIdentity: runtimePathComparisonIdentity as never,
             }],
           },
           commands: [{
@@ -1610,6 +1959,26 @@ describe('Maker Pi runtime skill status', () => {
         sessionId: 'source-snapshot',
       });
       expect(initial.skills[0]).toMatchObject({ runtimeStatus: 'loaded' });
+
+      runtimePathComparisonIdentity = undefined;
+      const missingIdentity = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(missingIdentity.skills[0]).toMatchObject({ runtimeStatus: 'discovered' });
+      expect(missingIdentity.errors).toContainEqual(expect.objectContaining({ path: sourcePath }));
+
+      runtimePathComparisonIdentity = {
+        platform: 'win32',
+        windowsCaseComparison: 'unavailable',
+      };
+      const invalidIdentity = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(invalidIdentity.skills[0]).toMatchObject({ runtimeStatus: 'discovered' });
+      expect(invalidIdentity.errors).toContainEqual(expect.objectContaining({ path: sourcePath }));
+      runtimePathComparisonIdentity = nativePathComparisonIdentity;
 
       const realRealpath = fsPromises.realpath.bind(fsPromises);
       let delayed = false;
@@ -1657,6 +2026,97 @@ describe('Maker Pi runtime skill status', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('keeps an admitted project skill loaded beyond the old palette entry budget', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-large-skill-')));
+    const repoRoot = path.join(root, 'repo');
+    const sourcePath = path.join(repoRoot, '.pi', 'skills', 'large');
+    const runtimePath = path.join(root, 'runtime', 'skills', 'large');
+    try {
+      mkdirSync(path.join(sourcePath, 'assets'), { recursive: true });
+      writeFileSync(path.join(sourcePath, 'SKILL.md'), '# large admitted skill\n');
+      // 1,050 assets plus the root, assets directory, and SKILL.md exceed the
+      // old 2,048 shared budget once the stable fingerprint walks twice, while
+      // remaining far below the 10,000-entry launch admission ceiling.
+      for (let index = 0; index < 1_050; index += 1) {
+        writeFileSync(path.join(sourcePath, 'assets', `${index}.txt`), '');
+      }
+      const sourceFingerprint = await fingerprintPiProjectSkillEntrypoint(sourcePath, repoRoot, {
+        pathComparisonIdentity: nativePathComparisonIdentity,
+      });
+      expect(sourceFingerprint).not.toBeNull();
+
+      const agent = createAgent(async (opts) => {
+        const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+        handle.getRuntimeCapabilities = () => ({
+          sessionId: opts.sessionId,
+          capturedAt: '2026-08-12T00:00:00.000Z',
+          generation: 1,
+          status: 'loaded',
+          source: 'pi:get_commands',
+          projectResources: {
+            status: 'approved',
+            reason: 'runtime-skills-confirmed',
+            approvalRevision: 'rev-large-skill',
+            requestedSkillCount: 1,
+            loadedSkillCount: 1,
+            loadedSkills: [{
+              sourcePath,
+              runtimePath,
+              commandName: 'skill:large',
+              snapshotDigest: sourceFingerprint!.contentDigest,
+              sourceFingerprint: sourceFingerprint!.sourceStateDigest,
+              canonicalRepoRoot: repoRoot,
+              pathComparisonIdentity: nativePathComparisonIdentity,
+            }],
+          },
+          commands: [{
+            name: 'skill:large',
+            source: 'skill',
+            sourceInfo: {
+              source: 'local',
+              scope: 'temporary',
+              baseDir: runtimePath,
+              path: path.join(runtimePath, 'SKILL.md'),
+            },
+          }],
+        });
+        return handle;
+      }, 'pi');
+      agent.listAgentSkills = vi.fn(async () => ({
+        skills: [{
+          kind: 'agent-skill' as const,
+          name: 'large',
+          source: 'skill' as const,
+          scope: 'repo' as const,
+          path: sourcePath,
+          runtimeStatus: 'discovered' as const,
+        }],
+      }));
+      const maker = new Maker({
+        agents: { pi: agent },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      await maker.createSession({
+        id: 'large-skill',
+        agentKind: 'pi',
+        workingDir: repoRoot,
+        model: 'm',
+      });
+
+      const result = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'large-skill',
+      });
+      expect(result.skills[0]).toMatchObject({
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:large',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('Session turn send guard', () => {

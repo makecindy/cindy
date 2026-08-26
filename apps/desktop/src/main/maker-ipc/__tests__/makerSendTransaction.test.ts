@@ -162,6 +162,41 @@ describe('maker SEND transaction', () => {
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
   });
 
+  it('awaits async pre-persistence validation before writing the user row or dispatching', async () => {
+    let releaseValidation!: () => void;
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    const onPersisting = vi.fn(() => validationGate);
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+
+    const pending = transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/skill:demo' },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'client-skill',
+          content: '/demo',
+          delivery: 'turn',
+          onPersisting,
+        },
+      },
+    );
+    for (let index = 0; index < 16; index += 1) await Promise.resolve();
+
+    expect(onPersisting).toHaveBeenCalledTimes(1);
+    expect(deps.createDbMessage).not.toHaveBeenCalled();
+    expect(deps.dispatchUserPromptPreview).not.toHaveBeenCalled();
+
+    releaseValidation();
+    await expect(pending).resolves.toMatchObject({ accepted: true });
+    expect(deps.createDbMessage).toHaveBeenCalledTimes(1);
+    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledTimes(1);
+  });
+
   it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {
     const { deps, session } = createDeps();
     session.agentKind = 'pi';

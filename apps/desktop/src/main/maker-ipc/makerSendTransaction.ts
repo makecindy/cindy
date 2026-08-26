@@ -273,7 +273,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   recoveryCheckpoint?: Record<string, unknown>;
   origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
-  onPersisting?: () => void;
+  onPersisting?: () => void | Promise<void>;
   onPersisted?: () => void | Promise<void>;
   onPersistFailed?: () => void;
   expectedClearBoundaryMs?: number | null;
@@ -305,7 +305,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
       ? { shouldBroadcast: persist.shouldBroadcast as () => boolean }
       : {}),
     ...(typeof persist.onPersisting === 'function'
-      ? { onPersisting: persist.onPersisting as () => void }
+      ? { onPersisting: persist.onPersisting as () => void | Promise<void> }
       : {}),
     ...(typeof persist.onPersisted === 'function'
       ? { onPersisted: persist.onPersisted as () => void | Promise<void> }
@@ -986,7 +986,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : {}),
           onAccepted: persistUserMessage
             ? async () => {
-                persistUserMessage.onPersisting?.();
+                await persistUserMessage.onPersisting?.();
                 deps.previewUserPrompt?.(sess, persistUserMessage.content, {
                   source: 'maker_send:onPersisting',
                   clientId: persistUserMessage.clientId,

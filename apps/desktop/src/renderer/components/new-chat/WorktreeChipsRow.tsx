@@ -45,7 +45,12 @@ import {
   type FolderPickerSelectSource,
 } from './FolderPickerPopover';
 import { resolveBranchPick } from './branchPick';
-import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
+import {
+  projectRepoRootFromDetectCwd,
+  useBranches,
+  useDetectCwd,
+  useSuggestName,
+} from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
 
 export type FolderPickerMode = 'folder' | 'project';
@@ -72,6 +77,11 @@ export interface WorktreeChipsRowProps {
   sourceBranch: string;
   onSourceBranchChange: (v: string) => void;
   onBaseRepoChange?: (baseRepo: string | null) => void;
+  /**
+   * 当前 cwd 所属的 Git 仓库根。与 worktree `baseRepo` 分开：已经位于 linked
+   * worktree 时不能再创建嵌套 worktree，但仍需要这个 root 绑定项目 Skill。
+   */
+  onProjectRepoRootChange?: (projectRepoRoot: string | null) => void;
   /**
    * 被控端是否支持 recoveryKey 预创建回收。null 表示当前探测结果尚未就绪；
    * 上层发送侧必须把非 true 视为不具备该能力。
@@ -125,6 +135,7 @@ export function WorktreeChipsRow({
   sourceBranch,
   onSourceBranchChange,
   onBaseRepoChange,
+  onProjectRepoRootChange,
   onRecoveryKeyDiscardSupportChange,
   onConfirmedIneligibleChange,
   onSuggestedNameChange,
@@ -148,11 +159,13 @@ export function WorktreeChipsRow({
   );
   // 探测成功且三种资格(已装 git / 是 git 仓库 / 未嵌套)同时满足为 true;
   // detect.data 未到达(探测中/失败)时为 null——与「确认不合格」不同,后者必须
-  // fail closed。baseRepo 与 confirmedIneligible 皆从此派生,保证两处使用同一条件。
+  // fail closed。baseRepo、projectRepoRoot 与 confirmedIneligible 皆从此派生，
+  // 并共享 useDetectCwd 的 target fence。
   const gitEligible: boolean | null = detect.data
     ? detect.data.gitInstalled && detect.data.isGitRepo && !detect.data.isInsideWorktree
     : null;
   const baseRepo = gitEligible ? (detect.data!.repoRoot ?? null) : null;
+  const projectRepoRoot = projectRepoRootFromDetectCwd(detect.data);
   const confirmedIneligible: boolean | null = detect.data ? !gitEligible : null;
 
   // 只有明确具备 worktree 资格的仓库才向发送侧提供 repoRoot。发送 / Goal 的 ON 门
@@ -160,17 +173,20 @@ export function WorktreeChipsRow({
   // 阶段 fence，切目标时这里先写 null。
   useLayoutEffect(() => {
     onBaseRepoChange?.(baseRepo);
+    onProjectRepoRootChange?.(projectRepoRoot);
     onRecoveryKeyDiscardSupportChange?.(
       detect.data ? detect.data.supportsRecoveryKeyDiscard === true : null,
     );
     onConfirmedIneligibleChange?.(confirmedIneligible);
   }, [
     baseRepo,
+    projectRepoRoot,
     detect.data,
     // confirmedIneligible 从 detect.data 纯派生，同一 render 下与 detect.data 同步变化；
     // 保留仅满足 exhaustive-deps lint，运行时不会独立触发此 effect。
     confirmedIneligible,
     onBaseRepoChange,
+    onProjectRepoRootChange,
     onRecoveryKeyDiscardSupportChange,
     onConfirmedIneligibleChange,
   ]);

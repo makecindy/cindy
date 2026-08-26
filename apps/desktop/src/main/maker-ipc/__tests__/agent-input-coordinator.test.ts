@@ -540,7 +540,7 @@ async function persistQueuedUserMessage(
 ): Promise<void> {
   const persist = sendOpts.persistUserMessage;
   if (!persist) return;
-  (persist as { onPersisting?: () => void }).onPersisting?.();
+  await (persist as { onPersisting?: () => void | Promise<void> }).onPersisting?.();
   try {
     await mocks.createMessage(
       sessionId,
@@ -649,6 +649,9 @@ function createHarness(opts?: {
   const onUserMessagePersistenceFailed = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUserMessagePersistenceFailed']>
   >(() => {});
+  const rewindPersistedUndispatchedUserMessage = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['rewindPersistedUndispatchedUserMessage']>
+  >(async () => true);
   const onAcceptedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>
   >(() => {});
@@ -687,6 +690,9 @@ function createHarness(opts?: {
 
   let hasPendingCredentialSwitch: (() => boolean) | null = null;
   let screenUserMessage: NonNullable<AgentInputCoordinatorDeps['screenUserMessage']> | null = null;
+  let validateAgentSkillInvocation: NonNullable<
+    AgentInputCoordinatorDeps['validateAgentSkillInvocation']
+  > = () => true;
   const onUserMessageBlocked = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUserMessageBlocked']>
   >(() => {});
@@ -750,6 +756,8 @@ function createHarness(opts?: {
     hasPendingInteraction: () => pendingInteraction,
     getAgentKind: () => agentKind,
     getSdkSessionId,
+    validateAgentSkillInvocation: (sessionId, item) =>
+      validateAgentSkillInvocation(sessionId, item),
     hasAssistantProgressAfter: (sessionId, userClientId) =>
       hasAssistantProgressAfter
         ? hasAssistantProgressAfter(sessionId, userClientId)
@@ -763,6 +771,7 @@ function createHarness(opts?: {
     onUserMessagePersisted,
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
+    rewindPersistedUndispatchedUserMessage,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
@@ -802,6 +811,7 @@ function createHarness(opts?: {
     onUserMessagePersisted,
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
+    rewindPersistedUndispatchedUserMessage,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
@@ -850,6 +860,11 @@ function createHarness(opts?: {
     onUserMessageRewritten,
     setScreenUserMessage(fn: NonNullable<AgentInputCoordinatorDeps['screenUserMessage']> | null) {
       screenUserMessage = fn;
+    },
+    setValidateAgentSkillInvocation(
+      fn: NonNullable<AgentInputCoordinatorDeps['validateAgentSkillInvocation']>,
+    ) {
+      validateAgentSkillInvocation = fn;
     },
     setHasAssistantProgressAfter(
       fn: ((sessionId: string, userClientId: string) => Promise<boolean>) | null,
@@ -5557,6 +5572,7 @@ describe('AgentInputCoordinator steer transaction', () => {
         expectedTurnSession: expectedSession,
         expectedTurnGeneration: 0,
       }),
+      expect.objectContaining({ clientId: 'q-control' }),
     );
     expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
     expect(h.sendToAgent).not.toHaveBeenCalled();
@@ -5697,6 +5713,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       sid,
       { type: 'user', content: 'second' },
       expect.objectContaining({ messageUuid: expect.any(String) }),
+      expect.objectContaining({ clientId: second.clientId }),
     );
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(latestProjection(h.projections).pendingQueue).toHaveLength(0);
@@ -5799,6 +5816,44 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.pendingQueue).toEqual([]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
+  });
+
+  it('fails closed and preserves a Pi Skill steer when runtime validation throws', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-stale-pi-skill';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    });
+    h.setValidateAgentSkillInvocation(() => {
+      throw new Error('scanner unavailable');
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.error).toContain('Skill is not loaded from the selected source');
   });
 
   it('preserves a capability-rejected steer when the original active turn errors concurrently', async () => {
@@ -5913,6 +5968,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       sid,
       { type: 'user', content: 'rewritten text' },
       expect.objectContaining({ messageUuid: expect.any(String) }),
+      expect.objectContaining({ clientId: second.clientId }),
     );
     expect(h.onUserMessageRewritten).toHaveBeenCalledWith(
       sid,
@@ -6144,6 +6200,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       sid,
       { type: 'user', content: 'second' },
       expect.objectContaining({ messageUuid: expect.any(String) }),
+      expect.objectContaining({ clientId: second.clientId }),
     );
     expect(latestProjection(h.projections).pendingQueue).toHaveLength(0);
     expect(mocks.createMessage).toHaveBeenNthCalledWith(
@@ -7898,6 +7955,293 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'first' });
   });
 
+  it('keeps a restored Pi Skill at the queue head when the current runtime rejects its receipt', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-stale-pi-skill';
+    const restored = makeItem('r-skill', '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    });
+    h.setLoadQueueSnapshot(async () => [restored]);
+    const validate = vi.fn<NonNullable<AgentInputCoordinatorDeps['validateAgentSkillInvocation']>>(
+      () => { throw new Error('scanner unavailable'); },
+    );
+    h.setValidateAgentSkillInvocation(validate);
+
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.resume(sid);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(projection.pendingQueue.map((queued) => queued.clientId)).toEqual(['r-skill']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'r-skill' });
+    expect(projection.error).toContain('Skill is not loaded from the selected source');
+    expect(validate).toHaveBeenCalledTimes(1);
+
+    validate.mockImplementation(() => true);
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls.at(-1)?.[1]).toEqual({
+      type: 'user',
+      content: '/skill:demo inspect',
+    });
+    expect(validate).toHaveBeenCalledTimes(3);
+  });
+
+  it('rewinds a persisted Pi Skill row and restores a fresh queue identity when final proof expires', async () => {
+    const h = createHarness();
+    const sid = 'persisted-pi-skill-final-proof-stale';
+    const original = makeItem('pi-skill-original', '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    });
+    let validationCount = 0;
+    h.setValidateAgentSkillInvocation(() => {
+      validationCount += 1;
+      return validationCount === 1;
+    });
+
+    h.coordinator.enqueue(sid, original);
+    await flush();
+    await vi.waitFor(() => {
+      expect(latestProjection(h.projections).pendingQueue).toHaveLength(1);
+    });
+
+    let projection = latestProjection(h.projections);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(h.rewindPersistedUndispatchedUserMessage).toHaveBeenCalledWith(
+      sid,
+      'pi-skill-original',
+    );
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'pi-skill-original' }),
+      'failed',
+    );
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(projection.pendingQueue).toHaveLength(1);
+    const restored = projection.pendingQueue[0]!;
+    expect(restored.clientId).not.toBe('pi-skill-original');
+    expect(restored.chatMessage.clientId).toBe(restored.clientId);
+    expect(restored.agentSkillInvocation).toEqual(original.agentSkillInvocation);
+    expect(restored.supersedesUserClientId).toBe('pi-skill-original');
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: restored.clientId });
+    const recoverySnapshotIndex = h.persistQueueSnapshot.mock.calls.findIndex((call) =>
+      call[1].some((queued) => queued.clientId === restored.clientId),
+    );
+    expect(recoverySnapshotIndex).toBeGreaterThanOrEqual(0);
+    expect(h.persistQueueSnapshot.mock.invocationCallOrder[recoverySnapshotIndex]!)
+      .toBeLessThan(h.rewindPersistedUndispatchedUserMessage.mock.invocationCallOrder[0]!);
+
+    h.setValidateAgentSkillInvocation(() => true);
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+    expect(mocks.createMessage.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      clientId: restored.clientId,
+    }));
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(projection.recovery).toBeNull();
+  });
+
+  it('keeps the crash-durable fresh Pi Skill queue head when persisted-row rewind fails', async () => {
+    const h = createHarness();
+    const sid = 'persisted-pi-skill-rewind-failed';
+    const item = makeItem('pi-skill-persisted', '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    });
+    let validationCount = 0;
+    h.setValidateAgentSkillInvocation(() => {
+      validationCount += 1;
+      return validationCount === 1;
+    });
+    h.rewindPersistedUndispatchedUserMessage.mockResolvedValueOnce(false);
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    await vi.waitFor(() => {
+      expect(latestProjection(h.projections).pendingQueue).toHaveLength(1);
+    });
+
+    const projection = latestProjection(h.projections);
+    expect(projection.pendingQueue).toHaveLength(1);
+    expect(projection.pendingQueue[0]?.clientId).not.toBe(item.clientId);
+    expect(projection.pendingQueue[0]?.supersedesUserClientId).toBe(item.clientId);
+    expect(projection.recovery).toEqual({
+      kind: 'queue-head',
+      clientId: projection.pendingQueue[0]?.clientId,
+    });
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'pi-skill-persisted' }),
+      'failed',
+    );
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps persisted recovery semantics when the fresh Pi Skill snapshot cannot commit', async () => {
+    const h = createHarness();
+    const sid = 'persisted-pi-skill-snapshot-failed';
+    const item = makeItem('pi-skill-snapshot-old', '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    });
+    let validationCount = 0;
+    h.setValidateAgentSkillInvocation(() => {
+      validationCount += 1;
+      return validationCount === 1;
+    });
+    h.persistQueueSnapshot.mockImplementation((_sessionId, items) => {
+      if (items.some((queued) => queued.supersedesUserClientId === item.clientId)) {
+        return Promise.reject(new Error('snapshot unavailable'));
+      }
+    });
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(h.rewindPersistedUndispatchedUserMessage).not.toHaveBeenCalled();
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.recovery).toEqual({ kind: 'active-turn', item });
+  });
+
+  it('restores the fresh Pi Skill identity if the process exits before old-row rewind', async () => {
+    const first = createHarness();
+    const sid = 'persisted-pi-skill-crash-handoff';
+    const rewindStarted = deferred<void>();
+    const finishRewind = deferred<void>();
+    let validationCount = 0;
+    first.setValidateAgentSkillInvocation(() => {
+      validationCount += 1;
+      return validationCount === 1;
+    });
+    first.rewindPersistedUndispatchedUserMessage.mockImplementationOnce(async () => {
+      rewindStarted.resolve();
+      await finishRewind.promise;
+      return true;
+    });
+    first.coordinator.enqueue(sid, makeItem('pi-skill-crash-old', '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    }));
+    await rewindStarted.promise;
+
+    const durableItems = structuredClone(
+      first.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? [],
+    );
+    expect(durableItems).toHaveLength(1);
+    expect(durableItems[0]?.clientId).not.toBe('pi-skill-crash-old');
+    expect(durableItems[0]?.supersedesUserClientId).toBe('pi-skill-crash-old');
+
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => durableItems);
+    restarted.setGetPersistedClientIds(async () => new Set(['pi-skill-crash-old']));
+    await restarted.coordinator.ensureQueueRestored(sid);
+    const restoredItems = latestProjection(restarted.projections).pendingQueue;
+    expect(restoredItems).toHaveLength(1);
+    expect(restoredItems[0]).toEqual(expect.objectContaining({
+      clientId: durableItems[0]?.clientId,
+      supersedesUserClientId: 'pi-skill-crash-old',
+      agentSkillInvocation: durableItems[0]?.agentSkillInvocation,
+    }));
+
+    first.coordinator.clearSession(sid);
+    finishRewind.resolve();
+    await flush();
+  });
+
+  it('does not revive a stale Pi Skill queue head when clear wins during persisted-row rewind', async () => {
+    const h = createHarness();
+    const sid = 'persisted-pi-skill-rewind-clear-race';
+    const rewindStarted = deferred<void>();
+    const finishRewind = deferred<void>();
+    let validationCount = 0;
+    h.setValidateAgentSkillInvocation(() => {
+      validationCount += 1;
+      return validationCount === 1;
+    });
+    h.rewindPersistedUndispatchedUserMessage.mockImplementationOnce(async () => {
+      rewindStarted.resolve();
+      await finishRewind.promise;
+      return true;
+    });
+
+    h.coordinator.enqueue(sid, makeItem('pi-skill-clear-race', '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    }));
+    await rewindStarted.promise;
+
+    h.coordinator.clearSession(sid);
+    finishRewind.resolve();
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.recovery).toBeNull();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
   it('releases a crash-restored paused queue on explicit user input (resumeRestorePausedQueue)', async () => {
     const h = createHarness();
     const sid = 'snapshot-restore-explicit-input-release';
@@ -8517,6 +8861,60 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
       { ghostId: 'g1', ghostName: '哨兵', text: '优化后的问题', originalText: '润色 原始问题' },
     );
     expect(h.onUserMessageBlocked).not.toHaveBeenCalled();
+  });
+
+  it('rewrite:removes a stale Pi Skill receipt from turn and steer dispatch', async () => {
+    const skillItem = (clientId: string) => makeItem(clientId, '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    });
+    const rewrite = async () => ({
+      action: 'rewrite' as const,
+      ghostId: 'g1',
+      ghostName: '哨兵',
+      text: 'ordinary rewritten prompt',
+    });
+
+    const turn = createHarness();
+    const turnValidate = vi.fn(() => false);
+    turn.setValidateAgentSkillInvocation(turnValidate);
+    turn.setScreenUserMessage(rewrite);
+    turn.coordinator.enqueue('rewrite-skill-turn', skillItem('rewrite-skill-turn-item'));
+    await flush();
+
+    expect(turnValidate).not.toHaveBeenCalled();
+    expect(turn.sendToAgent).toHaveBeenCalledWith(
+      'rewrite-skill-turn',
+      { type: 'user', content: 'ordinary rewritten prompt' },
+      expect.anything(),
+      expect.anything(),
+    );
+
+    const steer = createHarness();
+    const steerValidate = vi.fn(() => false);
+    steer.setRunning(true);
+    steer.setValidateAgentSkillInvocation(steerValidate);
+    steer.setScreenUserMessage(rewrite);
+    await expect(
+      steer.coordinator.steer('rewrite-skill-steer', skillItem('rewrite-skill-steer-item')),
+    ).resolves.toBe(true);
+
+    expect(steerValidate).not.toHaveBeenCalled();
+    expect(steer.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(steer.steerToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'ordinary rewritten prompt',
+    });
+    expect(steer.steerToAgent.mock.calls[0]?.[3].agentSkillInvocation).toBeUndefined();
   });
 
   it('rewrite:persistedContent 是 JSON 信封(带附件/引用)时只换 text 字段,引用不丢', async () => {

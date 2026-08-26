@@ -11796,6 +11796,7 @@ function buildQueuedMessage(
     agentReferences?: AgentInputReference[];
     pastedTextRanges?: PastedTextRange[];
     slashCommandRanges?: SlashCommandRange[];
+    agentSkillInvocation?: AgentInputQueuedMessage['agentSkillInvocation'];
     authRetryPersistOnProjectionError?: {
       data: Record<string, unknown> | null;
       agentMeta: Record<string, unknown> | null;
@@ -11866,6 +11867,7 @@ function buildQueuedMessage(
     mentions,
     ...(sessionRefs.length > 0 ? { sessionRefs } : {}),
     agentReferences: opts?.agentReferences,
+    ...(opts?.agentSkillInvocation ? { agentSkillInvocation: opts.agentSkillInvocation } : {}),
     chatMessage,
     createOpts,
     userName: currentUserName,
@@ -12307,6 +12309,7 @@ type SendMessageOpts = {
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: PastedTextRange[];
   slashCommandRanges?: SlashCommandRange[];
+  agentSkillInvocation?: AgentInputQueuedMessage['agentSkillInvocation'];
   authRetryPersistOnProjectionError?: {
     data: Record<string, unknown> | null;
     agentMeta: Record<string, unknown> | null;
@@ -12755,6 +12758,7 @@ function steerMessage(
     agentReferences?: AgentInputReference[];
     pastedTextRanges?: PastedTextRange[];
     slashCommandRanges?: SlashCommandRange[];
+    agentSkillInvocation?: AgentInputQueuedMessage['agentSkillInvocation'];
     beforeEnqueue?: () => Promise<boolean>;
     onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
   },

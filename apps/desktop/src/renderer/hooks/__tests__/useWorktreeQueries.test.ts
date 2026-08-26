@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   branchesStateForTarget,
   detectCwdStateForTarget,
+  projectRepoRootFromDetectCwd,
   suggestNameStateForTarget,
   useDetectCwd,
   type BranchesSnapshot,
@@ -20,6 +21,24 @@ const REPO_A = {
   repoRoot: '/repo-a',
   currentBranch: 'feature/a',
 };
+
+describe('projectRepoRootFromDetectCwd', () => {
+  it('stays closed before a successful Git probe', () => {
+    expect(projectRepoRootFromDetectCwd(null)).toBeNull();
+    expect(projectRepoRootFromDetectCwd({
+      ...REPO_A,
+      isGitRepo: false,
+    })).toBeNull();
+  });
+
+  it('uses the detected root for a repository subdirectory and a linked worktree', () => {
+    expect(projectRepoRootFromDetectCwd(REPO_A)).toBe('/repo-a');
+    expect(projectRepoRootFromDetectCwd({
+      ...REPO_A,
+      isInsideWorktree: true,
+    })).toBe('/repo-a');
+  });
+});
 
 describe('detectCwdStateForTarget', () => {
   const snapshot: DetectCwdSnapshot = {

@@ -9620,7 +9620,10 @@
     }
   },
   "commandPalette": {
-    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载",
+    "skillUnavailableForNewTask": "无法安全加载所选 Skill，首条消息已恢复；请重新选择该 Skill 后重试",
+    "projectSkillUnavailableForNewTask": "无法安全加载所选项目 Skill，首条消息已保留；请重启或重新选择该 Skill 后重试",
+    "projectSkillMissingInWorktree": "新 worktree 中没有加载到所选项目 Skill，首条消息已恢复；请确认目标分支包含该 Skill 后重试"
   },
   "skillhub": {
     "home": {
