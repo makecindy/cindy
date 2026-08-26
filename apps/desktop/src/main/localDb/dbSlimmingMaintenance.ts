@@ -109,6 +109,19 @@ export async function runDbSlimmingMaintenance(
   reportProgress(options, 'preparing', 2, request.phase === 'scheduled');
 
   try {
+    // A failed rollback-marker write leaves the previous replacement-installed
+    // marker on disk, while the restored replacement is parked back at work.
+    // Advance that durable state before treating the active database as the
+    // committed replacement on a later startup.
+    if (request.phase === 'replacement-installed' && fs.existsSync(paths.work)) {
+      request = {
+        ...request,
+        phase: 'rollback-completed',
+        rollbackFailureReason: request.rollbackFailureReason ?? 'recovery-failed',
+      };
+      writeDbSlimmingRequest(options.userDataDir, request);
+    }
+
     if (request.phase === 'rollback-completed') {
       const originalDatabaseReady = verifyDatabaseFile(options.dbFilePath);
       const result: DbSlimmingResultRecord = {
@@ -143,6 +156,13 @@ export async function runDbSlimmingMaintenance(
     }
 
     if (request.phase === 'committed') {
+      if (!verifyDatabaseFile(options.dbFilePath)) {
+        throw new DbSlimmingMaintenanceError(
+          'recovery-failed',
+          'committed replacement database is invalid',
+          false,
+        );
+      }
       let result: DbSlimmingResultRecord | null = null;
       try {
         result = readDbSlimmingResult(options.userDataDir);
@@ -158,13 +178,6 @@ export async function runDbSlimmingMaintenance(
         result.ownerId !== request.ownerId ||
         result.status !== 'completed'
       ) {
-        if (!verifyDatabaseFile(options.dbFilePath)) {
-          throw new DbSlimmingMaintenanceError(
-            'recovery-failed',
-            'committed replacement database is invalid',
-            false,
-          );
-        }
         registerInstalledBackup(options, request, paths);
         result = completedResult(request, paths, options.dbFilePath, now());
         writeDbSlimmingResult(options.userDataDir, result);
@@ -317,6 +330,7 @@ export async function runDbSlimmingMaintenance(
     const maintenanceError = normalizeMaintenanceError(error);
     let originalDatabaseReady = maintenanceError.originalDatabaseReady;
     let rollbackMarkerDurable = false;
+    let recoveryStateDurable = true;
     if (!committed && (replacementInstalled || request.phase === 'swap-prepared')) {
       try {
         restoreOriginalDatabase(options.dbFilePath, paths, options.log);
@@ -338,6 +352,7 @@ export async function runDbSlimmingMaintenance(
           writeDbSlimmingRequest(options.userDataDir, request);
           rollbackMarkerDurable = true;
         } catch (markerError) {
+          recoveryStateDurable = false;
           options.log.warn('database slimming rollback marker could not be advanced', {
             requestId: request.id,
             error: markerError instanceof Error ? markerError.message : String(markerError),
@@ -364,7 +379,7 @@ export async function runDbSlimmingMaintenance(
         error: resultError instanceof Error ? resultError.message : String(resultError),
       });
     }
-    if (originalDatabaseReady) {
+    if (originalDatabaseReady && recoveryStateDurable) {
       if (rollbackMarkerDurable) {
         if (resultPersisted && !finalizeFailedCleanup(options.userDataDir, paths)) {
           options.log.warn('database slimming rollback cleanup will be retried', {
@@ -380,10 +395,10 @@ export async function runDbSlimmingMaintenance(
     options.log.error('database slimming failed', {
       requestId: request.id,
       reason: result.reason,
-      originalDatabaseReady,
+      originalDatabaseReady: originalDatabaseReady && recoveryStateDurable,
       error: maintenanceError.message,
     });
-    return { result, originalDatabaseReady };
+    return { result, originalDatabaseReady: originalDatabaseReady && recoveryStateDurable };
   }
 }
 

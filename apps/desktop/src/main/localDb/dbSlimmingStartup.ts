@@ -152,16 +152,6 @@ export async function runPendingDbSlimmingAtStartup(
       ) {
         throw error;
       }
-      if (error instanceof DbSlimmingWorkerPreReplacementError) {
-        try {
-          discardCancelledDbSlimmingMaintenance(options.userDataDir, options.dbFilePath, request);
-        } catch (cleanupError) {
-          options.log.warn('failed database cleanup artifacts could not be fully removed', {
-            requestId: request.id,
-            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          });
-        }
-      }
       const result: DbSlimmingResultRecord = {
         id: request.id,
         ownerId: request.ownerId,
@@ -171,14 +161,33 @@ export async function runPendingDbSlimmingAtStartup(
         reason: 'cleanup-failed',
         originalDatabaseRestored: true,
       };
+      let resultPersisted = false;
       try {
         writeDbSlimmingResult(options.userDataDir, result);
-        clearDbSlimmingRequest(options.userDataDir);
+        resultPersisted = true;
       } catch (persistError) {
         options.log.warn('database cleanup process failure could not be persisted', {
           requestId: request.id,
           error: persistError instanceof Error ? persistError.message : String(persistError),
         });
+      }
+      if (resultPersisted) {
+        if (error instanceof DbSlimmingWorkerPreReplacementError) {
+          try {
+            discardCancelledDbSlimmingMaintenance(options.userDataDir, options.dbFilePath, request);
+          } catch (cleanupError) {
+            options.log.error('failed database cleanup artifacts could not be fully removed', {
+              requestId: request.id,
+              error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+            });
+            throw cleanupError;
+          }
+        } else if (!clearDbSlimmingRequest(options.userDataDir)) {
+          options.log.error('database cleanup process failure request marker could not be cleared', {
+            requestId: request.id,
+          });
+          throw new Error('database slimming request marker could not be cleared');
+        }
       }
       options.log.error('database cleanup process failed before replacement', {
         requestId: request.id,

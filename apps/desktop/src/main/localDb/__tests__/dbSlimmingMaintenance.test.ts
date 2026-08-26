@@ -16,6 +16,7 @@ import {
   readDbSlimmingRequest,
   type DbSlimmingRequestRecord,
   writeDbSlimmingRequest,
+  writeDbSlimmingResult,
 } from '../maintenanceStore';
 
 const REQUEST_ID = '9c5c7e99-6a6a-4d21-9152-4034a4959490';
@@ -516,6 +517,72 @@ describe('runDbSlimmingMaintenance', () => {
     expect(readMarker(backupPath)).toBe('older-slimming-backup');
   });
 
+  it('fails closed until a completed physical rollback can be persisted', async () => {
+    const rollbackPath = `${dbFilePath}.slimming-${REQUEST_ID}.rollback`;
+    const workPath = `${dbFilePath}.slimming-${REQUEST_ID}.work`;
+    createMarkerDatabase(rollbackPath, 'original');
+    fs.writeFileSync(dbFilePath, 'not a sqlite database');
+    const pending = request({
+      phase: 'replacement-installed',
+      beforeBytes: fs.statSync(dbFilePath).size,
+    });
+    writeDbSlimmingRequest(tmpDir, pending);
+
+    const requestPathPrefix = `${dbSlimmingRequestPath(tmpDir)}.`;
+    const originalWriteFileSync = fs.writeFileSync.bind(fs);
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation((candidate, data, options) => {
+      if (
+        String(candidate).startsWith(requestPathPrefix) &&
+        String(data).includes('"phase":"rollback-completed"')
+      ) {
+        throw Object.assign(new Error('rollback marker is unavailable'), { code: 'EACCES' });
+      }
+      return originalWriteFileSync(candidate, data, options);
+    });
+
+    const firstOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: pending,
+      now: () => 3_000,
+      log,
+    });
+
+    expect(firstOutcome).toMatchObject({
+      originalDatabaseReady: false,
+      result: {
+        status: 'failed',
+        reason: 'integrity-check-failed',
+        originalDatabaseRestored: true,
+      },
+    });
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ phase: 'replacement-installed' });
+    expect(readMarker(dbFilePath)).toBe('original');
+    expect(fs.existsSync(workPath)).toBe(true);
+
+    writeSpy.mockRestore();
+    const persisted = readDbSlimmingRequest(tmpDir)!;
+    const secondOutcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: persisted,
+      now: () => 4_000,
+      log,
+    });
+
+    expect(secondOutcome).toMatchObject({
+      originalDatabaseReady: true,
+      result: {
+        status: 'failed',
+        reason: 'recovery-failed',
+        originalDatabaseRestored: true,
+      },
+    });
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+    expect(readMarker(dbFilePath)).toBe('original');
+    expect(fs.existsSync(workPath)).toBe(false);
+  });
+
   it('keeps the rollback marker until occupied maintenance artifacts are removed', async () => {
     const rollbackPath = `${dbFilePath}.slimming-${REQUEST_ID}.rollback`;
     const workPath = `${dbFilePath}.slimming-${REQUEST_ID}.work`;
@@ -672,6 +739,50 @@ describe('runDbSlimmingMaintenance', () => {
     });
     expect(readDbSlimmingRequest(tmpDir)).toBeNull();
     expect(readMarker(dbFilePath)).toBe('committed-replacement');
+  });
+
+  it('keeps the rollback when a committed database is invalid despite a completed result', async () => {
+    const rollbackPath = `${dbFilePath}.slimming-${REQUEST_ID}.rollback`;
+    createMarkerDatabase(rollbackPath, 'original');
+    fs.writeFileSync(dbFilePath, 'not a sqlite database');
+    const pending = request({
+      phase: 'committed',
+      beforeBytes: fs.statSync(dbFilePath).size,
+    });
+    writeDbSlimmingRequest(tmpDir, pending);
+    writeDbSlimmingResult(tmpDir, {
+      id: pending.id,
+      ownerId: pending.ownerId,
+      status: 'completed',
+      finishedAt: 2_500,
+      archiveAgeMonths: pending.archiveAgeMonths,
+      deletedTaskCount: 1,
+      archivedTaskCount: 1,
+      messageCount: 1,
+      beforeBytes: pending.beforeBytes,
+      afterBytes: pending.beforeBytes,
+      reclaimedBytes: 0,
+      backupCreated: false,
+    });
+
+    const outcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: pending,
+      now: () => 3_000,
+      log,
+    });
+
+    expect(outcome).toMatchObject({
+      originalDatabaseReady: false,
+      result: {
+        status: 'failed',
+        reason: 'recovery-failed',
+        originalDatabaseRestored: false,
+      },
+    });
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ phase: 'committed' });
+    expect(readMarker(rollbackPath)).toBe('original');
   });
 
   it('keeps the committed marker until occupied maintenance artifacts are removed', async () => {
