@@ -16,6 +16,11 @@ import {
 } from '../shared/projectOrderSettings';
 import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
+  REVIEW_ARTIFACT_CONFIRM_REQUEST_CHANNEL,
+  REVIEW_ARTIFACT_CONFIRM_RESOLVE_CHANNEL,
+  type ReviewArtifactConfirmRequest,
+} from '../shared/reviewArtifactConfirm';
+import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL,
@@ -651,6 +656,7 @@ const fanOutHookControlWorkspaceProviderSource = createIpcFanOut(
 
 // ─── Maker Core 一阶段重构（新链路）── 与 cc-agent:* / codex:* 双轨并行 ─────
 const fanOutMakerEvent = createIpcFanOut('maker:event');
+const fanOutReviewArtifactConfirmRequest = createIpcFanOut(REVIEW_ARTIFACT_CONFIRM_REQUEST_CHANNEL);
 const fanOutMakerTurnChangeSetUpdated = createIpcFanOut('maker:turn-change-set:updated');
 const fanOutMakerStatusChanged = createIpcFanOut('maker:status-changed');
 const fanOutMakerInputProjection = createIpcFanOut('maker:input:projection');
@@ -5579,6 +5585,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }>;
     }): Promise<{ ok: true; runId: string; reviewerSessionId: string }> =>
       ipcRenderer.invoke('maker:review:start', input),
+    onReviewArtifactConfirmRequest: (
+      callback: (payload: ReviewArtifactConfirmRequest) => void,
+    ): (() => void) =>
+      fanOutReviewArtifactConfirmRequest((payload) =>
+        callback(payload as ReviewArtifactConfirmRequest),
+      ),
+    resolveReviewArtifactConfirm: (
+      requestId: string,
+      confirmed: boolean,
+    ): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke(REVIEW_ARTIFACT_CONFIRM_RESOLVE_CHANNEL, { requestId, confirmed }),
 
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',

@@ -5036,6 +5036,15 @@ interface ElectronAPI {
       focus?: string;
       attachments?: import('./lib/fileTypes').SerializedAttachedFile[];
     }) => Promise<{ ok: true; runId: string; reviewerSessionId: string }>;
+    onReviewArtifactConfirmRequest: (
+      callback: (
+        payload: import('../shared/reviewArtifactConfirm').ReviewArtifactConfirmRequest,
+      ) => void,
+    ) => () => void;
+    resolveReviewArtifactConfirm: (
+      requestId: string,
+      confirmed: boolean,
+    ) => Promise<{ handled: boolean }>;
 
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',

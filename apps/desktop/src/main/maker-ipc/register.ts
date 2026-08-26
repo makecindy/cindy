@@ -234,6 +234,7 @@ import {
   type ReviewArtifactConfirmationItem,
 } from '../reviewer/reviewArtifactAuthorization.js';
 import { buildReviewArtifactConfirmationDialog } from '../reviewer/reviewArtifactDialog.js';
+import { ReviewArtifactConfirmBridge } from '../reviewer/reviewArtifactConfirmBridge.js';
 import {
   cleanupOrphanedReviewArtifactSnapshots,
   prepareStableReviewArtifactSnapshots,
@@ -1025,6 +1026,7 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { openMainWindowSession } from '../deepLink.js';
 
 const log = createLogger('maker-ipc');
+const reviewArtifactConfirmBridge = new ReviewArtifactConfirmBridge({ log });
 
 async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<boolean> {
   // Slash/@ palettes are read-only device-link surfaces. Their remote invokes must not
@@ -5855,13 +5857,26 @@ async function confirmReviewExternalArtifacts(
   event: IpcMainInvokeEvent,
   items: ReviewArtifactConfirmationItem[],
 ): Promise<boolean> {
-  const options = buildReviewArtifactConfirmationDialog(items, t);
-  const owner = BrowserWindow.fromWebContents(event.sender);
-  const result =
-    owner && !owner.isDestroyed()
-      ? await dialog.showMessageBox(owner, options)
-      : await dialog.showMessageBox(options);
-  return result.response === 1;
+  const sender = event.sender;
+  return reviewArtifactConfirmBridge.request(
+    {
+      id: sender.id,
+      send: (payload) => {
+        if (sender.isDestroyed()) return false;
+        sender.send(MAKER_PUSH.REVIEW_ARTIFACT_CONFIRM_REQUEST, payload);
+        return true;
+      },
+      onDestroyed: (callback) => {
+        if (sender.isDestroyed()) {
+          callback();
+          return () => {};
+        }
+        sender.once('destroyed', callback);
+        return () => sender.removeListener('destroyed', callback);
+      },
+    },
+    buildReviewArtifactConfirmationDialog(items, t),
+  );
 }
 
 export interface RegisterMakerIpcOptions {
@@ -5952,6 +5967,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  });
+  ipcMain.handle(MAKER_INVOKE.REVIEW_ARTIFACT_CONFIRM_RESOLVE, (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const response = raw as { requestId?: unknown; confirmed?: unknown } | null;
+    return {
+      handled: reviewArtifactConfirmBridge.resolve(
+        event.sender.id,
+        response?.requestId,
+        response?.confirmed,
+      ),
+    };
   });
   disposePiPackagesChangedBroadcast?.();
   disposePiPackagesChangedBroadcast = onPiPackagesChanged(() => {

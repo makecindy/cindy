@@ -1,4 +1,8 @@
 import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../../shared/iosSimulatorIpc.js';
+import {
+  REVIEW_ARTIFACT_CONFIRM_REQUEST_CHANNEL,
+  REVIEW_ARTIFACT_CONFIRM_RESOLVE_CHANNEL,
+} from '../../shared/reviewArtifactConfirm.js';
 
 /**
  * maker:* IPC channel 名常量。统一收口，禁止 hardcode 字符串。
@@ -10,6 +14,7 @@ import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../../shared/iosSimulatorIpc
 export const MAKER_INVOKE = {
   CREATE_SESSION: 'maker:create-session',
   START_REVIEW: 'maker:review:start',
+  REVIEW_ARTIFACT_CONFIRM_RESOLVE: REVIEW_ARTIFACT_CONFIRM_RESOLVE_CHANNEL,
   TURN_CHANGE_SETS_LIST: 'maker:turn-change-sets:list',
   TURN_CHANGE_SETS_GET: 'maker:turn-change-sets:get',
   TURN_CHANGE_SET_APPLY: 'maker:turn-change-set:apply',
@@ -800,6 +805,7 @@ export const MAKER_SEND = {
 
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
+  REVIEW_ARTIFACT_CONFIRM_REQUEST: REVIEW_ARTIFACT_CONFIRM_REQUEST_CHANNEL,
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
