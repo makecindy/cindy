@@ -5651,10 +5651,6 @@ export async function installOrUpdateMarketGhostPackage(
     /** receipt 模型并发护栏:更新分支比对 receipt 派生 token(与 main 硬化叠加,决策 A)。 */
     expectedInstalledApproval?: string;
     /**
-     * 市场发现层已经公开的 Manifest。真实包可以缩小能力，但不能携带发现层
-     * 没有声明的 Host 能力；超出时按包内容不一致拒绝，不转成用户授权弹窗。
-     */
-    /**
      * Organization server-market packages pass this Host-built fact because the
      * ledger row is written after install/update. Official-prefix ids never
      * consult it (they short-circuit). Not "first install only": the same
@@ -5662,6 +5658,7 @@ export async function installOrUpdateMarketGhostPackage(
      * defaultInstall, and source replacement.
      */
     pendingMarketRecord?: GhostFirstPartyPendingMarketRecord;
+    /** 自定义 Git/本地市场在打包前读取的 Manifest，用于防止打包窗口内能力扩张。 */
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
@@ -5717,8 +5714,9 @@ async function installOrUpdateMarketGhostPackageLocked(
         ? 'cindy-official'
         : undefined;
     requireGhostAvailableForActiveSession(expected.ghostId);
-    // 市场投影只作为真实包的能力上限，避免分发内容与目录声明漂移；
-    // 安装动作本身不承担能力授权，也不会因此追加权限确认弹窗。
+    // 自定义 Git/本地市场的活目录可能在发现后、打包前变化；它们传入发现时的
+    // Manifest 作为 TOCTOU 上限。官方市场由服务端 Release SHA 绑定真实包，目录
+    // Manifest 只用于展示，不参与这里的安装准入。
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     if (expected.manifestCap) {
       const undeclaredCapabilities = unreviewedGhostPermissionItems(
@@ -5739,7 +5737,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         !ghostToolParametersWithinCap(expected.manifestCap, inspected.canonicalManifest) ||
         !ghostUnknownV3FieldsWithinCap(expected.manifestCap, inspected.canonicalManifest)
       ) {
-        log.warn('market package exceeds catalog manifest capabilities', {
+        log.warn('custom market package exceeds discovered manifest capabilities', {
           ghostId: expected.ghostId,
           keys: undeclaredCapabilities.map((item) => item.key),
         });
@@ -5762,14 +5760,15 @@ async function installOrUpdateMarketGhostPackageLocked(
     );
 
     // Manifest 能力只用于 Host 注册、校验和运行时守门。用户点击安装后不再
-    // 经过插件级权限确认；真实包仍必须通过上面的市场声明上限与 Host 校验。
+    // 经过插件级权限确认；自定义活目录还必须通过上面的打包窗口一致性校验。
     // Hold the owner-stability lease only for the actual Ghost filesystem
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
     if (!installed) {
       // 市场首装一律装完即开(defaultInstall 与手动安装归一)，用户不必再手动
-      // 点一次开关。市场包走服务端校验 + sha256 下载校验，并受目录 manifest
-      // 能力上限约束；本地 .cindy 由明确的文件选择、拖入或双击动作直接装入。
+      // 点一次开关。市场包走服务端校验 + sha256 下载校验；自定义 Git/本地市场
+      // 额外受发现 Manifest 上限约束。本地 .cindy 由明确的文件选择、拖入或双击
+      // 动作直接装入。
       // expectedPackageSha256 把"检查过的字节"与"落位的字节"钉死为同一份:
       // inspect 与 install 各自重读磁盘,临时 .cindy 在两读之间被替换时,
       // 所有前置校验(保留前缀/能力上限/签名/解压上限)都会作用在旧字节上。
