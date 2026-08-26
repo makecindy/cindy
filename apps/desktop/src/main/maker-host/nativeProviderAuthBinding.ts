@@ -115,6 +115,29 @@ function writeBindings(value: BindingFile): void {
   fs.renameSync(tmp, file);
 }
 
+export type LegacyNativeProviderAuthReservation =
+  'claimed' | 'already-owned' | 'owned-by-other' | 'failed';
+
+/** Reserve the one-shot native-provider namespace at the verified cloud commit edge. */
+export function reserveLegacyNativeProviderAuthOwner(
+  ownerId: string,
+): LegacyNativeProviderAuthReservation {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) return 'failed';
+  const read = readBindingsOrFail();
+  if (!read.ok) return 'failed';
+  const bindings = read.bindings;
+  if ('legacyClaimOwner' in bindings) {
+    return bindings.legacyClaimOwner === normalizedOwnerId ? 'already-owned' : 'owned-by-other';
+  }
+  try {
+    writeBindings({ ...bindings, legacyClaimOwner: normalizedOwnerId });
+    return 'claimed';
+  } catch {
+    return 'failed';
+  }
+}
+
 /** Return true only when the native OAuth credential is explicitly bound to this owner. */
 export function isNativeProviderAuthBound(provider: NativeProviderId): boolean {
   const read = readBindingsOrFail();
@@ -337,14 +360,14 @@ export function migrateLocalNativeProviderAuthBindings(ownerId: string): boolean
     next[provider] = normalizedOwnerId;
     migrated = true;
   }
-  if (!migrated) return false;
 
   // Reserve the one-shot legacy claim for this first cloud owner. This also
   // prevents a later account from claiming another local credential that
   // appears after the initial login.
   if (!('legacyClaimOwner' in next)) next.legacyClaimOwner = normalizedOwnerId;
+  if (!migrated && 'legacyClaimOwner' in bindings) return false;
   writeBindings(next);
-  return true;
+  return migrated;
 }
 
 /**

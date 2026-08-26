@@ -116,7 +116,10 @@ import {
   claimLegacyOwnerNamespace,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
-import { migrateLocalNativeProviderAuthBindings } from './maker-host/nativeProviderAuthBinding.js';
+import {
+  migrateLocalNativeProviderAuthBindings,
+  reserveLegacyNativeProviderAuthOwner,
+} from './maker-host/nativeProviderAuthBinding.js';
 import { reserveLocalProfileDataOwner } from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
@@ -912,7 +915,10 @@ async function withCloudOwnerCommit<T>(opts: {
           await projectionRepairTeardown('same-owner-projection-recovery');
         }
       },
-      prepareCommit: opts.prepareCommit,
+      prepareCommit: async () => {
+        reserveCloudOwnerData(opts.nextOwnerId);
+        await opts.prepareCommit?.();
+      },
       commit: async () => {
         const result = await opts.commit();
         // Same-owner repair: advance the owner generation after the real commit
@@ -1101,19 +1107,34 @@ async function recoverAccountFreeOwnerAtStartup(
   });
 }
 
+function reserveCloudOwnerData(ownerId: string): void {
+  const profileReservation = reserveLocalProfileDataOwner(
+    ownerId,
+    app.getPath('userData'),
+    BRAND_IDENTITY.dbFilePrefix,
+  );
+  if (profileReservation === 'failed') {
+    throw new Error('local profile data reservation failed before cloud owner commit');
+  }
+
+  const nativeReservation = reserveLegacyNativeProviderAuthOwner(ownerId);
+  if (nativeReservation === 'failed') {
+    throw new Error('native provider ownership reservation failed before cloud owner commit');
+  }
+  if (profileReservation === 'owned-by-other' || nativeReservation === 'owned-by-other') {
+    log.info('cloud owner committed without adopting legacy local data', {
+      ownerId,
+      profileReservation,
+      nativeReservation,
+    });
+  }
+}
+
 function commitCloudAppSession(ownerId: string): void {
   if (isPassiveSharedUserDataInstance()) {
     commitVolatileAppSession('cloud', ownerId);
   } else {
     commitActiveAppSession('cloud', ownerId);
-    const reservation = reserveLocalProfileDataOwner(
-      ownerId,
-      app.getPath('userData'),
-      BRAND_IDENTITY.dbFilePrefix,
-    );
-    if (reservation === 'owned-by-other' || reservation === 'failed') {
-      log.warn('local profile data reservation did not complete', { ownerId, reservation });
-    }
   }
 }
 
@@ -2499,6 +2520,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
         commit: () => commitCloudAppSession(currentUser!.id),
       });
     } else {
+      reserveCloudOwnerData(currentUser.id);
       commitCloudAppSession(currentUser.id);
     }
     migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);

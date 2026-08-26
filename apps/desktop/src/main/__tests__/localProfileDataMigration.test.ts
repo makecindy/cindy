@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   adoptLocalProfileDatabase,
   LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX,
+  LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
   reserveLocalProfileDataOwner,
   type LocalProfileDataMigrationDeps,
@@ -101,6 +102,9 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(path.join(root, 'cindy-local-v1.db'), 'utf8')).resolves.toBe(
       'local-db',
     );
+    await expect(
+      fs.access(path.join(root, `cindy-owner-a.db${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`)),
+    ).rejects.toThrow();
   });
 
   it('never overwrites an existing cloud database', async () => {
@@ -134,6 +138,8 @@ describe('adoptLocalProfileDatabase', () => {
   it('does not replace a target when same-owner adoption races across processes', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db-wal'), 'local-wal');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db-shm'), 'local-shm');
 
     const results = await Promise.all([
       adoptLocalProfileDatabase('owner-a', deps),
@@ -142,6 +148,12 @@ describe('adoptLocalProfileDatabase', () => {
     expect(results.map((result) => result.status).sort()).toEqual(['adopted', 'target-exists']);
     await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
       'local-db',
+    );
+    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db-wal'), 'utf8')).resolves.toBe(
+      'local-wal',
+    );
+    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db-shm'), 'utf8')).resolves.toBe(
+      'local-shm',
     );
   });
 

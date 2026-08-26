@@ -29,6 +29,7 @@ import {
   isNativeProviderAuthSelfAuthorized,
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
+  reserveLegacyNativeProviderAuthOwner,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
 } from '../nativeProviderAuthBinding.js';
@@ -72,6 +73,26 @@ describe('native provider auth legacy binding', () => {
 });
 
 describe('local → cloud native provider binding migration', () => {
+  it('reserves the first cloud owner even when no local provider slot exists', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({
+      legacyClaimOwner: 'owner-a',
+    });
+
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('persists the local claim when the first cloud owner has no credential to migrate', () => {
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({
+      legacyClaimOwner: 'owner-a',
+    });
+
+    session.dataOwnerId = 'owner-b';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(false);
+  });
+
   it('moves local-mode Harness bindings to the first cloud owner and preserves source metadata', () => {
     session.dataOwnerId = 'local-v1';
     expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);

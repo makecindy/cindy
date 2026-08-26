@@ -10,12 +10,14 @@
  */
 
 import fs from 'original-fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
 export const LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX = '.local-profile-migration.json';
+export const LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX = '.local-profile-migration-lease';
 
 const DB_SIDECAR_SUFFIXES = ['-wal', '-shm'] as const;
 
@@ -81,11 +83,12 @@ function migrationMarkerPath(deps: LocalProfileDataMigrationDeps): string {
   );
 }
 
+function migrationLeasePath(targetDb: string): string {
+  return `${targetDb}${LOCAL_PROFILE_MIGRATION_LEASE_SUFFIX}`;
+}
+
 export type LocalProfileMigrationReservation =
-  | 'claimed'
-  | 'already-owned'
-  | 'owned-by-other'
-  | 'failed';
+  'claimed' | 'already-owned' | 'owned-by-other' | 'failed';
 
 /**
  * Reserve local-v1 synchronously at the cloud-owner commit edge. This is a
@@ -181,46 +184,43 @@ async function copyDatabaseAtomically(
   targetDb: string,
 ): Promise<boolean> {
   await cleanupTemps(deps, targetDb);
-  const dbTmp = `${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`;
-  await deps.fs.removeIfExists(dbTmp);
-  await deps.fs.copyFile(sourceDb, dbTmp);
-
+  const attemptId = randomUUID();
+  const dbTmp = `${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.${attemptId}`;
+  const tempFiles = [dbTmp];
   const sidecars: Array<{ tmp: string; final: string }> = [];
-  for (const suffix of DB_SIDECAR_SUFFIXES) {
-    const source = `${sourceDb}${suffix}`;
-    if (!(await deps.fs.pathExists(source))) continue;
-    const final = `${targetDb}${suffix}`;
-    const tmp = `${final}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}`;
-    await deps.fs.removeIfExists(tmp);
-    await deps.fs.copyFile(source, tmp);
-    sidecars.push({ tmp, final });
-  }
-
-  // Establish ownership of the main database before publishing any WAL
-  // sidecar. A process that loses this no-replace commit must leave no
-  // sidecars behind for the winner's database file group.
   try {
+    await deps.fs.copyFile(sourceDb, dbTmp);
+    for (const suffix of DB_SIDECAR_SUFFIXES) {
+      const source = `${sourceDb}${suffix}`;
+      if (!(await deps.fs.pathExists(source))) continue;
+      const final = `${targetDb}${suffix}`;
+      const tmp = `${final}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.${attemptId}`;
+      await deps.fs.copyFile(source, tmp);
+      tempFiles.push(tmp);
+      sidecars.push({ tmp, final });
+    }
+
+    // Establish ownership of the main database before publishing any WAL
+    // sidecar. A process that loses this no-replace commit must leave no
+    // sidecars behind for the winner's database file group.
     await deps.fs.link(dbTmp, targetDb);
-    await deps.fs.removeIfExists(dbTmp);
+    // Commit sidecars only after the main database link has won. A sidecar that
+    // already exists belongs to the process that won the main-file race; never
+    // replace it.
+    for (const sidecar of sidecars) {
+      try {
+        await deps.fs.link(sidecar.tmp, sidecar.final);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
+      }
+    }
+    return true;
   } catch (error) {
-    await deps.fs.removeIfExists(dbTmp);
     if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
     throw error;
+  } finally {
+    await Promise.all(tempFiles.map((file) => deps.fs.removeIfExists(file)));
   }
-
-  // Commit sidecars only after the main database link has won. A sidecar that
-  // already exists belongs to the process that won the main-file race; never
-  // replace it.
-  for (const sidecar of sidecars) {
-    try {
-      await deps.fs.link(sidecar.tmp, sidecar.final);
-      await deps.fs.removeIfExists(sidecar.tmp);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
-      await deps.fs.removeIfExists(sidecar.tmp);
-    }
-  }
-  return true;
 }
 
 /**
@@ -240,6 +240,8 @@ export async function adoptLocalProfileDatabase(
 
   const sourceDb = dbPath(deps, LOCAL_PROFILE_DATA_OWNER_ID);
   const targetDb = dbPath(deps, normalizedOwnerId);
+  const lease = migrationLeasePath(targetDb);
+  let leaseHeld = false;
   try {
     const markerClaim = await claimMigrationMarker(normalizedOwnerId, deps);
     if (markerClaim === 'owned-by-other') return { status: 'claimed-by-other-owner' };
@@ -247,6 +249,15 @@ export async function adoptLocalProfileDatabase(
     // later account could create or adopt local content after the first account
     // has already crossed the login boundary.
     if (!(await deps.fs.pathExists(sourceDb))) return { status: 'no-local-db' };
+    // Serialize the complete database-file-group adoption across processes. The
+    // owner marker deliberately allows same-owner readers, so it cannot itself
+    // protect the copy; this lease keeps one process from cleaning or publishing
+    // another process's temporary database/WAL files.
+    leaseHeld = await deps.fs.createFileExclusive(
+      lease,
+      `${JSON.stringify({ ownerId: normalizedOwnerId, leaseId: randomUUID(), claimedAt: Date.now() })}\n`,
+    );
+    if (!leaseHeld) return { status: 'target-exists' };
     if (await deps.fs.pathExists(targetDb)) {
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
@@ -259,6 +270,8 @@ export async function adoptLocalProfileDatabase(
       status: 'failed',
       error: error instanceof Error ? error.message : String(error),
     };
+  } finally {
+    if (leaseHeld) await deps.fs.removeIfExists(lease).catch(() => undefined);
   }
 }
 

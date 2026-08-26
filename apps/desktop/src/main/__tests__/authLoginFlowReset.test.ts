@@ -302,6 +302,19 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).not.toContain('clearAuth({ notify: false });');
   });
 
+  it('reserves local namespaces before publishing a cloud owner', () => {
+    const cloudStart = source.indexOf('async function withCloudOwnerCommit(');
+    const prepareStart = source.indexOf('prepareCommit: async () => {', cloudStart);
+    const prepareEnd = source.indexOf('\n      },\n      commit: async () => {', prepareStart);
+    const prepareBody = source.slice(prepareStart, prepareEnd);
+
+    expect(prepareBody).toContain('reserveCloudOwnerData(opts.nextOwnerId);');
+    expect(prepareBody.indexOf('reserveCloudOwnerData')).toBeLessThan(
+      prepareBody.indexOf('await opts.prepareCommit?.();'),
+    );
+    expect(source).toContain('reserveCloudOwnerData(currentUser.id);');
+  });
+
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {
     expect(source).not.toContain('canaryFlagStore.sync(false)');
     expect(source.match(/scheduleCanaryFlagSync\(\{/g)).toHaveLength(3);
