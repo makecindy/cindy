@@ -1352,6 +1352,9 @@
         "subtitle": "모든 모델 · Claude Code / Codex 공용 · 토큰 단위로 잔액에서 차감",
         "modelLabel": "모든 모델",
         "billingLabel": "토큰 단위로 잔액에서 차감",
+        "accountTier": {
+          "free": "무료 버전"
+        },
         "disconnectConfirm": {
           "title": "Cindy AI 연결을 해제할까요?",
           "description": "연결을 해제하면 로컬에 저장된 Cindy AI Key가 삭제됩니다. Cindy AI 모델을 계속 사용하려면 다시 연결해야 합니다."

@@ -67,6 +67,7 @@ import {
 import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
+import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useProviders } from '@/hooks/useProviders';
 import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
@@ -115,6 +116,7 @@ import {
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilities';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
+import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
@@ -1012,11 +1014,13 @@ export function resolveRemoteModelListStatus({
 export function ModelSelectorContent(props: ModelSelectorContentProps) {
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
+  const { accountTier } = useModelAccessStatus();
   return (
     <ModelSelectorContentView
       {...props}
       gatewayPricing={gatewayPricing}
       referencePricing={referencePricing}
+      modelAccessAccountTier={accountTier}
     />
   );
 }
@@ -1061,9 +1065,11 @@ function ModelSelectorContentView({
   interactionDisabled = false,
   gatewayPricing,
   referencePricing,
+  modelAccessAccountTier,
 }: ModelSelectorContentProps & {
   gatewayPricing: ModelPricingCatalog | null;
   referencePricing: ModelPricingCatalog | null;
+  modelAccessAccountTier: ModelAccessAccountTier | null;
 }) {
   const confirmDialog = useOptionalConfirmDialog();
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
@@ -3051,8 +3057,16 @@ function ModelSelectorContentView({
                 aria-label={providerDisplayName(sec.provider, t)}
               >
                 {index > 0 && <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />}
-                <div className="truncate px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
-                  {providerDisplayName(sec.provider, t)}
+                <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
+                  <span className="min-w-0 truncate">{providerDisplayName(sec.provider, t)}</span>
+                  {!deviceId && sec.provider.id === 'xd' && modelAccessAccountTier === 'free' && (
+                    <span
+                      data-testid="cindy-ai-model-group-free-tier-badge"
+                      className="ml-auto inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+                    >
+                      {t('settings.providers.xd.accountTier.free')}
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-col gap-0.5">
                   {sec.models.map((m) => renderModelItem(sec.provider, m))}
@@ -3319,6 +3333,7 @@ export function ModelSelector({
   const pi = useAgentCapabilities('pi', deviceId);
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
+  const { accountTier: modelAccessAccountTier } = useModelAccessStatus();
   // trigger 的来源 icon / 当前模型也按来源取:device-link 用被控端供应商目录(否则控制端本地
   // 查不到被控端独有模型 → currentModel undefined → label 退成 "Select model")。
   const localProviders = useProviders();
@@ -3910,6 +3925,7 @@ export function ModelSelector({
       interactionDisabled={switching || disabled}
       gatewayPricing={gatewayPricing}
       referencePricing={referencePricing}
+      modelAccessAccountTier={modelAccessAccountTier}
       followSession={
         fallbackOption
           ? {

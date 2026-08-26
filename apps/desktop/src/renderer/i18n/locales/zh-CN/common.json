@@ -1352,6 +1352,9 @@
         "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 从余额扣费",
         "modelLabel": "全部模型",
         "billingLabel": "按 token 从余额扣费",
+        "accountTier": {
+          "free": "免费版"
+        },
         "disconnectConfirm": {
           "title": "断开 Cindy AI？",
           "description": "断开后将清除本地保存的 Cindy AI Key，需要重新连接才能继续使用 Cindy AI 提供的模型。"

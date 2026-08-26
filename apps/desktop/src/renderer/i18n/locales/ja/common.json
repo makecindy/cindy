@@ -1352,6 +1352,9 @@
         "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン単位で残高から引き落とし",
         "modelLabel": "すべてのモデル",
         "billingLabel": "トークン単位で残高から引き落とし",
+        "accountTier": {
+          "free": "無料版"
+        },
         "disconnectConfirm": {
           "title": "Cindy AI を切断しますか?",
           "description": "切断するとローカルに保存された Cindy AI Key が削除されます。Cindy AI のモデルを引き続き使うには再接続が必要です。"

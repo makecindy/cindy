@@ -3,6 +3,7 @@ import {
   parseListModelsResponse,
 } from '@cindy/model-providers';
 import type {
+  ModelAccessAccountTier,
   ModelAccessGatewayModel,
   ModelAccessModelsResponse,
   ModelAccessStatus,
@@ -15,7 +16,8 @@ export const XD_MODELS_SYNC_PATH =
   `/api/model-access/models?schemaVersion=${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}` as const;
 
 export type ModelsSyncPayloadParseResult =
-  { ok: true; models: ModelAccessGatewayModel[] } | { ok: false; error: string };
+  | { ok: true; models: ModelAccessGatewayModel[]; accountTier: ModelAccessAccountTier }
+  | { ok: false; error: string };
 
 /** 失败后的 LKG 只保留可执行模型；过期的付费差集不能继续作为升级营销事实。 */
 export function modelsWithoutStalePaymentUpsell(
@@ -40,7 +42,7 @@ export function parseModelsSyncPayload(value: unknown): ModelsSyncPayloadParseRe
     };
   }
   const response: ModelAccessModelsResponse = parsed.value;
-  return { ok: true, models: response.models };
+  return { ok: true, models: response.models, accountTier: response.accountTier! };
 }
 
 /**

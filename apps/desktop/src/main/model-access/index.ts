@@ -22,6 +22,7 @@ import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
+  type ModelAccessAccountTier,
   type ModelAccessGatewayModel,
   type ModelAccessStatus,
 } from '../../shared/modelAccess.js';
@@ -126,12 +127,25 @@ async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
   return true;
 }
 
+let accountTier: ModelAccessAccountTier | null = null;
+
+function statusWithAccountTier(status: ModelAccessStatus): ModelAccessStatus {
+  return { ...status, accountTier };
+}
+
 function broadcastStatus(status: ModelAccessStatus): void {
+  const payload = statusWithAccountTier(status);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(MODEL_ACCESS_STATUS_CHANNEL, status);
+      win.webContents.send(MODEL_ACCESS_STATUS_CHANNEL, payload);
     }
   }
+}
+
+function setAccountTier(next: ModelAccessAccountTier | null): void {
+  if (accountTier === next) return;
+  accountTier = next;
+  broadcastStatus(getSync().getStatus());
 }
 
 // ─── XD 网关模型目录同步(`/models` 是模型、能力与价格的唯一事实源)─────────
@@ -223,6 +237,7 @@ async function runModelsSync(
         error: parsed.error,
       });
       if (myGen === authGeneration) {
+        setAccountTier(null);
         setXdGatewayModels(modelsWithoutStalePaymentUpsell(getXdGatewayModels()), {
           authoritative: false,
           preservePaymentRequiredRoutes: true,
@@ -231,11 +246,13 @@ async function runModelsSync(
       return;
     }
     models = parsed.models;
+    if (myGen === authGeneration) setAccountTier(parsed.accountTier);
   } catch (err) {
     log.warn('xd gateway models fetch failed (keeping executable last valid list)', {
       error: err instanceof Error ? err.message : String(err),
     });
     if (myGen === authGeneration) {
+      setAccountTier(null);
       setXdGatewayModels(modelsWithoutStalePaymentUpsell(getXdGatewayModels()), {
         authoritative: false,
         preservePaymentRequiredRoutes: true,
@@ -326,6 +343,9 @@ function getSync(): CredentialsSync {
       writeXdKey: writeXdKeyWithCodexSideEffect,
       store: getModelAccessCredentialsStore(),
       onStatusChange: (status) => {
+        if (['failed', 'disabled', 'unsupported', 'idle'].includes(status.state)) {
+          accountTier = null;
+        }
         broadcastStatus(status);
         // 凭据就绪(下发/轮换成功)→ 拉取网关模型目录(XD 模型列表的权威来源)。
         if (status.state === 'ok') scheduleModelsSync();
@@ -346,7 +366,7 @@ function getSync(): CredentialsSync {
 
 /** 当前同步状态(renderer 首帧经 IPC 拉;main 内部也可直接读)。 */
 export function getModelAccessStatus(): ModelAccessStatus {
-  return getSync().getStatus();
+  return statusWithAccountTier(getSync().getStatus());
 }
 
 /**
@@ -438,6 +458,7 @@ export function initModelAccess(): void {
       )
     ) {
       authGeneration++;
+      accountTier = null;
       // 旧身份模型清单不能跨账号/区域继续显示;新身份拉取成功后再注入。
       applyGatewayModels([]);
     }
@@ -464,13 +485,13 @@ export function initModelAccess(): void {
     scheduleModelsSync();
   };
   app.on('browser-window-focus', foregroundRefreshListener);
-  ipcMain.handle('model-access:get-status', () => sync.getStatus());
+  ipcMain.handle('model-access:get-status', () => getModelAccessStatus());
 
   ipcMain.handle('model-access:retry', async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }
-    return sync.retry();
+    return statusWithAccountTier(await sync.retry());
   });
 
   ipcMain.handle('model-access:rotate', async (): Promise<ModelAccessStatus> => {
@@ -478,7 +499,7 @@ export function initModelAccess(): void {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }
     try {
-      return await sync.rotate();
+      return statusWithAccountTier(await sync.rotate());
     } catch (err) {
       mapServerError(err);
     }
@@ -501,5 +522,6 @@ export function resetModelAccessForTest(): void {
   authGeneration = 0;
   lastAuthUserId = null;
   lastAuthRealm = null;
+  accountTier = null;
   applyGatewayModels([]);
 }

@@ -139,6 +139,7 @@ describe('parseModelsSyncPayload', () => {
 
       expect(parseModelsSyncPayload(payload)).toEqual({
         ok: true,
+        accountTier: 'free',
         models: [
           {
             ...baseModel,
@@ -225,6 +226,7 @@ describe('waitForModelsSyncRefresh', () => {
         state: 'failed' as const,
         source: null,
         endpoint: null,
+        accountTier: null,
       };
     });
     const status = await ensureCredentialsReadyForModelsRefresh({
@@ -232,6 +234,7 @@ describe('waitForModelsSyncRefresh', () => {
         state: 'ok',
         source: 'server',
         endpoint: 'https://gateway.example.com',
+        accountTier: null,
       }),
       retry,
     });
@@ -256,11 +259,17 @@ describe('waitForModelsSyncRefresh', () => {
       state: 'ok' as const,
       source: 'server' as const,
       endpoint: 'https://gateway.example.com',
+      accountTier: null,
     }));
 
     await expect(
       ensureCredentialsReadyForModelsRefresh({
-        getStatus: () => ({ state: 'failed', source: null, endpoint: null }),
+        getStatus: () => ({
+          state: 'failed',
+          source: null,
+          endpoint: null,
+          accountTier: null,
+        }),
         retry,
       }),
     ).resolves.toMatchObject({ state: 'ok' });
