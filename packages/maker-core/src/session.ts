@@ -436,6 +436,8 @@ export class Session {
   /** Survives N+1 reservation clearing the current snapshot; leftover done must not adopt. */
   private lastObservedTerminalGeneration: number | null = null;
   private lastObservedTerminalKind: 'done' | 'error' | null = null;
+  /** Set when handle.send() accepts this generation; result-only done may bind to it. */
+  private acceptedTurnGeneration: number | null = null;
   /**
    * N+1 reservation 窗口内观察到的前一轮前台终态。lost-callback 时 turn N 的
    * done/error 可能在直接 N+1 `handle.send()` 待处理期间才 fan-out；当时
@@ -871,6 +873,7 @@ export class Session {
       // and report the turn as undispatched.
       turnDispatched = true;
       reservation.accepted = true;
+      this.acceptedTurnGeneration = reservedTurnGeneration;
       // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
       // error 会清掉它（见 armTurnStallWatchdog）。
       this.armTurnStallWatchdog();
@@ -2147,6 +2150,11 @@ export class Session {
       const sameGenerationError =
         this.terminalEventObservedGeneration === this.turnGeneration &&
         this.terminalEventObservedKind === 'error';
+      const sameGenerationDone =
+        this.terminalEventObservedGeneration === this.turnGeneration &&
+        this.terminalEventObservedKind === 'done';
+      // A late leftover error must not replace N+1's result-only success.
+      if (!(event.type === 'error' && sameGenerationDone)) {
       this.terminalEventObservedGeneration = this.turnGeneration;
       this.lastObservedTerminalGeneration = this.turnGeneration;
       this.lastObservedTerminalKind = event.type === 'error' ? 'error' : 'done';
@@ -2163,6 +2171,7 @@ export class Session {
         }
         this.clearTerminalErrorDrain();
       }
+      }
     } else if (
       this.agentKind === 'codex' &&
       isCurrentGeneration &&
@@ -2176,7 +2185,11 @@ export class Session {
       this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
-    if (terminalBoundaryObserved && event.type === 'error') {
+    if (
+      terminalBoundaryObserved &&
+      event.type === 'error' &&
+      this.terminalEventObservedKind === 'error'
+    ) {
       const snapshot = this.readRedactedTerminalErrorSnapshot(listenerEvent);
       this.terminalEventObservedErrorMessage = snapshot.message;
       this.terminalEventObservedErrorSignals = snapshot.signals;
@@ -2676,8 +2689,9 @@ export class Session {
       return false;
     }
     if (this.isSilentStopDoneEvent(event)) return false;
-    // Leftover paired done must not become N+1 success in the post-acceptance
-    // live-idle gap (PI prompt accepted → agent_start).
+    // An accepted N+1 send's result-only done belongs to the new turn.
+    // Leftover paired done is still held while handle.send() is pending.
+    if (this.acceptedTurnGeneration === this.turnGeneration) return false;
     return event.type === 'done';
   }
 

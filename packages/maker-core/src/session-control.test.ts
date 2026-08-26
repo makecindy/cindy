@@ -780,7 +780,7 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 
-  it('does not adopt a late paired done after handle.send accepts and before new-turn progress', async () => {
+  it('binds an accepted result-only done to the new generation after a prior terminal error', async () => {
     const stub = createHandle();
     const session = createSession(stub, 'codex');
     const firstError = waitForSessionEvent(session, 'error');
@@ -809,17 +809,20 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getTurnGeneration()).toBe(2);
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
 
-    stub.push({ type: 'done', data: {} });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
-
-    stub.push({ type: 'status', data: { isRunning: true } });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
-
     const secondDone = waitForSessionEvent(session, 'done');
     stub.push({ type: 'done', data: {} });
     await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 
