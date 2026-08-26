@@ -126,4 +126,34 @@ describe('useAvailableAgents roster cache', () => {
     });
     await waitFor(() => expect(result.current.availableVendors.has('pi')).toBe(true));
   });
+
+  it('shares one invalidation and result across mounted consumers', async () => {
+    const first = deferred<RuntimeAgentKind[]>();
+    const second = deferred<RuntimeAgentKind[]>();
+    const { api, listeners } = installMakerApi();
+    api.listAvailableAgents.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const { useAvailableAgents } = await import('../useAvailableAgents');
+    const firstHook = renderHook(() => useAvailableAgents());
+    const secondHook = renderHook(() => useAvailableAgents());
+    await waitFor(() => expect(api.listAvailableAgents).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      first.resolve(['claude-code', 'codex']);
+      await first.promise;
+    });
+    act(() => {
+      for (const listener of listeners) listener();
+    });
+    expect(api.listAvailableAgents).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve(['claude-code', 'codex', 'pi']);
+      await second.promise;
+    });
+    await waitFor(() => {
+      expect(firstHook.result.current.availableVendors.has('pi')).toBe(true);
+      expect(secondHook.result.current.availableVendors.has('pi')).toBe(true);
+    });
+  });
 });

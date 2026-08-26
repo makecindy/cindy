@@ -110,12 +110,17 @@ const inFlight = new Map<string, Promise<ReadonlySet<MakerVendor>>>();
  * 在途请求不能把旧的 agent 集合重新写回缓存或覆盖当前 hook 状态。
  */
 const agentsCacheGeneration = new Map<string, number>();
+/** 同一 roster push 会同步通知多个 mounted consumer；同一 tick 只失效一次。 */
+const agentsCacheInvalidationScheduled = new Set<string>();
 
 function currentAgentsCacheGeneration(key: string): number {
   return agentsCacheGeneration.get(key) ?? 0;
 }
 
 function invalidateAgentsCache(key: string): number {
+  if (agentsCacheInvalidationScheduled.has(key)) return currentAgentsCacheGeneration(key);
+  agentsCacheInvalidationScheduled.add(key);
+  queueMicrotask(() => agentsCacheInvalidationScheduled.delete(key));
   const generation = currentAgentsCacheGeneration(key) + 1;
   agentsCacheGeneration.set(key, generation);
   agentsCache.delete(key);
@@ -248,4 +253,5 @@ export function __resetAvailableAgentsCacheForTest(): void {
   }
   agentsCache.clear();
   inFlight.clear();
+  agentsCacheInvalidationScheduled.clear();
 }
