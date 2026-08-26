@@ -154,6 +154,9 @@ describe('Review external input wiring', () => {
     expect(registerSource).not.toContain('reconcileStaleLeases');
     expect(registerSource).not.toContain(`LIKE '%"reviewRun"%'`);
     expect(registerSource).toContain(
+      'await sessionTurnLeaseTracker.refreshActiveLeaseOwners();',
+    );
+    expect(registerSource).toContain(
       'void cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }).catch',
     );
     const wireSessionStart = registerSource.indexOf('export function wireSessionToIpc');

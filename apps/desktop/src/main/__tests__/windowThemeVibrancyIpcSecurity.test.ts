@@ -32,6 +32,9 @@ describe('window theme vibrancy IPC trust boundary', () => {
     expect(modeGuard).toBeGreaterThan(payloadParse);
     expect(systemFollowGuard).toBeGreaterThan(payloadParse);
     expect(snapshotWrite).toBeGreaterThan(systemFollowGuard);
+    expect(handler.slice(systemFollowGuard, snapshotWrite)).not.toContain(
+      "process.platform === 'win32'",
+    );
     expect(resolvedThemeWrite).toBeGreaterThan(systemFollowGuard);
     expect(vibrancyMutation).toBeGreaterThan(systemFollowGuard);
   });

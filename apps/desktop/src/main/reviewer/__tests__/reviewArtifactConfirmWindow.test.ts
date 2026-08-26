@@ -74,6 +74,7 @@ function createHarness(timeoutMs = 60_000) {
     {
       timeoutMs,
       isDark: false,
+      familyId: 'cindy',
       createWindow: (options) => {
         windowOptions = options;
         return dialog as unknown as BrowserWindow;
@@ -132,7 +133,7 @@ describe('Review artifact confirmation window', () => {
       parent: harness.parent,
       modal: true,
       show: false,
-      backgroundColor: '#f8f8f6',
+      backgroundColor: '#F2F2ED',
       webPreferences: {
         sandbox: true,
         contextIsolation: true,

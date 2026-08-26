@@ -7,6 +7,10 @@ import {
 import { resolveAppThemeIsDark } from '../resolved-app-theme.js';
 import { readWindowThemeSnapshot } from '../window-theme-mode-store.js';
 import type { ReviewArtifactConfirmDialogModel } from './reviewArtifactDialog.js';
+import {
+  resolveReviewArtifactConfirmPalette,
+  type ReviewArtifactConfirmPalette,
+} from './reviewArtifactConfirmTheme.js';
 import { markReviewArtifactConfirmWebContentsId } from './reviewArtifactConfirmWindowRegistry.js';
 
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -14,6 +18,7 @@ const DEFAULT_TIMEOUT_MS = 90_000;
 export interface ReviewArtifactConfirmWindowOptions {
   timeoutMs?: number;
   isDark?: boolean;
+  familyId?: string;
   createWindow?: (options: BrowserWindowConstructorOptions) => BrowserWindow;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }
@@ -33,28 +38,6 @@ function escapeHtml(value: string): string {
 }
 
 const DIALOG_CSS = `
-:root {
-  color-scheme: light;
-  --surface: #f8f8f6;
-  --surface-raised: #ffffff;
-  --text: #252523;
-  --muted: #696966;
-  --border: #deded9;
-  --accent: #252523;
-  --accent-text: #ffffff;
-  --hover: #efefeb;
-}
-:root[data-theme='dark'] {
-  color-scheme: dark;
-  --surface: #1f1f1e;
-  --surface-raised: #292927;
-  --text: #f1f1ed;
-  --muted: #aaa9a3;
-  --border: #41413d;
-  --accent: #f1f1ed;
-  --accent-text: #242422;
-  --hover: #333330;
-}
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--surface); color: var(--text); }
 body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
@@ -74,12 +57,28 @@ footer { display: flex; flex: none; justify-content: flex-end; gap: 10px; margin
 .primary:hover, .primary:focus-visible { background: var(--accent); opacity: .88; }
 `;
 
+function buildDialogCss(isDark: boolean, palette: ReviewArtifactConfirmPalette): string {
+  return `:root {
+  color-scheme: ${isDark ? 'dark' : 'light'};
+  --surface: ${palette.surface};
+  --surface-raised: ${palette.surfaceRaised};
+  --text: ${palette.text};
+  --muted: ${palette.muted};
+  --border: ${palette.border};
+  --accent: ${palette.accent};
+  --accent-text: ${palette.accentText};
+  --hover: ${palette.hover};
+}
+${DIALOG_CSS}`;
+}
+
 /** Build a script-free document whose only decisions are same-document fragments. */
 export function buildReviewArtifactConfirmDocument(
   model: ReviewArtifactConfirmDialogModel,
   isDark: boolean,
+  palette = resolveReviewArtifactConfirmPalette('cindy', isDark),
 ): string {
-  const stylesheet = `data:text/css;base64,${Buffer.from(DIALOG_CSS).toString('base64')}`;
+  const stylesheet = `data:text/css;base64,${Buffer.from(buildDialogCss(isDark, palette)).toString('base64')}`;
   const items = model.items
     .map((item) => {
       const secondary =
@@ -142,7 +141,10 @@ export async function showReviewArtifactConfirmWindow(
   options: ReviewArtifactConfirmWindowOptions = {},
 ): Promise<boolean> {
   if (parent.isDestroyed()) return false;
-  const persistedTheme = options.isDark === undefined ? readWindowThemeSnapshot() : null;
+  const persistedTheme =
+    options.isDark === undefined || options.familyId === undefined
+      ? readWindowThemeSnapshot()
+      : null;
   const isDark =
     options.isDark ??
     resolveAppThemeIsDark(
@@ -150,6 +152,10 @@ export async function showReviewArtifactConfirmWindow(
       persistedTheme?.mode,
       persistedTheme?.resolvedIsDark,
     );
+  const palette = resolveReviewArtifactConfirmPalette(
+    options.familyId ?? persistedTheme?.familyId ?? 'cindy',
+    isDark,
+  );
   const createWindow = options.createWindow ?? ((windowOptions) => new BrowserWindow(windowOptions));
   let win: BrowserWindow;
   try {
@@ -167,7 +173,7 @@ export async function showReviewArtifactConfirmWindow(
       fullscreenable: false,
       autoHideMenuBar: true,
       title: model.title,
-      backgroundColor: isDark ? '#1f1f1e' : '#f8f8f6',
+      backgroundColor: palette.surface,
       webPreferences: {
         sandbox: true,
         contextIsolation: true,
@@ -253,7 +259,7 @@ export async function showReviewArtifactConfirmWindow(
     }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     timeoutId.unref?.();
 
-    const document = buildReviewArtifactConfirmDocument(model, isDark);
+    const document = buildReviewArtifactConfirmDocument(model, isDark, palette);
     try {
       void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(document)}`).catch(
         (error) => {

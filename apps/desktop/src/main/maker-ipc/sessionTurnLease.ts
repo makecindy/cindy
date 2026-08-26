@@ -184,6 +184,34 @@ export async function replaceSessionTurnLease(
   return result.changes === 1;
 }
 
+/** Refresh one live generation's owner proof without changing its turn identity. */
+export async function refreshSessionTurnLeaseOwner(
+  dbClient: Pick<DbClient, 'exec'>,
+  input: {
+    sessionId: string;
+    turnId: string;
+    owner: ReviewRunOwner;
+  },
+): Promise<boolean> {
+  const lease: SessionTurnLease = {
+    version: 1,
+    turnId: input.turnId,
+    owner: input.owner,
+  };
+  const result = await dbClient.exec(
+    `UPDATE messages
+        SET agent_meta = ?
+      WHERE session_id = ? AND client_id = ? AND content = ?`,
+    [
+      sessionTurnLeaseAgentMeta(lease),
+      input.sessionId,
+      sessionTurnLeaseClientId(input.owner),
+      sessionTurnLeaseToken(lease),
+    ],
+  );
+  return result.changes === 1;
+}
+
 /** Delete only the exact turn that acquired the row; a delayed end cannot delete its successor. */
 export async function releaseSessionTurnLease(
   dbClient: Pick<DbClient, 'exec'>,
@@ -368,6 +396,26 @@ export class SessionTurnLeaseTracker {
         owner: this.deps.owner,
       });
     });
+  }
+
+  /** Add newly available exact-instance liveness to this process's active leases only. */
+  async refreshActiveLeaseOwners(): Promise<void> {
+    const activeTurns = [...this.activeTurnIds.entries()];
+    await Promise.all(
+      activeTurns.map(([sessionId, turnId]) =>
+        this.enqueue(sessionId, async () => {
+          if (this.activeTurnIds.get(sessionId) !== turnId) return;
+          const refreshed = await refreshSessionTurnLeaseOwner(this.deps.getDbClient(), {
+            sessionId,
+            turnId,
+            owner: this.deps.owner,
+          });
+          if (!refreshed && this.activeTurnIds.get(sessionId) === turnId) {
+            throw new Error('could not refresh the active turn lease owner');
+          }
+        }),
+      ),
+    );
   }
 
   /** End one exact generation and report whether no local/shared successor remains. */

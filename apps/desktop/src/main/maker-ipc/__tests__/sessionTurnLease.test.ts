@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import {
   readPersistedSessionTurnLeases,
+  refreshSessionTurnLeaseOwner,
   releaseSessionTurnLease,
   replaceSessionTurnLease,
   SESSION_TURN_LEASE_CLIENT_ID_PREFIX,
@@ -220,6 +221,49 @@ describe('shared-process session turn lease', () => {
       tracker.markTurnEndedAndCheckIdle('source-1', 'generation-2'),
     ).resolves.toBe(true);
     await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toEqual([]);
+  });
+
+  it('refreshes active PID-only leases with exact liveness without overwriting a successor', async () => {
+    const { first } = setup();
+    const owner = { instanceId: 'first', processId: 101 } as {
+      instanceId: string;
+      processId: number;
+      liveness?: { version: 1; port: number; token: string };
+    };
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first,
+      owner,
+      createTurnId: () => 'fallback',
+      now: () => 1,
+      ownerProcessEnded: () => false,
+    });
+
+    await tracker.markTurnStarted('source-1', 'generation-1');
+    const initialLease = (await readPersistedSessionTurnLeases(first, 'source-1'))[0]?.lease;
+    expect(initialLease).toMatchObject({ turnId: 'generation-1' });
+    expect(initialLease?.owner).not.toHaveProperty('liveness');
+
+    owner.liveness = {
+      version: 1,
+      port: 31_337,
+      token: 'current-instance-token',
+    };
+    await tracker.refreshActiveLeaseOwners();
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'generation-1', owner: { liveness: owner.liveness } } },
+    ]);
+
+    await tracker.markTurnStarted('source-1', 'generation-2');
+    await expect(
+      refreshSessionTurnLeaseOwner(first, {
+        sessionId: 'source-1',
+        turnId: 'generation-1',
+        owner,
+      }),
+    ).resolves.toBe(false);
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'generation-2', owner: { liveness: owner.liveness } } },
+    ]);
   });
 
   it('makes a peer turn visible until its exact lifecycle ends', async () => {

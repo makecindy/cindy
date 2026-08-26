@@ -4046,14 +4046,12 @@ const registerIpcHandlers = () => {
       const payload = parseWindowThemeVibrancyPayload(rawPayload);
       if (!payload) return;
       if (payload.mode === undefined || payload.systemModeFollowsSystem === undefined) return;
-      if (process.platform === 'win32') {
-        writeWindowThemeSnapshot(
-          payload.mode,
-          payload.isDark,
-          payload.familyId,
-          payload.systemModeFollowsSystem,
-        );
-      }
+      writeWindowThemeSnapshot(
+        payload.mode,
+        payload.isDark,
+        payload.familyId,
+        payload.systemModeFollowsSystem,
+      );
       rememberResolvedAppTheme(payload.isDark);
       applyWindowVibrancy(payload.familyId, payload.isDark);
     },
