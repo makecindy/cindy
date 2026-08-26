@@ -551,6 +551,45 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('fans out an in-flight N+1 start-failure after N already observed error', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({
+      type: 'error',
+      data: { message: 'first failed', isTerminal: true },
+      source: 'codex',
+    });
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 2 });
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('keeps a leftover terminal on queued generation after handle.send yields', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,

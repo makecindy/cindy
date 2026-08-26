@@ -2255,6 +2255,7 @@ export class Session {
       isTerminal &&
       !isBackgroundEvent &&
       this.isUnacceptedCurrentSend() &&
+      resolvedGeneration !== this.turnGeneration &&
       (
         (
           this.lastObservedTerminalKind === 'error' &&

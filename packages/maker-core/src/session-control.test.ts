@@ -1063,23 +1063,31 @@ describe('Session current-generation terminal observation', () => {
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    // In-flight error after N already observed error is N+1 start-failure.
+    // Leftover fence only applies to terminals attributed to a prior generation.
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({
+      kind: 'error',
+      generation: 2,
+      message: 'late prior error',
+    });
     expect(session.getTurnGeneration()).toBe(2);
-    expect(seen.slice(seenAfterReserve).some((event) => event.type === 'error')).toBe(false);
-    expect(onTerminal.mock.calls.length).toBe(terminalsAfterReserve);
+    expect(seen.slice(seenAfterReserve).some((event) => event.type === 'error')).toBe(true);
+    expect(onTerminal.mock.calls.length).toBeGreaterThan(terminalsAfterReserve);
     expect(
       seen.some((event) =>
         event.type === 'error' &&
         event.sessionTurnGeneration === 2 &&
         (event.data as { message?: string }).message === 'late prior error'),
-    ).toBe(false);
+    ).toBe(true);
 
     releaseSend();
     await expect(secondSend).resolves.toEqual({ accepted: true });
-    const secondDone = waitForSessionEvent(session, 'done');
     stub.push({ type: 'done', data: {} });
-    await secondDone;
-    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({
+      kind: 'error',
+      generation: 2,
+    });
   });
 
   it('keeps N+1 origin and attempt token after a leftover paired done in the reservation window', async () => {
