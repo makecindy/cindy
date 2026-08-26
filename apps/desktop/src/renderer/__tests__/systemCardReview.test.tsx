@@ -89,23 +89,28 @@ describe('SystemCard Review', () => {
     expect(
       screen.getByText('chat.systemCard.review.failure.sourceConversationChanged'),
     ).toBeTruthy();
-    expect(screen.getByTestId('review-markdown').textContent).toContain('reviewed snapshot');
+    const markdown = screen.getByTestId('review-markdown');
+    expect(markdown.textContent).toContain('reviewed snapshot');
+    expect(markdown.getAttribute('data-allow-privileged-links')).toBe('true');
     expect(screen.getByText('chat.systemCard.review.openTask')).toBeTruthy();
   });
 
-  it('does not resolve stale findings against a changed source workspace', () => {
-    renderCard({
-      status: 'failed',
-      reviewerSessionId: 'review-task',
-      failureCode: 'source-workspace-changed',
-      result: 'P1: src/auth.ts:42 belongs to the reviewed workspace',
-    });
+  it.each(['source-workspace-changed', 'source-files-changed', 'artifact-changed'])(
+    'does not resolve stale findings for %s against current files',
+    (failureCode) => {
+      renderCard({
+        status: 'failed',
+        reviewerSessionId: 'review-task',
+        failureCode,
+        result: 'P1: src/auth.ts:42 belongs to the reviewed snapshot',
+      });
 
-    const markdown = screen.getByTestId('review-markdown');
-    expect(markdown.textContent).toContain('src/auth.ts:42');
-    expect(markdown.getAttribute('data-working-dir')).toBe('/project');
-    expect(markdown.getAttribute('data-allow-privileged-links')).toBe('false');
-  });
+      const markdown = screen.getByTestId('review-markdown');
+      expect(markdown.textContent).toContain('src/auth.ts:42');
+      expect(markdown.getAttribute('data-working-dir')).toBe('/project');
+      expect(markdown.getAttribute('data-allow-privileged-links')).toBe('false');
+    },
+  );
 
   it('renders a linked legacy stale failure as out of date without inventing result content', () => {
     renderCard({

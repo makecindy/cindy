@@ -1273,7 +1273,11 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           <MarkdownRenderer
             content={result}
             workingDir={workingDir ?? ''}
-            allowPrivilegedLinks={failureCode !== 'source-workspace-changed'}
+            allowPrivilegedLinks={
+              failureCode !== 'source-workspace-changed' &&
+              failureCode !== 'source-files-changed' &&
+              failureCode !== 'artifact-changed'
+            }
           />
         </div>
       )}
