@@ -7,6 +7,7 @@ import {
 import { resolveAppThemeIsDark } from '../resolved-app-theme.js';
 import { readWindowThemeSnapshot } from '../window-theme-mode-store.js';
 import type { ReviewArtifactConfirmDialogModel } from './reviewArtifactDialog.js';
+import { markReviewArtifactConfirmWebContentsId } from './reviewArtifactConfirmWindowRegistry.js';
 
 const DEFAULT_TIMEOUT_MS = 90_000;
 
@@ -181,6 +182,7 @@ export async function showReviewArtifactConfirmWindow(
         navigateOnDragDrop: false,
       },
     });
+    markReviewArtifactConfirmWebContentsId(win.webContents.id);
   } catch (error) {
     options.log?.warn('failed to create Review artifact confirmation window; access denied', {
       error: error instanceof Error ? error.message : String(error),

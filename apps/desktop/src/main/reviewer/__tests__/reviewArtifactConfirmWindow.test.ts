@@ -8,6 +8,7 @@ import {
   buildReviewArtifactConfirmDocument,
   showReviewArtifactConfirmWindow,
 } from '../reviewArtifactConfirmWindow.js';
+import { isReviewArtifactConfirmWebContentsId } from '../reviewArtifactConfirmWindowRegistry.js';
 
 const MODEL: ReviewArtifactConfirmDialogModel = {
   title: 'Allow review?',
@@ -21,7 +22,10 @@ const MODEL: ReviewArtifactConfirmDialogModel = {
   cancelText: 'Cancel',
 };
 
+let nextWebContentsId = 1_000;
+
 class FakeWebContents extends EventEmitter {
+  readonly id = nextWebContentsId++;
   loadedUrl = '';
   openHandler: (() => { action: 'deny' }) | null = null;
 
@@ -144,6 +148,7 @@ describe('Review artifact confirmation window', () => {
     });
     expect(options?.webPreferences).not.toHaveProperty('preload');
     expect(harness.dialog.webContents.openHandler?.()).toEqual({ action: 'deny' });
+    expect(isReviewArtifactConfirmWebContentsId(harness.dialog.webContents.id)).toBe(true);
 
     harness.dialog.emit('ready-to-show');
     expect(harness.dialog.shown).toBe(true);

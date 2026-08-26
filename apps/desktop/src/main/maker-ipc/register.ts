@@ -2865,11 +2865,11 @@ let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
 const reviewRunOwner: ReviewRunOwner = { instanceId: randomUUID(), processId: process.pid };
-configureTempAttachmentOwner(reviewRunOwner);
 const ensureReviewOwnerLivenessReady = createRetryableReviewInitialization(async () => {
   const handle = await startReviewOwnerLiveness();
   reviewRunOwner.liveness = handle.identity;
 });
+configureTempAttachmentOwner(reviewRunOwner, ensureReviewOwnerLivenessReady);
 const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   getDbClient,
   owner: reviewRunOwner,
