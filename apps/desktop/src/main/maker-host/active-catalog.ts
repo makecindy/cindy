@@ -188,8 +188,15 @@ export interface XdGatewayModelInfo {
  * v3 必需字段在协议边界严格校验；这里不读取公共 Catalog，也不按模型 id 或固定常量补值。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
-/** 当前账号最近一次 `/models` 成功响应；false 时空/旧数组都不能作为 deny 证据。 */
+/** 当前账号最近一次 `/models` 成功响应；false 时清单缺席不能作为模型不存在的 deny 证据。 */
 let xdGatewayModelsAuthoritative = false;
+/**
+ * 最近一次成功 v5 响应明确拒绝的 XD 对话路由。
+ *
+ * 刷新失败时活动目录会隐藏过期的付费营销行，但既有会话的派发终检仍须保留这份
+ * fail-closed 证据；只有更新的成功响应或账号边界清空才能撤销。
+ */
+let xdGatewayPaymentRequiredRoutes = new Set<string>();
 /**
  * XD 模型里「由客户端投影给 Codex、但走 Anthropic Messages bridge」的 id 集合。
  * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
@@ -1449,11 +1456,20 @@ export function setDiscoveredProviderMediaModels(
  */
 export function setXdGatewayModels(
   models: XdGatewayModelInfo[],
-  options?: { authoritative?: boolean },
+  options?: { authoritative?: boolean; preservePaymentRequiredRoutes?: boolean },
 ): void {
   xdGatewayModels = [...models];
   if (options?.authoritative !== undefined) {
     xdGatewayModelsAuthoritative = options.authoritative;
+  }
+  if (options?.preservePaymentRequiredRoutes !== true) {
+    xdGatewayPaymentRequiredRoutes = new Set(
+      models.flatMap((model) =>
+        model.availability === 'requires_payment'
+          ? (model.agents ?? []).map((agent) => `${agent}\n${model.id}`)
+          : [],
+      ),
+    );
   }
   xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
@@ -1462,6 +1478,11 @@ export function setXdGatewayModels(
 /** 同步读取最近一次完整 `/models` 快照，供 sendSync 配置面只读投影。 */
 export function getXdGatewayModels(): readonly XdGatewayModelInfo[] {
   return xdGatewayModels;
+}
+
+/** Main 派发边界查询最近一次明确的付费拒绝；不用于 Renderer 营销展示。 */
+export function isXdGatewayPaymentRequiredRoute(modelId: string, agent: AgentKind): boolean {
+  return xdGatewayPaymentRequiredRoutes.has(`${agent}\n${modelId}`);
 }
 
 /** 子代理模型预检只在此标记为 true 时，才可把清单缺席解释为权威拒绝。 */

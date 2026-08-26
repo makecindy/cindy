@@ -112,6 +112,8 @@ export async function ensureCredentialsReadyForModelsRefresh(
 
 export async function waitForModelsSyncRefresh(input: {
   expectedGeneration: number;
+  /** The first attempt that is known to have started after this explicit refresh request. */
+  minimumAttempt: number;
   schedule(): void;
   snapshot(): ModelsSyncFlightSnapshot;
   currentGeneration(): number;
@@ -124,6 +126,7 @@ export async function waitForModelsSyncRefresh(input: {
     await flight;
     if (input.currentGeneration() !== input.expectedGeneration) return 'account-changed';
     if (generation !== input.expectedGeneration) continue;
+    if (attempt < input.minimumAttempt) continue;
     return input.lastSuccessfulAttempt() === attempt ? 'succeeded' : 'failed';
   }
 }

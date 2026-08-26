@@ -225,6 +225,7 @@ async function runModelsSync(
       if (myGen === authGeneration) {
         setXdGatewayModels(modelsWithoutStalePaymentUpsell(getXdGatewayModels()), {
           authoritative: false,
+          preservePaymentRequiredRoutes: true,
         });
       }
       return;
@@ -237,6 +238,7 @@ async function runModelsSync(
     if (myGen === authGeneration) {
       setXdGatewayModels(modelsWithoutStalePaymentUpsell(getXdGatewayModels()), {
         authoritative: false,
+        preservePaymentRequiredRoutes: true,
       });
     }
     return;
@@ -356,6 +358,10 @@ export async function refreshXdGatewayModels(): Promise<void> {
   if (!getAppCapabilities().canUseCindyGateway) {
     throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
   }
+  // Capture the call boundary before credential recovery can schedule a request. A flight that
+  // already existed here may have read entitlement before a just-completed payment; explicit
+  // refresh must wait through it and require a strictly newer attempt.
+  const minimumAttempt = modelsSyncAttempt + 1;
   const status = await ensureCredentialsReadyForModelsRefresh(getSync());
   if (status.state !== 'ok') {
     throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI credentials are not ready.');
@@ -365,6 +371,7 @@ export async function refreshXdGatewayModels(): Promise<void> {
   // 旧账号 flight，先等它作废，再显式补发当前世代并等待当前尝试号的真实结果。
   const outcome = await waitForModelsSyncRefresh({
     expectedGeneration: gen,
+    minimumAttempt,
     schedule: scheduleModelsSync,
     snapshot: () => ({
       flight: modelsSyncInflight,

@@ -241,6 +241,7 @@ describe('waitForModelsSyncRefresh', () => {
     await expect(
       waitForModelsSyncRefresh({
         expectedGeneration: 3,
+        minimumAttempt: 9,
         schedule: vi.fn(),
         snapshot: () => ({ flight: Promise.resolve(), generation: 3, attempt: 9 }),
         currentGeneration: () => 3,
@@ -279,6 +280,7 @@ describe('waitForModelsSyncRefresh', () => {
     await expect(
       waitForModelsSyncRefresh({
         expectedGeneration: 2,
+        minimumAttempt: 5,
         schedule: () => {
           if (scheduleCalls > 0) index = 1;
           scheduleCalls += 1;
@@ -290,6 +292,37 @@ describe('waitForModelsSyncRefresh', () => {
     ).resolves.toBe('succeeded');
   });
 
+  it('waits through a same-account prepayment flight and requires a newer attempt', async () => {
+    let resolveOldFlight!: () => void;
+    const oldFlight = new Promise<void>((resolve) => {
+      resolveOldFlight = resolve;
+    });
+    const newFlight = Promise.resolve();
+    let snapshot: ModelsSyncFlightSnapshot = {
+      flight: oldFlight,
+      generation: 4,
+      attempt: 8,
+    };
+    let scheduleCalls = 0;
+    const outcome = waitForModelsSyncRefresh({
+      expectedGeneration: 4,
+      minimumAttempt: 9,
+      schedule: () => {
+        if (scheduleCalls > 0) {
+          snapshot = { flight: newFlight, generation: 4, attempt: 9 };
+        }
+        scheduleCalls += 1;
+      },
+      snapshot: () => snapshot,
+      currentGeneration: () => 4,
+      lastSuccessfulAttempt: () => 9,
+    });
+
+    resolveOldFlight();
+    await expect(outcome).resolves.toBe('succeeded');
+    expect(scheduleCalls).toBe(2);
+  });
+
   it('stops instead of following a new account when auth changes in flight', async () => {
     let resolveFlight!: () => void;
     const flight = new Promise<void>((resolve) => {
@@ -298,6 +331,7 @@ describe('waitForModelsSyncRefresh', () => {
     let generation = 7;
     const outcome = waitForModelsSyncRefresh({
       expectedGeneration: 7,
+      minimumAttempt: 3,
       schedule: vi.fn(),
       snapshot: () => ({ flight, generation: 7, attempt: 3 }),
       currentGeneration: () => generation,
@@ -313,6 +347,7 @@ describe('waitForModelsSyncRefresh', () => {
     await expect(
       waitForModelsSyncRefresh({
         expectedGeneration: 3,
+        minimumAttempt: 9,
         schedule: vi.fn(),
         snapshot: () => ({ flight: Promise.resolve(), generation: 3, attempt: 9 }),
         currentGeneration: () => 3,

@@ -3861,6 +3861,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   session.setTurnLifecycleObserver({
     beforeProviderStart: async (turnGeneration) => {
       if (session.remoteHostId) return;
+      // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
+      // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
+      const model = session.model;
+      if (model) {
+        const verdict = await verdictForModelRoute(
+          session.agentKind,
+          model,
+          getSessionProvider(session.id),
+        );
+        if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
+          throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
+        }
+      }
       silentStopTurnLeaseGate.supersede(session.id);
       await sessionTurnLeaseTracker.markTurnStarted(
         session.id,
@@ -11710,20 +11723,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
     beforeDispatchDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
-    beforeVendorDispatch: async (sessionId) => {
-      const session = maker.getSession(sessionId);
-      const dbAgentKind = getSessionDbAgentKind(sessionId);
-      const model = session?.model;
-      if (!dbAgentKind || !model) return;
-      const verdict = await verdictForModelRoute(
-        dbToMakerAgentKind(dbAgentKind),
-        model,
-        getSessionProvider(sessionId),
-      );
-      if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
-        throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
-      }
-    },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);

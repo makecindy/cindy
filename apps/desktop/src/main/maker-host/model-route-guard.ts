@@ -157,6 +157,12 @@ export function shouldApplyExclusiveProviderReroute(
 export interface ModelRouteGuardOptions {
   /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
   isRetiredTombstone?: (providerId: string | null, modelId: string, agent: AgentKind) => boolean;
+  /** 刷新失败后已从展示目录移除、但最近一次成功 v5 明确拒绝的 XD 路由。 */
+  isPaymentRequiredTombstone?: (
+    providerId: string | null,
+    modelId: string,
+    agent: AgentKind,
+  ) => boolean;
 }
 
 /** 该来源下这份 (model, agent) 拷贝是否被停用(含供应商级)。 */
@@ -221,7 +227,17 @@ function checkDisableAxisRoute(
   if (providerId && !explicit && options.isRetiredTombstone?.(providerId, modelId, agent)) {
     return { kind: 'reject', reason: 'model-retired' };
   }
+  if (
+    providerId &&
+    !explicit &&
+    options.isPaymentRequiredTombstone?.(providerId, modelId, agent)
+  ) {
+    return { kind: 'reject', reason: 'payment-required' };
+  }
   if (offering.length === 0) {
+    if (options.isPaymentRequiredTombstone?.(null, modelId, agent)) {
+      return { kind: 'reject', reason: 'payment-required' };
+    }
     return options.isRetiredTombstone?.(null, modelId, agent)
       ? { kind: 'reject', reason: 'model-retired' }
       : { kind: 'pass' };
