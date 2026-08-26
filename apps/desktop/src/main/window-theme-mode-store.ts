@@ -7,8 +7,8 @@ import { isAppThemeMode, type AppThemeMode } from './resolved-app-theme.js';
 
 const log = desktopMakerLogger.child('window-theme-mode-store');
 
-// Renderer localStorage remains the source of truth. This small main-side snapshot lets windows
-// created later match the resolved theme family without trusting their isolated documents.
+// Renderer localStorage remains the source of truth. This small main-side snapshot exists only so
+// Windows can choose the matching Acrylic backing before the first BrowserWindow is created.
 
 export interface WindowThemeSnapshot {
   mode: AppThemeMode;
