@@ -383,11 +383,11 @@ describe('db worker tx handlers', () => {
   );
 
   it.each([false, true])(
-    'skips remote and restored sessions while compacting every local source (inline=%s)',
+    'compacts SSH sessions and every local source while skipping restored sessions (inline=%s)',
     async (useInlineWorker) => {
       await withClient(async (client) => {
         const sourceSessionIds = SESSION_SOURCES.map((source) => `source-${source}`);
-        for (const id of ['remote', 'orca', 'turn', 'restored', ...sourceSessionIds]) {
+        for (const id of ['ssh', 'orca', 'turn', 'restored', ...sourceSessionIds]) {
           await seedSession(client, id);
           await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", [id]);
           await client.exec(
@@ -403,7 +403,7 @@ describe('db worker tx handlers', () => {
             ],
           );
         }
-        await client.exec("UPDATE sessions SET remote_host_id = 'host-1' WHERE id = 'remote'");
+        await client.exec("UPDATE sessions SET remote_host_id = 'host-1' WHERE id = 'ssh'");
         for (const source of SESSION_SOURCES) {
           await client.exec('UPDATE sessions SET source = ? WHERE id = ?', [
             source,
@@ -416,7 +416,7 @@ describe('db worker tx handlers', () => {
         );
         await client.exec("UPDATE sessions SET status = 'active' WHERE id = 'restored'");
 
-        for (const sessionId of ['remote', 'restored']) {
+        for (const sessionId of ['restored']) {
           await expect(
             client.tx('toolResults.compactSession', {
               sessionId,
@@ -424,7 +424,7 @@ describe('db worker tx handlers', () => {
             }),
           ).resolves.toEqual({ compactedRows: 0, originalBytes: 0 });
         }
-        for (const sessionId of [...sourceSessionIds, 'orca', 'turn']) {
+        for (const sessionId of [...sourceSessionIds, 'ssh', 'orca', 'turn']) {
           await expect(
             client.tx('toolResults.compactSession', {
               sessionId,
@@ -444,7 +444,12 @@ describe('db worker tx handlers', () => {
             }
           }).map((row) => row.id),
         ).toEqual(
-          ['message-orca', 'message-turn', ...sourceSessionIds.map((id) => `message-${id}`)].sort(),
+          [
+            'message-ssh',
+            'message-orca',
+            'message-turn',
+            ...sourceSessionIds.map((id) => `message-${id}`),
+          ].sort(),
         );
       }, { useInlineWorker });
     },
