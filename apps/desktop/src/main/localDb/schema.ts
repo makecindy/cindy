@@ -219,6 +219,17 @@ export const sessions = sqliteTable(
      * sessionActiveTurn.ts 文件头。
      */
     lastTurnEndedAt: integer('last_turn_ended_at'),
+    /**
+     * 侧栏列表投影：已提炼的 preview 纯文本（最多 140 字）。NULL = 尚未回填，
+     * sessions:list 回落到 messages 相关子查询。不在 migration 里扫历史库。
+     */
+    listPreview: text('list_preview'),
+    listPreviewRole: text('list_preview_role'),
+    /**
+     * 侧栏「N 条消息」缓存。口径与历史 count(*) 相同（不过滤 role/rewind/clear）。
+     * 存精确总数；UI 把 ≥1001 显示成 1000+。NULL = 尚未回填。
+     */
+    listMessageCount: integer('list_message_count'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

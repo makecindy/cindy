@@ -5036,7 +5036,6 @@ interface ElectronAPI {
       focus?: string;
       attachments?: import('./lib/fileTypes').SerializedAttachedFile[];
     }) => Promise<{ ok: true; runId: string; reviewerSessionId: string }>;
-
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',
       params?: { sessionId?: string; allowManagedPiPackagePreview?: boolean },

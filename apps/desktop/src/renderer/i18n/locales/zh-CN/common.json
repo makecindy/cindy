@@ -7726,6 +7726,7 @@
       "review": {
         "running": "正在审查当前成果",
         "completed": "审查完成",
+        "stale": "审查已完成 · 结果已过期",
         "failed": "审查未完成",
         "openTask": "打开审查任务",
         "readOnlyHint": "独立任务 · 无开发记忆 · 只读",
@@ -9575,7 +9576,8 @@
       "publicNameHint": "该署名会公开显示在 Issue 正文中",
       "anonymous": "匿名",
       "useAnonymous": "使用匿名署名",
-      "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}} · 界面语言 {{uiLanguage}}",
+      "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面语言 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
       "regionLine": "版本区域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

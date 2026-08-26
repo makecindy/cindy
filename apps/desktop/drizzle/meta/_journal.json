@@ -680,6 +680,13 @@
       "when": 1787721235534,
       "tag": "0096_stabilize_messages_fts_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "6",
+      "when": 1787739425748,
+      "tag": "0097_fresh_stryfe",
+      "breakpoints": true
     }
   ]
 }

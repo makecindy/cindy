@@ -45,6 +45,9 @@ CREATE TABLE sessions (
   codex_plan_json TEXT,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
+  list_preview TEXT,
+  list_preview_role TEXT,
+  list_message_count INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -514,6 +517,176 @@ describe('db worker tx handlers', () => {
       });
     });
   });
+
+  it.each([false, true])(
+    'message.insert invalidates list projection in the same transaction (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          const seedCache = () =>
+            client.exec(
+              'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+              ['keep me', 'user', 7, 's1'],
+            );
+          const readCache = () =>
+            client.queryOne(
+              'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+              ['s1'],
+            );
+
+          await seedCache();
+          await expect(
+            client.tx('message.insert', {
+              id: 'm1',
+              clientId: 'c1',
+              sessionId: 's1',
+              role: 'user',
+              content: JSON.stringify({ text: 'hi' }),
+              toolUseId: null,
+              agentMeta: null,
+              agentKind: 'cc',
+              createdAt: 1,
+              guarded: false,
+            }),
+          ).resolves.toEqual({ changes: 1 });
+          await expect(readCache()).resolves.toEqual({
+            list_preview: null,
+            list_preview_role: null,
+            list_message_count: null,
+          });
+
+          await seedCache();
+          await expect(
+            client.tx('message.insert', {
+              id: 'm2',
+              clientId: 'c2',
+              sessionId: 's1',
+              role: 'tool_result',
+              content: '[]',
+              toolUseId: 't1',
+              agentMeta: null,
+              agentKind: 'cc',
+              createdAt: 2,
+              guarded: false,
+            }),
+          ).resolves.toEqual({ changes: 1 });
+          await expect(readCache()).resolves.toEqual({
+            list_preview: 'keep me',
+            list_preview_role: 'user',
+            list_message_count: null,
+          });
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'import and treeRehydrate invalidate list projection only when messages change (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          const seedCache = async () => {
+            await client.exec(
+              'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+              ['stale preview', 'user', 4, 's1'],
+            );
+          };
+          const readCache = () =>
+            client.queryOne(
+              'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+              ['s1'],
+            );
+          const stale = {
+            list_preview: 'stale preview',
+            list_preview_role: 'user',
+            list_message_count: 4,
+          };
+          const cleared = {
+            list_preview: null,
+            list_preview_role: null,
+            list_message_count: null,
+          };
+
+          await seedCache();
+          expect(
+            await client.tx('codex.importMessages', {
+              sessionId: 's1',
+              importClientIdPrefix: 'codex-import:',
+              sdkSessionId: 'thread-1',
+              model: 'gpt-5',
+              rows: [],
+            }),
+          ).toEqual({ changed: 0 });
+          await expect(readCache()).resolves.toEqual(stale);
+
+          expect(
+            await client.tx('codex.importMessages', {
+              sessionId: 's1',
+              importClientIdPrefix: 'codex-import:',
+              sdkSessionId: 'thread-1',
+              model: 'gpt-5',
+              rows: [
+                {
+                  lineNo: 1,
+                  role: 'assistant',
+                  text: 'imported',
+                  content: 'imported',
+                  createdAt: 2000,
+                },
+              ],
+            }),
+          ).toEqual({ changed: 1 });
+          await expect(readCache()).resolves.toEqual(cleared);
+
+          await seedCache();
+          expect(
+            await client.tx('claude.importMessages', {
+              sessionId: 's1',
+              importClientIdPrefix: 'claude-import:',
+              sdkSessionId: 'sdk-1',
+              rows: [
+                {
+                  lineNo: 7,
+                  partIndex: 0,
+                  role: 'assistant',
+                  content: { text: 'hello' },
+                  toolUseId: null,
+                  agentMeta: null,
+                  createdAt: 3000,
+                },
+              ],
+            }),
+          ).toEqual({ changed: 1 });
+          await expect(readCache()).resolves.toEqual(cleared);
+
+          await seedCache();
+          await client.tx('session.treeRehydrate', {
+            sessionId: 's1',
+            now: 4000,
+            contextTokens: 1,
+            contextWindow: 200000,
+            messages: [
+              {
+                id: 'tree-1',
+                clientId: 'tree-1',
+                role: 'assistant',
+                content: JSON.stringify('active branch'),
+                toolUseId: null,
+                agentMeta: null,
+                agentKind: 'pi',
+                createdAt: 2500,
+              },
+            ],
+          });
+          await expect(readCache()).resolves.toEqual(cleared);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it.each([false, true])(
     'rewind.commit soft-deletes messages and resets session context (inline=%s)',
@@ -1363,7 +1536,10 @@ describe('db worker tx handlers', () => {
   it('context.rebuild appends markers instead of deleting earlier rebuild boundaries', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
-      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['native-a', 's1']);
+      await client.exec(
+        'UPDATE sessions SET sdk_session_id = ?, list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+        ['native-a', 'keep me', 'user', 9, 's1'],
+      );
       await client.tx('context.rebuild', {
         sessionId: 's1',
         markerId: 'rebuild-1',
@@ -1399,8 +1575,16 @@ describe('db worker tx handlers', () => {
         },
       ]);
       await expect(
-        client.queryOne('SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?', ['s1']),
-      ).resolves.toEqual({ sdk_session_id: null, updated_at: 2000 });
+        client.queryOne(
+          'SELECT sdk_session_id, updated_at, list_preview, list_message_count FROM sessions WHERE id = ?',
+          ['s1'],
+        ),
+      ).resolves.toEqual({
+        sdk_session_id: null,
+        updated_at: 2000,
+        list_preview: 'keep me',
+        list_message_count: null,
+      });
     });
   });
 

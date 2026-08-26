@@ -21,6 +21,10 @@ export type DbTxName =
   | 'sessions.setStatus'
   | 'session.agentSwitchFallback'
   | 'context.rebuild'
+  | 'message.insert'
+  | 'message.updateContent'
+  | 'message.leaseMutate'
+  | 'message.rewindUserAfterClear'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -314,6 +318,42 @@ export interface ContextRebuildArgs {
   updatedAt: number;
   /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
   expectedClearedAt?: number | null;
+}
+
+export interface MessageInsertArgs {
+  id: string;
+  clientId: string;
+  sessionId: string;
+  role: string;
+  content: string;
+  toolUseId: string | null;
+  agentMeta: string | null;
+  agentKind: string | null;
+  createdAt: number;
+  guarded: boolean;
+  expectedClearBoundaryMs?: number | null;
+}
+
+export interface MessageUpdateContentArgs {
+  sessionId: string;
+  clientId: string;
+  content: string;
+}
+
+export interface MessageLeaseMutateArgs {
+  op: 'insert' | 'deleteByContent' | 'deleteById';
+  sessionId: string;
+  clientId: string;
+  id?: string;
+  content?: string;
+  agentMeta?: string | null;
+  createdAt?: number;
+}
+
+export interface MessageRewindUserAfterClearArgs {
+  sessionId: string;
+  clientId: string;
+  rewoundAt: number;
 }
 
 /**
@@ -774,6 +814,10 @@ export type DbTxArgsByName = {
   'sessions.setStatus': SessionsSetStatusArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
   'context.rebuild': ContextRebuildArgs;
+  'message.insert': MessageInsertArgs;
+  'message.updateContent': MessageUpdateContentArgs;
+  'message.leaseMutate': MessageLeaseMutateArgs;
+  'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -820,6 +864,10 @@ export type DbTxResultByName = {
   'sessions.setStatus': SessionsSetStatusResultItem[];
   'session.agentSwitchFallback': undefined;
   'context.rebuild': undefined;
+  'message.insert': { changes: number };
+  'message.updateContent': { changes: number };
+  'message.leaseMutate': { changes: number };
+  'message.rewindUserAfterClear': { changes: number };
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

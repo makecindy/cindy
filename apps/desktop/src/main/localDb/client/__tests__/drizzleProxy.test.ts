@@ -54,6 +54,11 @@ const DRIZZLE_PROXY_SCHEMA = [
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER,
+      one_m INTEGER NOT NULL DEFAULT 0,
+      codex_plan_json TEXT,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )

@@ -97,6 +97,95 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
     ).resolves.toEqual({ ok: true, source: 'cdn' });
   });
 
+  it('可从指定的第二个可信清单基址拉取端点', async () => {
+    const { startup } = await freshModules();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () => FULL_MANIFEST,
+    } as Response);
+    try {
+      await expect(
+        startup.runStartupEndpointResolve({
+          autoRetryDelaysMs: [],
+          manifestBaseUrl: 'https://release-manifest.example/app',
+        }),
+      ).resolves.toEqual({ ok: true, source: 'cdn' });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^https:\/\/release-manifest\.example\/app\/endpoint\.json\?t=\d+$/,
+        ),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('第二份清单按显式目标区域校验，不受安装包默认区域限制', async () => {
+    const { startup } = await freshModules();
+    const apply = vi.fn();
+
+    await expect(
+      startup.runStartupEndpointResolve({
+        apply,
+        expectedRegion: 'global',
+        fetchManifest: okFetch(
+          JSON.stringify({ ...FULL_MANIFEST_OBJECT, region: 'global' }),
+        ),
+      }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('切换业务服务器时保留 CindyDev 的 OTA 与审核元数据', async () => {
+    process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST = '1';
+    vi.resetModules();
+    vi.doMock('expo-constants', () => ({
+      default: { expoConfig: { version: '9.9.9' } },
+    }));
+    try {
+      const env = await import('@/config/env');
+      const startup = await import('@/config/clientEndpointStartup');
+      const buildManifest = JSON.stringify({
+        ...FULL_MANIFEST_OBJECT,
+        authApiBaseUrl: 'https://auth.dev.example.com',
+        mobileUpdateBaseUrl: 'https://updates.dev.example.com',
+        review: '9.9.9',
+      });
+      await startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(buildManifest),
+      });
+      expect(env.AUTH_API_BASE_URL).toBe('https://auth.dev.example.com');
+      expect(env.OTA_SERVER_BASE_URL).toBe('https://updates.dev.example.com');
+      expect(env.REVIEW_MODE).toBe(true);
+      expect(env.IS_TESTFLIGHT_BUILD).toBe(false);
+
+      const releaseManifest = JSON.stringify({
+        ...FULL_MANIFEST_OBJECT,
+        authApiBaseUrl: 'https://auth.release.example.com',
+        mobileUpdateBaseUrl: 'https://updates.release.example.com',
+        review: '0.0.0',
+      });
+      await startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(releaseManifest),
+        preserveBuildReleaseMetadata: true,
+        resolveIsTestFlight: async () => true,
+      });
+
+      expect(env.AUTH_API_BASE_URL).toBe('https://auth.release.example.com');
+      expect(env.OTA_SERVER_BASE_URL).toBe('https://updates.dev.example.com');
+      expect(env.REVIEW_MODE).toBe(true);
+      expect(env.IS_TESTFLIGHT_BUILD).toBe(false);
+      expect(
+        env.getMobileEndpointForRealm(env.BUILD_AUTH_REGION, 'authApiBaseUrl'),
+      ).toBe('https://auth.release.example.com');
+    } finally {
+      delete process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST;
+      vi.doUnmock('expo-constants');
+      vi.resetModules();
+    }
+  });
+
   it('二进制版本优先读原生 0.1.2，不被 OTA manifest 的 0.1.0 覆盖', async () => {
     vi.resetModules();
     vi.doMock('expo-application', () => ({

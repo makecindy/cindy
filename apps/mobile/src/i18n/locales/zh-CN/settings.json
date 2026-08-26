@@ -85,6 +85,21 @@
     "authServer": "Auth Server",
     "authRegion": "登录区域"
   },
+  "devServerEnvironment": {
+    "title": "服务器环境",
+    "description": "仅影响 CindyDev 连接的业务服务器",
+    "accessibility": "切换服务器环境",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "切换到 {{environment}}？",
+    "confirmBody": "切换会退出当前账号并重启 App。",
+    "cancel": "取消",
+    "switchAction": "切换",
+    "switching": "切换中",
+    "switchFailed": "切换服务器环境失败，请重试。"
+  },
   "updateInfo": {
     "embedded": "随整包",
     "embeddedFallback": "随整包（热更未生效）",
