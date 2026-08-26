@@ -33,6 +33,7 @@ import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLin
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { isAppInteractionLocked } from '@/lib/appInteractionLock';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import {
   addOrFocusSingletonTab,
@@ -1025,6 +1026,7 @@ export function MainLayout() {
 
   useEffect(() => {
     return window.electronAPI.onApplicationMenuCommand((command) => {
+      if (isAppInteractionLocked()) return;
       switch (command) {
         case 'open-about':
           navigate('/settings?tab=about');
@@ -1148,6 +1150,7 @@ export function MainLayout() {
 
   useEffect(() => {
     return subscribeWorkLouderCodexAction((action) => {
+      if (isAppInteractionLocked()) return true;
       if (action.type === 'keyboard') {
         const target =
           document.activeElement instanceof HTMLElement ? document.activeElement : document.body;

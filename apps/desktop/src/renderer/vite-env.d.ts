@@ -4260,6 +4260,17 @@ interface ElectronAPI {
         import('../shared/localDbMaintenance').DbSlimmingResult | null
       >;
       openLastBackupDirectory: () => Promise<{ opened: boolean }>;
+      getStartupProgress: () => Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null
+      >;
+      cancelStartup: () => Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupCancelResult
+      >;
+      onStartupProgress: (
+        callback: (
+          progress: import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null,
+        ) => void,
+      ) => () => void;
     };
     sessions: {
       list: (

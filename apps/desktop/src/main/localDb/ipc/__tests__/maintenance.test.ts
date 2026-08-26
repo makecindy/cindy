@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../../client/DbClient';
-import { archiveCutoffForMonths, createLocalDbMaintenanceIpcHandlers } from '../maintenance';
+import { archiveCutoffForAge, createLocalDbMaintenanceIpcHandlers } from '../maintenance';
 import {
   readDbSlimmingRequest,
   writeDbSlimmingResult,
@@ -73,27 +73,33 @@ function createHarness() {
 }
 
 describe('local database maintenance IPC', () => {
-  it('accepts only the fixed 1, 3, and 6 month archive thresholds', async () => {
+  it('accepts only the fixed 7 day, 1 month, 3 month, and 6 month archive thresholds', async () => {
     const { handlers, queryOne } = createHarness();
 
-    for (const archiveAgeMonths of [1, 3, 6] as const) {
+    for (const archiveAgeMonths of ['7-days', 1, 3, 6] as const) {
       await expect(handlers.scan({ archiveAgeMonths })).resolves.toMatchObject({
         archiveAgeMonths,
       });
     }
-    for (const archiveAgeMonths of [0, 1.5, 2, 12]) {
+    for (const archiveAgeMonths of [0, 1.5, 2, 7, 12, '7-day']) {
       await expect(
-        handlers.scan({ archiveAgeMonths: archiveAgeMonths as 1 }),
+        handlers.scan({ archiveAgeMonths: archiveAgeMonths as never }),
       ).rejects.toThrow('[INVALID_PARAMS]');
     }
-    expect(queryOne).toHaveBeenCalledTimes(3);
+    expect(queryOne).toHaveBeenCalledTimes(4);
+  });
+
+  it('subtracts exactly seven days for the seven day archive threshold', () => {
+    expect(archiveCutoffForAge(Date.UTC(2026, 2, 10, 12, 30), '7-days')).toBe(
+      Date.UTC(2026, 2, 3, 12, 30),
+    );
   });
 
   it('subtracts natural months and clamps dates at the end of shorter months', () => {
-    expect(archiveCutoffForMonths(Date.UTC(2026, 2, 31, 12, 30), 1)).toBe(
+    expect(archiveCutoffForAge(Date.UTC(2026, 2, 31, 12, 30), 1)).toBe(
       Date.UTC(2026, 1, 28, 12, 30),
     );
-    expect(archiveCutoffForMonths(Date.UTC(2024, 2, 31, 12, 30), 1)).toBe(
+    expect(archiveCutoffForAge(Date.UTC(2024, 2, 31, 12, 30), 1)).toBe(
       Date.UTC(2024, 1, 29, 12, 30),
     );
   });
@@ -171,15 +177,37 @@ describe('local database maintenance IPC', () => {
 
   it('does not show the native no-backup confirmation when a backup is enabled', async () => {
     const harness = createHarness();
-    const scan = await harness.handlers.scan({ archiveAgeMonths: 3 });
+    const scan = await harness.handlers.scan({ archiveAgeMonths: '7-days' });
 
     await expect(
       harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: true }),
     ).resolves.toEqual({ scheduled: true });
 
     expect(harness.confirmWithoutBackup).not.toHaveBeenCalled();
-    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ backupEnabled: true });
-    expect(harness.relaunch).toHaveBeenCalledOnce();
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({
+      archiveAgeMonths: '7-days',
+      backupEnabled: true,
+    });
+    expect(harness.relaunch).toHaveBeenCalledExactlyOnceWith(scan.scanId);
+  });
+
+  it('does not restart or copy the database when the scan found nothing to clean', async () => {
+    const harness = createHarness();
+    harness.queryOne.mockResolvedValueOnce({
+      deletedTaskCount: 0,
+      archivedTaskCount: 0,
+      messageCount: 0,
+      estimatedMessageBytes: 0,
+    });
+    const scan = await harness.handlers.scan({ archiveAgeMonths: '7-days' });
+
+    await expect(
+      harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: false }),
+    ).resolves.toEqual({ scheduled: false });
+
+    expect(harness.confirmWithoutBackup).not.toHaveBeenCalled();
+    expect(harness.relaunch).not.toHaveBeenCalled();
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
   });
 
   it('never exposes the privileged backup path to Renderer', async () => {

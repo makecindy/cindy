@@ -16,22 +16,24 @@
  * 点击用 ref 标志,不产生任何视觉变化。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown } from 'lucide-react';
+import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as Select from '@radix-ui/react-select';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { getAllDraftAttachmentUrls } from '@/lib/composerDraftStore';
+import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import {
-  DB_SLIMMING_ARCHIVE_MONTH_OPTIONS,
-  DB_SLIMMING_DEFAULT_ARCHIVE_MONTHS,
-  type DbSlimmingArchiveMonths,
+  DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
+  DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
+  type DbSlimmingArchiveAge,
   type DbSlimmingBackupDirectorySelection,
   type DbSlimmingResult,
   type DbSlimmingScanResult,
@@ -406,17 +408,36 @@ type DbSlimmingPhase =
 
 function DatabaseSlimmingSection() {
   const { t } = useTranslation();
-  const [archiveAgeMonths, setArchiveAgeMonths] = useState<DbSlimmingArchiveMonths>(
-    DB_SLIMMING_DEFAULT_ARCHIVE_MONTHS,
+  const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
+    DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
   );
   const [backupEnabled, setBackupEnabled] = useState(true);
   const [backupDirectory, setBackupDirectory] =
     useState<DbSlimmingBackupDirectorySelection>({ selected: false });
   const [phase, setPhase] = useState<DbSlimmingPhase>({ kind: 'idle' });
   const [scanLoading, setScanLoading] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [executionLocked, setExecutionLocked] = useState(false);
   const busyRef = useRef(false);
+  const interactionLockReleaseRef = useRef<(() => void) | null>(null);
+
+  const acquireInteractionLock = () => {
+    if (!interactionLockReleaseRef.current) {
+      interactionLockReleaseRef.current = acquireAppInteractionLock();
+    }
+  };
+
+  const releaseInteractionLock = () => {
+    interactionLockReleaseRef.current?.();
+    interactionLockReleaseRef.current = null;
+  };
+
+  useEffect(() => {
+    return () => {
+      interactionLockReleaseRef.current?.();
+      interactionLockReleaseRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -432,13 +453,15 @@ function DatabaseSlimmingSection() {
   }, []);
 
   const invalidateScan = () => {
+    setReportOpen(false);
+    releaseInteractionLock();
     setPhase((current) => (current.kind === 'scanned' ? { kind: 'idle' } : current));
   };
 
-  const handleArchiveMonthsChange = (raw: string) => {
-    const parsed = Number(raw) as DbSlimmingArchiveMonths;
-    if (!DB_SLIMMING_ARCHIVE_MONTH_OPTIONS.includes(parsed)) return;
-    setArchiveAgeMonths(parsed);
+  const handleArchiveAgeChange = (raw: string) => {
+    const parsed = raw === '7-days' ? raw : Number(raw);
+    if (!DB_SLIMMING_ARCHIVE_AGE_OPTIONS.includes(parsed as DbSlimmingArchiveAge)) return;
+    setArchiveAge(parsed as DbSlimmingArchiveAge);
     invalidateScan();
   };
 
@@ -458,10 +481,17 @@ function DatabaseSlimmingSection() {
   const handleScan = async () => {
     if (busyRef.current) return;
     busyRef.current = true;
+    acquireInteractionLock();
+    setReportOpen(false);
     setScanLoading(true);
+    let completed = false;
     try {
-      const scan = await window.electronAPI.localDb.maintenance.scan({ archiveAgeMonths });
+      const scan = await window.electronAPI.localDb.maintenance.scan({
+        archiveAgeMonths: archiveAge,
+      });
       setPhase({ kind: 'scanned', scan });
+      setReportOpen(true);
+      completed = true;
     } catch (error) {
       toast.error(
         error instanceof Error
@@ -470,13 +500,17 @@ function DatabaseSlimmingSection() {
       );
     } finally {
       busyRef.current = false;
+      if (!completed) releaseInteractionLock();
       setScanLoading(false);
     }
   };
 
   const handleSchedule = async () => {
-    if (phase.kind !== 'scanned' || confirmLoading) return;
-    setConfirmLoading(true);
+    if (phase.kind !== 'scanned' || busyRef.current || executionLocked) return;
+    busyRef.current = true;
+    acquireInteractionLock();
+    setReportOpen(false);
+    setExecutionLocked(true);
     try {
       const result = await window.electronAPI.localDb.maintenance.schedule({
         scanId: phase.scan.scanId,
@@ -486,18 +520,25 @@ function DatabaseSlimmingSection() {
           : {}),
       });
       if (!result.scheduled) {
-        setConfirmLoading(false);
-        setConfirmOpen(false);
+        busyRef.current = false;
+        setExecutionLocked(false);
+        setReportOpen(true);
       }
     } catch (error) {
-      setConfirmLoading(false);
-      setConfirmOpen(false);
+      busyRef.current = false;
+      setExecutionLocked(false);
+      setReportOpen(true);
       toast.error(
         error instanceof Error
           ? error.message
           : t('settings.about.storage.dbSlimmingScheduleFailed'),
       );
     }
+  };
+
+  const handleReportOpenChange = (open: boolean) => {
+    setReportOpen(open);
+    if (!open) releaseInteractionLock();
   };
 
   const handleOpenBackup = async () => {
@@ -535,19 +576,19 @@ function DatabaseSlimmingSection() {
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <label
-          htmlFor="db-slimming-archive-months"
+          htmlFor="db-slimming-archive-age"
           className="text-12 text-[var(--settings-section-sublabel)]"
         >
           {t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
         </label>
         <div className="flex items-center">
           <Select.Root
-            value={String(archiveAgeMonths)}
-            onValueChange={handleArchiveMonthsChange}
+            value={String(archiveAge)}
+            onValueChange={handleArchiveAgeChange}
             disabled={scanLoading}
           >
             <Select.Trigger
-              id="db-slimming-archive-months"
+              id="db-slimming-archive-age"
               aria-label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
               className={cn(
                 'flex h-8 min-w-[104px] items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none transition-colors',
@@ -577,10 +618,10 @@ function DatabaseSlimmingSection() {
                 )}
               >
                 <Select.Viewport className="flex flex-col gap-0.5">
-                  {DB_SLIMMING_ARCHIVE_MONTH_OPTIONS.map((months) => (
+                  {DB_SLIMMING_ARCHIVE_AGE_OPTIONS.map((age) => (
                     <Select.Item
-                      key={months}
-                      value={String(months)}
+                      key={age}
+                      value={String(age)}
                       className={cn(
                         'flex h-8 cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-2.5 text-12 outline-none transition-colors',
                         'text-[var(--settings-input-text)] data-[highlighted]:bg-[var(--settings-menu-bg-hover)]',
@@ -588,7 +629,11 @@ function DatabaseSlimmingSection() {
                       )}
                     >
                       <Select.ItemText>
-                        {t(`settings.about.storage.dbSlimmingArchiveAgeOption${months}`)}
+                        {t(
+                          age === '7-days'
+                            ? 'settings.about.storage.dbSlimmingArchiveAgeOption7Days'
+                            : `settings.about.storage.dbSlimmingArchiveAgeOption${age}`,
+                        )}
                       </Select.ItemText>
                       <Select.ItemIndicator>
                         <Check
@@ -640,49 +685,6 @@ function DatabaseSlimmingSection() {
         )}
       </div>
 
-      {scanned && (
-        <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-          <ReportLine
-            visible
-            text={t('settings.about.storage.dbSlimmingReportTasks', {
-              deleted: scanned.deletedTaskCount,
-              archived: scanned.archivedTaskCount,
-            })}
-          />
-          <ReportLine
-            visible
-            text={t('settings.about.storage.dbSlimmingReportMessages', {
-              count: scanned.messageCount,
-              size: formatBytes(scanned.estimatedMessageBytes),
-            })}
-          />
-          <ReportLine
-            visible
-            text={t('settings.about.storage.dbSlimmingReportSpace', {
-              database: formatBytes(scanned.databaseBytes),
-              temporary: formatBytes(scanned.temporaryBytesRequired),
-              free:
-                scanned.databaseVolumeFreeBytes === null
-                  ? t('settings.about.storage.dbSlimmingSpaceUnknown')
-                  : formatBytes(scanned.databaseVolumeFreeBytes),
-            })}
-          />
-          {insufficientSpace && (
-            <p className="text-12 leading-[1.5] text-[hsl(var(--destructive))]">
-              {t('settings.about.storage.dbSlimmingInsufficientSpace')}
-            </p>
-          )}
-          <div className="mt-1 flex justify-end gap-2">
-            <CardButton onClick={() => setPhase({ kind: 'idle' })}>
-              {t('settings.about.storage.cancelButton')}
-            </CardButton>
-            <CardButton emphasis onClick={() => setConfirmOpen(true)}>
-              {t('settings.about.storage.dbSlimmingConfirmButton')}
-            </CardButton>
-          </div>
-        </div>
-      )}
-
       {phase.kind === 'done' && (
         <div className="flex flex-col gap-1.5 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
           {phase.result.status === 'completed' ? (
@@ -712,25 +714,179 @@ function DatabaseSlimmingSection() {
         </div>
       )}
 
-      <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={(open) => {
-          if (!confirmLoading) setConfirmOpen(open);
-        }}
-        title={t('settings.about.storage.dbSlimmingConfirmTitle')}
-        description={
-          backupEnabled
-            ? t('settings.about.storage.dbSlimmingConfirmDescriptionWithBackup')
-            : t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup')
-        }
-        confirmText={t('settings.about.storage.dbSlimmingRestartButton')}
-        cancelText={t('settings.about.storage.cancelButton')}
-        confirmVariant="destructive"
-        confirmDisabled={insufficientSpace}
-        loading={confirmLoading}
+      <DatabaseCleanupDialog
+        scanLoading={scanLoading}
+        reportOpen={reportOpen}
+        executionLocked={executionLocked}
+        scanned={scanned}
+        insufficientSpace={insufficientSpace}
+        backupEnabled={backupEnabled}
+        onReportOpenChange={handleReportOpenChange}
         onConfirm={handleSchedule}
       />
     </div>
+  );
+}
+
+interface DatabaseCleanupDialogProps {
+  scanLoading: boolean;
+  reportOpen: boolean;
+  executionLocked: boolean;
+  scanned: DbSlimmingScanResult | null;
+  insufficientSpace: boolean;
+  backupEnabled: boolean;
+  onReportOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}
+
+function DatabaseCleanupDialog({
+  scanLoading,
+  reportOpen,
+  executionLocked,
+  scanned,
+  insufficientSpace,
+  backupEnabled,
+  onReportOpenChange,
+  onConfirm,
+}: DatabaseCleanupDialogProps) {
+  const { t } = useTranslation();
+  const bodyId = useId();
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const reportVisible = reportOpen && scanned !== null;
+  const mode = scanLoading
+    ? 'scanning'
+    : executionLocked
+      ? 'executing'
+      : reportVisible
+        ? 'report'
+        : 'closed';
+  const open = mode !== 'closed';
+  const busy = mode === 'scanning' || mode === 'executing';
+
+  useEffect(() => {
+    if (mode !== 'report') return;
+    const frame = requestAnimationFrame(() => cancelButtonRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [mode]);
+
+  return (
+    <AlertDialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && mode === 'report') onReportOpenChange(false);
+      }}
+    >
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay
+          className="fixed inset-0 z-[10020] bg-[var(--overlay-modal)]"
+          style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
+        >
+          <AlertDialog.Content
+            className={cn(
+              'fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'rounded-xl border border-[var(--settings-theme-card-border)]',
+              'bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)]',
+              mode === 'report' ? 'select-text' : 'select-none',
+            )}
+            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}
+            aria-describedby={mode === 'report' ? bodyId : undefined}
+            aria-busy={busy || undefined}
+            onEscapeKeyDown={(event) => {
+              if (busy) event.preventDefault();
+            }}
+          >
+            {busy ? (
+              <AlertDialog.Title className="flex flex-1 items-center justify-center gap-3 text-14 font-medium text-[var(--confirm-title)]">
+                <Spinner size={18} />
+                <span role="status" aria-live="assertive">
+                  {mode === 'scanning'
+                    ? t('settings.about.storage.dbSlimmingScanLoading')
+                    : t('settings.about.storage.dbSlimmingExecutionLoading')}
+                </span>
+              </AlertDialog.Title>
+            ) : (
+              scanned && (
+                <>
+                  <AlertDialog.Title className="shrink-0 text-lg font-medium text-[var(--confirm-title)]">
+                    {t('settings.about.storage.dbSlimmingScanResultTitle')}
+                  </AlertDialog.Title>
+                  <div
+                    id={bodyId}
+                    className="mt-3 flex min-h-0 flex-1 select-text flex-col gap-1.5 overflow-y-auto overscroll-contain"
+                  >
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportTasks', {
+                        deleted: scanned.deletedTaskCount,
+                        archived: scanned.archivedTaskCount,
+                      })}
+                    />
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportMessages', {
+                        count: scanned.messageCount,
+                        size: formatBytes(scanned.estimatedMessageBytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportSpace', {
+                        database: formatBytes(scanned.databaseBytes),
+                        temporary: formatBytes(scanned.temporaryBytesRequired),
+                        free:
+                          scanned.databaseVolumeFreeBytes === null
+                            ? t('settings.about.storage.dbSlimmingSpaceUnknown')
+                            : formatBytes(scanned.databaseVolumeFreeBytes),
+                      })}
+                    />
+                    {insufficientSpace && (
+                      <p className="text-12 leading-[1.5] text-[hsl(var(--destructive))]">
+                        {t('settings.about.storage.dbSlimmingInsufficientSpace')}
+                      </p>
+                    )}
+                    <p className="mt-2 text-12 leading-[1.5] text-[var(--settings-section-sublabel)] opacity-70">
+                      {backupEnabled
+                        ? t('settings.about.storage.dbSlimmingConfirmDescriptionWithBackup')
+                        : t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup')}
+                    </p>
+                  </div>
+                  <div className="mt-6 flex shrink-0 justify-end gap-2.5">
+                    <AlertDialog.Cancel asChild>
+                      <button
+                        ref={cancelButtonRef}
+                        type="button"
+                        className={cn(
+                          'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
+                          'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
+                          'transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                        )}
+                      >
+                        {t('settings.about.storage.cancelButton')}
+                      </button>
+                    </AlertDialog.Cancel>
+                    <button
+                      type="button"
+                      disabled={insufficientSpace || scanned.messageCount === 0}
+                      onClick={onConfirm}
+                      className={cn(
+                        'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
+                        'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)]',
+                        'transition-colors hover:opacity-90',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                        'disabled:cursor-not-allowed disabled:opacity-50',
+                      )}
+                    >
+                      {t('settings.about.storage.dbSlimmingConfirmButton')}
+                    </button>
+                  </div>
+                </>
+              )
+            )}
+          </AlertDialog.Content>
+        </AlertDialog.Overlay>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   );
 }
 

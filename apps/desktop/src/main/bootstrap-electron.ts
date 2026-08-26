@@ -322,6 +322,13 @@ import {
   setCurrentDbClient,
 } from './localDb/client/current';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
+import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
+import {
+  cancelDbSlimmingStartupProgress,
+  getDbSlimmingStartupProgress,
+  subscribeDbSlimmingStartupProgress,
+} from './localDb/dbSlimmingStartupState';
+import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -7451,9 +7458,20 @@ const registerIpcHandlers = () => {
         shell.showItemInFolder(path.normalize(filePath));
         return true;
       },
-      relaunch: () => {
+      relaunch: (requestId) => {
         dbClientLog.info('database slimming relaunch requested');
-        app.relaunch();
+        if (app.isPackaged) {
+          app.relaunch();
+        } else {
+          // Forge owns the Vite server. A bare app.relaunch() outlives Forge,
+          // then opens a white window against a dead localhost renderer. The
+          // repository dev runner observes the durable cleanup marker and
+          // restarts the full Forge/Vite stack after this process exits.
+          const delegated = writeDbSlimmingDevRelaunchSignal(requestId);
+          dbClientLog.info('database slimming dev relaunch delegated to desktop dev runner', {
+            delegated,
+          });
+        }
         app.quit();
       },
     });
@@ -7499,6 +7517,19 @@ const registerIpcHandlers = () => {
       return invokeLocalDbMaintenanceIpc('open-last-backup-directory', () =>
         localDbMaintenanceHandlers.openLastBackupDirectory(),
       );
+    });
+    ipcMain.handle('local-db:maintenance:startup-progress', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return getDbSlimmingStartupProgress();
+    });
+    ipcMain.handle('local-db:maintenance:cancel-startup', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return { cancelled: cancelDbSlimmingStartupProgress() };
+    });
+    subscribeDbSlimmingStartupProgress((progress) => {
+      const target = mainWindowRef;
+      if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+      target.webContents.send(DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
     });
   }
 

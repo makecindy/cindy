@@ -83,8 +83,15 @@ function createCleanupFixture(): void {
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       content TEXT NOT NULL
     );
-    CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content);
+    CREATE VIRTUAL TABLE messages_fts USING fts5(
+      message_id UNINDEXED,
+      session_id UNINDEXED,
+      role UNINDEXED,
+      content
+    );
+    CREATE TABLE messages_fts_delete_audit (message_id TEXT NOT NULL);
     CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts_delete_audit (message_id) VALUES (old.id);
       DELETE FROM messages_fts WHERE message_id = old.id;
     END;
     CREATE TABLE subagent_runs (
@@ -130,8 +137,12 @@ function createCleanupFixture(): void {
       id,
       'x'.repeat(32 * 1024),
     );
-    db.prepare('INSERT INTO messages_fts (message_id, content) VALUES (?, ?)').run(
+    db.prepare(
+      'INSERT INTO messages_fts (message_id, session_id, role, content) VALUES (?, ?, ?, ?)',
+    ).run(
       `message-${id}`,
+      id,
+      'user',
       `content-${id}`,
     );
   }
@@ -194,9 +205,11 @@ function readMarker(filePath: string): string {
 }
 
 describe('runDbSlimmingMaintenance', () => {
-  it('cleans only the frozen inactive-task scope while preserving task metadata and media refs', async () => {
+  it('cleans only messages and their derived indexes in the frozen inactive-task scope', async () => {
     createCleanupFixture();
     const beforeBytes = estimateDbFilesBytes(dbFilePath);
+    const onProgress = vi.fn();
+    const beforeReplacement = vi.fn(async () => {});
 
     const outcome = await runDbSlimmingMaintenance({
       userDataDir: tmpDir,
@@ -204,6 +217,8 @@ describe('runDbSlimmingMaintenance', () => {
       request: request({ beforeBytes }),
       now: () => 3_000,
       log,
+      onProgress,
+      beforeReplacement,
     });
 
     expect(outcome.originalDatabaseReady).toBe(true);
@@ -214,6 +229,18 @@ describe('runDbSlimmingMaintenance', () => {
       messageCount: 2,
       backupCreated: false,
     });
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'copying', cancellable: true }),
+    );
+    expect(onProgress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'backing-up' }),
+    );
+    expect(onProgress).toHaveBeenCalledWith({
+      phase: 'finalizing',
+      progress: 96,
+      cancellable: false,
+    });
+    expect(beforeReplacement).toHaveBeenCalledTimes(1);
     const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
     try {
       expect(
@@ -224,12 +251,19 @@ describe('runDbSlimmingMaintenance', () => {
         'message-deleted-new',
       ]);
       expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 3 });
-      expect(db.prepare('SELECT count(*) AS count FROM subagent_runs').get()).toEqual({ count: 0 });
-      expect(db.prepare('SELECT count(*) AS count FROM subagent_run_aliases').get()).toEqual({ count: 0 });
+      expect(db.prepare('SELECT count(*) AS count FROM messages_fts_delete_audit').get()).toEqual({
+        count: 0,
+      });
+      db.prepare("DELETE FROM messages WHERE id = 'message-active-old'").run();
+      expect(db.prepare('SELECT message_id FROM messages_fts_delete_audit').all()).toEqual([
+        { message_id: 'message-active-old' },
+      ]);
+      expect(db.prepare('SELECT count(*) AS count FROM subagent_runs').get()).toEqual({ count: 2 });
+      expect(db.prepare('SELECT count(*) AS count FROM subagent_run_aliases').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM session_pr_refs').get()).toEqual({ count: 2 });
-      expect(db.prepare('SELECT count(*) AS count FROM session_goals').get()).toEqual({ count: 0 });
-      expect(db.prepare('SELECT count(*) AS count FROM agent_input_queue_snapshots').get()).toEqual({ count: 0 });
-      expect(db.prepare('SELECT count(*) AS count FROM ghost_cards').get()).toEqual({ count: 0 });
+      expect(db.prepare('SELECT count(*) AS count FROM session_goals').get()).toEqual({ count: 2 });
+      expect(db.prepare('SELECT count(*) AS count FROM agent_input_queue_snapshots').get()).toEqual({ count: 2 });
+      expect(db.prepare('SELECT count(*) AS count FROM ghost_cards').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM skill_usage_sources').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM skill_usage_exposures').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM media_refs').get()).toEqual({ count: 2 });
@@ -247,15 +281,15 @@ describe('runDbSlimmingMaintenance', () => {
         updated_at: 1_000,
         total_token_usage: 7,
         total_cost_usd: 1.5,
-        sdk_session_id: null,
-        context_tokens: 0,
-        context_window: 0,
-        cleared_at: 3_000,
-        summary: null,
-        codex_plan_json: null,
-        codex_history_has_product_prompt: null,
-        active_turn_started_at: null,
-        last_turn_ended_at: null,
+        sdk_session_id: 'native-id',
+        context_tokens: 100,
+        context_window: 200,
+        cleared_at: null,
+        summary: 'summary',
+        codex_plan_json: '{}',
+        codex_history_has_product_prompt: 1,
+        active_turn_started_at: 10,
+        last_turn_ended_at: 20,
       });
     } finally {
       db.close();
@@ -443,13 +477,16 @@ describe('adoptDbSlimmingBackup', () => {
     fs.mkdirSync(secondDir);
     const first = path.join(firstDir, 'cindy-owner.db.slimming-backup');
     const second = path.join(secondDir, 'cindy-owner.db.slimming-backup');
+    const migrationBackup = path.join(firstDir, 'cindy-owner.db.bak.2026-08-26T00-00-00-000Z');
     fs.writeFileSync(first, 'first');
     fs.writeFileSync(second, 'second');
+    fs.writeFileSync(migrationBackup, 'migration');
 
     adoptDbSlimmingBackup(tmpDir, 'owner-1', first);
     adoptDbSlimmingBackup(tmpDir, 'owner-1', second);
 
     expect(fs.existsSync(first)).toBe(false);
     expect(fs.readFileSync(second, 'utf8')).toBe('second');
+    expect(fs.readFileSync(migrationBackup, 'utf8')).toBe('migration');
   });
 });

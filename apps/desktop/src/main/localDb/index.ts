@@ -54,7 +54,6 @@ import {
   readSchemaVersion,
 } from './migrationRunner';
 import {
-  acquireSchemaMigrationWriterLease,
   acquireSchemaStartupLease,
   SchemaMigrationReaderLeaseLifecycle,
   type SchemaMigrationLease,
@@ -206,19 +205,29 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     }),
   );
 
-  const maintenance = await runPendingDbSlimmingAtStartup({
-    userDataDir: app.getPath('userData'),
-    dbFilePath: filePath,
-    ownerId: userId,
-    leaseKind: startupLease.kind,
-    loadVectorExtension: (maintenanceDb) => loadSqliteVec(maintenanceDb).loaded,
-    log,
-  });
+  let maintenance: Awaited<ReturnType<typeof runPendingDbSlimmingAtStartup>>;
+  try {
+    maintenance = await runPendingDbSlimmingAtStartup({
+      userDataDir: app.getPath('userData'),
+      dbFilePath: filePath,
+      ownerId: userId,
+      leaseKind: startupLease.kind,
+      loadVectorExtension: (maintenanceDb) => loadSqliteVec(maintenanceDb).loaded,
+      log,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = '数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。';
+    log.error('database cleanup startup failed unexpectedly', { detail });
+    releaseSchemaLeasesAfterFailure();
+    showFatalDialog('数据库清理中断', message, 'MIGRATE_FAILED');
+    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+  }
   if (maintenance.handled && startupLease.kind === 'writer') {
     resetSqliteVecState();
   }
   if (!maintenance.originalDatabaseReady) {
-    const message = '数据库瘦身恢复失败，Cindy 已停止打开本地数据库以避免覆盖原始数据。';
+    const message = '数据库清理恢复失败，Cindy 已停止打开本地数据库以避免覆盖原始数据。';
     showFatalDialog('本地数据库无法安全恢复', message, 'DB_CORRUPT_NO_BACKUP');
     releaseSchemaLeasesAfterFailure();
     return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message } };

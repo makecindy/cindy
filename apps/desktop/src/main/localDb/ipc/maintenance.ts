@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 
 import type {
-  DbSlimmingArchiveMonths,
+  DbSlimmingArchiveAge,
   DbSlimmingBackupDirectorySelection,
   DbSlimmingResult,
   DbSlimmingScanInput,
@@ -11,7 +11,7 @@ import type {
   DbSlimmingScheduleResult,
 } from '../../../shared/localDbMaintenance';
 import {
-  DB_SLIMMING_ARCHIVE_MONTH_OPTIONS,
+  DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
 } from '../../../shared/localDbMaintenance';
 import { throwIpcError } from '../../utils/ipcValidate';
 import type { DbClient } from '../client/DbClient';
@@ -66,7 +66,7 @@ export interface LocalDbMaintenanceIpcDeps {
   selectBackupDirectory(): Promise<string | null>;
   confirmWithoutBackup(): Promise<boolean>;
   revealFile(filePath: string): Promise<boolean>;
-  relaunch(): void;
+  relaunch(requestId: string): void;
 }
 
 /** Main-owned grants keep Renderer-supplied ids from becoming path or time authorization. */
@@ -112,10 +112,10 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
 
   return {
     async scan(input: DbSlimmingScanInput): Promise<DbSlimmingScanResult> {
-      const archiveAgeMonths = validateArchiveAgeMonths(input?.archiveAgeMonths);
+      const archiveAgeMonths = validateArchiveAge(input?.archiveAgeMonths);
       const owner = captureReadyOwner();
       const scannedAt = Date.now();
-      const archivedBeforeMs = archiveCutoffForMonths(scannedAt, archiveAgeMonths);
+      const archivedBeforeMs = archiveCutoffForAge(scannedAt, archiveAgeMonths);
       const row = await deps.getDbClient().queryOne<ScanAggregateRow>(
         `WITH target_sessions AS (
            SELECT id, status
@@ -213,6 +213,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
       ) {
         throwIpcError('PRECONDITION_FAILED', 'database maintenance scan expired; scan again');
       }
+      if (scan.messageCount === 0) return { scheduled: false };
       if (pendingScheduleIds.has(scan.scanId)) {
         throwIpcError('PRECONDITION_FAILED', 'database maintenance confirmation is already open');
       }
@@ -278,6 +279,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           deletedTaskCount: scan.deletedTaskCount,
           archivedTaskCount: scan.archivedTaskCount,
           messageCount: scan.messageCount,
+          estimatedMessageBytes: scan.estimatedMessageBytes,
           beforeBytes: scan.databaseBytes,
           backupEnabled: input.backupEnabled,
           ...(backupDirectory ? { backupDirectory } : {}),
@@ -287,7 +289,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
         if (input.backupDirectoryGrantId) {
           directoryGrants.delete(input.backupDirectoryGrantId);
         }
-        deps.relaunch();
+        deps.relaunch(scan.scanId);
         return { scheduled: true };
       } finally {
         pendingScheduleIds.delete(scan.scanId);
@@ -311,22 +313,25 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
   };
 }
 
-function validateArchiveAgeMonths(value: unknown): DbSlimmingArchiveMonths {
-  if (!DB_SLIMMING_ARCHIVE_MONTH_OPTIONS.includes(value as DbSlimmingArchiveMonths)) {
-    throwIpcError('INVALID_PARAMS', 'archive age months must be 1, 3, or 6');
+function validateArchiveAge(value: unknown): DbSlimmingArchiveAge {
+  if (!DB_SLIMMING_ARCHIVE_AGE_OPTIONS.includes(value as DbSlimmingArchiveAge)) {
+    throwIpcError('INVALID_PARAMS', 'invalid database maintenance archive threshold');
   }
-  return value as DbSlimmingArchiveMonths;
+  return value as DbSlimmingArchiveAge;
 }
 
-/** Subtracts calendar months and clamps month-end dates (for example Mar 31 -> Feb 28). */
-export function archiveCutoffForMonths(
+/** Uses an exact seven-day duration or calendar months with month-end clamping. */
+export function archiveCutoffForAge(
   scannedAt: number,
-  archiveAgeMonths: DbSlimmingArchiveMonths,
+  archiveAge: DbSlimmingArchiveAge,
 ): number {
+  if (archiveAge === '7-days') {
+    return scannedAt - 7 * 24 * 60 * 60 * 1000;
+  }
   const cutoff = new Date(scannedAt);
   const dayOfMonth = cutoff.getUTCDate();
   cutoff.setUTCDate(1);
-  cutoff.setUTCMonth(cutoff.getUTCMonth() - archiveAgeMonths);
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - archiveAge);
   const lastDayOfTargetMonth = new Date(
     Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth() + 1, 0),
   ).getUTCDate();

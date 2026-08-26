@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
-  DB_SLIMMING_ARCHIVE_MONTH_OPTIONS,
-  type DbSlimmingArchiveMonths,
+  DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
+  type DbSlimmingArchiveAge,
   DbSlimmingBackupLocation,
   DbSlimmingFailureReason,
   DbSlimmingResult,
@@ -30,10 +30,11 @@ export interface DbSlimmingRequestRecord {
   createdAt: number;
   scannedAt: number;
   archivedBeforeMs: number;
-  archiveAgeMonths: DbSlimmingArchiveMonths;
+  archiveAgeMonths: DbSlimmingArchiveAge;
   deletedTaskCount: number;
   archivedTaskCount: number;
   messageCount: number;
+  estimatedMessageBytes?: number;
   beforeBytes: number;
   backupEnabled: boolean;
   backupDirectory?: string;
@@ -213,10 +214,12 @@ function isDbSlimmingRequestRecord(value: unknown): value is DbSlimmingRequestRe
     !isFiniteNumber(value.createdAt) ||
     !isFiniteNumber(value.scannedAt) ||
     !isFiniteNumber(value.archivedBeforeMs) ||
-    !isArchiveAgeMonths(value.archiveAgeMonths) ||
+    !isArchiveAge(value.archiveAgeMonths) ||
     !Number.isInteger(value.deletedTaskCount) ||
     !Number.isInteger(value.archivedTaskCount) ||
     !Number.isInteger(value.messageCount) ||
+    (value.estimatedMessageBytes !== undefined &&
+      (!isFiniteNumber(value.estimatedMessageBytes) || value.estimatedMessageBytes < 0)) ||
     !isFiniteNumber(value.beforeBytes) ||
     typeof value.backupEnabled !== 'boolean' ||
     ![
@@ -249,7 +252,7 @@ function isDbSlimmingResultRecord(value: unknown): value is DbSlimmingResultReco
     !REQUEST_ID_PATTERN.test(value.id) ||
     typeof value.ownerId !== 'string' ||
     !isFiniteNumber(value.finishedAt) ||
-    !isArchiveAgeMonths(value.archiveAgeMonths)
+    !isArchiveAge(value.archiveAgeMonths)
   ) {
     return false;
   }
@@ -300,8 +303,8 @@ function isBackupLocation(value: unknown): value is DbSlimmingBackupLocation {
   return value === 'database-directory' || value === 'custom-directory';
 }
 
-function isArchiveAgeMonths(value: unknown): value is DbSlimmingArchiveMonths {
-  return DB_SLIMMING_ARCHIVE_MONTH_OPTIONS.includes(value as DbSlimmingArchiveMonths);
+function isArchiveAge(value: unknown): value is DbSlimmingArchiveAge {
+  return DB_SLIMMING_ARCHIVE_AGE_OPTIONS.includes(value as DbSlimmingArchiveAge);
 }
 
 function pathsEqual(left: string, right: string): boolean {

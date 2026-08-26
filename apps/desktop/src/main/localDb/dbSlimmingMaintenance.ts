@@ -2,7 +2,10 @@ import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { DbSlimmingFailureReason } from '../../shared/localDbMaintenance';
+import type {
+  DbSlimmingFailureReason,
+  DbSlimmingMaintenanceProgress,
+} from '../../shared/localDbMaintenance';
 import { createBetterSqliteDatabase, restrictDbFilePermissions } from './betterSqliteFactory';
 import {
   adoptDbSlimmingBackup,
@@ -30,6 +33,9 @@ export interface RunDbSlimmingMaintenanceOptions {
   loadVectorExtension?: (db: Database.Database) => boolean;
   now?: () => number;
   log: DbSlimmingMaintenanceLog;
+  signal?: AbortSignal;
+  onProgress?: (progress: DbSlimmingMaintenanceProgress) => void;
+  beforeReplacement?: () => Promise<void>;
 }
 
 export interface RunDbSlimmingMaintenanceOutcome {
@@ -99,6 +105,8 @@ export async function runDbSlimmingMaintenance(
   const paths = maintenancePaths(options.dbFilePath, request);
   let replacementInstalled = request.phase === 'replacement-installed';
   let committed = request.phase === 'committed';
+
+  reportProgress(options, 'preparing', 2, request.phase === 'scheduled');
 
   try {
     if (request.phase === 'rollback-completed') {
@@ -203,6 +211,7 @@ export async function runDbSlimmingMaintenance(
     recoverInterruptedCustomBackupInstall(paths);
     cleanupUncommittedArtifacts(paths);
     assertMaintenanceSpace(options.dbFilePath, request, paths);
+    reportProgress(options, 'preparing', 5, true);
 
     const beforeBytes = estimateDbFilesBytes(options.dbFilePath);
     request = { ...request, beforeBytes };
@@ -211,12 +220,29 @@ export async function runDbSlimmingMaintenance(
     const source = openSourceDatabase(options.dbFilePath);
     try {
       if (paths.backupCandidate && paths.backupFinal) {
-        await createAndInstallCustomBackup(source, paths, options.log);
-        registerInstalledBackup(options, request, paths);
+        reportProgress(options, 'backing-up', 7, true);
+        await createAndInstallCustomBackup(source, paths, options.log, (fraction) => {
+          reportProgress(options, 'backing-up', 7 + fraction * 13, true);
+        });
+        registerInstalledBackup(options, request, paths, true);
       }
       removeDatabaseFamily(paths.work);
       try {
-        await source.backup(paths.work);
+        const progressStart = paths.backupCandidate ? 20 : 7;
+        const progressSpan = paths.backupCandidate ? 20 : 33;
+        reportProgress(options, 'copying', progressStart, true);
+        await source.backup(paths.work, {
+          progress: (progress) => {
+            const fraction = backupFraction(progress);
+            reportProgress(
+              options,
+              'copying',
+              progressStart + fraction * progressSpan,
+              true,
+            );
+            return 4_096;
+          },
+        });
       } catch (error) {
         throw new DbSlimmingMaintenanceError('cleanup-failed', 'working copy failed', true, {
           cause: error,
@@ -226,17 +252,12 @@ export async function runDbSlimmingMaintenance(
       source.close();
     }
 
-    const targetCounts = compactWorkingCopy(paths.work, request, now(), options);
+    const targetCounts = compactWorkingCopy(paths.work, request, options);
     request = { ...request, ...targetCounts };
     writeDbSlimmingRequest(options.userDataDir, request);
 
-    if (!verifyDatabaseFile(paths.work)) {
-      throw new DbSlimmingMaintenanceError(
-        'integrity-check-failed',
-        'compacted working database did not pass integrity checks',
-      );
-    }
-
+    reportProgress(options, 'finalizing', 96, false);
+    await options.beforeReplacement?.();
     request = { ...request, phase: 'swap-prepared' };
     writeDbSlimmingRequest(options.userDataDir, request);
     installReplacement(options.dbFilePath, paths);
@@ -244,13 +265,10 @@ export async function runDbSlimmingMaintenance(
 
     request = { ...request, phase: 'replacement-installed' };
     writeDbSlimmingRequest(options.userDataDir, request);
-    if (!verifyDatabaseFile(options.dbFilePath)) {
-      throw new DbSlimmingMaintenanceError(
-        'integrity-check-failed',
-        'installed database did not pass integrity checks',
-      );
-    }
-    registerInstalledBackup(options, request, paths);
+    // The verified VACUUM INTO output is renamed within the same directory.
+    // Re-reading the same multi-gigabyte file after each rename adds no useful
+    // corruption coverage and makes cleanup scale with several full DB scans.
+    registerInstalledBackup(options, request, paths, true);
 
     const result = completedResult(request, paths, options.dbFilePath, now());
     try {
@@ -286,6 +304,7 @@ export async function runDbSlimmingMaintenance(
       reclaimedBytes: result.reclaimedBytes,
       backupCreated: result.backupCreated,
     });
+    reportProgress(options, 'finalizing', 100, false);
     return { result, originalDatabaseReady: true };
   } catch (error) {
     const maintenanceError = normalizeMaintenanceError(error);
@@ -456,6 +475,7 @@ async function createAndInstallCustomBackup(
   source: Database.Database,
   paths: MaintenancePaths,
   log: DbSlimmingMaintenanceLog,
+  onProgress?: (fraction: number) => void,
 ): Promise<void> {
   const candidate = paths.backupCandidate;
   const finalPath = paths.backupFinal;
@@ -464,7 +484,12 @@ async function createAndInstallCustomBackup(
   removeDatabaseFamily(candidate);
   removeDatabaseFamily(previous);
   try {
-    await source.backup(candidate);
+    await source.backup(candidate, {
+      progress: (progress) => {
+        onProgress?.(backupFraction(progress));
+        return 4_096;
+      },
+    });
     if (!verifyDatabaseFile(candidate)) {
       throw new Error('backup integrity check failed');
     }
@@ -495,12 +520,17 @@ async function createAndInstallCustomBackup(
 function compactWorkingCopy(
   workPath: string,
   request: DbSlimmingRequestRecord,
-  clearedAt: number,
   options: RunDbSlimmingMaintenanceOptions,
 ): TargetCounts {
-  const db = createBetterSqliteDatabase(workPath, { fileMustExist: true });
+  const vacuumPath = `${workPath}.vacuum`;
+  removeDatabaseFamily(vacuumPath);
+  let db: Database.Database | null = createBetterSqliteDatabase(workPath, { fileMustExist: true });
   try {
-    db.pragma('journal_mode = DELETE');
+    // This copy is disposable and the untouched source remains the rollback
+    // authority. Avoid writing a second copy of changed pages to a rollback
+    // journal; a crash simply discards this work file on the next startup.
+    db.pragma('journal_mode = OFF');
+    db.pragma('synchronous = OFF');
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
     if (tableExists(db, 'chat_messages_vec_v1')) {
@@ -544,9 +574,28 @@ function compactWorkingCopy(
       messageCount: counts.messageCount ?? 0,
     };
 
-    const cleanup = db.transaction(() => {
-      if (tableExists(db, 'chat_messages_vec_v1') && tableExists(db, 'embedding_jobs')) {
-        db.exec(
+    const activeDb = db;
+    const messagesFtsDeleteTriggerSql = triggerSql(activeDb, 'messages_fts_delete');
+    reportProgress(options, 'cleaning', 44, true);
+    const cleanup = activeDb.transaction(() => {
+      // message_id/session_id are UNINDEXED FTS columns. Letting the trigger run
+      // once per message turns a large cleanup into N full FTS scans. Drop only
+      // this trigger inside the transaction, scan FTS once by session, then
+      // restore the exact schema SQL before committing.
+      if (messagesFtsDeleteTriggerSql) {
+        activeDb.exec('DROP TRIGGER messages_fts_delete');
+      }
+      if (tableExists(activeDb, 'messages_fts')) {
+        activeDb.exec(
+          `DELETE FROM messages_fts
+            WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
+        );
+      }
+      if (
+        tableExists(activeDb, 'chat_messages_vec_v1') &&
+        tableExists(activeDb, 'embedding_jobs')
+      ) {
+        activeDb.exec(
           `DELETE FROM chat_messages_vec_v1
             WHERE rowid IN (
               SELECT job.rowid
@@ -557,8 +606,8 @@ function compactWorkingCopy(
             )`,
         );
       }
-      if (tableExists(db, 'embedding_jobs')) {
-        db.exec(
+      if (tableExists(activeDb, 'embedding_jobs')) {
+        activeDb.exec(
           `DELETE FROM embedding_jobs
             WHERE source = 'chat'
               AND source_id IN (
@@ -568,37 +617,33 @@ function compactWorkingCopy(
               )`,
         );
       }
-      deleteRowsForTargets(db, 'subagent_runs', 'session_id');
-      deleteRowsForTargets(db, 'session_goals', 'session_id');
-      deleteRowsForTargets(db, 'agent_input_queue_snapshots', 'session_id');
-      deleteRowsForTargets(db, 'ghost_cards', 'session_id');
-      db.exec(
+      activeDb.exec(
         `DELETE FROM messages
           WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
       );
-      db.prepare(
-        `UPDATE sessions
-            SET sdk_session_id = NULL,
-                context_tokens = 0,
-                context_window = 0,
-                cleared_at = ?,
-                summary = NULL,
-                codex_plan_json = NULL,
-                codex_history_has_product_prompt = NULL,
-                active_turn_started_at = NULL,
-                last_turn_ended_at = NULL
-          WHERE id IN (SELECT id FROM temp.db_slimming_targets)`,
-      ).run(clearedAt);
+      if (messagesFtsDeleteTriggerSql) activeDb.exec(messagesFtsDeleteTriggerSql);
     });
     cleanup();
 
-    if (tableExists(db, 'messages_fts')) {
-      db.exec("INSERT INTO messages_fts(messages_fts) VALUES('optimize')");
-    }
-    db.pragma('optimize');
     db.exec('DROP TABLE temp.db_slimming_targets');
-    db.exec('VACUUM');
-    verifyOpenDatabase(db);
+    reportProgress(options, 'compacting', 58, true);
+    // VACUUM INTO writes the compact database once. In-place VACUUM first
+    // builds a temporary database and then copies it back over the working
+    // file, doubling the final write volume for large profiles.
+    db.prepare('VACUUM INTO ?').run(vacuumPath);
+    restrictDbFilePermissions(vacuumPath);
+    db.close();
+    db = null;
+    reportProgress(options, 'verifying', 90, true);
+    if (!verifyDatabaseFile(vacuumPath)) {
+      throw new DbSlimmingMaintenanceError(
+        'integrity-check-failed',
+        'compacted working database did not pass integrity checks',
+      );
+    }
+    restrictDbFilePermissions(vacuumPath);
+    removeDatabaseFamily(workPath);
+    renameWithRetry(vacuumPath, workPath);
     restrictDbFilePermissions(workPath);
     return targetCounts;
   } catch (error) {
@@ -607,20 +652,38 @@ function compactWorkingCopy(
       cause: error,
     });
   } finally {
-    db.close();
+    db?.close();
+    removeDatabaseFamily(vacuumPath);
   }
 }
 
-function deleteRowsForTargets(
-  db: Database.Database,
-  tableName: string,
-  sessionColumn: string,
+export function discardCancelledDbSlimmingMaintenance(
+  userDataDir: string,
+  dbFilePath: string,
+  request: DbSlimmingRequestRecord,
 ): void {
-  if (!tableExists(db, tableName)) return;
-  db.exec(
-    `DELETE FROM ${tableName}
-      WHERE ${sessionColumn} IN (SELECT id FROM temp.db_slimming_targets)`,
-  );
+  const paths = maintenancePaths(dbFilePath, request);
+  recoverInterruptedCustomBackupInstall(paths);
+  cleanupUncommittedArtifacts(paths);
+  clearDbSlimmingRequest(userDataDir);
+}
+
+function reportProgress(
+  options: RunDbSlimmingMaintenanceOptions,
+  phase: DbSlimmingMaintenanceProgress['phase'],
+  progress: number,
+  cancellable: boolean,
+): void {
+  options.onProgress?.({
+    phase,
+    progress: Math.min(100, Math.max(0, progress)),
+    cancellable,
+  });
+}
+
+function backupFraction(progress: Database.BackupMetadata): number {
+  if (progress.totalPages <= 0) return 0;
+  return Math.min(1, Math.max(0, 1 - progress.remainingPages / progress.totalPages));
 }
 
 function installReplacement(dbFilePath: string, paths: MaintenancePaths): void {
@@ -715,9 +778,10 @@ function registerInstalledBackup(
   options: RunDbSlimmingMaintenanceOptions,
   request: DbSlimmingRequestRecord,
   paths: MaintenancePaths,
+  alreadyVerified = false,
 ): void {
   if (!request.backupEnabled || !paths.backupFinal) return;
-  if (!verifyDatabaseFile(paths.backupFinal)) {
+  if (!alreadyVerified && !verifyDatabaseFile(paths.backupFinal)) {
     throw new DbSlimmingMaintenanceError(
       'backup-failed',
       'installed database slimming backup did not pass integrity checks',
@@ -733,6 +797,15 @@ function registerInstalledBackup(
       { cause: error },
     );
   }
+}
+
+function triggerSql(db: Database.Database, triggerName: string): string | null {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+    .get(triggerName) as { sql: string | null } | undefined;
+  if (!row) return null;
+  if (!row.sql) throw new Error(`trigger ${triggerName} has no restorable SQL`);
+  return row.sql;
 }
 
 function verifyDatabaseFile(filePath: string): boolean {
@@ -772,6 +845,7 @@ function tableExists(db: Database.Database, tableName: string): boolean {
 
 function cleanupAfterCommit(paths: MaintenancePaths): void {
   removeDatabaseFamily(paths.work);
+  removeDatabaseFamily(`${paths.work}.vacuum`);
   removeDatabaseFamily(paths.rollback);
   if (paths.backupPrevious) removeDatabaseFamily(paths.backupPrevious);
   if (paths.backupCandidate) removeDatabaseFamily(paths.backupCandidate);
@@ -797,6 +871,7 @@ function recoverInterruptedCustomBackupInstall(paths: MaintenancePaths): void {
 
 function cleanupUncommittedArtifacts(paths: MaintenancePaths): void {
   removeDatabaseFamily(paths.work);
+  removeDatabaseFamily(`${paths.work}.vacuum`);
   removeDatabaseFamily(paths.rollback);
   if (paths.backupPrevious) removeDatabaseFamily(paths.backupPrevious);
   if (paths.backupCandidate) removeDatabaseFamily(paths.backupCandidate);

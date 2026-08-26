@@ -250,6 +250,14 @@ export const SPLASH_PANEL = {
   progress: { x: 90, y: 346, width: 501, height: 16, radius: 12 },
   /** 明细行 20px Regular @(41,375) 599×23(379:574,与副文案同栏宽居中) */
   stats: { x: 41, y: 375, width: 599, height: 23, fontSize: 20 },
+  /** 启动数据库清理：阶段标题下依次为进度、时间、取消入口和安全提示。 */
+  databaseCleanup: {
+    progressY: 160,
+    statsY: 190,
+    actionY: 235,
+    actionHeight: 50,
+    hint: { x: 70, y: 315, width: 540, height: 48, fontSize: 16, lineHeight: 22 },
+  },
 } as const;
 
 /**

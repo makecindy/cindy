@@ -42,7 +42,7 @@ function storageApi() {
 function maintenanceApi() {
   return {
     getLastResult: vi.fn(async () => null),
-    scan: vi.fn(async (input: { archiveAgeMonths: 1 | 3 | 6 }) => ({
+    scan: vi.fn(async (input: { archiveAgeMonths: '7-days' | 1 | 3 | 6 }) => ({
       scanId: 'scan-1',
       archiveAgeMonths: input.archiveAgeMonths,
       scannedAt: 1_000,
@@ -184,22 +184,23 @@ describe('StorageManagementCard fixed cache directories', () => {
   });
 });
 
-describe('StorageManagementCard database slimming', () => {
-  it('offers only 1, 3, and 6 months, defaults to 3 months, and scans that threshold', async () => {
+describe('StorageManagementCard database cleanup', () => {
+  it('offers only 7 days, 1 month, 3 months, and 6 months, defaulting to 7 days', async () => {
     render(<StorageManagementCard />);
 
     const threshold = screen.getByRole('combobox');
     expect(threshold.textContent).toContain(
-      'settings.about.storage.dbSlimmingArchiveAgeOption3',
+      'settings.about.storage.dbSlimmingArchiveAgeOption7Days',
     );
     fireEvent.click(threshold);
     const options = screen.getAllByRole('option');
     expect(options.map((option) => option.textContent)).toEqual([
+      'settings.about.storage.dbSlimmingArchiveAgeOption7Days',
       'settings.about.storage.dbSlimmingArchiveAgeOption1',
       'settings.about.storage.dbSlimmingArchiveAgeOption3',
       'settings.about.storage.dbSlimmingArchiveAgeOption6',
     ]);
-    fireEvent.click(options[1]!);
+    fireEvent.click(options[0]!);
     expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
     fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
     expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
@@ -211,13 +212,18 @@ describe('StorageManagementCard database slimming', () => {
 
     await waitFor(() => {
       expect(window.electronAPI.localDb.maintenance.scan).toHaveBeenCalledWith({
-        archiveAgeMonths: 3,
+        archiveAgeMonths: '7-days',
       });
     });
     await waitFor(() => expect(scanButton.getAttribute('aria-busy')).toBeNull());
+    expect(
+      await screen.findByRole('alertdialog', {
+        name: 'settings.about.storage.dbSlimmingScanResultTitle',
+      }),
+    ).toBeTruthy();
   });
 
-  it('shows a disabled busy state while a database scan is running', async () => {
+  it('locks the full window while a database scan is running, then shows results in a dialog', async () => {
     let resolveScan!: (value: Awaited<ReturnType<ReturnType<typeof maintenanceApi>['scan']>>) => void;
     vi.mocked(window.electronAPI.localDb.maintenance.scan).mockImplementationOnce(
       () =>
@@ -236,11 +242,17 @@ describe('StorageManagementCard database slimming', () => {
       expect(scanButton.getAttribute('aria-busy')).toBe('true');
       expect((scanButton as HTMLButtonElement).disabled).toBe(true);
     });
+    const persistentDialog = screen.getByRole('alertdialog', {
+      name: 'settings.about.storage.dbSlimmingScanLoading',
+    });
+    expect(persistentDialog.className).not.toContain('animate-confirm');
+    expect(persistentDialog.parentElement?.className ?? '').not.toContain('animate-confirm');
+    expect(document.body.dataset.appInteractionLocked).toBe('1');
 
     await act(async () => {
       resolveScan({
         scanId: 'scan-busy',
-        archiveAgeMonths: 3,
+        archiveAgeMonths: '7-days',
         scannedAt: 1_000,
         archivedBeforeMs: 500,
         deletedTaskCount: 1,
@@ -253,9 +265,22 @@ describe('StorageManagementCard database slimming', () => {
       });
     });
     await waitFor(() => expect((scanButton as HTMLButtonElement).disabled).toBe(false));
+    const report = await screen.findByText('settings.about.storage.dbSlimmingReportTasks');
+    const resultDialog = report.closest('[role="alertdialog"]');
+    expect(resultDialog).toBe(persistentDialog);
+    expect(
+      screen.queryByRole('alertdialog', {
+        name: 'settings.about.storage.dbSlimmingScanLoading',
+      }),
+    ).toBeNull();
+    expect(document.body.dataset.appInteractionLocked).toBe('1');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.cancelButton' }),
+    );
+    await waitFor(() => expect(document.body.dataset.appInteractionLocked).toBeUndefined());
   });
 
-  it('passes only main-issued scan and directory grants when scheduling a restart', async () => {
+  it('passes only main-issued scan and directory grants and stays locked while restarting', async () => {
     render(<StorageManagementCard />);
 
     fireEvent.click(
@@ -273,11 +298,6 @@ describe('StorageManagementCard database slimming', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingConfirmButton' }),
     );
-    fireEvent.click(
-      await screen.findByRole('button', {
-        name: 'settings.about.storage.dbSlimmingRestartButton',
-      }),
-    );
 
     await waitFor(() => {
       expect(window.electronAPI.localDb.maintenance.schedule).toHaveBeenCalledWith({
@@ -286,5 +306,50 @@ describe('StorageManagementCard database slimming', () => {
         backupDirectoryGrantId: 'directory-grant',
       });
     });
+    expect(
+      await screen.findByRole('alertdialog', {
+        name: 'settings.about.storage.dbSlimmingExecutionLoading',
+      }),
+    ).toBeTruthy();
+    expect(document.body.dataset.appInteractionLocked).toBe('1');
+  });
+
+  it('restores the locked scan result when restart scheduling is cancelled', async () => {
+    vi.mocked(window.electronAPI.localDb.maintenance.schedule).mockResolvedValueOnce({
+      scheduled: false,
+    });
+    render(<StorageManagementCard />);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }),
+    );
+    await screen.findByRole('alertdialog', {
+      name: 'settings.about.storage.dbSlimmingScanResultTitle',
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingConfirmButton' }),
+    );
+
+    await waitFor(() => {
+      expect(window.electronAPI.localDb.maintenance.schedule).toHaveBeenCalledWith({
+        scanId: 'scan-1',
+        backupEnabled: true,
+      });
+      expect(
+        screen.queryByRole('alertdialog', {
+          name: 'settings.about.storage.dbSlimmingExecutionLoading',
+        }),
+      ).toBeNull();
+    });
+    expect(
+      await screen.findByRole('alertdialog', {
+        name: 'settings.about.storage.dbSlimmingScanResultTitle',
+      }),
+    ).toBeTruthy();
+    expect(document.body.dataset.appInteractionLocked).toBe('1');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.cancelButton' }),
+    );
+    await waitFor(() => expect(document.body.dataset.appInteractionLocked).toBeUndefined());
   });
 });

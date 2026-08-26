@@ -148,6 +148,7 @@ import {
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
+import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
 import type { BrowserBackendHealth, BrowserBackendRecoveryResult } from '../shared/browserBackend';
 import type {
   ReviewBranchDiffData,
@@ -431,6 +432,9 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutDbSlimmingStartupProgress = createIpcFanOut(
+  DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL,
+);
 const fanOutUpdateChannelSettings = createIpcFanOut('update-channel-settings');
 const fanOutWindowBackdropMaterialChanged = createIpcFanOut(
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
@@ -4868,6 +4872,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       > => ipcRenderer.invoke('local-db:maintenance:last-result'),
       openLastBackupDirectory: (): Promise<{ opened: boolean }> =>
         ipcRenderer.invoke('local-db:maintenance:open-last-backup-directory'),
+      getStartupProgress: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null
+      > => ipcRenderer.invoke('local-db:maintenance:startup-progress'),
+      cancelStartup: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupCancelResult
+      > => ipcRenderer.invoke('local-db:maintenance:cancel-startup'),
+      onStartupProgress: (
+        callback: (
+          progress: import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null,
+        ) => void,
+      ): (() => void) =>
+        fanOutDbSlimmingStartupProgress((progress) => {
+          callback(
+            progress as import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null,
+          );
+        }),
     },
     sessions: {
       list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
