@@ -1229,6 +1229,7 @@ describe('SplitGroup', () => {
     if (!(handle instanceof HTMLElement)) throw new Error('pane drag handle missing');
 
     expect(screen.getByRole('button', { name: 'Session B' })).toBe(handle);
+    expect(handle.getAttribute('draggable')).toBe('true');
     expect(handle.getAttribute('aria-label')).toBeNull();
     const describedBy = handle.getAttribute('aria-describedby');
     expect(describedBy).toBeTruthy();

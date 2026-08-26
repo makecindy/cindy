@@ -152,6 +152,14 @@
     -webkit-user-drag: element !important;
   }
 
+  /* SplitPaneView 的标题按钮也是同窗分屏的原生 HTML5 拖拽源。它不属于
+     SessionItem 的拖拽源树，必须单独恢复 element drag，否则 F2 的全局规则
+     会让 draggable 属性在 Chromium/WebKit 下无法真正启动拖拽。 */
+  [data-split-pane-drag-handle],
+  [data-split-pane-drag-handle] * {
+    -webkit-user-drag: element !important;
+  }
+
   /* F3: Global disable focus outline — Chromium default :focus-visible draws
      a yellow/orange ring on buttons, options and menu items after Esc/click
      transitions focus. Suppress it on non-input elements while inputs keep
