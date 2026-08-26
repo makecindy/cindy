@@ -405,6 +405,41 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('does not let leftover N running promote a later N error onto unaccepted N+1', async () => {
+    const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    queue({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+    expect(
+      seen.some((event) =>
+        event.type === 'error' && event.sessionTurnGeneration === 2),
+    ).toBe(false);
+    expect(
+      seen.find((event) =>
+        event.type === 'error' && (event.data as { message?: string }).message === 'first late failure')
+        ?.sessionTurnGeneration,
+    ).not.toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('keeps an in-flight N+1 start-failure after handle running releases the reservation', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       dispatchEvent: {

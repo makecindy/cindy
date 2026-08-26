@@ -471,8 +471,8 @@ export class Session {
   private staleTerminalQueuedGeneration: number | null = null;
   /** Previous turn generation, kept until leftover tail or new-turn progress. */
   private pendingPriorGeneration: number | null = null;
-  /** N+1 has emitted foreground running; later errors belong to this send. */
-  private sawCurrentTurnRunning = false;
+  /** Generation that already emitted foreground running. */
+  private sawCurrentTurnRunningGeneration: number | null = null;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
    * AgentEvent.turnOrigin 上,turn 终止(isTerminalTurnEvent)后清空 — 共享
@@ -760,7 +760,6 @@ export class Session {
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
     this.unacceptedSendGeneration = reservedTurnGeneration;
-    this.sawCurrentTurnRunning = false;
     this.terminalObservedDuringReservation = null;
     onTurnReserved?.(reservedTurnGeneration);
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
@@ -2048,9 +2047,12 @@ export class Session {
     observedGeneration: number,
     event: AgentEvent,
   ): number {
-    if (this.isForegroundRunningStatus(event)) {
-      this.sawCurrentTurnRunning = true;
-    }
+    const attributed = (generation: number): number => {
+      if (this.isForegroundRunningStatus(event)) {
+        this.sawCurrentTurnRunningGeneration = generation;
+      }
+      return generation;
+    };
     const inFlightGeneration =
       this.sendReservation?.generation ??
       (this.isUnacceptedCurrentSend() ? this.unacceptedSendGeneration : null);
@@ -2069,14 +2071,14 @@ export class Session {
         this.pendingPriorGeneration !== null &&
         this.pendingPriorGeneration < this.turnGeneration &&
         this.lastObservedTerminalKind !== 'error' &&
-        !this.sawCurrentTurnRunning &&
+        this.sawCurrentTurnRunningGeneration !== this.turnGeneration &&
         this.isUnacceptedCurrentSend() &&
         !belongsToInFlightSend
       ) {
         const prior = this.pendingPriorGeneration;
         this.pendingPriorGeneration = null;
         this.staleTerminalQueuedGeneration = null;
-        return prior;
+        return attributed(prior);
       }
       this.staleTerminalQueuedGeneration = null;
       if (
@@ -2086,7 +2088,7 @@ export class Session {
       ) {
         this.pendingPriorGeneration = null;
       }
-      return observedGeneration;
+      return attributed(observedGeneration);
     }
     const prior = this.pendingPriorGeneration;
     const leftoverDoneOrIdle =
@@ -2095,9 +2097,12 @@ export class Session {
     const leftoverUnobservedPriorError =
       isTerminalAgentErrorEvent(event) &&
       prior !== null &&
-      !this.sawCurrentTurnRunning &&
+      this.sawCurrentTurnRunningGeneration !== this.turnGeneration &&
       this.isUnacceptedCurrentSend() &&
-      !belongsToInFlightSend &&
+      (
+        !belongsToInFlightSend ||
+        this.sawCurrentTurnRunningGeneration === prior
+      ) &&
       (event.data as { reason?: string } | undefined)?.reason !== 'session_event_loop_crashed';
     if (prior !== null && (leftoverDoneOrIdle || leftoverUnobservedPriorError) && waitStartGeneration !== 0) {
       if (event.type === 'done' || leftoverUnobservedPriorError) {
@@ -2106,7 +2111,7 @@ export class Session {
       } else {
         this.staleTerminalQueuedGeneration = prior;
       }
-      return prior;
+      return attributed(prior);
     }
     const leftoverTail =
       this.isLeftoverTailEvent(event) &&
@@ -2120,7 +2125,7 @@ export class Session {
       if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
         this.staleTerminalQueuedGeneration = null;
       }
-      return stamped;
+      return attributed(stamped);
     }
     if (leftoverTail && waitStartGeneration > 0 && waitStartGeneration < this.turnGeneration) {
       if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
@@ -2128,7 +2133,7 @@ export class Session {
       } else {
         this.staleTerminalQueuedGeneration = waitStartGeneration;
       }
-      return waitStartGeneration;
+      return attributed(waitStartGeneration);
     }
     // N already observed a terminal error. A later error/done in the N+1
     // unaccepted send window is leftover N, not an in-flight N+1 start-failure.
@@ -2141,7 +2146,7 @@ export class Session {
       (event.type === 'done' || isTerminalAgentErrorEvent(event))
     ) {
       this.staleTerminalQueuedGeneration = null;
-      return waitStartGeneration;
+      return attributed(waitStartGeneration);
     }
     if (belongsToInFlightSend) {
       this.inFlightSendOwnsBlockedWait = false;
@@ -2153,11 +2158,11 @@ export class Session {
       ) {
         this.pendingPriorGeneration = null;
       }
-      return inFlightGeneration;
+      return attributed(inFlightGeneration);
     }
     if (waitStartGeneration === 0 && this.turnGeneration > 0) {
       this.staleTerminalQueuedGeneration = null;
-      return this.turnGeneration;
+      return attributed(this.turnGeneration);
     }
     if (this.isNewTurnProgressEvent(event)) {
       // New-turn tokens prove this generation owns later product terminals.
@@ -2166,7 +2171,7 @@ export class Session {
       this.pendingPriorGeneration = null;
       this.staleTerminalQueuedGeneration = null;
     }
-    return waitStartGeneration;
+    return attributed(waitStartGeneration);
   }
 
   private fanOutEvent(
@@ -2252,7 +2257,7 @@ export class Session {
           this.pendingPriorGeneration !== null &&
           this.pendingPriorGeneration < this.turnGeneration &&
           isTerminalAgentErrorEvent(event) &&
-          !this.sawCurrentTurnRunning &&
+          this.sawCurrentTurnRunningGeneration !== this.turnGeneration &&
           resolvedGeneration !== this.turnGeneration
         )
       );
