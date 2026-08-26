@@ -6,8 +6,6 @@ export const CINDY_FILE_EXT = '.cindy';
 
 /** 新建 ghost.json 使用的格式版本；与 Plugin HTTP API envelope 版本独立演进。 */
 export const GHOST_MANIFEST_SCHEMA_VERSION = 3 as const;
-/** 首个支持 Manifest v3 的 Cindy 正式版本；v3 清单不得声明更低的兼容下限。 */
-export const GHOST_MANIFEST_V3_MIN_CINDY_VERSION = '0.1.61';
 
 /** ghost.json 的 description / whenToUse 字符上限。 */
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
@@ -1341,15 +1339,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     (typeof raw.minCindyVersion !== 'string' || !isValidCindyVersion(raw.minCindyVersion))
   ) {
     return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
-  }
-  if (
-    prepared.schemaVersion === 3 &&
-    compareCindyVersions(raw.minCindyVersion as string, GHOST_MANIFEST_V3_MIN_CINDY_VERSION) === -1
-  ) {
-    return {
-      ok: false,
-      reason: `schemaVersion 3 的 minCindyVersion 不能低于 ${GHOST_MANIFEST_V3_MIN_CINDY_VERSION}`,
-    };
   }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。

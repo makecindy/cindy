@@ -1,9 +1,7 @@
 import {
   GHOST_LOCALES,
-  GHOST_MANIFEST_V3_MIN_CINDY_VERSION,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
-  compareCindyVersions,
   isValidCindyVersion,
   type GhostLocale,
   type GhostManifestLocales,
@@ -43,7 +41,7 @@ export const GHOST_MANIFEST_MAX_BYTES = 256 * 1024;
 export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
 
 /** ghost.json 的 description / whenToUse 字符上限，正本在 plugin-protocol。 */
-export { GHOST_MANIFEST_SUMMARY_MAX_CHARS, GHOST_MANIFEST_V3_MIN_CINDY_VERSION };
+export { GHOST_MANIFEST_SUMMARY_MAX_CHARS };
 
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
@@ -3730,15 +3728,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   }
   if (raw.minCindyVersion !== undefined && !isValidCindyVersion(raw.minCindyVersion)) {
     return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
-  }
-  if (
-    prepared.schemaVersion === 3 &&
-    compareCindyVersions(raw.minCindyVersion as string, GHOST_MANIFEST_V3_MIN_CINDY_VERSION) === -1
-  ) {
-    return {
-      ok: false,
-      reason: `schemaVersion 3 的 minCindyVersion 不能低于 ${GHOST_MANIFEST_V3_MIN_CINDY_VERSION}`,
-    };
   }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。

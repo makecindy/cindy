@@ -389,10 +389,23 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
  * Windows: 用 icacls 把文件权限收紧为"仅当前用户 Full"。
  * 失败仅 stderr 告警, 不抛 —— userData ACL + 0o600 已经是双保险, icacls 是第三道。
  */
+export function resolveWindowsAclPrincipal(
+  env: Partial<Pick<NodeJS.ProcessEnv, 'USERDOMAIN' | 'USERNAME'>> = process.env,
+  fallbackUsername = os.userInfo().username,
+): string {
+  const username = env.USERNAME?.trim() || fallbackUsername.trim();
+  const domain = env.USERDOMAIN?.trim();
+  if (!domain || username.includes('\\') || username.includes('@')) return username;
+  return `${domain}\\${username}`;
+}
+
 async function tightenAclWindows(file: string): Promise<void> {
-  const username = process.env.USERNAME ?? os.userInfo().username;
+  const principal = resolveWindowsAclPrincipal();
   try {
-    await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${username}:F`]);
+    // 先落当前用户的显式 ACE，再移除继承。若 principal 解析失败，第一步会失败，
+    // 文件仍保留原继承权限，不能出现“收紧失败反而把当前用户锁在门外”的半提交状态。
+    await execFileP('icacls', [file, '/grant:r', `${principal}:F`]);
+    await execFileP('icacls', [file, '/inheritance:r']);
   } catch (err) {
     credPathLog.warn('icacls failed', { file, error: (err as Error).message });
   }

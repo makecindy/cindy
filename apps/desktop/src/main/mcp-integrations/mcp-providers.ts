@@ -62,6 +62,8 @@ import {
 } from './remoteChatHistory.js';
 
 export interface DesktopMcpProvidersDeps {
+  /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
+  getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
   lspPool: LspServerPool;
   /** 按会话控制启用状态的 plugin registry。 */
@@ -462,9 +464,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       listWorkers: wrap((s, params) => s.listWorkers(params)),
       switchFocus: wrap((s, params) => s.switchFocus(params)),
       sendToWorker: wrap((s, params) => s.sendToWorker(params)),
+      interruptWorker: wrap((s, params) => s.interruptWorker(params)),
       listWorkerQueuedMessages: wrap((s, params) => s.listWorkerQueuedMessages(params)),
       updateWorkerQueuedMessage: wrap((s, params) => s.updateWorkerQueuedMessage(params)),
       cancelWorkerQueuedMessage: wrap((s, params) => s.cancelWorkerQueuedMessage(params)),
+      mergeWorkerQueuedMessages: wrap((s, params) => s.mergeWorkerQueuedMessages(params)),
       idleWorker: wrap((s, params) => s.idleWorker(params)),
       endTeam: wrap((s, params) => s.endTeam(params)),
       archiveWorker: wrap((s, params) => s.archiveWorker(params)),
@@ -546,6 +550,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       name: 'cindy',
       instance: createCindyGhostsMcpServer(
         getCindyGhostsMcpDeps(ctx, {
+          getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,
