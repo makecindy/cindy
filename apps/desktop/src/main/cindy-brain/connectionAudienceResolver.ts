@@ -4,8 +4,9 @@
  * dynamic bases. A named local-install exception exists only for ghostId
  * `mivo-canvas`: organization members may resolve after the org gate when the
  * installed manifest declares an exact oidc-token host. An intact organization
- * market record still takes the digest path and must not skip via this
- * exception. The Host derives the audience from current identity + plugin id.
+ * market record, including installed:false, still takes the digest path and
+ * must not skip via this exception. The Host derives the audience from
+ * current identity + plugin id.
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
@@ -163,9 +164,9 @@ export function loadConnectionAudienceResolver(
       } catch {
         return reject('market-installation-read-failed');
       }
-      if (!installation || !installation.installed) {
+      if (!installation) {
         // Named exception after the org gate and before market-missing reject.
-        // An intact organization-market record must still take the digest path.
+        // Any persisted market row, including installed:false, still takes digest.
         if (ghostId === LOCAL_OIDC_ALLOWLIST_GHOST_ID) {
           const allowlisted = readManifest();
           if (!allowlisted) return reject('plugin-not-installed');
@@ -174,6 +175,7 @@ export function loadConnectionAudienceResolver(
         }
         return reject('market-installation-missing');
       }
+      if (!installation.installed) return reject('market-installation-missing');
       if (installation.source !== 'market') return reject('market-installation-untrusted');
       if (installation.scope !== 'organization') {
         return reject('market-installation-not-organization');

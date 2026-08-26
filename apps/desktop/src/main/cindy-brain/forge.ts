@@ -2982,8 +2982,8 @@ Auth 的企业服务。主机只在当前登录账号属于组织 Membership，�
 audience 与组织身份由主机推导,插件清单和运行时代码都不能选择、读取或保存
 audience/token；audience 固定为 \`\${orgSlug}:\${ghostId}\`,总长不得超过 64 字符。
 个人身份与手动导入默认不签发。点名例外：\`ghostId\` 精确等于 \`mivo-canvas\` 的组织成员本地安装，
-在已装清单声明了精确 oidc-token host 时可解析 audience；其它本地插件仍不签发。已有有效市场
-organization 记录时必须仍走 digest，不得借例外跳过。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
+在已装清单声明了精确 oidc-token host 时可解析 audience；其它本地插件仍不签发。已有市场
+organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
 确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
 该凭证必须固定声明
 \`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,

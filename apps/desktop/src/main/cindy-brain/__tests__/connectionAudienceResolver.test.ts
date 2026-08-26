@@ -319,6 +319,39 @@ describe('installed Plugin Connection audience resolver', () => {
     expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
   });
 
+  it('does not skip digest when a mivo-canvas market record is marked uninstalled', () => {
+    const localManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      version: '2.0.0',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn'],
+            },
+          },
+        ],
+      },
+    };
+    const marketRecord: PluginMarketInstallationRecord = {
+      ...marketInstallation,
+      ghostId: 'mivo-canvas',
+      installed: false,
+      manifestDigest: ghostManifestDigest({ ...localManifest, version: '1.0.0' }),
+    };
+    const resolver = loadConnectionAudienceResolver(
+      resolverOptions(localManifest, marketRecord),
+    );
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
   it('requires the managed secret target to match a declared exact host', () => {
     const resolver = loadConnectionAudienceResolver({
       ...resolverOptions(),
