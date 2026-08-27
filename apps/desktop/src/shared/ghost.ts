@@ -6088,10 +6088,24 @@ export function ghostManifestToLegacyV2DigestFormat(
     source.schemaVersion === 2 &&
     Array.isArray(source.slots)
   ) {
-    return withLegacyAuthorSlots({
+    const legacy = withLegacyAuthorSlots({
       ...manifest,
       slots: source.slots.map((slot) => (slot === 'model' ? 'cindy' : slot)),
     });
+    // Reproduce the released v0.1.61 normalized output exactly. Its validator
+    // omitted card unless externalLinks was true, and omitted false agent flags;
+    // current validators may synthesize empty capability objects from slots.
+    const sourceCard = isPlainObject(source.card) ? source.card : null;
+    if (sourceCard?.externalLinks === true) legacy.card = { externalLinks: true };
+    else delete legacy.card;
+    const sourceAgent = isPlainObject(source.agent) ? source.agent : null;
+    const legacyAgent: Record<string, true> = {};
+    for (const field of ['background', 'errand', 'schedule'] as const) {
+      if (sourceAgent?.[field] === true) legacyAgent[field] = true;
+    }
+    if (Object.keys(legacyAgent).length > 0) legacy.agent = legacyAgent;
+    else delete legacy.agent;
+    return legacy;
   }
   return withLegacyAuthorSlots(manifest);
 }

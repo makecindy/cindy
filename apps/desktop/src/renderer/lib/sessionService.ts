@@ -26,6 +26,10 @@ import type { SessionReference } from '../../shared/sessionReference';
  */
 export type ListStatusFilter = 'active' | 'archived' | 'all';
 
+export type SessionStatusWriteTarget =
+  | { kind: 'local' }
+  | { kind: 'device-link'; deviceId: string };
+
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
     const ipcError = extractIpcError(err);
@@ -185,9 +189,54 @@ export async function patchMeta(
   return update(sessionId, patch);
 }
 
+/**
+ * Resolve one status mutation before the caller starts local optimistic convergence.
+ *
+ * A restored/copied database can contain the same session id as a task mirrored from a
+ * device that the user has disabled controlling. Sticky origin deliberately survives
+ * mirror removal, so only prefer the local row when both facts are proven: that exact
+ * device is disabled locally and the current local database contains the id. Any lookup
+ * failure stays pinned to the remote device (fail closed) instead of risking a local write.
+ */
+export async function resolveStatusWriteTarget(
+  sessionId: string,
+): Promise<SessionStatusWriteTarget> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return { kind: 'local' };
+
+  try {
+    const state = await window.electronAPI.deviceLink.getState();
+    if (!state.disabledControlDeviceIds?.includes(deviceId)) {
+      return { kind: 'device-link', deviceId };
+    }
+  } catch {
+    return { kind: 'device-link', deviceId };
+  }
+
+  try {
+    await get(sessionId);
+    return { kind: 'local' };
+  } catch {
+    return { kind: 'device-link', deviceId };
+  }
+}
+
 /** status 切换便捷封装(archive 一并 unpin)。 */
-export async function setStatus(sessionId: string, status: SessionStatus): Promise<Session> {
-  return patchMeta(sessionId, status === 'archived' ? { status, pinnedAt: null } : { status });
+export async function setStatus(
+  sessionId: string,
+  status: SessionStatus,
+  target?: SessionStatusWriteTarget,
+): Promise<Session> {
+  const patch = status === 'archived' ? { status, pinnedAt: null } : { status };
+  const resolvedTarget = target ?? (await resolveStatusWriteTarget(sessionId));
+  if (resolvedTarget.kind === 'local') return update(sessionId, patch);
+  return wrap(
+    window.electronAPI.deviceLink.invoke(
+      resolvedTarget.deviceId,
+      'local-db:sessions:patch-meta',
+      [sessionId, patch],
+    ) as Promise<Session>,
+  );
 }
 
 /**

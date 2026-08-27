@@ -58,6 +58,15 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
+  it('maps oversized Codex history to its own copy, not the reconnect timeout', () => {
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).toBe(
+      'logic.errors.codexHistoryOversized',
+    );
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).not.toBe(
+      ERROR_REASON_I18N_KEYS.codex_reconnect_stalled,
+    );
+  });
+
   it('maps an event-loop crash to the generic terminal failure copy', () => {
     expect(ERROR_REASON_I18N_KEYS.session_event_loop_crashed).toBe('logic.errors.turnFailed');
   });

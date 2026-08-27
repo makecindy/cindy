@@ -73,6 +73,7 @@ import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
+import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
@@ -101,6 +102,17 @@ function readCurrentDbClientUserId(): string | null {
   }
 }
 
+function compactTerminalSessionToolResults(
+  client: DbClient,
+  sessionId: string,
+  status: unknown,
+): void {
+  if (status !== 'archived' && status !== 'deleted') return;
+  void compactSessionToolResultsBestEffort({
+    client,
+    sessionId,
+  });
+}
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
 type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
@@ -237,13 +249,11 @@ export function broadcastSessionPatched(
 }
 
 /**
- * worktree 回收真正跑完后通知本机所有窗口重拉 worktree 快照。
+ * worktree 回收真正跑完后通知本机所有窗口更新对应 session 的 worktree 缓存。
  *
- * 没有这条推送,renderer 只能在归档/删除动作里"顺手"刷一次 worktree map,而回收
- * 是下面 fire-and-forget 的异步链(动态 import → 关子进程 → git worktree remove →
- * 文件系统清理),store 条目被移除的时刻远晚于状态 IPC 返回。renderer 那次刷新会
- * 快照到仍然存在的旧条目,归档列表上的 worktree 徽标就一直陈旧,直到某次无关的
- * 刷新才纠正(codex review P1)。
+ * 回收是下面 fire-and-forget 的异步链(动态 import → 关子进程 → git worktree remove →
+ * 文件系统清理),store 条目被移除的时刻远晚于状态 IPC 返回。这条推送提供回收完成的
+ * 权威时机；payload 保持为单个 sessionId，renderer 不需要重拉全表。
  *
  * 只广播给本机窗口、不进 device-link tap:控制端(手机/另一台桌面)的远程会话
  * worktree 元数据走 device-link 自己的镜像链路,不经本机 WorktreeContext。
@@ -265,8 +275,10 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * 反向 import 本文件的 setWorktreePathInDb)。Simulator 清理由启动组合层静态注入，
  * 避免在回收临界路径上延迟加载带原生副作用的 Host 模块。
  *
- * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
- * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
+ * 只为真正进入低层 worktree 回收的 session 广播。普通通知任务没有 worktree，仍会
+ * 完成 runtime / media / owner 扫描，但不会让 renderer 扫描全部 worktree。共享路径
+ * 扫描若找到另一个终态 owner，则通知 owner 的 sessionId，而不是原任务的 sessionId。
+ * 回收失败时仍广播：renderer 单条查询后会保留仍在 store 中的真实状态。
  */
 export async function recycleSessionWorktreeForStatusChange(
   sessionId: string,
@@ -274,6 +286,7 @@ export async function recycleSessionWorktreeForStatusChange(
   capturedScope?: SessionRecycleScope,
 ): Promise<void> {
   if (status !== 'deleted' && status !== 'archived') return;
+  const affectedWorktreeSessionIds = new Set<string>();
   try {
     // Callers that already crossed an async status write pass the owner/DB
     // captured at operation entry. The fallback is only for direct callers.
@@ -324,6 +337,9 @@ export async function recycleSessionWorktreeForStatusChange(
             });
           });
         if (!ownerIsCurrent()) return;
+        if (recycle.hasRegisteredWorktreeForSession(targetSessionId)) {
+          affectedWorktreeSessionIds.add(targetSessionId);
+        }
         await recycle.recycleWorktreeForRemovedSession(targetSessionId, {
           scanOwners,
           db: mediaDb,
@@ -341,7 +357,9 @@ export async function recycleSessionWorktreeForStatusChange(
       err: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    broadcastWorktreeChanged(sessionId);
+    for (const affectedSessionId of affectedWorktreeSessionIds) {
+      broadcastWorktreeChanged(affectedSessionId);
+    }
   }
 }
 
@@ -1412,7 +1430,8 @@ export function registerSessionIpc(
     const sid = requireString(id, 'id');
     const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
-    const db = getDbClient().drizzle;
+    const dbClient = getDbClient();
+    const db = dbClient.drizzle;
     // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
     // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
     const update = async () => {
@@ -1653,6 +1672,7 @@ export function registerSessionIpc(
     scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
     notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
     cleanupSessionTerminalArtifacts(sid, p.status);
+    compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;
     };
     return p.workingDir === undefined ? update() : withSessionRouteLock(sid, update);
@@ -1730,7 +1750,8 @@ export async function patchSessionMetaInDb(
     throwIpcError('INVALID_PARAMS', 'title must be a string');
   }
 
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
@@ -1782,6 +1803,7 @@ export async function patchSessionMetaInDb(
       m.maybeGenerateSessionTaskSummary(sessionId, { force: true }),
     );
   }
+  compactTerminalSessionToolResults(dbClient, sessionId, patch.status);
   return updated;
 }
 
@@ -1909,6 +1931,9 @@ export async function setSessionsStatusInDb(
     }
     return rows;
   });
+  for (const item of applied) {
+    compactTerminalSessionToolResults(dbClient, item.sessionId, item.status);
+  }
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
       sessionId: item.sessionId,

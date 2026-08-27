@@ -4,10 +4,10 @@
  * 职责:
  *   1. 从 newMakerDraft store 读取 vendor / workingDir / lastByVendor
  *   2. 渲染 CREATE AGENT 主区:lockup + ChatInput(sessionId=undefined) + 快速开始
- *   3. 用户切 vendor → switchVendor() 把当前 prefs 落地 lastByVendor[oldVendor]
- *      + 切到新 vendor 后 ChatInput 的 initialModel/Effort/PermissionMode 自动
+ *   3. 用户切 vendor → switchVendor() 保留已同步的当前 prefs 并切到新 vendor，
+ *      ChatInput 的 initialModel/Effort/PermissionMode 自动
  *      由 lastByVendor[newVendor] 提供
- *   4. 用户改 model/effort/permissionMode → patchCurrentVendorPrefs(局部更新)
+ *   4. 用户改 model/effort/permissionMode → patchVendorPrefs(按界面 Harness 局部更新)
  *   5. 用户改 workingDir → patchDraft({ workingDir })
  *
  * workspace 选择:
@@ -82,8 +82,12 @@ import {
   getDraft,
   patchDraft,
   patchCollab,
-  patchCurrentVendorPrefs,
   patchVendorPrefs,
+  patchVendorPrefsPreservingModelChoice,
+  applySuggestedDefaultTuple,
+  fallbackUnavailableVendor,
+  markDefaultTupleCustomized,
+  clearDefaultTupleTuningCustomization,
   resetDraftWorkspaceTargets,
   getFastModeForModel,
   setFastModeForModel,
@@ -93,6 +97,10 @@ import {
   type CollabDraft,
 } from '@/state/newMakerDraft';
 import {
+  hasAnyModelEngineOverride,
+  useModelEnginePrefsVersion,
+} from '@/state/modelEnginePrefs';
+import {
   setDraftFavoriteAnchor,
   setSessionFavoriteAnchor,
   useDraftFavoriteAnchor,
@@ -101,6 +109,7 @@ import {
 import {
   getProviderModelEffort,
   getProviderModelFast,
+  hasAnyProviderModelOverride,
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
@@ -124,6 +133,7 @@ import {
   resolveDraftSessionProviderId,
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
+import { resolveNewMakerDefaultTuple } from '@/lib/newMakerDefaultTuple';
 import { showWorktreeError } from '@/lib/worktreeToast';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -138,7 +148,7 @@ import {
   rewritePiSkillMessageForSend,
 } from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
-import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
+import { useRefreshWorktreeForSession } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
   consumeNewMakerDialogueTargetRequest,
@@ -637,7 +647,7 @@ export function NewMakerDraftRoute() {
   const isDraftToolbarNarrow = inputWidthBand <= 1;
   const { createSession, error: createSessionError } = useCCSessions();
   const vendorAuthGate = useVendorAuthGate();
-  const refreshWorktrees = useRefreshWorktrees();
+  const refreshWorktreeForSession = useRefreshWorktreeForSession();
 
   /** createSession 失败 toast:远端路由错误按 code 给可操作文案,其余回退通用文案。 */
   const toastCreateSessionFailed = (err?: unknown) => {
@@ -1198,6 +1208,38 @@ export function NewMakerDraftRoute() {
   // device-link「以被控端为准」:远程草稿用被控端经隧道带来的 providers(per-provider,含 fast 能力);
   // 本地草稿用本机 providers。fast 判定统一交给 resolveFastSupported(不在控制端另写远程逻辑)。
   const { providers: localProviders, loading: localProvidersLoading } = useProviders();
+  const modelEnginePrefsVersion = useModelEnginePrefsVersion();
+  const modelPresetVersion = useProviderModelMemoryVersion();
+  const hasLegacyDefaultChoice = useMemo(
+    () => hasAnyModelEngineOverride() || hasAnyProviderModelOverride(),
+    [modelEnginePrefsVersion, modelPresetVersion],
+  );
+  const suggestedDefaultTuple = useMemo(
+    () =>
+      resolveNewMakerDefaultTuple({
+        providers: localProviders,
+        providersLoading: localProvidersLoading,
+        availableAgents: availableVendors,
+        availableAgentsLoaded,
+      }),
+    [localProviders, localProvidersLoading, availableVendors, availableAgentsLoaded],
+  );
+  useEffect(() => {
+    // 远程主机 / device-link 的可用 Harness 与来源属于执行端，不能拿控制端本机登录态替它选。
+    if (
+      !suggestedDefaultTuple ||
+      effectiveDeviceLinkDeviceId ||
+      draft.remoteHostId ||
+      hasLegacyDefaultChoice
+    )
+      return;
+    applySuggestedDefaultTuple(suggestedDefaultTuple);
+  }, [
+    suggestedDefaultTuple,
+    effectiveDeviceLinkDeviceId,
+    draft.remoteHostId,
+    hasLegacyDefaultChoice,
+  ]);
   const {
     providers: deviceProviders,
     loading: deviceProvidersLoading,
@@ -1209,7 +1251,7 @@ export function NewMakerDraftRoute() {
   // 一一对应,工具条的引擎下拉必须按后者(active)决定去留:
   //   · capable(本变量)—— 联合列表只认供应商目录,老被控端(不支持 provider:list)只有
   //     一份拍平 capabilities → 开了就是空列表,composer 那边会降级回旧面板;
-  //   · active —— 再叠上形态偏好(modelPickerLayout,默认 'original' = 最原始选择器)。
+  //   · active —— 再叠上形态偏好(modelPickerLayout,默认 'classic' = A 版统一选择器)。
   // 旧面板是「先选引擎再选模型」,所以只要没真正启用统一面板,就必须把工具条上的引擎下拉
   // 还回来 —— 否则那条链路上根本换不了引擎(只按 capable 撤掉时,默认形态下的新建草稿
   // 就彻底没有换引擎入口)。统一面板真启用时不注入(引擎跟着模型走)。
@@ -1341,7 +1383,6 @@ export function NewMakerDraftRoute() {
   // 首页是“下一次创建会话”的配置草稿,没有正在运行的当前模型需要保护。其它对话更新同一模型
   // 的全局预设后,即使该模型正显示在首页 trigger 上,也应立即采用新 effort / fast。真实会话仍
   // 由 CCAgentSessionView 的 live DB/runtime props 保护,不会走这里。
-  const modelPresetVersion = useProviderModelMemoryVersion();
   const localDraftEffort = useMemo<Effort>(() => {
     if (isDeviceLinkDraft || !effectiveSourceId) return chatPrefs.effort;
     const provider = providers.find((item) => item.id === effectiveSourceId);
@@ -2423,7 +2464,7 @@ export function NewMakerDraftRoute() {
         }
         // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
         carryDraftFavoriteAnchorToSession(newSession.id, draftVendor, sshModel, sshProviderId);
-        if (effectivePlanMode) patchCurrentVendorPrefs({ planMode: false });
+        if (effectivePlanMode) patchVendorPrefs(draftVendor, { planMode: false });
         makerChatStore.setSessionRuntime(newSession.id, {
           agentKind: dbToMakerAgentKind(draftVendor),
           fastMode: sshFastMode,
@@ -2516,38 +2557,41 @@ export function NewMakerDraftRoute() {
   );
 
   // ─── 切 vendor ──────────────────────────────────────────────────────
-  // 把"当前 vendor 的最新 prefs"落进 lastByVendor[oldVendor],然后切到新 vendor。
+  // 当前 vendor 的 prefs 已由 patchActivePrefs 同步进草稿；这里只切到新 vendor。
   // ChatInput 的 initial* 由父级传入,vendor 切换后 ChatInput 重新 mount(key 变化)
   // 自动 pickup 新 vendor 的 lastByVendor 值。
-  const handleVendorChange = useCallback(
-    (next: MakerVendor) => {
-      switchVendor(next, currentPrefs);
-    },
-    [currentPrefs],
-  );
+  const handleVendorChange = useCallback((next: MakerVendor) => {
+    markDefaultTupleCustomized();
+    switchVendor(next);
+  }, []);
 
   // 当前草稿选中的 vendor 变为不可用(如 Pi 未注册 / 被控端无 Pi)时,coerce 到首个可用来源
   // (优先 cc),避免 tablist 卡在被隐藏段、且防止创建出注定 requireAgent 报错的会话。
   // 只在已加载可用性后收敛;fallback 一定可见,收敛一次即稳定(switchVendor 同值早返,不成环)。
   useEffect(() => {
     if (!availableAgentsLoaded) return;
-    if (!hiddenSwitcherVendors.includes(draft.vendor)) return;
-    const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
-      availableVendors.has(vendor),
-    );
-    if (fallback && fallback !== draft.vendor) handleVendorChange(fallback);
-  }, [
-    availableAgentsLoaded,
-    hiddenSwitcherVendors,
-    availableVendors,
-    draft.vendor,
-    handleVendorChange,
-  ]);
+    fallbackUnavailableVendor(availableVendors);
+  }, [availableAgentsLoaded, availableVendors]);
 
   // ─── 用户在 ChatInput 改 model/effort/permission 后,落进当前 vendor 的 prefs ──
-  const patchActivePrefs = useCallback((patch: Partial<VendorPrefs>) => {
-    patchCurrentVendorPrefs(patch);
-  }, []);
+  // 权限 / 计划模式不是默认模型 tuple：按界面 Harness 的槽写，但不改变 storage 中最新
+  // Harness。这样旧窗口的无关字段写入只 rebase，不会反向改掉另一窗口刚恢复的推荐。
+  const patchActivePrefs = useCallback(
+    (patch: Partial<VendorPrefs>) => {
+      patchVendorPrefs(draft.vendor, patch);
+    },
+    [draft.vendor],
+  );
+  const patchActiveTuplePrefs = useCallback(
+    (patch: Partial<VendorPrefs>) => {
+      // draft.vendor 是用户触发控件时眼前的 Harness，必须作为这次操作的明确意图带进
+      // store。另一个 renderer 可能已切换持久 tuple；先 rebase 并切回意图 Harness，
+      // 再按显式槽写入，避免把 cc 控件的值静默落进 Pi。
+      switchVendor(draft.vendor);
+      patchVendorPrefs(draft.vendor, patch);
+    },
+    [draft.vendor],
+  );
 
   const handleModelDidChange = useCallback(
     (newModelId: string) => {
@@ -2574,11 +2618,18 @@ export function NewMakerDraftRoute() {
         }));
         return;
       }
-      patchActivePrefs({ model: newModelId });
+      markDefaultTupleCustomized();
+      patchActiveTuplePrefs({ model: newModelId });
       // 本地草稿的 Fast 直接由「新 model + 全局预设 + 来源能力」派生,patch 后同步收敛,
       // 不再维护一份可能与其它对话更新脱节的本地 state。
     },
-    [isDeviceLinkDraft, capabilities, remoteDraftState, patchActivePrefs, capabilityAgentKind],
+    [
+      isDeviceLinkDraft,
+      capabilities,
+      remoteDraftState,
+      patchActiveTuplePrefs,
+      capabilityAgentKind,
+    ],
   );
   const handleFastModeChange = useCallback(
     (enabled: boolean) => {
@@ -2591,6 +2642,10 @@ export function NewMakerDraftRoute() {
       if (!supportsFastMode) {
         return;
       }
+      markDefaultTupleCustomized(false);
+      // Fast 也是当前可见模型组合的显式意图；旧窗口必须先从持久化的新 Harness
+      // 切回用户眼前的 Harness，再写该界面的 provider/model 记忆。
+      switchVendor(draft.vendor);
       // 权威库:per-(agent, 来源, 模型),与 resolveDraftFast 的读源对齐(ModelSelector 的 Edit 面板
       // 对选中模型也会写这一份;此处显式写一遍,使 onFastModeChange 走任何路径都自洽、不依赖选择器侧写)。
       // 写入键必须与 effectiveFastMode 的读取键同源:两者都用**校准后**的模型。若这里仍写
@@ -2604,6 +2659,7 @@ export function NewMakerDraftRoute() {
     },
     [
       isDeviceLinkDraft,
+      draft.vendor,
       calibratedDraftModel,
       supportsFastMode,
       effectiveSourceId,
@@ -2619,9 +2675,10 @@ export function NewMakerDraftRoute() {
         pushActiveDraftPref({ effort: newEffort }); // 选中模型 effort 写穿被控端
         return;
       }
-      patchActivePrefs({ effort: newEffort });
+      markDefaultTupleCustomized(false);
+      patchActiveTuplePrefs({ effort: newEffort });
     },
-    [isDeviceLinkDraft, patchActivePrefs, pushActiveDraftPref],
+    [isDeviceLinkDraft, patchActiveTuplePrefs, pushActiveDraftPref],
   );
   // ChatInput 内部决策完 newEffort 时回写这里, 让"每个 modelId 上次的 effort"
   // 跨 ChatInput 实例 / 跨重启保留 (修复: New Maker 先选 Haiku 发完, 再 New Maker
@@ -2663,9 +2720,10 @@ export function NewMakerDraftRoute() {
         setDlSel((prev) => (prev ? { ...prev, providerId: newProviderId } : prev));
         return;
       }
-      patchActivePrefs({ providerId: newProviderId });
+      markDefaultTupleCustomized();
+      patchActiveTuplePrefs({ providerId: newProviderId });
     },
-    [isDeviceLinkDraft, patchActivePrefs],
+    [isDeviceLinkDraft, patchActiveTuplePrefs],
   );
 
   // ─── 统一模型选择器:一次选中 = 一次完整写入 ─────────────────────────────
@@ -2691,6 +2749,7 @@ export function NewMakerDraftRoute() {
       effort?: Effort;
       fast: boolean;
       favoriteUid: string | null;
+      resetToRecommended?: true;
     }) => {
       // 收藏锚点写进**目标引擎的槽**(Chris 2026-08-19 起持久化,见 draftFavoriteAnchor 的
       // 说明):记的是 uid + **本次写进草稿的 wire id**,失效判定才有可比的同类值。
@@ -2708,7 +2767,9 @@ export function NewMakerDraftRoute() {
             }
           : null,
       );
-      if (selection.vendor !== draft.vendor) switchVendor(selection.vendor, currentPrefs);
+      // 必须无条件进入 store 的 rebase：当前 renderer 的 draft.vendor 可能还停在 storage
+      // event 到达前的旧 Harness。switchVendor 自身同值早返，不会制造额外写入。
+      switchVendor(selection.vendor);
       if (isDeviceLinkDraft) {
         dlRuntimeTouchedRef.current = true;
         // ★ 跨引擎选择必须**前置**把 seed key 推到目标引擎(2026-08-17 review 第三轮 G1)。
@@ -2782,18 +2843,32 @@ export function NewMakerDraftRoute() {
         );
         return;
       }
-      // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
-      // 这是用户在 New Maker picker 里的**显式**模型选择,modelChosenByVendor 必须打标
-      // (scheduler 的成本兜底默认模型依赖它)。
-      patchVendorPrefs(selection.vendor, {
+      const nextPrefs = {
         model: selection.modelId,
         providerId: selection.providerId,
         ...(selection.effort ? { effort: selection.effort } : {}),
-      });
+      };
+      if (selection.resetToRecommended) {
+        // 恢复推荐沿既有选择链把推荐配置真正应用到草稿，但不能把它重新记成显式选择。
+        // 只调过 effort / Fast 的用户在记忆键被删后重新跟随产品默认；已有模型 / 来源 /
+        // Harness 选择仍由 selection marker 保护。
+        patchVendorPrefsPreservingModelChoice(selection.vendor, nextPrefs);
+        clearDefaultTupleTuningCustomization({
+          modelId: selection.modelId,
+          // resetStoredConfig 已同步删除当前行三类 override；这里重读完整 store，只有其它行也
+          // 没有留下用户配置时才允许后续授权 / 推荐变化重新应用产品默认。
+          hasExternalOverrides:
+            hasAnyModelEngineOverride() || hasAnyProviderModelOverride(),
+        });
+      } else {
+        markDefaultTupleCustomized();
+        // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
+        // 这是用户在 New Maker picker 里的**显式**模型选择,modelChosenByVendor 必须打标。
+        patchVendorPrefs(selection.vendor, nextPrefs);
+      }
     },
     [
       draft.vendor,
-      currentPrefs,
       isDeviceLinkDraft,
       effectiveDeviceLinkDeviceId,
       deviceLinkInitial,
@@ -3914,7 +3989,7 @@ export function NewMakerDraftRoute() {
                   restoreFirstMessageDraft();
                   return;
                 }
-                await refreshWorktrees();
+                await refreshWorktreeForSession(newSession.id);
                 // 注意:成功后不立刻 clear worktreeCreationStore —— 移到 sendMessage
                 // 触发之后再 clear, 让 CCAgentSessionView 里 worktreePreparing 一直
                 // true 到 sendMessage 已经 push 第一条 user message + isStreaming=true
@@ -4208,7 +4283,7 @@ export function NewMakerDraftRoute() {
       navigate,
       crossAgentDialog.runMigrationFlow,
       attachmentState,
-      refreshWorktrees,
+      refreshWorktreeForSession,
       t,
     ],
   );
@@ -4696,7 +4771,7 @@ export function NewMakerDraftRoute() {
             setProgress: (progress) => worktreeCreationStore.set(newSession.id, progress),
             clearProgress: () => worktreeCreationStore.clear(newSession.id),
           });
-          await refreshWorktrees();
+          await refreshWorktreeForSession(newSession.id);
         }
         {
           const iso = new Date().toISOString();
@@ -4821,7 +4896,7 @@ export function NewMakerDraftRoute() {
       localProviders,
       localProvidersLoading,
       patchCollab,
-      refreshWorktrees,
+      refreshWorktreeForSession,
       navigate,
       t,
     ],

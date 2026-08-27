@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const knobs = vi.hoisted(() => ({
   ctorThrows: false,
   getStateRejects: false,
+  abortRejects: false,
   getStateGate: null as Promise<void> | null,
   closeRejects: false,
   closeFailuresRemaining: 0,
@@ -81,6 +82,9 @@ vi.mock('../rpc-client.js', () => ({
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
+      if (cmd.type === 'abort' && knobs.abortRejects) {
+        return { success: false, error: 'abort rejected (mock)' };
+      }
       // switch_session / set_thinking_level / set_auto_compaction / get_entries 等一律成功。
       return { success: true, data: { entries: [] } };
     }
@@ -127,6 +131,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   beforeEach(() => {
     knobs.ctorThrows = false;
     knobs.getStateRejects = false;
+    knobs.abortRejects = false;
     knobs.getStateGate = null;
     knobs.closeRejects = false;
     knobs.closeFailuresRemaining = 0;
@@ -1772,6 +1777,67 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
     expect(knobs.requests).toEqual(['abort']);
     expect(knobs.closeCount).toBe(0);
+
+    await handle.close();
+  });
+
+  it('does not surface an aborted gateway error when Host stop beats agent_start', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const events: Array<{ type: string; data?: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    await handle.send({ type: 'user', content: 'start a Pi turn' });
+    await handle.abort();
+    knobs.onEvent?.({ type: 'agent_start' });
+    knobs.onEvent?.({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'aborted',
+        errorMessage: rawError,
+      },
+    });
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+
+    await handle.close();
+  });
+
+  it('keeps a real gateway disconnect resumable when the Pi abort RPC is rejected', async () => {
+    knobs.abortRejects = true;
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const events: Array<{ type: string; data?: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    await handle.send({ type: 'user', content: 'start a Pi turn' });
+    await handle.abort();
+    knobs.onEvent?.({ type: 'agent_start' });
+    knobs.onEvent?.({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'aborted',
+        errorMessage: rawError,
+      },
+    });
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'error')).toBe(true));
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ message: rawError, isTerminal: true }),
+      }),
+    ]);
 
     await handle.close();
   });

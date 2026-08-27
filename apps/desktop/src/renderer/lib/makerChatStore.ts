@@ -9946,6 +9946,12 @@ function retryInvalidatedInitialHistoryFetchIfNeeded(
   epoch: number,
 ): void {
   const ownsFetch = _historyFetchToken.get(sessionId) === token;
+  // Release the shared pagination lock only when this fetch still owns the
+  // token.  A stale callback from a superseded fetch must not clear the lock
+  // that a newer replacement backfill is actively holding.
+  if (ownsFetch) {
+    setState(sessionId, (s) => (s.isLoadingMore ? { ...s, isLoadingMore: false } : s));
+  }
   const epochChanged = (_messagesEpoch.get(sessionId) ?? 0) !== epoch;
   const originUnchanged = remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
   releaseHistoryFetchIfCurrent(sessionId, token);
@@ -10505,7 +10511,7 @@ function ensureInitialMessages(sessionId: string): void {
       // rewind 之类的粘滞抑制(见 releaseCacheHydrationAfterFailure)。屏上已 hydrate 的
       // 缓存行**保持不动**:离线时它是用户唯一能看到的历史,清掉纯属倒退。
       releaseCacheHydrationAfterFailure(sessionId);
-      setState(sessionId, (s) => ({ ...s, historyLoaded: false }));
+      setState(sessionId, (s) => ({ ...s, historyLoaded: false, isLoadingMore: false }));
     });
 }
 

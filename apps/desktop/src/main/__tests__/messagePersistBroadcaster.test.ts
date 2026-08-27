@@ -2238,8 +2238,10 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
   it('does not persist a leaked Grok stop token as the last assistant', async () => {
     const first = onAssistantTextEvent(SESSION, { text: '现有 reviewer 空闲。', isFinal: true }, null);
     const leaked = onAssistantTextEvent(SESSION, { text: '<|eos|>', isFinal: true }, null);
+    const repeated = onAssistantTextEvent(SESSION, { text: '<|eos|><|eos|>', isFinal: true }, null);
     await flushWrites();
     expect(leaked).toBeUndefined();
+    expect(repeated).toBeUndefined();
     expect(createMessage).toHaveBeenCalledTimes(1);
     expect(consumeLastAssistantPersistId(SESSION)).toBe(first);
   });

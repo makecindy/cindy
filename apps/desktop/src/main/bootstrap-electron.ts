@@ -277,6 +277,7 @@ import {
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
+import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   getAllRegisteredDraftUrls,
@@ -322,10 +323,24 @@ import {
   getRawDb as localDbGetRawDb,
   closeDb as localDbCloseDb,
   getCurrentDbPath as localDbGetCurrentDbPath,
+  getDbPathForUser,
 } from './localDb/index';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
-import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from './localDb/client/current';
+import {
+  clearCurrentDbClient,
+  getCurrentDbClientUserId,
+  getDbClient,
+  setCurrentDbClient,
+} from './localDb/client/current';
+import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
+import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
+import {
+  cancelDbSlimmingStartupProgress,
+  getDbSlimmingStartupProgress,
+  subscribeDbSlimmingStartupProgress,
+} from './localDb/dbSlimmingStartupState';
+import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -2217,11 +2232,11 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
 
-// ── 资源监视器独立窗口 ──────────────────────────────────────────────
-// 单实例轻量独立窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
+// ── 资源监视器辅助窗口 ──────────────────────────────────────────────
+// 单实例轻量辅助窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
 // 不需要 session 上下文转发。后台预热后常驻复用，普通关窗只隐藏。
-// macOS 全屏时监视器自己进新的 Space，不能挂 parent；其它平台仍挂主窗，
-// 这样最小化 / 关到托盘时监视器一起消失。
+// macOS 使用独立顶层窗口，打开时保留系统原生 Space / 全屏呈现，不再由 controller
+// 主动镜像 owner；Windows / Linux 保持 parent 关系。owner 最小化或关到托盘时仍一起收起。
 const resourceUsageWindowController = new ResourceUsageWindowController({
   createWindow: () => {
     const owner = mainWindowRef;
@@ -7242,22 +7257,14 @@ const registerIpcHandlers = () => {
         throwIpcError('INTERNAL', 'fixed cache directory action failed');
       }
     };
-    const openExistingFixedDirectory = async (
+    const openFixedDirectory = (
       rootDir: string,
       canOpen: () => boolean = () => true,
-    ): Promise<boolean> => {
-      try {
-        const stat = await fs.promises.lstat(rootDir);
-        if (!stat.isDirectory()) return false;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
-        throw err;
-      }
-      if (!canOpen()) throw new Error('fixed directory owner changed before open');
-      const error = await shell.openPath(rootDir);
-      if (error) throw new Error(error);
-      return true;
-    };
+    ): Promise<boolean> =>
+      openOrCreateFixedDirectory(rootDir, {
+        canOpen,
+        openPath: (filePath) => shell.openPath(filePath),
+      });
     // These actions intentionally accept no renderer path. The frozen xdt-image
     // cache has no owner metadata, so its confirmed cleanup applies to the whole
     // profile-level legacy root. Chat attachments remain scoped to the active
@@ -7324,11 +7331,11 @@ const registerIpcHandlers = () => {
       getQueueScanTexts: collectAgentInputQueueScanTexts,
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
-      openLegacyImagesDir: () => openExistingFixedDirectory(imageCacheStore.getCacheRoot()),
+      openLegacyImagesDir: () => openFixedDirectory(imageCacheStore.getCacheRoot()),
       clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
       openChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
-          openExistingFixedDirectory(rootDir, isCurrentOwner),
+          openFixedDirectory(rootDir, isCurrentOwner),
         ),
       clearChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
@@ -7394,6 +7401,140 @@ const registerIpcHandlers = () => {
         return { cleared: true };
       }),
     );
+
+    const localDbMaintenanceHandlers = createLocalDbMaintenanceIpcHandlers({
+      captureOwner: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        if (!ownerId || isAppSessionBoundaryPending()) return null;
+        return { ownerId, scopeKey: activeOwnerScopeKey() };
+      },
+      isOwnerCurrent: ({ ownerId, scopeKey }) =>
+        !isAppSessionBoundaryPending() &&
+        getActiveAppSession().dataOwnerId === ownerId &&
+        activeOwnerScopeKey() === scopeKey,
+      getDbClient,
+      getDbClientOwnerId: getCurrentDbClientUserId,
+      getCurrentDbPath: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        return ownerId ? getDbPathForUser(ownerId) : null;
+      },
+      getUserDataDir: () => app.getPath('userData'),
+      canSchedule: () => process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      selectBackupDirectory: async () => {
+        const options = {
+          title: t('settings.about.storage.dbSlimmingBackupDirectoryDialogTitle'),
+          properties: ['openDirectory', 'createDirectory'] as Array<
+            'openDirectory' | 'createDirectory'
+          >,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showOpenDialog(ownerWindow, options)
+          : await dialog.showOpenDialog(options);
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      confirmWithoutBackup: async () => {
+        const options: Electron.MessageBoxOptions = {
+          type: 'warning',
+          title: t('settings.about.storage.dbSlimmingConfirmTitle'),
+          message: t('settings.about.storage.dbSlimmingConfirmTitle'),
+          detail: t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup'),
+          buttons: [
+            t('settings.about.storage.dbSlimmingRestartButton'),
+            t('settings.about.storage.cancelButton'),
+          ],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showMessageBox(ownerWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
+      revealFile: async (filePath) => {
+        try {
+          if (!(await fs.promises.stat(filePath)).isFile()) return false;
+        } catch {
+          return false;
+        }
+        shell.showItemInFolder(path.normalize(filePath));
+        return true;
+      },
+      relaunch: (requestId) => {
+        dbClientLog.info('database slimming relaunch requested');
+        if (app.isPackaged) {
+          app.relaunch();
+        } else {
+          // Forge owns the Vite server. A bare app.relaunch() outlives Forge,
+          // then opens a white window against a dead localhost renderer. The
+          // repository dev runner observes the durable cleanup marker and
+          // restarts the full Forge/Vite stack after this process exits.
+          const delegated = writeDbSlimmingDevRelaunchSignal(requestId);
+          dbClientLog.info('database slimming dev relaunch delegated to desktop dev runner', {
+            delegated,
+          });
+        }
+        app.quit();
+      },
+    });
+    const invokeLocalDbMaintenanceIpc = async <T>(
+      action: string,
+      operation: () => T | Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        dbClientLog.error('database slimming IPC failed', {
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError('INTERNAL', 'database maintenance request failed');
+      }
+    };
+    ipcMain.handle('local-db:maintenance:scan', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('scan', () => localDbMaintenanceHandlers.scan(input));
+    });
+    ipcMain.handle('local-db:maintenance:choose-backup-directory', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('choose-backup-directory', () =>
+        localDbMaintenanceHandlers.chooseBackupDirectory(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:schedule', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('schedule', () =>
+        localDbMaintenanceHandlers.schedule(input),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:last-result', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('last-result', () =>
+        localDbMaintenanceHandlers.getLastResult(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:open-last-backup-directory', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('open-last-backup-directory', () =>
+        localDbMaintenanceHandlers.openLastBackupDirectory(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:startup-progress', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return getDbSlimmingStartupProgress();
+    });
+    ipcMain.handle('local-db:maintenance:cancel-startup', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return { cancelled: cancelDbSlimmingStartupProgress() };
+    });
+    subscribeDbSlimmingStartupProgress((progress) => {
+      const target = mainWindowRef;
+      if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+      target.webContents.send(DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
+    });
   }
 
   // F5: SDK send-time temporary base64 read (renderer-initiated; main-initiated

@@ -41,6 +41,12 @@ export interface PluginMarketInstallationRecord {
    * 更新覆盖。新写入的市场、自定义市场和 legacy adoption 记录均应携带。
    */
   manifestDigest?: string;
+  /**
+   * SHA-256 of the exact installed ghost.json bytes. New clients use this
+   * serialization-exact identity; manifestDigest remains unchanged for released
+   * clients that still interpret it as a normalized digest.
+   */
+  rawManifestSha256?: string;
 }
 
 /** 递归按键排序的规范化 JSON(摘要必须与对象键序无关,两侧独立算也一致)。 */
@@ -61,6 +67,15 @@ export function ghostManifestDigest(manifest: unknown): string {
     .createHash('sha256')
     .update(canonicalJson(ghostManifestToLegacyV2DigestFormat(manifest)))
     .digest('hex');
+}
+
+/**
+ * Exact digest emitted by the released capability-decoupling build before v2
+ * rollback projection was restored. Migration-only: normal writers must keep
+ * using ghostManifestDigest so released clients can read the ledger.
+ */
+export function legacyNoSlotsGhostManifestDigest(manifest: unknown): string {
+  return crypto.createHash('sha256').update(canonicalJson(manifest)).digest('hex');
 }
 
 interface PluginMarketLedgerData {
@@ -115,7 +130,10 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
     typeof record.installed === 'boolean' &&
     typeof record.updatedAt === 'string' &&
     (record.sourceKey === undefined || typeof record.sourceKey === 'string') &&
-    (record.manifestDigest === undefined || typeof record.manifestDigest === 'string')
+    (record.manifestDigest === undefined || typeof record.manifestDigest === 'string') &&
+    (record.rawManifestSha256 === undefined ||
+      (typeof record.rawManifestSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(record.rawManifestSha256)))
   );
 }
 
@@ -290,6 +308,53 @@ export class PluginMarketLedger {
     this.write(data);
   }
 
+  /**
+   * Add the serialization-exact manifest identity without changing
+   * routing order or any legacy field. Full-record comparison makes this a CAS:
+   * an install/update/source change that won the race is never overwritten.
+   */
+  backfillRawManifestSha256(
+    expected: PluginMarketInstallationRecord,
+    rawManifestSha256: string,
+  ): boolean {
+    if (!/^[a-f0-9]{64}$/.test(rawManifestSha256)) return false;
+    const data = this.read();
+    const current = data.installations[expected.ghostId];
+    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    if (current.rawManifestSha256 !== undefined) {
+      return current.rawManifestSha256 === rawManifestSha256;
+    }
+    data.installations[current.ghostId] = { ...current, rawManifestSha256 };
+    this.write(data);
+    return true;
+  }
+
+  /**
+   * Replace both Manifest identities after an authorized package commit. Unlike
+   * migration backfill, this may replace an existing raw hash because the
+   * package itself was just atomically replaced. Full-record CAS prevents a
+   * concurrent route change from being overwritten.
+   */
+  replaceManifestIdentityAfterPackageCommit(
+    expected: PluginMarketInstallationRecord,
+    manifestDigest: string,
+    rawManifestSha256: string,
+  ): boolean {
+    if (!/^[a-f0-9]{64}$/.test(manifestDigest) || !/^[a-f0-9]{64}$/.test(rawManifestSha256)) {
+      return false;
+    }
+    const data = this.read();
+    const current = data.installations[expected.ghostId];
+    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    data.installations[current.ghostId] = {
+      ...current,
+      manifestDigest,
+      rawManifestSha256,
+    };
+    this.write(data);
+    return true;
+  }
+
   /** 换源落位前失败时，将旧路由和原有默认安装退订状态一起原子恢复。 */
   restoreInstallation(
     record: PluginMarketInstallationRecord,
@@ -324,7 +389,11 @@ export class PluginMarketLedger {
   restoreDisconnectedInstallation(
     expected: PluginMarketInstallationRecord,
     userId: string,
+    rawManifestSha256?: string,
   ): boolean {
+    if (rawManifestSha256 !== undefined && !/^[a-f0-9]{64}$/.test(rawManifestSha256)) {
+      return false;
+    }
     const data = this.read();
     const current = data.installations[expected.ghostId];
     if (
@@ -343,6 +412,7 @@ export class PluginMarketLedger {
           : current.source,
       installed: true,
       updatedAt: new Date().toISOString(),
+      ...(rawManifestSha256 !== undefined ? { rawManifestSha256 } : {}),
     };
     const remainingOptOuts = (data.defaultInstallOptOuts[userId] ?? []).filter(
       (pluginId) => pluginId !== current.pluginId,

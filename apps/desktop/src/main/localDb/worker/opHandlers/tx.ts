@@ -76,6 +76,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
       return sessionsSetStatus(db, txArgs);
+    case 'toolResults.compactSession':
+      return compactSessionToolResults(db, txArgs);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(db, txArgs);
     case 'context.rebuild':
@@ -779,6 +781,77 @@ function invalidateSessionListProjection(db: Database.Database, sessionId: strin
   ).run(sessionId);
 }
 
+function compactSessionToolResults(
+  db: Database.Database,
+  args: unknown,
+): {
+  compactedRows: number;
+  originalBytes: number;
+} {
+  const payload = asRecord(args, 'toolResults.compactSession args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const now = expectNumber(payload.now, 'now');
+
+  const selectSession = db.prepare(`
+    SELECT id
+      FROM sessions
+     WHERE id = ?
+       AND status IN ('archived', 'deleted')
+     LIMIT 1
+  `);
+  // Archived/deleted tool results are intentionally treated uniformly. Ordinary
+  // rows only pay for the fixed-prefix check. JSON validation runs solely for
+  // the tiny set of rows that look like our marker, preventing an unrelated
+  // tool result with the same prefix from being skipped forever.
+  const uncompactedContentPredicate = `
+    CASE
+      WHEN content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
+      WHEN json_valid(content) = 0 THEN 1
+      WHEN json_type(content) = 'object'
+       AND json_extract(content, '$.type') = 'tool_result_compacted'
+       AND json_extract(content, '$.version') = 1
+       AND json_type(content, '$.originalBytes') IN ('integer', 'real')
+       AND json_extract(content, '$.originalBytes') >= 0
+       AND json_type(content, '$.compactedAt') IN ('integer', 'real')
+       AND json_extract(content, '$.compactedAt') >= 0 THEN 0
+      ELSE 1
+    END
+  `;
+  const summarizeCandidates = db.prepare(`
+    SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes
+      FROM messages
+     WHERE session_id = ?
+       AND role = 'tool_result'
+       AND (${uncompactedContentPredicate}) = 1
+  `);
+  const compactMessages = db.prepare(`
+    UPDATE messages
+       SET content = json_object(
+         'type', 'tool_result_compacted',
+         'version', 1,
+         'originalBytes', octet_length(content),
+         'compactedAt', ?
+       )
+     WHERE session_id = ?
+       AND role = 'tool_result'
+       AND (${uncompactedContentPredicate}) = 1
+  `);
+
+  return db.transaction(() => {
+    const session = selectSession.get(sessionId) as { id: string } | undefined;
+    if (!session) {
+      return { compactedRows: 0, originalBytes: 0 };
+    }
+
+    const summary = summarizeCandidates.get(session.id) as { originalBytes: number };
+    const compactedRows = compactMessages.run(now, session.id).changes;
+    return {
+      compactedRows,
+      originalBytes: compactedRows > 0 ? summary.originalBytes : 0,
+    };
+  })();
+}
+
 function codexImportMessages(db: Database.Database, args: unknown): { changed: number } {
   const payload = asRecord(args, 'codex.importMessages args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -863,6 +936,21 @@ function claudeImportMessages(db: Database.Database, args: unknown): { changed: 
     WHERE
       messages.role != 'message_tombstone' AND
       messages.rewind_at IS NULL AND
+      (
+        messages.role != 'tool_result' OR
+        CASE
+          WHEN messages.content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
+          WHEN json_valid(messages.content) = 0 THEN 1
+          WHEN json_type(messages.content) = 'object'
+           AND json_extract(messages.content, '$.type') = 'tool_result_compacted'
+           AND json_extract(messages.content, '$.version') = 1
+           AND json_type(messages.content, '$.originalBytes') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.originalBytes') >= 0
+           AND json_type(messages.content, '$.compactedAt') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.compactedAt') >= 0 THEN 0
+          ELSE 1
+        END = 1
+      ) AND
       (
         messages.role IS NOT excluded.role OR
         messages.content IS NOT excluded.content OR

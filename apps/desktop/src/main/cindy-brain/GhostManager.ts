@@ -18,6 +18,7 @@ import {
   ghostInstallApprovalToken,
   ghostIconMimeType,
   isValidGhostId,
+  ghostManifestToLegacyV2DigestFormat,
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
@@ -2142,6 +2143,10 @@ export class GhostManager {
         unsupportedLegacySlots: string[];
         trust: GhostTrustInfo;
         packageSha256: string;
+        /** SHA-256 of the exact ghost.json entry bytes in this package. */
+        rawManifestSha256: string;
+        /** Exact normalized shape emitted by the released v0.1.61 v2 validator. */
+        releasedLegacyDigestFormat: unknown;
         iconDataUrl?: string;
       }
     | { rejection: InstallRejection }
@@ -2154,6 +2159,8 @@ export class GhostManager {
       unsupportedLegacySlots: parsed.unsupportedLegacySlots,
       trust: parsed.trust,
       packageSha256: parsed.packageSha256,
+      rawManifestSha256: parsed.rawManifestSha256,
+      releasedLegacyDigestFormat: parsed.releasedLegacyDigestFormat,
       ...(parsed.iconDataUrl !== undefined ? { iconDataUrl: parsed.iconDataUrl } : {}),
     };
   }
@@ -2170,6 +2177,8 @@ export class GhostManager {
         unsupportedLegacySlots: string[];
         trust: GhostTrustInfo;
         packageSha256: string;
+        rawManifestSha256: string;
+        releasedLegacyDigestFormat: unknown;
         iconDataUrl?: string;
         allEntries: JSZip.JSZipObject[];
         prefix: string;
@@ -2274,16 +2283,14 @@ export class GhostManager {
 
     // 3) 校验清单
     let manifestRaw: unknown;
+    let manifestBytes: Buffer;
     try {
-      manifestRaw = JSON.parse(
-        (
-          await readZipEntryBufferWithLimit(
-            manifestEntry,
-            MAX_GHOST_MANIFEST_BYTES,
-            GHOST_MANIFEST_FILE,
-          )
-        ).toString('utf8'),
+      manifestBytes = await readZipEntryBufferWithLimit(
+        manifestEntry,
+        MAX_GHOST_MANIFEST_BYTES,
+        GHOST_MANIFEST_FILE,
       );
+      manifestRaw = JSON.parse(manifestBytes.toString('utf8'));
     } catch {
       return {
         rejection: { code: 'file-invalid', reason: `${GHOST_MANIFEST_FILE} 不是合法 JSON` },
@@ -2555,6 +2562,11 @@ export class GhostManager {
       unsupportedLegacySlots: v.unsupportedLegacySlots,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
+      rawManifestSha256: crypto.createHash('sha256').update(manifestBytes).digest('hex'),
+      releasedLegacyDigestFormat: ghostManifestToLegacyV2DigestFormat(
+        v.manifest,
+        manifestRaw,
+      ),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
       allEntries,
       prefix,

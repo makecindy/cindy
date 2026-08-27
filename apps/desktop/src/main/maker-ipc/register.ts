@@ -182,7 +182,11 @@ import {
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeGeneratedImage } from '../cindy-media/generatedMedia.js';
-import { getDbClient, isDbClientNotReadyError } from '../localDb/client/current.js';
+import {
+  getCurrentDbClientSnapshot,
+  getDbClient,
+  isDbClientNotReadyError,
+} from '../localDb/client/current.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -737,11 +741,13 @@ import {
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
   lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
   shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
+import { classifyCodexHistoryOversized } from '../maker-host/codex-local-sessions.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
@@ -938,6 +944,7 @@ import {
 } from './agentSkillListIpcBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
   tapWindowBroadcast,
 } from '../device-link/broadcast-tap.js';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
@@ -3874,6 +3881,29 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   session.setTurnLifecycleObserver({
     beforeProviderStart: async (turnGeneration) => {
       if (session.remoteHostId) return;
+      // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
+      // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
+      const model = session.model;
+      if (model) {
+        const verdict = await verdictForModelRoute(
+          session.agentKind,
+          model,
+          getSessionProvider(session.id),
+        );
+        // beforeProviderStart 已经进入 Session 内部，无法再安全重建跨凭证形态的
+        // runtime。付费 reroute 不能当作 pass，否则 null-provider 仍会落到已锁定
+        // 的 XD 默认来源。普通停用/能力/独占 reroute 属于既有 best-effort 轴，
+        // 运行中会话按 model-route-guard 契约不在这里打断。
+        if (verdict.kind === 'reroute' && verdict.reason === 'payment-required') {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `model "${model}" must switch to provider "${verdict.providerId}" before sending`,
+          );
+        }
+        if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
+          throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
+        }
+      }
       silentStopTurnLeaseGate.supersede(session.id);
       // Keep Review's exact-instance liveness listener lazy. PID-only turn
       // leases remain fail-closed until this process actually starts Review.
@@ -4254,7 +4284,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
         isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
         isGatewayProxyTokenRecovery = isGatewayProxyTokenRecoveryErrorEvent(session.id, event);
-        if (!isPlannedUpgradeClose) {
+        if (isPlannedUpgradeClose) {
+          agentInputCoordinatorHolder?.noteSuppressedTerminalError(session.id, {
+            generation: event.sessionTurnGeneration,
+            reason: 'remote_daemon_closed',
+            instanceId: event.sessionInstanceId ?? session.instanceId,
+          });
+        } else {
           agentInputCoordinatorHolder?.onTurnEvent(
             session.id,
             'error',
@@ -4345,7 +4381,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       } else if (event.type === 'tool_result_full') {
         const r = onToolResultFullEvent(
           session.id,
-          event.data as { toolUseId?: unknown; fullText?: unknown },
+          event.data as { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
         );
@@ -4419,7 +4455,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
-        isContextOverflowErrorData(event.data);
+        (isContextOverflowErrorData(event.data) ||
+          isOversizedHistoryErrorData(event.data));
       if (suppressOverflowBroadcast) {
         overflowSuppressedBroadcasts.set(session.id, {
           sessionId: session.id,
@@ -4551,7 +4588,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           !isRemoteAuthRetry &&
           !isGatewayProxyTokenRecovery &&
           !autoResumeSuppressesPersist &&
-          isContextOverflowErrorData(attributedEvent.data)
+          (isContextOverflowErrorData(attributedEvent.data) ||
+            isOversizedHistoryErrorData(attributedEvent.data))
             ? (contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
             : 'idle';
         if (overflowClaim === 'claimed') {
@@ -7497,6 +7535,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? `model "${model}" is not an agent chat model`
             : verdict.reason === 'model-retired'
               ? `model "${model}" has been retired from the catalog`
+              : verdict.reason === 'payment-required'
+                ? `model "${model}" requires paid access`
               : verdict.reason === 'exclusive-source-unavailable'
                 ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
                 : `model "${model}" is disabled in settings`,
@@ -11923,11 +11963,112 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           contextWindow: sessions.contextWindow,
           model: sessions.model,
           providerId: sessions.providerId,
+          workingDir: sessions.workingDir,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       return row ?? null;
+    },
+    tryStripOversizedCodexHistory: async ({ sessionId, threadId, model, providerId, workingDir }) => {
+      const ownerScope = captureDataOwnerBroadcastScope();
+      const dbSnapshot = getCurrentDbClientSnapshot();
+      let committed = false;
+      try {
+        const classified = await classifyCodexHistoryOversized(threadId);
+        if (
+          !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
+          !dbSnapshot ||
+          getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+        ) {
+          return 'stale';
+        }
+        if (classified === 'healthy') return 'not-needed';
+        if (classified !== 'oversized') return 'failed';
+        const live = getMaker().getSession(sessionId);
+        // busy ≠ failed：外层已守卫 turn-running；这里若仍撞上，中止而不是升级成 rebuild。
+        if (live?.isTurnRunning()) return 'busy';
+        if (live) await getMaker().closeSession(sessionId);
+        const forked = await getMaker().forkSdkSession('codex', {
+          sourceSdkSessionId: threadId,
+          model: model ?? undefined,
+          providerId,
+          upToMessageId: undefined,
+          workingDir: workingDir ?? undefined,
+          stripEncryptedReasoning: true,
+          remoteHostId: null,
+        });
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return 'stale';
+        const currentDb = getCurrentDbClientSnapshot();
+        if (!dbSnapshot || !currentDb || currentDb.clientEpoch !== dbSnapshot.clientEpoch) {
+          return 'stale';
+        }
+        const now = Date.now();
+        const write = await dbSnapshot.client
+          .drizzle.update(sessions)
+          .set({ sdkSessionId: forked.newSdkSessionId, updatedAt: now })
+          .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, threadId)))
+          .run();
+        if (write.changes === 0) return 'failed';
+        committed = true;
+        try {
+          broadcastSessionPatched(
+            sessionId,
+            {
+              sdkSessionId: forked.newSdkSessionId,
+              updatedAt: new Date(now).toISOString(),
+            },
+            ownerScope,
+          );
+          const cardOwnerCurrent =
+            isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+            getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch;
+          if (!cardOwnerCurrent) {
+            log.warn('codex oversized history card skipped: owner changed after relink', {
+              sessionId,
+              threadId,
+              toThreadId: forked.newSdkSessionId,
+            });
+          } else {
+            await createDbMessage(
+              sessionId,
+              {
+                clientId: `context-rebuild-card:${createId()}`,
+                role: 'assistant',
+                content: '',
+                agentKind: 'codex',
+                agentMeta: { contextRebuild: { reason: 'codex-history-strip' } } as AgentMeta,
+              },
+              {
+                broadcastOwnerScope: ownerScope,
+                shouldBroadcast: () =>
+                  isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+                  getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch,
+              },
+            );
+          }
+        } catch (postError) {
+          log.warn('codex oversized history relink post-commit failed', {
+            sessionId,
+            threadId,
+            toThreadId: forked.newSdkSessionId,
+            error: postError instanceof Error ? postError.message : String(postError),
+          });
+        }
+        log.info('codex oversized history relinked in place', {
+          sessionId,
+          fromThreadId: threadId,
+          toThreadId: forked.newSdkSessionId,
+        });
+        return 'recovered';
+      } catch (error) {
+        log.warn('codex oversized history relink failed', {
+          sessionId,
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return committed ? 'recovered' : 'failed';
+      }
     },
     getAutoCompactThresholdPct: () => readCompactionPct(),
     resolveVerifiedWindow: (agentKind, modelId, providerId) => {
@@ -12885,6 +13026,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
+    getObservedCurrentTurnTerminal: (sessionId) => {
+      const lookup = lookupStableSessionForTurnBoundary(sessionId);
+      if (lookup.status !== 'found') return undefined;
+      try {
+        return lookup.session.getObservedCurrentTurnTerminal();
+      } catch {
+        return undefined;
+      }
+    },
     getTurnSessionIdentity: (sessionId) => getStableSessionForTurnBoundary(sessionId) ?? null,
     reconcileTurnIdle: (sessionId) => {
       // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止

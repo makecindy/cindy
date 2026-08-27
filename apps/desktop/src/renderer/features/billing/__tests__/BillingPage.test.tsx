@@ -20,6 +20,13 @@ const uiMocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
 }));
 
+const modelCatalogMocks = vi.hoisted(() => ({
+  refreshBuiltinProviderModels: vi.fn(async () => ({
+    ok: true as const,
+    providerId: 'xd' as const,
+  })),
+}));
+
 const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
 
 /**
@@ -112,6 +119,7 @@ beforeEach(() => {
   uiMocks.confirm.mockReset().mockResolvedValue(false);
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
+  modelCatalogMocks.refreshBuiltinProviderModels.mockClear();
   authState.dataOwnerId = 'account-fixture';
   routerState.search = '';
 });
@@ -388,6 +396,9 @@ describe('BillingPage remote catalog rendering', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
         },
         openExternal: vi.fn(),
       },
@@ -690,7 +701,7 @@ describe('BillingPage remote catalog rendering', () => {
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
 
-  it('refreshes the balance once and shows no recovery action when a top-up succeeds', async () => {
+  it('refreshes the balance and XD models once when a top-up succeeds', async () => {
     const pendingOrder = {
       orderId: 'order_paid',
       productCode: 'credit_topup',
@@ -731,6 +742,42 @@ describe('BillingPage remote catalog rendering', () => {
 
     view.rerender(<BillingPage />);
     expect(getBalance).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-refreshes the XD model catalog once when a subscription becomes active', async () => {
+    const pendingSubscription = {
+      subscriptionId: 'subscription_pending',
+      status: 'INCOMPLETE' as const,
+      currentPeriodStartAt: null,
+      currentPeriodEndAt: null,
+      entitlementValidUntil: null,
+      cancelAtPeriodEnd: false,
+      effectivePlan: null,
+      purchaseAttemptId: 'attempt_subscription',
+      paymentAction: null,
+    };
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'SUBSCRIPTION',
+      phase: 'AWAITING_PAYMENT',
+      subscription: pendingSubscription,
+    });
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(window.electronAPI.billing.getBalance).toHaveBeenCalledTimes(1));
+
+    Object.assign(checkout.state, {
+      phase: 'COMPLETED',
+      subscription: { ...pendingSubscription, status: 'ACTIVE' as const },
+    });
+    view.rerender(<BillingPage />);
+
+    await waitFor(() =>
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd'),
+    );
+    view.rerender(<BillingPage />);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('switches to the expired hint once the server stops issuing the payment action', async () => {
@@ -1792,7 +1839,13 @@ describe('BillingPage plan change', () => {
   const install = (billing: ReturnType<typeof billingMocks>) => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
-      value: { billing, openExternal: vi.fn() },
+      value: {
+        billing,
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
+        },
+        openExternal: vi.fn(),
+      },
     });
     return billing;
   };
@@ -1853,11 +1906,14 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
 
     await act(async () => resolvePortal({ success: true }));
     await act(async () => window.dispatchEvent(new Event('focus')));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes billing after a timed-out Stripe portal launch', async () => {
@@ -1880,7 +1936,9 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('does not show Stripe management in the menu for an Alipay subscription', async () => {
@@ -2186,6 +2244,7 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
   });
 
   it('quotes the selected same-Product monthly Offer', async () => {
@@ -2771,6 +2830,9 @@ describe('BillingPage order history', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders,
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
         },
         openExternal: vi.fn(),
       },

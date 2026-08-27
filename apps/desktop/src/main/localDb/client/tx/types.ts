@@ -19,6 +19,7 @@ export type DbTxName =
   | 'orca.reconcileInactiveTeamWorkersForLead'
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
+  | 'toolResults.compactSession'
   | 'session.agentSwitchFallback'
   | 'context.rebuild'
   | 'message.insert'
@@ -397,6 +398,16 @@ export interface SessionsSetStatusResultItem {
   workingDir: string | null;
   workspaceKind: string | null;
   status: 'active' | 'archived';
+}
+
+export interface CompactSessionToolResultsArgs {
+  sessionId: string;
+  now: number;
+}
+
+export interface CompactSessionToolResultsResult {
+  compactedRows: number;
+  originalBytes: number;
 }
 
 /** session.importShare 的单条 session 行(lead 与协同 Worker 共用形状)。 */
@@ -812,6 +823,7 @@ export type DbTxArgsByName = {
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
+  'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
   'context.rebuild': ContextRebuildArgs;
   'message.insert': MessageInsertArgs;
@@ -862,6 +874,7 @@ export type DbTxResultByName = {
   'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
+  'toolResults.compactSession': CompactSessionToolResultsResult;
   'session.agentSwitchFallback': undefined;
   'context.rebuild': undefined;
   'message.insert': { changes: number };

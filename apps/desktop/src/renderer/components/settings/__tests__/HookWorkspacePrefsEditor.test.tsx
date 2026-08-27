@@ -128,7 +128,15 @@ describe('useHookWorkspacePrefs provider isolation', () => {
       prefs: [],
     },
   }));
-  const getWorkspacePrefs = vi.fn(async () => ({ prefs: { bound: true, prefs: [] } }));
+  const getWorkspacePrefs = vi.fn(async () => ({
+    prefs: { bound: true, prefs: [] as Array<{
+      workspace: string;
+      model: string | null;
+      effort: string | null;
+      agentKind: string | null;
+      permissionMode: string | null;
+    }> },
+  }));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -178,6 +186,75 @@ describe('useHookWorkspacePrefs provider isolation', () => {
     renderHook(() => useHookWorkspacePrefs(BASE_HOOK, 'slack'));
     await waitFor(() => expect(getWorkspacePrefs).toHaveBeenCalledTimes(1));
     expect(getProviderWorkspacePrefs).not.toHaveBeenCalled();
+  });
+
+  it('Slack 开关开着但 hook 掉线时仍拉取本机偏好，可编辑', async () => {
+    getWorkspacePrefs.mockResolvedValue({
+      prefs: {
+        bound: true,
+        prefs: [
+          {
+            workspace: 'cindy',
+            model: 'claude-opus-4-8',
+            effort: null,
+            agentKind: 'claude-code',
+            permissionMode: null,
+          },
+        ] as Array<{
+          workspace: string;
+          model: string | null;
+          effort: string | null;
+          agentKind: string | null;
+          permissionMode: string | null;
+        }>,
+      },
+    });
+    const { result } = renderHook(() =>
+      useHookWorkspacePrefs({ ...BASE_HOOK, status: 'error', lastError: 'offline' }, 'slack'),
+    );
+    await waitFor(() => expect(getWorkspacePrefs).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.editable).toBe(true));
+    expect(result.current.prefsFor('cindy').model).toBe('claude-opus-4-8');
+    expect(result.current.hint).toBe('settings.tina.prefs.offlineLocal:settings.tina.prefs.providerSlack');
+  });
+
+  it('离线时仍按缓存的 Slack multi-team 绑定写入 teamId', async () => {
+    getWorkspacePrefs.mockResolvedValue({ prefs: { bound: true, prefs: [] } });
+    vi.mocked(window.electronAPI.hookControl.setWorkspacePrefs).mockResolvedValue({
+      prefs: { bound: true, prefs: [] },
+    });
+    const { result } = renderHook(() =>
+      useHookWorkspacePrefs(
+        {
+          ...BASE_HOOK,
+          status: 'error',
+          lastError: 'offline',
+          serverMultiTeam: false,
+          bindings: [
+            {
+              teamId: 'T1',
+              teamName: 'acme',
+              slackUserId: 'U1',
+              slackUserName: 'dash',
+              displaced: false,
+            },
+          ],
+        },
+        'slack',
+      ),
+    );
+    await waitFor(() => expect(result.current.editable).toBe(true));
+    expect(result.current.selectedTeamId).toBe('T1');
+    act(() => {
+      result.current.applyPatch('cindy', { model: 'claude-opus-4-8' });
+    });
+    await waitFor(() =>
+      expect(window.electronAPI.hookControl.setWorkspacePrefs).toHaveBeenCalledWith(
+        'cindy',
+        { model: 'claude-opus-4-8' },
+        'T1',
+      ),
+    );
   });
 
   it('Telegram 换绑时立即隔离旧偏好，直到新 binding 的快照返回', async () => {

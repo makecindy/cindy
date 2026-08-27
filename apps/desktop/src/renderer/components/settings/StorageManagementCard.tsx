@@ -16,13 +16,29 @@
  * 点击用 ref 标志,不产生任何视觉变化。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Check, ChevronDown } from 'lucide-react';
+import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import * as Select from '@radix-ui/react-select';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { getAllDraftAttachmentUrls } from '@/lib/composerDraftStore';
+import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
+import {
+  DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
+  DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
+  type DbSlimmingArchiveAge,
+  type DbSlimmingBackupDirectorySelection,
+  type DbSlimmingResult,
+  type DbSlimmingScanResult,
+} from '../../../shared/localDbMaintenance';
 
 type StatsResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.stats>>;
 type ScanResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.scan>>;
@@ -255,6 +271,10 @@ export function StorageManagementCard() {
 
       <Divider />
 
+      <DatabaseSlimmingSection />
+
+      <Divider />
+
       {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
       <div className="flex flex-col gap-2 px-[18px] py-4">
         <div className="flex items-center justify-between gap-3">
@@ -382,6 +402,499 @@ export function StorageManagementCard() {
   );
 }
 
+type DbSlimmingPhase =
+  | { kind: 'idle' }
+  | { kind: 'scanned'; scan: DbSlimmingScanResult }
+  | { kind: 'done'; result: DbSlimmingResult };
+
+function DatabaseSlimmingSection() {
+  const { t } = useTranslation();
+  const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
+    DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
+  );
+  const [backupEnabled, setBackupEnabled] = useState(true);
+  const [backupDirectory, setBackupDirectory] =
+    useState<DbSlimmingBackupDirectorySelection>({ selected: false });
+  const [phase, setPhase] = useState<DbSlimmingPhase>({ kind: 'idle' });
+  const [scanLoading, setScanLoading] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [executionLocked, setExecutionLocked] = useState(false);
+  const busyRef = useRef(false);
+  const interactionLockReleaseRef = useRef<(() => void) | null>(null);
+
+  const acquireInteractionLock = () => {
+    if (!interactionLockReleaseRef.current) {
+      interactionLockReleaseRef.current = acquireAppInteractionLock();
+    }
+  };
+
+  const releaseInteractionLock = () => {
+    interactionLockReleaseRef.current?.();
+    interactionLockReleaseRef.current = null;
+  };
+
+  useEffect(() => {
+    return () => {
+      interactionLockReleaseRef.current?.();
+      interactionLockReleaseRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.localDb.maintenance.getLastResult().then(
+      (result) => {
+        if (!cancelled && result) setPhase({ kind: 'done', result });
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const invalidateScan = () => {
+    setReportOpen(false);
+    releaseInteractionLock();
+    setPhase((current) => (current.kind === 'scanned' ? { kind: 'idle' } : current));
+  };
+
+  const handleArchiveAgeChange = (raw: string) => {
+    const parsed = raw === '7-days' ? raw : Number(raw);
+    if (!DB_SLIMMING_ARCHIVE_AGE_OPTIONS.includes(parsed as DbSlimmingArchiveAge)) return;
+    setArchiveAge(parsed as DbSlimmingArchiveAge);
+    invalidateScan();
+  };
+
+  const handleChooseBackupDirectory = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      const selection = await window.electronAPI.localDb.maintenance.chooseBackupDirectory();
+      if (selection.selected) setBackupDirectory(selection);
+    } catch {
+      toast.error(t('settings.about.storage.dbSlimmingBackupDirectoryFailed'));
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
+  const handleScan = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    acquireInteractionLock();
+    setReportOpen(false);
+    setScanLoading(true);
+    let completed = false;
+    try {
+      const scan = await window.electronAPI.localDb.maintenance.scan({
+        archiveAgeMonths: archiveAge,
+      });
+      setPhase({ kind: 'scanned', scan });
+      setReportOpen(true);
+      completed = true;
+    } catch (error) {
+      toast.error(
+        t(
+          mapIpcErrorToI18nKey(error, {
+            fallback: 'settings.about.storage.dbSlimmingScanFailed',
+          }),
+        ),
+      );
+    } finally {
+      busyRef.current = false;
+      if (!completed) releaseInteractionLock();
+      setScanLoading(false);
+    }
+  };
+
+  const handleSchedule = async () => {
+    if (phase.kind !== 'scanned' || busyRef.current || executionLocked) return;
+    busyRef.current = true;
+    acquireInteractionLock();
+    setReportOpen(false);
+    setExecutionLocked(true);
+    try {
+      const result = await window.electronAPI.localDb.maintenance.schedule({
+        scanId: phase.scan.scanId,
+        backupEnabled,
+        ...(backupEnabled && backupDirectory.grantId
+          ? { backupDirectoryGrantId: backupDirectory.grantId }
+          : {}),
+      });
+      if (!result.scheduled) {
+        busyRef.current = false;
+        setExecutionLocked(false);
+        setReportOpen(true);
+      }
+    } catch (error) {
+      busyRef.current = false;
+      setExecutionLocked(false);
+      setReportOpen(true);
+      toast.error(
+        t(
+          mapIpcErrorToI18nKey(error, {
+            fallback: 'settings.about.storage.dbSlimmingScheduleFailed',
+          }),
+        ),
+      );
+    }
+  };
+
+  const handleReportOpenChange = (open: boolean) => {
+    setReportOpen(open);
+    if (!open) releaseInteractionLock();
+  };
+
+  const handleOpenBackup = async () => {
+    try {
+      const result = await window.electronAPI.localDb.maintenance.openLastBackupDirectory();
+      if (!result.opened) toast.info(t('settings.about.storage.dbSlimmingBackupMissing'));
+    } catch {
+      toast.error(t('settings.about.storage.dbSlimmingBackupOpenFailed'));
+    }
+  };
+
+  const scanned = phase.kind === 'scanned' ? phase.scan : null;
+  const insufficientSpace = Boolean(
+    scanned &&
+      scanned.databaseVolumeFreeBytes !== null &&
+      scanned.databaseVolumeFreeBytes < scanned.temporaryBytesRequired,
+  );
+
+  return (
+    <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-13 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSlimmingLabel')}
+          </span>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.storage.dbSlimmingDescription')}
+          </p>
+        </div>
+        <CardButton onClick={handleScan} disabled={scanLoading} busy={scanLoading}>
+          {scanLoading && <Spinner size={12} />}
+          {t('settings.about.storage.dbSlimmingScanButton')}
+        </CardButton>
+      </div>
+
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+        <label
+          htmlFor="db-slimming-archive-age"
+          className="text-12 text-[var(--settings-section-sublabel)]"
+        >
+          {t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
+        </label>
+        <div className="flex items-center">
+          <Select.Root
+            value={String(archiveAge)}
+            onValueChange={handleArchiveAgeChange}
+            disabled={scanLoading}
+          >
+            <Select.Trigger
+              id="db-slimming-archive-age"
+              aria-label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
+              className={cn(
+                'flex h-8 min-w-[104px] items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none transition-colors',
+                'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              <Select.Value />
+              <Select.Icon asChild>
+                <ChevronDown
+                  size={13}
+                  className="shrink-0 text-[var(--settings-eye-icon)]"
+                  aria-hidden="true"
+                />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content
+                position="popper"
+                side="bottom"
+                align="end"
+                sideOffset={6}
+                className={cn(
+                  'z-[10010] min-w-[var(--radix-select-trigger-width)] rounded-xl p-1.5',
+                  'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)] shadow-[var(--shadow-menu)]',
+                )}
+              >
+                <Select.Viewport className="flex flex-col gap-0.5">
+                  {DB_SLIMMING_ARCHIVE_AGE_OPTIONS.map((age) => (
+                    <Select.Item
+                      key={age}
+                      value={String(age)}
+                      className={cn(
+                        'flex h-8 cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-2.5 text-12 outline-none transition-colors',
+                        'text-[var(--settings-input-text)] data-[highlighted]:bg-[var(--settings-menu-bg-hover)]',
+                        'data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
+                      )}
+                    >
+                      <Select.ItemText>
+                        {t(
+                          age === '7-days'
+                            ? 'settings.about.storage.dbSlimmingArchiveAgeOption7Days'
+                            : `settings.about.storage.dbSlimmingArchiveAgeOption${age}`,
+                        )}
+                      </Select.ItemText>
+                      <Select.ItemIndicator>
+                        <Check
+                          size={14}
+                          className="shrink-0 text-[var(--settings-theme-icon-active)]"
+                        />
+                      </Select.ItemIndicator>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
+        </div>
+
+        <label
+          htmlFor="db-slimming-backup-enabled"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSlimmingBackupLabel')}
+          </span>
+          <span className="truncate text-11 text-[var(--settings-section-sublabel)] opacity-70">
+            {backupDirectory.selected && backupDirectory.displayPath
+              ? backupDirectory.displayPath
+              : t('settings.about.storage.dbSlimmingBackupDefaultLocation')}
+          </span>
+        </label>
+        <Switch
+          id="db-slimming-backup-enabled"
+          checked={backupEnabled}
+          onCheckedChange={(checked) => setBackupEnabled(checked)}
+          aria-label={t('settings.about.storage.dbSlimmingBackupLabel')}
+        />
+
+        {backupEnabled && (
+          <div className="col-span-2 flex justify-end gap-2">
+            {backupDirectory.selected && (
+              <CardButton
+                onClick={() => setBackupDirectory({ selected: false })}
+              >
+                {t('settings.about.storage.dbSlimmingUseDefaultDirectoryButton')}
+              </CardButton>
+            )}
+            <CardButton onClick={handleChooseBackupDirectory}>
+              {t('settings.about.storage.dbSlimmingChooseDirectoryButton')}
+            </CardButton>
+          </div>
+        )}
+      </div>
+
+      {phase.kind === 'done' && (
+        <div className="flex flex-col gap-1.5 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+          {phase.result.status === 'completed' ? (
+            <>
+              <p>
+                {t('settings.about.storage.dbSlimmingResultCompleted', {
+                  size: formatBytes(phase.result.reclaimedBytes),
+                  messages: phase.result.messageCount,
+                  tasks: phase.result.deletedTaskCount + phase.result.archivedTaskCount,
+                })}
+              </p>
+              {phase.result.backupCreated && (
+                <div>
+                  <CardButton onClick={handleOpenBackup}>
+                    {t('settings.about.storage.dbSlimmingOpenBackupButton')}
+                  </CardButton>
+                </div>
+              )}
+            </>
+          ) : (
+            <p>
+              {t(`settings.about.storage.dbSlimmingFailure.${phase.result.reason}`, {
+                defaultValue: t('settings.about.storage.dbSlimmingFailure.unknown'),
+              })}
+            </p>
+          )}
+        </div>
+      )}
+
+      <DatabaseCleanupDialog
+        scanLoading={scanLoading}
+        reportOpen={reportOpen}
+        executionLocked={executionLocked}
+        scanned={scanned}
+        insufficientSpace={insufficientSpace}
+        backupEnabled={backupEnabled}
+        onReportOpenChange={handleReportOpenChange}
+        onConfirm={handleSchedule}
+      />
+    </div>
+  );
+}
+
+interface DatabaseCleanupDialogProps {
+  scanLoading: boolean;
+  reportOpen: boolean;
+  executionLocked: boolean;
+  scanned: DbSlimmingScanResult | null;
+  insufficientSpace: boolean;
+  backupEnabled: boolean;
+  onReportOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}
+
+function DatabaseCleanupDialog({
+  scanLoading,
+  reportOpen,
+  executionLocked,
+  scanned,
+  insufficientSpace,
+  backupEnabled,
+  onReportOpenChange,
+  onConfirm,
+}: DatabaseCleanupDialogProps) {
+  const { t } = useTranslation();
+  const bodyId = useId();
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const reportVisible = reportOpen && scanned !== null;
+  const mode = scanLoading
+    ? 'scanning'
+    : executionLocked
+      ? 'executing'
+      : reportVisible
+        ? 'report'
+        : 'closed';
+  const open = mode !== 'closed';
+  const busy = mode === 'scanning' || mode === 'executing';
+
+  useEffect(() => {
+    if (mode !== 'report') return;
+    const frame = requestAnimationFrame(() => confirmButtonRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [mode]);
+
+  return (
+    <AlertDialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && mode === 'report') onReportOpenChange(false);
+      }}
+    >
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay
+          className="fixed inset-0 z-[10020] bg-[var(--overlay-modal)]"
+          style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
+        >
+          <AlertDialog.Content
+            className={cn(
+              'fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'rounded-xl border border-[var(--settings-theme-card-border)]',
+              'bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)]',
+              mode === 'report' ? 'select-text' : 'select-none',
+            )}
+            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}
+            aria-describedby={mode === 'report' ? bodyId : undefined}
+            aria-busy={busy || undefined}
+            onEscapeKeyDown={(event) => {
+              if (busy) event.preventDefault();
+            }}
+          >
+            {busy ? (
+              <AlertDialog.Title className="flex flex-1 items-center justify-center gap-3 text-14 font-medium text-[var(--confirm-title)]">
+                <Spinner size={18} />
+                <span role="status" aria-live="assertive">
+                  {mode === 'scanning'
+                    ? t('settings.about.storage.dbSlimmingScanLoading')
+                    : t('settings.about.storage.dbSlimmingExecutionLoading')}
+                </span>
+              </AlertDialog.Title>
+            ) : (
+              scanned && (
+                <>
+                  <AlertDialog.Title className="shrink-0 text-lg font-medium text-[var(--confirm-title)]">
+                    {t('settings.about.storage.dbSlimmingScanResultTitle')}
+                  </AlertDialog.Title>
+                  <div
+                    id={bodyId}
+                    className="mt-3 flex min-h-0 flex-1 select-text flex-col gap-1.5 overflow-y-auto overscroll-contain"
+                  >
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportTasks', {
+                        deleted: scanned.deletedTaskCount,
+                        archived: scanned.archivedTaskCount,
+                      })}
+                    />
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportMessages', {
+                        count: scanned.messageCount,
+                        size: formatBytes(scanned.estimatedMessageBytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportSpace', {
+                        database: formatBytes(scanned.databaseBytes),
+                        temporary: formatBytes(scanned.temporaryBytesRequired),
+                        free:
+                          scanned.databaseVolumeFreeBytes === null
+                            ? t('settings.about.storage.dbSlimmingSpaceUnknown')
+                            : formatBytes(scanned.databaseVolumeFreeBytes),
+                      })}
+                    />
+                    {insufficientSpace && (
+                      <p className="text-12 leading-[1.5] text-[hsl(var(--destructive))]">
+                        {t('settings.about.storage.dbSlimmingInsufficientSpace')}
+                      </p>
+                    )}
+                    <p className="mt-2 text-12 leading-[1.5] text-[var(--settings-section-sublabel)] opacity-70">
+                      {backupEnabled
+                        ? t('settings.about.storage.dbSlimmingConfirmDescriptionWithBackup')
+                        : t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup')}
+                    </p>
+                  </div>
+                  <div className="mt-6 flex shrink-0 justify-end gap-2.5">
+                    <AlertDialog.Cancel asChild>
+                      <button
+                        type="button"
+                        className={cn(
+                          'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
+                          'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
+                          'transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                        )}
+                      >
+                        {t('settings.about.storage.cancelButton')}
+                      </button>
+                    </AlertDialog.Cancel>
+                    <button
+                      ref={confirmButtonRef}
+                      type="button"
+                      disabled={insufficientSpace || scanned.messageCount === 0}
+                      onClick={onConfirm}
+                      className={cn(
+                        'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
+                        'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)]',
+                        'transition-colors hover:opacity-90',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                        'disabled:cursor-not-allowed disabled:opacity-50',
+                      )}
+                    >
+                      {t('settings.about.storage.dbSlimmingConfirmButton')}
+                    </button>
+                  </div>
+                </>
+              )
+            )}
+          </AlertDialog.Content>
+        </AlertDialog.Overlay>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  );
+}
+
 function ReportLine({ visible, text }: { visible: boolean; text: string }) {
   if (!visible) return null;
   return <p className="text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">{text}</p>;
@@ -391,18 +904,25 @@ function CardButton({
   children,
   onClick,
   emphasis = false,
+  disabled = false,
+  busy = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   emphasis?: boolean;
+  disabled?: boolean;
+  busy?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
+      aria-busy={busy || undefined}
       className={cn(
-        'shrink-0 rounded-full px-2.5 py-1 text-12 font-medium transition-colors',
+        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-12 font-medium transition-colors',
         'border border-[var(--settings-theme-card-border)]',
+        'disabled:cursor-not-allowed disabled:opacity-50',
         emphasis
           ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] border-transparent hover:opacity-90'
           : 'text-[var(--settings-section-title)] hover:bg-[var(--settings-theme-card-border)]/40',

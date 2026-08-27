@@ -14,6 +14,18 @@
   ],
   "terms": [
     {
+      "id": "cindy-ai-free-tier",
+      "status": "proposed",
+      "en": "Free tier",
+      "translations": {
+        "zh-CN": "免费版",
+        "zh-TW": "免費版",
+        "ja": "無料版",
+        "ko": "무료 버전"
+      },
+      "note": "Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。"
+    },
+    {
       "id": "harness",
       "status": "proposed",
       "en": "Harness",
@@ -1794,6 +1806,18 @@
         "ko": "로컬 모델"
       },
       "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。"
+    },
+    {
+      "id": "database-cleanup",
+      "status": "proposed",
+      "en": "Database cleanup",
+      "translations": {
+        "zh-CN": "数据库清理",
+        "zh-TW": "資料庫清理",
+        "ja": "データベースのクリーンアップ",
+        "ko": "데이터베이스 정리"
+      },
+      "note": "设置 → 存储空间内主动备份、清理非活跃任务消息并压缩本地数据库的功能名称。先登记为 proposed，待实际使用后再固化。"
     }
   ]
 }

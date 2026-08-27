@@ -145,6 +145,8 @@ import {
 import {
   isSelectedSourceDisconnected,
   resolveEffort,
+  resolveRequestedEffort,
+  resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -771,6 +773,8 @@ interface ChatInputProps {
     effort?: Effort;
     fast: boolean;
     favoriteUid: string | null;
+    /** 来自配置浮层「恢复推荐」，不得把推荐档重新写成用户 override。 */
+    resetToRecommended?: true;
   }) => void;
   /**
    * 统一面板里被选中的收藏锚点 uid(与 onUnifiedDraftSelect 成对,由草稿层持有)。
@@ -6093,6 +6097,7 @@ export function ChatInput({
       providerId: string,
       modelId: string,
       expectedRevision?: number,
+      effort?: Effort,
     ) => void | boolean | Promise<void | boolean>;
     byModel: (
       modelId: string,
@@ -6167,37 +6172,38 @@ export function ChatInput({
           modelMemory && providerId
             ? modelMemory.getEffort(targetAgentKind, providerId, newModelId)
             : undefined;
-        const newEffort =
-          overrides?.effort && efforts.includes(overrides.effort)
-            ? overrides.effort
-            : resolveEffort({
-                efforts,
-                defaultEffort,
-                activeEffort,
-                providerEffort,
-                rememberedEffort: getRememberedEffort(newModelId),
-              });
+        const newEffort = resolveRequestedEffort({
+          requested: overrides?.effort,
+          efforts,
+          defaultEffort,
+          activeEffort,
+          providerEffort,
+          rememberedEffort: getRememberedEffort(newModelId),
+        });
         // Fast 目标值:目标 (来源,模型) 支持时按目标引擎全局预设,否则 false——
         // 旧引擎的 fastMode 不能原样带进新引擎。
+        // 显式 override 也必须过目标能力门:意图期改选到不支持 Fast 的模型/来源时,
+        // 旧 intent.fastMode=true 不能绕过 resolveFastSupported 写进新意图。
+        const fastCapable = resolveFastSupported({
+          deviceId: deviceLinkDeviceId ?? undefined,
+          deviceProviders: remoteProviders.providers,
+          localProviders: localProviders.providers,
+          capabilities:
+            targetAgentKind === 'codex'
+              ? codexCaps.capabilities
+              : targetAgentKind === 'pi'
+                ? piCaps.capabilities
+                : ccCaps.capabilities,
+          providerId,
+          modelId: newModelId,
+          agentKind: targetAgentKind,
+        });
         const targetFast =
           overrides?.fastMode !== undefined
-            ? overrides.fastMode
-            : !!providerId &&
+            ? overrides.fastMode && fastCapable
+            : fastCapable &&
+              !!providerId &&
               !!modelMemory &&
-              resolveFastSupported({
-                deviceId: deviceLinkDeviceId ?? undefined,
-                deviceProviders: remoteProviders.providers,
-                localProviders: localProviders.providers,
-                capabilities:
-                  targetAgentKind === 'codex'
-                    ? codexCaps.capabilities
-                    : targetAgentKind === 'pi'
-                      ? piCaps.capabilities
-                      : ccCaps.capabilities,
-                providerId,
-                modelId: newModelId,
-                agentKind: targetAgentKind,
-              }) &&
               (modelMemory.getFast(targetAgentKind, providerId, newModelId) ?? false);
 
         // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
@@ -6359,6 +6365,7 @@ export function ChatInput({
                 providerId,
                 newModelId,
                 result.sameEngineRevision,
+                newEffort,
               )
             : await sameEngineReselectRef.current.byModel(newModelId, result.sameEngineRevision);
           // 被更新的选择超车(byProvider / byModel 自带修订号守卫)→ 同样按「没切」上报。
@@ -6616,10 +6623,11 @@ export function ChatInput({
       favoriteUid: string | null;
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
       rowModelId?: string;
+      resetToRecommended?: true;
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
-      if (targetKind && selection.providerId) {
+      if (targetKind && selection.providerId && !selection.resetToRecommended) {
         if (selection.effort) {
           modelMemory?.setEffort(
             targetKind,
@@ -6639,6 +6647,7 @@ export function ChatInput({
         ...(selection.effort ? { effort: selection.effort } : {}),
         fast: selection.fast,
         favoriteUid: selection.favoriteUid,
+        ...(selection.resetToRecommended ? { resetToRecommended: true as const } : {}),
       });
     },
     [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],
@@ -6673,7 +6682,9 @@ export function ChatInput({
         // ★ await 并**透传真实结果**(Chris 2026-08-19):此前是 fire-and-forget + `return`,
         // 返回 undefined 被上游读成「已应用」——意图期内改选模型时,登记失败 / 被超车的
         // 那一路会被当成成功,后续持久化照跑,而会话上的意图其实一个字没变。
-        return await performAgentSwitch(intent.target, newModelId, null);
+        return await performAgentSwitch(intent.target, newModelId, null, {
+          ...(intent.effort ? { effort: intent.effort as Effort } : {}),
+        });
       }
       let rollbackModelAfterPersistFailure: { model: string; seq: number } | null = null;
       const committedActiveEffort =
@@ -7188,10 +7199,14 @@ export function ChatInput({
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
         // 同 performModelChange:await 并透传真实结果,别把「意图重登记失败」当成已应用
         // (Chris 2026-08-19)。
+        const nextEffort = resolveIntentReselectEffort(reconciledEffort, intent.effort);
         return await performAgentSwitch(
           intent.target,
           reconciledModelId ?? intent.model,
           newProviderId,
+          {
+            ...(nextEffort ? { effort: nextEffort as Effort } : {}),
+          },
         );
       }
       let rollbackProviderAfterPersistFailure: {
@@ -7477,8 +7492,8 @@ export function ChatInput({
 
   // performAgentSwitch 的"选回当前引擎"分支经 ref 调用(两 handler 声明在其后,TDZ)。
   sameEngineReselectRef.current = {
-    byProvider: (providerId, modelId, expectedRevision) =>
-      handleProviderChange(providerId, modelId, undefined, expectedRevision),
+    byProvider: (providerId, modelId, expectedRevision, effort) =>
+      handleProviderChange(providerId, modelId, effort, expectedRevision),
     byModel: (modelId, expectedRevision) => handleModelChange(modelId, expectedRevision),
   };
 

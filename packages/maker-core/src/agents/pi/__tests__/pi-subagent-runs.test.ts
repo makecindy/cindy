@@ -732,6 +732,19 @@ describe('PI durable subagent run store', () => {
       expect(piSubagentOwnerIdentity('not-an-owner')).toBeNull();
     });
 
+    it('keeps the owner id stable when later start-time samples cross a rounding boundary', () => {
+      const nowSpy = vi.spyOn(Date, 'now')
+        .mockReturnValueOnce(1_700_000_100_499)
+        .mockReturnValueOnce(1_700_000_100_501);
+      const uptimeSpy = vi.spyOn(process, 'uptime').mockReturnValue(100);
+      restores.push(() => nowSpy.mockRestore(), () => uptimeSpy.mockRestore());
+
+      const first = piSubagentRuntimeOwnerId(process.pid, 'scope-stable');
+      const second = piSubagentRuntimeOwnerId(process.pid, 'scope-stable');
+
+      expect(second).toBe(first);
+    });
+
     it('treats a recycled pid as a dead owner, so the orphan stays reclaimable', async () => {
       const ownerPid = nextOwnerPid++;
       stubAliveOwner(ownerPid);

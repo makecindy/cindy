@@ -1,6 +1,7 @@
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import { contentToPreview } from '@/utils/contentPreview';
+import { i18n } from '@/i18n';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import {
   buildMessageToolResultPairing,
@@ -15,6 +16,10 @@ import {
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+import {
+  formatToolResultCompactionBytes,
+  parseToolResultCompactionMarker,
+} from '@cindy/maker-shared/tool-result-compaction';
 import {
   buildPayloadToolDiff,
   extractPayloadToolResultMedia,
@@ -172,7 +177,9 @@ interface ToolUsePayload extends MessageNormalizeToolUse {
 
 export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): NormalizedRemoteMessage[] {
   const sorted = sortMessagesByCreatedAt(messages);
-  const toolResultPairing = buildMessageToolResultPairing(sorted);
+  const toolResultPairing = buildMessageToolResultPairing(sorted, {
+    contentToPreview: toolResultContentToPreview,
+  });
 
   const result: NormalizedRemoteMessage[] = [];
   for (const message of sorted) {
@@ -410,6 +417,14 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
   }
 
   return result;
+}
+
+function toolResultContentToPreview(content: unknown): string {
+  const compacted = parseToolResultCompactionMarker(content);
+  if (!compacted) return contentToPreview(content);
+  return i18n.t('message.renderer.toolResultCompacted', {
+    size: formatToolResultCompactionBytes(compacted.originalBytes),
+  });
 }
 
 function toolResultContentFor(

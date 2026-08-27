@@ -7,6 +7,12 @@ export type {
   ClaudeSubagentModelAccessStatus,
 } from './claude-code/subagent-model-access.js';
 export { CodexAgent } from './codex/index.js';
+export {
+  CODEX_HISTORY_OVERSIZED_REASON,
+  CODEX_LIVE_TAIL_OVERSIZED_BYTES,
+  isOversizedLiveTailStats,
+  measureRolloutLiveTailStats,
+} from './codex/rollout-sanitize.js';
 // host 导入本地 Codex rollout 历史时也要做 citation 归一化(流式路径在 translator
 // 内部做,导入路径拿到的是 rollout 原文),复用同一实现避免口径分叉。
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。

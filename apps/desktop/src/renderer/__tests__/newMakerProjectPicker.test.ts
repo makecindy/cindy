@@ -560,11 +560,14 @@ describe('Shared create project picker', () => {
       /opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/,
     );
 
-    // 路由:以被控端(deviceId)为准计算 hidden;选中值被隐藏时 coerce 到首个可用。
+    // 路由以被控端(deviceId)为准计算 hidden。不可用性变化只收窄可选入口；不得由
+    // 监听旧 draft 的 effect 再写回选中值，否则会覆盖同轮刚应用的新默认组合。
     expect(newMakerDraftRouteSource).toMatch(
       /useAvailableAgents\(\s*effectiveDeviceLinkDeviceId,?\s*\)/,
     );
-    expect(newMakerDraftRouteSource).toMatch(/hiddenSwitcherVendors\.includes\(draft\.vendor\)/);
+    expect(newMakerDraftRouteSource).not.toMatch(
+      /hiddenSwitcherVendors\.includes\(draft\.vendor\)/,
+    );
 
     // 2026-08-12 统一模型选择器(M5):新会话工具条上的引擎下拉常态已撤除(只在
     // device-link 老被控端的降级分支里保留),上面那条 hiddenVendors 断言因此不再是

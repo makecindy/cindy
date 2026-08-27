@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 
 import type { ModelAccessStatus } from '../../shared/modelAccess';
 
-const IDLE: ModelAccessStatus = { state: 'idle', source: null, endpoint: null };
+const IDLE: ModelAccessStatus = {
+  state: 'idle',
+  source: null,
+  endpoint: null,
+  accountTier: null,
+};
 
 /**
  * useModelAccessStatus —— 网关凭据自动下发的同步状态(main 侧权威,推送驱动)。
@@ -14,14 +19,19 @@ export function useModelAccessStatus(): ModelAccessStatus {
   const [status, setStatus] = useState<ModelAccessStatus>(IDLE);
 
   useEffect(() => {
+    const api = window.electronAPI?.modelAccess;
+    // 辅助窗口与单测可只暴露所需的最小 preload 能力；缺少该 bridge 时保持未知态，
+    // 不能让一枚展示标签扩大所有 Renderer surface 的能力依赖。
+    if (!api?.getStatus || !api.onStatusChange) return;
+
     let cancelled = false;
-    void window.electronAPI.modelAccess
+    void api
       .getStatus()
       .then((s) => {
         if (!cancelled) setStatus(s);
       })
       .catch(() => undefined);
-    const unsubscribe = window.electronAPI.modelAccess.onStatusChange((s) => setStatus(s));
+    const unsubscribe = api.onStatusChange((s) => setStatus(s));
     return () => {
       cancelled = true;
       unsubscribe();

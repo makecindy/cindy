@@ -129,6 +129,7 @@ import {
 import {
   newCodexRuntimeState,
   isAuthRelatedErrorMessage,
+  classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
   beginCodexGenerationTurn,
@@ -162,6 +163,12 @@ import {
   CompactionStormTracker,
   buildCompactionStormTerminalError,
 } from './compaction-storm.js';
+import {
+  CODEX_HISTORY_OVERSIZED_REASON,
+  isOversizedLiveTailStats,
+  measureRolloutLiveTailStats,
+  sanitizeCodexForkRolloutFile,
+} from './rollout-sanitize.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -359,36 +366,6 @@ function prefixId(value: string | undefined): string | undefined {
 
 function isRemoteLikePath(p: string): boolean {
   return p.startsWith('/') && process.platform === 'win32';
-}
-
-function isReasoningPayload(payload: unknown): boolean {
-  return Boolean(
-    payload &&
-    typeof payload === 'object' &&
-    !Array.isArray(payload) &&
-    (payload as Record<string, unknown>).type === 'reasoning',
-  );
-}
-
-function isImageGenerationPayloadWithoutId(payload: unknown): boolean {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
-  const record = payload as Record<string, unknown>;
-  const type = record.type;
-  if (typeof type !== 'string') return false;
-  if (!type.startsWith('image_generation') && !type.startsWith('imageGeneration')) return false;
-  const id = record.id;
-  return typeof id !== 'string' || id.trim().length === 0;
-}
-
-function hasUnsafeForkRolloutPayload(line: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(line);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-    const payload = (parsed as Record<string, unknown>).payload;
-    return isReasoningPayload(payload) || isImageGenerationPayloadWithoutId(payload);
-  } catch {
-    return false;
-  }
 }
 
 function buildCodexDeveloperInstructions(parts: {
@@ -2965,6 +2942,7 @@ export class CodexAgent extends BaseAgent {
       reviewMode,
       mcpProvidersCount: this.deps.mcpProviders?.length ?? 0,
     });
+    const stallAgent = this;
 
     // ── Maker Memory: 启动时预拉 MEMORY.md 索引 + 写入规范段 ────────────────
     // thread/start 仍把 developerInstructions 写入新 thread; thread/resume 在普通非 proxy
@@ -6753,17 +6731,59 @@ export class CodexAgent extends BaseAgent {
           clearReconnectStall();
           return;
         }
-        onUpstreamIdleTimeout({
-          reason: 'codex_reconnect_stalled',
-          timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
-          ignorePendingTools: true,
-          allowPendingTurnStart: !isTurnInFlight,
-          logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
-          message:
-            `Codex app-server has been reconnecting for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
-            'without making progress; the turn was interrupted automatically. ' +
-            'You can send the next message to continue.',
-        });
+        const stalledThreadId = threadId;
+        const stalledTurnGeneration = reconnectStallTurnGeneration;
+        const allowPendingTurnStart = !isTurnInFlight;
+        const stalledMessage =
+          `Codex app-server has been reconnecting for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
+          'without making progress; the turn was interrupted automatically. ' +
+          'You can send the next message to continue.';
+        const emitStalled = (reason: string, message: string): void => {
+          if (
+            !isReconnectStallCurrent() ||
+            threadId !== stalledThreadId ||
+            reconnectStallTurnGeneration !== stalledTurnGeneration
+          ) return;
+          onUpstreamIdleTimeout({
+            reason,
+            timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
+            ignorePendingTools: true,
+            allowPendingTurnStart,
+            logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
+            message,
+          });
+        };
+        if (!stalledThreadId || opts.remoteHostId || !stallAgent.hasLocalCodexHome()) {
+          emitStalled('codex_reconnect_stalled', stalledMessage);
+          return;
+        }
+        void (async () => {
+          let reason = 'codex_reconnect_stalled';
+          let message = stalledMessage;
+          try {
+            const rolloutPath = await stallAgent.findRolloutPath(stalledThreadId);
+            const stats = await measureRolloutLiveTailStats(rolloutPath);
+            if (isOversizedLiveTailStats(stats)) {
+              reason = CODEX_HISTORY_OVERSIZED_REASON;
+              message =
+                'Codex remote compaction cannot finish because this thread\'s live history is oversized. ' +
+                'Fork and strip oversized inline images to continue.';
+              log.warn('codex reconnect stall classified as oversized live history', {
+                threadId: stalledThreadId,
+                tailBytes: stats.tailBytes,
+                projectedTailBytes: stats.projectedTailBytes,
+                strippedBytes: stats.strippedBytes,
+                thresholdBytes: stats.tailBytes,
+              });
+            }
+          } catch (error) {
+            log.debug('codex live-tail measure skipped', {
+              threadId: stalledThreadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          emitStalled(reason, message);
+        })();
       }, slice);
       (reconnectStallTimer as unknown as { unref?: () => void }).unref?.();
     }
@@ -6842,7 +6862,7 @@ export class CodexAgent extends BaseAgent {
         armReconnectStall();
         return;
       }
-      if (reconnectStallTimer && isReconnectRecoveryEvent(event)) {
+      if (isReconnectRecoveryEvent(event)) {
         clearReconnectStall();
       }
     }
@@ -6870,7 +6890,9 @@ export class CodexAgent extends BaseAgent {
       const msSinceLast =
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
       const turnId = currentTurnId ?? pendingTurnId;
-      const deferTurnCleanupUntilInterrupt = opts?.reason === 'codex_reconnect_stalled';
+      const deferTurnCleanupUntilInterrupt =
+        opts?.reason === 'codex_reconnect_stalled' ||
+        opts?.reason === CODEX_HISTORY_OVERSIZED_REASON;
       if (deferTurnCleanupUntilInterrupt && !pendingTurnId && turnId) {
         // Keep Session.isTurnRunning() true until the interrupt ACK (or the
         // close/retire fallback) settles. Desktop may already have received
@@ -9049,9 +9071,13 @@ export class CodexAgent extends BaseAgent {
           // Already reported above as the authoritative terminal outcome; the
           // interrupt-derived message must not overwrite it.
         } else if (turn.error?.message) {
+          const classified = classifyCodexError(turn.error);
           eventQueue.push({
             type: 'error',
-            data: { message: turn.error.message, isTerminal: true },
+            data: {
+              ...classified.data,
+              isTerminal: true,
+            },
             source: 'codex',
           });
         } else if (turn.status === 'failed') {
@@ -12428,6 +12454,10 @@ export class CodexAgent extends BaseAgent {
    * opts.upToMessageId 在 Codex 这里被忽略。uuidMap 返回空 — Codex agentMeta 不存
    * message uuid, maker 那边也找不到东西可 remap, 不会 break。
    */
+  private hasLocalCodexHome(): boolean {
+    return Boolean(this.codexHome) && !isRemoteLikePath(this.codexHome ?? '');
+  }
+
   private async findRolloutPath(threadId: string, preferredPath?: string): Promise<string> {
     if (preferredPath && !isRemoteLikePath(preferredPath)) {
       try {
@@ -12485,14 +12515,14 @@ export class CodexAgent extends BaseAgent {
   private async createSafeForkRolloutCopy(threadId: string, preferredPath?: string): Promise<string> {
     const sourcePath = await this.findRolloutPath(threadId, preferredPath);
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-fork-'));
-    const copyPath = path.join(tempDir, path.basename(sourcePath));
-    const text = await fs.readFile(sourcePath, 'utf8');
-    const out = text
-      .split(/\r?\n/)
-      .filter((line) => !line.trim() || !hasUnsafeForkRolloutPayload(line))
-      .join('\n');
-    await fs.writeFile(copyPath, out.endsWith('\n') || out.length === 0 ? out : `${out}\n`, 'utf8');
-    return copyPath;
+    try {
+      const copyPath = path.join(tempDir, path.basename(sourcePath));
+      await sanitizeCodexForkRolloutFile(sourcePath, copyPath);
+      return copyPath;
+    } catch (error) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {

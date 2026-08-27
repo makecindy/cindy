@@ -38,6 +38,7 @@ import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifes
 import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
+import { compareAppUpdateVersions } from './updateVersionPolicy';
 
 import { createLogger, maskPath } from './logger';
 import {
@@ -582,7 +583,12 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
   try {
     const raw = fs.readFileSync(infoPath, 'utf-8');
     patchInfo = JSON.parse(raw) as PatchInfo;
-    if (!patchInfo.version || !patchInfo.fileName) {
+    if (
+      typeof patchInfo.version !== 'string' ||
+      !patchInfo.version ||
+      typeof patchInfo.fileName !== 'string' ||
+      !patchInfo.fileName
+    ) {
       throw new Error('invalid patch-info');
     }
   } catch {
@@ -603,20 +609,26 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
       patchInfo.enableBeta ? 'beta' : 'release',
       currentEnableBeta ? 'beta' : 'release',
     );
-    try { fs.unlinkSync(patchFilePath); } catch { /* ignore */ }
-    removePatchInfo();
-    const flag = readReloginFlag();
-    if (flag?.version === patchInfo.version) {
-      clearReloginFlag();
-    }
+    discardExistingPatch(patchInfo, patchFilePath, true);
     return { action: 'check' };
   }
 
   const currentVersion = app.getVersion();
-  if (patchInfo.version === currentVersion) {
+  const versionRelation = compareAppUpdateVersions(patchInfo.version, currentVersion);
+  if (versionRelation === 'same') {
     // Patch matches current version → already applied; clean up and re-check.
-    try { fs.unlinkSync(patchFilePath); } catch { /* ignore */ }
-    removePatchInfo();
+    // Keep the matching relogin flag: auth initialization owns consuming it.
+    discardExistingPatch(patchInfo, patchFilePath, false);
+    return { action: 'check' };
+  }
+  if (versionRelation !== 'newer') {
+    log.warn(
+      'discarding non-upgrade staged patch: current=%s patch=%s relation=%s',
+      currentVersion,
+      patchInfo.version,
+      versionRelation,
+    );
+    discardExistingPatch(patchInfo, patchFilePath, true);
     return { action: 'check' };
   }
 
@@ -651,6 +663,20 @@ function writePatchInfo(info: PatchInfo): void {
 
 function removePatchInfo(): void {
   try { fs.unlinkSync(path.join(getUpdatesDir(), PATCH_INFO_FILE)); } catch { /* ignore */ }
+}
+
+function discardExistingPatch(
+  patchInfo: PatchInfo,
+  patchFilePath: string,
+  clearMatchingReloginFlag: boolean,
+): void {
+  try { fs.unlinkSync(patchFilePath); } catch { /* ignore */ }
+  removePatchInfo();
+  if (!clearMatchingReloginFlag) return;
+  const flag = readReloginFlag();
+  if (flag?.version === patchInfo.version) {
+    clearReloginFlag();
+  }
 }
 
 function isUpdateApplyCommitted(): boolean {
@@ -747,6 +773,21 @@ function isCurrentPatchNewerThanDeferred(
 }
 
 function discardStagedPatchFiles(): void {
+  // A background manifest check can resume while the native updater is already
+  // reading this same file. Keep the patch intact in that window; the apply
+  // path owns cleanup after it either succeeds or reports a spawn failure.
+  if (isUpdateApplyCommitted()) {
+    log.info('skipping staged patch discard — update apply already in flight');
+    return;
+  }
+  if (autoRelaunchDecisionDepth > 0) {
+    rememberDeferredStagedPatch();
+    // Keep the payload until the async eligibility check settles, but remove
+    // the marker now so a channel/app relaunch cannot revive this patch.
+    removePatchInfo();
+    log.info('deferring staged patch discard until auto-relaunch eligibility settles');
+    return;
+  }
   const discardedVersion = readyVersion;
   if (readyFilePath) {
     try { fs.unlinkSync(readyFilePath); } catch { /* ignore */ }
@@ -1019,20 +1060,56 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     return 'manifest_failed';
   }
 
-  const asset = resolveUpdateAsset(manifest);
-  if (!asset) {
-    log.info(process.platform === 'linux' ? 'No installer in Linux manifest' : 'No hotfix in manifest');
-    if (!wasReady) currentStatus = 'idle';
-    return 'idle';
-  }
-
   const latestVersion = manifest.app.version;
   const currentVersion = app.getVersion();
   log.info('Version check: current=%s, latest=%s, ready=%s', currentVersion, latestVersion, previousReadyVersion ?? '<none>');
 
-  if (latestVersion === currentVersion) {
+  const versionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+  if (versionRelation === 'invalid') {
+    log.error(
+      'Refusing app update because version comparison is invalid: current=%s latest=%s',
+      currentVersion,
+      latestVersion,
+    );
+    if (wasReady) {
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
+    return 'manifest_failed';
+  }
+  if (versionRelation === 'same') {
     log.info('Versions match, no update needed');
-    if (!wasReady) currentStatus = 'idle';
+    if (wasReady) {
+      log.info('Discarding staged patch because the current manifest no longer advertises an upgrade');
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
+    return 'idle';
+  }
+  if (versionRelation === 'older') {
+    log.warn(
+      'Skipping app downgrade from %s to %s',
+      currentVersion,
+      latestVersion,
+    );
+    if (wasReady) {
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
+    return 'idle';
+  }
+
+  const asset = resolveUpdateAsset(manifest);
+  if (!asset) {
+    log.info(process.platform === 'linux' ? 'No installer in Linux manifest' : 'No hotfix in manifest');
+    if (wasReady) {
+      discardStagedPatchFiles();
+    } else {
+      currentStatus = 'idle';
+    }
     return 'idle';
   }
 
@@ -1731,6 +1808,21 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
     return;
   }
 
+  const currentVersion = app.getVersion();
+  const versionRelation = compareAppUpdateVersions(readyVersion, currentVersion);
+  if (versionRelation !== 'newer') {
+    log.error(
+      'executeRelaunch() refused non-upgrade patch: current=%s patch=%s relation=%s',
+      currentVersion,
+      readyVersion ?? '<unknown>',
+      versionRelation,
+    );
+    isRelaunching = false;
+    autoRelaunchInProgress = false;
+    discardStagedPatchFiles();
+    return;
+  }
+
   // Gate *before* the updater is spawned, not inside forceQuit: once the
   // updater script is running it polls our pid and SIGKILLs us after 120s
   // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
@@ -2008,9 +2100,32 @@ export function initUpdateService(): void {
       const currentVersion = app.getVersion();
       log.info('Startup: current=%s, latest=%s', currentVersion, latestVersion);
 
-      if (latestVersion === currentVersion) {
-        // Already up to date — clean up any stale patch directory.
-        checkExistingPatch();
+      const startupVersionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+      if (startupVersionRelation !== 'newer') {
+        // The online manifest is authoritative. A local patch that is no longer
+        // advertised must not survive into a later offline startup.
+        const patchResult = checkExistingPatch();
+        if (patchResult.action === 'relaunch') {
+          log.info(
+            'Discarding unadvertised local patch v%s (manifest relation=%s)',
+            patchResult.version,
+            startupVersionRelation,
+          );
+          discardStagedPatchFiles();
+        }
+        if (startupVersionRelation === 'invalid') {
+          log.info('[diag] update-check-startup returning error=manifest_failed');
+          return { hasUpdate: false, action: 'none' as const, error: 'manifest_failed' as const };
+        }
+        return { hasUpdate: false, action: 'none' as const };
+      }
+
+      if (!resolveUpdateAsset(manifest)) {
+        const patchResult = checkExistingPatch();
+        if (patchResult.action === 'relaunch') {
+          log.info('Discarding local patch v%s because the manifest has no update asset', patchResult.version);
+          discardStagedPatchFiles();
+        }
         return { hasUpdate: false, action: 'none' as const };
       }
 

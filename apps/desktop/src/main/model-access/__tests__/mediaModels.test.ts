@@ -28,6 +28,7 @@ vi.mock('../../cindy-media/providerMediaRuntime.js', () => ({
 
 import {
   fetchMediaInvocationGuide,
+  isMediaModelExecutable,
   isMediaModelExecutableForGuide,
   listAvailableMediaModels,
   listExecutableMediaModels,
@@ -36,12 +37,14 @@ import {
 } from '../mediaModels.js';
 
 const payload = {
-  schemaVersion: 4 as const,
+  schemaVersion: 5 as const,
+  accountTier: 'free' as const,
   models: [
     {
       id: 'image-without-guide',
       name: 'Image Without Guide',
       mode: 'image_generation',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       agents: [],
       modalities: { input: ['text'], output: ['image'] },
@@ -50,6 +53,7 @@ const payload = {
       id: 'image-with-guide',
       name: 'Image With Guide',
       mode: 'image_generation',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       agents: [],
       modalities: { input: ['text', 'image'], output: ['image'] },
@@ -58,6 +62,7 @@ const payload = {
       id: 'video-without-guide',
       name: 'Video Without Guide',
       mode: 'video_generation',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       agents: [],
       modalities: { input: ['text', 'image'], output: ['video'] },
@@ -66,6 +71,7 @@ const payload = {
       id: 'guide-only-chat',
       name: 'Guide Only Chat',
       mode: 'chat',
+      availability: 'available' as const,
       currency: 'CNY' as const,
       contextWindow: 200_000,
       agents: ['codex' as const],
@@ -153,6 +159,28 @@ describe('listAvailableMediaModels', () => {
 
     readModelDisableOverridesMock.mockReturnValueOnce({ disabledProviders: { xd: true } });
     await expect(listAvailableMediaModels()).resolves.toEqual([]);
+  });
+
+  it('v5 目录不会把需要付费的媒体模型暴露为可用模型', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      ...payload,
+      models: [
+        payload.models[1],
+        {
+          ...payload.models[0],
+          id: 'paid-image',
+          availability: 'requires_payment',
+        },
+      ],
+    });
+
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-with-guide', availability: 'available' },
+    ]);
+    expect(serverApiFetchMock).toHaveBeenCalledWith(
+      '/api/model-access/models?schemaVersion=5',
+      expect.any(Object),
+    );
   });
 
   it('namespaced modelId 唯一时继承旧裸 ID 的停用项', async () => {
@@ -288,54 +316,61 @@ describe('listAvailableMediaModels', () => {
 
   it('批量预检缓存 modelId 对应的协议 Guide', async () => {
     const modelId = 'openai/image-with-guide';
+    const paidModelId = 'openai/paid-image';
+    const guide = {
+      schemaVersion: 1 as const,
+      guideId: 'openai-images-v1',
+      revision: '2026-08-20.1',
+      connection: { providerId: 'xd' },
+      operations: [
+        {
+          capability: 'image.generate' as const,
+          request: {
+            method: 'POST' as const,
+            path: '/images/generations',
+            bodyEncoding: 'json' as const,
+            bodyModelPath: ['model'],
+            timeoutMs: 1_000,
+            maxRequestBytes: 1_024,
+            maxResponseBytes: 1_024,
+          },
+          response: {
+            mode: 'sync' as const,
+            media: [
+              {
+                path: ['data', '*', 'url'],
+                encoding: 'url' as const,
+                kind: 'image' as const,
+                allowedUrlHosts: ['example.com'],
+              },
+            ],
+          },
+          instructions: '按协议组装请求。',
+          exampleBody: { prompt: 'hello' },
+          inputSchema: { type: 'object' },
+          officialDocs: 'https://example.com/images-api',
+        },
+      ],
+    };
     serverApiFetchMock.mockImplementation(async (path: string) => {
       if (path.startsWith('/api/model-access/models')) {
         return {
           ...payload,
-          models: [{ ...payload.models[1], id: modelId }],
+          models: [
+            { ...payload.models[1], id: modelId },
+            {
+              ...payload.models[1],
+              id: paidModelId,
+              availability: 'requires_payment',
+            },
+          ],
         };
       }
       if (path === '/api/model-access/invocation-guides') {
         return {
           guides: [
-            {
-              modelId,
-              guide: {
-                schemaVersion: 1,
-                guideId: 'openai-images-v1',
-                revision: '2026-08-20.1',
-                connection: { providerId: 'xd' },
-                operations: [
-                  {
-                    capability: 'image.generate',
-                    request: {
-                      method: 'POST',
-                      path: '/images/generations',
-                      bodyEncoding: 'json',
-                      bodyModelPath: ['model'],
-                      timeoutMs: 1_000,
-                      maxRequestBytes: 1_024,
-                      maxResponseBytes: 1_024,
-                    },
-                    response: {
-                      mode: 'sync',
-                      media: [
-                        {
-                          path: ['data', '*', 'url'],
-                          encoding: 'url',
-                          kind: 'image',
-                          allowedUrlHosts: ['example.com'],
-                        },
-                      ],
-                    },
-                    instructions: '按协议组装请求。',
-                    exampleBody: { prompt: 'hello' },
-                    inputSchema: { type: 'object' },
-                    officialDocs: 'https://example.com/images-api',
-                  },
-                ],
-              },
-            },
+            { modelId, guide },
+            { modelId: paidModelId, guide: { ...guide, guideId: 'paid-images-v1' } },
           ],
         };
       }
@@ -351,5 +386,6 @@ describe('listAvailableMediaModels', () => {
     expect(
       isMediaModelExecutableForGuide(modelId, 'other-images-v1', 'image.generate'),
     ).toBe(false);
+    expect(isMediaModelExecutable(paidModelId, 'image.generate')).toBe(false);
   });
 });

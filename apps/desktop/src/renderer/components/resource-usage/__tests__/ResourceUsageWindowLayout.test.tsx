@@ -7,6 +7,7 @@ let resourceBodyProps: {
   shellVisible?: boolean;
   onFirstSample?: () => void;
 } | null = null;
+const fullscreenState = vi.hoisted(() => ({ isMac: false, isFullscreen: false }));
 
 vi.mock('@/features/right-sidebar/plugins/resource-usage/ResourceUsageBody', () => ({
   ResourceUsageBody: (props: typeof resourceBodyProps) => {
@@ -32,6 +33,7 @@ vi.mock('@/hooks/useLocale', () => ({
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ ConfirmDialogProvider: ({ children }: React.PropsWithChildren) => children }));
 vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut: vi.fn() }));
+vi.mock('@/hooks/useMacFullscreen', () => ({ useMacFullscreen: () => fullscreenState }));
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
 }));
@@ -59,6 +61,8 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     rendererReady.mockClear();
     presentationReady.mockClear();
     resourceClose.mockClear();
+    fullscreenState.isMac = false;
+    fullscreenState.isFullscreen = false;
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -84,6 +88,16 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     render(<ResourceUsageWindowRoot />);
 
     expect(screen.getByText('titleBar.menuItems.resourceUsage')).toBeTruthy();
+  });
+
+  it('removes the macOS traffic-light inset in native fullscreen', () => {
+    fullscreenState.isMac = true;
+    fullscreenState.isFullscreen = true;
+
+    render(<ResourceUsageWindowRoot />);
+
+    expect(screen.getByTestId('resource-window-title-spacer').className).toContain('w-3');
+    expect(screen.getByTestId('resource-window-title-spacer').className).not.toContain('w-20');
   });
 
   it('keeps Windows hidden prewarm idle, then samples only after Main activates it', async () => {

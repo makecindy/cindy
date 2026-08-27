@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "パラメータが無効です。確認して再試行してください。",
+    "PRECONDITION_FAILED": "現在の状態ではこの操作を実行できません。しばらくしてから再試行してください。",
     "SESSION_RUNNING": "このセッションは現在タスクを実行中です。しばらくしてからもう一度お試しください。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "現在の Pi モデルでは画像入力が有効になっていません。画像に対応するモデルへ切り替えてください。カスタムモデルの場合は、プロバイダー設定で「画像入力に対応」を有効にしてから、新しい Pi タスクを開始してください。",
     "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回のプロバイダー切り替えは適用されませんでした（セッションは元のプロバイダーのままです）。他のタスクが終わってからもう一度お試しください。",
@@ -39,6 +40,12 @@
     "details": "エラー詳細"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "データベースのクリーンアップが中断されました",
+      "interruptedDescription": "データベースのクリーンアップが予期せず中断されました。Cindy を再起動してください。保存されたメンテナンス状態に基づいて安全に復旧します。",
+      "recoveryFailedTitle": "ローカルデータベースを安全に復旧できませんでした",
+      "recoveryFailedDescription": "データベースのクリーンアップから復旧できませんでした。元のデータが上書きされないように、Cindy はローカルデータベースを開く処理を停止しました。"
+    },
     "updateReady": {
       "title": "続行にはアップデートが必要です",
       "description": "ローカルデータは新しいバージョンの Cindy によって更新されているため、現在のバージョンでは開けません。新しいバージョンのダウンロードは完了しています。再起動してインストールすると復旧します。",
@@ -843,7 +850,52 @@
         "chatAttachmentsClearConfirmDescription": "メッセージ添付ファイルのキャッシュディレクトリ内のファイルだけを削除し、メッセージデータベースは参照しません。履歴内の一部の添付ファイルを開けなくなる場合があり、この操作は元に戻せません。",
         "chatAttachmentsClearConfirmButton": "添付ファイルキャッシュを削除",
         "chatAttachmentsCleared": "メッセージ添付ファイルのキャッシュをクリーンアップしました",
-        "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
+          "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
+          "dbSlimmingBackupDirectoryDialogTitle": "データベースのクリーンアップ用バックアップ先を選択",
+          "dbSlimmingLabel": "データベースのクリーンアップ",
+          "dbSlimmingDescription": "論理削除されたタスクと長期間アーカイブされたタスクのメッセージ履歴をスキャンします。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
+          "dbSlimmingScanButton": "データベースをスキャン",
+          "dbSlimmingScanLoading": "データベースをスキャンしています…",
+          "dbSlimmingScanResultTitle": "データベースのスキャン結果",
+          "dbSlimmingExecutionLoading": "データベースのクリーンアップを準備しています。Cindy はまもなく再起動します…",
+          "dbSlimmingArchiveAgeLabel": "次の期間を超えてアーカイブされているタスクを整理",
+          "dbSlimmingArchiveAgeOption7Days": "7 日",
+          "dbSlimmingArchiveAgeOption1": "1 か月",
+          "dbSlimmingArchiveAgeOption3": "3 か月",
+          "dbSlimmingArchiveAgeOption6": "6 か月",
+          "dbSlimmingBackupLabel": "クリーンアップ前にデータベースをバックアップ",
+          "dbSlimmingBackupDefaultLocation": "データベースのフォルダ（最新のクリーンアップ用バックアップのみ保持）",
+          "dbSlimmingUseDefaultDirectoryButton": "既定のフォルダを使用",
+          "dbSlimmingChooseDirectoryButton": "バックアップ先を選択",
+          "dbSlimmingBackupDirectoryFailed": "バックアップ先を選択できませんでした。もう一度お試しください。",
+          "dbSlimmingScanFailed": "データベースをスキャンできませんでした。もう一度お試しください。",
+          "dbSlimmingScheduleFailed": "データベースのクリーンアップを予約できませんでした。再スキャンしてお試しください。",
+          "dbSlimmingBackupMissing": "最新のクリーンアップ用バックアップが見つかりません。",
+          "dbSlimmingBackupOpenFailed": "クリーンアップ用バックアップの場所を開けませんでした。もう一度お試しください。",
+          "dbSlimmingReportTasks": "論理削除タスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件を削除します",
+          "dbSlimmingReportMessages": "削除予定のメッセージ内容：{{count}} 件（約 {{size}}）",
+          "dbSlimmingReportSpace": "データベース {{database}}、必要な一時領域は最低 {{temporary}}、空き容量 {{free}}",
+          "dbSlimmingSpaceUnknown": "不明",
+          "dbSlimmingInsufficientSpace": "作業コピーを安全に作成してデータベースを圧縮するための空き容量がありません。",
+          "dbSlimmingConfirmButton": "データベースのクリーンアップを確認",
+          "dbSlimmingConfirmTitle": "再起動してデータベースをクリーンアップしますか？",
+          "dbSlimmingConfirmDescriptionWithBackup": "Cindy を正常に再起動し、次回起動時にデータベースを開く前にバックアップ、履歴削除、圧縮、整合性確認を行います。バックアップの書き込みと検証が完了するまでデータは削除しません。",
+          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy を正常に再起動し、次回起動時にデータベースを開く前に履歴を削除して圧縮します。今回はバックアップを作成しないため、削除した履歴は復元できません。",
+          "dbSlimmingRestartButton": "再起動してデータベースをクリーンアップ",
+          "dbSlimmingResultCompleted": "{{tasks}} 件のタスクから {{messages}} 件のメッセージを削除し、データベースを {{size}} 縮小しました。",
+          "dbSlimmingOpenBackupButton": "クリーンアップ用バックアップを開く",
+          "dbSlimmingToastCompleted": "データベースのクリーンアップが完了し、{{size}} 解放しました",
+          "dbSlimmingHistoryCleared": "履歴は削除されました",
+          "dbSlimmingFailure": {
+            "backup-failed": "データベースのバックアップを作成または保持できなかったため、履歴は削除していません。",
+            "cleanup-failed": "データベースのクリーンアップは完了しませんでした。元のデータベースは変更されていません。",
+            "database-in-use": "別のインスタンスがデータベースを使用しているため、クリーンアップを実行しませんでした。",
+            "insufficient-space": "空き容量が不足しているため、データベースのクリーンアップを実行しませんでした。",
+            "integrity-check-failed": "整合性確認に失敗したため、元のデータベースを復元しました。",
+            "replacement-failed": "圧縮後のデータベースを配置できなかったため、元のデータベースを復元しました。",
+            "recovery-failed": "データベースの復元に失敗しました。元データを保護するため、Cindy はデータベースを開いていません。",
+            "unknown": "データベースのクリーンアップは完了しませんでした。もう一度お試しください。"
+          },
         "cleanupLabel": "ディスククリーンアップ",
         "cleanupDescription": "どのセッションからも参照されていないメディアファイル、上限を超えたキャッシュ、不要になったフォルダをスキャンします。まず件数を表示し、確認後にのみ削除します。入力欄の下書きや送信待ちメッセージ内の画像は自動的に保護されます。",
         "scanButton": "スキャン",
@@ -1369,6 +1421,9 @@
         "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン単位で残高から引き落とし",
         "modelLabel": "すべてのモデル",
         "billingLabel": "トークン単位で残高から引き落とし",
+        "accountTier": {
+          "free": "無料版"
+        },
         "disconnectConfirm": {
           "title": "Cindy AI を切断しますか?",
           "description": "切断するとローカルに保存された Cindy AI Key が削除されます。Cindy AI のモデルを引き続き使うには再接続が必要です。"
@@ -1631,6 +1686,8 @@
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "disableModel": "このモデルを無効にする",
+        "paymentRequired": "有料",
+        "paymentUnlock": "有料で解放",
         "enableModel": "このモデルを有効にする",
         "capabilityGroupHint": "チャットのモデル選択には表示されず、画像生成などの機能でのみ使用されます。",
         "accessWriteFailed": "変更を保存できませんでした。もう一度お試しください。",
@@ -1982,7 +2039,7 @@
       "restartBusyDescription": "進行中のタスクがあります。再起動すると中断されます。今すぐ再起動しますか？",
       "unavailable": "Beta チャンネルは利用できません。Beta 更新サーバーに接続できませんでした。",
       "toast": {
-        "disabled": "Beta チャンネルをオフにしました。再起動後に反映されます",
+        "disabled": "Beta チャンネルをオフにしました。現在のバージョンを使い続け、より新しい正式版が公開されたら自動で切り替えます",
         "toggleFailed": "Beta チャンネルの切り替えに失敗しました"
       }
     },
@@ -3477,6 +3534,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
+        "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピュータに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
         "serverUnsupported": "サーバーのバージョンが古いか応答がないため、設定を読み込めません。",
         "retry": "再試行",
@@ -5237,6 +5295,32 @@
       "envFailed": "環境の初期化に失敗しました。クリックして再試行してください"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
+    "databaseCleanup": {
+      "title": "データベースをクリーンアップ中",
+      "progressLabel": "データベースのクリーンアップ進行状況",
+      "phase": {
+        "preparing": "クリーンアップを準備中",
+        "backingUp": "データベースをバックアップ中",
+        "copying": "クリーンアップ用の作業コピーを作成中",
+        "cleaning": "期限切れメッセージを削除中",
+        "compacting": "データベースを圧縮中",
+        "verifying": "データベースを検証中",
+        "finalizing": "データベースを安全に置き換え中",
+        "cancelling": "クリーンアップをキャンセル中"
+      },
+      "elapsedAndRemaining": "経過 {{elapsed}} · 残り約 {{remaining}}",
+      "elapsedFinalizing": "経過 {{elapsed}} · まもなく完了",
+      "duration": {
+        "seconds": "{{count}} 秒",
+        "minutes": "{{count}} 分"
+      },
+      "cancelAction": "キャンセルして Cindy を開く",
+      "cancellingAction": "キャンセル中…",
+      "finalizingAction": "完了処理中…",
+      "cancelHint": "安全にキャンセルできます。元のデータベースを保持して Cindy の起動を続けます。",
+      "cancellingHint": "クリーンアップを停止中です。元のデータベースは変更されません。",
+      "finalizingHint": "データベースを安全に置き換えています。Cindy を終了しないでください。"
+    },
     "envFailed": {
       "title": "環境の初期化に失敗しました",
       "retry": "再試行"
@@ -5450,7 +5534,7 @@
         "provider": "プロバイダー",
         "tokens": "累計トークン",
         "context": "コンテキスト使用率",
-            "lastActive": "最終アクティブ"
+        "lastActive": "最終アクティブ"
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
       "tokensTooltip": "セッションの累計値であり、直近 30 日の増分ではありません。"
@@ -6648,6 +6732,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
+      "paymentRequired": {
+        "badge": "有料",
+        "unlock": "有料で解放",
+        "title": "有料でこのモデルを解放",
+        "description": "有料プランを購読するか、残高をチャージすると、このモデルを利用できます。",
+        "action": "支払い方法を見る"
+      },
       "hidden": "非表示",
       "modelListAria": "モデル一覧",
       "subscriptionDirectDisabled": {
@@ -7303,7 +7394,13 @@
       "turnCostEstimated": "このターンの token 価値(API 単価換算)",
       "turnCostEstimatedValue": "価値 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "リクエストの明細"
+      "userTurnCostDetailsTitle": "リクエストの明細",
+      "relative": {
+        "justNow": "たった今",
+        "minutesAgo_other": "{{count}}分前",
+        "hoursAgo_other": "{{count}}時間前",
+        "daysAgo_other": "{{count}}日前"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
@@ -7363,6 +7460,9 @@
       "forkStripEncrypted": "Fork して切り離す",
       "forkStripEncryptedRunning": "Fork 中…",
       "forkStripEncryptedTitle": "暗号化推論を除いた新しいセッションを Fork で作成",
+      "forkStripOversizedHistory": "履歴を縮小して続ける",
+      "forkStripOversizedHistoryRunning": "Fork 中…",
+      "forkStripOversizedHistoryTitle": "過大なインライン画像を除いた新しいタスクへ Fork",
       "codexSessionExpiredLogin": "ChatGPT に再接続",
       "codexSessionReconnected": "ChatGPT に再接続しました。「再試行」をクリックして続行してください。",
       "networkUnreachable": "ネットワークエラー:サービスに一時的に接続できません。「再試行」を押してください。",
@@ -7535,6 +7635,7 @@
       "promptSend": "送信",
       "promptCancel": "キャンセル"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "表示できる内容はありません",
       "fileChange": {
@@ -7727,6 +7828,7 @@
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",
         "labelTimeout": "直前の応答がなかったため、整理して続行しました",
+        "labelStrip": "大きな画像を除いて続行しました",
         "toggleHint": "引き継ぎ内容を表示",
         "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
         "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
@@ -8798,7 +8900,15 @@
         "custom": "カスタム"
       },
       "weekday": {
-        "full": { "0": "日曜日", "1": "月曜日", "2": "火曜日", "3": "水曜日", "4": "木曜日", "5": "金曜日", "6": "土曜日" },
+        "full": {
+          "0": "日曜日",
+          "1": "月曜日",
+          "2": "火曜日",
+          "3": "水曜日",
+          "4": "木曜日",
+          "5": "金曜日",
+          "6": "土曜日"
+        },
         "short": { "0": "日", "1": "月", "2": "火", "3": "水", "4": "木", "5": "金", "6": "土" }
       },
       "time": {
@@ -9295,17 +9405,17 @@
         "nightly-test-heal": {
           "name": "夜間セルフヒーリングテスト",
           "description": "毎晩テストを実行し、失敗項目を分離ワークツリーで最小修正",
-        "prompt": "プロジェクトのテストスイートを実行し、失敗があれば隔離された worktree で最小限の修正を試みてください。\n制約：\n- リポジトリのドキュメントまたは package スクリプトから標準のテストコマンドを特定してから、テストスイート全体を実行する\n- 明確な失敗の証拠がある問題だけを修正し、影響範囲が最小の変更を優先して、ついでのリファクタリングは避ける\n- 修正後は関連テストを再実行して成功を確認し、diff 全体をレビューする\n- リポジトリのワークフローに従って修正を提出する（例：ブランチを作成して PR を開く）。main ブランチを直接変更しない\n- 安全に修正できない失敗については、原因、疑わしいファイル、推奨する調査手順を報告する"
+          "prompt": "プロジェクトのテストスイートを実行し、失敗があれば隔離された worktree で最小限の修正を試みてください。\n制約：\n- リポジトリのドキュメントまたは package スクリプトから標準のテストコマンドを特定してから、テストスイート全体を実行する\n- 明確な失敗の証拠がある問題だけを修正し、影響範囲が最小の変更を優先して、ついでのリファクタリングは避ける\n- 修正後は関連テストを再実行して成功を確認し、diff 全体をレビューする\n- リポジトリのワークフローに従って修正を提出する（例：ブランチを作成して PR を開く）。main ブランチを直接変更しない\n- 安全に修正できない失敗については、原因、疑わしいファイル、推奨する調査手順を報告する"
         },
         "pr-gatekeeper": {
           "name": "PR ゲートキーパー",
           "description": "平日にオープン PR の新規変更を事前レビューし、重大度別にリスクを報告",
-        "prompt": "リポジトリで現在オープンな PR を確認し、新しい変更を事前レビューしてください。\n制約：\n- 過去 24 時間以内に新しいコミットがあるオープン PR を 1 件ずつ確認する（月曜日は週末全体を対象）。PR 番号、ファイルパス、具体的な diff を引用する\n- 正確性、セキュリティ、データ損失、互換性の問題に重点を置き、深刻度別に分類する\n- 証拠で裏付けられる問題だけを報告し、失敗シナリオを説明する。スタイル上の好みだけで指摘しない\n- ユーザーが明示的に許可しない限り、レビュー結果のみを出力し、PR へのコメントやコード変更は行わない"
+          "prompt": "リポジトリで現在オープンな PR を確認し、新しい変更を事前レビューしてください。\n制約：\n- 過去 24 時間以内に新しいコミットがあるオープン PR を 1 件ずつ確認する（月曜日は週末全体を対象）。PR 番号、ファイルパス、具体的な diff を引用する\n- 正確性、セキュリティ、データ損失、互換性の問題に重点を置き、深刻度別に分類する\n- 証拠で裏付けられる問題だけを報告し、失敗シナリオを説明する。スタイル上の好みだけで指摘しない\n- ユーザーが明示的に許可しない限り、レビュー結果のみを出力し、PR へのコメントやコード変更は行わない"
         },
         "domain-radar": {
           "name": "分野レーダー",
           "description": "注目分野の最新動向を定期収集し、見解付きサマリーを出力",
-        "prompt": "テーマ「{{topic}}」について過去 24 時間の最新動向（月曜日は週末全体）を収集し、見解を含むダイジェストを作成してください。\n制約：\n- Web 検索を使い、複数の情報源で照合してから採用し、各項目に出典リンクを付ける\n- リリース、研究、政策、重要な議論など実質的な進展を優先し、宣伝記事や転載を除外する\n- リンクを並べるだけでなく、各動向に「なぜ注目すべきか」を 1 文で示す\n- 情報が少ない場合や情報源に疑義がある場合は率直に明記し、推測で補わない",
+          "prompt": "テーマ「{{topic}}」について過去 24 時間の最新動向（月曜日は週末全体）を収集し、見解を含むダイジェストを作成してください。\n制約：\n- Web 検索を使い、複数の情報源で照合してから採用し、各項目に出典リンクを付ける\n- リリース、研究、政策、重要な議論など実質的な進展を優先し、宣伝記事や転載を除外する\n- リンクを並べるだけでなく、各動向に「なぜ注目すべきか」を 1 文で示す\n- 情報が少ない場合や情報源に疑義がある場合は率直に明記し、推測で補わない",
           "params": {
             "topic": {
               "label": "注目テーマ",
@@ -9316,7 +9426,7 @@
         "competitor-watch": {
           "name": "競合ウォッチ",
           "description": "競合の製品・市場動向を週次でまとめ、自社への影響を分析",
-        "prompt": "次の競合の過去 1 週間の動向を追跡してください：{{competitors}}。\n制約：\n- Web 検索で製品更新、リリース、価格変更、市場動向、ユーザー評価を調べ、出典を示す\n- 公式情報と第三者による情報を区別し、未確認の噂は明示する\n- 重要な動向ごとに、それが自社に何を意味するかを分析し、対応案を示す\n- 実質的な動きがない場合は、水増しせず率直にその旨を伝える",
+          "prompt": "次の競合の過去 1 週間の動向を追跡してください：{{competitors}}。\n制約：\n- Web 検索で製品更新、リリース、価格変更、市場動向、ユーザー評価を調べ、出典を示す\n- 公式情報と第三者による情報を区別し、未確認の噂は明示する\n- 重要な動向ごとに、それが自社に何を意味するかを分析し、対応案を示す\n- 実質的な動きがない場合は、水増しせず率直にその旨を伝える",
           "params": {
             "competitors": {
               "label": "競合リスト",
@@ -9327,12 +9437,12 @@
         "weekly-work-draft": {
           "name": "週報ドラフトアシスタント",
           "description": "作業ディレクトリのドキュメントから今週の作業を整理し、週報ドラフトを生成",
-        "prompt": "作業ディレクトリ内で今週変更されたドキュメント、メモ、成果物を基に、週報の下書きを作成してください。\n制約：\n- 作業ディレクトリ内に実際の変更履歴がある内容だけを根拠とし、対応するファイルを示す\n- 「今週完了 / 進行中 / 来週の予定 / 調整が必要」の構成で、そのまま提出できる簡潔な文章にする\n- 実質的な進捗と定常作業を区別し、価値のある成果を強調する\n- 判断材料が足りない箇所には説明付きのプレースホルダーを残し、ユーザーが追記できるようにする"
+          "prompt": "作業ディレクトリ内で今週変更されたドキュメント、メモ、成果物を基に、週報の下書きを作成してください。\n制約：\n- 作業ディレクトリ内に実際の変更履歴がある内容だけを根拠とし、対応するファイルを示す\n- 「今週完了 / 進行中 / 来週の予定 / 調整が必要」の構成で、そのまま提出できる簡潔な文章にする\n- 実質的な進捗と定常作業を区別し、価値のある成果を強調する\n- 判断材料が足りない箇所には説明付きのプレースホルダーを残し、ユーザーが追記できるようにする"
         },
         "knowledge-freshness": {
           "name": "ナレッジベース鮮度チェック",
           "description": "毎月ドキュメントを点検し、古い内容や矛盾を洗い出す",
-        "prompt": "作業ディレクトリ内のドキュメントを点検し、更新が必要な内容を見つけてください。\n制約：\n- 古い情報（過去の日付、無効なリンク、廃止された手順やツール）、矛盾、重複を確認する\n- 各問題についてファイルパスと具体的な場所を示し、判断理由を説明する\n- 「更新を推奨 / 統合を推奨 / 削除を推奨」に分類し、修正チェックリストを作成する\n- 点検レポートだけを出力し、ドキュメント自体は変更しない"
+          "prompt": "作業ディレクトリ内のドキュメントを点検し、更新が必要な内容を見つけてください。\n制約：\n- 古い情報（過去の日付、無効なリンク、廃止された手順やツール）、矛盾、重複を確認する\n- 各問題についてファイルパスと具体的な場所を示し、判断理由を説明する\n- 「更新を推奨 / 統合を推奨 / 削除を推奨」に分類し、修正チェックリストを作成する\n- 点検レポートだけを出力し、ドキュメント自体は変更しない"
         }
       }
     }
@@ -10257,6 +10367,8 @@
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "hostShellCommandBlocked": "Cindy は内蔵 iOS シミュレータを迂回するシェルコマンドをブロックしました。デバイスの操作、アプリの起動、画面操作、スクリーンショット、診断には iOS シミュレータツールを使用してください。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
+      "codexHistoryOversized": "履歴に過大な画像があり、リモート圧縮を完了できません。Cindy がそれらの画像を省略し、このタスクのまま続けます。",
+      "codexHistoryOversizedRemote": "履歴に過大な画像があり、リモート圧縮を完了できません。Codex を実行している端末でこのタスクを開いて再送信してください。Cindy が画像を省略して続けます。",
       "codexCompactionNotConverging": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。容量を占めているのは会話ではなく、圧縮では削れないシステムプロンプトとツール定義であることがほとんどです。新しいセッションを開始してください。",
       "codexCompactionNotConvergingModelSwitch": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。このセッションは途中でモデルを切り替えており、Codex は切り替え前のモデルの上限でコンテキストを判定し続けています。元のモデルに戻すか、新しいセッションを開始してください。",
       "turnNoEventTimeout": "このターンは長時間まったく進展がなかったため（モデル・ツール・バックグラウンド処理のすべてが無反応）、無限待機を避けるため自動中断しました。次のメッセージを送信して続行できます。"

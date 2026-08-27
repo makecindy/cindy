@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
+    "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
@@ -39,6 +40,12 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "Database Cleanup Was Interrupted",
+      "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
+      "recoveryFailedTitle": "The Local Database Couldn't Be Recovered Safely",
+      "recoveryFailedDescription": "Database cleanup recovery failed. Cindy stopped opening the local database to avoid overwriting the original data."
+    },
     "updateReady": {
       "title": "Update required to continue",
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. The new version is downloaded and ready — restart to install it and get back in.",
@@ -843,7 +850,52 @@
         "chatAttachmentsClearConfirmDescription": "Only files in the message attachment cache directory will be deleted; the message database will not be queried. Some attachments in message history may become unavailable, and this cannot be undone.",
         "chatAttachmentsClearConfirmButton": "Clear attachment cache",
         "chatAttachmentsCleared": "Message attachment cache cleaned up",
-        "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
+          "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
+          "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
+          "dbSlimmingLabel": "Database cleanup",
+          "dbSlimmingDescription": "Scan message history in soft-deleted tasks and long-archived tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
+          "dbSlimmingScanButton": "Scan database",
+          "dbSlimmingScanLoading": "Scanning the database…",
+          "dbSlimmingScanResultTitle": "Database scan results",
+          "dbSlimmingExecutionLoading": "Preparing database cleanup. Cindy will restart shortly…",
+          "dbSlimmingArchiveAgeLabel": "Clean tasks archived for more than",
+          "dbSlimmingArchiveAgeOption7Days": "7 days",
+          "dbSlimmingArchiveAgeOption1": "1 month",
+          "dbSlimmingArchiveAgeOption3": "3 months",
+          "dbSlimmingArchiveAgeOption6": "6 months",
+          "dbSlimmingBackupLabel": "Back up database before cleanup",
+          "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
+          "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
+          "dbSlimmingChooseDirectoryButton": "Choose backup folder",
+          "dbSlimmingBackupDirectoryFailed": "Could not choose a backup folder. Try again.",
+          "dbSlimmingScanFailed": "Could not scan the database. Try again.",
+          "dbSlimmingScheduleFailed": "Could not schedule database cleanup. Scan again and retry.",
+          "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
+          "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
+          "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
+          "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
+          "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
+          "dbSlimmingSpaceUnknown": "unknown",
+          "dbSlimmingInsufficientSpace": "There is not enough disk space to safely create a working copy and compact the database.",
+          "dbSlimmingConfirmButton": "Confirm database cleanup",
+          "dbSlimmingConfirmTitle": "Restart and clean up the database?",
+          "dbSlimmingConfirmDescriptionWithBackup": "Cindy will restart gracefully, then back up, clean history, compact, and verify the database before opening it. Data is cleaned only after the backup is written and verified.",
+          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy will restart gracefully, then clean and compact the database before opening it. No backup will be created, and cleaned history cannot be recovered.",
+          "dbSlimmingRestartButton": "Restart and clean up database",
+          "dbSlimmingResultCompleted": "Removed {{messages}} messages from {{tasks}} tasks and reduced the database by {{size}}.",
+          "dbSlimmingOpenBackupButton": "Open cleanup backup",
+          "dbSlimmingToastCompleted": "Database cleanup complete; freed {{size}}",
+          "dbSlimmingHistoryCleared": "History has been cleared",
+          "dbSlimmingFailure": {
+            "backup-failed": "The database backup could not be created or retained. No history was cleaned.",
+            "cleanup-failed": "Database cleanup did not finish. The original database is unchanged.",
+            "database-in-use": "Another instance is using the database, so cleanup was not run.",
+            "insufficient-space": "There was not enough disk space to clean up the database.",
+            "integrity-check-failed": "The database integrity check failed. The original database was restored.",
+            "replacement-failed": "The compacted database could not be installed. The original database was restored.",
+            "recovery-failed": "Database recovery failed. Cindy stopped opening the database to protect the original data.",
+            "unknown": "Database cleanup did not finish. Try again."
+          },
         "cleanupLabel": "Disk cleanup",
         "cleanupDescription": "Scans for media files no session references anymore, oversized caches, and obsolete folders. Shows the numbers first and deletes only after you confirm; images in composer drafts and queued messages are protected automatically.",
         "scanButton": "Scan",
@@ -1369,6 +1421,9 @@
         "subtitle": "All models · Claude Code / Codex · billed from your balance per token",
         "modelLabel": "All models",
         "billingLabel": "billed from your balance per token",
+        "accountTier": {
+          "free": "Free tier"
+        },
         "disconnectConfirm": {
           "title": "Disconnect Cindy AI?",
           "description": "Disconnecting clears the Cindy AI key saved locally. You will need to reconnect to keep using models provided by Cindy AI."
@@ -1632,6 +1687,8 @@
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "disableModel": "Disable This Model",
+        "paymentRequired": "Paid",
+        "paymentUnlock": "Pay to unlock",
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
@@ -1983,7 +2040,7 @@
       "restartBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart now anyway?",
       "unavailable": "The beta channel is unavailable — could not reach the beta update server.",
       "toast": {
-        "disabled": "Beta channel disabled; takes effect after restart",
+        "disabled": "Beta channel disabled. Cindy will keep the current version and switch when a newer release is available",
         "toggleFailed": "Failed to toggle beta channel"
       }
     },
@@ -3478,6 +3535,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
+        "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
         "retry": "Retry",
@@ -5239,6 +5297,32 @@
       "envFailed": "Environment setup failed — click to retry"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
+    "databaseCleanup": {
+      "title": "Cleaning up the database",
+      "progressLabel": "Database cleanup progress",
+      "phase": {
+        "preparing": "Preparing cleanup",
+        "backingUp": "Backing up the database",
+        "copying": "Creating a cleanup working copy",
+        "cleaning": "Deleting expired messages",
+        "compacting": "Compacting the database",
+        "verifying": "Verifying the database",
+        "finalizing": "Safely replacing the database",
+        "cancelling": "Cancelling cleanup"
+      },
+      "elapsedAndRemaining": "Elapsed {{elapsed}} · About {{remaining}} remaining",
+      "elapsedFinalizing": "Elapsed {{elapsed}} · Almost done",
+      "duration": {
+        "seconds": "{{count}} sec",
+        "minutes": "{{count}} min"
+      },
+      "cancelAction": "Cancel cleanup and open Cindy",
+      "cancellingAction": "Cancelling cleanup…",
+      "finalizingAction": "Finishing up…",
+      "cancelHint": "You can cancel safely. Cindy will keep the original database and continue starting.",
+      "cancellingHint": "Stopping cleanup. The original database will not be changed.",
+      "finalizingHint": "Safely replacing the database. Do not close Cindy."
+    },
     "envFailed": {
       "title": "Environment initialization failed",
       "retry": "Retry"
@@ -5452,7 +5536,7 @@
         "provider": "Provider",
         "tokens": "Total tokens",
         "context": "Context used",
-            "lastActive": "Last active"
+        "lastActive": "Last active"
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
       "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
@@ -6650,6 +6734,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "paymentRequired": {
+        "badge": "Paid",
+        "unlock": "Pay to unlock",
+        "title": "Pay to Unlock This Model",
+        "description": "Subscribe to a paid plan or top up your balance to use this model.",
+        "action": "View Billing Options"
+      },
       "hidden": "Hidden",
       "modelListAria": "Model list",
       "subscriptionDirectDisabled": {
@@ -7305,7 +7396,16 @@
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "Request details"
+      "userTurnCostDetailsTitle": "Request details",
+      "relative": {
+        "justNow": "just now",
+        "minutesAgo_one": "{{count}} minute ago",
+        "minutesAgo_other": "{{count}} minutes ago",
+        "hoursAgo_one": "{{count}} hour ago",
+        "hoursAgo_other": "{{count}} hours ago",
+        "daysAgo_one": "{{count}} day ago",
+        "daysAgo_other": "{{count}} days ago"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
@@ -7366,6 +7466,9 @@
       "forkStripEncrypted": "Fork and strip",
       "forkStripEncryptedRunning": "Forking…",
       "forkStripEncryptedTitle": "Fork and strip into a new session",
+      "forkStripOversizedHistory": "Slim history and continue",
+      "forkStripOversizedHistoryRunning": "Forking…",
+      "forkStripOversizedHistoryTitle": "Fork into a new task after removing oversized inline images",
       "codexSessionExpiredLogin": "Reconnect ChatGPT",
       "codexSessionReconnected": "ChatGPT is reconnected. Click “Retry” to continue.",
       "networkUnreachable": "Network error: the service is temporarily unreachable. Click \"Retry\" to try again.",
@@ -7538,6 +7641,7 @@
       "promptSend": "Send",
       "promptCancel": "Cancel"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "Nothing to display",
       "fileChange": {
@@ -7730,6 +7834,7 @@
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
+        "labelStrip": "Oversized images removed, continuing",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
@@ -8810,7 +8915,15 @@
         "custom": "Custom"
       },
       "weekday": {
-        "full": { "0": "Sunday", "1": "Monday", "2": "Tuesday", "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday" },
+        "full": {
+          "0": "Sunday",
+          "1": "Monday",
+          "2": "Tuesday",
+          "3": "Wednesday",
+          "4": "Thursday",
+          "5": "Friday",
+          "6": "Saturday"
+        },
         "short": { "0": "Su", "1": "Mo", "2": "Tu", "3": "We", "4": "Th", "5": "Fr", "6": "Sa" }
       },
       "time": {
@@ -10270,6 +10383,8 @@
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
+      "codexHistoryOversized": "This task’s history includes oversized images, so remote compaction cannot finish. Cindy will omit those images and continue in this task.",
+      "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
       "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."

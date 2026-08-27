@@ -4282,6 +4282,45 @@ describe('GhostManager · inspect(只验不装)', () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
+  it('returns the SHA of the exact ghost.json package entry bytes', async () => {
+    const manifestBytes = Buffer.from(`${JSON.stringify(goodManifest(), null, 2)}\n`);
+    const zip = new JSZip();
+    zip.file('ghost.json', manifestBytes);
+    const cindy = path.join(workDir, 'raw-manifest-sha.cindy');
+    await fs.promises.writeFile(cindy, await zip.generateAsync({ type: 'nodebuffer' }));
+
+    const inspected = await manager.inspect(cindy);
+
+    expect(inspected).toMatchObject({
+      rawManifestSha256: crypto.createHash('sha256').update(manifestBytes).digest('hex'),
+    });
+  });
+
+  it('returns the released legacy digest shape from the same package entry', async () => {
+    const rawManifest = {
+      schemaVersion: 2,
+      id: 'legacy-card',
+      name: 'Legacy Card',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: ['card'],
+    };
+    const zip = new JSZip();
+    zip.file('ghost.json', JSON.stringify(rawManifest));
+    zip.file('main.js', 'export default {};');
+    const cindy = path.join(workDir, 'legacy-card.cindy');
+    await fs.promises.writeFile(cindy, await zip.generateAsync({ type: 'nodebuffer' }));
+
+    const inspected = await manager.inspect(cindy);
+
+    expect(inspected).toMatchObject({
+      releasedLegacyDigestFormat: rawManifest,
+    });
+    expect((inspected as { releasedLegacyDigestFormat: unknown }).releasedLegacyDigestFormat)
+      .not.toHaveProperty('card');
+  });
+
   it('本地化展示清单与包内 canonical 清单分离', async () => {
     hostLocale = 'zh-CN';
     const base = {
