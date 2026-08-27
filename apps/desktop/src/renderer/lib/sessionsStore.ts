@@ -209,6 +209,8 @@ interface PendingStatusTransition {
   titleRevisionAtStart: number;
   spendRevisionAtStart: number;
   buckets: Map<ListStatusFilter, StatusBucketSnapshot>;
+  /** 乐观移除前恰好满 1000 条的桶；等状态写收敛后定向补回新的尾项。 */
+  vacatedFullBuckets: Set<ListStatusFilter>;
 }
 
 const pendingStatusTransitions = new Map<string, PendingStatusTransition>();
@@ -284,6 +286,47 @@ function restorePendingStatusEvictions(
   if (restoredTail) notify();
 }
 
+/**
+ * 满桶移除一行会让数据库原第 1001 行进入结果集。pending 期间先记账，避免状态尚未
+ * 落库时反复 fresh；没有 pending 时可立即定向补拉。
+ */
+function recordFullBucketVacancy(
+  sessionId: string,
+  filter: ListStatusFilter,
+  before: Session[],
+  after: Session[],
+  pendingFallback?: PendingStatusTransition,
+): boolean {
+  if (after.length >= before.length) return false;
+  let inheritsFullBucketVacancy = pendingFallback?.vacatedFullBuckets.has(filter) ?? false;
+  if (!inheritsFullBucketVacancy) {
+    for (const candidate of pendingStatusTransitions.values()) {
+      if (!candidate.vacatedFullBuckets.has(filter)) continue;
+      inheritsFullBucketVacancy = true;
+      break;
+    }
+  }
+  if (before.length < DEFAULT_LIMIT && !inheritsFullBucketVacancy) return false;
+  const pending = pendingStatusTransitions.get(sessionId) ?? pendingFallback;
+  if (pending) {
+    pending.vacatedFullBuckets.add(filter);
+    return false;
+  }
+  return true;
+}
+
+function requestPendingStatusVacancyBackfills(
+  pending: PendingStatusTransition,
+  finalStatus: Session['status'],
+): void {
+  for (const filter of pending.vacatedFullBuckets) {
+    if (belongsInFilter(finalStatus, filter)) continue;
+    const list = cache.get(filter);
+    if (list && list.length >= DEFAULT_LIMIT) continue;
+    requestFilterBackfill(filter);
+  }
+}
+
 function applySessionStatusOverrides(
   list: Session[],
   filter: ListStatusFilter,
@@ -306,7 +349,12 @@ function applySessionStatusOverrides(
     const idx = next.findIndex((session) => session.id === sessionId);
     if (!belongsInFilter(status, filter)) {
       if (idx === -1) continue;
-      next = [...next.slice(0, idx), ...next.slice(idx + 1)];
+      const before = next;
+      next = [...before.slice(0, idx), ...before.slice(idx + 1)];
+      if (recordFullBucketVacancy(sessionId, filter, before, next)) {
+        // 当前列表请求仍在 inflight 中，requestFilterBackfill 会把它折叠成一轮尾刷。
+        requestFilterBackfill(filter);
+      }
       changed = true;
       continue;
     }
@@ -471,7 +519,10 @@ function recordStatusOverride(
   });
 }
 
-function applyAuthoritativeStatusSession(session: Session): void {
+function applyAuthoritativeStatusSession(
+  session: Session,
+  pendingForBackfills?: PendingStatusTransition,
+): void {
   recordStatusOverride(session.id, session, session);
   if (session.status === 'deleted') {
     autoTitlePreviews.delete(session.id);
@@ -479,11 +530,23 @@ function applyAuthoritativeStatusSession(session: Session): void {
     sessionSpendOverrides.delete(session.id);
   }
   let touched = false;
+  const toBackfill = new Set<ListStatusFilter>();
   for (const [filter, list] of cache) {
     if (!belongsInFilter(session.status, filter)) {
       const next = list.filter((item) => item.id !== session.id);
       if (next.length === list.length) continue;
       cache.set(filter, next);
+      if (
+        recordFullBucketVacancy(
+          session.id,
+          filter,
+          list,
+          next,
+          pendingForBackfills,
+        )
+      ) {
+        toBackfill.add(filter);
+      }
       touched = true;
       continue;
     }
@@ -491,6 +554,7 @@ function applyAuthoritativeStatusSession(session: Session): void {
     touched = true;
   }
   if (touched) notify();
+  for (const filter of toBackfill) requestFilterBackfill(filter);
 }
 
 export const sessionsStore = {
@@ -615,6 +679,7 @@ export const sessionsStore = {
       titleRevisionAtStart: sessionTitleRevision,
       spendRevisionAtStart: sessionSpendRevision,
       buckets,
+      vacatedFullBuckets: new Set(),
     });
     this.patchLocal(id, patch);
     for (const [filter, snapshot] of buckets) {
@@ -683,6 +748,7 @@ export const sessionsStore = {
       clearPendingStatusTransition(token.sessionId, pending);
       if (latestOverride?.patch.status) {
         restorePendingStatusEvictions(pending, latestOverride.patch.status);
+        requestPendingStatusVacancyBackfills(pending, latestOverride.patch.status);
       }
       return false;
     }
@@ -699,7 +765,10 @@ export const sessionsStore = {
         pending.titleRevisionAtStart,
       ),
     );
-    applyAuthoritativeStatusSession(withOverrides ?? authoritative);
+    applyAuthoritativeStatusSession(withOverrides ?? authoritative, pending);
+    if (pending.tokens.size === 0) {
+      requestPendingStatusVacancyBackfills(pending, persisted.status);
+    }
     return true;
   },
 
@@ -712,6 +781,7 @@ export const sessionsStore = {
       clearPendingStatusTransition(token.sessionId, pending);
       if (latestOverride?.patch.status) {
         restorePendingStatusEvictions(pending, latestOverride.patch.status);
+        requestPendingStatusVacancyBackfills(pending, latestOverride.patch.status);
       }
       return false;
     }
@@ -722,6 +792,7 @@ export const sessionsStore = {
       (latestOverride.revision !== pending.optimisticRevision &&
         latestOverride.patch.status === pending.optimisticStatus)
     ) {
+      requestPendingStatusVacancyBackfills(pending, pending.optimisticStatus);
       return true;
     }
     if (pending.sourceSession) {
@@ -736,11 +807,16 @@ export const sessionsStore = {
       );
       applyAuthoritativeStatusSession(
         withOverrides ?? mergeSession(pending.sourceSession, pending.rollbackPatch),
+        pending,
       );
     } else {
       this.patchLocal(token.sessionId, pending.rollbackPatch);
     }
     restorePendingStatusEvictions(
+      pending,
+      pending.rollbackPatch.status ?? pending.sourceSession?.status ?? 'active',
+    );
+    requestPendingStatusVacancyBackfills(
       pending,
       pending.rollbackPatch.status ?? pending.sourceSession?.status ?? 'active',
     );
@@ -842,7 +918,11 @@ export const sessionsStore = {
         const idx = list.findIndex((session) => session.id === id);
         if (!belongs) {
           if (idx === -1) continue;
-          cache.set(filter, [...list.slice(0, idx), ...list.slice(idx + 1)]);
+          const next = [...list.slice(0, idx), ...list.slice(idx + 1)];
+          cache.set(filter, next);
+          if (recordFullBucketVacancy(id, filter, list, next)) {
+            toBackfill.add(filter);
+          }
           touched = true;
           continue;
         }
@@ -872,6 +952,7 @@ export const sessionsStore = {
     ) {
       clearPendingStatusTransition(id, pendingBeforePatch);
       restorePendingStatusEvictions(pendingBeforePatch, patch.status);
+      requestPendingStatusVacancyBackfills(pendingBeforePatch, patch.status);
     }
     if (pendingStatusTransitions.has(id)) return;
     for (const filter of toBackfill) {
