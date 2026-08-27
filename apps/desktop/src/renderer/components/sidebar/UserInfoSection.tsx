@@ -36,14 +36,14 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const { state: betaChannelState } = useBetaChannelSettings();
   const hasPendingUpdate = status === 'ready' || status === 'superseding';
   const isFlameReopen = hasPendingUpdate && dismissed;
-  const showBetaBadge = !betaChannelState.loading && betaChannelState.enableBeta;
+  const showBetaLabel = !betaChannelState.loading && betaChannelState.enableBeta;
 
   // 头像地址变化(设置页改头像 / 服务端资料更新)时重置加载失败标记,
   // 让新地址有机会渲染,而不是永远停在首字母兜底。
   const isLocal = mode === 'local';
   const displayName = user?.name ?? (isLocal ? t('settings.userProfile.local.name') : '');
   const settingsLinkLabel = t('sidebar.user.settingsLink', { name: displayName });
-  const settingsLinkAriaLabel = showBetaBadge
+  const settingsLinkAriaLabel = showBetaLabel
     ? t('sidebar.user.settingsLinkBeta', { name: displayName })
     : settingsLinkLabel;
   const avatarUrl = user?.avatar ?? null;
@@ -256,10 +256,10 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               title={appVersionLabelDetail}
             >
               <span className="truncate opacity-80">{appVersionLabel}</span>
-              {showBetaBadge ? (
+              {showBetaLabel ? (
                 <span
-                  className="shrink-0 select-none rounded-full bg-[var(--beta-channel-badge-bg)] px-1 font-medium text-[var(--beta-channel-badge-fg)]"
-                  data-testid="sidebar-beta-channel-badge"
+                  className="shrink-0 select-none opacity-80"
+                  data-testid="sidebar-beta-channel-label"
                 >
                   {t('settings.betaChannel.badge')}
                 </span>

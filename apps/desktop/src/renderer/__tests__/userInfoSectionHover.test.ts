@@ -86,14 +86,13 @@ describe('UserInfoSection — version label', () => {
     expect(source).toContain('title={appVersionLabelDetail}');
   });
 
-  it('shows the Beta badge only after the persisted channel state has loaded', () => {
+  it('shows the Beta label only after the persisted channel state has loaded', () => {
     expect(source).toContain("import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';");
     expect(source).toContain(
-      'const showBetaBadge = !betaChannelState.loading && betaChannelState.enableBeta;',
+      'const showBetaLabel = !betaChannelState.loading && betaChannelState.enableBeta;',
     );
-    expect(source).toContain('data-testid="sidebar-beta-channel-badge"');
-    expect(source).toContain('bg-[var(--beta-channel-badge-bg)]');
-    expect(source).toContain('text-[var(--beta-channel-badge-fg)]');
+    expect(source).toContain('data-testid="sidebar-beta-channel-label"');
+    expect(source).not.toContain('beta-channel-badge');
     expect(source).toContain("t('settings.betaChannel.badge')");
   });
 });
