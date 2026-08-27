@@ -67,7 +67,6 @@ import { SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
-import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import {
   SessionAttentionUrgencyProvider,
   useSessionAttentionUrgencySet,
@@ -825,7 +824,6 @@ function ExpandedView({
     setProjectHidden,
     initialSnapshot: sidebarSettingsSnapshot,
   } = hiddenProjects;
-  const refreshWorktrees = useRefreshWorktrees();
   const projectPickerOptions = useProjectPickerOptions();
 
   // 自动化任务本身仍在顶部 Automations 入口管理；自动化任务 fire 后创建出的
@@ -852,7 +850,6 @@ function ExpandedView({
   const handleScheduleDeleted = useCallback(
     async ({ disposition, affectedSessionIds }: DeletedScheduleGeneratedSessionResult) => {
       await refreshSessions();
-      void refreshWorktrees();
       // 重定向判定用 viewedSessionId(files 路由兜底,与其余归档/删除 handler
       // 同口径):从面板删 schedule 连带清掉正在浏览的会话时也要跳离文件视图。
       if (
@@ -863,7 +860,7 @@ function ExpandedView({
         navigate('/cc-agent');
       }
     },
-    [viewedSessionId, navigate, refreshSessions, refreshWorktrees],
+    [viewedSessionId, navigate, refreshSessions],
   );
   const { requestDeleteSchedule, deleteScheduleDialog } = useDeleteScheduleWithSessions({
     onDeleted: handleScheduleDeleted,
@@ -2938,7 +2935,6 @@ function ExpandedView({
         candidates.filter((session) => !failedIds.has(session.id)).map((session) => session.id),
       );
       await refreshSessions();
-      void refreshWorktrees();
 
       if (viewedSessionId && succeededIds.has(viewedSessionId)) {
         const redirectRoute = await resolveSessionRemovalRedirect(
@@ -2976,7 +2972,6 @@ function ExpandedView({
     handleClearSelection,
     navigate,
     refreshSessions,
-    refreshWorktrees,
     resolveSessionRemovalRedirect,
     selectedSessions,
     t,
@@ -3079,7 +3074,6 @@ function ExpandedView({
         candidates.filter((session) => !failedIds.has(session.id)).map((session) => session.id),
       );
       await refreshSessions();
-      void refreshWorktrees();
 
       if (viewedSessionId && succeededIds.has(viewedSessionId)) {
         navigate('/cc-agent');
@@ -3112,7 +3106,6 @@ function ExpandedView({
     navigate,
     patchLocal,
     refreshSessions,
-    refreshWorktrees,
     runningSessionIds,
     selectedSessions,
     t,
@@ -3263,7 +3256,6 @@ function ExpandedView({
       const succeededIds = new Set(candidates.filter((s) => !failedIds.has(s.id)).map((s) => s.id));
 
       await refreshSessions();
-      void refreshWorktrees();
 
       // 当前注视中的 session 被归档了 → 走 /cc-agent 让 CCAgentIndexRedirect
       // 做 Orca-aware 的「选下一条 / 空则跳 new」决策(见 runSessionAction 同位置注释)。
@@ -3287,7 +3279,6 @@ function ExpandedView({
       runningSessionIds,
       confirmDialog,
       refreshSessions,
-      refreshWorktrees,
       viewedSessionId,
       navigate,
       patchLocal,

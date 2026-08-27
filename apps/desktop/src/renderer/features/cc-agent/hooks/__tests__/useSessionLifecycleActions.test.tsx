@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   purgeSession: vi.fn(),
   clearComposerDraft: vi.fn(),
   cleanupSessionLayoutPrefs: vi.fn(),
-  refreshWorktrees: vi.fn(),
   cleanupSessionImages: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -58,10 +57,6 @@ vi.mock('@/hooks/useCCSessions', () => ({
     refreshSessions: mocks.refreshSessions,
     patchLocal: mocks.patchLocal,
   }),
-}));
-
-vi.mock('@/contexts/WorktreeContext', () => ({
-  useRefreshWorktrees: () => mocks.refreshWorktrees,
 }));
 
 vi.mock('@/lib/logger', () => ({

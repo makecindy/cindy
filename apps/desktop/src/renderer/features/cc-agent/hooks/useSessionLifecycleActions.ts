@@ -32,7 +32,6 @@ import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { createLogger } from '@/lib/logger';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { SessionStatus } from '@/lib/ccAgent.types';
@@ -56,7 +55,6 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
   // 与调用方组件里的 useCCSessions 实例共享同一份 cache。
   // includeArchived 跟随调用方的桶（见文件头注释）。
   const { refreshSessions, patchLocal } = useCCSessions(options);
-  const refreshWorktrees = useRefreshWorktrees();
   // 取成 string 再进 deps —— options 是调用方每次渲染新建的字面量对象,直接放进
   // runSessionAction 的 deps 会让它每次重建,打穿 sidebar 的行 handler memo
   // (行渲染隔离不变量,见 SessionItem.tsx)。
@@ -165,7 +163,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // 写库成功后强制重拉**所有已加载桶**。不 await —— 列表视觉已由上面的
       // patchLocal 就地改好,这里只是让缓存跟 DB 对齐;sessions:list 是
       // LEFT JOIN messages + GROUP BY + latest-message 子查询的重查询,await 它
-      // 只会把后面的 refreshWorktrees / delete 跳转推迟几百毫秒。
+      // 只会把后面的 delete 跳转推迟几百毫秒。
       //
       // 为什么必须全桶、不能只刷当前桶(codex review):归档时 patchLocal 会 drop
       // 目标桶(archived,本地没有这条的完整 row)并立刻重拉,而那次重拉发生在
@@ -177,10 +175,6 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       emitRefresh();
       // 远程会话从侧边栏消失由被控端 sessions:patched{status} 回流(applyPatch 移出分片)驱动,
       // 控制端不再主动重拉 / 不再埋「主动移除」标记(掉线 vs 删除的区分见 CCAgentSessionView 优雅退出)。
-      // I-2: delete/archive 都要顺手刷一次 worktree map。上面的 emitRefresh 已经会
-      // 触发 WorktreeContext(它订阅 sessionsBus.onRefresh),这里再显式刷一次是为了
-      // 不依赖那条链;worktree 回收真正跑完后 main 还会广播 worktree:changed。
-      void refreshWorktrees();
 
       // Archive 已在前面乐观跳到 /cc-agent/new,这里只处理 delete。调用方有列表
       // 上下文时会传入按当前可见顺序解析好的 route；否则回落到 /cc-agent
@@ -189,7 +183,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         navigate(deleteRedirectRoute ?? '/cc-agent');
       }
     },
-    [navigate, refreshWorktrees, patchLocal, listFilter, t],
+    [navigate, patchLocal, listFilter, t],
   );
 
   /**

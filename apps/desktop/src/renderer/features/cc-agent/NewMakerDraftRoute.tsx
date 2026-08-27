@@ -138,7 +138,7 @@ import {
   rewritePiSkillMessageForSend,
 } from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
-import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
+import { useRefreshWorktreeForSession } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
   consumeNewMakerDialogueTargetRequest,
@@ -637,7 +637,7 @@ export function NewMakerDraftRoute() {
   const isDraftToolbarNarrow = inputWidthBand <= 1;
   const { createSession, error: createSessionError } = useCCSessions();
   const vendorAuthGate = useVendorAuthGate();
-  const refreshWorktrees = useRefreshWorktrees();
+  const refreshWorktreeForSession = useRefreshWorktreeForSession();
 
   /** createSession 失败 toast:远端路由错误按 code 给可操作文案,其余回退通用文案。 */
   const toastCreateSessionFailed = (err?: unknown) => {
@@ -3914,7 +3914,7 @@ export function NewMakerDraftRoute() {
                   restoreFirstMessageDraft();
                   return;
                 }
-                await refreshWorktrees();
+                await refreshWorktreeForSession(newSession.id);
                 // 注意:成功后不立刻 clear worktreeCreationStore —— 移到 sendMessage
                 // 触发之后再 clear, 让 CCAgentSessionView 里 worktreePreparing 一直
                 // true 到 sendMessage 已经 push 第一条 user message + isStreaming=true
@@ -4208,7 +4208,7 @@ export function NewMakerDraftRoute() {
       navigate,
       crossAgentDialog.runMigrationFlow,
       attachmentState,
-      refreshWorktrees,
+      refreshWorktreeForSession,
       t,
     ],
   );
@@ -4696,7 +4696,7 @@ export function NewMakerDraftRoute() {
             setProgress: (progress) => worktreeCreationStore.set(newSession.id, progress),
             clearProgress: () => worktreeCreationStore.clear(newSession.id),
           });
-          await refreshWorktrees();
+          await refreshWorktreeForSession(newSession.id);
         }
         {
           const iso = new Date().toISOString();
@@ -4821,7 +4821,7 @@ export function NewMakerDraftRoute() {
       localProviders,
       localProvidersLoading,
       patchCollab,
-      refreshWorktrees,
+      refreshWorktreeForSession,
       navigate,
       t,
     ],
