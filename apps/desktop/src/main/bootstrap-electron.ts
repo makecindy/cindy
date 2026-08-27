@@ -7856,6 +7856,7 @@ app.on('ready', async () => {
           createProductionLocalProfileDataMigrationDeps(
             app.getPath('userData'),
             BRAND_IDENTITY.dbFilePrefix,
+            () => hasExclusiveSharedLegacyUserDataAccess(),
           ),
         );
         if (passivePreflight.status === 'required') {

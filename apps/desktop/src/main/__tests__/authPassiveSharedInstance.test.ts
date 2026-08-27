@@ -188,13 +188,16 @@ describe('passive shared-userData instance auth isolation', () => {
       dbPassiveGuard,
     );
     expect(passivePreflight).toBeGreaterThan(dbPassiveGuard);
+    const passiveDepsEnd = beforeEnsureReady.indexOf('\n          ),', passivePreflight);
+    const passiveDeps = beforeEnsureReady.slice(passivePreflight, passiveDepsEnd);
+    expect(passiveDeps).toContain('() => hasExclusiveSharedLegacyUserDataAccess()');
     expect(
       beforeEnsureReady.indexOf("if (passivePreflight.status === 'required')", passivePreflight),
     ).toBeGreaterThan(passivePreflight);
     expect(beforeEnsureReady.indexOf('throw new Error(', passivePreflight)).toBeGreaterThan(
       passivePreflight,
     );
-    const exclusiveAdoptionGate = beforeEnsureReady.indexOf(
+    const exclusiveAdoptionGate = beforeEnsureReady.lastIndexOf(
       '() => hasExclusiveSharedLegacyUserDataAccess()',
     );
     expect(exclusiveAdoptionGate).toBeGreaterThan(dbPassiveGuard);
