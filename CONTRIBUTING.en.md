@@ -66,7 +66,12 @@ explain why any highly relevant check was not run.
    including scope, verification, risks, and rollback information.
 5. When submitting a pull request from a personal fork, we recommend keeping
    `Allow edits from maintainers` enabled so maintainers and QA can collaborate
-   on fixes directly in the original pull request branch.
+   on fixes directly in the original pull request branch. If the fork contains
+   GitHub Actions workflows, GitHub labels the option
+   `Allow edits and access to secrets by maintainers`; enabling it also lets
+   upstream maintainers edit workflows in the fork, which can potentially
+   reveal Actions secrets or grant access to other branches. Only enable it if
+   you accept that permission scope.
 6. Wait for CI and review; do not push directly to `main`.
 
 Small documentation fixes are welcome as pull requests. For larger changes to
