@@ -43,6 +43,8 @@ export interface LocalProfileDataMigrationDeps {
   userDataDir: string;
   dbFilePrefix: string;
   fs: LocalProfileDataMigrationFs;
+  /** True only while no other live process can keep writing the local-v1 source. */
+  hasExclusiveSourceAccess?: () => boolean;
 }
 
 export type LocalProfileDataMigrationResult =
@@ -515,6 +517,9 @@ async function copyDatabaseAtomically(
     // process is writing the WAL. The resulting standalone database therefore
     // needs no source -wal/-shm files and can be published as one atomic entry.
     await deps.fs.backupDatabase(sourceDb, dbTmp);
+    if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
+      throw new Error('local profile database adoption deferred: concurrent live instance');
+    }
     await deps.fs.link(dbTmp, targetDb);
     published = true;
     flushPublishedDatabase(targetDb);
@@ -569,6 +574,9 @@ export async function adoptLocalProfileDatabase(
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
     }
+    if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
+      throw new Error('local profile database adoption deferred: concurrent live instance');
+    }
     const adopted = await copyDatabaseAtomically(deps, sourceDb, targetDb);
     return adopted ? { status: 'adopted', sourceDb, targetDb } : { status: 'target-exists' };
   } catch (error) {
@@ -589,6 +597,12 @@ export async function adoptLocalProfileDatabase(
 export function createProductionLocalProfileDataMigrationDeps(
   userDataDir: string,
   dbFilePrefix: string,
+  hasExclusiveSourceAccess?: () => boolean,
 ): LocalProfileDataMigrationDeps {
-  return { userDataDir, dbFilePrefix, fs: realFs };
+  return {
+    userDataDir,
+    dbFilePrefix,
+    fs: realFs,
+    ...(hasExclusiveSourceAccess ? { hasExclusiveSourceAccess } : {}),
+  };
 }

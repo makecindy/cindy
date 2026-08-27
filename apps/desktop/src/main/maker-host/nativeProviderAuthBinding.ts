@@ -478,6 +478,18 @@ export function unbindNativeProviderAuth(
   // 不写也是安全的:文件读不出来时 isNativeProviderAuthBound 已经一律 false(用户看到的就是
   // 未连接),claimDetectedNativeProviderAuth 也已在同一条件下拒绝认领 —— 撤销标记要挡的那
   // 件事,此刻本来就发生不了。凭证删除在调用方,不受这里影响。
+  // 服务端失效会先做一次 early-unbind，随后 runLogout 再无 revoked 地收口。第二次若
+  // snapshot 已证明 slot、来路字段都不存在，就是确定性 no-op，不要在 Electron main
+  // thread 上同步等待跨进程 writer lock。显式登出仍必须进锁并持久化 revoked。
+  if (opts?.revoked !== true) {
+    const snapshot = readBindingsOrFail();
+    if (snapshot.ok) {
+      const bindings = snapshot.bindings;
+      const hasSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
+      const hasSource = bindings.sources?.[provider] !== undefined;
+      if (!(provider in bindings) && !hasSelfAuthorized && !hasSource) return;
+    }
+  }
   withRequiredNativeBindingMutationLock(() => {
     const read = readBindingsOrFail();
     if (!read.ok) return;
@@ -485,7 +497,8 @@ export function unbindNativeProviderAuth(
     const owner = getActiveAppSession().dataOwnerId;
     const marking = opts?.revoked === true && !!owner;
     const hadSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
-    if (!(provider in bindings) && !marking && !hadSelfAuthorized) return;
+    const hadSource = bindings.sources?.[provider] !== undefined;
+    if (!(provider in bindings) && !marking && !hadSelfAuthorized && !hadSource) return;
     delete bindings[provider];
     // 授权来路随绑定一起作废:登出之后这份凭证若还在本机,它对 Cindy 就重新是「外部已有的
     // 凭证」，继承语义（及其文案）重新成立。
@@ -494,7 +507,7 @@ export function unbindNativeProviderAuth(
       delete selfAuthorized[provider];
       bindings.selfAuthorized = selfAuthorized;
     }
-    if (bindings.sources?.[provider] !== undefined) {
+    if (hadSource) {
       const sources = { ...bindings.sources };
       delete sources[provider];
       bindings.sources = sources;

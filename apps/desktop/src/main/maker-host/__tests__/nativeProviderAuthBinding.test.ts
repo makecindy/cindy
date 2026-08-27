@@ -183,6 +183,28 @@ describe('local → cloud native provider binding migration', () => {
     );
   });
 
+  it('avoids the mutation lock for a known no-op invalidation unbind', () => {
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    unbindNativeProviderAuth('openai');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    unbindNativeProviderAuth('openai');
+
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it('removes a stale source field even when the provider slot is already absent', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ sources: { openai: 'native-harness-inherited' } }),
+    );
+
+    unbindNativeProviderAuth('openai');
+
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ sources: {} });
+  });
+
   it('reads every binding mutation while holding the shared SQLite writer lock', () => {
     const originalReadFileSync = fs.readFileSync.bind(fs);
     const leaseObserved: boolean[] = [];

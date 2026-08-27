@@ -183,11 +183,18 @@ describe('passive shared-userData instance auth isolation', () => {
       'if (authManager.isPassiveSharedUserDataInstance()) return;',
     );
     expect(dbPassiveGuard).toBeGreaterThan(-1);
+    const exclusiveAdoptionGate = beforeEnsureReady.indexOf(
+      '() => hasExclusiveSharedLegacyUserDataAccess()',
+    );
+    expect(exclusiveAdoptionGate).toBeGreaterThan(dbPassiveGuard);
     expect(beforeEnsureReady.indexOf('runLegacyUserDataMigrationForUser(user.id)')).toBeGreaterThan(
       dbPassiveGuard,
     );
     expect(beforeEnsureReady.indexOf('adoptLocalProfileDatabase(')).toBeGreaterThan(
       dbPassiveGuard,
+    );
+    expect(exclusiveAdoptionGate).toBeGreaterThan(
+      beforeEnsureReady.indexOf('adoptLocalProfileDatabase('),
     );
     const adoptionFailure = beforeEnsureReady.indexOf(
       "if (localProfileMigration.status === 'failed') {",

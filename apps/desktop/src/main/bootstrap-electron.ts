@@ -212,7 +212,10 @@ import {
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
-import { warmStaleProcessProvenance } from './ownerNamespaceMigration.js';
+import {
+  hasExclusiveSharedLegacyUserDataAccess,
+  warmStaleProcessProvenance,
+} from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
@@ -7858,6 +7861,7 @@ app.on('ready', async () => {
         createProductionLocalProfileDataMigrationDeps(
           app.getPath('userData'),
           BRAND_IDENTITY.dbFilePrefix,
+          () => hasExclusiveSharedLegacyUserDataAccess(),
         ),
       );
       if (localProfileMigration.status === 'failed') {

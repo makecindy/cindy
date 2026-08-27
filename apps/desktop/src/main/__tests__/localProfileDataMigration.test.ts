@@ -473,6 +473,42 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(activeSnapshot, 'utf8')).resolves.toBe('active-snapshot');
   });
 
+  it('defers adoption while another live instance can still write local-v1', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+
+    await expect(
+      adoptLocalProfileDatabase('owner-a', {
+        ...deps,
+        hasExclusiveSourceAccess: () => false,
+      }),
+    ).resolves.toEqual({
+      status: 'failed',
+      error: 'local profile database adoption deferred: concurrent live instance',
+    });
+    await expect(fs.access(target)).rejects.toThrow();
+  });
+
+  it('discards the snapshot if exclusive source access is lost before publication', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    let accessChecks = 0;
+
+    await expect(
+      adoptLocalProfileDatabase('owner-a', {
+        ...deps,
+        hasExclusiveSourceAccess: () => ++accessChecks === 1,
+      }),
+    ).resolves.toEqual({
+      status: 'failed',
+      error: 'local profile database adoption deferred: concurrent live instance',
+    });
+    expect(accessChecks).toBe(2);
+    await expect(fs.access(target)).rejects.toThrow();
+  });
+
   it('cleans interrupted temporary files before retrying', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');
