@@ -1452,6 +1452,40 @@ export class AgentInputCoordinator {
     }
   }
 
+  /**
+   * Apply the recovery ownership transition for content accepted as the
+   * session's next input. Stable-slot replacement preserves the queued row's
+   * identity, but the replacement content still owns the next turn.
+   */
+  private applyNewInputIntervention(
+    sessionId: string,
+    state: SessionInputState,
+    item: AgentInputQueuedMessage,
+  ): { schedulerOrigin: boolean; automaticOrigin: boolean } {
+    const schedulerOrigin = isSchedulerOriginItem(item);
+    const automaticOrigin = isAutomaticOriginItem(item);
+    if (!schedulerOrigin) {
+      this.cancelPreparedAutoResume(sessionId, state);
+    }
+    if (isUiContinuationItem(item)) {
+      if (state.recovery?.kind !== 'queue-head') {
+        this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
+      }
+    } else if (automaticOrigin && !schedulerOrigin) {
+      this.deps.onAutomaticEnqueue?.(sessionId);
+    } else if (!automaticOrigin) {
+      this.deps.onUserEnqueue?.(sessionId);
+    }
+    if (!schedulerOrigin) {
+      state.autoResumePending = null;
+      state.autoResumeAttemptToken = null;
+      markPendingTerminalSupersededByUser(state.activeTurn);
+      this.abandonActiveTurnRecoveryForUserAction(state);
+      this.clearErrorUnlessQueueHeadBlocked(state);
+    }
+    return { schedulerOrigin, automaticOrigin };
+  }
+
   enqueue(
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -1490,38 +1524,11 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    const schedulerOrigin = isSchedulerOriginItem(item);
-    const automaticOrigin = isAutomaticOriginItem(item);
-    if (!schedulerOrigin) {
-      // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
-      // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
-      // 继续派发、而新输入排在它后面。复用 Stop 的 generation 取消边界，先确认
-      // 旧续跑已被 coordinator 丢弃，再发布用户接管信号。
-      this.cancelPreparedAutoResume(sessionId, state);
-    }
-    if (isUiContinuationItem(item)) {
-      // queue-head recovery 时**跳过** onUiRetry:那条消息在派发前就失败了,
-      // 从未成为一个 turn,与之前失败的 hook turn 无关(与 retryLastError 对
-      // queue-head 刻意不发 onUiRetry 的语义一致,见 performRetryLastError 注释)。
-      // 下方 queue-head 特判分支会清 recovery 重发队首 A,合成 continue 项不入队;
-      // 若在这里发 onUiRetry(无论用哪个 clientId)会让无关的排队桌面消息认领
-      // 并改写旧 hook/channel 的待续跑记账。
-      if (state.recovery?.kind !== 'queue-head') {
-        this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
-      }
-    } else if (automaticOrigin && !schedulerOrigin) {
-      this.deps.onAutomaticEnqueue?.(sessionId);
-    } else if (!automaticOrigin) {
-      this.deps.onUserEnqueue?.(sessionId);
-    }
-    if (!schedulerOrigin) {
-      // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
-      // Scheduler 只是同一串行队列里的自动输入，不代表用户接手，不能取消正在退避的
-      // 自动续跑；它会保持 FIFO，等当前恢复生命周期收口后再派发。
-      state.autoResumePending = null;
-      state.autoResumeAttemptToken = null;
-      markPendingTerminalSupersededByUser(state.activeTurn);
-    }
+    const { schedulerOrigin, automaticOrigin } = this.applyNewInputIntervention(
+      sessionId,
+      state,
+      item,
+    );
     // 崩溃恢复暂停队列的死锁解除(2026-07-14):恢复暂停只防"重启后自动替用户
     // 发送",用户显式输入(composer 发送 / 中断横幅「继续任务」,均经 INPUT_ENQUEUE
     // 携带本 flag)即视为放行——否则「继续任务」只是往暂停队列再塞一条,永远
@@ -1534,10 +1541,6 @@ export class AgentInputCoordinator {
         sessionId,
         clientId: item.clientId,
       });
-    }
-    if (!schedulerOrigin) {
-      this.abandonActiveTurnRecoveryForUserAction(state);
-      this.clearErrorUnlessQueueHeadBlocked(state);
     }
     // —— queue-head recovery 解锁(2026-08 事故复盘)——
     // queue-head recovery 表示队首消息从未跨过 accepted 边界(派发前失败 /
@@ -3016,10 +3019,25 @@ export class AgentInputCoordinator {
     };
     if (current.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
     else replacement.hostAcceptedAtMs = current.hostAcceptedAtMs;
+    const { automaticOrigin } = this.applyNewInputIntervention(sessionId, state, replacement);
+    const liveReplaceIndex = state.pendingQueue.findIndex(
+      (item) =>
+        item.clientId === current.clientId &&
+        matches(item) &&
+        !state.queueEditLocks.includes(item.clientId) &&
+        !state.steeringQueueClientIds.includes(item.clientId),
+    );
+    if (liveReplaceIndex < 0) {
+      this.enqueue(sessionId, next);
+      return { queuedMessageId: next.clientId, queueAction: 'enqueued' };
+    }
     const nextQueue = [...state.pendingQueue];
-    nextQueue[replaceIndex] = replacement;
+    nextQueue[liveReplaceIndex] = replacement;
     state.pendingQueue = nextQueue;
+    if (!automaticOrigin) this.touchUserSend(sessionId);
     this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'stable-slot-replaced');
+    this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'stable-slot-replaced');
     return { queuedMessageId: current.clientId, queueAction: 'replaced' };
   }
 

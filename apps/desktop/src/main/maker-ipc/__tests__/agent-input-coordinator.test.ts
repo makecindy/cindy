@@ -10473,6 +10473,30 @@ describe('AgentInputCoordinator stable queue slot upsert', () => {
     item.origin?.kind === 'session' &&
     item.origin.senderSessionId === 'dispatcher' &&
     item.origin.queueKey === 'pr-followup:repo#1';
+  const stableRecoveryTakeover = {
+    error: 'temporary failure',
+    attempt: 1,
+    maxAttempts: 5,
+    sessionTotal: 1,
+  } as const;
+
+  async function queueStableSlotBehindFailedTurn(
+    h: ReturnType<typeof createHarness>,
+    sid: string,
+  ) {
+    h.setResumableTurnErrorTakeover(stableRecoveryTakeover);
+    h.setHasAssistantProgressAfter(async () => true);
+    h.coordinator.enqueue(sid, makeItem('failed-turn', 'original task'));
+    await flush();
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, stableItem('stable-old', 'old handoff'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', stableRecoveryTakeover.error, {
+      sdkError: 'server_error',
+    });
+    await flush();
+  }
 
   it('matches and replaces inside one live-queue critical section while isolating sender and key', async () => {
     const h = createHarness();
@@ -10578,6 +10602,87 @@ describe('AgentInputCoordinator stable queue slot upsert', () => {
         item.text,
       ]),
     ).toEqual([['latest-1', 'latest two']]);
+  });
+
+  it('releases failed-turn recovery before dispatching a stable-slot replacement', async () => {
+    const h = createHarness();
+    const sid = 'stable-slot-recovery-intervention';
+    await queueStableSlotBehindFailedTurn(h, sid);
+
+    expect(latestProjection(h.projections)).toMatchObject({
+      recovery: { kind: 'active-turn' },
+      autoResumePending: { attempt: 1 },
+      pendingQueue: [expect.objectContaining({ clientId: 'stable-old', text: 'old handoff' })],
+    });
+    h.onUserEnqueue.mockClear();
+
+    expect(
+      h.coordinator.replaceOrEnqueueQueuedMessageAtomically(
+        sid,
+        stableItem('stable-new', 'latest handoff'),
+        matchesStableSlot,
+      ),
+    ).toEqual({ queuedMessageId: 'stable-old', queueAction: 'replaced' });
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.recovery).toBeNull();
+    expect(projection.autoResumePending ?? null).toBeNull();
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'latest handoff',
+    });
+    expect(
+      h.sendToAgent.mock.calls.map((call) =>
+        typeof call[1] === 'string' ? call[1] : call[1].content,
+      ),
+    ).not.toContain('old handoff');
+  });
+
+  it('retires a prepared auto-resume when the stable slot receives newer content', async () => {
+    const h = createHarness();
+    const sid = 'stable-slot-cancels-prepared-auto-resume';
+    await queueStableSlotBehindFailedTurn(h, sid);
+
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, stableRecoveryTakeover.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    expect(
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue.some((item) => item.autoResume),
+    ).toBe(true);
+    h.onDiscardedQueuedMessage.mockClear();
+    const projectionsBeforeReplacement = h.projections.length;
+
+    expect(
+      h.coordinator.replaceOrEnqueueQueuedMessageAtomically(
+        sid,
+        stableItem('stable-new', 'latest handoff'),
+        matchesStableSlot,
+      ),
+    ).toEqual({ queuedMessageId: 'stable-old', queueAction: 'replaced' });
+
+    expect(
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => [
+        item.clientId,
+        item.text,
+        item.autoResume === true,
+      ]),
+    ).toEqual([['stable-old', 'latest handoff', false]]);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(latestProjection(h.projections).autoResumePending ?? null).toBeNull();
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ autoResume: true }),
+    );
+    for (const projection of h.projections.slice(projectionsBeforeReplacement)) {
+      if (!projection.pendingQueue.some((item) => item.text === 'latest handoff')) continue;
+      expect(projection.recovery).toBeNull();
+      expect(projection.autoResumePending ?? null).toBeNull();
+    }
   });
 });
 
