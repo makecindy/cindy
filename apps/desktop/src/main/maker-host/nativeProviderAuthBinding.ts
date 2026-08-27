@@ -520,6 +520,10 @@ export function migrateLegacyNativeProviderAuthBindings(
 ): void {
   // 同 claimDetectedNativeProviderAuth:一次性迁移也是写路径,归属读不出来就不能推进
   // (还会把 legacyClaimOwner 名额一起消费掉,损失不可逆)。
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return;
+  if (!needsLegacyNativeProviderAuthMigration(snapshot.bindings, ownerId, available)) return;
+
   withNativeBindingMutationLock(undefined, () => {
     const read = readBindingsOrFail();
     if (!read.ok) return;
@@ -551,6 +555,24 @@ export function migrateLegacyNativeProviderAuthBindings(
     }
     if (changed) writeBindings(next);
   });
+}
+
+function needsLegacyNativeProviderAuthMigration(
+  bindings: BindingFile,
+  ownerId: string,
+  available: Partial<Record<NativeProviderId, boolean>>,
+): boolean {
+  if ('legacyClaimOwner' in bindings) {
+    if (bindings.legacyClaimOwner !== ownerId) return false;
+  } else {
+    return true;
+  }
+  return NATIVE_PROVIDER_IDS.some(
+    (provider) =>
+      !(bindings.revoked && provider in bindings.revoked) &&
+      available[provider] === true &&
+      !bindings[provider],
+  );
 }
 
 /**

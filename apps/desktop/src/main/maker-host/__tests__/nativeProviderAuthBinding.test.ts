@@ -92,10 +92,12 @@ describe('native provider auth legacy binding', () => {
   it('does not rewrite an unchanged legacy binding for the reserved owner', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
     const renameSpy = vi.spyOn(fs, 'renameSync');
+    fs.rmSync(bindingLockDb, { force: true });
 
     migrateLegacyNativeProviderAuthBindings('owner-a', {});
 
     expect(renameSpy).not.toHaveBeenCalledWith(expect.any(String), bindingFile);
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
   });
 });
 

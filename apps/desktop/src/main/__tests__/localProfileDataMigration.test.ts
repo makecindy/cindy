@@ -128,6 +128,21 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
   });
 
+  it('restores an atomic-write backup before settling a pending claim', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    await fs.writeFile(
+      `${marker}.bak`,
+      JSON.stringify({ ownerId: 'owner-a', claimToken: 'claim-a' }),
+    );
+
+    expect(recoverPendingLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('finalized');
+    await expect(fs.access(`${marker}.bak`)).rejects.toThrow();
+    expect(JSON.parse(await fs.readFile(marker, 'utf8'))).toMatchObject({ ownerId: 'owner-a' });
+    expect(JSON.parse(await fs.readFile(marker, 'utf8'))).not.toHaveProperty('claimToken');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
   it('creates a tokenless claim for an already durable cloud owner', async () => {
     const { root } = await fixture();
     expect(reserveCommittedLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');

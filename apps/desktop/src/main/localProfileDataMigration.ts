@@ -431,7 +431,12 @@ export function recoverPendingLocalProfileDataOwner(
     'failed',
     () => {
       try {
-        const parsed = parseLocalProfileMigrationMarker(fs.readFileSync(marker, 'utf8'));
+        // atomicWriteFileSync may leave the only valid snapshot in .bak after
+        // an interrupted Windows backup exchange. Restore it before deciding
+        // whether a pending claim exists.
+        const raw = readAtomicFileSync(marker);
+        if (raw === null) return 'none';
+        const parsed = parseLocalProfileMigrationMarker(raw);
         if (!parsed) {
           fs.unlinkSync(marker);
           syncMarkerDirectory(marker);
@@ -448,8 +453,8 @@ export function recoverPendingLocalProfileDataOwner(
         fs.unlinkSync(marker);
         syncMarkerDirectory(marker);
         return 'released';
-      } catch (error) {
-        return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'none' : 'failed';
+      } catch {
+        return 'failed';
       }
     },
   );
