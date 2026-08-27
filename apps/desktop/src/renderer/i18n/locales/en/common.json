@@ -7387,9 +7387,12 @@
       "userTurnCostDetailsTitle": "Request details",
       "relative": {
         "justNow": "just now",
-        "minutesAgo": "{{count}} minutes ago",
-        "hoursAgo": "{{count}} hours ago",
-        "daysAgo": "{{count}} days ago"
+        "minutesAgo_one": "{{count}} minute ago",
+        "minutesAgo_other": "{{count}} minutes ago",
+        "hoursAgo_one": "{{count}} hour ago",
+        "hoursAgo_other": "{{count}} hours ago",
+        "daysAgo_one": "{{count}} day ago",
+        "daysAgo_other": "{{count}} days ago"
       }
     },
     "runningStatus": {

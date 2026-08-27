@@ -1092,7 +1092,7 @@ function relativeTime(iso: string, now: number, localizer?: PresentationLocalize
     return presentationText(
       localizer,
       'devices.presentation.sessionList.time.minutesAgo',
-      `${diffMinutes} minutes ago`,
+      diffMinutes === 1 ? '1 minute ago' : `${diffMinutes} minutes ago`,
       { count: diffMinutes },
     );
   }
@@ -1101,7 +1101,7 @@ function relativeTime(iso: string, now: number, localizer?: PresentationLocalize
     return presentationText(
       localizer,
       'devices.presentation.sessionList.time.hoursAgo',
-      `${diffHours} hours ago`,
+      diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`,
       { count: diffHours },
     );
   }
@@ -1110,7 +1110,7 @@ function relativeTime(iso: string, now: number, localizer?: PresentationLocalize
     return presentationText(
       localizer,
       'devices.presentation.sessionList.time.daysAgo',
-      `${diffDays} days ago`,
+      diffDays === 1 ? '1 day ago' : `${diffDays} days ago`,
       { count: diffDays },
     );
   }

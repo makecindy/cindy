@@ -44,15 +44,15 @@ export function formatRelative(createdAtMs: number, nowMs: number, t?: TFunc): s
   }
   if (delta < ONE_HOUR) {
     const count = Math.floor(delta / ONE_MINUTE);
-    return tr(t, 'chat.messageActionBar.relative.minutesAgo', `${count} minutes ago`, { count });
+    return tr(t, 'chat.messageActionBar.relative.minutesAgo', count === 1 ? '1 minute ago' : `${count} minutes ago`, { count });
   }
   if (delta < ONE_DAY) {
     const count = Math.floor(delta / ONE_HOUR);
-    return tr(t, 'chat.messageActionBar.relative.hoursAgo', `${count} hours ago`, { count });
+    return tr(t, 'chat.messageActionBar.relative.hoursAgo', count === 1 ? '1 hour ago' : `${count} hours ago`, { count });
   }
   if (delta < SEVEN_DAYS) {
     const count = Math.floor(delta / ONE_DAY);
-    return tr(t, 'chat.messageActionBar.relative.daysAgo', `${count} days ago`, { count });
+    return tr(t, 'chat.messageActionBar.relative.daysAgo', count === 1 ? '1 day ago' : `${count} days ago`, { count });
   }
 
   const d = new Date(createdAtMs);

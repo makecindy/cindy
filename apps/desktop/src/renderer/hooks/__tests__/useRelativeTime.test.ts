@@ -31,7 +31,10 @@ describe('formatRelative', () => {
   it('falls back to English when t is missing or returns the key', () => {
     expect(formatRelative(now - 30_000, now)).toBe('just now');
     expect(formatRelative(now - 30_000, now, tReturnsKey)).toBe('just now');
+    expect(formatRelative(now - 60_000, now, tReturnsKey)).toBe('1 minute ago');
     expect(formatRelative(now - 2 * 60_000, now, tReturnsKey)).toBe('2 minutes ago');
+    expect(formatRelative(now - 60 * 60_000, now, tReturnsKey)).toBe('1 hour ago');
+    expect(formatRelative(now - 24 * 60 * 60_000, now, tReturnsKey)).toBe('1 day ago');
     expect(formatRelative(now - 3 * 60 * 60_000, now, tReturnsKey)).toBe('3 hours ago');
     expect(formatRelative(now - 2 * 24 * 60 * 60_000, now, tReturnsKey)).toBe('2 days ago');
   });
