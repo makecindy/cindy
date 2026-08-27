@@ -565,6 +565,12 @@ export async function inspectPassiveLocalProfileAdoption(
       };
     }
     if (!sourceState.mainExists) {
+      if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
+        return {
+          status: 'failed',
+          error: 'local profile database adoption deferred: concurrent live instance',
+        };
+      }
       return { status: 'not-required', reason: 'no-local-db' };
     }
 
@@ -651,14 +657,8 @@ export async function adoptLocalProfileDatabase(
     // Reserve the local namespace even when it is currently empty. Otherwise a
     // later account could create or adopt local content after the first account
     // has already crossed the login boundary.
-    const sourceState = await databaseFileGroupState(deps, sourceDb);
-    if (sourceState.sidecarExists && !sourceState.mainExists) {
-      throw new Error('source database sidecar exists without its main database');
-    }
-    if (!sourceState.mainExists) return { status: 'no-local-db' };
-    // The same crash-released SQLite writer lock serializes marker repair and
-    // the complete snapshot publication. No PID identity or reclaimable lease
-    // file is involved, so a crashed process cannot block adoption forever.
+    // Check the target first: an existing cloud database remains authoritative
+    // and must open even while another live instance shares userData.
     const targetState = await databaseFileGroupState(deps, targetDb);
     if (targetState.sidecarExists && !targetState.mainExists) {
       throw new Error('target database sidecar exists without its main database');
@@ -667,6 +667,19 @@ export async function adoptLocalProfileDatabase(
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
     }
+    const sourceState = await databaseFileGroupState(deps, sourceDb);
+    if (sourceState.sidecarExists && !sourceState.mainExists) {
+      throw new Error('source database sidecar exists without its main database');
+    }
+    if (!sourceState.mainExists) {
+      if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
+        throw new Error('local profile database adoption deferred: concurrent live instance');
+      }
+      return { status: 'no-local-db' };
+    }
+    // The same crash-released SQLite writer lock serializes marker repair and
+    // the complete snapshot publication. No PID identity or reclaimable lease
+    // file is involved, so a crashed process cannot block adoption forever.
     if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
     }

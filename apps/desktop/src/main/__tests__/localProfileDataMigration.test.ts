@@ -217,6 +217,35 @@ describe('adoptLocalProfileDatabase', () => {
     ).resolves.toContain('owner-a');
   });
 
+  it('defers an absent source while another instance could still create it', async () => {
+    const { root, deps } = await fixture();
+
+    await expect(
+      adoptLocalProfileDatabase('owner-a', {
+        ...deps,
+        hasExclusiveSourceAccess: () => false,
+      }),
+    ).resolves.toEqual({
+      status: 'failed',
+      error: 'local profile database adoption deferred: concurrent live instance',
+    });
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db'))).rejects.toThrow();
+  });
+
+  it('opens an existing cloud database without requiring source exclusivity', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(target, 'cloud-db');
+
+    await expect(
+      adoptLocalProfileDatabase('owner-a', {
+        ...deps,
+        hasExclusiveSourceAccess: () => false,
+      }),
+    ).resolves.toEqual({ status: 'target-exists' });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
+  });
+
   it('blocks initialization when source sidecars exist without the main database', async () => {
     const { root, deps } = await fixture();
     const source = path.join(root, 'cindy-local-v1.db');
@@ -391,6 +420,20 @@ describe('adoptLocalProfileDatabase', () => {
       error: 'source database sidecar exists without its main database',
     });
     await expect(fs.readFile(`${source}-shm`, 'utf8')).resolves.toBe('orphaned-shm');
+  });
+
+  it('blocks passive initialization while another instance could create the source', async () => {
+    const { deps } = await fixture();
+
+    await expect(
+      inspectPassiveLocalProfileAdoption('owner-a', {
+        ...deps,
+        hasExclusiveSourceAccess: () => false,
+      }),
+    ).resolves.toEqual({
+      status: 'failed',
+      error: 'local profile database adoption deferred: concurrent live instance',
+    });
   });
 
   it('assigns the retained local source to only the first cloud owner', async () => {

@@ -3105,6 +3105,17 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
     expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
   });
 
+  it('restores an atomic-write backup before deciding that a live instance vanished', async () => {
+    const root = await tempRoot();
+    await writeDevInstanceRecord(root, 4242);
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
+    await fs.rename(recordPath, `${recordPath}.bak`);
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    await expect(fs.access(recordPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${recordPath}.bak`)).rejects.toThrow();
+  });
+
   it('ignores a registry pid that was reused by another app', async () => {
     const root = await tempRoot();
     const startedAtMs = 1_000_000;

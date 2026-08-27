@@ -24,6 +24,7 @@ import {
   readBoundedFileNoFollow,
   readBoundedFileNoFollowSync,
 } from './utils/readBoundedFile.js';
+import { readAtomicFileSync } from './utils/atomicWriteFile.js';
 
 const CLAIM_MARKER = '.owner-namespace-claim-v1.json';
 const LEGACY_GHOST_RECOVERY_MARKER = '.legacy-ghost-recovery-v1.json';
@@ -581,12 +582,22 @@ function hasConcurrentLiveInstanceSync(
     recordedAtMs: number | undefined;
     rootDir: string | undefined;
   }> = [];
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
+  const recordNames = new Set(
+    names.flatMap((name) => {
+      if (name.endsWith('.json')) return [name];
+      if (name.endsWith('.json.bak')) return [name.slice(0, -'.bak'.length)];
+      return [];
+    }),
+  );
+  for (const name of recordNames) {
     let raw: string;
     try {
-      raw = fsSync.readFileSync(path.join(registryDir, name), 'utf-8');
+      const restored = readAtomicFileSync(path.join(registryDir, name));
+      if (restored === null) continue;
+      raw = restored;
     } catch (error) {
+      // A backup that cannot be restored may still be the only live-process
+      // record. Fail closed rather than treating the instance as gone.
       if (isMissing(error)) continue;
       return true;
     }
