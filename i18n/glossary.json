@@ -14,6 +14,18 @@
   ],
   "terms": [
     {
+      "id": "cindy-ai-free-tier",
+      "status": "proposed",
+      "en": "Free tier",
+      "translations": {
+        "zh-CN": "免费版",
+        "zh-TW": "免費版",
+        "ja": "無料版",
+        "ko": "무료 버전"
+      },
+      "note": "Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。"
+    },
+    {
       "id": "harness",
       "status": "proposed",
       "en": "Harness",

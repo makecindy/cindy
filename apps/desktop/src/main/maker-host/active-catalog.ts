@@ -143,6 +143,7 @@ export interface XdGatewayAgentOverride {
  */
 export interface XdGatewayModelInfo {
   id: string;
+  availability?: 'available' | 'requires_payment';
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
   mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
@@ -187,8 +188,15 @@ export interface XdGatewayModelInfo {
  * v3 必需字段在协议边界严格校验；这里不读取公共 Catalog，也不按模型 id 或固定常量补值。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
-/** 当前账号最近一次 `/models` 成功响应；false 时空/旧数组都不能作为 deny 证据。 */
+/** 当前账号最近一次 `/models` 成功响应；false 时清单缺席不能作为模型不存在的 deny 证据。 */
 let xdGatewayModelsAuthoritative = false;
+/**
+ * 最近一次成功 v5 响应明确拒绝的 XD 对话路由。
+ *
+ * 刷新失败时活动目录会隐藏过期的付费营销行，但既有会话的派发终检仍须保留这份
+ * fail-closed 证据；只有更新的成功响应或账号边界清空才能撤销。
+ */
+let xdGatewayPaymentRequiredRoutes = new Set<string>();
 /**
  * XD 模型里「由客户端投影给 Codex、但走 Anthropic Messages bridge」的 id 集合。
  * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
@@ -798,6 +806,7 @@ function projectXdGatewayMediaModels(
     .map((model) => ({
       id: model.id,
       name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
   const videoModels = gatewayModels
@@ -805,6 +814,7 @@ function projectXdGatewayMediaModels(
     .map((model) => ({
       id: model.id,
       name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
   const identity = { ...provider };
@@ -1153,6 +1163,7 @@ function computeMerged(): Catalog {
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
         const merged: CatalogModel = {
           id: gm.id,
+          ...(gm.availability ? { availability: gm.availability } : {}),
           // name / contextWindow are required by Model Access v3 and therefore never synthesized.
           name: gm.name as string,
           ...(gm.group !== undefined ? { group: gm.group } : {}),
@@ -1445,11 +1456,20 @@ export function setDiscoveredProviderMediaModels(
  */
 export function setXdGatewayModels(
   models: XdGatewayModelInfo[],
-  options?: { authoritative?: boolean },
+  options?: { authoritative?: boolean; preservePaymentRequiredRoutes?: boolean },
 ): void {
   xdGatewayModels = [...models];
   if (options?.authoritative !== undefined) {
     xdGatewayModelsAuthoritative = options.authoritative;
+  }
+  if (options?.preservePaymentRequiredRoutes !== true) {
+    xdGatewayPaymentRequiredRoutes = new Set(
+      models.flatMap((model) =>
+        model.availability === 'requires_payment'
+          ? (model.agents ?? []).map((agent) => `${agent}\n${model.id}`)
+          : [],
+      ),
+    );
   }
   xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
@@ -1460,12 +1480,27 @@ export function getXdGatewayModels(): readonly XdGatewayModelInfo[] {
   return xdGatewayModels;
 }
 
+/** Main 派发边界查询最近一次明确的付费拒绝；不用于 Renderer 营销展示。 */
+export function isXdGatewayPaymentRequiredRoute(modelId: string, agent: AgentKind): boolean {
+  return xdGatewayPaymentRequiredRoutes.has(`${agent}\n${modelId}`);
+}
+
 /** 子代理模型预检只在此标记为 true 时，才可把清单缺席解释为权威拒绝。 */
 export function getXdGatewayModelAccessSnapshot(): {
   authoritative: boolean;
   models: readonly XdGatewayModelInfo[];
+  paymentRequiredModelIds: readonly string[];
 } {
-  return { authoritative: xdGatewayModelsAuthoritative, models: xdGatewayModels };
+  const claudeCodeRoutePrefix = 'claude-code\n';
+  return {
+    authoritative: xdGatewayModelsAuthoritative,
+    models: xdGatewayModels,
+    paymentRequiredModelIds: [...xdGatewayPaymentRequiredRoutes].flatMap((route) =>
+      route.startsWith(claudeCodeRoutePrefix)
+        ? [route.slice(claudeCodeRoutePrefix.length)]
+        : [],
+    ),
+  };
 }
 
 /** 新一轮 `/models` 未完成或失败后撤销负向证明，但保留 LKG 供 UI 展示。 */

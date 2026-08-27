@@ -3874,6 +3874,29 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   session.setTurnLifecycleObserver({
     beforeProviderStart: async (turnGeneration) => {
       if (session.remoteHostId) return;
+      // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
+      // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
+      const model = session.model;
+      if (model) {
+        const verdict = await verdictForModelRoute(
+          session.agentKind,
+          model,
+          getSessionProvider(session.id),
+        );
+        // beforeProviderStart 已经进入 Session 内部，无法再安全重建跨凭证形态的
+        // runtime。付费 reroute 不能当作 pass，否则 null-provider 仍会落到已锁定
+        // 的 XD 默认来源。普通停用/能力/独占 reroute 属于既有 best-effort 轴，
+        // 运行中会话按 model-route-guard 契约不在这里打断。
+        if (verdict.kind === 'reroute' && verdict.reason === 'payment-required') {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `model "${model}" must switch to provider "${verdict.providerId}" before sending`,
+          );
+        }
+        if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
+          throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
+        }
+      }
       silentStopTurnLeaseGate.supersede(session.id);
       // Keep Review's exact-instance liveness listener lazy. PID-only turn
       // leases remain fail-closed until this process actually starts Review.
@@ -7503,6 +7526,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? `model "${model}" is not an agent chat model`
             : verdict.reason === 'model-retired'
               ? `model "${model}" has been retired from the catalog`
+              : verdict.reason === 'payment-required'
+                ? `model "${model}" requires paid access`
               : verdict.reason === 'exclusive-source-unavailable'
                 ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
                 : `model "${model}" is disabled in settings`,

@@ -1421,6 +1421,9 @@
         "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 从余额扣费",
         "modelLabel": "全部模型",
         "billingLabel": "按 token 从余额扣费",
+        "accountTier": {
+          "free": "免费版"
+        },
         "disconnectConfirm": {
           "title": "断开 Cindy AI？",
           "description": "断开后将清除本地保存的 Cindy AI Key，需要重新连接才能继续使用 Cindy AI 提供的模型。"
@@ -1683,6 +1686,8 @@
         "refreshFailed": "模型列表刷新失败，请稍后再试",
         "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "disableModel": "停用此模型",
+        "paymentRequired": "付费",
+        "paymentUnlock": "付费解锁",
         "enableModel": "启用此模型",
         "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
         "accessWriteFailed": "停用设置未能保存，请重试",
@@ -5521,7 +5526,7 @@
         "provider": "供应商",
         "tokens": "累计 token",
         "context": "上下文占用",
-            "lastActive": "最后活跃"
+        "lastActive": "最后活跃"
       },
       "providerTooltip": "取该任务当前选定的供应商；未指定时留空。",
       "tokensTooltip": "该任务的生命周期累计，不是近 30 天内的增量。"
@@ -6719,6 +6724,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在设置里配置 API key 才能使用",
+      "paymentRequired": {
+        "badge": "付费",
+        "unlock": "付费解锁",
+        "title": "付费后解锁此模型",
+        "description": "订阅付费方案或完成余额充值后，即可使用此模型。",
+        "action": "查看付费方式"
+      },
       "hidden": "已隐藏",
       "modelListAria": "模型列表",
       "subscriptionDirectDisabled": {
@@ -8870,7 +8882,15 @@
         "custom": "自定义"
       },
       "weekday": {
-        "full": { "0": "星期日", "1": "星期一", "2": "星期二", "3": "星期三", "4": "星期四", "5": "星期五", "6": "星期六" },
+        "full": {
+          "0": "星期日",
+          "1": "星期一",
+          "2": "星期二",
+          "3": "星期三",
+          "4": "星期四",
+          "5": "星期五",
+          "6": "星期六"
+        },
         "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
       },
       "time": {

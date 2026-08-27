@@ -1421,6 +1421,9 @@
         "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 從餘額扣費",
         "modelLabel": "全部模型",
         "billingLabel": "按 token 從餘額扣費",
+        "accountTier": {
+          "free": "免費版"
+        },
         "disconnectConfirm": {
           "title": "斷開 Cindy AI？",
           "description": "斷開後將清除本地儲存的 Cindy AI Key，需要重新連線才能繼續使用 Cindy AI 提供的模型。"
@@ -1683,6 +1686,8 @@
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "disableModel": "停用此模型",
+        "paymentRequired": "付費",
+        "paymentUnlock": "付費解鎖",
         "enableModel": "啟用此模型",
         "capabilityGroupHint": "不會出現在對話模型選擇中，僅供影像生成等功能使用",
         "accessWriteFailed": "停用設定未能儲存，請重試",
@@ -5521,7 +5526,7 @@
         "provider": "供應商",
         "tokens": "累計 token",
         "context": "上下文佔用",
-            "lastActive": "最後活躍"
+        "lastActive": "最後活躍"
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
       "tokensTooltip": "該任務的生命週期累計，不是近 30 天內的增量。"
@@ -6719,6 +6724,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在設定裡配置 API key 才能使用",
+      "paymentRequired": {
+        "badge": "付費",
+        "unlock": "付費解鎖",
+        "title": "付費後解鎖此模型",
+        "description": "訂閱付費方案或完成餘額儲值後，即可使用此模型。",
+        "action": "查看付費方式"
+      },
       "hidden": "已隱藏",
       "subscriptionDirectDisabled": {
         "chatgpt": "訂閱直連的 GPT 模型協議暫不支援 SSH 遠端會話",
@@ -8870,7 +8882,15 @@
         "custom": "自訂"
       },
       "weekday": {
-        "full": { "0": "星期日", "1": "星期一", "2": "星期二", "3": "星期三", "4": "星期四", "5": "星期五", "6": "星期六" },
+        "full": {
+          "0": "星期日",
+          "1": "星期一",
+          "2": "星期二",
+          "3": "星期三",
+          "4": "星期四",
+          "5": "星期五",
+          "6": "星期六"
+        },
         "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
       },
       "time": {
