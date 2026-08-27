@@ -240,13 +240,17 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
 
     await fireToCompletion(
       runner,
-      baseSchedule({ targetSessionId: 'scheduler-session', workspaceKind: 'project' }),
+      baseSchedule({
+        targetSessionId: 'scheduler-session',
+        workspaceKind: 'project',
+        sessionTitleTemplate: '{date } should-not-rename',
+      }),
       h,
     );
 
     expect(closeSession).not.toHaveBeenCalled();
     expect(maker.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ vendorOptions: { source: 'scheduler' } }),
+      expect.objectContaining({ title: undefined, vendorOptions: { source: 'scheduler' } }),
     );
     expect(h.headlessDuringSend).toEqual([false]);
     expect(h.headlessAfterAccepted).toEqual([true]);

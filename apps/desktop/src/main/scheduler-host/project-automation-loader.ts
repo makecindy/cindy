@@ -56,6 +56,7 @@ export interface ProjectScheduleConfig {
   fastMode?: boolean;
   useWorktree?: boolean;
   persistentSession?: boolean;
+  sessionTitleTemplate?: string;
   silentWhenIdle?: boolean;
   /**
    * 前置检查脚本(Pre-run Hook)。省略 = 未启用;reconcile 恒带 key,配置文件里
@@ -461,6 +462,8 @@ function scheduleConfigToCreateInput(
     workingDir,
     useWorktree: config.useWorktree ?? false,
     persistentSession: config.persistentSession ?? false,
+    // Constant key in reconciliation: deleting it from config clears the DB value.
+    sessionTitleTemplate: config.sessionTitleTemplate?.trim() || undefined,
     silentWhenIdle: config.silentWhenIdle ?? false,
     // 恒带 key:配置省略 → undefined → update patch 双列写 NULL(清空既有 hook),
     // 与表单 buildScheduleInput 的「关闭前置检查」落库通道同一契约。
@@ -501,6 +504,7 @@ export function schedulesDiffer(
     !sameWorkingDir(schedule.workingDir, workingDir) ||
     schedule.useWorktree !== expected.useWorktree ||
     schedule.persistentSession !== expected.persistentSession ||
+    schedule.sessionTitleTemplate !== expected.sessionTitleTemplate ||
     schedule.silentWhenIdle !== expected.silentWhenIdle ||
     (schedule.preRunHook?.command ?? '') !== (expected.preRunHook?.command ?? '') ||
     (schedule.preRunHook?.timeoutMs ?? undefined) !== (expected.preRunHook?.timeoutMs ?? undefined) ||
@@ -567,6 +571,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.fastMode) &&
     optionalBoolean(config.useWorktree) &&
     optionalBoolean(config.persistentSession) &&
+    optionalString(config.sessionTitleTemplate) &&
     optionalBoolean(config.silentWhenIdle) &&
     optionalPreRunHook(config.preRunHook) &&
     optionalNotify(config.notify)

@@ -11,9 +11,11 @@ export interface ScheduleSidebarIndexRun {
   workingDir?: string;
   projectConfigId?: string;
   sessionId?: string;
+  firedAt?: number;
+  /** Persistent grouping/search association without a visible schedule_runs history row. */
+  associationOnly?: boolean;
   status: ScheduleRun['status'];
   readAt?: number;
-  firedAt?: number;
 }
 
 /**

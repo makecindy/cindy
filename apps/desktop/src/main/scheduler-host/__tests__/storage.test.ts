@@ -46,6 +46,7 @@ function baseRow(overrides: Partial<ScheduleRowLike> = {}): ScheduleRowLike {
     workingDir: null,
     useWorktree: false,
     targetSessionId: null,
+    sessionTitleTemplate: null,
     notifyDesktop: true,
     notifyFeishu: false,
     status: 'active',
@@ -143,6 +144,13 @@ describe('scheduleToCamel', () => {
     expect(s.workspaceKind).toBe('dialogue');
     expect(s.workingDir).toBeUndefined();
   });
+
+  it('maps nullable session title template to the optional schedule field', () => {
+    expect(scheduleToCamel(baseRow()).sessionTitleTemplate).toBeUndefined();
+    expect(
+      scheduleToCamel(baseRow({ sessionTitleTemplate: '{date} report' })).sessionTitleTemplate,
+    ).toBe('{date} report');
+  });
 });
 
 describe('scheduleCreateToRow', () => {
@@ -161,6 +169,7 @@ describe('scheduleCreateToRow', () => {
     expect(row.workspaceKind).toBe('project');
     expect(row.workingDir).toBeNull();
     expect(row.targetSessionId).toBeNull();
+    expect(row.sessionTitleTemplate).toBeNull();
     expect(row.lastFiredAt).toBeNull();
     expect(row.expireAt).toBeNull();
     expect(row.nextFireAt).toBe(1_700_000_060_000);
@@ -226,6 +235,18 @@ describe('schedulePatchToRow — patch 清空语义', () => {
   it('workspaceKind patch 写 workspace_kind 列', () => {
     const out = schedulePatchToRow({ workspaceKind: 'dialogue' });
     expect(out.workspaceKind).toBe('dialogue');
+  });
+
+  it('sessionTitleTemplate patch preserves true partial and explicit clear semantics', () => {
+    expect(schedulePatchToRow({ name: 'unchanged-title' })).not.toHaveProperty(
+      'sessionTitleTemplate',
+    );
+    expect(schedulePatchToRow({ sessionTitleTemplate: '{isoWeek}' })).toMatchObject({
+      sessionTitleTemplate: '{isoWeek}',
+    });
+    expect(schedulePatchToRow({ sessionTitleTemplate: undefined })).toMatchObject({
+      sessionTitleTemplate: null,
+    });
   });
 
   it('多字段 patch 只输出列出的字段', () => {

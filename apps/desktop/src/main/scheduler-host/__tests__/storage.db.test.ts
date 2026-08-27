@@ -147,6 +147,7 @@ const SCHEDULER_DDL = [
       use_worktree INTEGER NOT NULL DEFAULT 0,
       target_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
       persistent_session INTEGER NOT NULL DEFAULT 0,
+      session_title_template TEXT,
       silent_when_idle INTEGER NOT NULL DEFAULT 0,
       pre_run_hook_command TEXT,
       pre_run_hook_timeout_ms INTEGER,
@@ -188,17 +189,64 @@ const SCHEDULER_DDL = [
     )
   `,
   'CREATE INDEX idx_schedule_runs_schedule ON schedule_runs(schedule_id, fired_at)',
+  `
+    CREATE TABLE schedule_session_bindings (
+      schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      last_run_at INTEGER NOT NULL,
+      PRIMARY KEY (schedule_id, session_id)
+    )
+  `,
+  `
+    CREATE TRIGGER schedule_runs_bind_session_after_insert
+    AFTER INSERT ON schedule_runs
+    WHEN NEW.session_id IS NOT NULL
+    BEGIN
+      INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+      VALUES (NEW.schedule_id, NEW.session_id, NEW.fired_at)
+      ON CONFLICT(schedule_id, session_id) DO UPDATE SET
+        last_run_at = MAX(schedule_session_bindings.last_run_at, excluded.last_run_at);
+    END
+  `,
+  `
+    CREATE TRIGGER schedule_runs_bind_session_after_update
+    AFTER UPDATE OF schedule_id, session_id, fired_at ON schedule_runs
+    WHEN NEW.session_id IS NOT NULL
+    BEGIN
+      INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+      VALUES (NEW.schedule_id, NEW.session_id, NEW.fired_at)
+      ON CONFLICT(schedule_id, session_id) DO UPDATE SET
+        last_run_at = MAX(schedule_session_bindings.last_run_at, excluded.last_run_at);
+    END
+  `,
 ];
 
-function createStorageHarness() {
+interface CapturedQuery {
+  query: string;
+  params: unknown[];
+}
+
+function createStorageHarness(queryLog?: CapturedQuery[]) {
   const sqlite = new Database(':memory:');
   sqlite.pragma('foreign_keys = ON');
   for (const statement of SCHEDULER_DDL) sqlite.exec(statement);
 
-  const db = drizzle(sqlite, { schema }) as SchedulerDrizzleDb;
+  const db = drizzle(sqlite, {
+    schema,
+    ...(queryLog ? {
+      logger: {
+        logQuery(query: string, params: unknown[]) {
+          queryLog.push({ query, params });
+        },
+      },
+    } : {}),
+  }) as SchedulerDrizzleDb;
   return {
     close: () => sqlite.close(),
     db,
+    explain: (captured: CapturedQuery) => sqlite
+      .prepare(`EXPLAIN QUERY PLAN ${captured.query}`)
+      .all(...captured.params) as Array<{ detail: string }>,
     storage: new DrizzleScheduleStorage(() => db),
   };
 }
@@ -274,6 +322,667 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       });
       await harness.storage.delete(schedule.id);
       await expect(harness.storage.get(schedule.id)).resolves.toBeNull();
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('keeps schedule-session bindings after run deletion without creating unread history', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-bindings', name: 'binding owner' });
+
+    try {
+      await harness.storage.insert(schedule);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-binding-a', 'first instance', 'scheduler', 100, 100),
+          ('sess-binding-b', 'second instance', 'scheduler', 200, 200)
+      `);
+
+      await harness.storage.insertRun({
+        id: 'run-binding-newer',
+        scheduleId: schedule.id,
+        sessionId: 'sess-binding-a',
+        firedAt: 300,
+        status: 'success',
+      });
+      await harness.storage.insertRun({
+        id: 'run-binding-older',
+        scheduleId: schedule.id,
+        sessionId: 'sess-binding-a',
+        firedAt: 100,
+        status: 'success',
+      });
+      await harness.storage.insertRun({
+        id: 'run-binding-late-session',
+        scheduleId: schedule.id,
+        firedAt: 400,
+        status: 'running',
+      });
+      await harness.storage.updateRun('run-binding-late-session', {
+        sessionId: 'sess-binding-b',
+      });
+
+      await expect(
+        harness.db.select().from(schema.scheduleSessionBindings).orderBy(schema.scheduleSessionBindings.sessionId),
+      ).resolves.toEqual([
+        { scheduleId: schedule.id, sessionId: 'sess-binding-a', lastRunAt: 300 },
+        { scheduleId: schedule.id, sessionId: 'sess-binding-b', lastRunAt: 400 },
+      ]);
+
+      await harness.storage.deleteRun('run-binding-newer');
+      await harness.storage.deleteRun('run-binding-older');
+      await harness.storage.deleteRun('run-binding-late-session');
+      await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([]);
+
+      await expect(harness.storage.listSidebarIndexRuns()).resolves.toEqual([
+        expect.objectContaining({
+          runId: 'schedule-session-binding:sch-bindings:sess-binding-a',
+          scheduleId: schedule.id,
+          sessionId: 'sess-binding-a',
+          firedAt: 300,
+          associationOnly: true,
+          status: 'success',
+          readAt: 300,
+        }),
+        expect.objectContaining({
+          runId: 'schedule-session-binding:sch-bindings:sess-binding-b',
+          scheduleId: schedule.id,
+          sessionId: 'sess-binding-b',
+          firedAt: 400,
+          associationOnly: true,
+          status: 'success',
+          readAt: 400,
+        }),
+      ]);
+
+      await harness.storage.insertRun({
+        id: 'run-binding-real',
+        scheduleId: schedule.id,
+        sessionId: 'sess-binding-b',
+        firedAt: 500,
+        status: 'running',
+      });
+      const sessionBRuns = (await harness.storage.listSidebarIndexRuns()).filter(
+        (run) => run.sessionId === 'sess-binding-b',
+      );
+      expect(sessionBRuns).toHaveLength(1);
+      expect(sessionBRuns[0]).toMatchObject({
+        runId: 'run-binding-real',
+        status: 'running',
+        readAt: undefined,
+      });
+      expect(sessionBRuns[0]?.associationOnly).toBeUndefined();
+
+      harness.db.run(sql`DELETE FROM sessions WHERE id = 'sess-binding-a'`);
+      await expect(harness.db.select().from(schema.scheduleSessionBindings)).resolves.toEqual([
+        { scheduleId: schedule.id, sessionId: 'sess-binding-b', lastRunAt: 500 },
+      ]);
+
+      await harness.storage.delete(schedule.id);
+      await expect(harness.db.select().from(schema.scheduleSessionBindings)).resolves.toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('bounds compact sidebar rows while full mode keeps real run history', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-compact-history', name: 'compact history' });
+
+    try {
+      await harness.storage.insert(schedule);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES ('sess-compact-history', 'compact instance', 'scheduler', 1, 1)
+      `);
+      harness.db.run(sql`
+        WITH RECURSIVE run_numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM run_numbers WHERE value < 1200
+        )
+        INSERT INTO schedule_runs (
+          id, schedule_id, session_id, fired_at, finished_at, status, read_at
+        )
+        SELECT
+          'compact-read-' || value,
+          ${schedule.id},
+          'sess-compact-history',
+          value,
+          value,
+          'success',
+          value
+        FROM run_numbers
+      `);
+      harness.db.run(sql`
+        WITH RECURSIVE unread_numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM unread_numbers WHERE value < 80
+        )
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status)
+        SELECT
+          'compact-unread-' || value,
+          ${schedule.id},
+          'sess-compact-history',
+          2000 + value,
+          'failed'
+        FROM unread_numbers
+      `);
+      await harness.storage.insertRun({
+        id: 'compact-latest-read',
+        scheduleId: schedule.id,
+        sessionId: 'sess-compact-history',
+        firedAt: 3000,
+        status: 'success',
+        readAt: 3000,
+      });
+      await harness.storage.insertRun({
+        id: 'compact-running',
+        scheduleId: schedule.id,
+        sessionId: 'sess-compact-history',
+        firedAt: 2500,
+        status: 'running',
+      });
+
+      const compact = await harness.storage.listSidebarIndexRuns({ compact: true });
+      expect(compact).toHaveLength(52);
+      expect(compact).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: 'schedule-session-binding:sch-compact-history:sess-compact-history',
+            firedAt: 3000,
+            associationOnly: true,
+          }),
+          expect.objectContaining({ runId: 'compact-running', status: 'running' }),
+          expect.objectContaining({ runId: 'compact-unread-80', status: 'failed' }),
+        ]),
+      );
+      const compactUnread = compact.filter((run) => run.status === 'failed');
+      expect(compactUnread).toHaveLength(50);
+      expect(Math.min(...compactUnread.map((run) => run.firedAt))).toBe(2031);
+      expect(compact.some((run) => run.runId === 'compact-unread-30')).toBe(false);
+
+      const full = await harness.storage.listSidebarIndexRuns();
+      expect(full).toHaveLength(1282);
+      expect(full.some((run) => run.associationOnly === true)).toBe(false);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('bounds old compact requests before reading a 10k binding table and scopes new requests', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-10k-bindings', name: '10k bindings' });
+    const tieSchedule = baseSchedule({
+      id: 'zz-sch-10k-tie',
+      name: 'tie winner',
+      status: 'paused',
+    });
+    try {
+      await harness.storage.insert(schedule);
+      await harness.storage.insert(tieSchedule);
+      harness.db.run(sql`
+        WITH RECURSIVE numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM numbers WHERE value < 10000
+        )
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        SELECT 'bound-session-' || value, 'generated ' || value, 'scheduler', value, value
+        FROM numbers
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+        SELECT ${schedule.id}, id, updated_at FROM sessions WHERE id LIKE 'bound-session-%'
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+        VALUES (${tieSchedule.id}, 'bound-session-1', 1)
+      `);
+
+      const legacyCompact = await harness.storage.listSidebarIndexRuns({ compact: true });
+      expect(legacyCompact).toHaveLength(200);
+      expect(legacyCompact.every((run) => run.associationOnly === true)).toBe(true);
+      expect(legacyCompact.some((run) => run.sessionId === 'bound-session-10000')).toBe(true);
+      expect(legacyCompact.some((run) => run.sessionId === 'bound-session-1')).toBe(false);
+
+      const requested = Array.from({ length: 200 }, (_, index) => `bound-session-${index + 1}`);
+      const scoped = await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: requested,
+      });
+      expect(scoped).toHaveLength(200);
+      expect(new Set(scoped.map((run) => run.sessionId))).toEqual(new Set(requested));
+      expect(scoped.find((run) => run.sessionId === 'bound-session-1')).toMatchObject({
+        scheduleId: tieSchedule.id,
+        associationAllSchedulesStopped: false,
+      });
+      await expect(harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: Array.from({ length: 201 }, (_, index) => `too-many-${index}`),
+      })).rejects.toThrow(/exceeds 200/);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('uses window ranking for a deterministic top 50 from 10k unread runs', async () => {
+    const queryLog: CapturedQuery[] = [];
+    const harness = createStorageHarness(queryLog);
+    const schedule = baseSchedule({ id: 'sch-window-10k', name: 'window 10k' });
+    try {
+      await harness.storage.insert(schedule);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES ('sess-window-10k', 'window history', 'scheduler', 1, 1)
+      `);
+      harness.db.run(sql`
+        WITH RECURSIVE numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM numbers WHERE value < 10000
+        )
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status)
+        SELECT 'window-unread-' || value, ${schedule.id}, 'sess-window-10k', value, 'failed'
+        FROM numbers
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status)
+        VALUES
+          ('window-running-old', ${schedule.id}, 'sess-window-10k', 10001, 'running'),
+          ('window-running-new', ${schedule.id}, 'sess-window-10k', 10002, 'running')
+      `);
+
+      queryLog.length = 0;
+      const compact = await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: ['sess-window-10k'],
+      });
+      const unread = compact.filter((run) => run.status === 'failed');
+      const running = compact.filter((run) => run.status === 'running');
+      expect(unread).toHaveLength(50);
+      expect(unread.map((run) => run.runId)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `window-unread-${10000 - index}`),
+      );
+      expect(running.map((run) => run.runId)).toEqual(['window-running-new']);
+
+      const rankedRunQuery = queryLog.find(({ query }) => query.includes('compact_ranked_runs'));
+      expect(rankedRunQuery).toBeDefined();
+      expect(rankedRunQuery?.query.toLowerCase()).toContain('row_number() over');
+      const plan = harness.explain(rankedRunQuery!);
+      expect(plan.some(({ detail }) => /co-routine compact_ranked_runs/i.test(detail))).toBe(true);
+      expect(plan.some(({ detail }) => /correlated scalar subquery/i.test(detail))).toBe(false);
+    } finally {
+      harness.close();
+    }
+  }, 30_000);
+
+  it('keeps only valid compact bindings and recognizes strict legacy-generated sessions', async () => {
+    const harness = createStorageHarness();
+    const legacy = baseSchedule({ id: 'sch-legacy-binding', name: 'legacy binding', status: 'paused' });
+    const nonLegacy = baseSchedule({ id: 'sch-prefix-not-legacy', name: 'not legacy' });
+    const stale = baseSchedule({ id: 'sch-stale-manual', name: 'stale manual' });
+    const current = baseSchedule({
+      id: 'sch-current-manual',
+      name: 'current manual',
+      status: 'paused',
+    });
+    try {
+      await harness.storage.insert(legacy);
+      await harness.storage.insert(nonLegacy);
+      await harness.storage.insert(stale);
+      await harness.storage.insert(current);
+      enableLegacySessionFallback(harness, legacy.id);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-old-prefix', '[Schedule] legacy binding', 'desktop', 1, 1),
+          ('sess-fake-prefix', '[Schedule] not legacy', 'desktop', 1, 1),
+          ('sess-lower-prefix', '[schedule] legacy binding', 'desktop', 1, 1),
+          ('sess-generated-source', 'generated without prefix', 'scheduler', 1, 1),
+          ('sess-ordinary', 'ordinary desktop', 'desktop', 1, 1)
+      `);
+      harness.db.run(sql`
+        UPDATE schedules SET target_session_id = 'sess-ordinary'
+        WHERE id = ${current.id}
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+        VALUES
+          (${legacy.id}, 'sess-old-prefix', 10),
+          (${nonLegacy.id}, 'sess-fake-prefix', 10),
+          (${legacy.id}, 'sess-lower-prefix', 10),
+          (${stale.id}, 'sess-generated-source', 10),
+          (${stale.id}, 'sess-ordinary', 20),
+          (${current.id}, 'sess-ordinary', 10)
+      `);
+
+      const compact = await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: [
+          'sess-old-prefix',
+          'sess-fake-prefix',
+          'sess-lower-prefix',
+          'sess-generated-source',
+          'sess-ordinary',
+        ],
+      });
+      expect(compact.map((run) => run.sessionId).sort()).toEqual([
+        'sess-generated-source',
+        'sess-old-prefix',
+        'sess-ordinary',
+      ]);
+      expect(compact.find((run) => run.sessionId === 'sess-old-prefix')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(compact.find((run) => run.sessionId === 'sess-generated-source')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(compact.find((run) => run.sessionId === 'sess-ordinary')).toMatchObject({
+        scheduleId: current.id,
+        associationAllSchedulesStopped: true,
+      });
+      expect(compact.find((run) => run.sessionId === 'sess-ordinary')?.schedulerGeneratedAssociation)
+        .toBeUndefined();
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('keeps only valid association-only bindings in a full sidebar snapshot', async () => {
+    const harness = createStorageHarness();
+    const ordinary = baseSchedule({ id: 'sch-full-ordinary', name: 'full ordinary' });
+    const generated = baseSchedule({ id: 'sch-full-generated', name: 'full generated' });
+    const legacy = baseSchedule({ id: 'sch-full-legacy', name: 'full legacy' });
+    const prefixDisabled = baseSchedule({
+      id: 'sch-full-prefix-disabled',
+      name: 'full prefix disabled',
+    });
+    try {
+      await harness.storage.insert(ordinary);
+      await harness.storage.insert(generated);
+      await harness.storage.insert(legacy);
+      await harness.storage.insert(prefixDisabled);
+      enableLegacySessionFallback(harness, legacy.id);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-full-ordinary-a', 'former ordinary target', 'desktop', 1, 1),
+          ('sess-full-ordinary-b', 'current ordinary target', 'desktop', 2, 2),
+          ('sess-full-generated-a', 'historical generated target', 'scheduler', 3, 3),
+          ('sess-full-generated-b', 'current generated target', 'desktop', 4, 4),
+          ('sess-full-legacy-a', '[Schedule] prior strict key', 'desktop', 5, 5),
+          ('sess-full-legacy-b', 'current legacy target', 'desktop', 6, 6),
+          ('sess-full-prefix-a', '[Schedule] disabled prior key', 'desktop', 7, 7),
+          ('sess-full-prefix-b', 'current prefix target', 'desktop', 8, 8)
+      `);
+
+      const histories = [
+        {
+          scheduleId: ordinary.id,
+          oldSessionId: 'sess-full-ordinary-a',
+          currentSessionId: 'sess-full-ordinary-b',
+        },
+        {
+          scheduleId: generated.id,
+          oldSessionId: 'sess-full-generated-a',
+          currentSessionId: 'sess-full-generated-b',
+        },
+        {
+          scheduleId: legacy.id,
+          oldSessionId: 'sess-full-legacy-a',
+          currentSessionId: 'sess-full-legacy-b',
+        },
+        {
+          scheduleId: prefixDisabled.id,
+          oldSessionId: 'sess-full-prefix-a',
+          currentSessionId: 'sess-full-prefix-b',
+        },
+      ] as const;
+
+      for (const [index, history] of histories.entries()) {
+        harness.db.run(sql`
+          UPDATE schedules
+          SET target_session_id = ${history.oldSessionId}
+          WHERE id = ${history.scheduleId}
+        `);
+        const oldRunId = `run-full-old-${index}`;
+        await harness.storage.insertRun({
+          id: oldRunId,
+          scheduleId: history.scheduleId,
+          sessionId: history.oldSessionId,
+          firedAt: 100 + index,
+          status: 'success',
+        });
+        harness.db.run(sql`
+          UPDATE schedules
+          SET target_session_id = ${history.currentSessionId}
+          WHERE id = ${history.scheduleId}
+        `);
+        const currentRunId = `run-full-current-${index}`;
+        await harness.storage.insertRun({
+          id: currentRunId,
+          scheduleId: history.scheduleId,
+          sessionId: history.currentSessionId,
+          firedAt: 200 + index,
+          status: 'success',
+        });
+        // The 0094 trigger-created bindings survive run-history cleanup and are
+        // the only rows under test in the full association-only branch.
+        await harness.storage.deleteRun(oldRunId);
+        await harness.storage.deleteRun(currentRunId);
+      }
+
+      const associations = (await harness.storage.listSidebarIndexRuns())
+        .filter((run) => run.associationOnly === true)
+        .map((run) => `${run.scheduleId}:${run.sessionId}`)
+        .sort();
+
+      expect(associations).toEqual([
+        'sch-full-generated:sess-full-generated-a',
+        'sch-full-generated:sess-full-generated-b',
+        'sch-full-legacy:sess-full-legacy-a',
+        'sch-full-legacy:sess-full-legacy-b',
+        'sch-full-ordinary:sess-full-ordinary-b',
+        'sch-full-prefix-disabled:sess-full-prefix-b',
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('filters invalid real runs from sidebar snapshots without hiding automation history', async () => {
+    const harness = createStorageHarness();
+    const ordinary = baseSchedule({
+      id: 'sch-run-policy-ordinary',
+      name: 'run policy ordinary',
+      targetSessionId: 'sess-run-policy-ordinary-a',
+    });
+    const generated = baseSchedule({
+      id: 'sch-run-policy-generated',
+      name: 'run policy generated',
+      targetSessionId: 'sess-run-policy-generated-current',
+    });
+    const legacy = baseSchedule({
+      id: 'sch-run-policy-legacy',
+      name: 'run policy legacy',
+      targetSessionId: 'sess-run-policy-legacy-current',
+    });
+    const prefixDisabled = baseSchedule({
+      id: 'sch-run-policy-prefix-disabled',
+      name: 'run policy prefix disabled',
+      targetSessionId: 'sess-run-policy-prefix-disabled-current',
+    });
+    const nullSession = baseSchedule({
+      id: 'sch-run-policy-null-session',
+      name: 'run policy null session',
+    });
+    const rankingStale = baseSchedule({
+      id: 'sch-run-policy-ranking-stale',
+      name: 'run policy ranking stale',
+    });
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-run-policy-ordinary-a', 'former ordinary target', 'desktop', 1, 1),
+          ('sess-run-policy-ordinary-b', 'current ordinary target', 'desktop', 2, 2),
+          ('sess-run-policy-generated', 'generated without legacy title', 'scheduler', 3, 3),
+          ('sess-run-policy-generated-current', 'current generated target', 'desktop', 4, 4),
+          ('sess-run-policy-legacy', '[Schedule] prior strict key', 'desktop', 5, 5),
+          ('sess-run-policy-legacy-current', 'current legacy target', 'desktop', 6, 6),
+          ('sess-run-policy-prefix-disabled', '[Schedule] disabled prior key', 'desktop', 7, 7),
+          ('sess-run-policy-prefix-disabled-current', 'current prefix-disabled target', 'desktop', 8, 8)
+      `);
+      await harness.storage.insert(ordinary);
+      await harness.storage.insert(generated);
+      await harness.storage.insert(legacy);
+      await harness.storage.insert(prefixDisabled);
+      await harness.storage.insert(nullSession);
+      await harness.storage.insert(rankingStale);
+      enableLegacySessionFallback(harness, legacy.id);
+
+      await harness.storage.insertRun({
+        id: 'run-policy-ordinary-a',
+        scheduleId: ordinary.id,
+        sessionId: 'sess-run-policy-ordinary-a',
+        firedAt: 100,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-generated',
+        scheduleId: generated.id,
+        sessionId: 'sess-run-policy-generated',
+        firedAt: 110,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-generated-current',
+        scheduleId: generated.id,
+        sessionId: 'sess-run-policy-generated-current',
+        firedAt: 115,
+        status: 'running',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-legacy',
+        scheduleId: legacy.id,
+        sessionId: 'sess-run-policy-legacy',
+        firedAt: 120,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-prefix-disabled',
+        scheduleId: prefixDisabled.id,
+        sessionId: 'sess-run-policy-prefix-disabled',
+        firedAt: 130,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-null-session',
+        scheduleId: nullSession.id,
+        firedAt: 140,
+        status: 'failed',
+      });
+      harness.db.run(sql`
+        UPDATE schedules SET target_session_id = NULL WHERE id = ${ordinary.id}
+      `);
+
+      await expect(harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: ['sess-run-policy-ordinary-a'],
+      })).resolves.toEqual([]);
+      const freshFullRealRunIds = (await harness.storage.listSidebarIndexRuns())
+        .filter((run) => run.associationOnly !== true)
+        .map((run) => run.runId);
+      expect(freshFullRealRunIds).not.toContain('run-policy-ordinary-a');
+      expect(freshFullRealRunIds).toEqual(expect.arrayContaining([
+        'run-policy-generated',
+        'run-policy-legacy',
+        'run-policy-null-session',
+      ]));
+      expect(freshFullRealRunIds).not.toContain('run-policy-prefix-disabled');
+
+      harness.db.run(sql`
+        UPDATE schedules
+        SET target_session_id = 'sess-run-policy-ordinary-b'
+        WHERE id = ${ordinary.id}
+      `);
+      await harness.storage.insertRun({
+        id: 'run-policy-ordinary-b',
+        scheduleId: ordinary.id,
+        sessionId: 'sess-run-policy-ordinary-b',
+        firedAt: 200,
+        status: 'running',
+      });
+      // This newer invalid run shares B's partition. Filtering must happen before
+      // row_number(), otherwise it would consume B's sole running slot.
+      await harness.storage.insertRun({
+        id: 'run-policy-ranking-stale',
+        scheduleId: rankingStale.id,
+        sessionId: 'sess-run-policy-ordinary-b',
+        firedAt: 999,
+        status: 'running',
+      });
+
+      const requestedSessionIds = [
+        'sess-run-policy-ordinary-a',
+        'sess-run-policy-ordinary-b',
+        'sess-run-policy-generated',
+        'sess-run-policy-generated-current',
+        'sess-run-policy-legacy',
+        'sess-run-policy-prefix-disabled',
+      ];
+      const compactRuns = await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: requestedSessionIds,
+      });
+      const compactRealRunIds = compactRuns
+        .filter((run) => run.associationOnly !== true)
+        .map((run) => run.runId)
+        .sort();
+      expect(compactRealRunIds).toEqual([
+        'run-policy-generated',
+        'run-policy-generated-current',
+        'run-policy-legacy',
+        'run-policy-ordinary-b',
+      ]);
+      expect(compactRuns.find((run) => run.runId === 'run-policy-generated')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(compactRuns.find((run) => run.runId === 'run-policy-legacy')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(
+        compactRuns.find((run) => run.runId === 'run-policy-generated-current')
+          ?.schedulerGeneratedAssociation,
+      ).toBeUndefined();
+      expect(
+        compactRuns.find((run) => run.runId === 'run-policy-ordinary-b')
+          ?.schedulerGeneratedAssociation,
+      ).toBeUndefined();
+
+      const fullRuns = await harness.storage.listSidebarIndexRuns();
+      const fullRealRuns = fullRuns.filter((run) => run.associationOnly !== true);
+      const fullRealRunIds = fullRealRuns
+        .map((run) => run.runId)
+        .sort();
+      expect(fullRealRunIds).toEqual([
+        'run-policy-generated',
+        'run-policy-generated-current',
+        'run-policy-legacy',
+        'run-policy-null-session',
+        'run-policy-ordinary-b',
+      ]);
+      expect(fullRealRuns.every((run) => run.schedulerGeneratedAssociation === undefined))
+        .toBe(true);
+
+      expect((await harness.storage.listRuns(ordinary.id)).map((run) => run.id).sort()).toEqual([
+        'run-policy-ordinary-a',
+        'run-policy-ordinary-b',
+      ]);
     } finally {
       harness.close();
     }
@@ -1292,7 +2001,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         INSERT INTO sessions (
           id, title, source, workspace_kind, working_dir, created_at, updated_at, total_cost_usd
         ) VALUES (
-          'sess-legacy-owner', '[Schedule] weekly summary', 'scheduler', 'project', '/repo',
+          'sess-legacy-owner', '[Schedule] weekly summary', 'desktop', 'project', '/repo',
           ${legacySchedule.createdAt + 1}, ${legacySchedule.createdAt + 2}, 4.25
         )
       `);
@@ -1305,10 +2014,22 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         }),
       ]);
       await expect(harness.storage.listRuns(duplicate.id)).resolves.toEqual([]);
+      await expect(harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: ['sess-legacy-owner'],
+      })).resolves.toEqual([
+        expect.objectContaining({
+          scheduleId: legacySchedule.id,
+          sessionId: 'sess-legacy-owner',
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+        }),
+      ]);
       await expect(harness.storage.listSidebarIndexRuns()).resolves.toEqual([
         expect.objectContaining({
           scheduleId: legacySchedule.id,
           sessionId: 'sess-legacy-owner',
+          associationOnly: true,
         }),
       ]);
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([

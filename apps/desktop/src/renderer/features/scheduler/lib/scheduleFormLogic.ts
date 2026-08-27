@@ -14,6 +14,7 @@
  *   - buildScheduleInput:表单 → CreateScheduleInput(原 toInput 迁入)
  */
 
+import { renderSessionTitleTemplate } from '@cindy/maker-scheduler/session-title-template';
 import type { CreateScheduleInput, ScheduleTemplate, ScheduleWorkspaceKind, ScriptCapability } from '@cindy/maker-scheduler';
 import {
   effectiveSourceIdForModel,
@@ -141,6 +142,8 @@ export interface ScheduleFormState {
    * RunMode 三态中它是 persistent 与 bound 的判别器(bound 恒为 false)。
    */
   persistentSession: boolean;
+  /** Safe title template applied only when a run creates a new task. */
+  sessionTitleTemplate: string;
   /** 静默运行:true → 成功 run 默认不提醒;AI 主动上报时才按通知渠道提醒。 */
   silentWhenIdle: boolean;
   /** 前置检查脚本开关。false = 未启用,保存时 preRunHook 清空(写 NULL)。 */
@@ -152,6 +155,41 @@ export interface ScheduleFormState {
   notifyDesktop: boolean;
   notifyFeishu: boolean;
   notifyWecomGroup?: boolean;
+}
+
+export interface SessionTitleTemplatePreviewInput {
+  form: Pick<
+    ScheduleFormState,
+    'name' | 'timezone' | 'manual' | 'workspaceKind' | 'workingDir' | 'sessionTitleTemplate'
+  >;
+  sampleName: string;
+  locale?: string;
+  scheduledFor?: number;
+  runId?: string;
+}
+
+/**
+ * Render the same fresh-session title context that the scheduler runner will
+ * use. Keeping this pure makes the form preview testable and prevents manual
+ * runs or localized weekday names from drifting from the runtime title.
+ */
+export function renderSessionTitleTemplatePreview({
+  form,
+  sampleName,
+  locale,
+  scheduledFor = Date.now(),
+  runId = '12345678-preview',
+}: SessionTitleTemplatePreviewInput): string {
+  return renderSessionTitleTemplate(form.sessionTitleTemplate, {
+    scheduleName: form.name.trim() || sampleName,
+    timezone: form.timezone.trim() || 'Asia/Shanghai',
+    scheduledFor,
+    source: form.manual ? 'run-now' : 'automatic',
+    workspaceKind: form.workspaceKind,
+    workingDir: form.workingDir,
+    runId,
+    locale,
+  });
 }
 
 /** bound 态"已选绑定但尚未挑会话"的占位 id;validate 用 selectThread 拦截。 */
@@ -518,6 +556,10 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     workspaceKind: form.workspaceKind,
     useWorktree: !isScript && form.workspaceKind === 'project' && form.useWorktree,
     persistentSession: !isScript && form.persistentSession,
+    // Keep the key in full-form updates so clearing the input clears the DB column.
+    // Script mode does not create a session, so the runner ignores this field; preserving it
+    // avoids erasing a user's template when they temporarily switch execution modes.
+    sessionTitleTemplate: form.sessionTitleTemplate.trim() || undefined,
     silentWhenIdle: !isScript && form.silentWhenIdle,
     targetSessionId: !isScript ? (form.targetSessionId.trim() || undefined) : undefined,
     preRunHook: buildPreRunHook(form),

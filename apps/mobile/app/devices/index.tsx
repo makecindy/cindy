@@ -170,12 +170,15 @@ import { useStableValue } from '@/utils/useStableValue';
 import { useMinuteNow } from '@/utils/useMinuteNow';
 import {
   getScheduleIndexInvalidationVersion,
+  getScheduleIndexRequestGeneration,
   invalidateOfflineScheduleIndexFailureFor,
   invalidateRunningSessionScheduleEntries,
   invalidateScheduleIndexForDevice,
+  isScheduleIndexRequestCurrent,
   loadDeviceSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
+  sessionScheduleIndexScopeKey,
 } from '@/session/scheduleIndex';
 import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
 import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
@@ -394,13 +397,17 @@ export default function HomeScreen() {
     // force = 已读类权威信号(read / all-read 推送),必须绕过 TTL 立即重拉——否则「看完
     // 返回首页」这个最常见路径永远命中 30s 内的陈旧缓存,未读徽标清不掉(review P1)。
     const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
-    void loadSessionScheduleIndexThrottled(
+    const scopeKey = sessionScheduleIndexScopeKey(sessionIds);
+    const request = loadSessionScheduleIndexThrottled(
       deviceId,
-      () => loadDeviceSessionScheduleIndex(deviceId, invoke),
-      { force: options?.force },
-    )
+      () => loadDeviceSessionScheduleIndex(deviceId, invoke, sessionIds),
+      { force: options?.force, scopeKey },
+    );
+    const requestGeneration = getScheduleIndexRequestGeneration(deviceId);
+    void request
       .then((nextIndex) => {
         if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
+        if (!isScheduleIndexRequestCurrent(deviceId, scopeKey, requestGeneration)) return;
         setScheduleIndex((current) => replaceSessionScheduleIndexEntries(
           current,
           sessionIds,

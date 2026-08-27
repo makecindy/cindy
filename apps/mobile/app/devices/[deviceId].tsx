@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   RefreshControl,
@@ -89,10 +89,13 @@ import {
 } from '@/scheduler/remoteScheduleEvents';
 import {
   getScheduleIndexInvalidationVersion,
+  getScheduleIndexRequestGeneration,
   invalidateOfflineScheduleIndexFailureFor,
   invalidateRunningSessionScheduleEntries,
+  isScheduleIndexRequestCurrent,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
+  sessionScheduleIndexScopeKey,
 } from '@/session/scheduleIndex';
 import { shouldSuppressRemoteListEmptyState } from '@/session/sessionEmptyState';
 import type { RemoteSession } from '@/session/types';
@@ -160,6 +163,8 @@ export default function DeviceDetailScreen() {
     (s.canonicalDeviceId ?? s.deviceLinkDeviceId) === deviceId
     && (!projectWorkingDir || sessionMatchesProjectDir(s.workingDir, projectWorkingDir))),
   [allSessions, deviceId, projectWorkingDir]);
+  const scheduleScopeSessionIdsRef = useRef<string[]>([]);
+  scheduleScopeSessionIdsRef.current = sessions.map((session) => session.id);
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
   const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
@@ -259,13 +264,22 @@ export default function DeviceDetailScreen() {
       // 节流缓存与首页共用同一 key(deviceId):两页交替浏览时不重复全量拉取(单飞 + TTL,
       // 拥塞背景见 scheduleIndex 注释)。
       const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
-      void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId) }))
+      const sessionIds = (Array.isArray(list) ? list : []).map((session) => session.id);
+      const scopeKey = sessionScheduleIndexScopeKey(sessionIds);
+      const request = loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, {
+        isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
+        sessionIds,
+      }), { scopeKey });
+      const requestGeneration = getScheduleIndexRequestGeneration(deviceId);
+      void request
         .then((nextIndex) => {
           if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
+          if (!isScheduleIndexRequestCurrent(deviceId, scopeKey, requestGeneration)) return;
           setScheduleIndex(nextIndex);
         })
         .catch(() => {
           if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
+          if (!isScheduleIndexRequestCurrent(deviceId, scopeKey, requestGeneration)) return;
           setScheduleIndex(new Map());
         });
       setLastSyncedAt(Date.now());
@@ -305,9 +319,17 @@ export default function DeviceDetailScreen() {
       && scheduleEventSnapshot.unreadClearVersion === 0
     ) return;
     const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
-    void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId) }), { force: true })
+    const sessionIds = scheduleScopeSessionIdsRef.current;
+    const scopeKey = sessionScheduleIndexScopeKey(sessionIds);
+    const request = loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, {
+      isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
+      sessionIds,
+    }), { force: true, scopeKey });
+    const requestGeneration = getScheduleIndexRequestGeneration(deviceId);
+    void request
       .then((nextIndex) => {
         if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
+        if (!isScheduleIndexRequestCurrent(deviceId, scopeKey, requestGeneration)) return;
         setScheduleIndex(nextIndex);
       })
       .catch(() => {

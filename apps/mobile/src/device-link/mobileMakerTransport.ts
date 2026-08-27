@@ -55,6 +55,24 @@ export interface MobileMakerTransportDeps {
   invoke: RemoteInvoke;
 }
 
+export interface MobileScheduleSidebarIndexRun {
+  runId: string;
+  scheduleId: string;
+  sessionId?: string;
+  firedAt?: number;
+  associationOnly?: boolean;
+  schedulerGeneratedAssociation?: boolean;
+  associationAllSchedulesStopped?: boolean;
+  status: RemoteScheduleRun['status'];
+  readAt?: number;
+}
+
+export interface MobileScheduleSidebarIndexSnapshot {
+  runs: MobileScheduleSidebarIndexRun[];
+  /** Compact responses carry an empty array for response-shape compatibility. */
+  inflightRunIds?: string[];
+}
+
 export interface SendOptions {
   messageUuid?: string;
   userName?: string;
@@ -567,6 +585,7 @@ export interface MobileMakerTransport {
     create(input: RemoteScheduleWriteInput): Promise<RemoteSchedule>;
     update(id: string, patch: Partial<RemoteScheduleWriteInput>): Promise<RemoteSchedule>;
     listRuns(id: string, limit?: number): Promise<RemoteScheduleRun[]>;
+    listSidebarIndexRuns(sessionIds?: readonly string[]): Promise<MobileScheduleSidebarIndexSnapshot>;
     runNow(id: string): Promise<void>;
     pause(id: string): Promise<RemoteSchedule>;
     resume(id: string): Promise<RemoteSchedule>;
@@ -775,6 +794,11 @@ export function createMobileMakerTransport({
       create: (input) => call('maker:schedule:create', [input]),
       update: (id, patch) => call('maker:schedule:update', [id, patch]),
       listRuns: (id, limit) => call('maker:schedule:list-runs', [id, limit]),
+      listSidebarIndexRuns: (sessionIds) =>
+        call('maker:schedule:list-sidebar-index-runs', [{
+          compact: true,
+          ...(sessionIds === undefined ? {} : { sessionIds: [...sessionIds] }),
+        }]),
       runNow: (id) => call('maker:schedule:run-now', [id]),
       pause: (id) => call('maker:schedule:pause', [id]),
       resume: (id) => call('maker:schedule:resume', [id]),

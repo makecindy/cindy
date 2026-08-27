@@ -20,8 +20,20 @@ describe('conversationSearch source invariants', () => {
   // renderer 渲染同一个 conversationSearchTitle,两端逐字一致(PR #1031)。
   it('matches session titles through the shared display projection', () => {
     expect(conversationSearchSource).toContain(
-      'fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query)',
+      'conversationSearchTitle(row.title, request.unnamedLabel)',
     );
+  });
+
+  it('uses authoritative valid bindings when an instance title omits the automation name', () => {
+    expect(conversationSearchSource).toContain(
+      'fetchScheduleNamesBySessionId(sessionIdsWithoutTitleMatch)',
+    );
+    expect(conversationSearchSource).toContain(
+      'bestScheduleNameMatch(scheduleNamesBySessionId.get(row.id), query)',
+    );
+    expect(conversationSearchSource).toContain('validScheduleSessionBindingWhere()');
+    expect(conversationSearchSource).toContain('.from(scheduleSessionBindings)');
+    expect(conversationSearchSource).not.toContain('scheduleRuns');
   });
 
   // 返回给 renderer 的 summary 仍是原始存储值:投影只发生在匹配 / 渲染那一刻,

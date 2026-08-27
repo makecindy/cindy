@@ -9,14 +9,20 @@ import { SessionTooltip } from '../SessionTooltip';
 import type { SessionPrRef } from '@/lib/gitContext.types';
 import { prStatusKey } from '@/hooks/useSessionGitContext';
 
-const { prStatuses } = vi.hoisted(() => ({
+const { loadScheduleSidebarIndexRuns, prStatuses } = vi.hoisted(() => ({
+  loadScheduleSidebarIndexRuns: vi.fn(),
   prStatuses: new Map(),
 }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: { count?: number }) =>
+      typeof options?.count === 'number' ? `${key}:${options.count}` : key,
   }),
+}));
+
+vi.mock('@/features/scheduler/lib/scheduleSidebarIndexRuns', () => ({
+  loadScheduleSidebarIndexRuns,
 }));
 
 vi.mock('@/contexts/PrRefsContext', () => ({
@@ -28,6 +34,7 @@ vi.mock('@/contexts/PrRefsContext', () => ({
 
 afterEach(() => {
   cleanup();
+  loadScheduleSidebarIndexRuns.mockReset();
   prStatuses.clear();
 });
 
@@ -159,5 +166,58 @@ describe('SessionTooltip', () => {
       expect(statusLabel.classList.contains('shrink-0')).toBe(true);
       expect(statusLabel.classList.contains('whitespace-nowrap')).toBe(true);
     }
+  });
+
+  it('excludes association-only rows from the displayed automation run count', async () => {
+    loadScheduleSidebarIndexRuns.mockResolvedValue([
+      {
+        runId: 'schedule-session-binding:schedule-1:session-1',
+        scheduleId: 'schedule-1',
+        scheduleName: 'Daily',
+        scheduleStatus: 'active',
+        sessionId: 'session-1',
+        firedAt: 100,
+        associationOnly: true,
+        status: 'success',
+        readAt: 100,
+      },
+      {
+        runId: 'run-1',
+        scheduleId: 'schedule-1',
+        scheduleName: 'Daily',
+        scheduleStatus: 'active',
+        sessionId: 'session-2',
+        firedAt: 200,
+        status: 'success',
+        readAt: 200,
+      },
+      {
+        runId: 'run-2',
+        scheduleId: 'schedule-1',
+        scheduleName: 'Daily',
+        scheduleStatus: 'active',
+        sessionId: 'session-3',
+        firedAt: 300,
+        status: 'success',
+        readAt: 300,
+      },
+    ]);
+
+    render(
+      createElement(
+        SessionTooltip,
+        {
+          sessionId: 'session-1',
+          prRefs: [],
+          isAutomationSession: true,
+        } as unknown as ComponentProps<typeof SessionTooltip>,
+        createElement('div', null, 'Automation row'),
+      ),
+    );
+
+    fireEvent.pointerMove(screen.getByText('Automation row'), { pointerType: 'mouse' });
+
+    expect((await screen.findAllByText('ccAgent.sidebar.automationGroup.runCount:2')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('ccAgent.sidebar.automationGroup.runCount:3')).toBeNull();
   });
 });

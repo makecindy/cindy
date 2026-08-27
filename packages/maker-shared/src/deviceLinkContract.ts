@@ -343,6 +343,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:schedule:create',
   'maker:schedule:update',
   'maker:schedule:list-runs',
+  'maker:schedule:list-sidebar-index-runs',
   'maker:schedule:run-now',
   'maker:schedule:pause',
   'maker:schedule:resume',

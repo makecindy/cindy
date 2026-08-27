@@ -39,6 +39,8 @@ export interface RemoteScheduleWriteInput {
   useWorktree: boolean;
   targetSessionId?: string;
   persistentSession?: boolean;
+  /** null clears the saved title template across the JSON device-link boundary. */
+  sessionTitleTemplate?: string | null;
   silentWhenIdle?: boolean;
   notify: RemoteScheduleNotifyConfig;
 }
@@ -71,6 +73,7 @@ export interface RemoteScheduleTemplate {
   fastMode?: boolean;
   useWorktree?: boolean;
   persistentSession?: boolean;
+  sessionTitleTemplate?: string;
   notify?: RemoteScheduleNotifyConfig;
   parameters?: RemoteTemplateParameter[];
   createdAt?: number;
@@ -109,6 +112,7 @@ export interface RemoteSchedule {
   useWorktree?: boolean;
   targetSessionId?: string;
   persistentSession?: boolean;
+  sessionTitleTemplate?: string;
   silentWhenIdle?: boolean;
   notify?: RemoteScheduleNotifyConfig;
   status: RemoteScheduleStatus;
@@ -124,6 +128,12 @@ export interface RemoteScheduleRun {
   id: string;
   scheduleId: string;
   sessionId?: string;
+  /** Compact sidebar snapshot row that only records session ownership. */
+  associationOnly?: boolean;
+  /** Trusted scheduler/strict-legacy session origin that may survive a later target rebind. */
+  schedulerGeneratedAssociation?: boolean;
+  /** Aggregate binding status retained when compact emits one association per session. */
+  associationAllSchedulesStopped?: boolean;
   firedAt?: RemoteTimestamp;
   finishedAt?: RemoteTimestamp;
   status: RemoteScheduleRunStatus;

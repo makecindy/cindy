@@ -71,6 +71,7 @@ describe('mobile schedule form model', () => {
     const draft = createMobileScheduleDraft(schedule({
       targetSessionId: 'session-1',
       persistentSession: true,
+      sessionTitleTemplate: '{isoWeek} {scheduleName}',
       silentWhenIdle: true,
       intervalMs: 3_600_000,
       notify: { desktop: false, feishu: true },
@@ -82,6 +83,7 @@ describe('mobile schedule form model', () => {
       name: '更新后的巡检',
       targetSessionId: 'session-1',
       persistentSession: true,
+      sessionTitleTemplate: '{isoWeek} {scheduleName}',
       silentWhenIdle: true,
       notify: { desktop: false, feishu: true },
     });

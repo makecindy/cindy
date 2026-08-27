@@ -74,6 +74,7 @@ function toDesktopScheduleFormState(schedule: RemoteSchedule): ScheduleFormState
     useWorktree: !!schedule.useWorktree,
     targetSessionId: schedule.targetSessionId ?? '',
     persistentSession: !!schedule.persistentSession,
+    sessionTitleTemplate: schedule.sessionTitleTemplate ?? '',
     // 与共享侧 createMobileScheduleDraft 同口径(scheduleForm.ts),保证 parity 取值一致
     silentWhenIdle: !!schedule.silentWhenIdle,
     // RemoteSchedule 尚未透出 preRunHook,parity fixture 取桌面关闭默认

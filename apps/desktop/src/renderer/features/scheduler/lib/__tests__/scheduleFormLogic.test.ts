@@ -34,6 +34,7 @@ import {
   needsBoundSessionGenerationRouteResolution,
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
+  renderSessionTitleTemplatePreview,
   resolveTemplateAgentFields,
   sessionAgentKindToScheduleAgentKind,
   shouldFollowBoundSessionGenerationRoute,
@@ -324,6 +325,7 @@ function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState
     workspaceKind: 'project',
     workingDir: '/repo/project',
     useWorktree: true,
+    sessionTitleTemplate: '',
     targetSessionId: '',
     persistentSession: false,
     silentWhenIdle: false,
@@ -338,6 +340,26 @@ function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState
 
 const hasKey = (obj: object, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(obj, key);
+
+describe('session title template preview', () => {
+  it('uses the manual trigger value that Run now sends to the runner', () => {
+    expect(renderSessionTitleTemplatePreview({
+      form: makeForm({ manual: true, sessionTitleTemplate: '{trigger}' }),
+      sampleName: 'sample',
+      locale: 'en-US',
+      scheduledFor: Date.UTC(2026, 7, 10, 1, 0),
+    })).toBe('manual');
+  });
+
+  it('uses the resolved UI locale for weekday titles', () => {
+    expect(renderSessionTitleTemplatePreview({
+      form: makeForm({ sessionTitleTemplate: '{weekday}' }),
+      sampleName: 'sample',
+      locale: 'zh-CN',
+      scheduledFor: Date.UTC(2026, 7, 10, 1, 0),
+    })).toBe('周一');
+  });
+});
 
 describe('schedule timing mode conversion', () => {
   it('preserves the authoritative interval when cronExpr is stale', () => {
@@ -485,6 +507,15 @@ describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create
   it('透传静默运行开关', () => {
     expect(buildScheduleInput(makeForm()).silentWhenIdle).toBe(false);
     expect(buildScheduleInput(makeForm({ silentWhenIdle: true })).silentWhenIdle).toBe(true);
+  });
+
+  it('trims and clears the new-session title template with an explicit key', () => {
+    expect(
+      buildScheduleInput(makeForm({ sessionTitleTemplate: '  {date} report  ' })),
+    ).toMatchObject({ sessionTitleTemplate: '{date} report' });
+    const cleared = buildScheduleInput(makeForm({ sessionTitleTemplate: '   ' }));
+    expect(hasKey(cleared, 'sessionTitleTemplate')).toBe(true);
+    expect(cleared.sessionTitleTemplate).toBeUndefined();
   });
 });
 

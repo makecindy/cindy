@@ -2209,8 +2209,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const stackOtherDir = path.join(workingDir, 'stack-other');
         const postCdLink = path.join(subDir, 'link');
         const escapedLinkName = 'innocent\\q';
+        const escapedLinkPath = path.join(workingDir, escapedLinkName);
         const cdRedirectLinkName = 'cd-innocent';
         mkdirSync(path.dirname(secretPath), { recursive: true });
+        mkdirSync(path.dirname(escapedLinkPath), { recursive: true });
         mkdirSync(subDir);
         mkdirSync(stackOtherDir);
         writeFileSync(secretPath, 'FAKE_REDIRECT_DOTENV_SECRET=must-not-leak');
@@ -2219,7 +2221,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         symlinkSync('../secrets/.env', postCdLink);
         symlinkSync(ordinaryPath, path.join(workingDir, 'link'));
         symlinkSync(ordinaryPath, path.join(stackOtherDir, 'link'));
-        symlinkSync(secretPath, path.join(workingDir, escapedLinkName));
+        symlinkSync(secretPath, escapedLinkPath);
         symlinkSync(secretPath, path.join(workingDir, cdRedirectLinkName));
         symlinkSync(ordinaryPath, path.join(subDir, cdRedirectLinkName));
         symlinkSync(ordinaryPath, path.join(subDir, 'ordinary'));

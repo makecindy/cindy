@@ -68,31 +68,7 @@ import {
   buildPluginScheduleFormOverrides,
   readPluginScheduleCreateIntent,
 } from './lib/pluginScheduleCreateIntent';
-
-function scheduleToUserCreateInput(
-  schedule: Schedule,
-  overrides: Partial<CreateScheduleInput> = {},
-): CreateScheduleInput {
-  return {
-    name: schedule.name,
-    prompt: schedule.prompt,
-    kind: schedule.kind,
-    cronExpr: schedule.cronExpr,
-    timezone: schedule.timezone,
-    recurring: schedule.recurring,
-    manual: schedule.manual,
-    intervalMs: schedule.intervalMs,
-    agentKind: schedule.agentKind,
-    model: schedule.model,
-    effort: schedule.effort,
-    workspaceKind: schedule.workspaceKind,
-    workingDir: schedule.workingDir,
-    useWorktree: schedule.useWorktree,
-    persistentSession: schedule.persistentSession,
-    notify: schedule.notify,
-    ...overrides,
-  };
-}
+import { scheduleToUserCreateInput } from './lib/scheduleClone';
 
 /**
  * 排序：active 与 expired 同 rank（一次性已跑完的任务不再单独沉底，

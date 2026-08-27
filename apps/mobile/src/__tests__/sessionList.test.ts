@@ -264,15 +264,16 @@ describe('sessionList', () => {
       ]],
     ]));
 
+    // 两个实例标题模拟 `{date} deploy {runId:short}`，Mobile 仍应使用 scheduleId 归组。
     const sections = buildRemoteSessionSections([
       session('old', {
         source: 'scheduler',
-        title: '[Schedule] Old run',
+        title: '2026-08-10 deploy abcdefgh',
         updatedAt: '2026-01-01T00:02:00.000Z',
       }),
       session('running', {
         source: 'scheduler',
-        title: '[Schedule] Running run',
+        title: '2026-08-11 deploy 12345678',
         updatedAt: '2026-01-01T00:06:00.000Z',
       }),
       session('normal', { title: 'Normal', updatedAt: '2026-01-01T00:04:00.000Z' }),
@@ -575,9 +576,14 @@ describe('sessionList', () => {
       ['sched-1', [run('run-1', 'sched-1', { sessionId: 'automation-hit' })]],
     ]));
     expect(buildRemoteSessionSections([
-      session('automation-hit', { title: 'Other', source: 'scheduler' }),
+      session('automation-hit', { title: '2026-08-10 deploy abcdefgh', source: 'scheduler' }),
       session('automation-miss', { title: 'Other' }),
     ], Date.now(), { scheduleIndex, searchQuery: '巡检' })
+      .flatMap((section) => section.data.map((item) => item.session.id))).toEqual(['automation-hit']);
+    expect(buildRemoteSessionSections([
+      session('automation-hit', { title: '2026-08-10 deploy abcdefgh', source: 'scheduler' }),
+      session('automation-miss', { title: 'Other' }),
+    ], Date.now(), { scheduleIndex, searchQuery: 'abcdefgh' })
       .flatMap((section) => section.data.map((item) => item.session.id))).toEqual(['automation-hit']);
   });
 

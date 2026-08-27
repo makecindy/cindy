@@ -87,6 +87,13 @@ function indexExists(db: Database.Database, indexName: string): boolean {
   );
 }
 
+function triggerExists(db: Database.Database, triggerName: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?").get(triggerName) !==
+    undefined
+  );
+}
+
 function columnNames(db: Database.Database, tableName: string): string[] {
   return db
     .prepare(`PRAGMA table_info('${tableName}')`)
@@ -134,6 +141,12 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'wechat_inbox')).toBe(true);
       expect(tableExists(db, 'wechat_outbox')).toBe(true);
       expect(tableExists(db, 'wechat_file_attachments')).toBe(true);
+      expect(columnNames(db, 'schedules')).toContain('session_title_template');
+      expect(indexExists(db, 'idx_schedule_runs_session_schedule')).toBe(true);
+      expect(tableExists(db, 'schedule_session_bindings')).toBe(true);
+      expect(indexExists(db, 'idx_schedule_session_bindings_session_schedule')).toBe(true);
+      expect(triggerExists(db, 'schedule_runs_bind_session_after_insert')).toBe(true);
+      expect(triggerExists(db, 'schedule_runs_bind_session_after_update')).toBe(true);
     } finally {
       cleanup();
     }
@@ -170,6 +183,7 @@ describeMigrationReplay('migration replay', () => {
       expect(indexExists(db, 'uniq_active_team_per_lead')).toBe(true);
       expect(indexExists(db, 'uniq_orca_workers_focused_per_team')).toBe(true);
       expect(indexExists(db, 'idx_orca_workers_workflow_id')).toBe(false);
+      expect(indexExists(db, 'idx_schedule_runs_session_schedule')).toBe(true);
       expect(columnNames(db, 'schedules')).toContain('fast_mode');
     } finally {
       cleanup();
@@ -293,6 +307,7 @@ describeMigrationReplay('migration replay', () => {
           'cost_attribution',
         ]),
       );
+      expect(indexExists(db, 'idx_schedule_runs_session_schedule')).toBe(false);
       // fixture 故意不建 schedules(最小库 + 各迁移自带守卫的设计):0084 的
       // 裸 ALTER 靠 runner 的冻结缺陷守卫跳过,迁移链必须能走完而不是中途炸掉。
       expect(tableExists(db, 'schedules')).toBe(false);

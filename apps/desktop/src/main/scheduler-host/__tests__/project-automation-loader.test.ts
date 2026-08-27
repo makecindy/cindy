@@ -86,3 +86,27 @@ describe('project automation provider reconciliation', () => {
     ).toBe(true);
   });
 });
+
+describe('project automation session title template reconciliation', () => {
+  it('round-trips the config and detects set and clear changes', () => {
+    const config = projectConfig({ sessionTitleTemplate: ' {date} Daily ' });
+    const input = __testing.scheduleConfigToUpdateInput(config, workingDir);
+    expect(input.sessionTitleTemplate).toBe('{date} Daily');
+    expect(
+      schedulesDiffer(projectSchedule({ desktop: true, feishu: false }), config, workingDir),
+    ).toBe(true);
+
+    const configured = {
+      ...projectSchedule({ desktop: true, feishu: false }),
+      sessionTitleTemplate: '{date} Daily',
+    };
+    expect(schedulesDiffer(configured, projectConfig(), workingDir)).toBe(true);
+    expect(
+      schedulesDiffer(
+        configured,
+        projectConfig({ sessionTitleTemplate: '{date} Daily' }),
+        workingDir,
+      ),
+    ).toBe(false);
+  });
+});

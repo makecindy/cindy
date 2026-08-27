@@ -65,6 +65,8 @@ export interface MobileScheduleDraft {
   notifyWecomGroup?: boolean;
   targetSessionId: string;
   persistentSession: boolean;
+  /** Hidden on mobile, but round-tripped so editing another field cannot erase it. */
+  sessionTitleTemplate: string;
   silentWhenIdle: boolean;
 }
 
@@ -154,6 +156,7 @@ export function createMobileScheduleDraft(
       notifyFeishu: false,
       targetSessionId: '',
       persistentSession: false,
+      sessionTitleTemplate: '',
       silentWhenIdle: false,
     };
   }
@@ -181,6 +184,7 @@ export function createMobileScheduleDraft(
     ...(schedule.notify?.wecomGroup === true ? { notifyWecomGroup: true } : {}),
     targetSessionId: schedule.targetSessionId ?? '',
     persistentSession: !!schedule.persistentSession,
+    sessionTitleTemplate: schedule.sessionTitleTemplate ?? '',
     silentWhenIdle: !!schedule.silentWhenIdle,
   };
 }
@@ -226,6 +230,7 @@ export function applyTemplateToMobileScheduleDraft(
     workspaceKind: template.useWorktree ? 'project' : draft.workspaceKind,
     targetSessionId: template.useWorktree ? '' : draft.targetSessionId,
     persistentSession: template.persistentSession ?? draft.persistentSession,
+    sessionTitleTemplate: template.sessionTitleTemplate ?? draft.sessionTitleTemplate,
     notifyDesktop: template.notify?.desktop ?? draft.notifyDesktop,
     notifyFeishu: template.notify?.feishu ?? draft.notifyFeishu,
     ...((template.notify?.wecomGroup ?? draft.notifyWecomGroup) !== undefined
@@ -395,6 +400,7 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,
     persistentSession: draft.persistentSession,
+    sessionTitleTemplate: draft.sessionTitleTemplate.trim() || null,
     targetSessionId: targetSessionId || undefined,
     silentWhenIdle: draft.silentWhenIdle,
     notify: {

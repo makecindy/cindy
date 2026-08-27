@@ -16,7 +16,13 @@ import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
-import { messages, sessions } from './schema.js';
+import {
+  messages,
+  scheduleSessionBindings,
+  schedules,
+  sessions,
+} from './schema.js';
+import { validScheduleSessionBindingWhere } from './scheduleSessionBindingPolicy.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import {
@@ -31,6 +37,8 @@ const MAX_LIMIT = 50;
 const CONTENT_PAGE_LIMIT = 50;
 const CONTENT_MAX_PAGES = 3;
 const CONTENT_POOL_LIMIT = CONTENT_PAGE_LIMIT * CONTENT_MAX_PAGES;
+// SQLite 默认只允许 999 个绑定参数；会话搜索不分页，按批查询关联的 schedule 名称。
+const SCHEDULE_NAME_LOOKUP_CHUNK_SIZE = 500;
 const SEARCH_ROLES = ['user', 'assistant', 'ask_user', 'plan_review'] as const;
 const ACTIVE_STATUSES = ['active'] as const;
 const VISIBLE_STATUSES = ['active', 'archived'] as const;
@@ -88,19 +96,43 @@ export async function searchConversations(
     sessionRows.map((row) => [row.id, sessionSummaryFromRow(row, 0)]),
   );
   const allowedSessionIds = sessionRows.map((row) => row.id);
+  const displayTitleMatches = new Map<string, ReturnType<typeof fuzzyTitleMatch>>();
+  const sessionIdsWithoutTitleMatch: string[] = [];
+  for (const row of sessionRows) {
+    // 匹配与命中下标都按**界面上显示的**标题算:未起名会话行上显示的是本地化兜底
+    // 文案,拿原始哨兵匹配会两头错位 —— 搜可见文案一条都搜不到,搜 "New Maker" 反而
+    // 命中一堆不显示这个词的行,高亮下标也会落在别的字上(PR #1031 review P1)。
+    // renderer 渲染时调同一个 conversationSearchTitle,两端逐字一致。
+    const displayTitleMatch = fuzzyTitleMatch(
+      conversationSearchTitle(row.title, request.unnamedLabel),
+      query,
+    );
+    displayTitleMatches.set(row.id, displayTitleMatch);
+    if (!displayTitleMatch) sessionIdsWithoutTitleMatch.push(row.id);
+  }
+  // 大多数搜索会直接命中实例标题；只有未命中的会话才需要查自动化关联。
+  const scheduleNamesBySessionId = await fetchScheduleNamesBySessionId(sessionIdsWithoutTitleMatch);
   const activityCutoff = cutoffForLastActivity(filters.lastActivity);
 
   const titleMatches = sessionRows
     .map((row, index) => {
-      // 匹配与命中下标都按**界面上显示的**标题算:未起名会话行上显示的是本地化兜底
-      // 文案,拿原始哨兵匹配会两头错位 —— 搜可见文案一条都搜不到,搜 "New Maker" 反而
-      // 命中一堆不显示这个词的行,高亮下标也会落在别的字上(PR #1031 review P1)。
-      // renderer 渲染时调同一个 conversationSearchTitle,两端逐字一致。
-      const match = fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query);
+      const displayTitleMatch = displayTitleMatches.get(row.id) ?? null;
+      // 自定义实例标题可以完全不含自动化名称。迁移 0094 已将历史关联回填到
+      // 持久绑定表，并由 trigger 持续维护；这里不扫描 run 历史，也不按同名猜测。
+      const scheduleNameMatch = displayTitleMatch
+        ? null
+        : bestScheduleNameMatch(scheduleNamesBySessionId.get(row.id), query);
+      const match = displayTitleMatch ?? scheduleNameMatch;
       if (!match) return null;
       const session = sessionSummaries.get(row.id);
       if (!session) return null;
-      return { session, score: match.score, indices: match.indices, index };
+      return {
+        session,
+        score: match.score,
+        // 高亮只能标注实际显示的实例标题；按自动化名称命中时返回空下标。
+        indices: displayTitleMatch?.indices ?? [],
+        index,
+      };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null)
     .sort((a, b) => b.score - a.score || activityMs(b.session) - activityMs(a.session) || a.index - b.index);
@@ -314,6 +346,47 @@ async function listSearchableSessions(filters: NormalizedConversationSearchFilte
     .orderBy(desc(sessions.updatedAt));
 }
 
+async function fetchScheduleNamesBySessionId(sessionIds: string[]): Promise<Map<string, string[]>> {
+  const namesBySessionId = new Map<string, string[]>();
+  if (sessionIds.length === 0) return namesBySessionId;
+  const db = getDbClient().drizzle;
+
+  for (let offset = 0; offset < sessionIds.length; offset += SCHEDULE_NAME_LOOKUP_CHUNK_SIZE) {
+    const chunk = sessionIds.slice(offset, offset + SCHEDULE_NAME_LOOKUP_CHUNK_SIZE);
+    const bindingRows = await db
+      .select({
+        sessionId: scheduleSessionBindings.sessionId,
+        scheduleName: schedules.name,
+      })
+      .from(scheduleSessionBindings)
+      .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id))
+      .innerJoin(sessions, eq(scheduleSessionBindings.sessionId, sessions.id))
+      .where(and(
+        inArray(scheduleSessionBindings.sessionId, chunk),
+        validScheduleSessionBindingWhere(),
+      ));
+
+    for (const row of bindingRows) {
+      const names = namesBySessionId.get(row.sessionId) ?? [];
+      if (!names.includes(row.scheduleName)) names.push(row.scheduleName);
+      namesBySessionId.set(row.sessionId, names);
+    }
+  }
+
+  return namesBySessionId;
+}
+
+function bestScheduleNameMatch(
+  scheduleNames: readonly string[] | undefined,
+  query: string,
+): ReturnType<typeof fuzzyTitleMatch> {
+  let best: ReturnType<typeof fuzzyTitleMatch> = null;
+  for (const scheduleName of scheduleNames ?? []) {
+    const match = fuzzyTitleMatch(scheduleName, query);
+    if (match && (!best || match.score > best.score)) best = match;
+  }
+  return best;
+}
 function statusCondition(status: ConversationSearchStatusFilter) {
   if (status === 'active') return eq(sessions.status, 'active');
   if (status === 'archived') return eq(sessions.status, 'archived');

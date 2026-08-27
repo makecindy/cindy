@@ -265,7 +265,13 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     // schedule_create
     const created = await h.client.callTool({
       name: 'call_tool',
-      arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
+      arguments: {
+        name: 'schedule_create',
+        args: {
+          ...baseCreate,
+          sessionTitleTemplate: '  {date} {scheduleName}  ',
+        } as unknown as Record<string, unknown>,
+      },
     });
     const { envelope, isError } = parseToolResult(
       created as { content: unknown[]; isError?: boolean },
@@ -278,6 +284,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(createdData.name).toBe('phase5-smoke');
     expect(createdData.cronExpr).toBe('0 9 * * *');
     expect(createdData.notify).toEqual({ desktop: true, feishu: false });
+    expect(createdData.sessionTitleTemplate).toBe('{date} {scheduleName}');
     expect(typeof createdData.nextFireAt).toBe('number');
 
     // schedule_list — verify the same payload shape as scheduler.list().
@@ -1097,6 +1104,21 @@ describe('schedule_update — partial 语义的 JSON 边界翻译', () => {
     expect(env.ok).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(updated.patch ?? {}, 'intervalMs')).toBe(true);
     expect(updated.patch?.intervalMs).toBeUndefined();
+  });
+
+  it('sessionTitleTemplate is a true partial field and null clears it across JSON', async () => {
+    const omitted = setup({ sessionTitleTemplate: '{date}' });
+    expect((await callUpdate(omitted.registry, { prompt: 'new prompt' })).ok).toBe(true);
+    expect(
+      Object.prototype.hasOwnProperty.call(omitted.updated.patch ?? {}, 'sessionTitleTemplate'),
+    ).toBe(false);
+
+    const cleared = setup({ sessionTitleTemplate: '{date}' });
+    expect((await callUpdate(cleared.registry, { sessionTitleTemplate: null })).ok).toBe(true);
+    expect(
+      Object.prototype.hasOwnProperty.call(cleared.updated.patch ?? {}, 'sessionTitleTemplate'),
+    ).toBe(true);
+    expect(cleared.updated.patch?.sessionTitleTemplate).toBeUndefined();
   });
 
   it('preRunHook 只改 command → 沿用任务现有 timeoutMs,不再静默清成不限时', async () => {
