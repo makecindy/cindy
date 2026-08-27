@@ -22,6 +22,8 @@ export type SendToSessionCallback = (params: {
   targetSessionId?: string;
   message: string;
   dispatcherSessionId?: string;
+  /** jump 模式可选：同一 dispatcher 内稳定待办键；目标忙时覆盖该键尚未消费的旧消息。 */
+  queueKey?: string;
   title?: string;
   /** create 模式可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
   useWorktree?: boolean;
@@ -45,6 +47,8 @@ export type SendToSessionCallback = (params: {
       targetLastUserSendAt: string | null;
       /** jump 进入队列时的可寻址句柄，可用于本人编辑/撤回。 */
       queuedMessageId?: string;
+      /** jump 排队时，本次是新入队还是覆盖同键待办。 */
+      queueAction?: "enqueued" | "replaced";
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
       worktreePath?: string | null;
       model?: string;
@@ -80,7 +84,7 @@ const DESCRIPTION = [
   '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
-  "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
+  "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。可传 queue_key 给同一 dispatcher 的同一待办建立单槽：旧消息尚未消费时原位覆盖，返回 queue_action=replaced；否则新入队并返回 enqueued。",
   "- 不传 target_session_id → create:为业务对象新建一个专属 session。workingDir / Agent / model / effort / Fast 缺省继承当前 session；可用 agent_kind / model / effort / fast 显式覆盖目标执行配置。host 会在创建前按目标 Agent 的模型能力校验，非法组合结构化失败，不静默换模型。wake_kind 返 created,并回传 target_session_id 供调用方建立绑定。",
   "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。完全不传这些字段时保持原有 dispatcher 继承行为。jump 模式忽略这些字段，不修改既有 session。",
@@ -135,6 +139,14 @@ export function registerSendToSessionTool(
         .describe(
           "要 handoff 给目标 session 的消息正文(create 模式下作为新 session 的首条消息)。",
         ),
+      queue_key: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          "仅 jump 模式可选:同一 dispatcher session 内的稳定待办键。目标繁忙时，同键且尚未消费的排队消息会原位更新，不新增一条；适合 PR 跟进等只需保留最新状态的任务。create 模式拒绝此字段。",
+        ),
       title: z
         .string()
         .optional()
@@ -182,6 +194,7 @@ export function registerSendToSessionTool(
     handler: async ({
       target_session_id,
       message,
+      queue_key,
       title,
       use_worktree,
       working_dir,
@@ -190,11 +203,15 @@ export function registerSendToSessionTool(
       effort,
       fast,
     }) => {
+      if (queue_key !== undefined && target_session_id === undefined) {
+        return errorPayload("INVALID_ARGS", "queue_key 仅支持 jump 模式，必须同时提供 target_session_id");
+      }
       const ctx = deps.getSessionContext();
       const result = await deps.sendToSession({
         targetSessionId: target_session_id,
         message,
         dispatcherSessionId: ctx.sessionId,
+        ...(queue_key !== undefined ? { queueKey: queue_key } : {}),
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,
@@ -221,6 +238,7 @@ export function registerSendToSessionTool(
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
+        ...(result.queueAction ? { queue_action: result.queueAction } : {}),
         worktree_path: result.worktreePath ?? null,
         ...(result.model !== undefined ? { model: result.model } : {}),
         ...(result.effort !== undefined ? { effort: result.effort } : {}),

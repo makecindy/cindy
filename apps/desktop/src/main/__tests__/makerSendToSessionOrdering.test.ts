@@ -1051,6 +1051,20 @@ function extractSendToSessionSource(): string {
   return block;
 }
 
+describe('send_to_session stable queue slot', () => {
+  it('reuses the pending message identity for the same dispatcher and queue key', () => {
+    const block = extractBetween(
+      source,
+      'async function enqueueSendToSessionMessage',
+      'async function buildSessionControlInputItem',
+    );
+    expect(block).toContain('findPendingSessionQueueItemByStableKey(');
+    expect(block).toContain('if (!inputCoordinator.isQueueRestored(params.targetSessionId))');
+    expect(block).toContain("clientId: existing.clientId");
+    expect(block).toContain("queueAction: 'replaced'");
+  });
+});
+
 function extractOrcaTeamServiceSendToWorkerSource(): string {
   const block = orcaTeamServiceSource.match(
     /async function sendToWorker\([\s\S]*?\): Promise<SendToWorkerResult> \{[\s\S]*?async function interruptWorker/,

@@ -319,6 +319,7 @@ export function rebuildSessionQueueItem(
 export function sessionQueueOriginForDispatcher(params: {
   dispatcherSessionId?: string;
   message: string;
+  queueKey?: string;
   explicitOrigin?: AgentInputQueuedMessage['origin'];
 }): AgentInputQueuedMessage['origin'] | undefined {
   if (params.explicitOrigin) return params.explicitOrigin;
@@ -326,6 +327,20 @@ export function sessionQueueOriginForDispatcher(params: {
   return {
     kind: 'session',
     senderSessionId: params.dispatcherSessionId,
+    ...(params.queueKey ? { queueKey: params.queueKey } : {}),
     displayText: params.message,
   };
+}
+
+export function findPendingSessionQueueItemByStableKey(
+  pendingQueue: readonly AgentInputQueuedMessage[],
+  desiredOrigin: Extract<AgentInputQueuedMessage['origin'], { kind: 'session' }>,
+): AgentInputQueuedMessage | undefined {
+  if (!desiredOrigin.queueKey) return undefined;
+  return pendingQueue.find(
+    (item) =>
+      item.origin?.kind === 'session' &&
+      item.origin.senderSessionId === desiredOrigin.senderSessionId &&
+      item.origin.queueKey === desiredOrigin.queueKey,
+  );
 }

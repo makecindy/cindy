@@ -4,6 +4,7 @@ import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activi
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
   createSessionControlService,
+  findPendingSessionQueueItemByStableKey,
   rebuildSessionQueueItem,
   sessionQueueOriginForDispatcher,
 } from '../sessionControlService.js';
@@ -154,10 +155,12 @@ describe('session control domain service', () => {
       sessionQueueOriginForDispatcher({
         dispatcherSessionId: 'caller',
         message: 'follow-up',
+        queueKey: 'pr-followup:repo#1',
       }),
     ).toEqual({
       kind: 'session',
       senderSessionId: 'caller',
+      queueKey: 'pr-followup:repo#1',
       displayText: 'follow-up',
     });
     const explicit = { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'nightly' };
@@ -168,6 +171,40 @@ describe('session control domain service', () => {
         explicitOrigin: explicit,
       }),
     ).toBe(explicit);
+  });
+
+  it('matches a stable queue slot only within the same dispatcher and key', () => {
+    const wanted = item({
+      kind: 'session',
+      senderSessionId: 'caller',
+      queueKey: 'pr-followup:repo#1',
+      displayText: 'old',
+    });
+    const otherSender = item({
+      kind: 'session',
+      senderSessionId: 'other',
+      queueKey: 'pr-followup:repo#1',
+      displayText: 'other sender',
+    });
+    otherSender.clientId = 'queued-other';
+    otherSender.chatMessage.clientId = 'queued-other';
+    const otherKey = item({
+      kind: 'session',
+      senderSessionId: 'caller',
+      queueKey: 'pr-followup:repo#2',
+      displayText: 'other key',
+    });
+    otherKey.clientId = 'queued-key';
+    otherKey.chatMessage.clientId = 'queued-key';
+
+    expect(
+      findPendingSessionQueueItemByStableKey([otherSender, otherKey, wanted], {
+        kind: 'session',
+        senderSessionId: 'caller',
+        queueKey: 'pr-followup:repo#1',
+        displayText: 'new',
+      }),
+    ).toBe(wanted);
   });
 
   it('shares queue lifecycle while enforcing sender ownership and preserving identity', async () => {

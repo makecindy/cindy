@@ -165,6 +165,7 @@ import {
 } from './sessionQueueInspection.js';
 import {
   createSessionControlService,
+  findPendingSessionQueueItemByStableKey,
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
@@ -1600,6 +1601,8 @@ type SendToSessionInternalResult =
       targetLastUserSendAt: string | null;
       /** jump 排队时的可寻址句柄；直发 / create 时省略。 */
       queuedMessageId?: string;
+      /** jump 排队时，本次是新入队还是覆盖同键待办。 */
+      queueAction?: 'enqueued' | 'replaced';
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
       worktreePath?: string | null;
       model?: string;
@@ -1754,6 +1757,8 @@ interface OrcaCollabService {
     message: string;
     /** 调用方(dispatcher)自身 session id,create 分支据此继承配置;未绑定 session ctx 时为 undefined。 */
     dispatcherSessionId?: string;
+    /** jump 模式可选：同一 dispatcher 内稳定待办键；目标忙时覆盖该键尚未消费的旧消息。 */
+    queueKey?: string;
     /** create 分支可选标题;省略则用消息首行兜底。 */
     title?: string;
     /** create 分支可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
@@ -9087,6 +9092,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     persistedContent?: string;
     clientId?: string;
     dispatcherSessionId?: string;
+    queueKey?: string;
     title?: string;
     useWorktree?: boolean;
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
@@ -9107,6 +9113,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       persistedContent,
       clientId: explicitClientId,
       dispatcherSessionId,
+      queueKey,
       title,
       useWorktree,
       workingDir: workingDirOverride,
@@ -9121,10 +9128,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const queuedOrigin = sessionQueueOriginForDispatcher({
       dispatcherSessionId,
       message,
+      queueKey,
       explicitOrigin: origin,
     });
     if (!message) {
       return { ok: false, errorCode: 'INVALID_ARGS', message: 'message required' };
+    }
+    if (
+      queueKey &&
+      (
+        !targetSessionId ||
+        !dispatcherSessionId ||
+        origin !== undefined ||
+        onAccepted !== undefined ||
+        onAcceptedRollback !== undefined ||
+        onAcceptedCommit !== undefined
+      )
+    ) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message:
+          'queueKey requires jump mode with a dispatcher session, no explicit origin, and no accepted callbacks',
+      };
     }
 
     if (targetSessionId) {
@@ -9443,7 +9469,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await inputCoordinator.ensureQueueRestored(targetSessionId).catch(() => undefined);
       if (inputCoordinator.shouldQueueNewTurn(targetSessionId)) {
         const qClientId = explicitClientId ?? createId();
-        await enqueueSendToSessionMessage({
+        const queued = await enqueueSendToSessionMessage({
           targetSessionId,
           message,
           persistedContent: persistedContent ?? message,
@@ -9460,7 +9486,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetSessionId,
           agentKind: meta.agentKind,
           wakeKind: 'queued' as const,
-          queuedMessageId: qClientId,
+          queuedMessageId: queued.queuedMessageId,
+          queueAction: queued.queueAction,
           targetTitle: dbRow.title,
           targetLastUserSendAt:
             dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -9496,7 +9523,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let live = maker.getSession(targetSessionId);
       if (live) {
         if (live.isTurnRunning?.()) {
-          await enqueueSendToSessionMessage({
+          const queued = await enqueueSendToSessionMessage({
             targetSessionId,
             message,
             persistedContent: persistedContent ?? message,
@@ -9513,7 +9540,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             targetSessionId,
             agentKind: meta.agentKind,
             wakeKind: 'queued' as const,
-            queuedMessageId: clientId,
+            queuedMessageId: queued.queuedMessageId,
+            queueAction: queued.queueAction,
             targetTitle: dbRow.title,
             targetLastUserSendAt:
               dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -9616,7 +9644,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 'send_to_session:live:queued-before-dispatch',
               );
             }
-            await enqueueSendToSessionMessage({
+            const queued = await enqueueSendToSessionMessage({
               targetSessionId,
               message,
               persistedContent: persistedContent ?? message,
@@ -9633,7 +9661,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               targetSessionId,
               agentKind: meta.agentKind,
               wakeKind: 'queued' as const,
-              queuedMessageId: clientId,
+              queuedMessageId: queued.queuedMessageId,
+              queueAction: queued.queueAction,
               targetTitle: dbRow.title,
               targetLastUserSendAt:
                 dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -9716,7 +9745,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'send_to_session:resumed:queued-before-dispatch',
             );
           }
-          await enqueueSendToSessionMessage({
+          const queued = await enqueueSendToSessionMessage({
             targetSessionId,
             message,
             persistedContent: persistedContent ?? message,
@@ -9733,7 +9762,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             targetSessionId,
             agentKind: meta.agentKind,
             wakeKind: 'queued' as const,
-            queuedMessageId: clientId,
+            queuedMessageId: queued.queuedMessageId,
+            queueAction: queued.queueAction,
             targetTitle: dbRow.title,
             targetLastUserSendAt:
               dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -10061,7 +10091,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedRollback?: () => void | Promise<void>;
     onAcceptedCommit?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
-  }): Promise<void> {
+  }): Promise<{ queuedMessageId: string; queueAction: 'enqueued' | 'replaced' }> {
+    // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
+    // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
+    await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
+    const desiredOrigin = params.origin?.kind === 'session' ? params.origin : undefined;
+    if (desiredOrigin?.queueKey) {
+      if (!inputCoordinator.isQueueRestored(params.targetSessionId)) {
+        throw new Error(
+          `queue restore incomplete for stable send_to_session slot: ${params.targetSessionId}`,
+        );
+      }
+      const existing = findPendingSessionQueueItemByStableKey(
+        inputCoordinator.getQueueControlSnapshot(params.targetSessionId).pendingQueue,
+        desiredOrigin,
+      );
+      if (existing) {
+        const replacement = await buildSessionControlInputItem({
+          ...params,
+          clientId: existing.clientId,
+        });
+        if (
+          inputCoordinator.replaceQueuedMessage(
+            params.targetSessionId,
+            existing.clientId,
+            replacement,
+          )
+        ) {
+          log.info('send_to_session replaced queued message by stable key', {
+            targetSessionId: params.targetSessionId,
+            clientId: existing.clientId,
+            queueKey: desiredOrigin.queueKey,
+          });
+          return { queuedMessageId: existing.clientId, queueAction: 'replaced' };
+        }
+      }
+    }
     const queued = await buildSessionControlInputItem(params);
     if (params.onAccepted) {
       orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
@@ -10071,14 +10136,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         params.onAcceptedCommit,
       );
     }
-    // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
-    // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
-    await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
     inputCoordinator.enqueue(params.targetSessionId, queued);
     log.info('send_to_session queued while target busy', {
       targetSessionId: params.targetSessionId,
       clientId: params.clientId,
     });
+    return { queuedMessageId: params.clientId, queueAction: 'enqueued' };
   }
 
   async function buildSessionControlInputItem(params: {

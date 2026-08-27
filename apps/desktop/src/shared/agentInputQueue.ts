@@ -242,6 +242,8 @@ export interface AgentInputQueuedMessage {
         /** cindy_helper 的 send_to_session 入队来源；只用于本人排队消息控制授权。 */
         kind: 'session';
         senderSessionId: string;
+        /** 同一发送 session 内的稳定待办键；目标忙时用于原位覆盖尚未消费的旧消息。 */
+        queueKey?: string;
         /** 原始可编辑正文；单独保留以兼容未来可能加入的派发包装。 */
         displayText: string;
       };

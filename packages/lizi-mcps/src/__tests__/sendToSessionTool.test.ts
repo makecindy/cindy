@@ -302,6 +302,50 @@ describe('send_to_session tool', () => {
     });
   });
 
+  it('jump + queue_key: 透传稳定键并回显原位覆盖结果', async () => {
+    const { registry, sendToSession } = setup({
+      result: {
+        ok: true,
+        targetSessionId: UUID,
+        agentKind: 'codex',
+        wakeKind: 'queued',
+        queuedMessageId: 'stable-slot-1',
+        queueAction: 'replaced',
+        targetTitle: 'Busy target',
+        targetLastUserSendAt: null,
+      },
+    });
+
+    const res = await registry.call('send_to_session', {
+      target_session_id: UUID,
+      message: '只保留这版最新状态',
+      queue_key: 'pr-followup:makecindy/cindy#3478',
+    });
+
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionId: UUID,
+        queueKey: 'pr-followup:makecindy/cindy#3478',
+      }),
+    );
+    expect(parse(res)).toMatchObject({
+      ok: true,
+      wake_kind: 'queued',
+      queued_message_id: 'stable-slot-1',
+      queue_action: 'replaced',
+    });
+  });
+
+  it('create + queue_key → INVALID_ARGS, host 不被调', async () => {
+    const { registry, sendToSession } = setup();
+    const res = await registry.call('send_to_session', {
+      message: '首次处理',
+      queue_key: 'pr-followup:makecindy/cindy#3478',
+    });
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(sendToSession).not.toHaveBeenCalled();
+  });
+
   it('无 dispatcher sessionId → host 仍被调(dispatcherSessionId=undefined), host 返 LEAD_NOT_SUPPORTED 透传', async () => {
     const { registry, sendToSession } = setup({
       sessionId: undefined,
