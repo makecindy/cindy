@@ -108,8 +108,15 @@ describe('leaked model stop tokens', () => {
   it('holds whitespace-only deltas without releasing a later leftover token', () => {
     const buffer = { pending: '', emitted: false };
     expect(holdStandaloneStopTokenDelta(buffer, ' '.repeat(23))).toBeNull();
+    expect(buffer.pending).toBe(' '.repeat(23));
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
     expect(buffer).toEqual({ pending: '', emitted: false });
+  });
+
+  it('keeps ordinary leading whitespace when later prose arrives', () => {
+    const buffer = { pending: '', emitted: false };
+    expect(holdStandaloneStopTokenDelta(buffer, '    ')).toBeNull();
+    expect(holdStandaloneStopTokenDelta(buffer, 'code')).toBe('    code');
   });
 
   it('holds a one-character leftover prefix until the closer arrives', () => {

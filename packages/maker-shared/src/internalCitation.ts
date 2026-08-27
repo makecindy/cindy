@@ -161,9 +161,9 @@ export function holdStandaloneStopTokenDelta(
 ): string | null {
   const combined = buffer.pending + delta;
   if (!buffer.emitted) {
-    const { remainder } = consumeLeadingStopControl(combined);
+    const { remainder, consumedToken } = consumeLeadingStopControl(combined);
     if (remainder.length === 0 || isIncompleteStopTokenPrefix(remainder)) {
-      buffer.pending = remainder;
+      buffer.pending = consumedToken ? remainder : combined;
       return null;
     }
   }
