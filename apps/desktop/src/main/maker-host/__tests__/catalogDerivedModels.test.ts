@@ -22,6 +22,7 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
+  resolveExplicitCustomContextWindow,
 } from '../catalog-to-descriptors.js';
 import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
@@ -726,5 +727,65 @@ describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () =
       p.routing.codex = { ...(p.routing.codex ?? {}), disabled: true } as typeof p.routing.codex;
     }
     expect(resolveVerifiedContextWindow(catalog, 'codex', 'xd', 'xd/only')).toBeNull();
+  });
+});
+
+describe('resolveExplicitCustomContextWindow — 只注入用户显式填写的自定义窗口', () => {
+  function catalogWithCustom(solContextWindow?: number): Catalog {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers.push(
+      buildUserProvider({
+        id: 'mygpt',
+        name: 'My GPT',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.invalid/v1',
+            models: [
+              {
+                id: 'gpt-5.6-sol',
+                name: 'gpt-5.6-sol',
+                ...(solContextWindow !== undefined ? { contextWindow: solContextWindow } : {}),
+              },
+              { id: 'gpt-5.4-mini', name: 'gpt-5.4-mini' },
+            ],
+          },
+        },
+      }),
+    );
+    return catalog;
+  }
+
+  it('用户显式填写的窗口返回该值', () => {
+    const catalog = catalogWithCustom(1_050_000);
+    expect(
+      resolveExplicitCustomContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
+    ).toBe(1_050_000);
+  });
+
+  it('未填写窗口的自定义模型不注入(200K 展示兜底)', () => {
+    const catalog = catalogWithCustom();
+    expect(
+      resolveExplicitCustomContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
+    ).toBeNull();
+    expect(
+      resolveExplicitCustomContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.4-mini'),
+    ).toBeNull();
+  });
+
+  it('官方 / 网关路由不注入', () => {
+    const catalog = catalogWithCustom(1_050_000);
+    expect(
+      resolveExplicitCustomContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol'),
+    ).toBeNull();
+    expect(
+      resolveExplicitCustomContextWindow(catalog, 'codex', 'openai', 'gpt-5.6-sol'),
+    ).toBeNull();
+  });
+
+  it('没有 providerId 不注入', () => {
+    const catalog = catalogWithCustom(1_050_000);
+    expect(
+      resolveExplicitCustomContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
+    ).toBeNull();
   });
 });

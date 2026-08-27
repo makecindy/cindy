@@ -267,6 +267,34 @@ export function resolveVerifiedContextWindow(
 }
 
 /**
+ * 自定义供应商上用户显式填写的 contextWindow。
+ *
+ * 注入 thread/start|resume 的 `model_context_window` 与
+ * `model_auto_compact_token_limit`(窗口的 95%)。Codex 还会按模型目录里的
+ * `max_context_window` 夹紧该值；Desktop 为这类会话启动隔离 app-server，并给它
+ * 注入从当前 Codex 二进制提取、只抬高对应模型上限的完整目录。
+ * 只认 `source === 'user'` 且 `contextWindowExplicit` 的条目:
+ *   - 官方 ChatGPT 订阅走 live catalog 的 1M,不要被这条覆盖;
+ *   - 网关核实上限(如 372K)只用于 Cindy 进度条收敛,写进 Codex 会改变官方会话压缩时机。
+ * 缺省 200K 展示兜底不算显式,不注入。
+ */
+export function resolveExplicitCustomContextWindow(
+  catalog: Catalog,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): number | null {
+  const source = providerId?.trim();
+  if (!source) return null;
+  const provider = catalog.providers.find((entry) => entry.id === source);
+  if (!provider || provider.source !== 'user') return null;
+  if (provider.routing[agent]?.disabled === true) return null;
+  const model = (provider.models[agent] ?? []).find((entry) => entry.id === modelId);
+  if (!model || model.contextWindowExplicit !== true) return null;
+  return model.contextWindow > 0 ? model.contextWindow : null;
+}
+
+/**
  * 目录运行时刷新后原地替换两个 agent 的模型能力。不能直接赋新数组：本地 Session 持有 agent
  * capabilities 引用，原地 splice 才能让 provider:list 与实际可发送模型在同一次广播前对齐。
  */

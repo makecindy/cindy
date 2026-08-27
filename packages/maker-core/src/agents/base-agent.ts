@@ -749,6 +749,17 @@ export interface AgentDeps {
   ) => number | null;
 
   /**
+   * 自定义 Codex 供应商上用户显式填写的 contextWindow。会话启动时据此选择隔离
+   * app-server，并写入 thread/start|resume 的 `config.model_context_window` 与
+   * `config.model_auto_compact_token_limit`,让 app-server 按该窗口 auto-compact。
+   * 返回 null / 缺省 = 不覆盖(官方订阅继续用 live catalog)。
+   */
+  resolveCodexThreadContextWindow?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
+  /**
    * Agent 起 session 时追加到 system prompt 末尾的字符串（host 注入）。
    * **本轮一阶段不消费**，仅占位。后续接通后 desktop 可以传项目级 prompt。
    */
@@ -776,8 +787,12 @@ export interface AgentDeps {
       credentialMode?: AgentCredentialMode;
       /** Original session request when the shared host was upgraded to a credential superset. */
       requestedCredentialMode?: AgentCredentialMode;
-      /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
-      hostPurpose?: 'control-plane' | 'review';
+      /** Marks app-server work that must not share the normal local task host. */
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+      /** Exact real model slug whose static catalog entry must allow the custom window. */
+      customContextModel?: string;
+      /** Explicit custom-provider context window for a one-session custom-context host. */
+      customContextWindow?: number;
     },
   ) => Promise<CodexExtraSpawnConfig>;
 

@@ -109,7 +109,9 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
+  resolveExplicitCustomContextWindow,
 } from './catalog-to-descriptors.js';
+import { prepareCodexCustomContextCatalog } from './codex-custom-context-catalog.js';
 import { buildPiAgent } from './pi-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
@@ -1300,6 +1302,13 @@ export function getMaker(): Maker {
       // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
+      resolveCodexThreadContextWindow: (providerId, modelId) =>
+        resolveExplicitCustomContextWindow(
+          getDesktopSelectableCatalog(),
+          'codex',
+          providerId,
+          modelId,
+        ),
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
       },
@@ -1346,7 +1355,8 @@ export function getMaker(): Maker {
         }
         const isControlPlane = ctx.hostPurpose === 'control-plane';
         const isReview = ctx.hostPurpose === 'review';
-        const usesIsolatedProxy = isControlPlane || isReview;
+        const isCustomContext = ctx.hostPurpose === 'custom-context';
+        const usesIsolatedProxy = isControlPlane || isReview || isCustomContext;
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
         let buildSessionMcpConfig:
@@ -1376,7 +1386,7 @@ export function getMaker(): Maker {
             codexAppliedContactsEnabled = false;
           }
         }
-        const browserCompanion = usesIsolatedProxy
+        const browserCompanion = isControlPlane || isReview
           ? null
           : await prepareCodexBrowserCompanion({ codexHome: getCodexHome() });
         const browserCompanionSpawnConfig =
@@ -1542,6 +1552,32 @@ export function getMaker(): Maker {
             };
           }
         }
+        let customContextCatalogArgs: string[] = [];
+        if (isCustomContext) {
+          const modelId = ctx.customContextModel?.trim();
+          const contextWindow = ctx.customContextWindow;
+          try {
+            if (
+              !modelId ||
+              typeof contextWindow !== 'number' ||
+              !Number.isFinite(contextWindow) ||
+              contextWindow <= 0
+            ) {
+              throw new Error('custom-context Codex host is missing its model or context window');
+            }
+            const customCatalog = await prepareCodexCustomContextCatalog({
+              binaryPath: codexPath,
+              codexHome: getCodexHome(),
+              modelId,
+              contextWindow,
+            });
+            customContextCatalogArgs = customCatalog.extraArgs;
+          } catch (error) {
+            const fatal = error instanceof Error ? error : new Error(String(error));
+            (fatal as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
+            throw fatal;
+          }
+        }
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
@@ -1553,6 +1589,7 @@ export function getMaker(): Maker {
                   forceDisableSubagents,
                 })
               : []),
+            ...customContextCatalogArgs,
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,

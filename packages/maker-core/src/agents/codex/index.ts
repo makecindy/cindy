@@ -474,6 +474,17 @@ function isLocalReviewHostKey(key: string): boolean {
   return key.startsWith(LOCAL_REVIEW_HOST_PREFIX);
 }
 
+/** Explicit custom windows need a static catalog, so each such session gets its own app-server. */
+const LOCAL_CUSTOM_CONTEXT_HOST_PREFIX = 'local-custom-context:';
+
+function localCustomContextHostKey(sessionId: string): string {
+  return `${LOCAL_CUSTOM_CONTEXT_HOST_PREFIX}${sessionId || randomUUID()}`;
+}
+
+function isLocalCustomContextHostKey(key: string): boolean {
+  return key.startsWith(LOCAL_CUSTOM_CONTEXT_HOST_PREFIX);
+}
+
 /**
  * maker permissionMode → app-server { approvalPolicy, approvalsReviewer, sandbox }。
  *
@@ -2207,7 +2218,9 @@ export class CodexAgent extends BaseAgent {
     opts: {
       ignoreBindingLeases?: number;
       keyOverride?: string;
-      hostPurpose?: 'control-plane' | 'review';
+      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+      customContextModel?: string;
+      customContextWindow?: number;
     } = {},
   ): Promise<AppServerHost> {
     const key = opts.keyOverride ?? hostKey(remoteHostId);
@@ -2372,6 +2385,8 @@ export class CodexAgent extends BaseAgent {
           }
         },
         opts.hostPurpose,
+        opts.customContextModel,
+        opts.customContextWindow,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2532,7 +2547,9 @@ export class CodexAgent extends BaseAgent {
     credentialMode: AgentCredentialMode | undefined,
     generation: number,
     onSpawnCredentialModeResolved?: (mode: AgentCredentialMode | undefined) => void,
-    hostPurpose?: 'control-plane' | 'review',
+    hostPurpose?: 'control-plane' | 'review' | 'custom-context',
+    customContextModel?: string,
+    customContextWindow?: number,
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -2639,6 +2656,9 @@ export class CodexAgent extends BaseAgent {
                 ? { requestedCredentialMode: credentialMode }
                 : {}),
               ...(hostPurpose ? { hostPurpose } : {}),
+              ...(hostPurpose === 'custom-context'
+                ? { customContextModel, customContextWindow }
+                : {}),
             },
           );
           assertCurrentGeneration('spawn config');
@@ -4178,7 +4198,20 @@ export class CodexAgent extends BaseAgent {
           providerId: opts.providerId,
           model: opts.model,
         });
-    const currentHostKey = reviewMode ? localReviewHostKey(sid) : hostKey(opts.remoteHostId);
+    const initialCustomContextWindow = !reviewMode && !opts.remoteHostId
+      ? this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
+      : null;
+    const usesCustomContextHost =
+      typeof initialCustomContextWindow === 'number' &&
+      Number.isFinite(initialCustomContextWindow) &&
+      initialCustomContextWindow > 0;
+    const initialCustomContextModel = usesCustomContextHost ? opts.model : null;
+    const initialCustomContextProviderId = usesCustomContextHost ? opts.providerId : null;
+    const currentHostKey = reviewMode
+      ? localReviewHostKey(sid)
+      : usesCustomContextHost
+        ? localCustomContextHostKey(sid)
+        : hostKey(opts.remoteHostId);
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -4199,7 +4232,14 @@ export class CodexAgent extends BaseAgent {
         ignoreBindingLeases: 1,
         ...(reviewMode
           ? { keyOverride: currentHostKey, hostPurpose: 'review' as const }
-          : {}),
+          : usesCustomContextHost
+            ? {
+                keyOverride: currentHostKey,
+                hostPurpose: 'custom-context' as const,
+                customContextModel: initialCustomContextModel ?? undefined,
+                customContextWindow: initialCustomContextWindow ?? undefined,
+              }
+            : {}),
       });
     };
     const host = await getSessionHost().catch((error) => {
@@ -5092,6 +5132,7 @@ export class CodexAgent extends BaseAgent {
       cleanup: () => host.unsubscribeThread(detachedThreadId),
     });
     const hasHostShellCommandPolicy = Boolean(this.deps.getShellCommandPolicy);
+    const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
     function currentApprovalConfig(): CodexPermissionConfig {
       if (reviewMode) {
         return { approvalPolicy: 'never', sandbox: 'read-only' };
@@ -5129,6 +5170,7 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const threadContextWindow = initialCustomContextWindow;
       const config = {
         ...capabilityRoutingConfig,
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig : {}),
@@ -5144,6 +5186,18 @@ export class CodexAgent extends BaseAgent {
             }
           : {}),
         ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
+        // 自定义供应商显式窗口。隔离 app-server 的静态模型目录先放开
+        // `max_context_window`,这里再按 thread 设置实际窗口和 95% 自动压缩阈值。
+        // 官方会话继续走共享 app-server + live catalog,不受该静态目录影响。
+        ...(typeof threadContextWindow === 'number' && threadContextWindow > 0
+          ? {
+              model_context_window: Math.floor(threadContextWindow),
+              model_auto_compact_token_limit: Math.max(
+                1,
+                Math.floor(threadContextWindow * 0.95),
+              ),
+            }
+          : {}),
       };
       const shared = {
         approvalPolicy,
@@ -11017,15 +11071,16 @@ export class CodexAgent extends BaseAgent {
       });
       try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     }
-    const retireReviewHost = async (): Promise<void> => {
-      if (!reviewMode) return;
-      await this.retireHostKey(currentHostKey, 'Cindy Review host is single-session', {
+    const retireSingleSessionHost = async (): Promise<void> => {
+      if (!reviewMode && !usesCustomContextHost) return;
+      const purpose = reviewMode ? 'Review' : 'custom context';
+      await this.retireHostKey(currentHostKey, `Cindy ${purpose} host is single-session`, {
         failIfActive: false,
-        logPrefix: 'codex review host cleanup',
+        logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
         ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
         expectedGeneration: hostGeneration,
       }).catch((error) => {
-        log.warn('review host retire failed', {
+        log.warn(`${purpose} host retire failed`, {
           error: error instanceof Error ? error.message : String(error),
         });
       });
@@ -12090,7 +12145,7 @@ export class CodexAgent extends BaseAgent {
 
       async close() {
         await closeSessionHandle();
-        await retireReviewHost();
+        await retireSingleSessionHost();
       },
 
       events(): AsyncIterable<AgentEvent> {
@@ -12117,6 +12172,29 @@ export class CodexAgent extends BaseAgent {
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
       async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
         if (reviewMode) return;
+        const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
+          ? setOpts.providerId
+          : mutableProviderId;
+        const requestedCustomContextWindow = opts.remoteHostId
+          ? null
+          : resolveCodexThreadContextWindow?.(requestedProviderId, newModel) ?? null;
+        if (
+          usesCustomContextHost &&
+          (newModel !== initialCustomContextModel || requestedProviderId !== initialCustomContextProviderId)
+        ) {
+          throw new Error(
+            'A custom context window is fixed when this Codex task starts. Start a new task to change its model or provider.',
+          );
+        }
+        if (
+          !usesCustomContextHost &&
+          typeof requestedCustomContextWindow === 'number' &&
+          requestedCustomContextWindow > 0
+        ) {
+          throw new Error(
+            'This Codex task did not start with a custom context catalog. Start a new task to use that model.',
+          );
+        }
         // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
         // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
         const prevProviderId = mutableProviderId;
@@ -12706,10 +12784,20 @@ export class CodexAgent extends BaseAgent {
   async forceDisposeLocalHostForAuthChange(reason = 'CodexAgent local auth changed'): Promise<void> {
     const keys = new Set<string>([hostKey()]);
     for (const key of this.hosts.keys()) {
-      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key) || isLocalReviewHostKey(key)) keys.add(key);
+      if (
+        isLocalControlPlaneHostKey(key) ||
+        isLocalForkHostKey(key) ||
+        isLocalReviewHostKey(key) ||
+        isLocalCustomContextHostKey(key)
+      ) keys.add(key);
     }
     for (const key of this.hostPromises.keys()) {
-      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key) || isLocalReviewHostKey(key)) keys.add(key);
+      if (
+        isLocalControlPlaneHostKey(key) ||
+        isLocalForkHostKey(key) ||
+        isLocalReviewHostKey(key) ||
+        isLocalCustomContextHostKey(key)
+      ) keys.add(key);
     }
     await Promise.all(Array.from(keys, (key) =>
       this.retireHostKey(key, reason, {

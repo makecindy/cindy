@@ -28362,6 +28362,149 @@ describe('CodexAgent context window reporting', () => {
   });
 });
 
+describe('CodexAgent custom provider context window override', () => {
+  it('uses a one-session host and injects the explicit window with the real model slug', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: (providerId, modelId) =>
+        providerId === 'mygpt' && modelId === 'gpt-5.6-sol' ? 1_050_000 : null,
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-custom-ctxwin',
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      model?: string;
+      config?: Record<string, unknown>;
+    };
+    expect(host.getHost).toHaveBeenCalledWith(
+      undefined,
+      'provider-oauth',
+      expect.objectContaining({
+        keyOverride: 'local-custom-context:session-custom-ctxwin',
+        hostPurpose: 'custom-context',
+        customContextModel: 'gpt-5.6-sol',
+        customContextWindow: 1_050_000,
+      }),
+    );
+    expect(params.model).toBe('gpt-5.6-sol');
+    expect(params.config?.model_context_window).toBe(1_050_000);
+    expect(params.config?.model_auto_compact_token_limit).toBe(997_500);
+    await handle.close();
+  });
+
+  it('omits model_context_window when host has no explicit custom window', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => null,
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-no-custom-ctxwin',
+      model: 'gpt-5.6-sol',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      model?: string;
+      config?: Record<string, unknown>;
+    };
+    expect(params.model).toBe('gpt-5.6-sol');
+    expect(params.config?.model_context_window).toBeUndefined();
+    expect(params.config?.model_auto_compact_token_limit).toBeUndefined();
+    await handle.close();
+  });
+
+  it('retires the isolated custom-context app-server when its task closes', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
+      extraArgs: ['-c', 'model_catalog_json="/tmp/custom-models.json"'],
+      extraEnv: {},
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: (providerId, modelId) =>
+        providerId === 'mygpt' && modelId === 'gpt-5.6-sol' ? 700_000 : null,
+      prepareCodexExtraSpawnConfig,
+    }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-custom-host-lifecycle',
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+    });
+
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
+      remoteHostId: undefined,
+      credentialMode: 'provider-oauth',
+      hostPurpose: 'custom-context',
+      customContextModel: 'gpt-5.6-sol',
+      customContextWindow: 700_000,
+    });
+    expect(Array.from(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+    )).toEqual(['local-custom-context:session-custom-host-lifecycle']);
+    expect(createdTransports[0]?.closed).toBe(false);
+
+    await handle.close();
+
+    expect(createdTransports[0]?.closed).toBe(true);
+    expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    await agent.dispose();
+  });
+
+  it('requires a new task when runtime model switching would cross the catalog boundary', async () => {
+    const resolveCodexThreadContextWindow = (providerId: string | null | undefined, modelId: string) =>
+      providerId === 'mygpt' && modelId === 'gpt-5.6-sol' ? 700_000 : null;
+    const customAgent = new CodexAgent(createDeps({}, { resolveCodexThreadContextWindow }));
+    installFakeHost(customAgent);
+    const customHandle = await customAgent.startSession({
+      sessionId: 'session-custom-switch-guard',
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+    });
+
+    await expect(customHandle.setModel?.('gpt-5.4', { providerId: 'xd' })).rejects.toThrow(
+      'custom context window is fixed',
+    );
+    await customHandle.close();
+
+    const normalAgent = new CodexAgent(createDeps({}, { resolveCodexThreadContextWindow }));
+    installFakeHost(normalAgent);
+    const normalHandle = await normalAgent.startSession({
+      sessionId: 'session-normal-switch-guard',
+      model: 'gpt-5.4',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+
+    await expect(normalHandle.setModel?.('gpt-5.6-sol', { providerId: 'mygpt' })).rejects.toThrow(
+      'did not start with a custom context catalog',
+    );
+    await normalHandle.close();
+  });
+
+  it('includes custom-context hosts in local auth-boundary disposal', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 700_000,
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
+    }));
+    await agent.startSession({
+      sessionId: 'session-custom-auth-disposal',
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test custom catalog auth boundary');
+
+    expect(createdTransports[0]?.closed).toBe(true);
+    expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    await agent.dispose();
+  });
+});
+
 describe('CodexAgent compaction storm escalation', () => {
   /**
    * 复刻 rollout 019fcd52 (2026-08-04) 的故障:会话中途切模型后 codex 按旧模型窗口
