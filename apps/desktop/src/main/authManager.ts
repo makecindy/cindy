@@ -1212,11 +1212,7 @@ function reserveCloudOwnerData(
     if (nativeReservation.status === 'owned-by-other') {
       throw new Error('local profile and native provider ownership reservations disagree');
     }
-    if (
-      profileReservation.status === 'claimed' &&
-      nativeReservation.status === 'claimed' &&
-      nativeReservation.claimToken
-    ) {
+    if (nativeReservation.status === 'claimed' && nativeReservation.claimToken) {
       rollbackActions.push(() => {
         releaseLegacyNativeProviderAuthOwner(authoritativeOwnerId, nativeReservation.claimToken!);
       });

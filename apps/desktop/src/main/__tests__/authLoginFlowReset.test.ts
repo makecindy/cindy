@@ -319,9 +319,13 @@ describe('auth login-flow reset', () => {
     );
     const failureEnd = source.indexOf('\n      },\n    });', failureStart);
     const failureBody = source.slice(failureStart, failureEnd);
+    expect(failureBody).toContain('if (boundaryCommitApplied || commitApplied) return;');
     expect(failureBody.indexOf('if (!reservation.rollback())')).toBeLessThan(
       failureBody.indexOf('rollbackReservation = null;'),
     );
+    const finallyStart = source.indexOf('  } finally {', failureEnd);
+    const finallyBody = source.slice(finallyStart, source.indexOf('\n  }\n', finallyStart));
+    expect(finallyBody).toContain('if (!committed && !commitApplied)');
 
     const repairStart = source.indexOf(
       'function repairStableCloudOwnerDataReservationsWhileLocked(',
@@ -374,6 +378,12 @@ describe('auth login-flow reset', () => {
     );
     expect(reserveBody).toContain(
       'releaseLocalProfileDataOwner(\n          profileReservationOwnerId,',
+    );
+    expect(reserveBody).toContain(
+      "if (nativeReservation.status === 'claimed' && nativeReservation.claimToken)",
+    );
+    expect(reserveBody).not.toContain(
+      "profileReservation.status === 'claimed' &&\n      nativeReservation.status === 'claimed'",
     );
     expect(reserveBody).toContain('const authoritativeOwnerId = profileReservation.ownerId;');
     expect(reserveBody).toContain(

@@ -267,7 +267,9 @@ describe('local → cloud native provider binding migration', () => {
     expect(reserveLegacyNativeProviderAuthOwnerDetailed('owner-a')).toEqual({
       status: 'already-owned',
     });
+    const beforeWrongToken = fs.readFileSync(bindingFile, 'utf8');
     expect(releaseLegacyNativeProviderAuthOwner('owner-a', 'wrong-token')).toBe(false);
+    expect(fs.readFileSync(bindingFile, 'utf8')).toBe(beforeWrongToken);
     session.dataOwnerId = 'owner-b';
     expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
     session.dataOwnerId = 'owner-a';

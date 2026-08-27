@@ -312,6 +312,46 @@ function replaceLocalProfileMigrationMarker(marker: string, contents: string): v
   syncMarkerDirectory(marker);
 }
 
+function restoreClaimedLocalProfileMarker(candidate: string, marker: string): boolean {
+  try {
+    // linkSync is an exclusive restore: it never overwrites a replacement that
+    // another process may have published after this process claimed candidate.
+    fs.linkSync(candidate, marker);
+    fs.unlinkSync(candidate);
+    syncMarkerDirectory(marker);
+    return true;
+  } catch {
+    // Keep the claimed entry as ownership evidence when a newer canonical
+    // marker prevents restoration. Deleting either entry would be unsafe.
+    return false;
+  }
+}
+
+function reclaimInvalidLocalProfileMarker(marker: string, inspectedRaw: string): boolean {
+  const candidate = `${marker}.reclaim.${randomUUID()}`;
+  try {
+    // Claim exactly the entry that was inspected. Validation happens after the
+    // atomic rename, so a replacement is never unlinked based on stale reads.
+    fs.renameSync(marker, candidate);
+  } catch {
+    return false;
+  }
+
+  try {
+    const movedRaw = fs.readFileSync(candidate, 'utf8');
+    if (movedRaw !== inspectedRaw || parseLocalProfileMigrationMarker(movedRaw)) {
+      restoreClaimedLocalProfileMarker(candidate, marker);
+      return false;
+    }
+    fs.unlinkSync(candidate);
+    syncMarkerDirectory(marker);
+    return true;
+  } catch {
+    restoreClaimedLocalProfileMarker(candidate, marker);
+    return false;
+  }
+}
+
 function reserveLocalProfileDataOwnerWhileLocked(
   normalizedOwnerId: string,
   marker: string,
@@ -342,10 +382,11 @@ function reserveLocalProfileDataOwnerWhileLocked(
         }
         return { status: 'already-owned', ownerId: normalizedOwnerId };
       }
-      // A malformed marker is not evidence of an unused namespace. Current
-      // writers publish atomically, so preserve the damaged ownership record
-      // and fail closed rather than allowing a later account to claim it.
-      return { status: 'failed' };
+      // Legacy writers created the canonical entry before its contents were
+      // durable, so a crash could leave an empty/truncated marker that blocks
+      // the first owner forever. Reclaim only the exact malformed entry that
+      // was inspected; a concurrent replacement is restored/preserved.
+      if (!reclaimInvalidLocalProfileMarker(marker, raw)) return { status: 'failed' };
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
         return { status: 'failed' };
@@ -439,15 +480,21 @@ export function releaseLocalProfileDataOwner(
     `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
   return withLocalProfileMigrationLock(marker, false, () => {
+    const candidate = `${marker}.release.${randomUUID()}`;
     try {
-      const parsed = parseLocalProfileMigrationMarker(fs.readFileSync(marker, 'utf8'));
+      // Atomically claim the exact marker before checking the token. This
+      // prevents a stale read from unlinking another reservation.
+      fs.renameSync(marker, candidate);
+      const parsed = parseLocalProfileMigrationMarker(fs.readFileSync(candidate, 'utf8'));
       if (!parsed || parsed.ownerId !== normalizedOwnerId || parsed.claimToken !== claimToken) {
+        restoreClaimedLocalProfileMarker(candidate, marker);
         return false;
       }
-      fs.unlinkSync(marker);
+      fs.unlinkSync(candidate);
       syncMarkerDirectory(marker);
       return true;
     } catch {
+      if (fs.existsSync(candidate)) restoreClaimedLocalProfileMarker(candidate, marker);
       return false;
     }
   });
