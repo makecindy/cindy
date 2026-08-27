@@ -71,6 +71,21 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(marker, 'utf8')).resolves.toBe(contents);
   });
 
+  it('falls back to an exclusive marker copy when hard links are unsupported', async () => {
+    const { root } = await fixture();
+    const linkSpy = vi.spyOn(originalFs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('hard links unsupported'), { code: 'EOPNOTSUPP' });
+    });
+
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+    expect(linkSpy).toHaveBeenCalled();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    await expect(fs.readFile(marker, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      ownerId: 'owner-a',
+    });
+  });
+
   it('restores an atomic-write backup before deciding ownership', async () => {
     const { root } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);

@@ -74,14 +74,33 @@ type BindingRead =
   /** 根有效、各 provider 归属可信，只有 revoked 这个字段被改坏。 */
   | { ok: false; reason: 'badRevoked'; bindings: Omit<BindingFile, 'revoked'> };
 
+let nativeBindingMutationLockDepth = 0;
+
 function readBindingsOrFail(): BindingRead {
+  const file = bindingPath();
   let raw: string;
   try {
-    const restored = readAtomicFileSync(bindingPath());
-    // 文件确实不存在 = 合法的首次状态（还没有任何人绑定过）。主文件缺失但 .bak
-    // 存在时，readAtomicFileSync 会先恢复唯一有效快照；恢复失败则抛错并 fail closed。
-    if (restored === null) return { ok: true, bindings: {} };
-    raw = restored;
+    if (nativeBindingMutationLockDepth > 0) {
+      const restored = readAtomicFileSync(file);
+      if (restored === null) return { ok: true, bindings: {} };
+      raw = restored;
+    } else {
+      try {
+        // The common read path has no filesystem side effects and therefore
+        // stays off the synchronous SQLite writer lock.
+        raw = fs.readFileSync(file, 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+        if (!fs.existsSync(`${file}.bak`)) return { ok: true, bindings: {} };
+        // Restoring `<file>.bak` is a mutation. Acquire the same lock as the
+        // writer and recheck inside it so a reader cannot interrupt the
+        // Windows backup-exchange window.
+        return withNativeBindingMutationLock<BindingRead>(
+          { ok: false, reason: 'unreadable' },
+          () => readBindingsOrFail(),
+        );
+      }
+    }
   } catch {
     // EACCES / EIO / 无法恢复原子备份都说明归属不明，不能当成空。
     return { ok: false, reason: 'unreadable' };
@@ -180,8 +199,10 @@ function withNativeBindingMutationLock<T>(
     return fallback;
   }
   try {
+    nativeBindingMutationLockDepth += 1;
     return operation();
   } finally {
+    nativeBindingMutationLockDepth -= 1;
     try {
       // The transaction exists only to hold SQLite's cross-process writer
       // lock while the JSON read-modify-write runs; no lock-db state is changed.

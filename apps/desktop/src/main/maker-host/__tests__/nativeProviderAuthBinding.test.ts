@@ -184,6 +184,35 @@ describe('local → cloud native provider binding migration', () => {
     });
   });
 
+  it('restores a backup only while holding the shared mutation lock', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      `${bindingFile}.bak`,
+      JSON.stringify({ openai: 'owner-a', legacyClaimOwner: 'owner-a' }),
+    );
+    const originalRenameSync = fs.renameSync.bind(fs);
+    const lockObserved: boolean[] = [];
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (from === `${bindingFile}.bak` && to === bindingFile) {
+        const contender = createBetterSqliteDatabase(bindingLockDb);
+        contender.pragma('busy_timeout = 1');
+        try {
+          contender.exec('BEGIN IMMEDIATE');
+          contender.exec('ROLLBACK');
+          lockObserved.push(false);
+        } catch (error) {
+          lockObserved.push((error as { code?: string }).code === 'SQLITE_BUSY');
+        } finally {
+          contender.close();
+        }
+      }
+      return originalRenameSync(from, to);
+    });
+
+    expect(isNativeProviderAuthBound('openai')).toBe(true);
+    expect(lockObserved).toEqual([true]);
+  });
+
   it('uses a crash-released SQLite transaction lock instead of a reclaimable lease file', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
 

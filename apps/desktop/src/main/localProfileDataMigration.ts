@@ -11,6 +11,7 @@
 
 import fs from 'original-fs';
 import { randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
@@ -278,8 +279,26 @@ function publishLocalProfileMigrationMarker(
     try {
       fs.linkSync(tmp, marker);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return 'exists';
-      throw error;
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === 'EEXIST') return 'exists';
+      // A few supported userData filesystems do not implement hard links.
+      // Preserve the no-replace claim point with an exclusive copy instead of
+      // falling back to rename (which could replace another owner's marker).
+      if (!['EXDEV', 'EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'ENOSYS'].includes(code ?? '')) {
+        throw error;
+      }
+      try {
+        fs.copyFileSync(tmp, marker, fsConstants.COPYFILE_EXCL);
+      } catch (fallbackError) {
+        if ((fallbackError as NodeJS.ErrnoException | null)?.code === 'EEXIST') return 'exists';
+        throw fallbackError;
+      }
+    }
+    const finalHandle = fs.openSync(marker, 'r+');
+    try {
+      fs.fsyncSync(finalHandle);
+    } finally {
+      fs.closeSync(finalHandle);
     }
     syncMarkerDirectory(marker);
     return 'claimed';

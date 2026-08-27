@@ -605,7 +605,12 @@ function hasConcurrentLiveInstanceSync(
     try {
       record = JSON.parse(raw) as RegisteredInstanceRecord;
     } catch {
-      continue; // torn leftover
+      // The filename still identifies the registering process even when its
+      // payload is torn. A live PID remains a possible writer; a dead PID is a
+      // stale record and must not block adoption forever.
+      const pid = instancePidFromRecordName(name);
+      if (pid !== null && pid !== selfPid && isPidAlive(pid)) return true;
+      continue;
     }
     const pid = record.pid;
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {
@@ -2435,6 +2440,13 @@ function isSameUserDataDir(a: string, b: string, platform: NodeJS.Platform): boo
     : ra === rb;
 }
 
+function instancePidFromRecordName(name: string): number | null {
+  const match = /^(\d+)\.json$/.exec(name);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
 /**
  * Other live Cindy instances sharing this userData, discovered via the
  * `.dev-instances/<pid>.json` runtime provenance registry (devStartupStatus;
@@ -2446,9 +2458,9 @@ function isSameUserDataDir(a: string, b: string, platform: NodeJS.Platform): boo
  * Error posture is asymmetric on purpose: a record file that VANISHES
  * (ENOENT) means that instance exited — skip it; a record file that exists
  * but cannot be READ (EACCES, I/O errors) may hide a live instance — fail
- * closed by rethrowing so the caller defers the destructive claim. Only a
- * record that reads fine but fails to PARSE is treated as a torn leftover
- * (writes are atomic rename, so torn content cannot be a live registration).
+ * closed by rethrowing so the caller defers the destructive claim. If a
+ * record reads but fails to parse, its `<pid>.json` filename still keeps a
+ * live process visible; dead-PID leftovers remain safely ignorable.
  */
 async function findConcurrentLiveInstancePids(
   deps: MigrationDeps,
@@ -2483,7 +2495,11 @@ async function findConcurrentLiveInstancePids(
     try {
       record = JSON.parse(raw) as RegisteredInstanceRecord;
     } catch {
-      continue; // torn leftover, never a live registration
+      const pid = instancePidFromRecordName(name);
+      if (pid !== null && pid !== selfPid && deps.isPidAlive(pid)) {
+        candidates.push({ raw, fileName: name, pid, recordedAtMs: undefined, rootDir: undefined });
+      }
+      continue;
     }
     const pid = record.pid;
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {

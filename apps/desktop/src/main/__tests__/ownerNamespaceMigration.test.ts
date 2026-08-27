@@ -381,6 +381,29 @@ describe('claimLegacyOwnerNamespace', () => {
     await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
   });
 
+  it('fails closed when a registry record is malformed', async () => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), '{not-json', 'utf-8');
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, { isPidAlive: (pid) => pid === 4242 }),
+    );
+
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+    await expect(
+      fs.readFile(path.join(root, '.dev-instances', '4242.json'), 'utf-8'),
+    ).resolves.toBe('{not-json');
+  });
+
   it('interrupts mid-claim when an instance registers during the move, then resumes next exclusive start', async () => {
     const root = await tempRoot();
     // LEGACY_PATHS 顺序:ghost-cindy-prefs.json 在 slack-hook.json 之前。
@@ -670,7 +693,6 @@ describe('claimLegacyOwnerNamespace', () => {
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
     await writeDevInstanceRecord(root, 4242); // isPidAlive=false → 已退出的残留
     await writeDevInstanceRecord(root, 5353, '/somewhere/else'); // 异常拷贝进来的他库记录
-    await fs.writeFile(path.join(root, '.dev-instances', 'torn.json'), '{not-json', 'utf-8');
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
@@ -3100,6 +3122,15 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
   it('fails closed while another live instance shares the profile', async () => {
     const root = await tempRoot();
     await writeDevInstanceRecord(root, 4242);
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
+  });
+
+  it('fails closed when a shared instance registry record is malformed', async () => {
+    const root = await tempRoot();
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), '{not-json', 'utf-8');
 
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
     expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
