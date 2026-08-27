@@ -128,13 +128,14 @@ function writeBindings(value: BindingFile): void {
     fs.closeSync(handle);
     handle = undefined;
     fs.renameSync(tmp, file);
-    if (process.platform !== 'win32') {
-      const finalHandle = fs.openSync(file, 'r');
-      try {
-        fs.fsyncSync(finalHandle);
-      } finally {
-        fs.closeSync(finalHandle);
-      }
+    // Flush the published file on every platform. On Windows this maps to
+    // FlushFileBuffers and is the durable barrier available for a renamed
+    // file; POSIX additionally flushes the parent directory below.
+    const finalHandle = fs.openSync(file, 'r');
+    try {
+      fs.fsyncSync(finalHandle);
+    } finally {
+      fs.closeSync(finalHandle);
     }
     syncParentDirectory(file);
   } finally {
@@ -156,12 +157,18 @@ function writeBindings(value: BindingFile): void {
 const BINDING_MUTATION_LOCK_DB_SUFFIX = '.mutation-lock.db';
 
 function syncParentDirectory(file: string): void {
-  if (process.platform === 'win32') return;
-  const dirHandle = fs.openSync(path.dirname(file), 'r');
+  let dirHandle: number | undefined;
   try {
+    dirHandle = fs.openSync(path.dirname(file), 'r');
     fs.fsyncSync(dirHandle);
+  } catch (error) {
+    // Windows does not support opening directories on every filesystem. The
+    // final-file FlushFileBuffers above remains the fallback durability
+    // barrier in that case; do not turn a successful binding commit into a
+    // logout merely because directory fsync is unavailable.
+    if (process.platform !== 'win32') throw error;
   } finally {
-    fs.closeSync(dirHandle);
+    if (dirHandle !== undefined) fs.closeSync(dirHandle);
   }
 }
 

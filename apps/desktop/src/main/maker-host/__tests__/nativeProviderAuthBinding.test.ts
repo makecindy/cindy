@@ -97,10 +97,8 @@ describe('local → cloud native provider binding migration', () => {
 
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
 
-    if (process.platform === 'win32') {
-      expect(openSpy).not.toHaveBeenCalledWith(bindingFile, 'r');
-    } else {
-      expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r');
+    expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r');
+    if (process.platform !== 'win32') {
       expect(openSpy).toHaveBeenCalledWith(userDataDir, 'r');
     }
     expect(fsyncSpy).toHaveBeenCalled();
