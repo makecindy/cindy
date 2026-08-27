@@ -189,6 +189,44 @@ interface SessionStatusOverride {
 const sessionStatusOverrides = new Map<string, SessionStatusOverride>();
 let sessionStatusRevision = 0;
 
+export interface SessionStatusTransitionToken {
+  sessionId: string;
+  token: number;
+}
+
+interface StatusBucketSnapshot {
+  tailBefore: Session | null;
+  evictedByOptimisticInsert: Session | null;
+}
+
+interface PendingStatusTransition {
+  tokens: Set<number>;
+  optimisticStatus: Session['status'];
+  optimisticRevision: number;
+  hasSucceeded: boolean;
+  rollbackPatch: Partial<Session>;
+  sourceSession: Session | null;
+  titleRevisionAtStart: number;
+  spendRevisionAtStart: number;
+  buckets: Map<ListStatusFilter, StatusBucketSnapshot>;
+}
+
+const pendingStatusTransitions = new Map<string, PendingStatusTransition>();
+const pendingStatusTransitionWaiters = new Map<string, Set<() => void>>();
+let statusTransitionToken = 0;
+let statusTransitionGeneration = 0;
+
+function clearPendingStatusTransition(
+  sessionId: string,
+  pending: PendingStatusTransition,
+): void {
+  if (pendingStatusTransitions.get(sessionId) !== pending) return;
+  pendingStatusTransitions.delete(sessionId);
+  const waiters = pendingStatusTransitionWaiters.get(sessionId);
+  pendingStatusTransitionWaiters.delete(sessionId);
+  waiters?.forEach((resolve) => resolve());
+}
+
 /** 同桶补查已有请求在途时只记一个 dirty 位，请求结束后最多追加一轮 fresh。 */
 const trailingFilterRefreshes = new Set<ListStatusFilter>();
 
@@ -197,8 +235,53 @@ function belongsInFilter(status: Session['status'], filter: ListStatusFilter): b
   return filter === 'all' || filter === status;
 }
 
-function prependSession(list: Session[], session: Session): Session[] {
-  return [session, ...list.filter((item) => item.id !== session.id)].slice(0, DEFAULT_LIMIT);
+function updatedAtMs(session: Session): number {
+  const parsed = Date.parse(session.updatedAt);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+/** 与 sessions:list 的 updatedAt DESC 保持一致，并保留 1000 条硬上限。 */
+function upsertSessionByUpdatedAt(list: Session[], session: Session): Session[] {
+  const withoutSession = list.filter((item) => item.id !== session.id);
+  const timestamp = updatedAtMs(session);
+  const earlierIndex = withoutSession.findIndex((item) => timestamp > updatedAtMs(item));
+  const insertAt = earlierIndex === -1 ? withoutSession.length : earlierIndex;
+  return [
+    ...withoutSession.slice(0, insertAt),
+    session,
+    ...withoutSession.slice(insertAt),
+  ].slice(0, DEFAULT_LIMIT);
+}
+
+function recordPendingStatusEviction(
+  sessionId: string,
+  filter: ListStatusFilter,
+  before: Session[],
+  after: Session[],
+): void {
+  const pending = pendingStatusTransitions.get(sessionId);
+  const tailBefore = before.length >= DEFAULT_LIMIT ? (before[before.length - 1] ?? null) : null;
+  if (!pending || !tailBefore || after.some((item) => item.id === tailBefore.id)) return;
+  pending.buckets.set(filter, {
+    tailBefore,
+    evictedByOptimisticInsert: tailBefore,
+  });
+}
+
+function restorePendingStatusEvictions(
+  pending: PendingStatusTransition,
+  finalStatus: Session['status'],
+): void {
+  let restoredTail = false;
+  for (const [filter, snapshot] of pending.buckets) {
+    if (belongsInFilter(finalStatus, filter)) continue;
+    const evicted = snapshot.evictedByOptimisticInsert;
+    const list = cache.get(filter);
+    if (!evicted || !list || list.some((item) => item.id === evicted.id)) continue;
+    cache.set(filter, upsertSessionByUpdatedAt(list, evicted));
+    restoredTail = true;
+  }
+  if (restoredTail) notify();
 }
 
 function applySessionStatusOverrides(
@@ -210,7 +293,14 @@ function applySessionStatusOverrides(
   let next = list;
   let changed = false;
   for (const [sessionId, override] of sessionStatusOverrides) {
-    if (override.revision <= afterRevision) continue;
+    // 乐观状态在写库完成前必须跨过 request-start revision 持续生效；否则归档后、
+    // DB 提交前启动的列表查询会把旧 active 行写回来。
+    if (
+      override.revision <= afterRevision &&
+      !pendingStatusTransitions.has(sessionId)
+    ) {
+      continue;
+    }
     const status = override.patch.status;
     if (!status) continue;
     const idx = next.findIndex((session) => session.id === sessionId);
@@ -221,16 +311,16 @@ function applySessionStatusOverrides(
       continue;
     }
     if (idx !== -1) {
-      next = [
-        ...next.slice(0, idx),
-        mergeSession(next[idx], override.patch),
-        ...next.slice(idx + 1),
-      ];
+      const before = next;
+      next = upsertSessionByUpdatedAt(before, mergeSession(before[idx], override.patch));
+      recordPendingStatusEviction(sessionId, filter, before, next);
       changed = true;
       continue;
     }
     if (override.session) {
-      next = prependSession(next, override.session);
+      const before = next;
+      next = upsertSessionByUpdatedAt(before, override.session);
+      recordPendingStatusEviction(sessionId, filter, before, next);
       changed = true;
     }
   }
@@ -369,6 +459,41 @@ function runTrailingFilterBackfill(filter: ListStatusFilter): void {
   runFilterBackfill(filter);
 }
 
+function recordStatusOverride(
+  sessionId: string,
+  patch: Partial<Session>,
+  session: Session | null,
+): void {
+  sessionStatusRevision += 1;
+  sessionStatusOverrides.set(sessionId, {
+    revision: sessionStatusRevision,
+    patch: { ...patch },
+    session: patch.status === 'deleted' ? null : session,
+  });
+}
+
+function applyAuthoritativeStatusSession(session: Session): void {
+  recordStatusOverride(session.id, session, session);
+  if (session.status === 'deleted') {
+    autoTitlePreviews.delete(session.id);
+    sessionTitleOverrides.delete(session.id);
+    sessionSpendOverrides.delete(session.id);
+  }
+  let touched = false;
+  for (const [filter, list] of cache) {
+    if (!belongsInFilter(session.status, filter)) {
+      const next = list.filter((item) => item.id !== session.id);
+      if (next.length === list.length) continue;
+      cache.set(filter, next);
+      touched = true;
+      continue;
+    }
+    cache.set(filter, upsertSessionByUpdatedAt(list, session));
+    touched = true;
+  }
+  if (touched) notify();
+}
+
 export const sessionsStore = {
   subscribe(fn: (change: StoreChange) => void): () => void {
     subs.add(fn);
@@ -452,6 +577,152 @@ export const sessionsStore = {
   },
 
   /**
+   * 开始一次本地乐观状态迁移。pending 期间 status override 对之后启动的列表请求也
+   * 持续生效；写库成功后必须 complete，失败后必须 rollback。
+   */
+  beginStatusTransition(
+    id: string,
+    patch: Partial<Session> & { status: Session['status'] },
+  ): SessionStatusTransitionToken | null {
+    if (!id) return null;
+    statusTransitionToken += 1;
+    const token = statusTransitionToken;
+    const existing = pendingStatusTransitions.get(id);
+    if (existing?.optimisticStatus === patch.status) {
+      existing.tokens.add(token);
+      return { sessionId: id, token };
+    }
+    const source = this.findById(id);
+    const buckets = new Map<ListStatusFilter, StatusBucketSnapshot>();
+    for (const [filter, list] of cache) {
+      buckets.set(filter, {
+        tailBefore: list.length >= DEFAULT_LIMIT ? (list[list.length - 1] ?? null) : null,
+        evictedByOptimisticInsert: null,
+      });
+    }
+    const rollbackPatch: Partial<Session> = {
+      status:
+        source?.status ??
+        (patch.status === 'archived' ? 'active' : patch.status === 'active' ? 'archived' : 'active'),
+      ...(patch.pinnedAt !== undefined ? { pinnedAt: source?.pinnedAt } : {}),
+    };
+    pendingStatusTransitions.set(id, {
+      tokens: new Set([token]),
+      optimisticStatus: patch.status,
+      optimisticRevision: sessionStatusRevision + 1,
+      hasSucceeded: false,
+      rollbackPatch,
+      sourceSession: source,
+      titleRevisionAtStart: sessionTitleRevision,
+      spendRevisionAtStart: sessionSpendRevision,
+      buckets,
+    });
+    this.patchLocal(id, patch);
+    for (const [filter, snapshot] of buckets) {
+      const tail = snapshot.tailBefore;
+      const current = cache.get(filter);
+      if (tail && current && !current.some((item) => item.id === tail.id)) {
+        snapshot.evictedByOptimisticInsert = tail;
+      }
+    }
+    return { sessionId: id, token };
+  },
+
+  hasPendingStatusTransition(id: string): boolean {
+    return Boolean(id) && pendingStatusTransitions.has(id);
+  },
+
+  /** 等同一会话的状态写收敛；reset 代表数据 owner 已切换，返回 false 让旧动作停止。 */
+  async waitForStatusTransition(id: string): Promise<boolean> {
+    if (!id) return false;
+    const generation = statusTransitionGeneration;
+    while (pendingStatusTransitions.has(id)) {
+      await new Promise<void>((resolve) => {
+        const waiters = pendingStatusTransitionWaiters.get(id) ?? new Set<() => void>();
+        waiters.add(resolve);
+        pendingStatusTransitionWaiters.set(id, waiters);
+      });
+      if (generation !== statusTransitionGeneration) return false;
+    }
+    return generation === statusTransitionGeneration;
+  },
+
+  /** 用写库返回的完整行结束乐观迁移，并按服务端 updatedAt DESC 重排所有已加载桶。 */
+  completeStatusTransition(token: SessionStatusTransitionToken, persisted: Session): boolean {
+    const pending = pendingStatusTransitions.get(token.sessionId);
+    if (!pending || persisted.id !== token.sessionId || !pending.tokens.delete(token.token)) {
+      return false;
+    }
+    const latestOverride = sessionStatusOverrides.get(token.sessionId);
+    if (latestOverride?.patch.status !== persisted.status) {
+      clearPendingStatusTransition(token.sessionId, pending);
+      if (latestOverride?.patch.status) {
+        restorePendingStatusEvictions(pending, latestOverride.patch.status);
+      }
+      return false;
+    }
+    pending.hasSucceeded = true;
+    if (pending.tokens.size === 0) clearPendingStatusTransition(token.sessionId, pending);
+    const current = this.findById(token.sessionId);
+    const authoritative =
+      current?.status === persisted.status && updatedAtMs(current) > updatedAtMs(persisted)
+        ? current
+        : persisted;
+    const [withOverrides] = applyAutoTitlePreviews(
+      applySessionTitleOverrides(
+        applySessionSpendOverrides([authoritative], pending.spendRevisionAtStart),
+        pending.titleRevisionAtStart,
+      ),
+    );
+    applyAuthoritativeStatusSession(withOverrides ?? authoritative);
+    return true;
+  },
+
+  /** 写库失败时恢复原状态，并补回乐观插入在 1000 条上限处挤出的尾项。 */
+  rollbackStatusTransition(token: SessionStatusTransitionToken): boolean {
+    const pending = pendingStatusTransitions.get(token.sessionId);
+    if (!pending || !pending.tokens.delete(token.token)) return false;
+    const latestOverride = sessionStatusOverrides.get(token.sessionId);
+    if (latestOverride?.patch.status !== pending.optimisticStatus) {
+      clearPendingStatusTransition(token.sessionId, pending);
+      if (latestOverride?.patch.status) {
+        restorePendingStatusEvictions(pending, latestOverride.patch.status);
+      }
+      return false;
+    }
+    if (pending.tokens.size > 0) return true;
+    clearPendingStatusTransition(token.sessionId, pending);
+    if (
+      pending.hasSucceeded ||
+      (latestOverride.revision !== pending.optimisticRevision &&
+        latestOverride.patch.status === pending.optimisticStatus)
+    ) {
+      return true;
+    }
+    if (pending.sourceSession) {
+      const [withOverrides] = applyAutoTitlePreviews(
+        applySessionTitleOverrides(
+          applySessionSpendOverrides(
+            [mergeSession(pending.sourceSession, pending.rollbackPatch)],
+            pending.spendRevisionAtStart,
+          ),
+          pending.titleRevisionAtStart,
+        ),
+      );
+      applyAuthoritativeStatusSession(
+        withOverrides ?? mergeSession(pending.sourceSession, pending.rollbackPatch),
+      );
+    } else {
+      this.patchLocal(token.sessionId, pending.rollbackPatch);
+    }
+    restorePendingStatusEvictions(
+      pending,
+      pending.rollbackPatch.status ?? pending.sourceSession?.status ?? 'active',
+    );
+    return true;
+  },
+
+  /**
    * 局部合并（rename / pin / title / updatedAt / model / clearSession 等
    * "字段变化"全部走这里）。遍历所有桶：命中即合并字段，保留位置不重排序。
    *
@@ -473,15 +744,12 @@ export const sessionsStore = {
    */
   patchLocal(id: string, patch: Partial<Session>): void {
     if (!id || !patch) return;
+    const pendingBeforePatch =
+      patch.status !== undefined ? pendingStatusTransitions.get(id) : undefined;
     const sourceSession = patch.status !== undefined ? this.findById(id) : null;
     const migratedSession = sourceSession ? mergeSession(sourceSession, patch) : null;
     if (patch.status !== undefined) {
-      sessionStatusRevision += 1;
-      sessionStatusOverrides.set(id, {
-        revision: sessionStatusRevision,
-        patch: { ...patch },
-        session: patch.status === 'deleted' ? null : migratedSession,
-      });
+      recordStatusOverride(id, patch, migratedSession);
     }
     // 权威标题落地(main 写完占位 / 智能标题后经 sessions:patched 回流,或用户手动改名)
     // → 无条件回收预览条目。留着它会在下一次全量刷新时把真实标题又顶掉。
@@ -563,7 +831,7 @@ export const sessionsStore = {
           continue;
         }
         if (migratedSession) {
-          cache.set(filter, prependSession(list, migratedSession));
+          cache.set(filter, upsertSessionByUpdatedAt(list, migratedSession));
           touched = true;
         } else {
           toBackfill.add(filter);
@@ -571,6 +839,16 @@ export const sessionsStore = {
       }
     }
     if (touched) notify();
+    if (
+      pendingBeforePatch &&
+      patch.status !== undefined &&
+      patch.status !== pendingBeforePatch.optimisticStatus &&
+      pendingStatusTransitions.get(id) === pendingBeforePatch
+    ) {
+      clearPendingStatusTransition(id, pendingBeforePatch);
+      restorePendingStatusEvictions(pendingBeforePatch, patch.status);
+    }
+    if (pendingStatusTransitions.has(id)) return;
     for (const filter of toBackfill) {
       requestFilterBackfill(filter);
     }
@@ -604,6 +882,12 @@ export const sessionsStore = {
     autoTitlePreviews.clear();
     sessionTitleOverrides.clear();
     sessionStatusOverrides.clear();
+    statusTransitionGeneration += 1;
+    pendingStatusTransitions.clear();
+    for (const waiters of pendingStatusTransitionWaiters.values()) {
+      waiters.forEach((resolve) => resolve());
+    }
+    pendingStatusTransitionWaiters.clear();
     trailingFilterRefreshes.clear();
     initialFetchLogged.clear();
     notify('reset');

@@ -38,13 +38,17 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
-function session(id: string, status: Session['status'] = 'active'): Session {
+function session(
+  id: string,
+  status: Session['status'] = 'active',
+  updatedAt = '2026-08-27T00:00:00.000Z',
+): Session {
   return {
     id,
     status,
     title: `title-${id}`,
     workingDir: `C:\\projects\\${id}`,
-    updatedAt: '2026-08-27T00:00:00.000Z',
+    updatedAt,
   } as Session;
 }
 
@@ -77,7 +81,9 @@ describe('sessionsStore status bucket migration', () => {
     act(() => sessionsStore.patchLocal('archive-me', { status: 'archived', pinnedAt: null }));
 
     expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep-active']);
-    expect(sessionsStore.getByFilter('archived')?.[0]).toEqual(
+    expect(
+      sessionsStore.getByFilter('archived')?.find(({ id }) => id === 'archive-me'),
+    ).toEqual(
       expect.objectContaining({
         id: 'archive-me',
         status: 'archived',
@@ -90,6 +96,423 @@ describe('sessionsStore status bucket migration', () => {
       expect.objectContaining({ id: 'archive-me', status: 'archived', pinnedAt: null }),
     );
     expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it('keeps an optimistic archive applied to list requests started before the DB write completes', async () => {
+    const target = session('archive-me', 'active', '2026-08-27T02:00:00.000Z');
+    const keep = session('keep', 'active', '2026-08-27T01:00:00.000Z');
+    const alreadyArchived = session(
+      'already-archived',
+      'archived',
+      '2026-08-27T01:30:00.000Z',
+    );
+    mocks.list
+      .mockResolvedValueOnce([target, keep])
+      .mockResolvedValueOnce([alreadyArchived])
+      .mockResolvedValueOnce([target, keep]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    expect(transition).not.toBeNull();
+    mocks.list.mockReset();
+    // 三个请求都在乐观 patch 之后、数据库提交之前启动，返回的仍是旧 DB 快照。
+    mocks.list
+      .mockResolvedValueOnce([target, keep])
+      .mockResolvedValueOnce([alreadyArchived])
+      .mockResolvedValueOnce([target, keep]);
+
+    await Promise.all([
+      sessionsStore.forceRefresh('active'),
+      sessionsStore.forceRefresh('archived'),
+      sessionsStore.forceRefresh('all'),
+    ]);
+
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep']);
+    expect(sessionsStore.getByFilter('archived')).toEqual([
+      expect.objectContaining({ id: 'archive-me', status: 'archived' }),
+      expect.objectContaining({ id: 'already-archived' }),
+    ]);
+    expect(sessionsStore.getByFilter('all')?.find(({ id }) => id === 'archive-me')).toEqual(
+      expect.objectContaining({ status: 'archived' }),
+    );
+  });
+
+  it('defers a missing-row backfill until the status write returns the complete row', async () => {
+    mocks.list.mockResolvedValueOnce([]);
+    await sessionsStore.ensureByFilter('archived');
+    mocks.list.mockReset();
+
+    const transition = sessionsStore.beginStatusTransition('not-cached', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(sessionsStore.getByFilter('archived')).toEqual([]);
+
+    const persisted = session(
+      'not-cached',
+      'archived',
+      '2026-08-27T03:00:00.000Z',
+    );
+    expect(sessionsStore.completeStatusTransition(transition!, persisted)).toBe(true);
+    expect(sessionsStore.getByFilter('archived')).toEqual([
+      expect.objectContaining({
+        id: 'not-cached',
+        status: 'archived',
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ]);
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it('uses the persisted row to refresh updatedAt and reorder loaded target buckets', async () => {
+    const target = session('archive-me', 'active', '2026-08-27T01:00:00.000Z');
+    const newer = session('newer', 'archived', '2026-08-27T02:00:00.000Z');
+    mocks.list
+      .mockResolvedValueOnce([target])
+      .mockResolvedValueOnce([newer])
+      .mockResolvedValueOnce([newer, target]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'newer',
+      'archive-me',
+    ]);
+
+    const persisted = {
+      ...target,
+      status: 'archived' as const,
+      pinnedAt: null,
+      updatedAt: '2026-08-27T03:00:00.000Z',
+    };
+    expect(sessionsStore.completeStatusTransition(transition!, persisted)).toBe(true);
+
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'archive-me',
+      'newer',
+    ]);
+    expect(sessionsStore.getByFilter('all')?.map(({ id }) => id)).toEqual([
+      'archive-me',
+      'newer',
+    ]);
+    expect(sessionsStore.getByFilter('all')?.[0].updatedAt).toBe(
+      '2026-08-27T03:00:00.000Z',
+    );
+  });
+
+  it('replays the persisted row onto a stale list response that finishes after the DB write', async () => {
+    const target = session('archive-me', 'active', '2026-08-27T01:00:00.000Z');
+    const previousNewest = session('previous-newest', 'archived', '2026-08-27T02:00:00.000Z');
+    mocks.list
+      .mockResolvedValueOnce([target])
+      .mockResolvedValueOnce([previousNewest, target]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const staleAllRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleAllRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('all');
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ).toBe(true);
+    staleAllRequest.resolve([previousNewest, target]);
+    await staleRefresh;
+
+    expect(sessionsStore.getByFilter('all')?.map(({ id }) => id)).toEqual([
+      'archive-me',
+      'previous-newest',
+    ]);
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({
+        status: 'archived',
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    );
+  });
+
+  it('keeps the newest 1000 rows when a persisted archive enters a full target bucket', async () => {
+    const archived = Array.from({ length: 1000 }, (_, index) =>
+      session(
+        `archived-${index}`,
+        'archived',
+        new Date(2_000_000 - index * 1_000).toISOString(),
+      ),
+    );
+    const target = session('archive-me', 'active', new Date(500_000).toISOString());
+    mocks.list.mockResolvedValueOnce([target]).mockResolvedValueOnce(archived);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    // 旧 updatedAt 排在 1000 条之外，乐观阶段不能无条件挤掉尾项。
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual(
+      archived.map(({ id }) => id),
+    );
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: new Date(3_000_000).toISOString(),
+      }),
+    ).toBe(true);
+    const finalArchived = sessionsStore.getByFilter('archived') ?? [];
+    expect(finalArchived).toHaveLength(1000);
+    expect(finalArchived[0]?.id).toBe('archive-me');
+    expect(finalArchived.some(({ id }) => id === 'archived-999')).toBe(false);
+  });
+
+  it('restores ordering, pin state and an evicted tail row when an archive write fails', async () => {
+    const archived = Array.from({ length: 1000 }, (_, index) =>
+      session(
+        `archived-${index}`,
+        'archived',
+        new Date(2_000_000 - index * 1_000).toISOString(),
+      ),
+    );
+    const target = {
+      ...session('archive-me', 'active', new Date(1_500_500).toISOString()),
+      pinnedAt: '2026-08-27T00:00:00.000Z',
+    };
+    const active = [
+      session('active-newer', 'active', new Date(2_500_000).toISOString()),
+      target,
+      session('active-older', 'active', new Date(500_000).toISOString()),
+    ];
+    mocks.list.mockResolvedValueOnce(active).mockResolvedValueOnce(archived);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    expect(sessionsStore.getByFilter('archived')).toHaveLength(1000);
+    expect(sessionsStore.getByFilter('archived')?.some(({ id }) => id === 'archive-me')).toBe(true);
+    expect(
+      sessionsStore.getByFilter('archived')?.some(({ id }) => id === 'archived-999'),
+    ).toBe(false);
+
+    expect(sessionsStore.rollbackStatusTransition(transition!)).toBe(true);
+
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(
+      active.map(({ id }) => id),
+    );
+    expect(sessionsStore.getByFilter('active')?.[1]).toEqual(
+      expect.objectContaining({
+        id: 'archive-me',
+        status: 'active',
+        pinnedAt: '2026-08-27T00:00:00.000Z',
+      }),
+    );
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual(
+      archived.map(({ id }) => id),
+    );
+  });
+
+  it('restores the 1000th row when a full target bucket loads during a pending archive', async () => {
+    const archived = Array.from({ length: 1000 }, (_, index) =>
+      session(
+        `archived-${index}`,
+        'archived',
+        new Date(2_000_000 - index * 1_000).toISOString(),
+      ),
+    );
+    const target = session('archive-me', 'active', new Date(1_500_500).toISOString());
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('active');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    mocks.list.mockResolvedValueOnce(archived);
+    await sessionsStore.ensureByFilter('archived');
+
+    expect(sessionsStore.getByFilter('archived')).toHaveLength(1000);
+    expect(sessionsStore.getByFilter('archived')?.some(({ id }) => id === 'archive-me')).toBe(true);
+    expect(
+      sessionsStore.getByFilter('archived')?.some(({ id }) => id === 'archived-999'),
+    ).toBe(false);
+
+    expect(sessionsStore.rollbackStatusTransition(transition!)).toBe(true);
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual(
+      archived.map(({ id }) => id),
+    );
+  });
+
+  it('waits for all overlapping archive writes before rolling back their shared optimistic state', async () => {
+    const archived = Array.from({ length: 1000 }, (_, index) =>
+      session(
+        `archived-${index}`,
+        'archived',
+        new Date(2_000_000 - index * 1_000).toISOString(),
+      ),
+    );
+    const target = session('archive-me', 'active', new Date(1_500_500).toISOString());
+    mocks.list.mockResolvedValueOnce([target]).mockResolvedValueOnce(archived);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+
+    const first = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const second = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+
+    expect(sessionsStore.rollbackStatusTransition(first!)).toBe(true);
+    expect(sessionsStore.getByFilter('archived')?.some(({ id }) => id === 'archive-me')).toBe(true);
+    expect(sessionsStore.rollbackStatusTransition(second!)).toBe(true);
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['archive-me']);
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual(
+      archived.map(({ id }) => id),
+    );
+  });
+
+  it.each(['active', 'deleted'] as const)(
+    'keeps a later %s status and restores the full archived bucket before an old archive response returns',
+    async (laterStatus) => {
+      const archived = Array.from({ length: 1000 }, (_, index) =>
+        session(
+          `archived-${index}`,
+          'archived',
+          new Date(2_000_000 - index * 1_000).toISOString(),
+        ),
+      );
+      const target = session('archive-me', 'active', new Date(1_500_500).toISOString());
+      mocks.list.mockResolvedValueOnce([target]).mockResolvedValueOnce(archived);
+      await sessionsStore.ensureByFilter('active');
+      await sessionsStore.ensureByFilter('archived');
+
+      const transition = sessionsStore.beginStatusTransition('archive-me', {
+        status: 'archived',
+        pinnedAt: null,
+      });
+      sessionsStore.patchLocal('archive-me', { status: laterStatus });
+
+      expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual(
+        archived.map(({ id }) => id),
+      );
+      expect(
+        sessionsStore.completeStatusTransition(transition!, {
+          ...target,
+          status: 'archived',
+          pinnedAt: null,
+          updatedAt: new Date(3_000_000).toISOString(),
+        }),
+      ).toBe(false);
+      expect(sessionsStore.getByFilter('active')?.some(({ id }) => id === 'archive-me')).toBe(
+        laterStatus === 'active',
+      );
+      expect(sessionsStore.getByFilter('archived')?.some(({ id }) => id === 'archive-me')).toBe(
+        false,
+      );
+    },
+  );
+
+  it('waits for an archive to settle before restoring and rolls a failed restore back to its full row', async () => {
+    const target = session('archive-me', 'active', '2026-08-27T01:00:00.000Z');
+    const previousNewest = session(
+      'previous-newest',
+      'archived',
+      '2026-08-27T02:00:00.000Z',
+    );
+    mocks.list
+      .mockResolvedValueOnce([target])
+      .mockResolvedValueOnce([previousNewest])
+      .mockResolvedValueOnce([previousNewest, target]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    await sessionsStore.ensureByFilter('all');
+
+    const archive = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    let restoreStarted = false;
+    const restorePromise = sessionsStore
+      .waitForStatusTransition('archive-me')
+      .then((canContinue) => {
+        restoreStarted = true;
+        return canContinue
+          ? sessionsStore.beginStatusTransition('archive-me', { status: 'active' })
+          : null;
+      });
+    await Promise.resolve();
+    expect(restoreStarted).toBe(false);
+
+    expect(
+      sessionsStore.completeStatusTransition(archive!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ).toBe(true);
+    const restore = await restorePromise;
+    expect(restoreStarted).toBe(true);
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['archive-me']);
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'previous-newest',
+    ]);
+
+    expect(sessionsStore.rollbackStatusTransition(restore!)).toBe(true);
+    expect(sessionsStore.getByFilter('active')).toEqual([]);
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'archive-me',
+      'previous-newest',
+    ]);
+    expect(sessionsStore.getByFilter('all')?.map(({ id, status }) => [id, status])).toEqual([
+      ['archive-me', 'archived'],
+      ['previous-newest', 'archived'],
+    ]);
+    expect(sessionsStore.getByFilter('all')?.[0].updatedAt).toBe(
+      '2026-08-27T03:00:00.000Z',
+    );
+  });
+
+  it('stops a queued opposite status action when the store resets', async () => {
+    mocks.list.mockResolvedValueOnce([session('archive-me')]);
+    await sessionsStore.ensureByFilter('active');
+    sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const queued = sessionsStore.waitForStatusTransition('archive-me');
+
+    sessionsStore.reset();
+
+    await expect(queued).resolves.toBe(false);
+    expect(sessionsStore.getByFilter('active')).toBeNull();
   });
 
   it('removes the archived row from a mounted active list synchronously', async () => {
@@ -119,7 +542,7 @@ describe('sessionsStore status bucket migration', () => {
 
     act(() => sessionsStore.patchLocal('restore-me', { status: 'active' }));
 
-    expect(sessionsStore.getByFilter('active')?.[0]).toEqual(
+    expect(sessionsStore.getByFilter('active')?.find(({ id }) => id === 'restore-me')).toEqual(
       expect.objectContaining({
         id: 'restore-me',
         status: 'active',
@@ -247,8 +670,8 @@ describe('sessionsStore status bucket migration', () => {
     await staleLoad;
 
     expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
-      'archive-me',
       'already-archived',
+      'archive-me',
     ]);
     expect(requestedFilters()).toEqual(['active', 'archived']);
   });

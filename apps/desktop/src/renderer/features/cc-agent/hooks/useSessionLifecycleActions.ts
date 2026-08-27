@@ -30,11 +30,12 @@ import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
-import { emitRefresh } from '@/lib/sessionsBus';
+import { sessionsStore, type SessionStatusTransitionToken } from '@/lib/sessionsStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { createLogger } from '@/lib/logger';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { ListStatusFilter } from '@/lib/sessionService';
-import type { SessionStatus } from '@/lib/ccAgent.types';
+import type { Session, SessionStatus } from '@/lib/ccAgent.types';
 
 const log = createLogger('useSessionLifecycleActions');
 
@@ -70,6 +71,8 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       { activeSessionId, deleteRedirectRoute }: RunSessionActionOptions,
     ) => {
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
+      const isDeviceLinkSession = Boolean(getStickySessionDeviceId(sessionId));
+      let statusTransition: SessionStatusTransitionToken | null = null;
       // device-link 远程会话:status 写经隧道(setStatus 内部按来源路由 patch-meta),被控端写库后
       // 广播 sessions:patched{status} → 控制端 applyPatch 把它移出分片(纯镜像,无需乐观/重拉)。
 
@@ -104,9 +107,20 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         if (archivedRowStaysInList) {
           flushSync(leaveArchivedSession);
         }
-        flushSync(() => {
-          patchLocal(sessionId, { status: 'archived', pinnedAt: null });
-        });
+        if (!isDeviceLinkSession) {
+          if (
+            sessionsStore.hasPendingStatusTransition(sessionId) &&
+            !(await sessionsStore.waitForStatusTransition(sessionId))
+          ) {
+            return;
+          }
+          flushSync(() => {
+            statusTransition = sessionsStore.beginStatusTransition(sessionId, {
+              status: 'archived',
+              pinnedAt: null,
+            });
+          });
+        }
         if (!archivedRowStaysInList) {
           leaveArchivedSession();
         }
@@ -116,19 +130,17 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // query,不影响列表,没有理由挤在用户等着看到行消失的那一段前面。
       makerChatStore.closeSessionQuery(sessionId);
 
+      let persisted: Session;
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        await sessionService.setStatus(sessionId, targetStatus);
+        persisted = await sessionService.setStatus(sessionId, targetStatus);
+        if (statusTransition) {
+          sessionsStore.completeStatusTransition(statusTransition, persisted);
+        }
       } catch (err) {
         log.error('[session action]', err);
-        // Archive 乐观更新失败的回滚:把 status 改回 active(pinnedAt 已被乐观
-        // 清了,如果回滚不补回原值就会丢 pin。但 oldPinnedAt 在闭包里没捕获,
-        // 这里只能补 status —— pin 丢失是已知 trade-off,概率极低(只有 DB
-        // 写失败这种边界场景才触发)。
-        if (action === 'archive') {
-          patchLocal(sessionId, { status: 'active' });
-        }
+        if (statusTransition) sessionsStore.rollbackStatusTransition(statusTransition);
         toast.error(
           action === 'delete'
             ? t('ccAgent.sidebar.deleteFailed')
@@ -137,11 +149,11 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         return;
       }
 
-      if (action === 'delete') {
+      if (action === 'delete' && !isDeviceLinkSession) {
         // DB 已确认删除成功后再让 sessionsStore 修正所有已加载的筛选桶。
         // 仅刷新当前桶会留下陈旧的 active / all 缓存，切换筛选时已删除会话会短暂重现；
         // 不在写库前乐观移除，避免失败时出现“先消失、再恢复”的反向闪烁。
-        patchLocal(sessionId, { status: 'deleted' });
+        patchLocal(sessionId, persisted);
       }
 
       // MEM-1: Free all in-memory state (messages, base64 images, listeners)
@@ -177,28 +189,36 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
   );
 
   /**
-   * unarchive：archive 的反向操作，无副作用直接 patch，不弹确认。
-   * 调用方 filter.status === 'archived' 时，unarchive 后 session 不再匹配筛选，
-   * 由 refreshSessions 拉到最新列表后自然消失。
+   * unarchive：archive 的反向状态事务，不弹确认。若归档仍在写库，先等它收敛，
+   * 再以完整归档行作为恢复失败时的回滚基线。
    */
   const unarchiveSession = useCallback(
     async (sessionId: string) => {
-      // 乐观更新本地状态，避免 refresh 期间残留 archived 视觉
-      patchLocal(sessionId, { status: 'active' });
-      try {
-        await sessionService.setStatus(sessionId, 'active');
-      } catch (err) {
-        log.error('[session unarchive]', err);
-        toast.error(t('ccAgent.sidebar.unarchiveFailed'));
-        await refreshSessions();
+      const isDeviceLinkSession = Boolean(getStickySessionDeviceId(sessionId));
+      if (
+        !isDeviceLinkSession &&
+        sessionsStore.hasPendingStatusTransition(sessionId) &&
+        !(await sessionsStore.waitForStatusTransition(sessionId))
+      ) {
         return;
       }
-      // 兜底:status 跨桶迁移由 sessionsStore.patchLocal 自动 drop+refetch 相关桶,
-      // 这里再 emitRefresh 一次,确保即便存在 pre-fix 陈旧 cache,active/archived/all
-      // 三桶都会被强制重拉,跟 DB 对齐(unarchive 频次低,代价可接受)。
-      emitRefresh();
+      const statusTransition = isDeviceLinkSession
+        ? null
+        : sessionsStore.beginStatusTransition(sessionId, { status: 'active' });
+      try {
+        const persisted = await sessionService.setStatus(sessionId, 'active');
+        if (statusTransition) {
+          sessionsStore.completeStatusTransition(statusTransition, persisted);
+        }
+      } catch (err) {
+        log.error('[session unarchive]', err);
+        if (statusTransition) sessionsStore.rollbackStatusTransition(statusTransition);
+        toast.error(t('ccAgent.sidebar.unarchiveFailed'));
+        if (!statusTransition && !isDeviceLinkSession) await refreshSessions();
+        return;
+      }
     },
-    [patchLocal, refreshSessions, t],
+    [refreshSessions, t],
   );
 
   return { runSessionAction, unarchiveSession };
