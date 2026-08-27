@@ -7457,6 +7457,9 @@
       "forkStripEncrypted": "Fork and strip",
       "forkStripEncryptedRunning": "Forking…",
       "forkStripEncryptedTitle": "Fork and strip into a new session",
+      "forkStripOversizedHistory": "Slim history and continue",
+      "forkStripOversizedHistoryRunning": "Forking…",
+      "forkStripOversizedHistoryTitle": "Fork into a new task after removing oversized inline images",
       "codexSessionExpiredLogin": "Reconnect ChatGPT",
       "codexSessionReconnected": "ChatGPT is reconnected. Click “Retry” to continue.",
       "networkUnreachable": "Network error: the service is temporarily unreachable. Click \"Retry\" to try again.",
@@ -7822,6 +7825,7 @@
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
+        "labelStrip": "Omitted oversized images and continued",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
@@ -10370,6 +10374,8 @@
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
+      "codexHistoryOversized": "This task’s history includes oversized images, so remote compaction cannot finish. Cindy will omit those images and continue in this task.",
+      "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
       "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."

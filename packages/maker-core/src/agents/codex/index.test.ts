@@ -20373,6 +20373,43 @@ describe('CodexAgent.forkSdkSession', () => {
     }
   });
 
+  it('rewrites oversized tool-output images in the stripped fork copy', async () => {
+    const agent = new CodexAgent(createDeps());
+    let copied = '';
+    installFakeHost(agent, async (method, params) => {
+      if (method !== Method.ThreadFork) return undefined;
+      const forkPath = (params as { path?: string }).path;
+      if (forkPath) copied = await fs.readFile(forkPath, 'utf8');
+      return undefined;
+    });
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-home-'));
+    try {
+      (agent as unknown as { codexHome: string }).codexHome = codexHome;
+      const sessionsDir = path.join(codexHome, 'sessions', '2026', '08', '26');
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sourceRollout = path.join(sessionsDir, 'rollout-2026-08-26-source-thread-id.jsonl');
+      const huge = `data:image/png;base64,${'A'.repeat(64 * 1024)}`;
+      await fs.writeFile(
+        sourceRollout,
+        `${[
+          JSON.stringify({ payload: { type: 'message', role: 'user' } }),
+          JSON.stringify({ payload: { type: 'custom_tool_call_output', call_id: 'shot', output: huge } }),
+        ].join('\n')}\n`,
+        'utf8',
+      );
+      await agent.forkSdkSession({
+        sourceSdkSessionId: 'source-thread-id',
+        upToMessageId: undefined,
+        stripEncryptedReasoning: true,
+      });
+      expect(copied).toContain('"shot"');
+      expect(copied).toContain('cindy-omitted-inline-image');
+      expect(copied).not.toContain(';base64,');
+    } finally {
+      await fs.rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it('uses the rollout path returned by imported-thread preparation when stripping', async () => {
     const externalHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-external-'));
     const sourceRollout = path.join(externalHome, 'rollout-imported-thread.jsonl');
@@ -22479,6 +22516,44 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('preserves structured Codex error info when failed turn only reports it on turn/completed', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-failed-with-structured-detail',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: {
+        id: 'turn-1',
+        status: 'failed',
+        error: {
+          message: 'context window exceeded',
+          codexErrorInfo: 'contextWindowExceeded',
+        },
+      },
+    });
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: {
+        message: 'context window exceeded',
+        codexErrorInfo: 'contextWindowExceeded',
+        reason: 'context-overflow',
+        isTerminal: true,
+      },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+    await handle.close();
+  });
   it('does NOT emit a fallback error for an interrupted turn without error message', async () => {
     // interrupted = 用户主动停止, 不算失败, 不该弹"执行失败"。
     const agent = new CodexAgent(createDeps());
@@ -26147,6 +26222,87 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       ]);
       await handle.close();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('classifies reconnect stall as oversized only when live-tail images are strip-worthy', async () => {
+    vi.useFakeTimers();
+    const agent = new CodexAgent(createDeps());
+    const proto = Object.getPrototypeOf(agent) as {
+      findRolloutPath: (id: string) => Promise<string>;
+      hasLocalCodexHome: () => boolean;
+    };
+    const localHome = vi.spyOn(proto, 'hasLocalCodexHome').mockReturnValue(true);
+    const find = vi.spyOn(proto, 'findRolloutPath').mockResolvedValue('/tmp/mock-oversized.jsonl');
+    const measure = vi.spyOn(await import('./rollout-sanitize.js'), 'measureRolloutLiveTailStats')
+      .mockResolvedValue({
+        tailBytes: 20 * 1024 * 1024,
+        projectedTailBytes: 800_000,
+        strippedBytes: 19 * 1024 * 1024,
+        rewrittenLines: 4,
+        unsafeLines: 0,
+        scannedBytes: 20 * 1024 * 1024,
+      });
+    try {
+      const { handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized');
+      emitReconnect(handlers, 1);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_history_oversized',
+          isTerminal: true,
+        }),
+      }));
+      expect(seen.filter((event) => event.type === 'error' && (event.data as { reason?: string }).reason === 'codex_history_oversized')).toHaveLength(1);
+      await handle.close();
+    } finally {
+      localHome.mockRestore();
+      find.mockRestore();
+      measure.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps reconnect-stalled when live tail is large but not image-heavy', async () => {
+    vi.useFakeTimers();
+    const agent = new CodexAgent(createDeps());
+    const proto = Object.getPrototypeOf(agent) as {
+      findRolloutPath: (id: string) => Promise<string>;
+      hasLocalCodexHome: () => boolean;
+    };
+    const localHome = vi.spyOn(proto, 'hasLocalCodexHome').mockReturnValue(true);
+    const find = vi.spyOn(proto, 'findRolloutPath').mockResolvedValue('/tmp/mock-text-only.jsonl');
+    const measure = vi.spyOn(await import('./rollout-sanitize.js'), 'measureRolloutLiveTailStats')
+      .mockResolvedValue({
+        tailBytes: 20 * 1024 * 1024,
+        projectedTailBytes: 20 * 1024 * 1024,
+        strippedBytes: 0,
+        rewrittenLines: 0,
+        unsafeLines: 0,
+        scannedBytes: 20 * 1024 * 1024,
+      });
+    try {
+      const { handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-text-only');
+      emitReconnect(handlers, 1);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        data: expect.objectContaining({ reason: 'codex_history_oversized' }),
+      }));
+      await handle.close();
+    } finally {
+      localHome.mockRestore();
+      find.mockRestore();
+      measure.mockRestore();
       vi.useRealTimers();
     }
   });

@@ -7454,6 +7454,9 @@
       "forkStripEncrypted": "Fork して切り離す",
       "forkStripEncryptedRunning": "Fork 中…",
       "forkStripEncryptedTitle": "暗号化推論を除いた新しいセッションを Fork で作成",
+      "forkStripOversizedHistory": "履歴を縮小して続ける",
+      "forkStripOversizedHistoryRunning": "Fork 中…",
+      "forkStripOversizedHistoryTitle": "過大なインライン画像を除いた新しいタスクへ Fork",
       "codexSessionExpiredLogin": "ChatGPT に再接続",
       "codexSessionReconnected": "ChatGPT に再接続しました。「再試行」をクリックして続行してください。",
       "networkUnreachable": "ネットワークエラー:サービスに一時的に接続できません。「再試行」を押してください。",
@@ -7819,6 +7822,7 @@
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",
         "labelTimeout": "直前の応答がなかったため、整理して続行しました",
+        "labelStrip": "サイズの大きい画像を省略して続行しました",
         "toggleHint": "引き継ぎ内容を表示",
         "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
         "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
@@ -10357,6 +10361,8 @@
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "hostShellCommandBlocked": "Cindy は内蔵 iOS シミュレータを迂回するシェルコマンドをブロックしました。デバイスの操作、アプリの起動、画面操作、スクリーンショット、診断には iOS シミュレータツールを使用してください。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
+      "codexHistoryOversized": "履歴に過大な画像があり、リモート圧縮を完了できません。Cindy がそれらの画像を省略し、このタスクのまま続けます。",
+      "codexHistoryOversizedRemote": "履歴に過大な画像があり、リモート圧縮を完了できません。Codex を実行している端末でこのタスクを開いて再送信してください。Cindy が画像を省略して続けます。",
       "codexCompactionNotConverging": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。容量を占めているのは会話ではなく、圧縮では削れないシステムプロンプトとツール定義であることがほとんどです。新しいセッションを開始してください。",
       "codexCompactionNotConvergingModelSwitch": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。このセッションは途中でモデルを切り替えており、Codex は切り替え前のモデルの上限でコンテキストを判定し続けています。元のモデルに戻すか、新しいセッションを開始してください。",
       "turnNoEventTimeout": "このターンは長時間まったく進展がなかったため（モデル・ツール・バックグラウンド処理のすべてが無反応）、無限待機を避けるため自動中断しました。次のメッセージを送信して続行できます。"

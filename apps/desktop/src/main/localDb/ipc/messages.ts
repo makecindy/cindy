@@ -48,6 +48,7 @@ import {
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
+import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 
 const log = createLogger('localDb/messages');
@@ -313,7 +314,21 @@ export function registerMessageIpc(): void {
       )
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
-    return hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
+    const listed = hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
+    // 不阻塞首屏。旧 reconnect-stalled 横幅在打开本地 Codex 会话后异步升格。
+    void maybeUpgradeCodexHistoryOversizedError(sid)
+      .then((upgrade) => {
+        if (upgrade.result === 'upgraded' && upgrade.message) {
+          broadcastMessageRow(sid, upgrade.message);
+        }
+      })
+      .catch((error) => {
+        log.warn('codex oversized history upgrade rejected', {
+          sessionId: sid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return listed;
   });
 
   ipcMain.handle(

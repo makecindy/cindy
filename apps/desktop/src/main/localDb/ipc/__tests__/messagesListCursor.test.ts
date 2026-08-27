@@ -41,6 +41,10 @@ const h = vi.hoisted(() => ({
   ),
 }));
 
+vi.mock('../../codexHistoryOversizedUpgrade', () => ({
+  maybeUpgradeCodexHistoryOversizedError: vi.fn(async () => ({ result: 'skipped' })),
+}));
+
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {

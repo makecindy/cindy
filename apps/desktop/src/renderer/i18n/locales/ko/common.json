@@ -7454,6 +7454,9 @@
       "forkStripEncrypted": "Fork 및 분리",
       "forkStripEncryptedRunning": "Fork 중…",
       "forkStripEncryptedTitle": "암호화 추론을 제거한 새 세션으로 Fork",
+      "forkStripOversizedHistory": "기록을 줄인 뒤 계속",
+      "forkStripOversizedHistoryRunning": "Fork 중…",
+      "forkStripOversizedHistoryTitle": "과대한 인라인 이미지를 제거한 새 작업으로 Fork",
       "codexSessionExpiredLogin": "ChatGPT 다시 연결",
       "codexSessionReconnected": "ChatGPT가 다시 연결되었습니다. ‘다시 시도’를 눌러 계속하세요.",
       "networkUnreachable": "네트워크 오류: 서비스에 일시적으로 연결할 수 없습니다. ‘다시 시도’를 눌러 주세요.",
@@ -7819,6 +7822,7 @@
       "contextRebuild": {
         "labelOverflow": "컨텍스트를 정리하고 계속합니다",
         "labelTimeout": "직전 응답이 없어 정리한 뒤 계속합니다",
+        "labelStrip": "큰 이미지를 생략하고 계속합니다",
         "toggleHint": "인계 내용 보기",
         "handoffTitle": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "handoffTitleEnglishSource": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)"
@@ -10357,6 +10361,8 @@
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
       "hostShellCommandBlocked": "Cindy가 내장 iOS 시뮬레이터를 우회하는 셸 명령을 차단했습니다. 기기 제어, 앱 실행, 화면 조작, 스크린샷, 진단에는 iOS 시뮬레이터 도구를 사용하세요.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
+      "codexHistoryOversized": "기록에 과대한 이미지가 있어 원격 압축을 끝낼 수 없습니다. Cindy가 해당 이미지를 생략하고 이 작업에서 계속합니다.",
+      "codexHistoryOversizedRemote": "기록에 과대한 이미지가 있어 원격 압축을 끝낼 수 없습니다. Codex를 실행 중인 기기에서 이 작업을 연 뒤 다시 보내세요. Cindy가 이미지를 생략하고 계속합니다.",
       "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
       "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
       "turnNoEventTimeout": "이번 턴에서 오랫동안 아무런 진행이 없어(모델·도구·백그라운드 프로세스 모두 무응답) 무한 대기를 막기 위해 자동으로 중단했습니다. 다음 메시지를 보내 계속할 수 있습니다."

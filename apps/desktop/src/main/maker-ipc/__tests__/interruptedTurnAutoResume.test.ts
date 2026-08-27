@@ -66,6 +66,15 @@ describe('isInterruptedTurnError', () => {
     ).toBe(true);
   });
 
+  it('rejects oversized-history classification so auto-resume cannot loop', () => {
+    expect(
+      isInterruptedTurnError({
+        reason: 'codex_history_oversized',
+        message: 'Codex remote compaction cannot finish because this thread\'s live history is oversized.',
+      }),
+    ).toBe(false);
+  });
+
   it('accepts the classified empty-response reason (#2320)', () => {
     // translator 只在「发起过 API 调用、零文本、零工具、零 usage 增量」的严格
     // 形态下盖这个 key —— 上游/网关返回退化空响应,与流被切断同属连接层故障,

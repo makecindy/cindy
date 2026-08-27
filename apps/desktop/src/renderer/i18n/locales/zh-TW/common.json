@@ -7445,6 +7445,9 @@
       "forkStripEncrypted": "Fork 並剝離",
       "forkStripEncryptedRunning": "Fork 中…",
       "forkStripEncryptedTitle": "Fork 並剝離出新任務(去掉加密推理內容)",
+      "forkStripOversizedHistory": "瘦身後繼續",
+      "forkStripOversizedHistoryRunning": "Fork 中…",
+      "forkStripOversizedHistoryTitle": "去掉過大的歷史圖片後 Fork 成新任務",
       "codexSessionExpiredLogin": "重新連線 ChatGPT",
       "codexSessionReconnected": "ChatGPT 帳號已重新連線。點選「重試」繼續。",
       "networkUnreachable": "網路異常，服務暫時不可達，可點選「重試」。",
@@ -7810,6 +7813,7 @@
       "contextRebuild": {
         "labelOverflow": "已整理上下文並繼續",
         "labelTimeout": "上一輪沒有回應，已整理後繼續",
+        "labelStrip": "已略去過大的圖片並繼續",
         "toggleHint": "檢視交接內容",
         "handoffTitle": "交接內容——整理後傳送給後續對話的上下文摘要(不計入對話記錄，僅在此展示)",
         "handoffTitleEnglishSource": "交接內容——整理後傳送給後續對話的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)"
@@ -10349,6 +10353,8 @@
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
       "hostShellCommandBlocked": "Cindy 已阻止會繞過內嵌模擬器的 Shell 命令。請改用模擬器工具控制裝置、啟動 App、操作介面、截圖和診斷。",
       "upstreamResponseIdleTimeout": "模型長時間沒有任何響應，本輪已自動中斷以免無限等待。已完成的工具呼叫都保留，可以直接發下一條訊息繼續。",
+      "codexHistoryOversized": "這段歷史裡有過大的圖片，遠端壓縮送不出去。Cindy 會自動略去這些圖片，並在目前任務裡繼續。",
+      "codexHistoryOversizedRemote": "這段歷史裡有過大的圖片，遠端壓縮送不出去。請在執行 Codex 的那台電腦上打開任務後再傳送，Cindy 會自動略去這些圖片並繼續。",
       "codexCompactionNotConverging": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。壓不動的部分通常不在對話裡——system prompt 與工具定義佔掉的空間壓縮清不掉。新開一個任務可以繼續。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。本任務中途切換過模型，而 Codex 仍按切換前那個模型的上下文上限來判斷。切回原模型可以繼續，或者新開一個任務。",
       "turnNoEventTimeout": "本輪長時間沒有任何進展（模型、工具與後臺處理程序都沒有動靜），已自動中斷以免無限等待。可以直接發下一條訊息繼續。"

@@ -470,6 +470,7 @@ describe('forkSessionAtMessage', () => {
     const second = makeMessageRow({ id: 'asst-1', role: 'assistant', createdAt: 2000 });
 
     selectQueue.push([source]); // source session
+    selectQueue.push([]); // no existing strip-fork child
     selectQueue.push([first, second]); // source messages for max + ids
     selectQueue.push([
       makeSourceRow({
@@ -514,6 +515,32 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.forkedAtMessageId).toBeNull();
     expect(txArgs.newSession.providerId).toBe('xd');
     expect(txArgs.newMessageIds).toHaveLength(2);
+    expect(result.parentSessionId).toBe('src-session');
+  });
+
+  it('reuses an existing strip-fork child instead of forking twice', async () => {
+    const source = makeSourceRow({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      sdkSessionId: 'codex-thread-source',
+    });
+    const existing = makeSourceRow({
+      id: 'already-stripped',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-stripped',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+    });
+    selectQueue.push([source]);
+    selectQueue.push([existing]);
+
+    const result = await forkSessionStripEncrypted('src-session');
+
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(txCalls).toHaveLength(0);
+    expect(result.id).toBe('already-stripped');
     expect(result.parentSessionId).toBe('src-session');
   });
 

@@ -41,6 +41,8 @@ export type ForkErrorCode =
   | 'CODEX_FORK_STATE_UNAVAILABLE'
   | 'UNSUPPORTED_HISTORY';
 
+const STRIP_FORK_TITLE_PREFIX = '[Fork·已剥离]';
+
 function forkError(code: ForkErrorCode, message: string): Error {
   const err = new Error(message);
   (err as { code?: string }).code = code;
@@ -870,6 +872,19 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
   }
 
+  const childRows = await db
+    .select()
+    .from(sessions)
+    .where(
+      and(eq(sessions.parentSessionId, sourceSessionId), isNull(sessions.forkedAtMessageId)),
+    );
+  const reused = childRows.find(
+    (row) => row.status !== 'deleted' && String(row.title).startsWith(STRIP_FORK_TITLE_PREFIX),
+  );
+  if (reused) {
+    return sessionToCamel({ ...reused, messageCount: 0 });
+  }
+
   const sourceMessages = await db
     .select()
     .from(messages)
@@ -893,9 +908,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     copyBeforeCreatedAt,
   );
 
-  const newTitle = source.title.startsWith('[Fork·已剥离]')
+  const newTitle = source.title.startsWith(STRIP_FORK_TITLE_PREFIX)
     ? source.title
-    : `[Fork·已剥离] ${source.title}`;
+    : `${STRIP_FORK_TITLE_PREFIX} ${source.title}`;
   const { newSdkSessionId, uuidMap } = await getMaker()
     .forkSdkSession('codex', {
       sourceSdkSessionId: source.sdkSessionId,

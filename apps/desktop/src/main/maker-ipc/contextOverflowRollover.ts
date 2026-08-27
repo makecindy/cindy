@@ -5,7 +5,11 @@
  * 规划函数是纯的，host 只负责关 live handle、落库、注入交接、wire 重放失败那条 user 消息。
  */
 
-import { CONTEXT_OVERFLOW_REASON, isContextOverflowErrorMessage } from '@cindy/maker-core';
+import {
+  CODEX_HISTORY_OVERSIZED_REASON,
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '@cindy/maker-core';
 import {
   projectAgentFacingText,
   readAgentInputReferences,
@@ -41,6 +45,13 @@ export function isContextOverflowErrorData(data: unknown): boolean {
     (value) => typeof value === 'string' && isContextOverflowErrorMessage(value),
   );
 }
+
+export function isOversizedHistoryErrorData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  return (data as { reason?: unknown }).reason === CODEX_HISTORY_OVERSIZED_REASON;
+}
+
+export type CodexStripRelinkResult = 'recovered' | 'not-needed' | 'failed';
 
 const PI_PROMPT_RPC_TIMEOUT_RE = /pi rpc timeout after \d+ms: prompt\b/i;
 
@@ -267,6 +278,7 @@ export function findLatestRebuildableError(
       const data = errorContentToData(message.content);
       if (isContextOverflowErrorData(data)) return data;
       if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
+      if (isOversizedHistoryErrorData(data)) return data;
       return null;
     }
     if (message.role === 'assistant' && extractPlainText(message.content).trim().length > 0) {
@@ -287,7 +299,19 @@ export interface ContextOverflowRolloverDeps {
     contextWindow?: number | null;
     model?: string | null;
     providerId?: string | null;
+    workingDir?: string | null;
   } | null>;
+  /**
+   * Codex 字节病第一档：同任务剥图并 relink native thread。
+   * recovered = 已换干净 thread；not-needed = 当前 thread 已可发送；failed = 落到换窗。
+   */
+  tryStripOversizedCodexHistory?(args: {
+    sessionId: string;
+    threadId: string;
+    model: string | null;
+    providerId: string | null;
+    workingDir: string | null;
+  }): Promise<CodexStripRelinkResult>;
   resolveVerifiedWindow?(
     agentKind: string,
     modelId: string,
@@ -343,11 +367,39 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 } {
   const inFlight = new Set<string>();
 
+  const runStripRelink = async (
+    sessionId: string,
+    sessionRow: {
+      agentKind: string;
+      sdkSessionId?: string | null;
+      model?: string | null;
+      providerId?: string | null;
+      workingDir?: string | null;
+    },
+  ): Promise<CodexStripRelinkResult> => {
+    if (
+      sessionRow.agentKind !== 'codex' ||
+      !sessionRow.sdkSessionId ||
+      !deps.tryStripOversizedCodexHistory
+    ) {
+      return 'failed';
+    }
+    return deps.tryStripOversizedCodexHistory({
+      sessionId,
+      threadId: sessionRow.sdkSessionId,
+      model: sessionRow.model ?? null,
+      providerId: sessionRow.providerId ?? null,
+      workingDir: sessionRow.workingDir ?? null,
+    });
+  };
+
   const runRecover = async (sessionId: string, errorData: unknown): Promise<boolean> => {
-    if (!isContextOverflowErrorData(errorData)) return false;
+    const oversized = isOversizedHistoryErrorData(errorData);
+    if (!isContextOverflowErrorData(errorData) && !oversized) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
+    // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
@@ -355,6 +407,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       if (live?.isTurnRunning()) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
+      }
+      if (oversized) {
+        const strip = await runStripRelink(sessionId, sessionRow);
+        if (strip === 'recovered' || strip === 'not-needed') {
+          deps.onRebuilt?.(sessionId);
+          deps.log.info('codex oversized history stripped in place', { sessionId, strip });
+          return true;
+        }
+        deps.log.warn('codex oversized strip failed; falling back to rollover', { sessionId });
       }
       const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
       const [source, rebuildMeta] = await Promise.all([
@@ -425,12 +486,25 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
+    // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
     if (!sessionRow.sdkSessionId) return false;
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning()) return false;
     const source = await deps.listMessages(sessionId);
     const lastError = findLatestRebuildableError(source, sessionRow.agentKind === 'pi');
+    if (isOversizedHistoryErrorData(lastError)) {
+      const strip = await runStripRelink(sessionId, sessionRow);
+      if (strip === 'not-needed') return false;
+      if (strip === 'recovered') {
+        deps.onRebuilt?.(sessionId);
+        deps.log.info('codex oversized history stripped before send', { sessionId });
+        return true;
+      }
+      deps.log.warn('codex oversized strip failed before send; falling back to rollover', {
+        sessionId,
+      });
+    }
     const liveUsage = live?.getUsageSnapshot?.();
     const hasLiveTokens =
       liveUsage !== undefined &&

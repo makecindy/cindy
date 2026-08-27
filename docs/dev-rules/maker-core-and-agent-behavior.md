@@ -40,6 +40,16 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
 自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
+Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
+不得用 `remote compaction v2` 文案驱动 rollover、fork、鉴权或 reason。Cindy 保底压缩在
+**同一任务**里分档、不 fork 新任务、打开会话不触发：① 本地/device-link 活尾巴有足够可剥
+离的超大内联图时，升为 `codex_history_oversized`，剥图后 relink 同一 session 的 native
+thread；② 剥不了或引擎报窗口满 / compact 确定性失败时，走现有 context-overflow rollover。
+只在终态错误或下次发送时由 main 侧协调器 claim。SSH 远端没有本机 rollout，不分类、不剥图、
+不换窗。普通 Codex timeout、纯文本大历史和网络重连失败不得自动换窗，也不得进入自动续跑
+死循环。救援路径不得依赖额外模型调用来「必然成功」。
+
+
 > **适用范围与增量原则**：Agent 能力归属（下节 1）与代码优先确定性（下节 2）按增量
 > 适用——约束新增和正在修改的代码，不要求为统一形式专项重构存量。但**核心指标不变量
 > （下节 3）与 system prompt 改动门禁（下节 4）对所有触及相关路径的改动都生效，不分

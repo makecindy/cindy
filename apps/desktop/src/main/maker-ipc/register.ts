@@ -737,11 +737,13 @@ import {
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
   lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
   shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
+import { classifyCodexHistoryOversized } from '../maker-host/codex-local-sessions.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
@@ -4448,7 +4450,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
-        isContextOverflowErrorData(event.data);
+        (isContextOverflowErrorData(event.data) ||
+          isOversizedHistoryErrorData(event.data));
       if (suppressOverflowBroadcast) {
         overflowSuppressedBroadcasts.set(session.id, {
           sessionId: session.id,
@@ -4580,7 +4583,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           !isRemoteAuthRetry &&
           !isGatewayProxyTokenRecovery &&
           !autoResumeSuppressesPersist &&
-          isContextOverflowErrorData(attributedEvent.data)
+          (isContextOverflowErrorData(attributedEvent.data) ||
+            isOversizedHistoryErrorData(attributedEvent.data))
             ? (contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
             : 'idle';
         if (overflowClaim === 'claimed') {
@@ -11954,11 +11958,60 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           contextWindow: sessions.contextWindow,
           model: sessions.model,
           providerId: sessions.providerId,
+          workingDir: sessions.workingDir,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       return row ?? null;
+    },
+    tryStripOversizedCodexHistory: async ({ sessionId, threadId, model, providerId, workingDir }) => {
+      try {
+        const classified = await classifyCodexHistoryOversized(threadId);
+        if (classified === 'healthy') return 'not-needed';
+        if (classified !== 'oversized') return 'failed';
+        const live = getMaker().getSession(sessionId);
+        if (live?.isTurnRunning()) return 'failed';
+        if (live) await getMaker().closeSession(sessionId);
+        const forked = await getMaker().forkSdkSession('codex', {
+          sourceSdkSessionId: threadId,
+          model: model ?? undefined,
+          providerId,
+          upToMessageId: undefined,
+          workingDir: workingDir ?? undefined,
+          stripEncryptedReasoning: true,
+          remoteHostId: null,
+        });
+        const now = Date.now();
+        await getDbClient()
+          .drizzle.update(sessions)
+          .set({ sdkSessionId: forked.newSdkSessionId, updatedAt: now })
+          .where(eq(sessions.id, sessionId));
+        broadcastSessionPatched(sessionId, {
+          sdkSessionId: forked.newSdkSessionId,
+          updatedAt: new Date(now).toISOString(),
+        });
+        await createDbMessage(sessionId, {
+          clientId: `context-rebuild-card:${createId()}`,
+          role: 'assistant',
+          content: '',
+          agentKind: 'codex',
+          agentMeta: { contextRebuild: { reason: 'codex-history-strip' } } as AgentMeta,
+        });
+        log.info('codex oversized history relinked in place', {
+          sessionId,
+          fromThreadId: threadId,
+          toThreadId: forked.newSdkSessionId,
+        });
+        return 'recovered';
+      } catch (error) {
+        log.warn('codex oversized history relink failed', {
+          sessionId,
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return 'failed';
+      }
     },
     getAutoCompactThresholdPct: () => readCompactionPct(),
     resolveVerifiedWindow: (agentKind, modelId, providerId) => {
