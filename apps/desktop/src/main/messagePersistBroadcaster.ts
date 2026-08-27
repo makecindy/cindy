@@ -1216,7 +1216,7 @@ export function prepareSyntheticToolEventForBroadcast(
   if (event.type === 'tool_result_full') {
     const r = onToolResultFullEvent(
       sessionId,
-      event.data as { toolUseId?: unknown; fullText?: unknown },
+      event.data as { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
       agentMeta,
     );
     return { persistId: r?.persistId, resolvedContent: r?.content };
@@ -1432,14 +1432,21 @@ export function onToolResultEvent(
  * 对齐老 renderer:有映射 → 覆盖更新;无映射但 tool_use 已到 → eager-create;
  * tool_use 也没到 → buffer。
  */
+function markFailedToolResultText(text: string, isError: boolean): string {
+  if (!isError || text.includes('<tool_use_error>')) return text;
+  return `<tool_use_error>${text}</tool_use_error>`;
+}
+
 export function onToolResultFullEvent(
   sessionId: string,
-  data: { toolUseId?: unknown; fullText?: unknown },
+  data: { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
 ): { persistId: string; content: string } | null {
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
-  const fullText = typeof data.fullText === 'string' ? data.fullText : null;
+  const rawText = typeof data.fullText === 'string' ? data.fullText : null;
+  const fullText =
+    rawText === null ? null : markFailedToolResultText(rawText, data.isError === true);
   if (!toolUseId || fullText === null) return null; // guard,对齐老 renderer
 
   const backgroundState = scope === 'background'

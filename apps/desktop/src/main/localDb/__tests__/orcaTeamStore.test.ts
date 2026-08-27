@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   notifyAgentIslandSessionPatch: vi.fn(),
   runtimeCleanup: vi.fn(),
+  compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
 }));
 
 vi.mock('electron', () => ({
@@ -26,6 +27,9 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 }));
 vi.mock('../agentIslandSessionPatch.js', () => ({
   notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch,
+}));
+vi.mock('../toolResultCompaction.js', () => ({
+  compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
 }));
 
 describe('orcaTeamStore', () => {
@@ -117,6 +121,15 @@ describe('orcaTeamStore', () => {
     expect(h.runtimeCleanup).toHaveBeenCalledTimes(2);
     expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
     expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-2');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledTimes(2);
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-2',
+    });
   });
 
   it('never archives or broadcasts a worker task that is already deleted', async () => {
@@ -141,6 +154,7 @@ describe('orcaTeamStore', () => {
       patch: { status: 'archived' },
     });
     expect(h.runtimeCleanup).not.toHaveBeenCalledWith('worker-session-2');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles only still-active workers from inactive teams', async () => {
@@ -169,6 +183,10 @@ describe('orcaTeamStore', () => {
     ]);
     expect(h.runtimeCleanup).toHaveBeenCalledTimes(1);
     expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
   });
 
   it('cleans archived worker runtime state before releasing route locks and broadcasting', async () => {
@@ -211,14 +229,34 @@ describe('orcaTeamStore', () => {
 
     await archiveSingleWorkerSession('worker-session-1');
     expect(h.runtimeCleanup).toHaveBeenCalledWith('worker-session-1');
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
 
     h.runtimeCleanup.mockClear();
+    h.compactSessionToolResultsBestEffort.mockClear();
     await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [
       'deleted',
       'worker-session-2',
     ]);
     await archiveSingleWorkerSession('worker-session-2');
     expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
+  });
+
+  it('compacts a worker task after removeWorker archives it', async () => {
+    const { removeWorker } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    await removeWorker('worker-1');
+
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
+      client,
+      sessionId: 'worker-session-1',
+    });
   });
 
   it('preserves Pi worker identity in Orca projections', async () => {
@@ -332,12 +370,16 @@ describe('orcaTeamStore', () => {
         im_user_id TEXT,
         used_project_context INTEGER NOT NULL DEFAULT 0,
         codex_history_has_product_prompt INTEGER,
+        codex_plan_json TEXT,
         extra_dirs TEXT NOT NULL DEFAULT '[]',
         remote_host_id TEXT,
         provider_id TEXT,
         active_turn_started_at INTEGER,
         active_turn_pid INTEGER,
         last_turn_ended_at INTEGER,
+        list_preview TEXT,
+        list_preview_role TEXT,
+        list_message_count INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );

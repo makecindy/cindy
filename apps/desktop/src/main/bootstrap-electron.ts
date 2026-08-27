@@ -311,10 +311,24 @@ import {
   getRawDb as localDbGetRawDb,
   closeDb as localDbCloseDb,
   getCurrentDbPath as localDbGetCurrentDbPath,
+  getDbPathForUser,
 } from './localDb/index';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
-import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from './localDb/client/current';
+import {
+  clearCurrentDbClient,
+  getCurrentDbClientUserId,
+  getDbClient,
+  setCurrentDbClient,
+} from './localDb/client/current';
+import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
+import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
+import {
+  cancelDbSlimmingStartupProgress,
+  getDbSlimmingStartupProgress,
+  subscribeDbSlimmingStartupProgress,
+} from './localDb/dbSlimmingStartupState';
+import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -7383,6 +7397,140 @@ const registerIpcHandlers = () => {
         return { cleared: true };
       }),
     );
+
+    const localDbMaintenanceHandlers = createLocalDbMaintenanceIpcHandlers({
+      captureOwner: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        if (!ownerId || isAppSessionBoundaryPending()) return null;
+        return { ownerId, scopeKey: activeOwnerScopeKey() };
+      },
+      isOwnerCurrent: ({ ownerId, scopeKey }) =>
+        !isAppSessionBoundaryPending() &&
+        getActiveAppSession().dataOwnerId === ownerId &&
+        activeOwnerScopeKey() === scopeKey,
+      getDbClient,
+      getDbClientOwnerId: getCurrentDbClientUserId,
+      getCurrentDbPath: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        return ownerId ? getDbPathForUser(ownerId) : null;
+      },
+      getUserDataDir: () => app.getPath('userData'),
+      canSchedule: () => process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      selectBackupDirectory: async () => {
+        const options = {
+          title: t('settings.about.storage.dbSlimmingBackupDirectoryDialogTitle'),
+          properties: ['openDirectory', 'createDirectory'] as Array<
+            'openDirectory' | 'createDirectory'
+          >,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showOpenDialog(ownerWindow, options)
+          : await dialog.showOpenDialog(options);
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      confirmWithoutBackup: async () => {
+        const options: Electron.MessageBoxOptions = {
+          type: 'warning',
+          title: t('settings.about.storage.dbSlimmingConfirmTitle'),
+          message: t('settings.about.storage.dbSlimmingConfirmTitle'),
+          detail: t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup'),
+          buttons: [
+            t('settings.about.storage.dbSlimmingRestartButton'),
+            t('settings.about.storage.cancelButton'),
+          ],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showMessageBox(ownerWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
+      revealFile: async (filePath) => {
+        try {
+          if (!(await fs.promises.stat(filePath)).isFile()) return false;
+        } catch {
+          return false;
+        }
+        shell.showItemInFolder(path.normalize(filePath));
+        return true;
+      },
+      relaunch: (requestId) => {
+        dbClientLog.info('database slimming relaunch requested');
+        if (app.isPackaged) {
+          app.relaunch();
+        } else {
+          // Forge owns the Vite server. A bare app.relaunch() outlives Forge,
+          // then opens a white window against a dead localhost renderer. The
+          // repository dev runner observes the durable cleanup marker and
+          // restarts the full Forge/Vite stack after this process exits.
+          const delegated = writeDbSlimmingDevRelaunchSignal(requestId);
+          dbClientLog.info('database slimming dev relaunch delegated to desktop dev runner', {
+            delegated,
+          });
+        }
+        app.quit();
+      },
+    });
+    const invokeLocalDbMaintenanceIpc = async <T>(
+      action: string,
+      operation: () => T | Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        dbClientLog.error('database slimming IPC failed', {
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError('INTERNAL', 'database maintenance request failed');
+      }
+    };
+    ipcMain.handle('local-db:maintenance:scan', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('scan', () => localDbMaintenanceHandlers.scan(input));
+    });
+    ipcMain.handle('local-db:maintenance:choose-backup-directory', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('choose-backup-directory', () =>
+        localDbMaintenanceHandlers.chooseBackupDirectory(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:schedule', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('schedule', () =>
+        localDbMaintenanceHandlers.schedule(input),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:last-result', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('last-result', () =>
+        localDbMaintenanceHandlers.getLastResult(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:open-last-backup-directory', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('open-last-backup-directory', () =>
+        localDbMaintenanceHandlers.openLastBackupDirectory(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:startup-progress', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return getDbSlimmingStartupProgress();
+    });
+    ipcMain.handle('local-db:maintenance:cancel-startup', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return { cancelled: cancelDbSlimmingStartupProgress() };
+    });
+    subscribeDbSlimmingStartupProgress((progress) => {
+      const target = mainWindowRef;
+      if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+      target.webContents.send(DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
+    });
   }
 
   // F5: SDK send-time temporary base64 read (renderer-initiated; main-initiated

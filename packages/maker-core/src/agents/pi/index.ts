@@ -178,6 +178,10 @@ import {
   createPiTranslateContext,
   disposePiTranslateContext,
   isFailedOrAbortedPiCompaction,
+  markPiHostAbortRequested,
+  markPiHostTurnStartPending,
+  rollbackPiHostAbortRequest,
+  rollbackPiHostTurnStart,
   translatePiEvent,
   usageSnapshotOf,
   type PiTranslateContext,
@@ -451,6 +455,21 @@ function effortToPiThinkingLevel(effort: Effort): string {
 }
 
 const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/**
+ * Last-resort maxTokens for models that provide no authoritative output limit.
+ * Explicit Model Access / native-provider metadata always wins. Pi separately clamps each
+ * request to the remaining context window, so keep this fallback context-bounded as well.
+ *
+ * This is deliberately a compatibility fallback rather than a claimed model capability:
+ * unknown upstreams may still have a lower output limit and should publish explicit metadata.
+ * Raising the legacy gateway/native defaults (32k/16k) to 64k prevents known long-thinking
+ * turns from being cut off solely by Cindy's synthetic value without making the fallback
+ * unbounded.
+ */
+function piMaxTokensFallback(contextWindow: number | undefined): number {
+  return contextWindow && contextWindow > 0 ? Math.min(contextWindow, 65_536) : 65_536;
+}
 
 /** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
@@ -1443,7 +1462,7 @@ export class PiAgent extends BaseAgent {
         input: supportsImageInput ? ['text', 'image'] : ['text'],
         // Model Access v3 requires this value; never replace the server limit with a client guess.
         contextWindow: m.contextWindow,
-        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
+        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : piMaxTokensFallback(m.contextWindow),
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
         cost: {
           input: m.cost?.input ?? 0,
@@ -1481,21 +1500,24 @@ export class PiAgent extends BaseAgent {
       }
       const nativeModels = (
         np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true) : np.models
-      ).map((m) => ({
-        id: m.wireId ?? m.id,
-        name: m.name ?? m.id,
-        ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
-        ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
-        ...(m.api ? { api: m.api } : {}),
-        reasoning: m.reasoning ?? false,
-        ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-        input: m.input ?? ['text'],
-        contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
-        maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
-        ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
-        ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
-        ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
-      }));
+      ).map((m) => {
+        const contextWindow = m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000;
+        return {
+          id: m.wireId ?? m.id,
+          name: m.name ?? m.id,
+          ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
+          ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
+          ...(m.api ? { api: m.api } : {}),
+          reasoning: m.reasoning ?? false,
+          ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
+          input: m.input ?? ['text'],
+          contextWindow,
+          maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
+          ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
+          ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
+          ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
+        };
+      });
       if (!np.inheritModels && !np.api) {
         throw new Error(`pi: native provider '${np.id}' has no default api`);
       }
@@ -5138,6 +5160,7 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
+          const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
           promptRequestStarted = true;
           try {
             doctorCommandActivity.enter(isDoctorCommand);
@@ -5150,6 +5173,7 @@ export class PiAgent extends BaseAgent {
                 PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
             }));
             if (!resp.success) {
+              rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
               if (managedPackageRoute.accepted) {
                 // The host-owned package mutation and its deterministic visible
                 // receipt already crossed the dispatch boundary. The follow-up
@@ -5219,6 +5243,7 @@ export class PiAgent extends BaseAgent {
                   data.isCompacting !== true &&
                   (typeof data.pendingMessageCount !== 'number' || data.pendingMessageCount === 0);
                 if (runtimeIdle && piAgentLifecycleSequence === lifecycleSequenceBeforePrompt) {
+                  rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
                   const result = capturedExtensionNotifications?.join('\n\n') ?? '';
                   // prompt success is only the RPC acceptance boundary. Let
                   // handle.send() resolve before publishing a synthetic terminal;
@@ -5417,9 +5442,17 @@ export class PiAgent extends BaseAgent {
 
       async requestGracefulStop(): Promise<void> {
         if (proc.isClosed) throw new Error('No active Pi turn to stop');
+        const hostAbortToken = markPiHostAbortRequested(ctx);
         dismissAllPendingPrompts('turn_aborted', 'deny');
-        const resp = await proc.request({ type: 'abort' });
+        let resp: Awaited<ReturnType<typeof proc.request>>;
+        try {
+          resp = await proc.request({ type: 'abort' });
+        } catch (error) {
+          rollbackPiHostAbortRequest(ctx, hostAbortToken);
+          throw error;
+        }
         if (!resp.success) {
+          rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw new Error(`Pi graceful stop rejected: ${resp.error ?? 'unknown'}`);
         }
         clearActiveTurnPermissionPolicy('turn_aborted');
@@ -5427,6 +5460,7 @@ export class PiAgent extends BaseAgent {
 
       async abort(): Promise<void> {
         if (proc.isClosed) return;
+        const hostAbortToken = markPiHostAbortRequested(ctx);
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
         // 停止的那次工具继续等一张已失效的卡。policy 仅在 Pi 确认接受 abort 后清空，
         // RPC 失败时继续保留，防止仍在运行的 turn 失去渠道安全边界。
@@ -5436,11 +5470,13 @@ export class PiAgent extends BaseAgent {
           if (resp.success) {
             clearActiveTurnPermissionPolicy('turn_aborted');
           } else {
+            rollbackPiHostAbortRequest(ctx, hostAbortToken);
             deps.logger.warn('pi abort request rejected', {
               message: resp.error ?? 'unknown',
             });
           }
         } catch (err) {
+          rollbackPiHostAbortRequest(ctx, hostAbortToken);
           deps.logger.warn('pi abort request failed', {
             message: err instanceof Error ? err.message : String(err),
           });

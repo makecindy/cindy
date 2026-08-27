@@ -116,6 +116,7 @@
     "controlFork": "Fork session",
     "markdownDocAriaLabel": "Message body",
     "toolOutputTitle": "{{label}} output",
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "Empty Mermaid diagram.",
     "diffEditCount": "{{n}} edits"
   },

@@ -20,6 +20,7 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
+import type { IssueHarness } from '../../shared/issueRuntimeMetadata.js';
 import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection.js';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
@@ -36,6 +37,10 @@ export interface IssueEnvInfo {
   platform: string;
   arch: string;
   osVersion: string;
+  /** 本次 /issue 工具调用所在的 Agent harness；使用公开全名，不使用内部缩写。 */
+  harness: IssueHarness;
+  /** /issue 所在轮开始时冻结的 Cindy 模型选择值。 */
+  modelId: string;
   /**
    * 本构建的区域身份(中国版 / 国际版 / 开发版)。构建期烘焙、运行时不可切换,
    * 但同一个版本号在两区是两个不同的包——反馈里没有它就分不清用户装的是哪一个。

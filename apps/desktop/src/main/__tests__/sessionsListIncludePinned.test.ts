@@ -140,7 +140,7 @@ function listRow(id: string, patch: Record<string, unknown> = {}) {
   return {
     session: sessionRow(id, patch),
     messageCount: 0,
-    latestMessageContent: null,
+    latestMessageExtract: null,
     latestMessageRole: null,
   };
 }

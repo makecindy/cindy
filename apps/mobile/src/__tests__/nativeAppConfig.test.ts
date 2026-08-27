@@ -14,6 +14,7 @@ const managedEnvKeys = [
   'EXPO_PUBLIC_APP_VARIANT',
   'EXPO_PUBLIC_BETA_DEV',
   'EXPO_PUBLIC_CINDY_AUTH_REGION',
+  'EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL',
   'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL',
   'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
   'EXPO_PUBLIC_XDT_OTA_SELFHOST',
@@ -96,6 +97,48 @@ describe('mobile native app config', () => {
     );
     expect(runtimeEnvSource).toContain(
       'process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
+    );
+  });
+
+  it('keeps the CN Release manifest injection CindyDev-only and outside Expo config', () => {
+    const appJson = JSON.parse(
+      readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),
+    );
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    const appConfigSource = readFileSync(
+      resolve(process.cwd(), 'app.config.js'),
+      'utf8',
+    );
+
+    expect(appConfigSource).toContain("...(region === 'dev'");
+    expect(appConfigSource).toContain(
+      'EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL:',
+    );
+    expect(appConfigSource).toContain("resolveManifestBaseUrl('cn')");
+    expect(appConfigSource).not.toContain(
+      'xdtProductionEnv: mobileBundleEnv',
+    );
+
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'cn';
+    process.env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL =
+      'https://stale-release.example.invalid/app';
+    const cn = buildConfig({ config: appJson.expo });
+    expect(
+      process.env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL,
+    ).toBeUndefined();
+    expect(JSON.stringify(cn)).not.toContain(
+      'EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL',
+    );
+
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'global';
+    process.env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL =
+      'https://stale-release.example.invalid/app';
+    const global = buildConfig({ config: appJson.expo });
+    expect(
+      process.env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL,
+    ).toBeUndefined();
+    expect(JSON.stringify(global)).not.toContain(
+      'EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL',
     );
   });
 

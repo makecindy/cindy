@@ -940,8 +940,12 @@ function sessionStatusLabel(status: RemoteSession['status']): string {
   return '已删除';
 }
 
+/** 与 Desktop sessions:list 封顶计数对齐：达到该值即显示 1000+。 */
+export const SESSION_LIST_MESSAGE_COUNT_CAP = 1001;
+
 function messageCountLabel(count: number | undefined): string | null {
   if (typeof count !== 'number') return null;
+  if (count >= SESSION_LIST_MESSAGE_COUNT_CAP) return '1000+ 条消息';
   return `${count} 条消息`;
 }
 

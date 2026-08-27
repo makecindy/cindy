@@ -191,6 +191,261 @@ describe('installed Plugin Connection audience resolver', () => {
     }
   });
 
+  it('resolves a named local mivo-canvas install without a market record', () => {
+    const localManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(localManifest, null),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('mivo-canvas', identity)).toEqual({
+      membershipId: 'membership-1',
+      audience: 'org-example:mivo-canvas',
+      pluginSlug: 'mivo-canvas',
+      allowedHosts: ['mivo-canvas.dsworks.cn'],
+    });
+    expect(
+      loadConnectionAudienceResolver({
+        ...resolverOptions(localManifest, null),
+        readMarketInstallation: () => ({ kind: 'absent' }),
+        readInstallOrigin: () => 'manual',
+      }).resolve('mivo-canvas', identity),
+    ).toEqual({
+      membershipId: 'membership-1',
+      audience: 'org-example:mivo-canvas',
+      pluginSlug: 'mivo-canvas',
+      allowedHosts: ['mivo-canvas.dsworks.cn'],
+    });
+  });
+
+  it('does not extend the local mivo-canvas exception past an exact id and org membership', () => {
+    const localManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(localManifest, null),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('plugin-a', identity)).toBeNull();
+    expect(resolver.resolve('mivo-canvas-x', identity)).toBeNull();
+    expect(resolver.resolve('Mivo-Canvas', identity)).toBeNull();
+    expect(
+      resolver.resolve('mivo-canvas', {
+        membershipId: 'membership-1',
+        membershipKind: 'personal',
+        orgId: null,
+        orgSlug: null,
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects a local mivo-canvas install whose exact oidc host is not the allowlisted host', () => {
+    const forgedManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['attacker.example.com'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['attacker.example.com'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(forgedManifest, null),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
+  it('rejects a local mivo-canvas install that declares an extra exact oidc host', () => {
+    const extraHostManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn', 'attacker.example.com'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn', 'attacker.example.com'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(extraHostManifest, null),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
+  it('rejects a local mivo-canvas install whose oidc host is only a wildcard', () => {
+    const wildcardManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['*.x.test'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['*.x.test'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(wildcardManifest, null),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
+  it('still requires digest match when mivo-canvas has an organization market record', () => {
+    const localManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      version: '2.0.0',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn'],
+            },
+          },
+        ],
+      },
+    };
+    const marketRecord: PluginMarketInstallationRecord = {
+      ...marketInstallation,
+      ghostId: 'mivo-canvas',
+      manifestDigest: ghostManifestDigest({ ...localManifest, version: '1.0.0' }),
+    };
+    const resolver = loadConnectionAudienceResolver(
+      resolverOptions(localManifest, marketRecord),
+    );
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
+  it('does not take the local exception when the market ledger is invalid', () => {
+    const localManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn'],
+            },
+          },
+        ],
+      },
+    };
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(localManifest, null),
+      readMarketInstallation: () => ({ kind: 'invalid' }),
+      readInstallOrigin: () => 'manual',
+    });
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
+  it('does not skip digest when a mivo-canvas market record is marked uninstalled', () => {
+    const localManifest: GhostManifest = {
+      ...manifest,
+      id: 'mivo-canvas',
+      version: '2.0.0',
+      network: {
+        hosts: ['mivo-canvas.dsworks.cn'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token' as const,
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['mivo-canvas.dsworks.cn'],
+            },
+          },
+        ],
+      },
+    };
+    const marketRecord: PluginMarketInstallationRecord = {
+      ...marketInstallation,
+      ghostId: 'mivo-canvas',
+      installed: false,
+      manifestDigest: ghostManifestDigest({ ...localManifest, version: '1.0.0' }),
+    };
+    const resolver = loadConnectionAudienceResolver(
+      resolverOptions(localManifest, marketRecord),
+    );
+    expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
+  });
+
   it('requires the managed secret target to match a declared exact host', () => {
     const resolver = loadConnectionAudienceResolver({
       ...resolverOptions(),

@@ -1,7 +1,13 @@
 /**
  * Host-owned Connection audience resolution. Explicit Forge installs for the
  * current organization and intact organization-market installs are the two
- * dynamic bases. The Host derives the audience from current identity + plugin id.
+ * dynamic bases. A named local-install exception exists only for ghostId
+ * `mivo-canvas`: organization members may resolve after the org gate when the
+ * installed manifest's exact oidc-token host is only `mivo-canvas.dsworks.cn`.
+ * An intact organization market record, including installed:false, still takes
+ * the digest path and must not skip via this exception. A present but invalid
+ * market ledger is a hard failure, not an absent record. The Host derives the
+ * audience from current identity + plugin id.
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
@@ -32,6 +38,10 @@ export interface ConnectionAudienceResolver {
 
 const ORG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const PLUGIN_SLUG_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** Named local-install Connection exception. Must stay an exact id, not a prefix. */
+const LOCAL_OIDC_ALLOWLIST_GHOST_ID = 'mivo-canvas';
+/** Local exception may inject the org JWT only to this exact BFF host. */
+const LOCAL_OIDC_ALLOWLIST_HOST = 'mivo-canvas.dsworks.cn';
 
 /**
  * Host-owned Connection audiences that plugins must never mint.
@@ -67,10 +77,17 @@ export function declaredOidcTokenHosts(manifest: GhostManifest): string[] {
   ];
 }
 
+export type MarketInstallationLookup =
+  | { kind: 'absent' }
+  | { kind: 'found'; record: PluginMarketInstallationRecord }
+  | { kind: 'invalid' };
+
 export interface LoadConnectionAudienceResolverOptions {
   readInstalledManifest(ghostId: string): GhostManifest | null;
   readInstalledManifestDigest(ghostId: string): string | null;
-  readMarketInstallation(ghostId: string): PluginMarketInstallationRecord | null;
+  readMarketInstallation(
+    ghostId: string,
+  ): PluginMarketInstallationRecord | MarketInstallationLookup | null;
   readApprovedPackageSha256?(ghostId: string): string | null;
   readInstallOrigin?(ghostId: string): 'manual' | 'agent-forge';
   lookupOrganizationPrefix?(
@@ -153,13 +170,40 @@ export function loadConnectionAudienceResolver(
 
       let installation: PluginMarketInstallationRecord | null = null;
       try {
-        installation = options.readMarketInstallation(ghostId);
+        const lookup = options.readMarketInstallation(ghostId);
+        if (
+          lookup &&
+          typeof lookup === 'object' &&
+          'kind' in lookup &&
+          (lookup.kind === 'absent' || lookup.kind === 'found' || lookup.kind === 'invalid')
+        ) {
+          if (lookup.kind === 'invalid') return reject('market-installation-invalid');
+          if (lookup.kind === 'found') installation = lookup.record;
+        } else {
+          installation = lookup;
+        }
       } catch {
         return reject('market-installation-read-failed');
       }
-      if (!installation || !installation.installed) {
+      if (!installation) {
+        // Named exception after the org gate and before market-missing reject.
+        // Any persisted market row, including installed:false, still takes digest.
+        if (ghostId === LOCAL_OIDC_ALLOWLIST_GHOST_ID) {
+          const allowlisted = readManifest();
+          if (!allowlisted) return reject('plugin-not-installed');
+          if (allowlisted.id !== ghostId) return reject('plugin-id-mismatch');
+          const allowlistedHosts = declaredOidcTokenHosts(allowlisted);
+          if (
+            allowlistedHosts.length !== 1 ||
+            allowlistedHosts[0] !== LOCAL_OIDC_ALLOWLIST_HOST
+          ) {
+            return reject('oidc-host-not-allowlisted');
+          }
+          return finish(allowlisted);
+        }
         return reject('market-installation-missing');
       }
+      if (!installation.installed) return reject('market-installation-missing');
       if (installation.source !== 'market') return reject('market-installation-untrusted');
       if (installation.scope !== 'organization') {
         return reject('market-installation-not-organization');

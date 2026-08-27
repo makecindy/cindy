@@ -373,7 +373,7 @@ export function App() {
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
-                            <ForgeOidcInstallConfirmHost />
+                          <ForgeOidcInstallConfirmHost />
                           <PluginPublisherConfirmHost />
                           <OwnerScopedRouter />
                         </EnvCheckGuard>

@@ -146,6 +146,8 @@ describe('isInterruptedTurnError', () => {
       'upstream unreachable',
       '502 Bad Gateway',
       'Service Unavailable',
+      'API Error: upstream stream error: terminated',
+      'upstream stream error: socket reset',
     ]) {
       expect(isInterruptedTurnError({ message }), `${message} 应自动重连`).toBe(true);
     }
@@ -176,6 +178,7 @@ describe('isInterruptedTurnError', () => {
       ['codex thread', { message: 'thread not found' }],
       ['加密内容失效', { message: 'invalid encrypted content' }],
       ['Pi auto-retry 耗尽后交给用户点重试', { reason: 'pi-gateway-drop', message: 'The operation timed out.' }],
+      ['Codex 鉴权会话结束', { message: 'app_session_terminated' }],
     ] as Array<[string, Parameters<typeof isInterruptedTurnError>[0]]>) {
       expect(isInterruptedTurnError(signals), `${label} 不该自动重连`).toBe(false);
     }

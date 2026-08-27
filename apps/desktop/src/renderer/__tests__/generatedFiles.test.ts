@@ -4,6 +4,7 @@ import {
   collectGeneratedFiles,
   extractCommandOutputPathCandidates,
   extractDocumentArtifactMetadata,
+  isExplicitFailedToolResult,
 } from '../lib/generatedFiles';
 
 const WORKDIR = '/work';
@@ -11,6 +12,21 @@ const WORKDIR = '/work';
 function toolUse(toolName: string, toolInput: unknown) {
   return { role: 'tool_use', toolName, toolInput };
 }
+
+describe('isExplicitFailedToolResult', () => {
+  it('fails closed on structured error envelopes', () => {
+    expect(isExplicitFailedToolResult(JSON.stringify({ ok: false }))).toBe(true);
+    expect(isExplicitFailedToolResult(JSON.stringify({ success: false }))).toBe(true);
+    expect(isExplicitFailedToolResult(JSON.stringify({ status: 'error' }))).toBe(true);
+    expect(isExplicitFailedToolResult('<tool_use_error>denied</tool_use_error>')).toBe(true);
+  });
+
+  it('does not treat ordinary success text as a failure', () => {
+    expect(isExplicitFailedToolResult('Wrote a.md')).toBe(false);
+    expect(isExplicitFailedToolResult(JSON.stringify({ ok: true }))).toBe(false);
+    expect(isExplicitFailedToolResult(undefined)).toBe(false);
+  });
+});
 
 describe('collectGeneratedFiles', () => {
   it('turns a top-level cindy docs tool result into artifact metadata', () => {
@@ -136,6 +152,181 @@ describe('collectGeneratedFiles', () => {
     expect(extractDocumentArtifactMetadata('make_docx', input, 'not-json')).toBeUndefined();
     // 历史消息没有保存 tool_result 时仍保留兼容重建。
     expect(extractDocumentArtifactMetadata('make_docx', input)).toBeDefined();
+  });
+
+  it('does not list a file whose tool result is an explicit failure', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w-fail',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'w-fail',
+          content: JSON.stringify({ ok: false, errorCode: 'FILE_EXISTS' }),
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files).toEqual([]);
+  });
+
+  it('does not drop a created path when the later delete is wrapped as a tool_use_error', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'new.txt', content: 'hi' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+        {
+          role: 'tool_use',
+          toolName: 'file_change',
+          toolUseId: 'd1',
+          toolInput: {
+            changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'd1',
+          content: '<tool_use_error>delete new.txt</tool_use_error>',
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('drops a created path that the same turn later deletes', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'new.txt', content: 'hi' }),
+        toolUse('file_change', {
+          changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+        }),
+      ],
+      WORKDIR,
+    );
+    expect(files).toEqual([]);
+  });
+
+  it('keeps a path that is deleted and then recreated later in the same turn', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'new.txt', content: 'old' }),
+        toolUse('file_change', {
+          changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-old' }],
+        }),
+        toolUse('Write', { file_path: 'new.txt', content: 'new' }),
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('keeps a confirmed document preview while a second write is still in flight', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'make_xlsx',
+          toolUseId: 'x1',
+          toolInput: {
+            outPath: 'documents/progress.xlsx',
+            sheets: [{ name: '旧表', header: ['A'] }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'x1',
+          content: JSON.stringify({ ok: true }),
+        },
+        {
+          role: 'tool_use',
+          toolName: 'make_xlsx',
+          toolUseId: 'x2',
+          toolInput: {
+            outPath: 'documents/progress.xlsx',
+            sheets: [{ name: '新表', header: ['B'] }],
+          },
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files).toHaveLength(1);
+    expect(files[0].artifactConfirmed).toBe(true);
+    expect(files[0].ready).not.toBe(false);
+    expect(files[0].artifact?.preview).toMatchObject({
+      kind: 'sheet',
+      hasHeader: true,
+      rows: [['A']],
+    });
+  });
+
+  it('keeps a created path when the later delete result is an explicit failure', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'new.txt', content: 'hi' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+        {
+          role: 'tool_use',
+          toolName: 'file_change',
+          toolUseId: 'd1',
+          toolInput: {
+            changes: [{ path: 'new.txt', kind: { type: 'delete' }, diff: '-hi' }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'd1',
+          content: JSON.stringify({ ok: false, status: 'failed' }),
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files.map((file) => file.name)).toEqual(['new.txt']);
+  });
+
+  it('marks in-flight tool_use files as not ready until the result arrives', () => {
+    const inflight = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+      ],
+      WORKDIR,
+    );
+    expect(inflight).toHaveLength(1);
+    expect(inflight[0].ready).toBe(false);
+
+    const settled = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'Write',
+          toolUseId: 'w1',
+          toolInput: { file_path: 'a.md', content: 'x' },
+        },
+        { role: 'tool_result', toolUseId: 'w1', content: 'ok' },
+      ],
+      WORKDIR,
+    );
+    expect(settled).toHaveLength(1);
+    expect(settled[0].ready).toBeUndefined();
   });
 
   it('collects Write (claude) and write (pi) created files', () => {

@@ -34,6 +34,11 @@ export interface GeneratedFileRef {
    * 'command' = 命令文本启发式候选,渲染前还需 mtime 时间窗校验。
    */
   source: 'tool' | 'command';
+  /**
+   * false = 创建它的 tool_use 还在跑(有 toolUseId、结果未到),文件多半没落盘。
+   * 缺省 / true = 可以做存在性检查。历史消息没有 toolUseId 时按已完成处理。
+   */
+  ready?: boolean;
   /** 文档工具返回的轻量交付信息；普通源码文件没有此字段。 */
   artifact?: DocumentArtifactMetadata;
   /** true 仅表示同一 tool_use 有结构化 ok:true 结果，可用本轮 mtime 证明成功覆盖。 */
@@ -88,6 +93,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * 只认结构化失败：ok/success=false、status=error/failed，或 `<tool_use_error>`。
+ * 普通 Write 失败文案不在这里猜，避免把成功输出误杀。
+ */
+export function isExplicitFailedToolResult(content: string | undefined): boolean {
+  if (!content) return false;
+  if (content.includes('<tool_use_error>')) return true;
+  const parsed = parseToolResult(content);
+  if (!parsed) return false;
+  if (parsed.ok === false || parsed.success === false) return true;
+  const status = typeof parsed.status === 'string' ? parsed.status.toLowerCase() : '';
+  return status === 'error' || status === 'failed' || status === 'failure';
 }
 
 function parseToolResult(content: string | undefined): Record<string, unknown> | null {
@@ -711,6 +730,9 @@ export function collectGeneratedFiles(
   const editedKeys = new Set<string>();
   for (const msg of messages) {
     if (msg.role !== 'tool_use' || !msg.toolName) continue;
+    const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
+    if (msg.toolUseId && resultContent === undefined) continue;
+    if (isExplicitFailedToolResult(resultContent)) continue;
     const d = describeToolUse(msg.toolName, msg.toolInput);
     if (d.kind === 'file' && d.action === 'edit' && d.filePath) {
       editedKeys.add(dedupeKeyForPath(resolveToolFilePath(d.filePath, workingDir)));
@@ -729,22 +751,31 @@ export function collectGeneratedFiles(
     const toolName = msg.toolName ?? '';
     if (!toolName) continue;
 
+    const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
+    const toolFailed = isExplicitFailedToolResult(resultContent);
+    const toolReady = !msg.toolUseId || resultByToolUseId.has(msg.toolUseId);
     const addPath = (rawPath: string, source: GeneratedFileRef['source']): void => {
+      if (toolFailed) return;
       const abs = canonicalizeWindowsShape(resolveToolFilePath(rawPath, workingDir));
       const key = dedupeKeyForPath(abs);
       if (source === 'command' && editedKeys.has(key)) return;
       const prev = byKey.get(key);
       if (prev) {
         if (prev.source === 'command' && source === 'tool') prev.source = 'tool';
+        if (toolReady) delete prev.ready;
         return;
       }
-      byKey.set(key, { path: abs, name: basename(abs), source });
+      byKey.set(key, {
+        path: abs,
+        name: basename(abs),
+        source,
+        ...(toolReady ? {} : { ready: false }),
+      });
     };
 
     for (const rawPath of createdPathsFromToolUse(toolName, msg.toolInput)) {
       addPath(rawPath, 'tool');
     }
-    const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
     const artifact = extractDocumentArtifactMetadata(toolName, msg.toolInput, resultContent);
     if (artifact) {
       const outputPath =
@@ -757,8 +788,14 @@ export function collectGeneratedFiles(
         const existing = byKey.get(key);
         const artifactConfirmed = parseToolResult(resultContent)?.ok === true;
         if (existing) {
-          existing.artifact = artifact;
-          if (artifactConfirmed) existing.artifactConfirmed = true;
+          // 同路径第二次文档工具还在跑时，保留第一次已确认的交付，不要用未落地预览覆盖。
+          if (!toolReady || toolFailed) {
+            /* keep existing */
+          } else {
+            existing.artifact = artifact;
+            if (artifactConfirmed) existing.artifactConfirmed = true;
+            delete existing.ready;
+          }
         } else {
           byKey.set(key, {
             path: abs,
@@ -766,6 +803,7 @@ export function collectGeneratedFiles(
             source: 'tool',
             artifact,
             ...(artifactConfirmed ? { artifactConfirmed: true } : {}),
+            ...(toolReady ? {} : { ready: false }),
           });
         }
       }
@@ -774,6 +812,13 @@ export function collectGeneratedFiles(
     if (descriptor.kind === 'command' && descriptor.command) {
       for (const rawPath of extractCommandOutputPathCandidates(descriptor.command)) {
         addPath(rawPath, 'command');
+      }
+    }
+    if (descriptor.kind === 'fileChange' && toolReady && !toolFailed) {
+      for (const change of descriptor.changes) {
+        if ((change.action === 'delete' || change.action === 'move') && change.path) {
+          byKey.delete(dedupeKeyForPath(resolveToolFilePath(change.path, workingDir)));
+        }
       }
     }
   }

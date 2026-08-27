@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { Children, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
+  DevSettings,
   FlatList,
   Image,
   Linking,
@@ -53,6 +54,12 @@ import {
   IS_TESTFLIGHT_BUILD,
   REVIEW_MODE,
 } from '@/config/env';
+import {
+  DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED,
+  switchDevServerEnvironmentAndReload,
+  type DevServerEnvironment,
+} from '@/config/devServerEnvironment';
+import { useDevServerEnvironment } from '@/config/useDevServerEnvironment';
 import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
@@ -148,6 +155,13 @@ export default function SettingsScreen() {
   const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
   const [betaBusy, setBetaBusy] = useState(false);
   const showBetaBadge = betaReady && betaEnabled;
+  const {
+    environment: devServerEnvironment,
+    ready: devServerEnvironmentReady,
+    setEnvironment: setDevServerEnvironment,
+  } = useDevServerEnvironment();
+  const [devServerEnvironmentBusy, setDevServerEnvironmentBusy] =
+    useState(false);
   const updateCheckInFlightRef = useRef(false);
   // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。
   const [dictionaryScreenOpen, setDictionaryScreenOpen] = useState(false);
@@ -538,6 +552,89 @@ export default function SettingsScreen() {
       setLoggingOut(false);
     }
   }, [auth, loggingOut, router]);
+
+  const switchDevServerEnvironment = useCallback(
+    async (next: DevServerEnvironment) => {
+      if (
+        !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
+        devServerEnvironmentBusy ||
+        !devServerEnvironmentReady ||
+        next === devServerEnvironment
+      ) {
+        return;
+      }
+      const reload = __DEV__
+        ? () => DevSettings.reload()
+        : Updates.isEnabled
+          ? () => Updates.reloadAsync()
+          : null;
+      if (!reload) {
+        Alert.alert(
+          t('settings.devServerEnvironment.title'),
+          t('settings.devServerEnvironment.switchFailed'),
+        );
+        return;
+      }
+      setDevServerEnvironmentBusy(true);
+      try {
+        // 旧环境的 push 注销、token 与账号缓存必须先在旧端点仍生效时清理。
+        await auth.logout();
+        await switchDevServerEnvironmentAndReload({
+          current: devServerEnvironment,
+          next,
+          reload,
+          setEnvironment: setDevServerEnvironment,
+        });
+      } catch {
+        Alert.alert(
+          t('settings.devServerEnvironment.title'),
+          t('settings.devServerEnvironment.switchFailed'),
+        );
+      } finally {
+        setDevServerEnvironmentBusy(false);
+      }
+    },
+    [
+      auth,
+      devServerEnvironment,
+      devServerEnvironmentBusy,
+      devServerEnvironmentReady,
+      setDevServerEnvironment,
+      t,
+    ],
+  );
+
+  const confirmDevServerEnvironmentSwitch = useCallback(() => {
+    if (
+      !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
+      devServerEnvironmentBusy ||
+      !devServerEnvironmentReady
+    ) {
+      return;
+    }
+    const next: DevServerEnvironment =
+      devServerEnvironment === 'dev' ? 'release' : 'dev';
+    Alert.alert(
+      t('settings.devServerEnvironment.confirmTitle', {
+        environment: t(`settings.devServerEnvironment.options.${next}`),
+      }),
+      t('settings.devServerEnvironment.confirmBody'),
+      [
+        { text: t('settings.devServerEnvironment.cancel'), style: 'cancel' },
+        {
+          text: t('settings.devServerEnvironment.switchAction'),
+          style: 'destructive',
+          onPress: () => void switchDevServerEnvironment(next),
+        },
+      ],
+    );
+  }, [
+    devServerEnvironment,
+    devServerEnvironmentBusy,
+    devServerEnvironmentReady,
+    switchDevServerEnvironment,
+    t,
+  ]);
 
   const openAccountDeletion = useCallback(() => {
     router.push('/account-deletion');
@@ -1007,6 +1104,25 @@ export default function SettingsScreen() {
           >
             {debugExpanded
               ? [
+                ...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED
+                  ? [
+                      <ActionInfoRow
+                        accessibilityLabel={t('settings.devServerEnvironment.accessibility')}
+                        detail={t('settings.devServerEnvironment.description')}
+                        key="dev-server-environment"
+                        label={t('settings.devServerEnvironment.title')}
+                        onPress={confirmDevServerEnvironmentSwitch}
+                        testID="settings.devServerEnvironment"
+                        value={
+                          devServerEnvironmentBusy
+                            ? t('settings.devServerEnvironment.switching')
+                            : t(
+                                `settings.devServerEnvironment.options.${devServerEnvironment}`,
+                              )
+                        }
+                      />,
+                    ]
+                  : []),
                 ...debugSection.rows.map((row) => (
                   row.copyValue ? (
                     <CopyRow copied={copiedRowId === row.id} key={row.id} onCopy={copyRow} row={row} />

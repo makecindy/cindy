@@ -56,7 +56,7 @@ import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
-import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import {
   getActiveAppSession,
@@ -234,6 +234,7 @@ import {
   type ReviewArtifactConfirmationItem,
 } from '../reviewer/reviewArtifactAuthorization.js';
 import { buildReviewArtifactConfirmationDialog } from '../reviewer/reviewArtifactDialog.js';
+import { showReviewArtifactConfirmWindow } from '../reviewer/reviewArtifactConfirmWindow.js';
 import {
   cleanupOrphanedReviewArtifactSnapshots,
   prepareStableReviewArtifactSnapshots,
@@ -253,14 +254,17 @@ import {
   type ReviewRunOwner,
 } from '../../shared/reviewRun.js';
 import {
-  createRetryableReviewStartup,
+  createRetryableReviewInitialization,
   hasReviewOwnerProcessEnded,
   shouldFailInterruptedReview,
 } from '../reviewer/reviewRunRecovery.js';
-import { startReviewOwnerLiveness } from '../reviewer/reviewOwnerLiveness.js';
+import {
+  startReviewOwnerLiveness,
+  type ReviewOwnerLivenessHandle,
+} from '../reviewer/reviewOwnerLiveness.js';
 import {
   discardInvalidReviewSourceLease,
-  listPersistedReviewSourceLeases,
+  readPersistedReviewSourceLease,
   releaseReviewSourceLease,
   tryAcquireReviewSourceLease,
 } from '../reviewer/reviewSourceLease.js';
@@ -2873,11 +2877,6 @@ let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
 const reviewRunOwner: ReviewRunOwner = { instanceId: randomUUID(), processId: process.pid };
-configureTempAttachmentOwner(reviewRunOwner);
-const ensureReviewOwnerLivenessReady = createRetryableReviewStartup(async () => {
-  const handle = await startReviewOwnerLiveness();
-  reviewRunOwner.liveness = handle.identity;
-});
 const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   getDbClient,
   owner: reviewRunOwner,
@@ -2885,6 +2884,14 @@ const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   now: Date.now,
   warn: (message, fields) => log.warn(message, fields),
 });
+let reviewOwnerLivenessHandle: ReviewOwnerLivenessHandle | null = null;
+const ensureReviewOwnerLivenessReady = createRetryableReviewInitialization(async () => {
+  const handle = reviewOwnerLivenessHandle ?? (await startReviewOwnerLiveness());
+  reviewOwnerLivenessHandle = handle;
+  reviewRunOwner.liveness = handle.identity;
+  await sessionTurnLeaseTracker.refreshActiveLeaseOwners();
+});
+configureTempAttachmentOwner(reviewRunOwner, ensureReviewOwnerLivenessReady);
 const silentStopTurnLeaseGate = new SilentStopTurnLeaseGate();
 function providerTurnLeaseId(sessionInstanceId: string, turnGeneration: number): string {
   return `${sessionInstanceId}:${turnGeneration}`;
@@ -3867,7 +3874,32 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   session.setTurnLifecycleObserver({
     beforeProviderStart: async (turnGeneration) => {
       if (session.remoteHostId) return;
+      // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
+      // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
+      const model = session.model;
+      if (model) {
+        const verdict = await verdictForModelRoute(
+          session.agentKind,
+          model,
+          getSessionProvider(session.id),
+        );
+        // beforeProviderStart 已经进入 Session 内部，无法再安全重建跨凭证形态的
+        // runtime。付费 reroute 不能当作 pass，否则 null-provider 仍会落到已锁定
+        // 的 XD 默认来源。普通停用/能力/独占 reroute 属于既有 best-effort 轴，
+        // 运行中会话按 model-route-guard 契约不在这里打断。
+        if (verdict.kind === 'reroute' && verdict.reason === 'payment-required') {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `model "${model}" must switch to provider "${verdict.providerId}" before sending`,
+          );
+        }
+        if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
+          throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
+        }
+      }
       silentStopTurnLeaseGate.supersede(session.id);
+      // Keep Review's exact-instance liveness listener lazy. PID-only turn
+      // leases remain fail-closed until this process actually starts Review.
       await sessionTurnLeaseTracker.markTurnStarted(
         session.id,
         providerTurnLeaseId(session.instanceId, turnGeneration),
@@ -4245,7 +4277,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
         isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
         isGatewayProxyTokenRecovery = isGatewayProxyTokenRecoveryErrorEvent(session.id, event);
-        if (!isPlannedUpgradeClose) {
+        if (isPlannedUpgradeClose) {
+          agentInputCoordinatorHolder?.noteSuppressedTerminalError(session.id, {
+            generation: event.sessionTurnGeneration,
+            reason: 'remote_daemon_closed',
+            instanceId: event.sessionInstanceId ?? session.instanceId,
+          });
+        } else {
           agentInputCoordinatorHolder?.onTurnEvent(
             session.id,
             'error',
@@ -4336,7 +4374,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       } else if (event.type === 'tool_result_full') {
         const r = onToolResultFullEvent(
           session.id,
-          event.data as { toolUseId?: unknown; fullText?: unknown },
+          event.data as { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
         );
@@ -5860,13 +5898,13 @@ async function confirmReviewExternalArtifacts(
   event: IpcMainInvokeEvent,
   items: ReviewArtifactConfirmationItem[],
 ): Promise<boolean> {
-  const options = buildReviewArtifactConfirmationDialog(items, t);
-  const owner = BrowserWindow.fromWebContents(event.sender);
-  const result =
-    owner && !owner.isDestroyed()
-      ? await dialog.showMessageBox(owner, options)
-      : await dialog.showMessageBox(options);
-  return result.response === 1;
+  const parent = BrowserWindow.fromWebContents(event.sender);
+  if (!parent || parent.isDestroyed()) return false;
+  return showReviewArtifactConfirmWindow(
+    parent,
+    buildReviewArtifactConfirmationDialog(items, t),
+    { log },
+  );
 }
 
 export interface RegisterMakerIpcOptions {
@@ -6001,7 +6039,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // submit_github_issue 工具的 main 侧提交服务(确认桥 → serverApiFetch)。
-  initGithubIssueSubmit(issueConfirmBridge);
+  initGithubIssueSubmit(issueConfirmBridge, (sessionId) =>
+    turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
+  );
   initRenameSessionsConfirm(renameSessionsConfirmBridge);
 
   // ── newMakerDraft 缓存同步 ──────────────────────────────────────────────
@@ -7486,6 +7526,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? `model "${model}" is not an agent chat model`
             : verdict.reason === 'model-retired'
               ? `model "${model}" has been retired from the catalog`
+              : verdict.reason === 'payment-required'
+                ? `model "${model}" requires paid access`
               : verdict.reason === 'exclusive-source-unavailable'
                 ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
                 : `model "${model}" is disabled in settings`,
@@ -8058,25 +8100,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warnStderr: (agentKind, line) => log.warn(`[${agentKind}/stderr] ${line}`),
   });
 
-  const reconcileInterruptedReviews = async (): Promise<void> => {
-    const dbClient = getDbClient();
-    const db = dbClient.drizzle;
-    const [rows, sourceLeases] = await Promise.all([
-      db
-        .select({
-          sessionId: messages.sessionId,
-          clientId: messages.clientId,
-          agentMeta: messages.agentMeta,
-        })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.role, 'assistant'),
-            isNull(messages.rewindAt),
-            sql`${messages.agentMeta} LIKE '%"reviewRun"%'`,
-          ),
+  const readSourceReviewCards = async (sourceSessionId: string) =>
+    getDbClient()
+      .drizzle.select({
+        clientId: messages.clientId,
+        agentMeta: messages.agentMeta,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, sourceSessionId),
+          gte(messages.clientId, 'review:'),
+          lt(messages.clientId, 'review;'),
+          eq(messages.role, 'assistant'),
+          isNull(messages.rewindAt),
         ),
-      listPersistedReviewSourceLeases(dbClient),
+      );
+
+  const reconcileReviewForSource = async (sourceSessionId: string): Promise<void> => {
+    const dbClient = getDbClient();
+    const [rows, sourceLease] = await Promise.all([
+      readSourceReviewCards(sourceSessionId),
+      readPersistedReviewSourceLease(dbClient, sourceSessionId),
     ]);
     const interruptedAt = Date.now();
     for (const row of rows) {
@@ -8088,39 +8133,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         completedAt: interruptedAt,
         failureCode: 'interrupted',
       };
-      await updateMessageContent(row.sessionId, row.clientId, '');
-      await patchMessageAgentMeta(row.sessionId, row.clientId, { reviewRun: failed });
-      await broadcastMessageAgentMetaUpdate(row.sessionId, row.clientId);
+      await updateMessageContent(sourceSessionId, row.clientId, '');
+      await patchMessageAgentMeta(sourceSessionId, row.clientId, { reviewRun: failed });
+      await broadcastMessageAgentMetaUpdate(sourceSessionId, row.clientId);
     }
-    for (const row of sourceLeases) {
-      if (!row.lease) {
-        await discardInvalidReviewSourceLease(dbClient, row);
-        log.warn('discarded malformed Review source lease', {
-          sourceSessionId: row.sourceSessionId,
-          leaseRowId: row.id,
-        });
-        continue;
-      }
-      if (!(await hasReviewOwnerProcessEnded(row.lease.owner, reviewRunOwner))) continue;
-      await releaseReviewSourceLease(dbClient, {
-        sourceSessionId: row.sourceSessionId,
-        runId: row.lease.runId,
-        owner: row.lease.owner,
+    if (!sourceLease) return;
+    if (!sourceLease.lease) {
+      await discardInvalidReviewSourceLease(dbClient, sourceLease);
+      log.warn('discarded malformed Review source lease', {
+        sourceSessionId,
+        leaseRowId: sourceLease.id,
       });
+      return;
     }
+    if (!(await hasReviewOwnerProcessEnded(sourceLease.lease.owner, reviewRunOwner))) return;
+    await releaseReviewSourceLease(dbClient, {
+      sourceSessionId,
+      runId: sourceLease.lease.runId,
+      owner: sourceLease.lease.owner,
+    });
   };
   const sourceHasPersistedRunningReview = async (sourceSessionId: string): Promise<boolean> => {
-    const rows = await getDbClient()
-      .drizzle.select({ agentMeta: messages.agentMeta })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.sessionId, sourceSessionId),
-          eq(messages.role, 'assistant'),
-          isNull(messages.rewindAt),
-          sql`${messages.agentMeta} LIKE '%"reviewRun"%'`,
-        ),
-      );
+    const rows = await readSourceReviewCards(sourceSessionId);
     return rows.some((row) => readReviewRunFromAgentMeta(row.agentMeta)?.status === 'running');
   };
   const sourceHasActiveTurn = async (sourceSessionId: string): Promise<boolean> => {
@@ -8132,15 +8166,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     return sessionTurnLeaseTracker.isTurnActive(sourceSessionId);
   };
-  const ensureReviewStartupReady = createRetryableReviewStartup(async () => {
+  // This is ordinary attachment hygiene rather than Review recovery. Keep its
+  // existing startup behavior while Review-specific work remains on demand.
+  void cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }).catch((error) => {
+    log.warn('failed to clean orphaned temporary attachments', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  const ensureReviewRuntimeReady = createRetryableReviewInitialization(async () => {
     try {
       await ensureReviewOwnerLivenessReady();
-      await Promise.all([
-        reconcileInterruptedReviews(),
-        sessionTurnLeaseTracker.reconcileStaleLeases(),
-        cleanupOrphanedReviewArtifactSnapshots({ currentOwner: reviewRunOwner }),
-        cleanupOrphanedTempAttachments({ currentOwner: reviewRunOwner }),
-      ]);
+      await cleanupOrphanedReviewArtifactSnapshots({ currentOwner: reviewRunOwner });
     } catch (error) {
       log.error('failed to prepare Review runtime state', {
         error: error instanceof Error ? error.message : String(error),
@@ -8148,11 +8184,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throw error;
     }
   });
-  // Registration happens before the renderer can invoke /review. Keep a
-  // rejection observer here so a startup database failure is logged without
-  // becoming an unhandled promise. A rejected attempt is forgotten so a later
-  // START_REVIEW can retry the full reconciliation and still fail closed.
-  void ensureReviewStartupReady().catch(() => {});
 
   const readLatestReviewerResult = async (reviewerSessionId: string): Promise<string> => {
     const rows = await getDbClient()
@@ -8174,15 +8205,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return '';
   };
 
-  registerReviewStartHandler(makerSessionRegistry, {
+  const reviewRunControl = registerReviewStartHandler(makerSessionRegistry, {
     assertCaller: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
-    waitUntilReady: async () => {
-      await ensureReviewStartupReady();
-      // A supported shared-userData peer can exit after this instance starts.
-      // Recheck ownership immediately before each run so its stale card can be
-      // failed, while a still-live peer remains protected by the DB-backed gate.
-      await reconcileInterruptedReviews();
+    waitUntilReady: async (sourceSessionId) => {
+      await ensureReviewRuntimeReady();
+      // Recover only this task when the user explicitly starts Review again.
+      // A live or ambiguous peer remains protected by the DB-backed gate.
+      await reconcileReviewForSource(sourceSessionId);
     },
     createRunId: randomUUID,
     createReviewerSessionId: randomUUID,
@@ -12886,6 +12916,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
+    getObservedCurrentTurnTerminal: (sessionId) => {
+      const lookup = lookupStableSessionForTurnBoundary(sessionId);
+      if (lookup.status !== 'found') return undefined;
+      try {
+        return lookup.session.getObservedCurrentTurnTerminal();
+      } catch {
+        return undefined;
+      }
+    },
     getTurnSessionIdentity: (sessionId) => getStableSessionForTurnBoundary(sessionId) ?? null,
     reconcileTurnIdle: (sessionId) => {
       // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止
@@ -13786,8 +13825,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sid: string,
     remote: boolean,
     opts: unknown,
+    intent: 'external-input' | 'stop' = 'external-input',
   ): Promise<MainOwnedInputBoundaryStamp> => {
-    await assertReviewExternalInputAllowed(sid);
+    // Stop is lifecycle control rather than external input. Keep the exception
+    // local-only: this Review version does not expand Device Link control.
+    if (intent !== 'stop' || remote) await assertReviewExternalInputAllowed(sid);
     // Capture the coordinator generation before the first database await.  A
     // concurrent /clear replaces the in-memory state; after that await we must
     // reject the old request rather than treating the new generation as its
@@ -14205,7 +14247,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
     const sid = requireSessionId(sessionId);
-    await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+    const remote = isDeviceLinkInvoke();
+    await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');
+    if (!remote) reviewRunControl.noteReviewerStopRequested(sid);
     // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
     // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
     notePromptPredictionSessionStopped(sid);

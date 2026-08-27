@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
+    "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
     "SESSION_RUNNING": "當前任務正在執行，請稍後再試。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後新建 Pi 任務。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任務中執行，本次來源切換未生效（本任務仍使用原來源）。等它結束後再試。",
@@ -39,6 +40,12 @@
     "details": "錯誤詳情"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "資料庫清理中斷",
+      "interruptedDescription": "資料庫清理異常中斷。請重新啟動 Cindy，系統會根據維護記錄安全復原。",
+      "recoveryFailedTitle": "無法安全復原本地資料庫",
+      "recoveryFailedDescription": "資料庫清理復原失敗，Cindy 已停止開啟本地資料庫，以避免覆寫原始資料。"
+    },
     "updateReady": {
       "title": "需要更新後才能繼續",
       "description": "本地資料已由更新版本的 Cindy 升級，當前版本無法開啟。新版本已下載就緒，重啟安裝後即可恢復使用。",
@@ -842,9 +849,54 @@
         "chatAttachmentsClearConfirmTitle": "清理訊息附件快取？",
         "chatAttachmentsClearConfirmDescription": "只會刪除訊息附件快取目錄中的檔案，不會讀取訊息資料庫。清理後，歷史訊息中的部分附件可能無法開啟，且無法復原。",
         "chatAttachmentsClearConfirmButton": "清理附件快取",
-        "chatAttachmentsCleared": "訊息附件快取已清理",
-        "chatAttachmentsClearFailed": "無法清理訊息附件快取，請重試",
-        "cleanupLabel": "磁碟清理",
+          "chatAttachmentsCleared": "訊息附件快取已清理",
+          "chatAttachmentsClearFailed": "無法清理訊息附件快取，請重試",
+          "dbSlimmingBackupDirectoryDialogTitle": "選擇資料庫清理備份目錄",
+          "dbSlimmingLabel": "資料庫清理",
+          "dbSlimmingDescription": "掃描軟刪除任務和長時間封存任務中的歷史訊息，確認後重新啟動 Cindy，在資料庫開啟前清理並壓縮。不會刪除磁碟附件或生成媒體。",
+          "dbSlimmingScanButton": "掃描資料庫",
+          "dbSlimmingScanLoading": "正在掃描資料庫，請稍候…",
+          "dbSlimmingScanResultTitle": "資料庫掃描結果",
+          "dbSlimmingExecutionLoading": "正在準備資料庫清理，Cindy 即將重新啟動…",
+          "dbSlimmingArchiveAgeLabel": "清理封存時間超過",
+          "dbSlimmingArchiveAgeOption7Days": "7 天",
+          "dbSlimmingArchiveAgeOption1": "1 個月",
+          "dbSlimmingArchiveAgeOption3": "3 個月",
+          "dbSlimmingArchiveAgeOption6": "6 個月",
+          "dbSlimmingBackupLabel": "清理前備份資料庫",
+          "dbSlimmingBackupDefaultLocation": "資料庫所在目錄（只保留最近一次清理備份）",
+          "dbSlimmingUseDefaultDirectoryButton": "使用預設目錄",
+          "dbSlimmingChooseDirectoryButton": "選擇備份目錄",
+          "dbSlimmingBackupDirectoryFailed": "無法選擇備份目錄，請重試",
+          "dbSlimmingScanFailed": "無法掃描資料庫，請重試",
+          "dbSlimmingScheduleFailed": "無法安排資料庫清理，請重新掃描後重試",
+          "dbSlimmingBackupMissing": "找不到最近一次清理備份",
+          "dbSlimmingBackupOpenFailed": "無法開啟清理備份位置，請重試",
+          "dbSlimmingReportTasks": "將清理軟刪除任務 {{deleted}} 個、封存任務 {{archived}} 個",
+          "dbSlimmingReportMessages": "預計清理 {{count}} 則訊息內容（約 {{size}}）",
+          "dbSlimmingReportSpace": "資料庫 {{database}}；暫存空間至少需要 {{temporary}}；目前可用 {{free}}",
+          "dbSlimmingSpaceUnknown": "未知",
+          "dbSlimmingInsufficientSpace": "目前磁碟空間不足，無法安全建立工作副本並壓縮資料庫。",
+          "dbSlimmingConfirmButton": "確認資料庫清理",
+          "dbSlimmingConfirmTitle": "重新啟動並清理資料庫？",
+          "dbSlimmingConfirmDescriptionWithBackup": "Cindy 將正常重新啟動，並在下次啟動、資料庫開啟前完成備份、歷史清理、壓縮和完整性檢查。備份寫入並通過檢查後才會清理資料。",
+          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy 將正常重新啟動，並在下次啟動、資料庫開啟前清理和壓縮。本次不建立備份，清除的歷史內容無法復原。",
+          "dbSlimmingRestartButton": "重新啟動並清理資料庫",
+          "dbSlimmingResultCompleted": "已清除 {{tasks}} 個任務中的 {{messages}} 則訊息，資料庫縮小 {{size}}。",
+          "dbSlimmingOpenBackupButton": "開啟清理備份",
+          "dbSlimmingToastCompleted": "資料庫清理完成，已釋放 {{size}}",
+          "dbSlimmingHistoryCleared": "歷史內容已清除",
+          "dbSlimmingFailure": {
+            "backup-failed": "未能建立或保留資料庫備份，未清理歷史內容。",
+            "cleanup-failed": "資料庫清理未完成，原資料庫保持不變。",
+            "database-in-use": "資料庫正被其他執行個體使用，未執行清理。",
+            "insufficient-space": "磁碟空間不足，未執行資料庫清理。",
+            "integrity-check-failed": "資料庫完整性檢查未通過，已復原原資料庫。",
+            "replacement-failed": "無法安裝壓縮後的資料庫，已復原原資料庫。",
+            "recovery-failed": "資料庫復原失敗，Cindy 已停止開啟資料庫以保護原始資料。",
+            "unknown": "資料庫清理未完成，請重試。"
+          },
+          "cleanupLabel": "磁碟清理",
         "cleanupDescription": "掃描沒有被任何任務引用的媒體檔案、超限快取與廢棄目錄。先報數，確認後才刪除；輸入框草稿和排隊訊息裡的圖片會被自動保護。",
         "scanButton": "掃描",
         "scanFailed": "掃描失敗",
@@ -1369,6 +1421,9 @@
         "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 從餘額扣費",
         "modelLabel": "全部模型",
         "billingLabel": "按 token 從餘額扣費",
+        "accountTier": {
+          "free": "免費版"
+        },
         "disconnectConfirm": {
           "title": "斷開 Cindy AI？",
           "description": "斷開後將清除本地儲存的 Cindy AI Key，需要重新連線才能繼續使用 Cindy AI 提供的模型。"
@@ -1631,6 +1686,8 @@
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "disableModel": "停用此模型",
+        "paymentRequired": "付費",
+        "paymentUnlock": "付費解鎖",
         "enableModel": "啟用此模型",
         "capabilityGroupHint": "不會出現在對話模型選擇中，僅供影像生成等功能使用",
         "accessWriteFailed": "停用設定未能儲存，請重試",
@@ -1974,7 +2031,7 @@
       "restartBusyDescription": "目前有任務進行中，重新啟動會中斷它們。確定要立即重新啟動嗎？",
       "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。",
       "toast": {
-        "disabled": "Beta 測試管道已關閉，重新啟動後生效",
+        "disabled": "Beta 測試管道已關閉，將繼續使用目前版本，等正式版推出較新版本後自動切換",
         "toggleFailed": "切換 Beta 測試管道失敗"
       }
     },
@@ -3469,6 +3526,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "連線 {{provider}} 後可編輯（先在上方開啟對應開關並等待連線成功）。",
+        "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",
         "serverUnsupported": "伺服器版本過舊或暫時無應答，無法讀取偏好。",
         "retry": "重試",
@@ -5229,6 +5287,32 @@
       "envFailed": "環境初始化失敗，點選重試"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
+    "databaseCleanup": {
+      "title": "正在清理資料庫",
+      "progressLabel": "資料庫清理進度",
+      "phase": {
+        "preparing": "正在準備清理",
+        "backingUp": "正在備份資料庫",
+        "copying": "正在建立清理工作副本",
+        "cleaning": "正在刪除過期訊息",
+        "compacting": "正在壓縮資料庫",
+        "verifying": "正在驗證資料庫",
+        "finalizing": "正在安全替換資料庫",
+        "cancelling": "正在取消清理"
+      },
+      "elapsedAndRemaining": "已用 {{elapsed}} · 約剩 {{remaining}}",
+      "elapsedFinalizing": "已用 {{elapsed}} · 即將完成",
+      "duration": {
+        "seconds": "{{count}} 秒",
+        "minutes": "{{count}} 分鐘"
+      },
+      "cancelAction": "取消清理並進入 Cindy",
+      "cancellingAction": "正在取消清理…",
+      "finalizingAction": "即將完成，請稍候…",
+      "cancelHint": "可隨時取消；取消後會保留原資料庫並繼續啟動 Cindy。",
+      "cancellingHint": "正在停止清理，原資料庫不會被修改。",
+      "finalizingHint": "正在安全替換資料庫，請勿關閉 Cindy。"
+    },
     "envFailed": {
       "title": "環境初始化失敗",
       "retry": "重試"
@@ -5442,7 +5526,7 @@
         "provider": "供應商",
         "tokens": "累計 token",
         "context": "上下文佔用",
-            "lastActive": "最後活躍"
+        "lastActive": "最後活躍"
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
       "tokensTooltip": "該任務的生命週期累計，不是近 30 天內的增量。"
@@ -6640,6 +6724,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在設定裡配置 API key 才能使用",
+      "paymentRequired": {
+        "badge": "付費",
+        "unlock": "付費解鎖",
+        "title": "付費後解鎖此模型",
+        "description": "訂閱付費方案或完成餘額儲值後，即可使用此模型。",
+        "action": "查看付費方式"
+      },
       "hidden": "已隱藏",
       "subscriptionDirectDisabled": {
         "chatgpt": "訂閱直連的 GPT 模型協議暫不支援 SSH 遠端會話",
@@ -7526,6 +7617,7 @@
       "promptSend": "傳送",
       "promptCancel": "取消"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "無可展示內容",
       "fileChange": {
@@ -7725,6 +7817,7 @@
       "review": {
         "running": "正在審查當前成果",
         "completed": "審查完成",
+        "stale": "審查已完成 · 結果已過期",
         "failed": "審查未完成",
         "openTask": "開啟審查任務",
         "readOnlyHint": "獨立任務 · 無開發記憶 · 只讀",
@@ -8789,7 +8882,15 @@
         "custom": "自訂"
       },
       "weekday": {
-        "full": { "0": "星期日", "1": "星期一", "2": "星期二", "3": "星期三", "4": "星期四", "5": "星期五", "6": "星期六" },
+        "full": {
+          "0": "星期日",
+          "1": "星期一",
+          "2": "星期二",
+          "3": "星期三",
+          "4": "星期四",
+          "5": "星期五",
+          "6": "星期六"
+        },
         "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
       },
       "time": {
@@ -9575,7 +9676,8 @@
       "publicNameHint": "該署名會公開顯示在 Issue 正文中",
       "anonymous": "匿名",
       "useAnonymous": "使用匿名署名",
-      "envLine": "提交時將自動附加：客戶端 {{appVersion}} · {{platform}} {{arch}} · 介面語言 {{uiLanguage}}",
+      "envLine": "提交時將自動附加：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
       "regionLine": "版本區域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

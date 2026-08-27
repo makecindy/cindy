@@ -50,6 +50,7 @@ const h = vi.hoisted(() => ({
     task(),
   ) as SessionRouteLockMock,
   runtimeCleanup: vi.fn(),
+  compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
   userDataDir: null as string | null,
 }));
 
@@ -99,6 +100,9 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../toolResultCompaction.js', () => ({
+  compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
+}));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
@@ -176,7 +180,10 @@ function createDb(): void {
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
-      last_turn_ended_at INTEGER
+      last_turn_ended_at INTEGER,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -516,6 +523,9 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: { status: 'deleted' },
       }),
     );
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'cc-local' }),
+    );
   });
 
   it('broadcasts local unarchive status patches to every window (#3175)', async () => {
@@ -532,6 +542,7 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { status: 'active' },
     });
+    expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
 
   // setStatus 的归档形是 { status, pinnedAt: null }:广播沿用置顶合并逻辑,
@@ -549,6 +560,9 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { status: 'archived', pinnedAt: null, summary: null },
     });
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
   });
 
   it('cleans runtime state before releasing the local terminal status lock', async () => {

@@ -116,6 +116,7 @@
     "controlFork": "セッションを分岐",
     "markdownDocAriaLabel": "メッセージ本文",
     "toolOutputTitle": "{{label}} の出力",
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "空の Mermaid 図。",
     "diffEditCount": "{{n}} 件の編集"
   },

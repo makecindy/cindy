@@ -46,6 +46,8 @@ type MakerSendOptions = {
    */
   ackInterruptedTurnOnDispatch?: boolean;
   signal?: AbortSignal;
+  /** Coordinator leftover reclaim: capture vendor generation at Session reservation. */
+  onVendorTurnReserved?: (generation: number) => void;
   /**
    * scheduler 排队消息的来源标记(coordinator drain 透传,见 AgentInputSendOpts.origin)。
    * 打到 sess.send 的 origin(本轮 turnOrigin)并合进落库 user 消息 agentMeta.origin。
@@ -943,6 +945,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           throwOnStartFailure: so.throwOnStartFailure,
           turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
+          ...(so.onVendorTurnReserved
+            ? { onTurnReserved: so.onVendorTurnReserved }
+            : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
           ...(so.origin ? { origin: so.origin } : {}),

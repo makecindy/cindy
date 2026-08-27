@@ -119,33 +119,61 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
   );
 }
 
+type InstallationsFileRead = {
+  kind: 'absent' | 'ok' | 'invalid';
+  installations: Record<string, PluginMarketInstallationRecord>;
+  raw: Record<string, unknown> | null;
+};
+
 /** 读取并解析一个账本 JSON 文件的 installations 段;文件不存在返回空。 */
-function readInstallationsFile(
-  filePath: string,
-): { installations: Record<string, PluginMarketInstallationRecord>; raw: Record<string, unknown> | null } {
+function readInstallationsFile(filePath: string): InstallationsFileRead {
   // 读失败与解析失败分开处理:文件不存在(ENOENT)才是空;文件在但读不到(文件锁/
   // 权限/瞬时 I/O)或备份救不回来时由 readAtomicFileSync **上抛**——降级成空会让
   // 紧接着的写入把真实记录覆盖掉。只有"内容确实不是合法 JSON"才按空重建。
   const text = readAtomicFileSync(filePath);
-  if (text === null) return { installations: {}, raw: null };
+  if (text === null) return { kind: 'absent', installations: {}, raw: null };
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { installations: {}, raw: null };
+    return { kind: 'invalid', installations: {}, raw: null };
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { installations: {}, raw: null };
+    return { kind: 'invalid', installations: {}, raw: null };
   }
   const value = parsed as Record<string, unknown>;
-  if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) return { installations: {}, raw: null };
-  const installations: Record<string, PluginMarketInstallationRecord> = {};
-  if (value.installations && typeof value.installations === 'object') {
-    for (const [ghostId, record] of Object.entries(value.installations)) {
-      if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
-    }
+  if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) {
+    return { kind: 'invalid', installations: {}, raw: null };
   }
-  return { installations, raw: value };
+  const rawInstallations = value.installations;
+  if (
+    rawInstallations === undefined ||
+    rawInstallations === null ||
+    typeof rawInstallations !== 'object' ||
+    Array.isArray(rawInstallations)
+  ) {
+    return { kind: 'invalid', installations: {}, raw: value };
+  }
+  const installations: Record<string, PluginMarketInstallationRecord> = {};
+  for (const [ghostId, record] of Object.entries(rawInstallations)) {
+    if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
+  }
+  return { kind: 'ok', installations, raw: value };
+}
+
+function rawMentionsGhost(file: InstallationsFileRead, ghostId: string): boolean {
+  const installations = file.raw?.installations;
+  if (!installations || typeof installations !== 'object' || Array.isArray(installations)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(installations, ghostId)) return true;
+  return Object.values(installations).some(
+    (record) =>
+      record &&
+      typeof record === 'object' &&
+      !Array.isArray(record) &&
+      (record as { ghostId?: unknown }).ghostId === ghostId,
+  );
 }
 
 /**
@@ -188,10 +216,17 @@ export class PluginMarketLedger {
     return path.join(path.dirname(this.filePath()), CUSTOM_LEDGER_FILE);
   }
 
-  read(): PluginMarketLedgerData {
-    const main = readInstallationsFile(this.filePath());
-    const custom = readInstallationsFile(this.customFilePath());
+  private readFiles(): { main: InstallationsFileRead; custom: InstallationsFileRead } {
+    return {
+      main: readInstallationsFile(this.filePath()),
+      custom: readInstallationsFile(this.customFilePath()),
+    };
+  }
 
+  private mergeInstallations(
+    main: InstallationsFileRead,
+    custom: InstallationsFileRead,
+  ): PluginMarketLedgerData {
     const installations: Record<string, PluginMarketInstallationRecord> = {};
     for (const [ghostId, record] of Object.entries(main.installations)) {
       // 主账本里的自定义记录是早期开发版写入的存量,一并纳入(下次写入时归位)。
@@ -222,8 +257,31 @@ export class PluginMarketLedger {
     return { schemaVersion: LEDGER_SCHEMA_VERSION, installations, defaultInstallOptOuts };
   }
 
+  read(): PluginMarketLedgerData {
+    const { main, custom } = this.readFiles();
+    return this.mergeInstallations(main, custom);
+  }
+
   installationForGhost(ghostId: string): PluginMarketInstallationRecord | null {
     return this.read().installations[ghostId] ?? null;
+  }
+
+  /**
+   * Connection OIDC lookup. Missing files are absent; a present but unreadable
+   * or schema-invalid ledger is a hard failure so callers cannot treat
+   * corruption as "no market record".
+   */
+  lookupInstallationForOidc(
+    ghostId: string,
+  ): { kind: 'absent' } | { kind: 'found'; record: PluginMarketInstallationRecord } | { kind: 'invalid' } {
+    const { main, custom } = this.readFiles();
+    if (main.kind === 'invalid' || custom.kind === 'invalid') return { kind: 'invalid' };
+    const record = this.mergeInstallations(main, custom).installations[ghostId];
+    if (record) return { kind: 'found', record };
+    if (rawMentionsGhost(main, ghostId) || rawMentionsGhost(custom, ghostId)) {
+      return { kind: 'invalid' };
+    }
+    return { kind: 'absent' };
   }
 
   upsertInstallation(record: PluginMarketInstallationRecord): void {

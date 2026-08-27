@@ -2048,6 +2048,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(stableCitationBoundary('<|eo')).toBe(0);
     expect(stableCitationBoundary('<')).toBe(0);
     expect(stableCitationBoundary('  <|eos|>')).toBe(0);
+    expect(stableCitationBoundary('<|eos|><|eos|>')).toBe(0);
     expect(stableCitationBoundary('The token is <|eos|>')).toBe('The token is <|eos|>'.length);
   });
 
@@ -2088,6 +2089,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(finalizeCodexCitationText('<')).toBe('<');
     expect(finalizeCodexCitationText('<|eo')).toBe('<|eo');
     expect(finalizeCodexCitationText('<|eos|>')).toBe('');
+    expect(finalizeCodexCitationText('<|eos|><|eos|>')).toBe('');
   });
 
   it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {

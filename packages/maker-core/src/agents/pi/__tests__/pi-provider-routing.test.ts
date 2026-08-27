@@ -253,6 +253,89 @@ describe('Pi provider-aware model routing', () => {
     await nativeHandle.close();
   });
 
+  it('uses explicit output caps and a context-bounded fallback for gateway and native models', async () => {
+    const availableModels: ModelDescriptor[] = [
+      {
+        id: 'gateway-fallback-model', displayName: 'Gateway fallback', contextWindow: 128_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'gateway-explicit-model', displayName: 'Gateway explicit', contextWindow: 200_000,
+        maxOutputTokens: 90_000, efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'gateway-small-context-model', displayName: 'Gateway small context', contextWindow: 32_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'native-fallback-model', displayName: 'Native fallback', contextWindow: 200_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'native-explicit-model', displayName: 'Native explicit', contextWindow: 200_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'native-small-context-model', displayName: 'Native small context', contextWindow: 32_000,
+        efforts: [], defaultEffort: null,
+      },
+    ];
+    const descriptorResolver = (_providerId: string | null | undefined, modelId: string) =>
+      availableModels.find((candidate) => candidate.id === modelId)!;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: { availableModels },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelDescriptor: descriptorResolver,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'native', name: 'Native', baseUrl: 'http://native.test', api: 'openai-completions',
+          models: [
+            { id: 'native-fallback-model', contextWindow: 200_000 },
+            { id: 'native-explicit-model', contextWindow: 200_000, maxTokens: 90_000 },
+            { id: 'native-small-context-model', contextWindow: 32_000 },
+          ],
+        }],
+        env: {},
+      }),
+    });
+
+    const gatewayHandle = await agent.startSession({
+      sessionId: 'max-tokens-gateway', workingDir: cwd, model: 'gateway-fallback-model', providerId: 'openai',
+    });
+    const gatewayModels = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models?: Array<Record<string, unknown>> }> };
+    expect(gatewayModels.providers.cindy?.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'gateway-fallback-model', maxTokens: 65_536 }),
+      expect.objectContaining({ id: 'gateway-explicit-model', maxTokens: 90_000 }),
+      expect.objectContaining({ id: 'gateway-small-context-model', maxTokens: 32_000 }),
+    ]));
+    await gatewayHandle.close();
+
+    const nativeHandle = await agent.startSession({
+      sessionId: 'max-tokens-native', workingDir: cwd, model: 'native-fallback-model', providerId: 'native',
+    });
+    const nativeModels = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models?: Array<Record<string, unknown>> }> };
+    expect(nativeModels.providers.native?.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'native-fallback-model', maxTokens: 65_536 }),
+      expect.objectContaining({ id: 'native-explicit-model', maxTokens: 90_000 }),
+      expect.objectContaining({ id: 'native-small-context-model', maxTokens: 32_000 }),
+    ]));
+    await nativeHandle.close();
+  });
+
   it('routes host subscriptions through PI native providers and wire model ids', async () => {
     const authProviderIds: Array<string | null | undefined> = [];
     let resolveProxyProviderId: (() => string | null) | undefined;
