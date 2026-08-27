@@ -12,6 +12,7 @@ import {
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
   recoverPendingLocalProfileDataOwner,
   reserveCommittedLocalProfileDataOwner,
+  reserveCommittedLocalProfileDataOwnerDetailed,
   reserveLocalProfileDataOwner,
   reserveLocalProfileDataOwnerDetailed,
   releaseLocalProfileDataOwner,
@@ -92,6 +93,7 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
     expect(reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy')).toEqual({
       status: 'already-owned',
+      ownerId: 'owner-a',
     });
     expect(releaseLocalProfileDataOwner('owner-a', root, 'cindy', 'wrong-token')).toBe(false);
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
@@ -126,6 +128,16 @@ describe('adoptLocalProfileDatabase', () => {
     expect(marker).not.toHaveProperty('claimToken');
     expect(recoverPendingLocalProfileDataOwner(null, root, 'cindy')).toBe('none');
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
+  it('reports the authoritative owner when a later cloud owner is rejected', async () => {
+    const { root } = await fixture();
+    expect(reserveCommittedLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+
+    expect(reserveCommittedLocalProfileDataOwnerDetailed('owner-b', root, 'cindy')).toEqual({
+      status: 'owned-by-other',
+      ownerId: 'owner-a',
+    });
   });
 
   it('recovers an interrupted pending claim before a different owner commits', async () => {

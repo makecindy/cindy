@@ -82,18 +82,11 @@ describe('auth login-flow reset', () => {
   });
 
   it('clears stale organization realm state before personal login and a new discovery', () => {
-    const discoveryStart = source.indexOf(
-      'async function discoverOrganizationRealm(org: string)',
-    );
-    const discoveryBody = source.slice(
-      discoveryStart,
-      source.indexOf('\n}', discoveryStart),
-    );
+    const discoveryStart = source.indexOf('async function discoverOrganizationRealm(org: string)');
+    const discoveryBody = source.slice(discoveryStart, source.indexOf('\n}', discoveryStart));
     expect(discoveryBody).toContain('pendingAuthRealm = null;');
 
-    const actionStart = source.indexOf(
-      'async function runLoginAction(action: DesktopLoginAction)',
-    );
+    const actionStart = source.indexOf('async function runLoginAction(action: DesktopLoginAction)');
     const actionPreamble = source.slice(
       actionStart,
       source.indexOf('const stateBeforeAction', actionStart),
@@ -101,12 +94,8 @@ describe('auth login-flow reset', () => {
     expect(actionPreamble).toContain("action.type === 'discover'");
     expect(actionPreamble).toContain("action.type === 'request-code'");
     expect(actionPreamble).toContain("action.type === 'verify-code'");
-    expect(actionPreamble).toContain(
-      "action.type === 'start-browser' && action.kind === 'social'",
-    );
-    expect(actionPreamble).toContain(
-      'if (startsBuildRealmFlow) pendingAuthRealm = null;',
-    );
+    expect(actionPreamble).toContain("action.type === 'start-browser' && action.kind === 'social'");
+    expect(actionPreamble).toContain('if (startsBuildRealmFlow) pendingAuthRealm = null;');
   });
 
   it('does not leave expired private tickets on a screen that can only reuse them', () => {
@@ -165,7 +154,9 @@ describe('auth login-flow reset', () => {
 
     expect(localGuard).toBeGreaterThan(-1);
     expect(refreshTokenRead).toBeGreaterThan(localGuard);
-    expect(initializeBody.slice(localGuard, refreshTokenRead)).toContain('return snapshotAuthState();');
+    expect(initializeBody.slice(localGuard, refreshTokenRead)).toContain(
+      'return snapshotAuthState();',
+    );
   });
 
   it('activates a restored realm only after the refreshed membership passes build policy', () => {
@@ -285,7 +276,10 @@ describe('auth login-flow reset', () => {
     expect(helperBody).toContain('notifySessionExpired(reason);');
 
     const ownerCommitStart = source.indexOf('async function withAccountFreeOwnerCommit(');
-    const ownerCommitEnd = source.indexOf('\n}\n\nasync function withCloudOwnerCommit(', ownerCommitStart);
+    const ownerCommitEnd = source.indexOf(
+      '\n}\n\nasync function withCloudOwnerCommit(',
+      ownerCommitStart,
+    );
     const ownerCommitBody = source.slice(ownerCommitStart, ownerCommitEnd);
     expect(ownerCommitBody).toContain('beginAppSessionBoundary()');
     expect(ownerCommitBody).toContain('notifyRendererAuthBoundaryPending();');
@@ -332,12 +326,43 @@ describe('auth login-flow reset', () => {
     const repairStart = source.indexOf('function repairStableCloudOwnerDataReservations(');
     const repairEnd = source.indexOf('\n}\n\nfunction commitCloudAppSession(', repairStart);
     const repairBody = source.slice(repairStart, repairEnd);
-    expect(repairBody).toContain('reserveCommittedLocalProfileDataOwner(');
-    expect(repairBody).toContain('reserveCommittedLegacyNativeProviderAuthOwner(ownerId)');
+    expect(repairBody).toContain('reserveCommittedLocalProfileDataOwnerDetailed(');
+    expect(repairBody).toContain(
+      'reserveCommittedLegacyNativeProviderAuthOwner(authoritativeOwnerId)',
+    );
     expect(repairBody).not.toContain('reserveLocalProfileDataOwnerDetailed(');
     expect(repairBody).not.toContain('reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)');
     expect(repairBody).toContain('remains authenticated with local adoption fail-closed');
     expect(repairBody).not.toContain('throw new Error');
+
+    const reserveStart = source.indexOf('function reserveCloudOwnerData(');
+    const reserveEnd = source.indexOf(
+      '\n}\n\nfunction repairStableCloudOwnerDataReservations(',
+      reserveStart,
+    );
+    const reserveBody = source.slice(reserveStart, reserveEnd);
+    expect(reserveBody).toContain('const authoritativeOwnerId = profileReservation.ownerId;');
+    expect(reserveBody).toContain(
+      'reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId)',
+    );
+    expect(reserveBody).toContain(
+      "throw new Error('local profile and native provider ownership reservations disagree')",
+    );
+
+    const migrationStart = source.indexOf(
+      'function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): void {',
+    );
+    const migrationEnd = source.indexOf(
+      '\n}\n\nasync function finishColdStartSignedOut(',
+      migrationStart,
+    );
+    const migrationBody = source.slice(migrationStart, migrationEnd);
+    expect(migrationBody).toContain(
+      'if (!repairStableCloudOwnerDataReservations(ownerId)) return;',
+    );
+    expect(migrationBody.indexOf('repairStableCloudOwnerDataReservations')).toBeLessThan(
+      migrationBody.indexOf('migrateLocalNativeProviderAuthBindings'),
+    );
   });
 
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {

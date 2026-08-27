@@ -126,7 +126,7 @@ import {
 import {
   recoverPendingLocalProfileDataOwner,
   releaseLocalProfileDataOwner,
-  reserveCommittedLocalProfileDataOwner,
+  reserveCommittedLocalProfileDataOwnerDetailed,
   reserveLocalProfileDataOwnerDetailed,
 } from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
@@ -1182,21 +1182,34 @@ function reserveCloudOwnerData(
       });
     }
 
-    const nativeReservation = reserveLegacyNativeProviderAuthOwnerDetailed(ownerId);
+    const authoritativeOwnerId = profileReservation.ownerId;
+    if (!authoritativeOwnerId) {
+      throw new Error('local profile data reservation did not identify its durable owner');
+    }
+    // Keep this reservation provisional until the same cloud commit finalizes
+    // both namespaces. Even when the profile marker was already durable, a
+    // missing native marker must remain rollback-able if this auth transition
+    // is superseded before commit.
+    const nativeReservation = reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId);
     if (nativeReservation.status === 'failed') {
       throw new Error('native provider ownership reservation failed before cloud owner commit');
     }
-    if (nativeReservation.status === 'claimed' && nativeReservation.claimToken) {
-      rollbackActions.push(() => {
-        releaseLegacyNativeProviderAuthOwner(ownerId, nativeReservation.claimToken!);
-      });
+    if (nativeReservation.status === 'owned-by-other') {
+      throw new Error('local profile and native provider ownership reservations disagree');
     }
     if (
-      profileReservation.status === 'owned-by-other' ||
-      nativeReservation.status === 'owned-by-other'
+      profileReservation.status === 'claimed' &&
+      nativeReservation.status === 'claimed' &&
+      nativeReservation.claimToken
     ) {
+      rollbackActions.push(() => {
+        releaseLegacyNativeProviderAuthOwner(authoritativeOwnerId, nativeReservation.claimToken!);
+      });
+    }
+    if (authoritativeOwnerId !== ownerId) {
       log.info('cloud owner committed without adopting legacy local data', {
         ownerId,
+        authoritativeOwnerId,
         profileReservation: profileReservation.status,
         nativeReservation: nativeReservation.status,
       });
@@ -1214,17 +1227,19 @@ function reserveCloudOwnerData(
   }
 }
 
-function repairStableCloudOwnerDataReservations(ownerId: string): void {
-  let profileReservation: ReturnType<typeof reserveCommittedLocalProfileDataOwner> = 'failed';
+function repairStableCloudOwnerDataReservations(ownerId: string): boolean {
+  let profileReservation: ReturnType<typeof reserveCommittedLocalProfileDataOwnerDetailed> = {
+    status: 'failed',
+  };
   let nativeReservation: ReturnType<typeof reserveCommittedLegacyNativeProviderAuthOwner> =
     'failed';
 
   if (!recoverCloudOwnerDataReservations(ownerId)) {
     log.error('stable cloud owner reservation recovery failed', { ownerId });
-    return;
+    return false;
   }
   try {
-    profileReservation = reserveCommittedLocalProfileDataOwner(
+    profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
       ownerId,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
@@ -1235,21 +1250,34 @@ function repairStableCloudOwnerDataReservations(ownerId: string): void {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  if (profileReservation.status === 'failed' || !profileReservation.ownerId) {
+    log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
+      ownerId,
+      profileReservation: profileReservation.status,
+      nativeReservation,
+    });
+    return false;
+  }
+  const authoritativeOwnerId = profileReservation.ownerId;
   try {
-    nativeReservation = reserveCommittedLegacyNativeProviderAuthOwner(ownerId);
+    nativeReservation = reserveCommittedLegacyNativeProviderAuthOwner(authoritativeOwnerId);
   } catch (error) {
     log.warn('stable cloud owner native provider reservation repair failed', {
       ownerId,
+      authoritativeOwnerId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  if (profileReservation === 'failed' || nativeReservation === 'failed') {
+  if (nativeReservation === 'failed' || nativeReservation === 'owned-by-other') {
     log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
       ownerId,
-      profileReservation,
+      authoritativeOwnerId,
+      profileReservation: profileReservation.status,
       nativeReservation,
     });
+    return false;
   }
+  return authoritativeOwnerId === ownerId;
 }
 
 function commitCloudAppSession(ownerId: string): void {
@@ -1268,6 +1296,10 @@ function commitCloudAppSession(ownerId: string): void {
 function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): void {
   if (isPassiveSharedUserDataInstance()) return;
   try {
+    // The profile marker is the single durable authority for both retained
+    // local namespaces. Reconcile the native marker to that owner before any
+    // legacy credential migration can run.
+    if (!repairStableCloudOwnerDataReservations(ownerId)) return;
     if (migrateLocalNativeProviderAuthBindings(ownerId)) {
       log.info('migrated local native provider bindings to first cloud owner', { ownerId });
     }
