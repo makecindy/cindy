@@ -423,7 +423,7 @@
     "continueTask": "Continue Task",
     "retry": "Retry",
     "ignore": "Ignore",
-    "toolUseLoopDetected": "The model repeated a tool call too many times, so the task was stopped to prevent an infinite loop. Send a new message to continue.",
+    "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedPingPongWithCount": "The model kept cycling between tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",

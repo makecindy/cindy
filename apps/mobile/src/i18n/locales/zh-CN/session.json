@@ -423,7 +423,7 @@
     "continueTask": "继续任务",
     "retry": "重试",
     "ignore": "忽略",
-    "toolUseLoopDetected": "模型重复调用工具次数过多，任务已停止以避免无限循环。可以发送新消息继续。",
+    "toolUseLoopDetected": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
     "toolUseLoopDetectedWithCount": "模型连续触发了无效的工具调用，Cindy 已在 {{count}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。",
     "toolUseLoopDetectedConsecutiveWithCount": "模型重复调用同一个工具 {{count}} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
     "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
