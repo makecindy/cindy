@@ -3,13 +3,9 @@
 /**
  * sessionsStore 跨桶迁移（patch.status）不变量
  * ---------------------------------------------------------------------------
- * 回归的是「点归档后对话过半秒才消失」：早期 patchLocal 对任何桶归属不一致都
- * drop + 重拉，当前可见桶变 null 后 useCCSessions 的 `next !== null` 守卫会跳过
- * setState，列表停在**仍含被归档行**的陈旧快照，直到重拉的 sessions:list（LEFT
- * JOIN messages + GROUP BY 的重查询）回来才更新，把调用方的乐观更新整段抵消。
- *
- * 现在的口径是不对称的：该移出的桶就地移除（本地即可定论，桶保持非 null），
- * 只有该补进却缺 row 的桶才 drop 重拉。下面每条测试都钉这个不对称。
+ * 状态变化必须优先复用已加载桶里的完整 Session 行，同步修正 active / archived /
+ * all。完全找不到行时才保留当前快照并定向补查目标桶；同桶连续补查只允许一个
+ * 在途请求和一次尾刷，避免连续归档放大成列表查询风暴。
  */
 
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
@@ -43,7 +39,13 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 function session(id: string, status: Session['status'] = 'active'): Session {
-  return { id, status } as Session;
+  return {
+    id,
+    status,
+    title: `title-${id}`,
+    workingDir: `C:\\projects\\${id}`,
+    updatedAt: '2026-08-27T00:00:00.000Z',
+  } as Session;
 }
 
 /** 本次 list mock 收到的 filter 参数（sessionService.list(limit, filter)）。 */
@@ -62,22 +64,37 @@ describe('sessionsStore status bucket migration', () => {
     sessionsStore.reset();
   });
 
-  it('archiving removes the row from the active bucket in place, without dropping or refetching it', async () => {
-    mocks.list.mockResolvedValueOnce([session('archive-me'), session('keep')]);
+  it('moves a complete row from active into archived and updates all without querying', async () => {
+    mocks.list
+      .mockResolvedValueOnce([session('archive-me'), session('keep-active')])
+      .mockResolvedValueOnce([session('already-archived', 'archived')])
+      .mockResolvedValueOnce([session('archive-me'), session('keep-active')]);
     await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    await sessionsStore.ensureByFilter('all');
     mocks.list.mockReset();
 
     act(() => sessionsStore.patchLocal('archive-me', { status: 'archived', pinnedAt: null }));
 
-    // 桶必须仍是数组（非 null）—— null 才是订阅者跳过 setState 的根因。
-    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep']);
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep-active']);
+    expect(sessionsStore.getByFilter('archived')?.[0]).toEqual(
+      expect.objectContaining({
+        id: 'archive-me',
+        status: 'archived',
+        title: 'title-archive-me',
+        workingDir: 'C:\\projects\\archive-me',
+        pinnedAt: null,
+      }),
+    );
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({ id: 'archive-me', status: 'archived', pinnedAt: null }),
+    );
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
-  it('drops the archived row from a mounted list synchronously, before any IPC resolves', async () => {
+  it('removes the archived row from a mounted active list synchronously', async () => {
     mocks.list.mockResolvedValueOnce([session('archive-me'), session('keep')]);
     await sessionsStore.ensureByFilter('active');
-    // 归档后若有任何重拉，让它永远悬着：断言必须在没有 IPC 回包的前提下成立。
     mocks.list.mockReset();
     mocks.list.mockImplementation(() => deferred<Session[]>().promise);
 
@@ -90,79 +107,169 @@ describe('sessionsStore status bucket migration', () => {
     expect(view.result.current.isLoading).toBe(false);
   });
 
-  it('refetches only the bucket that is missing the row after archiving', async () => {
+  it('moves a complete row from archived into active without querying', async () => {
     mocks.list
-      .mockResolvedValueOnce([session('archive-me'), session('keep-active')])
+      .mockResolvedValueOnce([session('stay-active')])
+      .mockResolvedValueOnce([session('restore-me', 'archived')])
+      .mockResolvedValueOnce([session('restore-me', 'archived')]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    await sessionsStore.ensureByFilter('all');
+    mocks.list.mockReset();
+
+    act(() => sessionsStore.patchLocal('restore-me', { status: 'active' }));
+
+    expect(sessionsStore.getByFilter('active')?.[0]).toEqual(
+      expect.objectContaining({
+        id: 'restore-me',
+        status: 'active',
+        title: 'title-restore-me',
+      }),
+    );
+    expect(sessionsStore.getByFilter('archived')).toEqual([]);
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({ id: 'restore-me', status: 'active' }),
+    );
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it('removes a deleted row from every loaded bucket without querying', async () => {
+    mocks.list
+      .mockResolvedValueOnce([session('delete-me'), session('keep-active')])
+      .mockResolvedValueOnce([session('delete-me', 'archived'), session('keep-archived', 'archived')])
+      .mockResolvedValueOnce([session('delete-me'), session('keep-all')]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    await sessionsStore.ensureByFilter('all');
+    mocks.list.mockReset();
+
+    act(() => sessionsStore.patchLocal('delete-me', { status: 'deleted' }));
+
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep-active']);
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'keep-archived',
+    ]);
+    expect(sessionsStore.getByFilter('all')?.map(({ id }) => id)).toEqual(['keep-all']);
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it('keeps loaded snapshots and refetches only a missing target bucket', async () => {
+    mocks.list
+      .mockResolvedValueOnce([session('keep-active')])
       .mockResolvedValueOnce([session('already-archived', 'archived')]);
     await sessionsStore.ensureByFilter('active');
     await sessionsStore.ensureByFilter('archived');
     mocks.list.mockReset();
-    mocks.list.mockResolvedValue([
-      session('archive-me', 'archived'),
-      session('already-archived', 'archived'),
+
+    const backfill = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => backfill.promise);
+    act(() => sessionsStore.patchLocal('not-cached', { status: 'archived' }));
+
+    expect(requestedFilters()).toEqual(['archived']);
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep-active']);
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'already-archived',
     ]);
 
-    act(() => sessionsStore.patchLocal('archive-me', { status: 'archived' }));
-
-    // active 桶就地移除，不重拉；archived 桶缺这一条 row，只能问 DB。
-    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep-active']);
-    expect(requestedFilters()).toEqual(['archived']);
+    backfill.resolve([
+      session('not-cached', 'archived'),
+      session('already-archived', 'archived'),
+    ]);
     await waitFor(() => {
       expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
-        'archive-me',
+        'not-cached',
         'already-archived',
       ]);
     });
   });
 
-  it('keeps the row in the all bucket with the new status', async () => {
-    mocks.list.mockResolvedValueOnce([session('archive-me'), session('keep')]);
-    await sessionsStore.ensureByFilter('all');
-    mocks.list.mockReset();
-
-    act(() => sessionsStore.patchLocal('archive-me', { status: 'archived' }));
-
-    expect(sessionsStore.getByFilter('all')).toEqual([
-      expect.objectContaining({ id: 'archive-me', status: 'archived' }),
-      expect.objectContaining({ id: 'keep' }),
-    ]);
-    expect(mocks.list).not.toHaveBeenCalled();
-  });
-
-  it('unarchiving removes the row from the archived bucket in place', async () => {
-    mocks.list.mockResolvedValueOnce([
-      session('restore-me', 'archived'),
-      session('stay-archived', 'archived'),
-    ]);
+  it('coalesces consecutive backfills for one bucket into one request plus one trailing refresh', async () => {
+    mocks.list.mockResolvedValueOnce([]);
     await sessionsStore.ensureByFilter('archived');
     mocks.list.mockReset();
 
-    act(() => sessionsStore.patchLocal('restore-me', { status: 'active' }));
+    const firstBackfill = deferred<Session[]>();
+    const trailingBackfill = deferred<Session[]>();
+    mocks.list
+      .mockImplementationOnce(() => firstBackfill.promise)
+      .mockImplementationOnce(() => trailingBackfill.promise);
 
-    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual(['stay-archived']);
-    expect(mocks.list).not.toHaveBeenCalled();
+    act(() => {
+      sessionsStore.patchLocal('missing-1', { status: 'archived' });
+      sessionsStore.patchLocal('missing-2', { status: 'archived' });
+      sessionsStore.patchLocal('missing-3', { status: 'archived' });
+    });
+    expect(requestedFilters()).toEqual(['archived']);
+
+    firstBackfill.resolve([]);
+    await waitFor(() => expect(requestedFilters()).toEqual(['archived', 'archived']));
+
+    trailingBackfill.resolve([
+      session('missing-1', 'archived'),
+      session('missing-2', 'archived'),
+      session('missing-3', 'archived'),
+    ]);
+    await waitFor(() => {
+      expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+        'missing-1',
+        'missing-2',
+        'missing-3',
+      ]);
+    });
+    expect(mocks.list).toHaveBeenCalledTimes(2);
   });
 
-  it('does not let a list request started before the archive write the row back', async () => {
+  it('does not let a list request started before archiving write the row back', async () => {
     const staleRequest = deferred<Session[]>();
-    const replacementRequest = deferred<Session[]>();
-    mocks.list
-      .mockImplementationOnce(() => staleRequest.promise)
-      .mockImplementationOnce(() => replacementRequest.promise);
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
 
-    // 请求在途、桶还没进 cache 时归档：旧响应整桶 cache.set 会把被归档行带回来。
     const staleLoad = sessionsStore.ensureByFilter('active');
     act(() => sessionsStore.patchLocal('archive-me', { status: 'archived' }));
 
-    expect(requestedFilters()).toEqual(['active', 'active']);
-    replacementRequest.resolve([session('keep')]);
-    await waitFor(() => {
-      expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep']);
-    });
-
+    expect(requestedFilters()).toEqual(['active']);
     staleRequest.resolve([session('archive-me'), session('keep')]);
     await staleLoad;
 
     expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep']);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a cached source row to repair a target bucket request that started earlier', async () => {
+    mocks.list.mockResolvedValueOnce([session('archive-me')]);
+    await sessionsStore.ensureByFilter('active');
+
+    const staleArchivedRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleArchivedRequest.promise);
+    const staleLoad = sessionsStore.ensureByFilter('archived');
+
+    act(() => sessionsStore.patchLocal('archive-me', { status: 'archived' }));
+    staleArchivedRequest.resolve([session('already-archived', 'archived')]);
+    await staleLoad;
+
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'archive-me',
+      'already-archived',
+    ]);
+    expect(requestedFilters()).toEqual(['active', 'archived']);
+  });
+
+  it('does not let an older archived response overwrite a later deleted status', async () => {
+    mocks.list.mockResolvedValueOnce([session('archive-me')]);
+    await sessionsStore.ensureByFilter('active');
+
+    const staleArchivedRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleArchivedRequest.promise);
+    const staleLoad = sessionsStore.ensureByFilter('archived');
+
+    act(() => {
+      sessionsStore.patchLocal('archive-me', { status: 'archived' });
+      sessionsStore.patchLocal('archive-me', { status: 'deleted' });
+    });
+    staleArchivedRequest.resolve([session('archive-me', 'archived')]);
+    await staleLoad;
+
+    expect(sessionsStore.getByFilter('active')).toEqual([]);
+    expect(sessionsStore.getByFilter('archived')).toEqual([]);
+    expect(mocks.list).toHaveBeenCalledTimes(2);
   });
 });

@@ -98,6 +98,8 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
       mocks.navigate.mock.invocationCallOrder[0],
     );
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
+    expect(mocks.emitRefresh).not.toHaveBeenCalled();
+    expect(mocks.refreshSessions).not.toHaveBeenCalled();
   });
 
   it('navigates first when the archived row stays visible in the all bucket', async () => {
@@ -153,6 +155,23 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.toastError).toHaveBeenCalledWith('ccAgent.sidebar.archiveFailed');
     expect(mocks.purgeSession).not.toHaveBeenCalled();
   });
+
+  it('does not turn consecutive archives into global or current-bucket refreshes', async () => {
+    const { result } = renderHook(() =>
+      useSessionLifecycleActions({ includeArchived: 'active' }),
+    );
+
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'archive', { activeSessionId: null });
+      await result.current.runSessionAction('session-2', 'archive', { activeSessionId: null });
+      await result.current.runSessionAction('session-3', 'archive', { activeSessionId: null });
+    });
+
+    expect(mocks.setStatus).toHaveBeenCalledTimes(3);
+    expect(mocks.patchLocal).toHaveBeenCalledTimes(3);
+    expect(mocks.emitRefresh).not.toHaveBeenCalled();
+    expect(mocks.refreshSessions).not.toHaveBeenCalled();
+  });
 });
 
 describe('useSessionLifecycleActions delete cache invalidation', () => {
@@ -168,11 +187,7 @@ describe('useSessionLifecycleActions delete cache invalidation', () => {
     expect(mocks.setStatus.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.patchLocal.mock.invocationCallOrder[0],
     );
-    // 兜底重拉走 emitRefresh(强制重拉所有已加载桶),不是只刷当前桶的
-    // refreshSessions —— 见 hook 里关于 archived 目标桶的注释。
-    expect(mocks.patchLocal.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.emitRefresh.mock.invocationCallOrder[0],
-    );
+    expect(mocks.emitRefresh).not.toHaveBeenCalled();
     expect(mocks.refreshSessions).not.toHaveBeenCalled();
   });
 

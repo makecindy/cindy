@@ -96,7 +96,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         //
         // Delete 仍走原来的"先 DB 后清理"流程:delete 不可逆,乐观删除如果 DB 失
         // 败会让用户看到"行消失又出现"的诡异闪烁,代价比 archive 大。写库成功
-        // 后再用 patchLocal 从所有桶移除,并由 emitRefresh 强制重拉所有桶兜底。
+        // 后再用 patchLocal 从所有桶移除。
         const archivedRowStaysInList = listFilter === 'all';
         const leaveArchivedSession = () => {
           if (sessionId === activeSessionId) navigate('/cc-agent/new');
@@ -160,19 +160,9 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         cleanupSessionLayoutPrefs(sessionId);
       }
 
-      // 写库成功后强制重拉**所有已加载桶**。不 await —— 列表视觉已由上面的
-      // patchLocal 就地改好,这里只是让缓存跟 DB 对齐;sessions:list 是
-      // LEFT JOIN messages + GROUP BY + latest-message 子查询的重查询,await 它
-      // 只会把后面的 delete 跳转推迟几百毫秒。
-      //
-      // 为什么必须全桶、不能只刷当前桶(codex review):归档时 patchLocal 会 drop
-      // 目标桶(archived,本地没有这条的完整 row)并立刻重拉,而那次重拉发生在
-      // setStatus 写库**之前**,拿回来的是「还没归档」的快照。本机
-      // local-db:sessions:update 对 status 变化也会广播 sessions:patched(#3175,
-      // 副窗与控制端靠它收敛),但广播只修单个字段、不触发各桶重拉 ——
-      // 已归档桶仍需要这里的 emitRefresh 才能看到刚归档的这条,直到某次无关刷新。
-      // 与 unarchiveSession 末尾的 emitRefresh 同口径。
-      emitRefresh();
+      // sessionsStore 已用任一缓存桶中的完整 row 同步迁移 active / archived / all；
+      // 完全找不到 row 时也只合并补查目标桶。这里不再发全局 refresh，避免连续归档
+      // 把每次状态写放大成所有已加载桶的一轮 fresh 查询。
       // 远程会话从侧边栏消失由被控端 sessions:patched{status} 回流(applyPatch 移出分片)驱动,
       // 控制端不再主动重拉 / 不再埋「主动移除」标记(掉线 vs 删除的区分见 CCAgentSessionView 优雅退出)。
 
