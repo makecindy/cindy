@@ -265,6 +265,7 @@ describe('adoptLocalProfileDatabase', () => {
       await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
         status: 'adopted',
       });
+      expect(openSpy).toHaveBeenCalledWith(path.join(root, 'cindy-owner-a.db'), 'r+');
       if (process.platform !== 'win32') {
         expect(openSpy).toHaveBeenCalledWith(root, 'r');
       }

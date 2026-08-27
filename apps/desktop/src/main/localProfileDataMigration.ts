@@ -204,13 +204,30 @@ function parseLocalProfileMigrationMarker(raw: string): LocalProfileMigrationMar
 }
 
 function syncMarkerDirectory(marker: string): void {
-  if (process.platform === 'win32') return;
-  const dirFd = fs.openSync(path.dirname(marker), 'r');
+  let dirFd: number | undefined;
   try {
+    dirFd = fs.openSync(path.dirname(marker), 'r');
     fs.fsyncSync(dirFd);
+  } catch (error) {
+    // Directory handles are not supported by every Windows filesystem. The
+    // final-file flush remains the durability barrier there; POSIX errors are
+    // surfaced because the directory entry is otherwise not durable.
+    if (process.platform !== 'win32') throw error;
   } finally {
-    fs.closeSync(dirFd);
+    if (dirFd !== undefined) fs.closeSync(dirFd);
   }
+}
+
+function flushPublishedDatabase(targetDb: string): void {
+  // Hard-link publication is not durable until the published inode and its
+  // containing directory have both crossed their filesystem barriers.
+  const finalHandle = fs.openSync(targetDb, 'r+');
+  try {
+    fs.fsyncSync(finalHandle);
+  } finally {
+    fs.closeSync(finalHandle);
+  }
+  syncMarkerDirectory(targetDb);
 }
 
 function publishLocalProfileMigrationMarker(
@@ -492,15 +509,19 @@ async function copyDatabaseAtomically(
   await cleanupTemps(deps, targetDb);
   const attemptId = randomUUID();
   const dbTmp = `${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.${attemptId}`;
+  let published = false;
   try {
     // SQLite's online backup API takes one coherent snapshot even while another
     // process is writing the WAL. The resulting standalone database therefore
     // needs no source -wal/-shm files and can be published as one atomic entry.
     await deps.fs.backupDatabase(sourceDb, dbTmp);
     await deps.fs.link(dbTmp, targetDb);
+    published = true;
+    flushPublishedDatabase(targetDb);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+    if (published) await deps.fs.removeIfExists(targetDb);
     throw error;
   } finally {
     await deps.fs.removeIfExists(dbTmp);

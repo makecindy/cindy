@@ -289,6 +289,14 @@ describe('local → cloud native provider binding migration', () => {
     expect(isNativeProviderAuthBound('openai')).toBe(true);
   });
 
+  it('avoids the mutation lock when no local binding can move', () => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
   it('does not let a later cloud owner migrate local residue after another owner won the claim', () => {
     session.dataOwnerId = 'local-v1';
     expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);

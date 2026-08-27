@@ -619,6 +619,24 @@ export function migrateLocalNativeProviderAuthBindings(ownerId: string): boolean
   // different owner transition.
   if (isAppSessionBoundaryPending()) return false;
 
+  // Stable-owner initialization commonly reaches this helper from ordinary
+  // renderer setup. If the snapshot proves that no local-v1 slot can move and
+  // the one-shot namespace is already owned, avoid waiting on the synchronous
+  // writer lock; the locked path below still rechecks before any write.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return false;
+  const snapshotBindings = snapshot.bindings;
+  if (
+    snapshotBindings.legacyClaimOwner === normalizedOwnerId &&
+    !(['anthropic', 'openai'] as const).some(
+      (provider) =>
+        !(snapshotBindings.revoked && provider in snapshotBindings.revoked) &&
+        snapshotBindings[provider] === LOCAL_DATA_OWNER_ID,
+    )
+  ) {
+    return false;
+  }
+
   return withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
     if (!read.ok) return false;
