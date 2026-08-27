@@ -71,6 +71,12 @@ import { StreamingStatusText } from '@/session/StreamingStatusText';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { motionDuration, motionEasing } from '@/theme/tokens';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
+import {
+  NativePullDownMenu,
+  showActionMenu,
+  usesNativePullDownMenu,
+  usesSystemActionMenu,
+} from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
@@ -2013,7 +2019,7 @@ function MessageBubble({
   actions: MessageActions & { firstUserMessageClientId?: string };
 }) {
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   const [copyState, setCopyState] = useState<CopyMessageStatus | 'idle' | 'copying'>('idle');
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
@@ -2301,6 +2307,27 @@ function MessageBubble({
     if (id === 'add-to-chat') return actions.onAddMessageToComposer?.(clientId);
     actions.onCopyMessageLink?.(clientId);
   }, [actions, clientId, selectControlAction]);
+  const openMessageActionMenu = useCallback(() => {
+    if (usesSystemActionMenu()) {
+      const disabled = actionBusy
+        ? new Set<MobileMessageMenuActionId>(['rewind', 'delete'])
+        : null;
+      void showActionMenu({
+        cancelLabel: t('session.common.cancel'),
+        items: messageMenu.map((item) => ({
+          destructive: item.destructive,
+          disabled: disabled?.has(item.id) === true,
+          key: item.id,
+          label: item.label,
+        })),
+        userInterfaceStyle: mode,
+      }).then((result) => {
+        if (result.kind === 'action') selectMenuAction(result.key);
+      });
+      return;
+    }
+    setActionSheetOpen(true);
+  }, [actionBusy, messageMenu, mode, selectMenuAction, t]);
   // 时间只展示发送时间；消息锚点复制移入语义明确的 More 菜单。
   const timeText = relativeTime ? (
     <Text
@@ -2555,16 +2582,26 @@ function MessageBubble({
             if (id === 'cost') return costText;
             if (id === 'more') {
               return (
-                <MessageMoreButton
-                  buttonSize={actionBar.buttonSize}
-                  // Fork has its own visible busy state. Keep More available
-                  // only while that direct action is running; rewind/delete
-                  // still block the menu while their requests are in flight.
-                  disabled={disabled && !forkBusy}
-                  iconSize={actionBar.iconSize}
+                <NativePullDownMenu
+                  actions={messageMenu.map((item) => ({
+                    destructive: item.destructive,
+                    disabled: actionBusy && (item.id === 'rewind' || item.id === 'delete'),
+                    id: item.id,
+                    title: item.label,
+                  }))}
                   key="more"
-                  onPress={() => setActionSheetOpen(true)}
-                />
+                  onAction={(actionId) => selectMenuAction(actionId as MobileMessageMenuActionId)}
+                >
+                  <MessageMoreButton
+                    buttonSize={actionBar.buttonSize}
+                    // Fork has its own visible busy state. Keep More available
+                    // only while that direct action is running; rewind/delete
+                    // still block the menu while their requests are in flight.
+                    disabled={disabled && !forkBusy}
+                    iconSize={actionBar.iconSize}
+                    onPress={usesNativePullDownMenu() ? () => undefined : openMessageActionMenu}
+                  />
+                </NativePullDownMenu>
               );
             }
             if (isMessageControlActionId(id)) {

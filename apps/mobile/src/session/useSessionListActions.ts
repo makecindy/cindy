@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -108,10 +108,7 @@ export function useSessionListActions() {
     });
   }, [patchSession, swipeRegistry, t]);
 
-  const handleSessionSheetAction = useCallback((action: SessionSwipeAction) => {
-    const session = actionSheetSession;
-    setActionSheetSession(null);
-    if (!session) return;
+  const applySessionSheetAction = useCallback((session: RemoteSession, action: SessionSwipeAction) => {
     if (action === 'delete') {
       const title = projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim()
         || t('devices.list.untitled');
@@ -122,14 +119,24 @@ export function useSessionListActions() {
       return;
     }
     if (action === 'rename') {
-      pendingSheetActionRef.current = () => {
-        setRenameSessionDraft(projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')));
-        setRenameSessionTarget(session);
-      };
+      setRenameSessionDraft(projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')));
+      setRenameSessionTarget(session);
       return;
     }
     runSwipeAction(session, action);
-  }, [actionSheetSession, runSwipeAction, t]);
+  }, [runSwipeAction, t]);
+
+  const handleSessionSheetAction = useCallback((action: SessionSwipeAction) => {
+    const session = actionSheetSession;
+    setActionSheetSession(null);
+    if (!session) return;
+    if (action === 'rename' && Platform.OS !== 'ios') {
+      // Android 自绘 Modal 必须等卸载后再挂重命名弹窗。
+      pendingSheetActionRef.current = () => applySessionSheetAction(session, action);
+      return;
+    }
+    applySessionSheetAction(session, action);
+  }, [actionSheetSession, applySessionSheetAction]);
 
   const handleSessionSheetClosed = useCallback(() => {
     const pending = pendingSheetActionRef.current;
