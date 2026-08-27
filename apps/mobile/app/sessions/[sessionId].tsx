@@ -2256,7 +2256,8 @@ export default function SessionScreen() {
     () => composerDisplaySession && composerDisplayRuntimeOptions
       ? buildComposerRuntimeSummary(composerDisplaySession, composerDisplayRuntimeOptions)
       : null,
-    [composerDisplayRuntimeOptions, composerDisplaySession],
+    // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
+    [composerDisplayRuntimeOptions, composerDisplaySession, i18nInstance.language],
   );
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
   const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
