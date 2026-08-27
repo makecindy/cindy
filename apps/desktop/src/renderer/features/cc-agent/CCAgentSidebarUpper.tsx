@@ -2911,15 +2911,17 @@ function ExpandedView({
       for (const session of candidates) {
         makerChatStore.closeSessionQuery(session.id);
         try {
-          // patchMeta 按来源路由:远程会话经隧道写被控端 patch-meta(allowlist 内),本地仍走 update。
-          await sessionService.patchMeta(session.id, { status: 'deleted' });
+          // 先固定本次状态写目标:关闭远端控制后,复制库里与 sticky origin 同 ID 的任务
+          // 必须按本地任务删除；真正远端任务仍固定经隧道写被控端。
+          const statusWriteTarget = await sessionService.resolveStatusWriteTarget(session.id);
+          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget);
           makerChatStore.purgeSession(session.id);
           discardComposerDraft(session.id);
           // RSB 布局偏好(fraction / treeWidth / collapsed)走 localStorage 是
           // 本机概念,本地 + 远程 session 都要清(被控端的 localStorage 由被控端自己处理)。
           cleanupSessionLayoutPrefs(session.id);
           // 图片缓存清理是本机概念;远程会话的图在被控端,由被控端自己的删除流程处理。
-          if (!session.deviceLinkDeviceId) {
+          if (statusWriteTarget.kind === 'local') {
             void window.electronAPI.cleanupSessionImages(session.id).catch((err: unknown) => {
               log.warn('[bulk session delete] cleanup images failed', err);
             });
@@ -3055,10 +3057,12 @@ function ExpandedView({
       for (const session of candidates) {
         makerChatStore.closeSessionQuery(session.id);
         try {
-          // patchMeta 按来源路由:远程会话经隧道写被控端;本地仍走 update。
-          await sessionService.patchMeta(session.id, { status: 'archived', pinnedAt: null });
+          // 与单条归档共用同一目标判定,避免复制数据库后的 sticky sessionId 冲突
+          // 被误送往已经关闭控制的设备。
+          const statusWriteTarget = await sessionService.resolveStatusWriteTarget(session.id);
+          await sessionService.setStatus(session.id, 'archived', statusWriteTarget);
           // 乐观本地 patch 只对本机会话;远程会话由隧道广播 sessions:patched → applyPatch 更新远程分片。
-          if (!session.deviceLinkDeviceId) {
+          if (statusWriteTarget.kind === 'local') {
             patchLocal(session.id, { status: 'archived', pinnedAt: null });
           }
           makerChatStore.purgeSession(session.id);
