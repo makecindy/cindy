@@ -4,8 +4,9 @@
  * sessionsStore 跨桶迁移（patch.status）不变量
  * ---------------------------------------------------------------------------
  * 状态变化必须优先复用已加载桶里的完整 Session 行，同步修正 active / archived /
- * all。完全找不到行时才保留当前快照并定向补查目标桶；同桶连续补查只允许一个
- * 在途请求和一次尾刷，避免连续归档放大成列表查询风暴。
+ * all。完全找不到行，或 status-only 广播缺少 DB 已更新的 updatedAt 时，才保留即时
+ * 迁移并定向补查目标桶；同桶连续补查只允许一个在途请求和一次尾刷，避免连续归档
+ * 放大成列表查询风暴。
  */
 
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
@@ -71,17 +72,25 @@ describe('sessionsStore status bucket migration', () => {
     sessionsStore.reset();
   });
 
-  it('moves a complete row from active into archived and updates all without querying', async () => {
+  it('moves a row with an authoritative timestamp into archived and all without querying', async () => {
+    const target = session('archive-me', 'active', '2026-08-27T00:00:00.000Z');
+    const keepActive = session('keep-active', 'active', '2026-08-27T00:30:00.000Z');
     mocks.list
-      .mockResolvedValueOnce([session('archive-me'), session('keep-active')])
+      .mockResolvedValueOnce([keepActive, target])
       .mockResolvedValueOnce([session('already-archived', 'archived')])
-      .mockResolvedValueOnce([session('archive-me'), session('keep-active')]);
+      .mockResolvedValueOnce([keepActive, target]);
     await sessionsStore.ensureByFilter('active');
     await sessionsStore.ensureByFilter('archived');
     await sessionsStore.ensureByFilter('all');
     mocks.list.mockReset();
 
-    act(() => sessionsStore.patchLocal('archive-me', { status: 'archived', pinnedAt: null }));
+    act(() =>
+      sessionsStore.patchLocal('archive-me', {
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: '2026-08-27T01:00:00.000Z',
+      }),
+    );
 
     expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep-active']);
     expect(
@@ -99,6 +108,48 @@ describe('sessionsStore status bucket migration', () => {
       expect.objectContaining({ id: 'archive-me', status: 'archived', pinnedAt: null }),
     );
     expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it('backfills archived and all ordering when a status-only archive lacks updatedAt', async () => {
+    const target = session('archive-me', 'active', '2026-08-27T01:00:00.000Z');
+    const previousNewest = session(
+      'previous-newest',
+      'archived',
+      '2026-08-27T02:00:00.000Z',
+    );
+    mocks.list
+      .mockResolvedValueOnce([target])
+      .mockResolvedValueOnce([previousNewest])
+      .mockResolvedValueOnce([previousNewest, target]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    await sessionsStore.ensureByFilter('all');
+    mocks.list.mockReset();
+
+    const persisted = {
+      ...target,
+      status: 'archived',
+      updatedAt: '2026-08-27T03:00:00.000Z',
+    } as Session;
+    mocks.list.mockImplementation((_limit, filter) =>
+      Promise.resolve(filter === 'archived' || filter === 'all' ? [persisted, previousNewest] : []),
+    );
+
+    act(() => sessionsStore.patchLocal('archive-me', { status: 'archived' }));
+
+    expect(requestedFilters()).toEqual(['archived', 'all']);
+    await waitFor(() => {
+      expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+        'archive-me',
+        'previous-newest',
+      ]);
+      expect(sessionsStore.getByFilter('all')?.map(({ id }) => id)).toEqual([
+        'archive-me',
+        'previous-newest',
+      ]);
+    });
+    expect(sessionsStore.getByFilter('archived')?.[0]?.updatedAt).toBe(persisted.updatedAt);
+    expect(sessionsStore.getByFilter('all')?.[0]?.updatedAt).toBe(persisted.updatedAt);
   });
 
   it('keeps an optimistic archive applied to list requests started before the DB write completes', async () => {
@@ -489,6 +540,33 @@ describe('sessionsStore status bucket migration', () => {
     expect(finalArchived).toHaveLength(1000);
     expect(finalArchived[0]?.id).toBe('archive-me');
     expect(finalArchived.some(({ id }) => id === 'archived-999')).toBe(false);
+  });
+
+  it('backfills a full active bucket when a status-only restore lacks updatedAt', async () => {
+    const active = Array.from({ length: 1000 }, (_, index) =>
+      session(`active-${index}`, 'active', new Date(2_000_000 - index * 1_000).toISOString()),
+    );
+    const target = session('restore-me', 'archived', new Date(500_000).toISOString());
+    mocks.list.mockResolvedValueOnce(active).mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    mocks.list.mockReset();
+
+    const persisted = {
+      ...target,
+      status: 'active',
+      updatedAt: new Date(3_000_000).toISOString(),
+    } as Session;
+    mocks.list.mockResolvedValueOnce([persisted, ...active.slice(0, 999)]);
+
+    act(() => sessionsStore.patchLocal('restore-me', { status: 'active' }));
+
+    expect(requestedFilters()).toEqual(['active']);
+    await waitFor(() => expect(sessionsStore.getByFilter('active')?.[0]?.id).toBe('restore-me'));
+    const finalActive = sessionsStore.getByFilter('active') ?? [];
+    expect(finalActive).toHaveLength(1000);
+    expect(finalActive[0]?.updatedAt).toBe(persisted.updatedAt);
+    expect(finalActive.some(({ id }) => id === 'active-999')).toBe(false);
   });
 
   it('restores ordering, pin state and an evicted tail row when an archive write fails', async () => {
@@ -908,7 +986,7 @@ describe('sessionsStore status bucket migration', () => {
     expect(view.result.current.isLoading).toBe(false);
   });
 
-  it('moves a complete row from archived into active without querying', async () => {
+  it('moves a row with an authoritative timestamp from archived into active without querying', async () => {
     mocks.list
       .mockResolvedValueOnce([session('stay-active')])
       .mockResolvedValueOnce([session('restore-me', 'archived')])
@@ -918,7 +996,12 @@ describe('sessionsStore status bucket migration', () => {
     await sessionsStore.ensureByFilter('all');
     mocks.list.mockReset();
 
-    act(() => sessionsStore.patchLocal('restore-me', { status: 'active' }));
+    act(() =>
+      sessionsStore.patchLocal('restore-me', {
+        status: 'active',
+        updatedAt: '2026-08-27T01:00:00.000Z',
+      }),
+    );
 
     expect(sessionsStore.getByFilter('active')?.find(({ id }) => id === 'restore-me')).toEqual(
       expect.objectContaining({
@@ -1080,12 +1163,15 @@ describe('sessionsStore status bucket migration', () => {
     expect(sessionsStore.getByFilter('active')?.at(-1)?.id).toBe('active-1000');
   });
 
-  it('uses a cached source row to repair a target bucket request that started earlier', async () => {
+  it('trails a target request when its cached status migration lacks updatedAt', async () => {
     mocks.list.mockResolvedValueOnce([session('archive-me')]);
     await sessionsStore.ensureByFilter('active');
 
     const staleArchivedRequest = deferred<Session[]>();
-    mocks.list.mockImplementationOnce(() => staleArchivedRequest.promise);
+    const trailingArchivedRequest = deferred<Session[]>();
+    mocks.list
+      .mockImplementationOnce(() => staleArchivedRequest.promise)
+      .mockImplementationOnce(() => trailingArchivedRequest.promise);
     const staleLoad = sessionsStore.ensureByFilter('archived');
 
     act(() => sessionsStore.patchLocal('archive-me', { status: 'archived' }));
@@ -1096,7 +1182,25 @@ describe('sessionsStore status bucket migration', () => {
       'already-archived',
       'archive-me',
     ]);
-    expect(requestedFilters()).toEqual(['active', 'archived']);
+    await waitFor(() => expect(requestedFilters()).toEqual(['active', 'archived', 'archived']));
+
+    trailingArchivedRequest.resolve([
+      session('archive-me', 'archived', '2026-08-27T03:00:00.000Z'),
+      session('already-archived', 'archived'),
+    ]);
+    await waitFor(() => {
+      expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+        'archive-me',
+        'already-archived',
+      ]);
+    });
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual([
+      'archive-me',
+      'already-archived',
+    ]);
+    expect(sessionsStore.getByFilter('archived')?.[0]?.updatedAt).toBe(
+      '2026-08-27T03:00:00.000Z',
+    );
   });
 
   it('does not let an older archived response overwrite a later deleted status', async () => {
@@ -1108,7 +1212,10 @@ describe('sessionsStore status bucket migration', () => {
     const staleLoad = sessionsStore.ensureByFilter('archived');
 
     act(() => {
-      sessionsStore.patchLocal('archive-me', { status: 'archived' });
+      sessionsStore.patchLocal('archive-me', {
+        status: 'archived',
+        updatedAt: '2026-08-27T01:00:00.000Z',
+      });
       sessionsStore.patchLocal('archive-me', { status: 'deleted' });
     });
     staleArchivedRequest.resolve([session('archive-me', 'archived')]);

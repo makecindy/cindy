@@ -246,6 +246,11 @@ function updatedAtMs(session: Session): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
+function statusPatchNeedsTargetBackfill(patch: Partial<Session>): boolean {
+  if (patch.status === undefined || patch.status === 'deleted') return false;
+  return typeof patch.updatedAt !== 'string' || !Number.isFinite(Date.parse(patch.updatedAt));
+}
+
 /** 与 sessions:list 的 updatedAt DESC 保持一致，并保留 1000 条硬上限。 */
 function upsertSessionByUpdatedAt(list: Session[], session: Session): Session[] {
   const withoutSession = list.filter((item) => item.id !== session.id);
@@ -881,7 +886,8 @@ export const sessionsStore = {
    *     一直等到重拉的 sessions:list 回来才更新 —— 表现为"点归档后半秒对话
    *     才消失"，把调用方 useSessionLifecycleActions 的乐观更新整段抵消掉。
    *   - 「不在桶里但该在」（归档时的 archived 桶）→ 从 active / all 任一桶捕获
-   *     完整 row 后直接插入。只有所有桶都找不到 row 时，才保留桶快照并定向补查。
+   *     完整 row 后直接插入。所有桶都找不到 row，或 status 广播没有携带 DB 已更新的
+   *     updatedAt 时，再定向补查目标桶以校正排序和 1000 条边界。
    * deleted 从所有桶移除即可；旧在途请求由 status override 过滤，不再取消并重启。
    */
   patchLocal(id: string, patch: Partial<Session>): void {
@@ -890,6 +896,7 @@ export const sessionsStore = {
       patch.status !== undefined ? pendingStatusTransitions.get(id) : undefined;
     const sourceSession = patch.status !== undefined ? this.findById(id) : null;
     const migratedSession = sourceSession ? mergeSession(sourceSession, patch) : null;
+    const needsTargetBackfill = statusPatchNeedsTargetBackfill(patch);
     if (patch.status !== undefined) {
       recordStatusOverride(id, patch, migratedSession);
     } else {
@@ -953,6 +960,11 @@ export const sessionsStore = {
       const loadedFilters = new Set<ListStatusFilter>([...cache.keys(), ...inflight.keys()]);
       for (const filter of loadedFilters) {
         const belongs = belongsInFilter(patch.status, filter);
+        // sessions.setStatus 等批量入口只广播 { status }，但 DB 已把 updatedAt bump 到当前
+        // 时间。先用缓存行即时迁移，再补拉应包含它的桶，否则会按旧时间错排，满 1000 条
+        // 时甚至可能把本应进入结果集的新近任务裁掉。pending 本地写入会在下方继续延后，
+        // 由 completeStatusTransition 返回的完整持久行直接收敛，避免多打一轮请求。
+        if (belongs && needsTargetBackfill) toBackfill.add(filter);
         const list = cache.get(filter);
         if (!list) {
           if (belongs && !migratedSession) toBackfill.add(filter);
@@ -970,11 +982,13 @@ export const sessionsStore = {
           continue;
         }
         if (idx !== -1) {
-          cache.set(filter, [
-            ...list.slice(0, idx),
-            mergeSession(list[idx], patch),
-            ...list.slice(idx + 1),
-          ]);
+          const merged = mergeSession(list[idx], patch);
+          cache.set(
+            filter,
+            needsTargetBackfill
+              ? [...list.slice(0, idx), merged, ...list.slice(idx + 1)]
+              : upsertSessionByUpdatedAt(list, merged),
+          );
           touched = true;
           continue;
         }
