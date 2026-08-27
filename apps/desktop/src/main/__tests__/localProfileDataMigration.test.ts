@@ -514,6 +514,30 @@ describe('adoptLocalProfileDatabase', () => {
     );
   });
 
+  it('does not replace a cloud database created after the target preflight', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+
+    const racingDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async (source, destination) => {
+          // Model another initializer winning the target race after the
+          // adoption preflight but before publication.
+          await fs.writeFile(destination, 'cloud-db');
+          return fs.link(source, destination);
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', racingDeps)).resolves.toEqual({
+      status: 'target-exists',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
+  });
+
   it('does not publish WAL sidecars when the main target loses the race', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
