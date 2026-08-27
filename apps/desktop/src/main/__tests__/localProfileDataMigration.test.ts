@@ -217,6 +217,20 @@ describe('adoptLocalProfileDatabase', () => {
     ).resolves.toContain('owner-a');
   });
 
+  it('blocks initialization when source sidecars exist without the main database', async () => {
+    const { root, deps } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(`${source}-wal`, 'orphaned-wal');
+
+    await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toEqual({
+      status: 'failed',
+      error: 'source database sidecar exists without its main database',
+    });
+    await expect(fs.access(target)).rejects.toThrow();
+    await expect(fs.readFile(`${source}-wal`, 'utf8')).resolves.toBe('orphaned-wal');
+  });
+
   it('adopts a standalone snapshot without deleting the local source', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
@@ -365,6 +379,18 @@ describe('adoptLocalProfileDatabase', () => {
       status: 'not-required',
       reason: 'claimed-by-other-owner',
     });
+  });
+
+  it('blocks passive initialization for orphaned source sidecars', async () => {
+    const { root, deps } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    await fs.writeFile(`${source}-shm`, 'orphaned-shm');
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'failed',
+      error: 'source database sidecar exists without its main database',
+    });
+    await expect(fs.readFile(`${source}-shm`, 'utf8')).resolves.toBe('orphaned-shm');
   });
 
   it('assigns the retained local source to only the first cloud owner', async () => {

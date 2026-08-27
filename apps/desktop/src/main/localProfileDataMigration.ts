@@ -516,13 +516,13 @@ async function cleanupTemps(deps: LocalProfileDataMigrationDeps, targetDb: strin
   }
 }
 
-async function targetDatabaseFileGroupState(
+async function databaseFileGroupState(
   deps: LocalProfileDataMigrationDeps,
-  targetDb: string,
+  database: string,
 ): Promise<{ mainExists: boolean; sidecarExists: boolean }> {
   const [mainExists, ...sidecarResults] = await Promise.all([
-    deps.fs.pathExists(targetDb),
-    ...DB_SIDECAR_SUFFIXES.map((suffix) => deps.fs.pathExists(`${targetDb}${suffix}`)),
+    deps.fs.pathExists(database),
+    ...DB_SIDECAR_SUFFIXES.map((suffix) => deps.fs.pathExists(`${database}${suffix}`)),
   ]);
   return { mainExists, sidecarExists: sidecarResults.some(Boolean) };
 }
@@ -549,7 +549,7 @@ export async function inspectPassiveLocalProfileAdoption(
   const sourceDb = dbPath(deps, LOCAL_PROFILE_DATA_OWNER_ID);
   const targetDb = dbPath(deps, normalizedOwnerId);
   try {
-    const targetState = await targetDatabaseFileGroupState(deps, targetDb);
+    const targetState = await databaseFileGroupState(deps, targetDb);
     if (targetState.sidecarExists && !targetState.mainExists) {
       return {
         status: 'failed',
@@ -557,7 +557,14 @@ export async function inspectPassiveLocalProfileAdoption(
       };
     }
     if (targetState.mainExists) return { status: 'not-required', reason: 'target-exists' };
-    if (!(await deps.fs.pathExists(sourceDb))) {
+    const sourceState = await databaseFileGroupState(deps, sourceDb);
+    if (sourceState.sidecarExists && !sourceState.mainExists) {
+      return {
+        status: 'failed',
+        error: 'source database sidecar exists without its main database',
+      };
+    }
+    if (!sourceState.mainExists) {
       return { status: 'not-required', reason: 'no-local-db' };
     }
 
@@ -644,11 +651,15 @@ export async function adoptLocalProfileDatabase(
     // Reserve the local namespace even when it is currently empty. Otherwise a
     // later account could create or adopt local content after the first account
     // has already crossed the login boundary.
-    if (!(await deps.fs.pathExists(sourceDb))) return { status: 'no-local-db' };
+    const sourceState = await databaseFileGroupState(deps, sourceDb);
+    if (sourceState.sidecarExists && !sourceState.mainExists) {
+      throw new Error('source database sidecar exists without its main database');
+    }
+    if (!sourceState.mainExists) return { status: 'no-local-db' };
     // The same crash-released SQLite writer lock serializes marker repair and
     // the complete snapshot publication. No PID identity or reclaimable lease
     // file is involved, so a crashed process cannot block adoption forever.
-    const targetState = await targetDatabaseFileGroupState(deps, targetDb);
+    const targetState = await databaseFileGroupState(deps, targetDb);
     if (targetState.sidecarExists && !targetState.mainExists) {
       throw new Error('target database sidecar exists without its main database');
     }
