@@ -1,8 +1,12 @@
-import { Host, Switch } from "@expo/ui";
-import { View } from "react-native";
+import { Host, Switch as ExpoSwitch } from "@expo/ui";
+import { Platform, Switch as RNSwitch, View } from "react-native";
 import { useTheme } from "@/theme";
 
-/** 收起时仍占原来的开关位;iOS/Android 点开是系统 Switch。 */
+/** iOS/Android 点开是系统 Switch;Web 没有原生 toolkit,继续用 RN Switch。 */
+export function usesExpoNativeSwitch(): boolean {
+  return Platform.OS === "ios" || Platform.OS === "android";
+}
+
 export function NativeSwitch({
   accessibilityLabel,
   disabled,
@@ -19,6 +23,19 @@ export function NativeSwitch({
   value: boolean;
 }) {
   const { mode } = useTheme();
+
+  if (!usesExpoNativeSwitch()) {
+    return (
+      <RNSwitch
+        accessibilityLabel={accessibilityLabel}
+        disabled={disabled}
+        onValueChange={onValueChange}
+        testID={testID}
+        value={value}
+      />
+    );
+  }
+
   return (
     <View
       accessibilityLabel={accessibilityLabel}
@@ -32,7 +49,7 @@ export function NativeSwitch({
       }
     >
       <Host colorScheme={mode} matchContents seedColor={seedColor}>
-        <Switch
+        <ExpoSwitch
           disabled={disabled}
           onValueChange={onValueChange}
           testID={testID}

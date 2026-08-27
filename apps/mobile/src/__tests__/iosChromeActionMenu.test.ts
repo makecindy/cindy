@@ -182,6 +182,12 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     );
     expect(nativeSwitch).toContain("accessibilityLabel?: string");
     expect(nativeSwitch).toContain("onAccessibilityTap");
+    expect(nativeSwitch).toContain("usesExpoNativeSwitch");
+    expect(nativeSwitch).toContain(
+      'Platform.OS === "ios" || Platform.OS === "android"',
+    );
+    expect(nativeSwitch).toContain("Switch as RNSwitch");
+    expect(nativeSwitch).toContain("if (!usesExpoNativeSwitch())");
     expect(settings).toContain(
       "accessibilityLabel={t('settings.notifications.taskDone')}",
     );
