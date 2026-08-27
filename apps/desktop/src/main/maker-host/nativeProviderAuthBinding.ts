@@ -658,6 +658,17 @@ export function claimDetectedNativeProviderAuth(
   // Callers reached from an async settle (Codex reconcile) additionally pin an
   // owner+generation snapshot; this guard is the floor every caller gets.
   if (isAppSessionBoundaryPending()) return false;
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return false;
+  if (provider in snapshot.bindings) return false;
+  if (
+    ('legacyClaimOwner' in snapshot.bindings && snapshot.bindings.legacyClaimOwner !== owner) ||
+    (snapshot.bindings.revoked && provider in snapshot.bindings.revoked)
+  ) {
+    return false;
+  }
+  if (!hasCredential()) return false;
+
   return withNativeBindingMutationLock(false, () => {
     // 归属文件读不出来 = 归属不明,一律不认领:这条路径是**写**路径,把损坏当空会把共享
     // keychain 里可能属于别人的凭证判给当前账号,并覆盖掉原有归属(PR #548 review)。

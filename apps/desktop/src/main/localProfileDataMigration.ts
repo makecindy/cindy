@@ -477,12 +477,15 @@ async function cleanupTemps(deps: LocalProfileDataMigrationDeps, targetDb: strin
   }
 }
 
-async function targetDatabaseFileGroupExists(
+async function targetDatabaseFileGroupState(
   deps: LocalProfileDataMigrationDeps,
   targetDb: string,
-): Promise<boolean> {
-  const targets = [targetDb, ...DB_SIDECAR_SUFFIXES.map((suffix) => `${targetDb}${suffix}`)];
-  return (await Promise.all(targets.map((target) => deps.fs.pathExists(target)))).some(Boolean);
+): Promise<{ mainExists: boolean; sidecarExists: boolean }> {
+  const [mainExists, ...sidecarResults] = await Promise.all([
+    deps.fs.pathExists(targetDb),
+    ...DB_SIDECAR_SUFFIXES.map((suffix) => deps.fs.pathExists(`${targetDb}${suffix}`)),
+  ]);
+  return { mainExists, sidecarExists: sidecarResults.some(Boolean) };
 }
 
 async function copyDatabaseAtomically(
@@ -541,7 +544,11 @@ export async function adoptLocalProfileDatabase(
     // The same crash-released SQLite writer lock serializes marker repair and
     // the complete snapshot publication. No PID identity or reclaimable lease
     // file is involved, so a crashed process cannot block adoption forever.
-    if (await targetDatabaseFileGroupExists(deps, targetDb)) {
+    const targetState = await targetDatabaseFileGroupState(deps, targetDb);
+    if (targetState.sidecarExists && !targetState.mainExists) {
+      throw new Error('target database sidecar exists without its main database');
+    }
+    if (targetState.mainExists || targetState.sidecarExists) {
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
     }

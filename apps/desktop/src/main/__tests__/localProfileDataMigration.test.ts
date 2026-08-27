@@ -301,13 +301,28 @@ describe('adoptLocalProfileDatabase', () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(target, 'cloud-db');
     await fs.writeFile(`${target}-wal`, 'cloud-wal');
 
     await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toEqual({
       status: 'target-exists',
     });
-    await expect(fs.access(target)).rejects.toThrow();
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
     await expect(fs.readFile(`${target}-wal`, 'utf8')).resolves.toBe('cloud-wal');
+  });
+
+  it('blocks initialization when target sidecars exist without the main database', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(`${target}-wal`, 'orphaned-wal');
+
+    await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'target database sidecar exists without its main database',
+    });
+    await expect(fs.access(target)).rejects.toThrow();
+    await expect(fs.readFile(`${target}-wal`, 'utf8')).resolves.toBe('orphaned-wal');
   });
 
   it('assigns the retained local source to only the first cloud owner', async () => {

@@ -99,6 +99,17 @@ describe('native provider auth legacy binding', () => {
     expect(renameSpy).not.toHaveBeenCalledWith(expect.any(String), bindingFile);
     expect(fs.existsSync(bindingLockDb)).toBe(false);
   });
+
+  it('does not acquire the mutation lock for a known no-op claim', () => {
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    fs.rmSync(bindingLockDb, { force: true });
+    const hasCredential = vi.fn(() => true);
+
+    expect(claimDetectedNativeProviderAuth('openai', hasCredential)).toBe(false);
+
+    expect(hasCredential).not.toHaveBeenCalled();
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
 });
 
 describe('local → cloud native provider binding migration', () => {
