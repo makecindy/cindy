@@ -48,7 +48,14 @@ describe('leaked model stop tokens', () => {
     expect(stripStandaloneModelStopToken('<|eos|><|eos|>')).toBe('');
     expect(stripInternalWebCitations('<|eos|>\n\n<|eos|>')).toBe('');
     expect(stripInternalWebCitations('  <|eos|> <|eot_id|>\n')).toBe('');
-    expect(stripInternalWebCitations('<|eos|>answer')).toBe('answer');
+    expect(stripInternalWebCitations('<|eos|>answer')).toBe('<|eos|>answer');
+  });
+
+  it('leaves completed messages that start with a stop token but continue as prose', () => {
+    expect(stripStandaloneModelStopToken('<|eos|>answer')).toBe('<|eos|>answer');
+    expect(stripInternalWebCitations('<|endoftext|> The token is still here')).toBe(
+      '<|endoftext|> The token is still here',
+    );
   });
 
   it('leaves embedded stop-token prose intact', () => {
@@ -117,6 +124,12 @@ describe('leaked model stop tokens', () => {
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
     expect(buffer).toEqual({ pending: '', emitted: false });
+    expect(holdStandaloneStopTokenDelta(buffer, 'answer')).toBe('answer');
+  });
+
+  it('does not glue a completed leftover onto later prose in the same stream', () => {
+    const buffer = { pending: '', emitted: false };
+    expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
     expect(holdStandaloneStopTokenDelta(buffer, 'answer')).toBe('answer');
   });
 

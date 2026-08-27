@@ -12,7 +12,9 @@
  * prose, such as `The token is <|eos|>`, stay intact.
  */
 const MODEL_STOP_TOKEN_LIST = ['<|endoftext|>', '<|eot_id|>', '<|im_end|>', '<|eos|>'];
-const LONGEST_MODEL_STOP_TOKEN = MODEL_STOP_TOKEN_LIST[0]?.length ?? 0;
+const LONGEST_MODEL_STOP_TOKEN = Math.max(
+  ...MODEL_STOP_TOKEN_LIST.map((token) => token.length),
+);
 const WEB_CITATION_OPEN = '\uE200cite\uE202';
 const WEB_CITATION_CLOSE = '\uE201';
 
@@ -89,11 +91,13 @@ function isIncompleteStopTokenPrefix(text: string): boolean {
 
 /**
  * Eat a leading run of known stop tokens and the whitespace around them.
- * Used by both the completed-message strip and the streaming hold so a
- * second `<|eos|>` cannot turn an already-recognized leftover into prose.
+ * Completed messages only disappear when nothing remains. The streaming
+ * hold still drops recognized tokens from `pending` so a second copy
+ * cannot flush the earlier leftover as prose.
  */
-function consumeLeadingStopControl(text: string): string {
+function consumeLeadingStopControl(text: string): { remainder: string; consumedToken: boolean } {
   let index = 0;
+  let consumedToken = false;
   while (index < text.length) {
     if ((text[index] ?? '').trim() === '') {
       index += 1;
@@ -101,20 +105,21 @@ function consumeLeadingStopControl(text: string): string {
     }
     const token = matchStopTokenAt(text, index);
     if (!token) break;
+    consumedToken = true;
     index += token.length;
   }
-  return text.slice(index);
+  return { remainder: text.slice(index), consumedToken };
 }
 
 /**
- * Drop a leading run of leaked stop tokens. A whole message that is only
- * those tokens (and whitespace) becomes empty; a leading run followed by
- * prose keeps the prose. Embedded mentions such as `The token is <|eos|>`
- * stay intact because they do not start with a known token.
+ * Drop a leaked stop-token run only when it is the whole assistant
+ * message (optional surrounding whitespace). Repeated or mixed tokens
+ * still count. Mentions such as `The token is <|eos|>`, or a token
+ * glued to later prose (`<|eos|>answer`), stay intact.
  */
 export function stripStandaloneModelStopToken(text: string): string {
-  const remainder = consumeLeadingStopControl(text);
-  return remainder === text.trimStart() ? text : remainder;
+  const { remainder, consumedToken } = consumeLeadingStopControl(text);
+  return consumedToken && remainder.length === 0 ? '' : text;
 }
 
 /**
@@ -123,7 +128,7 @@ export function stripStandaloneModelStopToken(text: string): string {
  * Used to hold streaming deltas until the leftover can be dropped or flushed.
  */
 export function isPossibleStandaloneStopPrefix(text: string): boolean {
-  const remainder = consumeLeadingStopControl(text);
+  const { remainder } = consumeLeadingStopControl(text);
   return remainder.length === 0 || isIncompleteStopTokenPrefix(remainder);
 }
 
@@ -156,7 +161,7 @@ export function holdStandaloneStopTokenDelta(
 ): string | null {
   const combined = buffer.pending + delta;
   if (!buffer.emitted) {
-    const remainder = consumeLeadingStopControl(combined);
+    const { remainder } = consumeLeadingStopControl(combined);
     if (remainder.length === 0 || isIncompleteStopTokenPrefix(remainder)) {
       buffer.pending = remainder;
       return null;
