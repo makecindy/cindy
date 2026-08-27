@@ -662,12 +662,23 @@ async function copyDatabaseAtomically(
     if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
     }
-    await deps.fs.link(dbTmp, targetDb);
+    // Hard-link publication is intentionally no-replace on every supported
+    // platform. Never use rename here: a later same-owner initializer must
+    // lose with EEXIST rather than overwrite the database already published
+    // by the first initializer.
+    let linked = false;
+    try {
+      await deps.fs.link(dbTmp, targetDb);
+      linked = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+      throw error;
+    }
+    if (!linked) return false;
     published = true;
     flushPublishedDatabase(targetDb);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
     if (published) await deps.fs.removeIfExists(targetDb);
     throw error;
   } finally {

@@ -489,6 +489,33 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.access(path.join(root, 'cindy-owner-a.db-shm'))).rejects.toThrow();
   });
 
+  it('keeps the first same-owner snapshot when concurrent publishers produce different bytes', async () => {
+    const { root, deps } = await fixture();
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    let backupCount = 0;
+    const racingDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        backupDatabase: async (_source, target) => {
+          backupCount += 1;
+          await fs.writeFile(target, `snapshot-${backupCount}`);
+        },
+      },
+    };
+
+    const results = await Promise.all([
+      adoptLocalProfileDatabase('owner-a', racingDeps),
+      adoptLocalProfileDatabase('owner-a', racingDeps),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(['adopted', 'target-exists']);
+    expect(backupCount).toBe(1);
+    await expect(fs.readFile(path.join(root, 'cindy-owner-a.db'), 'utf8')).resolves.toBe(
+      'snapshot-1',
+    );
+  });
+
   it('does not publish WAL sidecars when the main target loses the race', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
