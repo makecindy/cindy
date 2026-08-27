@@ -63,6 +63,17 @@ describe('grok-build detection', () => {
     expect(found).toBe('/opt/xai/bin/grok');
   });
 
+  // Windows 上 grok 由 npm 装成 .cmd shim;分隔符是 ;、扩展名要逐个试。
+  // 注入 platform 的用例在任何宿主上都要给出同一答案,所以拼接也得跟着 platform 走。
+  it('resolves the Windows .cmd shim from a win32 PATH', () => {
+    const found = resolveGrokBinaryFromPath({
+      pathEnv: 'C:\\Users\\u\\AppData\\Roaming\\npm;C:\\Windows\\system32',
+      platform: 'win32',
+      existsSyncImpl: (candidate) => candidate === 'C:\\Users\\u\\AppData\\Roaming\\npm\\grok.cmd',
+    });
+    expect(found).toBe('C:\\Users\\u\\AppData\\Roaming\\npm\\grok.cmd');
+  });
+
   it('treats initialize authMethods as logged-out', async () => {
     const spawnImpl = fakeSpawn((_stdin, stdout) => {
       stdout.write(`${JSON.stringify({

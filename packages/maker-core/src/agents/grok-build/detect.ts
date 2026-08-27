@@ -42,12 +42,15 @@ export function resolveGrokBinaryFromPath(options: ResolveGrokBinaryOptions = {}
   const pathEnv = options.pathEnv ?? process.env.PATH ?? '';
   const platform = options.platform ?? process.platform;
   const exists = options.existsSyncImpl ?? existsSync;
-  const delim = options.pathSep ?? (platform === 'win32' ? ';' : ':');
+  // 分隔符与拼接必须同属一个 platform:注入 platform 做跨平台用例时,若这里还用宿主的
+  // path.join,在 Windows 上跑 posix 用例会拼出 `\opt\xai\bin\grok`,反之亦然。
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const delim = options.pathSep ?? pathApi.delimiter;
   const exts = platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
   for (const dir of pathEnv.split(delim)) {
     if (!dir) continue;
     for (const ext of exts) {
-      const candidate = path.join(dir, `grok${ext}`);
+      const candidate = pathApi.join(dir, `grok${ext}`);
       if (exists(candidate)) return candidate;
     }
   }
