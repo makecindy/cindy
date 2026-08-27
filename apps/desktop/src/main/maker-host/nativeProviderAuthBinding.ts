@@ -720,6 +720,17 @@ export function restoreNativeProviderAuthForRecovery(
 ): boolean {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner || owner !== expectedOwner || isAppSessionBoundaryPending()) return false;
+  // Recovery runs on the Electron main thread after Codex reconciliation. Avoid
+  // synchronously waiting on the cross-process writer lock when a read-only
+  // snapshot already proves that no write is needed. Any potentially writable
+  // state is still rechecked under the lock below.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return false;
+  const snapshotBindings = snapshot.bindings;
+  if (snapshotBindings.revoked && provider in snapshotBindings.revoked) return false;
+  if (!hasCredential()) return false;
+  if (provider in snapshotBindings) return snapshotBindings[provider] === expectedOwner;
+
   return withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
     if (!read.ok) return false;

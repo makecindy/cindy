@@ -627,6 +627,30 @@ describe('claimDetectedNativeProviderAuth', () => {
 });
 
 describe('restoreNativeProviderAuthForRecovery', () => {
+  it('avoids the mutation lock when recovery has no credential to restore', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(restoreNativeProviderAuthForRecovery('openai', 'owner-a', () => false)).toBe(false);
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it.each([
+    ['owner-a', true],
+    ['owner-b', false],
+  ] as const)(
+    'avoids the mutation lock when recovery finds an existing slot for %s',
+    (slotOwner, expected) => {
+      fs.mkdirSync(userDataDir, { recursive: true });
+      fs.writeFileSync(bindingFile, JSON.stringify({ openai: slotOwner }));
+      fs.rmSync(bindingLockDb, { force: true });
+
+      expect(restoreNativeProviderAuthForRecovery('openai', 'owner-a', () => true)).toBe(expected);
+      expect(fs.existsSync(bindingLockDb)).toBe(false);
+    },
+  );
+
   it('restores the invalidated owner even when another owner won the legacy claim', () => {
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));
