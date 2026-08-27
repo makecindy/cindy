@@ -647,21 +647,20 @@ describe('newMakerDraft store', () => {
     expect(getDraft().workingDir).toBe('E:/projects/foo/.claude/worktrees/auto-abc/src');
   });
 
-  it('switchVendor:落地当前 vendor 的最新 prefs 后再切到目标 vendor', async () => {
-    const { getDraft, switchVendor } = await loadModule();
-    // 当前 vendor='cc',传入"模拟用户改过的 cc prefs"
-    switchVendor('codex', {
-      ...getDraft().lastByVendor.cc,
+  it('switchVendor:保留已同步的当前 vendor prefs 后再切到目标 vendor', async () => {
+    const { getDraft, patchCurrentVendorPrefs, switchVendor } = await loadModule();
+    patchCurrentVendorPrefs({
       model: 'claude-opus-4-7',
       effort: 'high',
-      permissionMode: 'plan',
+      permissionMode: 'bypassPermissions',
     });
+    switchVendor('codex');
     const d = getDraft();
     expect(d.vendor).toBe('codex');
     // 旧 vendor(cc)的 prefs 被落地为传入的值
     expect(d.lastByVendor.cc.model).toBe('claude-opus-4-7');
     expect(d.lastByVendor.cc.effort).toBe('high');
-    expect(d.lastByVendor.cc.permissionMode).toBe('plan');
+    expect(d.lastByVendor.cc.permissionMode).toBe('bypassPermissions');
     // 新 vendor(codex)的 prefs 不变(等待用户在 codex 下继续操作)
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
   });
@@ -669,7 +668,7 @@ describe('newMakerDraft store', () => {
   it('switchVendor:选中的引擎跨重启保留(模拟 app 重启后仍是上次选的)', async () => {
     const m1 = await loadModule();
     expect(m1.getDraft().vendor).toBe('cc');
-    m1.switchVendor('codex', m1.getDraft().lastByVendor.cc);
+    m1.switchVendor('codex');
     expect(m1.getDraft().vendor).toBe('codex');
 
     vi.resetModules();
@@ -700,7 +699,7 @@ describe('newMakerDraft store', () => {
   it('switchVendor:相同 vendor 不变(no-op,避免误覆盖)', async () => {
     const { getDraft, switchVendor } = await loadModule();
     const before = getDraft().lastByVendor.cc;
-    switchVendor('cc', { ...before, model: 'XX', effort: 'low', permissionMode: 'auto' });
+    switchVendor('cc');
     expect(getDraft().lastByVendor.cc).toEqual(before);
   });
 
@@ -1069,7 +1068,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
 
     activeWindow.markDefaultTupleCustomized();
-    activeWindow.switchVendor('pi', activeWindow.getCurrentVendorPrefs());
+    activeWindow.switchVendor('pi');
     activeWindow.patchVendorPrefs('pi', {
       model: 'grok-4.6',
       providerId: 'xai',
@@ -1105,6 +1104,299 @@ describe('newMakerDraft store', () => {
     ).toMatchObject(expectedTuple);
   });
 
+  it('旧窗口的无关写入不会复活另一窗口已恢复推荐的 tuple', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+    expect(staleWindow.getDraft().defaultTupleCustomized).toBe(true);
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    const restoredTuple = {
+      vendor: activeWindow.getDraft().vendor,
+      defaultTupleCustomized: false,
+      defaultTupleSelectionCustomized: false,
+      modelChosenByVendor: {},
+      effortByModel: {},
+      fastModeByModel: {},
+      lastByVendor: activeWindow.getDraft().lastByVendor,
+    };
+
+    // storage event 尚未到达 B；仅改工作目录时必须采用 A 已写入的完整恢复结果。
+    staleWindow.patchDraft({ workingDir: '/projects/after-restore' });
+    expect(staleWindow.getDraft()).toMatchObject(restoredTuple);
+    expect(staleWindow.getDraft().workingDir).toBe('/projects/after-restore');
+    expect(JSON.parse(memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}')).toMatchObject(
+      restoredTuple,
+    );
+  });
+
+  it('旧窗口在恢复推荐后明确选模时，只写入这次新的 tuple 意图', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    staleWindow.patchVendorPrefs('cc', {
+      model: 'claude-new-choice',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { cc: true },
+      effortByModel: {},
+      fastModeByModel: {},
+      lastByVendor: {
+        cc: expect.objectContaining({
+          model: 'claude-new-choice',
+          providerId: 'anthropic',
+          effort: 'xhigh',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口在恢复推荐后切 Harness 时，不用旧闭包污染最新来源槽', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // B 仍渲染着旧 cc tuple，但这次明确意图只有“切到 Codex”。切换前必须采用 A 的
+    // 最新 Pi tuple，不能把旧 cc prefs 填进 Pi 槽。
+    staleWindow.markDefaultTupleCustomized();
+    staleWindow.switchVendor('codex');
+
+    const expected = {
+      vendor: 'codex',
+      defaultTupleCustomized: true,
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+          effort: 'medium',
+        }),
+      },
+    };
+    expect(staleWindow.getDraft()).toMatchObject(expected);
+    expect(JSON.parse(memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}')).toMatchObject(
+      expected,
+    );
+  });
+
+  it('旧窗口选择界面所示 Harness 时，仍按最新持久状态执行切换', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+    expect(staleWindow.getDraft().vendor).toBe('cc');
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // B 仍显示 cc，用户明确点 cc。调用方必须始终进入 switchVendor，让它先看到真实 Pi
+    // 再切回 cc；若用旧 draft.vendor 预判，这次明确意图会被错误跳过。
+    staleWindow.switchVendor('cc');
+    staleWindow.patchVendorPrefs('cc', {
+      model: 'claude-new-choice',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      modelChosenByVendor: { cc: true },
+      lastByVendor: {
+        cc: expect.objectContaining({
+          model: 'claude-new-choice',
+          providerId: 'anthropic',
+        }),
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口的内联控件按界面 Harness 写入，不串到最新持久 Harness', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+    const renderedVendor = staleWindow.getDraft().vendor;
+    expect(renderedVendor).toBe('cc');
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // 模拟 classic/inline 回调：marker 会先 rebase 到 Pi，但后续必须按渲染时捕获的 cc
+    // 执行切换并写 cc 槽，不能用 rebase 后的 currentDraft.vendor 把值串进 Pi。
+    staleWindow.markDefaultTupleCustomized();
+    staleWindow.switchVendor(renderedVendor);
+    staleWindow.patchVendorPrefs(renderedVendor, {
+      model: 'claude-inline-choice',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      modelChosenByVendor: { cc: true },
+      lastByVendor: {
+        cc: expect.objectContaining({
+          model: 'claude-inline-choice',
+          providerId: 'anthropic',
+          effort: 'xhigh',
+        }),
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+          effort: 'medium',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口切 Fast 时回到界面 Harness，并保留最新 Pi 默认', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+    const renderedVendor = staleWindow.getDraft().vendor;
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // 模拟 Fast handler：先标记调档，再确保当前 Harness 是用户仍看见的 cc，最后写模型记忆。
+    staleWindow.markDefaultTupleCustomized(false);
+    staleWindow.switchVendor(renderedVendor);
+    staleWindow.setFastModeForModel('claude-visible-model', true);
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      fastModeByModel: { 'claude-visible-model': true },
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口改权限等非 tuple 字段时，只更新界面 Harness 槽', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    staleWindow.patchVendorPrefs('cc', { permissionMode: 'bypassPermissions' });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: false,
+      lastByVendor: {
+        cc: expect.objectContaining({ permissionMode: 'bypassPermissions' }),
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+        }),
+      },
+    });
+  });
+
+  it('preserving 活动同步基于恢复后的 tuple，不带回旧 marker 和调档', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    vi.resetModules();
+    const staleWindow = await loadModule();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    staleWindow.patchVendorPrefsPreservingModelChoice('cc', { effort: 'medium' });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      defaultTupleCustomized: false,
+      defaultTupleSelectionCustomized: false,
+      modelChosenByVendor: {},
+      effortByModel: {},
+      fastModeByModel: {},
+      lastByVendor: {
+        cc: expect.objectContaining({ effort: 'medium' }),
+      },
+    });
+  });
+
   it('旧窗口只清调档但未解锁时仍保住另一窗口的新默认组合', async () => {
     const staleWindow = await loadModule();
     staleWindow.setEffortForModel('legacy-model', 'high');
@@ -1112,7 +1404,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
 
     activeWindow.markDefaultTupleCustomized();
-    activeWindow.switchVendor('pi', activeWindow.getCurrentVendorPrefs());
+    activeWindow.switchVendor('pi');
     activeWindow.patchVendorPrefs('pi', {
       model: 'grok-4.6',
       providerId: 'xai',
@@ -1329,18 +1621,18 @@ describe('newMakerDraft store', () => {
 
     it('显式带设备 + 具体 workingDir(选该设备上的项目)→ 两者都保留', async () => {
       const { getDraft, patchDraft } = await loadModule();
-      patchDraft({
-        deviceLinkDeviceId: 'dev-a',
-        deviceLinkDeviceName: 'Studio Mac',
-        workingDir: '/host/proj',
-      });
+      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: '/host/proj' });
       expect(getDraft().deviceLinkDeviceId).toBe('dev-a');
       expect(getDraft().workingDir).toBe('/host/proj');
     });
 
     it('改 workingDir 但不带设备字段 → 仍按老规则清设备(防本地项目被误当远程)', async () => {
       const { getDraft, patchDraft } = await loadModule();
-      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: '/host/proj' });
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: '/host/proj',
+      });
       patchDraft({ workingDir: '/local/proj' });
       expect(getDraft().deviceLinkDeviceId).toBeNull();
       expect(getDraft().deviceLinkDeviceName).toBeNull();

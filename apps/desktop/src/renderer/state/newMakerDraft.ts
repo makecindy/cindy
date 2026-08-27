@@ -582,6 +582,22 @@ type PreferenceSyncFallback = 'full-draft' | 'worktree-only' | null;
 let preferenceSyncFallback: PreferenceSyncFallback = null;
 
 /**
+ * 显式 tuple 操作先采用跨窗口持久真相，再只施加自己的字段变更。
+ * 这样既不会带着旧整表复活已恢复的 override，也不会吞掉本窗口刚发生的真实选模意图。
+ */
+function rebaseStoredDefaultTuplePreference(): void {
+  const stored = readStoredDefaultTuplePreference();
+  if (
+    stored !== undefined &&
+    !hasSameDefaultTuplePreference(stored, defaultTuplePreferenceOf(currentDraft))
+  ) {
+    currentDraft = { ...currentDraft, ...stored };
+    // 等价于 storage event 已到达：即使后续显式操作因同值短路，订阅者也必须看到这次收敛。
+    emit();
+  }
+}
+
+/**
  * Persist a complete draft snapshot without letting another renderer's stale in-memory copy
  * overwrite workstation-wide worktree or user-customized default-tuple preferences.
  *
@@ -593,7 +609,7 @@ let preferenceSyncFallback: PreferenceSyncFallback = null;
 function scheduleWrite(
   options: {
     preserveStoredWorktreePreference?: boolean;
-    preserveStoredDefaultTupleCustomization?: boolean;
+    preserveStoredDefaultTuplePreference?: boolean;
   } = {},
 ): void {
   if (typeof window === 'undefined') return;
@@ -611,16 +627,18 @@ function scheduleWrite(
     currentDraft = { ...currentDraft, ...storedWorktreePreference };
   }
   const storedDefaultTuplePreference =
-    options.preserveStoredDefaultTupleCustomization !== false
+    options.preserveStoredDefaultTuplePreference !== false
       ? readStoredDefaultTuplePreference()
       : undefined;
-  // 旧 renderer 还拿着未自定义草稿时，任意其它字段的完整快照写入都不能回滚另一个
-  // renderer 刚保存的用户组合。两个 marker 必须和 Harness / 来源 / 模型 / 深度 / Fast
-  // 整体 rebase；只 OR boolean 会留下“已自定义”却指向旧 tuple 的撕裂状态。
-  // 显式「恢复推荐」通过 option 跳过本保护，保留合法的 true → false 通道。
+  // 无关字段写入必须无条件采用最新完整 tuple，方向不能只保护 false → true：恢复推荐刚把
+  // true 清成 false 后，旧窗口的 workdir/collab 写入同样不能把旧 tuple/true 整体复活。
+  // 显式 tuple 操作已在变更前调用 rebaseStoredDefaultTuplePreference，再通过 option 跳过此处。
   if (
-    storedDefaultTuplePreference?.defaultTupleCustomized === true
-    && currentDraft.defaultTupleCustomized === false
+    storedDefaultTuplePreference !== undefined &&
+    !hasSameDefaultTuplePreference(
+      storedDefaultTuplePreference,
+      defaultTuplePreferenceOf(currentDraft),
+    )
   ) {
     currentDraft = { ...currentDraft, ...storedDefaultTuplePreference };
   }
@@ -860,22 +878,18 @@ export function patchCollab(patch: Partial<CollabDraft>): void {
 
 /**
  * 切 vendor 的便捷入口:
- *   1. 把当前 vendor 的 (model/effort/permissionMode) 落进 lastByVendor[currentVendor]
+ *   1. 保留当前 vendor 已同步进草稿的 (model/effort/permissionMode)
  *   2. 切到新 vendor
  * NewMakerDraftRoute 的 VendorSegmentedSwitcher 切换时调本函数;切回某 vendor 时 ChatInput 通过 lastByVendor[vendor] 取上次值。
  */
-export function switchVendor(next: MakerVendor, currentPrefs: VendorPrefs): void {
+export function switchVendor(next: MakerVendor): void {
+  rebaseStoredDefaultTuplePreference();
   if (currentDraft.vendor === next) return;
-  const prev = currentDraft.vendor;
   currentDraft = {
     ...currentDraft,
     vendor: next,
-    lastByVendor: {
-      ...currentDraft.lastByVendor,
-      [prev]: currentPrefs,
-    },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -887,13 +901,14 @@ export function switchVendor(next: MakerVendor, currentPrefs: VendorPrefs): void
  * defaultTupleCustomized,因为它不是用户选择。
  */
 export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVendor>): boolean {
+  rebaseStoredDefaultTuplePreference();
   const currentVendor = currentDraft.vendor;
   if (availableVendors.has(currentVendor)) return false;
   const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
     availableVendors.has(vendor),
   );
   if (!fallback) return false;
-  switchVendor(fallback, currentDraft.lastByVendor[currentVendor]);
+  switchVendor(fallback);
   return true;
 }
 
@@ -906,6 +921,7 @@ export interface SuggestedDefaultTuple {
 
 /** 原子应用产品默认；只改未自定义草稿，不把默认伪装成用户显式选模。 */
 export function applySuggestedDefaultTuple(tuple: SuggestedDefaultTuple): boolean {
+  rebaseStoredDefaultTuplePreference();
   if (currentDraft.defaultTupleCustomized) return false;
   const previous = currentDraft.lastByVendor[tuple.vendor];
   const nextPrefs: VendorPrefs = {
@@ -927,13 +943,14 @@ export function applySuggestedDefaultTuple(tuple: SuggestedDefaultTuple): boolea
     vendor: tuple.vendor,
     lastByVendor: { ...currentDraft.lastByVendor, [tuple.vendor]: nextPrefs },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
   return true;
 }
 
 /** 用户开始调整默认组合后立刻封住后续自动下放。 */
 export function markDefaultTupleCustomized(selectionCustomized = true): void {
+  rebaseStoredDefaultTuplePreference();
   if (
     currentDraft.defaultTupleCustomized &&
     (!selectionCustomized || currentDraft.defaultTupleSelectionCustomized)
@@ -946,7 +963,7 @@ export function markDefaultTupleCustomized(selectionCustomized = true): void {
     defaultTupleSelectionCustomized:
       currentDraft.defaultTupleSelectionCustomized || selectionCustomized,
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -962,6 +979,7 @@ export function clearDefaultTupleTuningCustomization(args: {
   modelId: string;
   hasExternalOverrides: boolean;
 }): void {
+  rebaseStoredDefaultTuplePreference();
   const nextEffortByModel = { ...currentDraft.effortByModel };
   const nextFastModeByModel = { ...currentDraft.fastModeByModel };
   const hadEffortOverride = args.modelId in nextEffortByModel;
@@ -987,7 +1005,7 @@ export function clearDefaultTupleTuningCustomization(args: {
     fastModeByModel: nextFastModeByModel,
     ...(shouldUnlock ? { defaultTupleCustomized: false } : {}),
   };
-  scheduleWrite({ preserveStoredDefaultTupleCustomization: !shouldUnlock });
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -1002,6 +1020,7 @@ function patchVendorPrefsInternal(
   patch: Partial<VendorPrefs>,
   opts: { markModelChoice: boolean },
 ): void {
+  rebaseStoredDefaultTuplePreference();
   const marksSelection = opts.markModelChoice && ('model' in patch || 'providerId' in patch);
   const marksDefaultTuple = marksSelection || (opts.markModelChoice && 'effort' in patch);
   const modelChosen = { ...currentDraft.modelChosenByVendor };
@@ -1039,7 +1058,7 @@ function patchVendorPrefsInternal(
       [vendor]: { ...currentDraft.lastByVendor[vendor], ...nextPatch },
     },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -1073,6 +1092,7 @@ export function getEffortForModel(modelId: string | null | undefined): Effort | 
 
 export function setEffortForModel(modelId: string, effort: Effort): void {
   if (!modelId) return;
+  rebaseStoredDefaultTuplePreference();
   // 同值短路,避免无意义的 emit / write。
   if (currentDraft.effortByModel[modelId] === effort) return;
   currentDraft = {
@@ -1082,7 +1102,7 @@ export function setEffortForModel(modelId: string, effort: Effort): void {
       [modelId]: effort,
     },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -1093,6 +1113,7 @@ export function getFastModeForModel(modelId: string | null | undefined): boolean
 
 export function setFastModeForModel(modelId: string, enabled: boolean): void {
   if (!modelId) return;
+  rebaseStoredDefaultTuplePreference();
   currentDraft = {
     ...currentDraft,
     fastModeByModel: {
@@ -1100,7 +1121,7 @@ export function setFastModeForModel(modelId: string, enabled: boolean): void {
       [modelId]: enabled,
     },
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -1108,7 +1129,7 @@ export function clearDraft(): void {
   currentDraft = makeDefault();
   scheduleWrite({
     preserveStoredWorktreePreference: false,
-    preserveStoredDefaultTupleCustomization: false,
+    preserveStoredDefaultTuplePreference: false,
   });
   emit();
 }
