@@ -1211,7 +1211,7 @@ describe('SplitGroup', () => {
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
   });
 
-  it('pane 标题按钮以任务标题命名，并将拖动能力作为补充说明', () => {
+  it('pane 标题按钮以任务标题命名，并说明鼠标与键盘重排能力', () => {
     useCCSessionsMock.mockReturnValue({
       sessions: [
         { id: 'session-a', title: 'Session A', status: 'active' },
@@ -1231,9 +1231,59 @@ describe('SplitGroup', () => {
     expect(screen.getByRole('button', { name: 'Session B' })).toBe(handle);
     expect(handle.getAttribute('draggable')).toBe('true');
     expect(handle.getAttribute('aria-label')).toBeNull();
-    const describedBy = handle.getAttribute('aria-describedby');
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy ?? '')?.textContent).toBe('splitGroup.dragPaneAria');
+    const describedBy = handle.getAttribute('aria-describedby')?.split(/\s+/) ?? [];
+    expect(describedBy).toHaveLength(2);
+    expect(document.getElementById(describedBy[0] ?? '')?.textContent).toBe(
+      'splitGroup.dragPaneAria',
+    );
+    expect(document.getElementById(describedBy[1] ?? '')?.textContent).toBe(
+      'splitGroup.movePaneKeyboardAria',
+    );
+    expect(handle.getAttribute('aria-keyshortcuts')).toBe(
+      'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown',
+    );
+  });
+
+  it('pane 标题按钮支持用 Alt 加方向键重排 pane', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const panes = {
+      a: view.container.querySelector('[data-split-pane-session-id=\'session-a\']'),
+      b: view.container.querySelector('[data-split-pane-session-id=\'session-b\']'),
+      c: view.container.querySelector('[data-split-pane-session-id=\'session-c\']'),
+    };
+    const rects = {
+      a: { left: 0, top: 0, width: 300, height: 500 },
+      b: { left: 300, top: 0, width: 300, height: 500 },
+      c: { left: 600, top: 0, width: 300, height: 500 },
+    };
+    for (const key of ['a', 'b', 'c'] as const) {
+      const pane = panes[key];
+      if (!(pane instanceof HTMLElement)) throw new Error('pane ' + key + ' missing');
+      const rect = rects[key];
+      vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue({
+        ...rect,
+        right: rect.left + rect.width,
+        bottom: rect.top + rect.height,
+        x: rect.left,
+        y: rect.top,
+        toJSON: () => ({}),
+      });
+    }
+    const handle = panes.b?.querySelector('[data-split-pane-drag-handle]');
+    if (!(handle instanceof HTMLElement)) throw new Error('pane drag handle missing');
+
+    act(() => {
+      fireEvent.keyDown(handle, { key: 'ArrowRight', altKey: true });
+    });
+
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-a', 'session-c', 'session-b'],
+    );
+    expect(view.container.querySelector('[data-split-pane-session-id=\'session-b\']')).toBeTruthy();
   });
 
   it('未启用 pane drop 的单窗格目标不会吞掉 pane 拖放', async () => {

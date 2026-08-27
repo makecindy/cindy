@@ -10487,6 +10487,7 @@
   "splitGroup": {
     "closeAria": "‘{{title}}’ 분할 창 닫기",
     "dragPaneAria": "‘{{title}}’ 분할 창 끌기",
+    "movePaneKeyboardAria": "Alt 키와 화살표 키로 이 분할 창 이동",
     "closeAll": "분할 닫기",
     "toggleDirection": "상하 / 좌우 분할 전환",
     "dropHint": "여기에 세션을 놓아 열기",

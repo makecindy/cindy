@@ -10487,6 +10487,7 @@
   "splitGroup": {
     "closeAria": "「{{title}}」のペインを閉じる",
     "dragPaneAria": "「{{title}}」のペインをドラッグ",
+    "movePaneKeyboardAria": "Alt キーと矢印キーでこのペインを移動",
     "closeAll": "分割を閉じる",
     "toggleDirection": "上下 / 左右の分割を切り替え",
     "dropHint": "ここにセッションをドロップして開く",

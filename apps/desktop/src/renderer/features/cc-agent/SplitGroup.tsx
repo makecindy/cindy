@@ -95,6 +95,80 @@ function getRenderedSplitPaneDropGeometry(
   };
 }
 
+function getKeyboardMoveTarget(
+  sourceSessionId: string,
+  side: DropSide,
+): { anchorSessionId: string; geometry: SplitPaneDropGeometry } | null {
+  if (typeof document === 'undefined') return null;
+  const paneElements = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-split-pane-session-id]'),
+  );
+  const sourceElement = paneElements.find(
+    (element) => element.dataset.splitPaneSessionId === sourceSessionId,
+  );
+  if (!sourceElement) return null;
+
+  const toRect = (element: HTMLElement) => {
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { left, top, width, height };
+  };
+  const source = toRect(sourceElement);
+  const sourceRight = source.left + source.width;
+  const sourceBottom = source.top + source.height;
+  const sourceCenter = {
+    x: source.left + source.width / 2,
+    y: source.top + source.height / 2,
+  };
+
+  const candidates = paneElements
+    .filter((element) => element !== sourceElement)
+    .map((element) => {
+      const rect = toRect(element);
+      const right = rect.left + rect.width;
+      const bottom = rect.top + rect.height;
+      const crossOverlap =
+        side === 'left' || side === 'right'
+          ? Math.max(0, Math.min(sourceBottom, bottom) - Math.max(source.top, rect.top))
+          : Math.max(0, Math.min(sourceRight, right) - Math.max(source.left, rect.left));
+      const axisGap =
+        side === 'left'
+          ? source.left - right
+          : side === 'right'
+            ? rect.left - sourceRight
+            : side === 'top'
+              ? source.top - bottom
+              : rect.top - sourceBottom;
+      const crossDistance =
+        side === 'left' || side === 'right'
+          ? Math.abs(sourceCenter.y - (rect.top + rect.height / 2))
+          : Math.abs(sourceCenter.x - (rect.left + rect.width / 2));
+      return { element, rect, axisGap, crossOverlap, crossDistance };
+    })
+    .filter(({ axisGap }) => axisGap >= -1)
+    .sort(
+      (first, second) =>
+        Number(second.crossOverlap > 0) - Number(first.crossOverlap > 0) ||
+        first.axisGap - second.axisGap ||
+        first.crossDistance - second.crossDistance,
+    );
+  const target = candidates[0];
+  const anchorSessionId = target?.element.dataset.splitPaneSessionId;
+  if (!target || !anchorSessionId) return null;
+
+  return {
+    anchorSessionId,
+    geometry: { source, anchor: target.rect, gutterPx: GUTTER_PX },
+  };
+}
+
+function getKeyboardMoveSide(key: string): DropSide | null {
+  if (key === 'ArrowLeft') return 'left';
+  if (key === 'ArrowRight') return 'right';
+  if (key === 'ArrowUp') return 'top';
+  if (key === 'ArrowDown') return 'bottom';
+  return null;
+}
+
 function isSplitPaneNoFocusTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
   return Boolean(element?.closest('[data-split-pane-no-focus], [data-split-pane-route-action]'));
@@ -857,6 +931,7 @@ const SplitPaneView = memo(function SplitPaneView({
   const session = sessionsById.get(viewSessionId) ?? null;
   const title = session ? getSessionDisplayTitle(session, unnamedTitle) : loadingTitle;
   const dragDescriptionId = useId();
+  const keyboardMoveDescriptionId = useId();
 
   return (
     <SplitDropTarget
@@ -908,11 +983,26 @@ const SplitPaneView = memo(function SplitPaneView({
             type="button"
             data-split-pane-drag-handle
             draggable
-            aria-describedby={dragDescriptionId}
+            aria-describedby={[dragDescriptionId, keyboardMoveDescriptionId].join(' ')}
+            aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
             onDragStart={(event) => {
               if (!writeSplitGroupPaneDragData(event.dataTransfer, viewSessionId)) {
                 event.preventDefault();
               }
+            }}
+            onKeyDown={(event) => {
+              if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+              const side = getKeyboardMoveSide(event.key);
+              if (!side) return;
+              event.preventDefault();
+              const target = getKeyboardMoveTarget(viewSessionId, side);
+              if (!target) return;
+              splitGroupStore.moveSession(
+                viewSessionId,
+                target.anchorSessionId,
+                side,
+                target.geometry,
+              );
             }}
             onClick={() => focusSession(viewSessionId)}
             className={cn(
@@ -928,6 +1018,9 @@ const SplitPaneView = memo(function SplitPaneView({
           </button>
           <span id={dragDescriptionId} className="sr-only">
             {t('splitGroup.dragPaneAria', { title })}
+          </span>
+          <span id={keyboardMoveDescriptionId} className="sr-only">
+            {t('splitGroup.movePaneKeyboardAria')}
           </span>
           <button
             type="button"
