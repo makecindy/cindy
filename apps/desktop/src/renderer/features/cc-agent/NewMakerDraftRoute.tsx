@@ -84,6 +84,8 @@ import {
   patchCollab,
   patchCurrentVendorPrefs,
   patchVendorPrefs,
+  applySuggestedDefaultTuple,
+  markDefaultTupleCustomized,
   resetDraftWorkspaceTargets,
   getFastModeForModel,
   setFastModeForModel,
@@ -92,6 +94,10 @@ import {
   type VendorPrefs,
   type CollabDraft,
 } from '@/state/newMakerDraft';
+import {
+  hasAnyModelEngineOverride,
+  useModelEnginePrefsVersion,
+} from '@/state/modelEnginePrefs';
 import {
   setDraftFavoriteAnchor,
   setSessionFavoriteAnchor,
@@ -124,6 +130,7 @@ import {
   resolveDraftSessionProviderId,
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
+import { resolveNewMakerDefaultTuple } from '@/lib/newMakerDefaultTuple';
 import { showWorktreeError } from '@/lib/worktreeToast';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -1198,6 +1205,37 @@ export function NewMakerDraftRoute() {
   // device-link「以被控端为准」:远程草稿用被控端经隧道带来的 providers(per-provider,含 fast 能力);
   // 本地草稿用本机 providers。fast 判定统一交给 resolveFastSupported(不在控制端另写远程逻辑)。
   const { providers: localProviders, loading: localProvidersLoading } = useProviders();
+  const modelEnginePrefsVersion = useModelEnginePrefsVersion();
+  const hasLegacyHarnessChoice = useMemo(
+    () => hasAnyModelEngineOverride(),
+    [modelEnginePrefsVersion],
+  );
+  const suggestedDefaultTuple = useMemo(
+    () =>
+      resolveNewMakerDefaultTuple({
+        providers: localProviders,
+        providersLoading: localProvidersLoading,
+        availableAgents: availableVendors,
+        availableAgentsLoaded,
+      }),
+    [localProviders, localProvidersLoading, availableVendors, availableAgentsLoaded],
+  );
+  useEffect(() => {
+    // 远程主机 / device-link 的可用 Harness 与来源属于执行端，不能拿控制端本机登录态替它选。
+    if (
+      !suggestedDefaultTuple ||
+      effectiveDeviceLinkDeviceId ||
+      draft.remoteHostId ||
+      hasLegacyHarnessChoice
+    )
+      return;
+    applySuggestedDefaultTuple(suggestedDefaultTuple);
+  }, [
+    suggestedDefaultTuple,
+    effectiveDeviceLinkDeviceId,
+    draft.remoteHostId,
+    hasLegacyHarnessChoice,
+  ]);
   const {
     providers: deviceProviders,
     loading: deviceProvidersLoading,
@@ -1209,7 +1247,7 @@ export function NewMakerDraftRoute() {
   // 一一对应,工具条的引擎下拉必须按后者(active)决定去留:
   //   · capable(本变量)—— 联合列表只认供应商目录,老被控端(不支持 provider:list)只有
   //     一份拍平 capabilities → 开了就是空列表,composer 那边会降级回旧面板;
-  //   · active —— 再叠上形态偏好(modelPickerLayout,默认 'original' = 最原始选择器)。
+  //   · active —— 再叠上形态偏好(modelPickerLayout,默认 'classic' = A 版统一选择器)。
   // 旧面板是「先选引擎再选模型」,所以只要没真正启用统一面板,就必须把工具条上的引擎下拉
   // 还回来 —— 否则那条链路上根本换不了引擎(只按 capable 撤掉时,默认形态下的新建草稿
   // 就彻底没有换引擎入口)。统一面板真启用时不注入(引擎跟着模型走)。
@@ -2521,6 +2559,7 @@ export function NewMakerDraftRoute() {
   // 自动 pickup 新 vendor 的 lastByVendor 值。
   const handleVendorChange = useCallback(
     (next: MakerVendor) => {
+      markDefaultTupleCustomized();
       switchVendor(next, currentPrefs);
     },
     [currentPrefs],
@@ -2535,13 +2574,13 @@ export function NewMakerDraftRoute() {
     const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
       availableVendors.has(vendor),
     );
-    if (fallback && fallback !== draft.vendor) handleVendorChange(fallback);
+    if (fallback && fallback !== draft.vendor) switchVendor(fallback, currentPrefs);
   }, [
     availableAgentsLoaded,
     hiddenSwitcherVendors,
     availableVendors,
     draft.vendor,
-    handleVendorChange,
+    currentPrefs,
   ]);
 
   // ─── 用户在 ChatInput 改 model/effort/permission 后,落进当前 vendor 的 prefs ──
@@ -2574,6 +2613,7 @@ export function NewMakerDraftRoute() {
         }));
         return;
       }
+      markDefaultTupleCustomized();
       patchActivePrefs({ model: newModelId });
       // 本地草稿的 Fast 直接由「新 model + 全局预设 + 来源能力」派生,patch 后同步收敛,
       // 不再维护一份可能与其它对话更新脱节的本地 state。
@@ -2591,6 +2631,7 @@ export function NewMakerDraftRoute() {
       if (!supportsFastMode) {
         return;
       }
+      markDefaultTupleCustomized();
       // 权威库:per-(agent, 来源, 模型),与 resolveDraftFast 的读源对齐(ModelSelector 的 Edit 面板
       // 对选中模型也会写这一份;此处显式写一遍,使 onFastModeChange 走任何路径都自洽、不依赖选择器侧写)。
       // 写入键必须与 effectiveFastMode 的读取键同源:两者都用**校准后**的模型。若这里仍写
@@ -2619,6 +2660,7 @@ export function NewMakerDraftRoute() {
         pushActiveDraftPref({ effort: newEffort }); // 选中模型 effort 写穿被控端
         return;
       }
+      markDefaultTupleCustomized();
       patchActivePrefs({ effort: newEffort });
     },
     [isDeviceLinkDraft, patchActivePrefs, pushActiveDraftPref],
@@ -2663,6 +2705,7 @@ export function NewMakerDraftRoute() {
         setDlSel((prev) => (prev ? { ...prev, providerId: newProviderId } : prev));
         return;
       }
+      markDefaultTupleCustomized();
       patchActivePrefs({ providerId: newProviderId });
     },
     [isDeviceLinkDraft, patchActivePrefs],
@@ -2782,6 +2825,7 @@ export function NewMakerDraftRoute() {
         );
         return;
       }
+      markDefaultTupleCustomized();
       // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
       // 这是用户在 New Maker picker 里的**显式**模型选择,modelChosenByVendor 必须打标
       // (scheduler 的成本兜底默认模型依赖它)。

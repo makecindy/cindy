@@ -154,6 +154,11 @@ export interface NewMakerDraft {
    * 也不得在已打标后改写 lastByVendor.model / providerId / effort。
    */
   modelChosenByVendor: Partial<Record<MakerVendor, boolean>>;
+  /**
+   * 用户是否明确改过新任务的模型组合（Harness / 来源 / 模型 / 思考深度 / Fast）。
+   * false 才允许连接态为新任务下放产品默认；目录热更与登录变化不得覆盖 true。
+   */
+  defaultTupleCustomized: boolean;
 }
 
 /**
@@ -220,6 +225,7 @@ function makeDefault(): NewMakerDraft {
       codex: defaultVendorPrefs('codex'),
     },
     modelChosenByVendor: {},
+    defaultTupleCustomized: false,
   };
 }
 
@@ -350,6 +356,22 @@ function sanitize(raw: unknown): NewMakerDraft {
   for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
+  // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast，或当前 vendor 不是
+  // 历史硬默认 cc，都是足够强的用户意图证据。只有完全原始的 cc 种子接受新产品默认。
+  const legacyDefaultTupleCustomized =
+    r.defaultTupleCustomized === undefined &&
+    (Object.values(modelChosenByVendor).some(Boolean) ||
+      vendor !== 'cc' ||
+      Object.keys(effortByModel).length > 0 ||
+      Object.keys(fastModeByModel).length > 0 ||
+      Object.values(lastByVendorRaw).some(
+        (prefs) =>
+          prefs &&
+          typeof prefs === 'object' &&
+          typeof prefs.providerId === 'string' &&
+          prefs.providerId.length > 0,
+      ));
+  const defaultTupleCustomized = r.defaultTupleCustomized === true || legacyDefaultTupleCustomized;
   // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，
   // 可安全迁移为 override；旧 false 无法区分“默认快照”与“明确关闭”，按未自定义处理。
   const worktreePreferenceCustomized =
@@ -387,6 +409,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },
     modelChosenByVendor,
+    defaultTupleCustomized,
   };
 }
 
@@ -728,6 +751,49 @@ export function switchVendor(next: MakerVendor, currentPrefs: VendorPrefs): void
   emit();
 }
 
+export interface SuggestedDefaultTuple {
+  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi'>;
+  providerId: string;
+  model: string;
+  effort?: Effort | null;
+}
+
+/** 原子应用产品默认；只改未自定义草稿，不把默认伪装成用户显式选模。 */
+export function applySuggestedDefaultTuple(tuple: SuggestedDefaultTuple): boolean {
+  if (currentDraft.defaultTupleCustomized) return false;
+  const previous = currentDraft.lastByVendor[tuple.vendor];
+  const nextPrefs: VendorPrefs = {
+    ...previous,
+    model: tuple.model,
+    providerId: tuple.providerId,
+    ...(tuple.effort ? { effort: tuple.effort } : {}),
+  };
+  if (
+    currentDraft.vendor === tuple.vendor &&
+    previous.model === nextPrefs.model &&
+    previous.providerId === nextPrefs.providerId &&
+    previous.effort === nextPrefs.effort
+  ) {
+    return false;
+  }
+  currentDraft = {
+    ...currentDraft,
+    vendor: tuple.vendor,
+    lastByVendor: { ...currentDraft.lastByVendor, [tuple.vendor]: nextPrefs },
+  };
+  scheduleWrite();
+  emit();
+  return true;
+}
+
+/** 用户开始调整默认组合后立刻封住后续自动下放。 */
+export function markDefaultTupleCustomized(): void {
+  if (currentDraft.defaultTupleCustomized) return;
+  currentDraft = { ...currentDraft, defaultTupleCustomized: true };
+  scheduleWrite();
+  emit();
+}
+
 /**
  * 显式指定 vendor 的 pref 写入入口。读模块级 currentDraft (而非调用方 closure
  * 捕获的 draft), 避免连续调用之间相互覆盖 —— ChatInput 切 model 时会同步连发
@@ -739,6 +805,9 @@ function patchVendorPrefsInternal(
   patch: Partial<VendorPrefs>,
   opts: { markModelChoice: boolean },
 ): void {
+  const marksDefaultTuple =
+    opts.markModelChoice &&
+    ('model' in patch || 'providerId' in patch || 'effort' in patch);
   const modelChosen = { ...currentDraft.modelChosenByVendor };
   const nextPatch = { ...patch };
   if (typeof nextPatch.model === 'string' && nextPatch.model.length > 0) {
@@ -765,6 +834,7 @@ function patchVendorPrefsInternal(
   }
   currentDraft = {
     ...currentDraft,
+    defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
     modelChosenByVendor: modelChosen,
     lastByVendor: {
       ...currentDraft.lastByVendor,

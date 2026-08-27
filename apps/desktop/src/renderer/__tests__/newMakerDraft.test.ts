@@ -66,6 +66,71 @@ describe('newMakerDraft store', () => {
     expect(d.effortByModel).toEqual({});
     expect(d.worktreeEnabled).toBe(false);
     expect(d.worktreePreferenceCustomized).toBe(false);
+    expect(d.defaultTupleCustomized).toBe(false);
+  });
+
+  it('产品默认原子写入完整组合，但不伪装成用户显式选模', async () => {
+    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'codex',
+        providerId: 'openai',
+        model: 'chatgpt/gpt-5.6-sol',
+        effort: 'high',
+      }),
+    ).toBe(true);
+    expect(getDraft()).toMatchObject({
+      vendor: 'codex',
+      defaultTupleCustomized: false,
+      lastByVendor: {
+        codex: {
+          providerId: 'openai',
+          model: 'chatgpt/gpt-5.6-sol',
+          effort: 'high',
+        },
+      },
+    });
+    expect(getDraft().modelChosenByVendor.codex).toBeUndefined();
+
+    vi.resetModules();
+    const reloaded = await loadModule();
+    expect(reloaded.getDraft().defaultTupleCustomized).toBe(false);
+  });
+
+  it('用户明确改过组合后，登录态变化不再覆盖', async () => {
+    const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
+    markDefaultTupleCustomized();
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(false);
+    expect(getDraft().vendor).toBe('cc');
+    expect(getDraft().defaultTupleCustomized).toBe(true);
+  });
+
+  it('只改权限不把模型组合误标成用户自定义', async () => {
+    const { getDraft, patchCurrentVendorPrefs } = await loadModule();
+    patchCurrentVendorPrefs({ permissionMode: 'bypassPermissions' });
+    expect(getDraft().defaultTupleCustomized).toBe(false);
+  });
+
+  it('旧草稿的 Harness、模型、来源、思考深度或 Fast 选择会迁移成已自定义', async () => {
+    for (const saved of [
+      { vendor: 'codex' },
+      { vendor: 'cc', modelChosenByVendor: { cc: true } },
+      { vendor: 'cc', lastByVendor: { cc: { providerId: 'anthropic' } } },
+      { vendor: 'cc', effortByModel: { 'claude-opus-5': 'high' } },
+      { vendor: 'cc', fastModeByModel: { 'claude-opus-5': true } },
+    ]) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify(saved));
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      expect(getDraft().defaultTupleCustomized).toBe(true);
+    }
   });
 
   it('persists an explicit Pi model choice across reload', async () => {
