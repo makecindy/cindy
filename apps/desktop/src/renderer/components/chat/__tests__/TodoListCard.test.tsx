@@ -46,7 +46,7 @@ describe('TodoListCard flyout interaction', () => {
     expect(container.firstElementChild?.classList.contains('pointer-events-none')).toBe(true);
     expect(trigger.parentElement?.classList.contains('pointer-events-auto')).toBe(true);
     expect(trigger.querySelector('svg[data-plan-progress-ring="true"]')).not.toBeNull();
-    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('.animate-spinner')).toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
@@ -59,7 +59,7 @@ describe('TodoListCard flyout interaction', () => {
 
     const wrapper = container.querySelector('span[data-plan-step-active="true"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.classList.contains('animate-spin')).toBe(false);
+    expect(wrapper?.classList.contains('animate-spinner')).toBe(false);
     expect(wrapper?.querySelector('svg')).not.toBeNull();
   });
 
@@ -73,11 +73,12 @@ describe('TodoListCard flyout interaction', () => {
     // 旋转必须挂 span wrapper,SVG 本体静态;不用 pulse,不用侧栏呼吸。
     const wrapper = container.querySelector('span[data-plan-step-active="true"]') as HTMLElement;
     expect(wrapper?.tagName).toBe('SPAN');
-    expect(wrapper?.classList.contains('animate-spin')).toBe(true);
+    expect(wrapper?.classList.contains('animate-spinner')).toBe(true);
+    expect(wrapper?.classList.contains('animate-spin')).toBe(false);
     const arc = wrapper?.querySelector('svg[data-plan-loader-arc="true"]');
     expect(arc).not.toBeNull();
     expect(arc?.querySelector('path')?.getAttribute('d')).toContain('a10 10');
-    expect(container.querySelector('svg.animate-spin')).toBeNull();
+    expect(container.querySelector('svg.animate-spinner')).toBeNull();
     expect(container.querySelector('.session-status-breathing')).toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
   });
@@ -258,16 +259,17 @@ describe('InlinePlanCard', () => {
       '[data-inline-plan-step-active="true"]',
     ) as HTMLElement;
 
-    expect(active?.classList.contains('animate-spin')).toBe(true);
+    expect(active?.classList.contains('animate-spinner')).toBe(true);
+    expect(active?.classList.contains('animate-spin')).toBe(false);
     const arc = active?.querySelector('svg[data-plan-loader-arc="true"]');
     expect(arc).not.toBeNull();
     expect(arc?.querySelector('path')?.getAttribute('d')).toContain('a10 10');
-    expect(active?.querySelector('svg.animate-spin')).toBeNull();
+    expect(active?.querySelector('svg.animate-spinner')).toBeNull();
 
     view.rerender(<InlinePlanCard todos={TODOS} animated={false} />);
     const idle = view.container.querySelector(
       '[data-inline-plan-step-active="true"]',
     ) as HTMLElement;
-    expect(idle?.classList.contains('animate-spin')).toBe(false);
+    expect(idle?.classList.contains('animate-spinner')).toBe(false);
   });
 });

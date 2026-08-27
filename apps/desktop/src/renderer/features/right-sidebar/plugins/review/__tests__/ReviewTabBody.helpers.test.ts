@@ -456,7 +456,7 @@ describe('ReviewTabBody refresh control', () => {
     );
 
     const button = screen.getByRole('button', { name: 'rightSidebar.review.refreshGitData' });
-    expect(button.querySelector('.animate-spin')).toBeTruthy();
+    expect(button.querySelector('.animate-spinner')).toBeTruthy();
     button.click();
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
@@ -830,7 +830,7 @@ describe('ReviewTabBody hover-reveal action affordance', () => {
     expect(stageButton.querySelector('.sr-only')?.textContent).toBe(
       'rightSidebar.review.actions.stageAll',
     );
-    expect(stageButton.querySelector('.animate-spin')).toBeTruthy();
+    expect(stageButton.querySelector('.animate-spinner')).toBeTruthy();
   });
 });
 

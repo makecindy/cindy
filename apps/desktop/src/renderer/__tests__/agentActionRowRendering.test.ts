@@ -448,7 +448,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
         isSessionStreaming: true,
       }),
     );
-    expect(container.querySelector('.animate-spin')).toBeTruthy();
+    expect(container.querySelector('.animate-spinner')).toBeTruthy();
     expandBlock();
     expect(screen.getAllByLabelText('chat.agentActionRow.status.done')).toHaveLength(1);
     expect(screen.getAllByLabelText('chat.agentActionRow.status.running')).toHaveLength(1);
@@ -463,7 +463,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
         isSessionStreaming: true,
       }),
     );
-    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('.animate-spinner')).toBeNull();
     expandBlock();
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
   });
@@ -475,7 +475,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
         resultMap: new Map(),
       }),
     );
-    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('.animate-spinner')).toBeNull();
     expandBlock();
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
   });

@@ -418,7 +418,7 @@ describe('GhostPluginCard', () => {
       name: 'settings.ghosts.page.updateAria',
     });
     expect(update.getAttribute('aria-busy')).toBe('true');
-    expect(update.querySelector('.animate-spin')).toBeTruthy();
+    expect(update.querySelector('.animate-spinner')).toBeTruthy();
     expect(update.textContent).toBe('');
   });
 
@@ -737,7 +737,7 @@ describe('MarketPluginCard', () => {
       name: 'settings.ghosts.page.installAria',
     });
     expect(install.getAttribute('aria-busy')).toBe('true');
-    expect(install.querySelector('.animate-spin')).toBeTruthy();
+    expect(install.querySelector('.animate-spinner')).toBeTruthy();
     expect(install.textContent).toBe('');
   });
 });
