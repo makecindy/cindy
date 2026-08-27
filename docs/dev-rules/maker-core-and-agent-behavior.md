@@ -40,14 +40,19 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
 自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
+Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装得进当前约束就不动；
+字节预算破了（可剥的超大内联图）就剥图；token 预算破了或剥图失败，就交接重建。
+决定函数见 `cindyContextCompression.ts`。字节预算目前只有 Codex 能测量。工具输出
+不另开一档：官方 compact 会先清旧工具结果；官方失败后交接不带 tool_result 正文。
+可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
+由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援路径不得依赖额外模型调用。
+切模型预检的数学仍在 `assessModelSwitchContext`；确认切小窗后动作端应以
+`tokens='violated'` 调用同一决定走 rebuild，不再走独立 handoff（本版尚未并入）。
+token 破了只认：终态超限、占用 ≥ 100%、官方 compact 确定性失败；普通 timeout 不算。
+
 Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
-不得用 `remote compaction v2` 文案驱动 rollover、fork、鉴权或 reason。Cindy 保底压缩在
-**同一任务**里分档、不 fork 新任务、打开会话不触发：① 本地/device-link 活尾巴有足够可剥
-离的超大内联图时，升为 `codex_history_oversized`，剥图后 relink 同一 session 的 native
-thread；② 剥不了或引擎报窗口满 / compact 确定性失败时，走现有 context-overflow rollover。
-只在终态错误或下次发送时由 main 侧协调器 claim。SSH 远端没有本机 rollout，不分类、不剥图、
-不换窗。普通 Codex timeout、纯文本大历史和网络重连失败不得自动换窗，也不得进入自动续跑
-死循环。救援路径不得依赖额外模型调用来「必然成功」。
+不得用 `remote compaction v2` 文案驱动恢复动作。普通 timeout、纯文本大历史和网络失败
+不得进入这套压缩，也不得进入自动续跑死循环。
 
 
 > **适用范围与增量原则**：Agent 能力归属（下节 1）与代码优先确定性（下节 2）按增量

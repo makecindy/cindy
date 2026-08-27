@@ -777,6 +777,35 @@ describe('createContextOverflowRollover', () => {
     expect(deps.commitRebuild).toHaveBeenCalled();
   });
 
+  it('does not rebuild when strip reports the turn is still running', async () => {
+    const deps = makeDeps([
+      msg('user', '继续', 'u1'),
+      msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-fat',
+      contextTokens: 20_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      workingDir: '/work',
+    });
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      tryStripOversizedCodexHistory: vi.fn(async () => 'busy' as const),
+    });
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'codex_history_oversized', message: 'oversized' }),
+    ).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.onRebuilt).not.toHaveBeenCalled();
+  });
+
   it('does not rollover before send when current Codex thread is already slim', async () => {
     const deps = makeDeps([
       msg('user', '继续', 'u1'),
