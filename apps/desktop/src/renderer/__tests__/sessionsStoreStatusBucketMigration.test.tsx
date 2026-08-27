@@ -11,6 +11,8 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+
 import type { Session } from '@/lib/ccAgent.types';
 
 const mocks = vi.hoisted(() => {
@@ -27,6 +29,7 @@ vi.mock('@/lib/sessionService', () => ({
 }));
 
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { emitAutoTitlePreview } from '@/lib/sessionsBus';
 import { sessionsStore } from '@/lib/sessionsStore';
 import type { ListStatusFilter } from '@/lib/sessionService';
 
@@ -248,6 +251,82 @@ describe('sessionsStore status bucket migration', () => {
       expect.objectContaining({
         status: 'archived',
         updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    );
+  });
+
+  it('replays newer title and spend fields after a complete status override', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      totalCostUsd: 1,
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('all');
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ).toBe(true);
+    sessionsStore.patchLocal('archive-me', {
+      title: 'new authoritative title',
+      totalCostUsd: 42,
+    });
+    staleRequest.resolve([target]);
+    await staleRefresh;
+
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({
+        status: 'archived',
+        title: 'new authoritative title',
+        totalCostUsd: 42,
+      }),
+    );
+  });
+
+  it('applies a newer auto-title preview after a complete status override', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      title: DEFAULT_DRAFT_SESSION_TITLE,
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('all');
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ).toBe(true);
+    emitAutoTitlePreview('archive-me', 'new optimistic title');
+    staleRequest.resolve([target]);
+    await staleRefresh;
+
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({
+        status: 'archived',
+        title: 'new optimistic title',
       }),
     );
   });

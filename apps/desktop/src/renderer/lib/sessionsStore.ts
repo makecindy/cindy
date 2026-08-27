@@ -409,17 +409,16 @@ async function fetchFilter(
     filter,
     opts?.fresh ? { fresh: true } : undefined,
   );
-  // 顺序:先把「请求发起之后到达的权威标题」补回去,再叠乐观预览。反过来的话预览会先
-  // 盖在旧标题上、随后又被权威值挤掉,中间多一次跳变。
-  const result = applySessionStatusOverrides(
-    applyAutoTitlePreviews(
-      applySessionTitleOverrides(
-        applySessionSpendOverrides(sessions, spendRevisionAtStart),
-        titleRevisionAtStart,
+  // 顺序:status override 可能携带写库返回的完整旧行,必须先应用；再重放请求期间到达的
+  // 费用与权威标题,最后叠乐观标题预览。否则完整状态行会把这三类更新盖回旧值。
+  const result = applyAutoTitlePreviews(
+    applySessionTitleOverrides(
+      applySessionSpendOverrides(
+        applySessionStatusOverrides(sessions, filter, statusRevisionAtStart),
+        spendRevisionAtStart,
       ),
+      titleRevisionAtStart,
     ),
-    filter,
-    statusRevisionAtStart,
   );
   const fields = {
     event: 'renderer.sessions.initial-fetch.done',

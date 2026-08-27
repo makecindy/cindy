@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   setStatus: vi.fn(),
+  resolveStatusWriteTarget: vi.fn(),
   refreshSessions: vi.fn(),
   emitRefresh: vi.fn(),
   patchLocal: vi.fn(),
@@ -14,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   waitForStatusTransition: vi.fn(),
   completeStatusTransition: vi.fn(),
   rollbackStatusTransition: vi.fn(),
-  getStickySessionDeviceId: vi.fn(),
   closeSessionQuery: vi.fn(),
   purgeSession: vi.fn(),
   clearComposerDraft: vi.fn(),
@@ -40,6 +40,7 @@ vi.mock('@/lib/toast', () => ({
 
 vi.mock('@/lib/sessionService', () => ({
   setStatus: mocks.setStatus,
+  resolveStatusWriteTarget: mocks.resolveStatusWriteTarget,
 }));
 
 vi.mock('@/lib/makerChatStore', () => ({
@@ -71,10 +72,6 @@ vi.mock('@/lib/sessionsStore', () => ({
   },
 }));
 
-vi.mock('@/features/device-link/stickySessionOrigin', () => ({
-  getStickySessionDeviceId: mocks.getStickySessionDeviceId,
-}));
-
 vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: () => ({
     refreshSessions: mocks.refreshSessions,
@@ -100,6 +97,7 @@ beforeEach(() => {
     title: `title-${id}`,
     updatedAt: '2026-08-27T00:00:00.000Z',
   }));
+  mocks.resolveStatusWriteTarget.mockResolvedValue({ kind: 'local' });
   mocks.beginStatusTransition.mockImplementation((sessionId: string) => ({
     sessionId,
     token: 1,
@@ -108,7 +106,6 @@ beforeEach(() => {
   mocks.waitForStatusTransition.mockResolvedValue(true);
   mocks.completeStatusTransition.mockReturnValue(true);
   mocks.rollbackStatusTransition.mockReturnValue(true);
-  mocks.getStickySessionDeviceId.mockReturnValue(undefined);
   mocks.refreshSessions.mockResolvedValue([]);
   mocks.cleanupSessionImages.mockResolvedValue(undefined);
   Object.defineProperty(window, 'electronAPI', {
@@ -270,8 +267,36 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     );
   });
 
+  it('converges a disabled remote-id collision through the local status buckets', async () => {
+    mocks.resolveStatusWriteTarget.mockResolvedValueOnce({ kind: 'local' });
+    const { result } = renderHook(() =>
+      useSessionLifecycleActions({ includeArchived: 'active' }),
+    );
+
+    await act(async () => {
+      await result.current.runSessionAction('copied-local-session', 'archive', {
+        activeSessionId: null,
+      });
+    });
+
+    expect(mocks.setStatus).toHaveBeenCalledWith('copied-local-session', 'archived', {
+      kind: 'local',
+    });
+    expect(mocks.beginStatusTransition).toHaveBeenCalledWith('copied-local-session', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    expect(mocks.completeStatusTransition).toHaveBeenCalledWith(
+      { sessionId: 'copied-local-session', token: 1 },
+      expect.objectContaining({ id: 'copied-local-session', status: 'archived' }),
+    );
+  });
+
   it('leaves device-link archive convergence to the remote mirror', async () => {
-    mocks.getStickySessionDeviceId.mockReturnValue('device-1');
+    mocks.resolveStatusWriteTarget.mockResolvedValueOnce({
+      kind: 'device-link',
+      deviceId: 'device-1',
+    });
     const { result } = renderHook(() =>
       useSessionLifecycleActions({ includeArchived: 'active' }),
     );
@@ -282,7 +307,10 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
       });
     });
 
-    expect(mocks.setStatus).toHaveBeenCalledWith('remote-session', 'archived');
+    expect(mocks.setStatus).toHaveBeenCalledWith('remote-session', 'archived', {
+      kind: 'device-link',
+      deviceId: 'device-1',
+    });
     expect(mocks.beginStatusTransition).not.toHaveBeenCalled();
     expect(mocks.completeStatusTransition).not.toHaveBeenCalled();
     expect(mocks.patchLocal).not.toHaveBeenCalled();
@@ -297,7 +325,7 @@ describe('useSessionLifecycleActions delete cache invalidation', () => {
       await result.current.runSessionAction('session-1', 'delete', { activeSessionId: null });
     });
 
-    expect(mocks.setStatus).toHaveBeenCalledWith('session-1', 'deleted');
+    expect(mocks.setStatus).toHaveBeenCalledWith('session-1', 'deleted', { kind: 'local' });
     expect(mocks.patchLocal).toHaveBeenCalledWith(
       'session-1',
       expect.objectContaining({ id: 'session-1', status: 'deleted' }),
@@ -401,7 +429,10 @@ describe('useSessionLifecycleActions unarchive convergence', () => {
   });
 
   it('leaves device-link restore convergence to the remote mirror', async () => {
-    mocks.getStickySessionDeviceId.mockReturnValue('device-1');
+    mocks.resolveStatusWriteTarget.mockResolvedValueOnce({
+      kind: 'device-link',
+      deviceId: 'device-1',
+    });
     const { result } = renderHook(() =>
       useSessionLifecycleActions({ includeArchived: 'archived' }),
     );
@@ -410,7 +441,10 @@ describe('useSessionLifecycleActions unarchive convergence', () => {
       await result.current.unarchiveSession('remote-session');
     });
 
-    expect(mocks.setStatus).toHaveBeenCalledWith('remote-session', 'active');
+    expect(mocks.setStatus).toHaveBeenCalledWith('remote-session', 'active', {
+      kind: 'device-link',
+      deviceId: 'device-1',
+    });
     expect(mocks.beginStatusTransition).not.toHaveBeenCalled();
     expect(mocks.completeStatusTransition).not.toHaveBeenCalled();
     expect(mocks.patchLocal).not.toHaveBeenCalled();

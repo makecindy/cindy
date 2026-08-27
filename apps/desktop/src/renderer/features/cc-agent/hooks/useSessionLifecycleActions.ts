@@ -33,7 +33,6 @@ import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import { sessionsStore, type SessionStatusTransitionToken } from '@/lib/sessionsStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { createLogger } from '@/lib/logger';
-import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { Session, SessionStatus } from '@/lib/ccAgent.types';
 
@@ -72,7 +71,8 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     ) => {
       const actionStartedAt = performance.now();
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
-      const isDeviceLinkSession = Boolean(getStickySessionDeviceId(sessionId));
+      const statusWriteTarget = await sessionService.resolveStatusWriteTarget(sessionId);
+      const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
       let statusTransition: SessionStatusTransitionToken | null = null;
       // device-link 远程会话:status 写经隧道(setStatus 内部按来源路由 patch-meta),被控端写库后
       // 广播 sessions:patched{status} → 控制端 applyPatch 把它移出分片(纯镜像,无需乐观/重拉)。
@@ -137,7 +137,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        persisted = await sessionService.setStatus(sessionId, targetStatus);
+        persisted = await sessionService.setStatus(sessionId, targetStatus, statusWriteTarget);
         statusWriteFinishedAt = performance.now();
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);
@@ -225,7 +225,8 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
    */
   const unarchiveSession = useCallback(
     async (sessionId: string) => {
-      const isDeviceLinkSession = Boolean(getStickySessionDeviceId(sessionId));
+      const statusWriteTarget = await sessionService.resolveStatusWriteTarget(sessionId);
+      const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
       if (
         !isDeviceLinkSession &&
         sessionsStore.hasPendingStatusTransition(sessionId) &&
@@ -237,7 +238,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         ? null
         : sessionsStore.beginStatusTransition(sessionId, { status: 'active' });
       try {
-        const persisted = await sessionService.setStatus(sessionId, 'active');
+        const persisted = await sessionService.setStatus(sessionId, 'active', statusWriteTarget);
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);
         }
