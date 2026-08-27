@@ -348,6 +348,9 @@ describe('auth login-flow reset', () => {
     expect(reserveBody).toContain(
       "throw new Error('local profile and native provider ownership reservations disagree')",
     );
+    expect(reserveBody).toContain(
+      'finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId)',
+    );
 
     const migrationStart = source.indexOf(
       'function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): void {',

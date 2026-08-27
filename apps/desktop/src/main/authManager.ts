@@ -1219,7 +1219,7 @@ function reserveCloudOwnerData(
         for (const rollback of rollbackActions.reverse()) rollback();
         return recoverCloudOwnerDataReservations(previousOwnerId);
       },
-      finalize: () => recoverCloudOwnerDataReservations(ownerId),
+      finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId),
     };
   } catch (error) {
     for (const rollback of rollbackActions.reverse()) rollback();

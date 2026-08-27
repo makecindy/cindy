@@ -247,6 +247,23 @@ function reserveLegacyNativeProviderAuthOwnerWithMode(
   if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) {
     return { status: 'failed' };
   }
+  // Stable-owner repair is frequently reached by ordinary provider reads. A
+  // tokenless matching (or different) owner is a definitive no-op, so avoid
+  // blocking the Electron main thread on the synchronous writer lock. Missing
+  // or provisional state still goes through the lock and is rechecked there.
+  if (!provisional) {
+    const snapshot = readBindingsOrFail();
+    if (!snapshot.ok) return { status: 'failed' };
+    const bindings = snapshot.bindings;
+    if ('legacyClaimOwner' in bindings) {
+      if (bindings.legacyClaimOwner !== normalizedOwnerId) {
+        return { status: 'owned-by-other' };
+      }
+      if (!('legacyClaimToken' in bindings)) {
+        return { status: 'already-owned' };
+      }
+    }
+  }
   return withNativeBindingMutationLock<LegacyNativeProviderAuthReservationDetails>(
     { status: 'failed' },
     () => {
@@ -334,6 +351,12 @@ export function recoverPendingLegacyNativeProviderAuthOwner(
   committedOwnerId: string | null,
 ): PendingLegacyNativeProviderAuthRecovery {
   const normalizedCommittedOwnerId = committedOwnerId?.trim() || null;
+  // A tokenless binding is already durable ownership, not pending recovery.
+  // Read it without taking the synchronous writer lock so stable-owner
+  // initialization cannot block the Electron main thread on a no-op.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return 'failed';
+  if (!snapshot.bindings.legacyClaimToken) return 'none';
   return withNativeBindingMutationLock<PendingLegacyNativeProviderAuthRecovery>('failed', () => {
     try {
       const read = readBindingsOrFail();

@@ -60,13 +60,14 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
   });
 
-  it.each(['', '{'])('recovers an interrupted owner marker containing %j', async (contents) => {
+  it.each(['', '{'])('fails closed for a malformed owner marker containing %j', async (contents) => {
     const { root } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
     await fs.writeFile(marker, contents);
 
-    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
-    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('failed');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('failed');
+    await expect(fs.readFile(marker, 'utf8')).resolves.toBe(contents);
   });
 
   it('restores an atomic-write backup before deciding ownership', async () => {
@@ -93,8 +94,9 @@ describe('adoptLocalProfileDatabase', () => {
       lockDb.close();
     }
 
-    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
-    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('failed');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('failed');
+    await expect(fs.readFile(marker, 'utf8')).resolves.toBe('{');
   });
 
   it('releases only the marker created by the matching claim token', async () => {

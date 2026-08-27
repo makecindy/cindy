@@ -299,10 +299,10 @@ function reserveLocalProfileDataOwnerWhileLocked(
         }
         return { status: 'already-owned', ownerId: normalizedOwnerId };
       }
-      // Every current writer holds the SQLite lock, so an invalid marker can
-      // be removed without ever vacating an unverified replacement entry.
-      fs.unlinkSync(marker);
-      syncMarkerDirectory(marker);
+      // A malformed marker is not evidence of an unused namespace. Current
+      // writers publish atomically, so preserve the damaged ownership record
+      // and fail closed rather than allowing a later account to claim it.
+      return { status: 'failed' };
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
         return { status: 'failed' };
@@ -437,11 +437,7 @@ export function recoverPendingLocalProfileDataOwner(
         const raw = readAtomicFileSync(marker);
         if (raw === null) return 'none';
         const parsed = parseLocalProfileMigrationMarker(raw);
-        if (!parsed) {
-          fs.unlinkSync(marker);
-          syncMarkerDirectory(marker);
-          return 'released';
-        }
+        if (!parsed) return 'failed';
         if (!parsed.claimToken) return 'none';
         if (parsed.ownerId === normalizedCommittedOwnerId) {
           replaceLocalProfileMigrationMarker(
