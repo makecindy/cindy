@@ -25,6 +25,11 @@ export function NativeSwitch({
       accessibilityRole="switch"
       accessibilityState={{ checked: value, disabled: Boolean(disabled) }}
       accessible={Boolean(accessibilityLabel)}
+      onAccessibilityTap={
+        accessibilityLabel && !disabled
+          ? () => onValueChange(!value)
+          : undefined
+      }
     >
       <Host colorScheme={mode} matchContents seedColor={seedColor}>
         <Switch

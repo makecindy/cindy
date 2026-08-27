@@ -80,7 +80,7 @@ describe("iOS chrome presenters stay on the system menu path", () => {
 
     expect(sessionActions).toContain("setActionSheetSession(session)");
     expect(sessionActions).not.toContain("showActionMenu({");
-    expect(sessionActions).toContain("action === 'rename'");
+    expect(sessionActions).toContain("action === 'rename' || action === 'delete'");
     expect(sessionActions).not.toContain("Platform.OS !== 'ios'");
     const expoSheet = readTextLf(
       resolve(process.cwd(), "src/session/SessionOptionsExpoSheet.tsx"),
@@ -165,6 +165,7 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       "utf8",
     );
     expect(nativeSwitch).toContain("accessibilityLabel?: string");
+    expect(nativeSwitch).toContain("onAccessibilityTap");
     expect(settings).toContain(
       "accessibilityLabel={t('settings.notifications.taskDone')}",
     );
