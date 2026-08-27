@@ -229,9 +229,9 @@ export type PendingLegacyNativeProviderAuthRecovery =
   | 'released'
   | 'failed';
 
-/** Reserve the one-shot native-provider namespace at the verified cloud commit edge. */
-export function reserveLegacyNativeProviderAuthOwnerDetailed(
+function reserveLegacyNativeProviderAuthOwnerWithMode(
   ownerId: string,
+  provisional: boolean,
 ): LegacyNativeProviderAuthReservationDetails {
   const normalizedOwnerId = ownerId.trim();
   if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) {
@@ -245,22 +245,42 @@ export function reserveLegacyNativeProviderAuthOwnerDetailed(
         if (!read.ok) return { status: 'failed' };
         const bindings = read.bindings;
         if ('legacyClaimOwner' in bindings) {
-          return bindings.legacyClaimOwner === normalizedOwnerId
-            ? { status: 'already-owned' }
-            : { status: 'owned-by-other' };
+          if (bindings.legacyClaimOwner !== normalizedOwnerId) {
+            return { status: 'owned-by-other' };
+          }
+          if (!provisional && bindings.legacyClaimToken) {
+            const next = { ...bindings };
+            delete next.legacyClaimToken;
+            writeBindings(next);
+          }
+          return { status: 'already-owned' };
         }
-        const claimToken = randomUUID();
+        const claimToken = provisional ? randomUUID() : undefined;
         writeBindings({
           ...bindings,
           legacyClaimOwner: normalizedOwnerId,
-          legacyClaimToken: claimToken,
+          ...(claimToken ? { legacyClaimToken: claimToken } : {}),
         });
-        return { status: 'claimed', claimToken };
+        return { status: 'claimed', ...(claimToken ? { claimToken } : {}) };
       } catch {
         return { status: 'failed' };
       }
     },
   );
+}
+
+/** Reserve the one-shot native-provider namespace at the verified cloud commit edge. */
+export function reserveLegacyNativeProviderAuthOwnerDetailed(
+  ownerId: string,
+): LegacyNativeProviderAuthReservationDetails {
+  return reserveLegacyNativeProviderAuthOwnerWithMode(ownerId, true);
+}
+
+/** Reserve or finalize the namespace for an owner whose cloud session is already durable. */
+export function reserveCommittedLegacyNativeProviderAuthOwner(
+  ownerId: string,
+): LegacyNativeProviderAuthReservation {
+  return reserveLegacyNativeProviderAuthOwnerWithMode(ownerId, false).status;
 }
 
 export function reserveLegacyNativeProviderAuthOwner(

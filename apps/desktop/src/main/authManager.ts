@@ -120,11 +120,13 @@ import {
   migrateLocalNativeProviderAuthBindings,
   recoverPendingLegacyNativeProviderAuthOwner,
   releaseLegacyNativeProviderAuthOwner,
+  reserveCommittedLegacyNativeProviderAuthOwner,
   reserveLegacyNativeProviderAuthOwnerDetailed,
 } from './maker-host/nativeProviderAuthBinding.js';
 import {
   recoverPendingLocalProfileDataOwner,
   releaseLocalProfileDataOwner,
+  reserveCommittedLocalProfileDataOwner,
   reserveLocalProfileDataOwnerDetailed,
 } from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
@@ -1213,9 +1215,8 @@ function reserveCloudOwnerData(
 }
 
 function repairStableCloudOwnerDataReservations(ownerId: string): void {
-  let profileReservation: ReturnType<typeof reserveLocalProfileDataOwnerDetailed>['status'] =
-    'failed';
-  let nativeReservation: ReturnType<typeof reserveLegacyNativeProviderAuthOwnerDetailed>['status'] =
+  let profileReservation: ReturnType<typeof reserveCommittedLocalProfileDataOwner> = 'failed';
+  let nativeReservation: ReturnType<typeof reserveCommittedLegacyNativeProviderAuthOwner> =
     'failed';
 
   if (!recoverCloudOwnerDataReservations(ownerId)) {
@@ -1223,11 +1224,11 @@ function repairStableCloudOwnerDataReservations(ownerId: string): void {
     return;
   }
   try {
-    profileReservation = reserveLocalProfileDataOwnerDetailed(
+    profileReservation = reserveCommittedLocalProfileDataOwner(
       ownerId,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
-    ).status;
+    );
   } catch (error) {
     log.warn('stable cloud owner local profile reservation repair failed', {
       ownerId,
@@ -1235,7 +1236,7 @@ function repairStableCloudOwnerDataReservations(ownerId: string): void {
     });
   }
   try {
-    nativeReservation = reserveLegacyNativeProviderAuthOwnerDetailed(ownerId).status;
+    nativeReservation = reserveCommittedLegacyNativeProviderAuthOwner(ownerId);
   } catch (error) {
     log.warn('stable cloud owner native provider reservation repair failed', {
       ownerId,

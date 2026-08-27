@@ -267,11 +267,12 @@ function replaceLocalProfileMigrationMarker(marker: string, contents: string): v
 function reserveLocalProfileDataOwnerWhileLocked(
   normalizedOwnerId: string,
   marker: string,
+  provisional: boolean,
 ): LocalProfileMigrationReservationDetails {
-  const claimToken = randomUUID();
+  const claimToken = provisional ? randomUUID() : undefined;
   const contents = `${JSON.stringify({
     ownerId: normalizedOwnerId,
-    claimToken,
+    ...(claimToken ? { claimToken } : {}),
     claimedAt: Date.now(),
   })}\n`;
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -279,9 +280,14 @@ function reserveLocalProfileDataOwnerWhileLocked(
       const raw = fs.readFileSync(marker, 'utf8');
       const parsed = parseLocalProfileMigrationMarker(raw);
       if (parsed) {
-        return parsed.ownerId === normalizedOwnerId
-          ? { status: 'already-owned' }
-          : { status: 'owned-by-other' };
+        if (parsed.ownerId !== normalizedOwnerId) return { status: 'owned-by-other' };
+        if (!provisional && parsed.claimToken) {
+          replaceLocalProfileMigrationMarker(
+            marker,
+            `${JSON.stringify({ ownerId: normalizedOwnerId, claimedAt: Date.now() })}\n`,
+          );
+        }
+        return { status: 'already-owned' };
       }
       // Every current writer holds the SQLite lock, so an invalid marker can
       // be removed without ever vacating an unverified replacement entry.
@@ -294,7 +300,7 @@ function reserveLocalProfileDataOwnerWhileLocked(
     }
     try {
       if (publishLocalProfileMigrationMarker(marker, contents) === 'claimed') {
-        return { status: 'claimed', claimToken };
+        return { status: 'claimed', ...(claimToken ? { claimToken } : {}) };
       }
     } catch {
       return { status: 'failed' };
@@ -322,8 +328,27 @@ export function reserveLocalProfileDataOwnerDetailed(
     `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
   return withLocalProfileMigrationLock(marker, { status: 'failed' }, () =>
-    reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker),
+    reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker, true),
   );
+}
+
+/** Reserve or finalize ownership for an owner whose cloud session is already durable. */
+export function reserveCommittedLocalProfileDataOwner(
+  ownerId: string,
+  userDataDir: string,
+  dbFilePrefix: string,
+): LocalProfileMigrationReservation {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_PROFILE_DATA_OWNER_ID) return 'failed';
+  const marker = path.join(
+    userDataDir,
+    `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
+  );
+  return withLocalProfileMigrationLock<LocalProfileMigrationReservationDetails>(
+    marker,
+    { status: 'failed' },
+    () => reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker, false),
+  ).status;
 }
 
 export function reserveLocalProfileDataOwner(
@@ -475,7 +500,7 @@ export async function adoptLocalProfileDatabase(
   let lockDb: LocalProfileMigrationLockDb | null = null;
   try {
     lockDb = await acquireLocalProfileMigrationLock(marker);
-    const reservation = reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker);
+    const reservation = reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker, false);
     if (reservation.status === 'owned-by-other') return { status: 'claimed-by-other-owner' };
     if (reservation.status === 'failed') {
       throw new Error('failed to reserve local profile owner');

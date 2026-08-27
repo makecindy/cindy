@@ -32,6 +32,7 @@ import {
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
   recoverPendingLegacyNativeProviderAuthOwner,
+  reserveCommittedLegacyNativeProviderAuthOwner,
   reserveLegacyNativeProviderAuthOwner,
   reserveLegacyNativeProviderAuthOwnerDetailed,
   releaseLegacyNativeProviderAuthOwner,
@@ -181,6 +182,16 @@ describe('local → cloud native provider binding migration', () => {
 
     expect(recoverPendingLegacyNativeProviderAuthOwner('owner-a')).toBe('finalized');
     expect(releaseLegacyNativeProviderAuthOwner('owner-a', reservation.claimToken!)).toBe(false);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('creates a tokenless native reservation for an already durable cloud owner', () => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const bindings = JSON.parse(fs.readFileSync(bindingFile, 'utf8'));
+    expect(bindings).toMatchObject({ legacyClaimOwner: 'owner-a' });
+    expect(bindings).not.toHaveProperty('legacyClaimToken');
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('none');
     session.dataOwnerId = 'owner-b';
     expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
   });

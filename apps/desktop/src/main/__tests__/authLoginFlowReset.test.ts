@@ -332,8 +332,10 @@ describe('auth login-flow reset', () => {
     const repairStart = source.indexOf('function repairStableCloudOwnerDataReservations(');
     const repairEnd = source.indexOf('\n}\n\nfunction commitCloudAppSession(', repairStart);
     const repairBody = source.slice(repairStart, repairEnd);
-    expect(repairBody).toContain('reserveLocalProfileDataOwnerDetailed(');
-    expect(repairBody).toContain('reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)');
+    expect(repairBody).toContain('reserveCommittedLocalProfileDataOwner(');
+    expect(repairBody).toContain('reserveCommittedLegacyNativeProviderAuthOwner(ownerId)');
+    expect(repairBody).not.toContain('reserveLocalProfileDataOwnerDetailed(');
+    expect(repairBody).not.toContain('reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)');
     expect(repairBody).toContain('remains authenticated with local adoption fail-closed');
     expect(repairBody).not.toContain('throw new Error');
   });

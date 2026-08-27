@@ -11,6 +11,7 @@ import {
   LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
   recoverPendingLocalProfileDataOwner,
+  reserveCommittedLocalProfileDataOwner,
   reserveLocalProfileDataOwner,
   reserveLocalProfileDataOwnerDetailed,
   releaseLocalProfileDataOwner,
@@ -112,6 +113,21 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
   });
 
+  it('creates a tokenless claim for an already durable cloud owner', async () => {
+    const { root } = await fixture();
+    expect(reserveCommittedLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    const marker = JSON.parse(
+      await fs.readFile(
+        path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`),
+        'utf8',
+      ),
+    );
+    expect(marker).toMatchObject({ ownerId: 'owner-a' });
+    expect(marker).not.toHaveProperty('claimToken');
+    expect(recoverPendingLocalProfileDataOwner(null, root, 'cindy')).toBe('none');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
   it('recovers an interrupted pending claim before a different owner commits', async () => {
     const { root } = await fixture();
     expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
@@ -183,6 +199,13 @@ describe('adoptLocalProfileDatabase', () => {
         ),
       ),
     ).resolves.toBeUndefined();
+    const marker = JSON.parse(
+      await fs.readFile(
+        path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`),
+        'utf8',
+      ),
+    );
+    expect(marker).not.toHaveProperty('claimToken');
   });
 
   it('captures committed WAL data through SQLite online backup while the source stays open', async () => {
