@@ -87,6 +87,35 @@ describe('adoptLocalProfileDatabase', () => {
     });
   });
 
+  it('recovers a truncated fallback marker from its pending publication', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const pending = `${marker}.pending`;
+    vi.spyOn(originalFs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('hard links unsupported'), { code: 'EOPNOTSUPP' });
+    });
+    const originalCopyFileSync = originalFs.copyFileSync;
+    let interrupted = true;
+    vi.spyOn(originalFs, 'copyFileSync').mockImplementation((...args) => {
+      if (interrupted && String(args[1]) === pending) {
+        interrupted = false;
+        originalFs.writeFileSync(pending, '{"ownerId":');
+        throw Object.assign(new Error('marker copy interrupted'), { code: 'EIO' });
+      }
+      return originalCopyFileSync.apply(originalFs, args);
+    });
+
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('failed');
+    await expect(fs.access(marker)).rejects.toThrow();
+    await expect(fs.readFile(pending, 'utf8')).resolves.toBe('{"ownerId":');
+
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    await expect(fs.readFile(marker, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      ownerId: 'owner-a',
+    });
+    await expect(fs.access(pending)).rejects.toThrow();
+  });
+
   it('restores an atomic-write backup before deciding ownership', async () => {
     const { root } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
@@ -354,6 +383,27 @@ describe('adoptLocalProfileDatabase', () => {
       true,
     );
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('claimed');
+  });
+
+  it('fails closed when a released marker cannot be restored atomically', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const candidate = `${marker}.release`;
+    const reservation = reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+
+    const originalRenameSync = originalFs.renameSync;
+    vi.spyOn(originalFs, 'renameSync').mockImplementation((source, destination) => {
+      if (String(source) === candidate && String(destination) === marker) {
+        throw Object.assign(new Error('marker restore temporarily unavailable'), { code: 'EBUSY' });
+      }
+      return originalRenameSync.apply(originalFs, [source, destination]);
+    });
+
+    expect(releaseLocalProfileDataOwner('owner-a', root, 'cindy', 'c1-deadbeef')).toBe(false);
+    await expect(fs.access(marker)).rejects.toThrow();
+    await expect(fs.access(candidate)).resolves.toBeUndefined();
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('failed');
   });
 
   it('finalizes a pending claim for the committed owner', async () => {

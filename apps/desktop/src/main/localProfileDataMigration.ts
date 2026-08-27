@@ -431,16 +431,40 @@ function publishLocalProfileMigrationMarker(
       const code = (error as NodeJS.ErrnoException | null)?.code;
       if (code === 'EEXIST') return 'exists';
       // A few supported userData filesystems do not implement hard links.
-      // Preserve the no-replace claim point with an exclusive copy instead of
-      // falling back to rename (which could replace another owner's marker).
+      // Copy into a private pending path first. The canonical marker must not
+      // become visible until the complete payload is durable; COPYFILE_EXCL
+      // directly on the canonical path can leave a truncated marker after a
+      // process or machine interruption.
       if (!['EXDEV', 'EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'ENOSYS'].includes(code ?? '')) {
         throw error;
       }
+      const pending = `${marker}.pending`;
       try {
-        fs.copyFileSync(tmp, marker, fsConstants.COPYFILE_EXCL);
+        if (fs.existsSync(marker)) return 'exists';
+        fs.copyFileSync(tmp, pending, fsConstants.COPYFILE_EXCL);
+        flushFile(pending);
+        syncMarkerDirectory(pending);
+        if (fs.existsSync(marker)) return 'exists';
+        fs.renameSync(pending, marker);
+        const finalHandle = fs.openSync(marker, 'r+');
+        try {
+          fs.fsyncSync(finalHandle);
+        } finally {
+          fs.closeSync(finalHandle);
+        }
+        syncMarkerDirectory(marker);
       } catch (fallbackError) {
         if ((fallbackError as NodeJS.ErrnoException | null)?.code === 'EEXIST') return 'exists';
         throw fallbackError;
+      } finally {
+        if (fs.existsSync(pending) && fs.existsSync(marker)) {
+          try {
+            fs.unlinkSync(pending);
+          } catch {
+            // The canonical marker is authoritative; leave a complete pending
+            // copy for the next recovery pass if cleanup is temporarily busy.
+          }
+        }
       }
     }
     const finalHandle = fs.openSync(marker, 'r+');
@@ -484,8 +508,11 @@ function restoreClaimedLocalProfileMarker(candidate: string, marker: string): bo
   try {
     // Restore only into an absent canonical path; never overwrite a newer
     // reservation that may have appeared after this process claimed candidate.
-    fs.linkSync(candidate, marker);
-    fs.unlinkSync(candidate);
+    if (fs.existsSync(marker)) return false;
+    // rename is available on all supported userData filesystems, including
+    // those without hard-link support, and publishes the complete candidate
+    // in one atomic operation while the migration lock is held.
+    fs.renameSync(candidate, marker);
     syncMarkerDirectory(marker);
     return true;
   } catch {
@@ -494,11 +521,56 @@ function restoreClaimedLocalProfileMarker(candidate: string, marker: string): bo
   }
 }
 
+function recoverPendingLocalProfileMigrationMarker(marker: string): void {
+  const pending = `${marker}.pending`;
+  if (!fs.existsSync(pending)) return;
+  if (fs.existsSync(marker)) {
+    try {
+      fs.unlinkSync(pending);
+      syncMarkerDirectory(marker);
+    } catch {
+      // The canonical marker is authoritative; a later pass can retry cleanup.
+    }
+    return;
+  }
+  let parsed: LocalProfileMigrationMarker | null = null;
+  try {
+    parsed = parseLocalProfileMigrationMarker(fs.readFileSync(pending, 'utf8'));
+  } catch {
+    parsed = null;
+  }
+  if (!parsed) {
+    fs.unlinkSync(pending);
+    syncMarkerDirectory(marker);
+    return;
+  }
+  flushFile(pending);
+  syncMarkerDirectory(pending);
+  if (fs.existsSync(marker)) return;
+  fs.renameSync(pending, marker);
+  const finalHandle = fs.openSync(marker, 'r+');
+  try {
+    fs.fsyncSync(finalHandle);
+  } finally {
+    fs.closeSync(finalHandle);
+  }
+  syncMarkerDirectory(marker);
+}
+
 function reserveLocalProfileDataOwnerWhileLocked(
   normalizedOwnerId: string,
   marker: string,
   provisional: boolean,
 ): LocalProfileMigrationReservationDetails {
+  try {
+    recoverPendingLocalProfileMigrationMarker(marker);
+  } catch {
+    return { status: 'failed' };
+  }
+  // A previous release may have moved the canonical marker to this candidate
+  // and failed to restore it. Treat that stranded ownership evidence as busy;
+  // never let a later owner claim the namespace while it is unresolved.
+  if (fs.existsSync(`${marker}.release`)) return { status: 'failed' };
   const claimToken = provisional ? randomUUID() : undefined;
   const contents = `${JSON.stringify({
     ownerId: normalizedOwnerId,
@@ -621,7 +693,7 @@ export function releaseLocalProfileDataOwner(
     `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
   return withLocalProfileMigrationLock(marker, false, () => {
-    const candidate = `${marker}.release.${randomUUID()}`;
+    const candidate = `${marker}.release`;
     try {
       // Atomically claim the exact marker before checking the token. This
       // prevents a stale read from unlinking another reservation.
@@ -662,6 +734,7 @@ export function recoverPendingLocalProfileDataOwner(
     'failed',
     () => {
       try {
+        recoverPendingLocalProfileMigrationMarker(marker);
         // atomicWriteFileSync may leave the only valid snapshot in .bak after
         // an interrupted Windows backup exchange. Restore it before deciding
         // whether a pending claim exists.
