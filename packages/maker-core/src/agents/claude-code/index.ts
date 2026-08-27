@@ -4780,6 +4780,10 @@ export class ClaudeCodeAgent extends BaseAgent {
                           `已完成的 tool result 都保留。`,
                         isTerminal: true,
                         reason: 'tool_use_loop_detected',
+                        toolLoop: {
+                          kind: verdict.reason,
+                          count: verdict.count,
+                        },
                         loopKind: verdict.reason,
                         loopCount: verdict.count,
                         model: loopModel,

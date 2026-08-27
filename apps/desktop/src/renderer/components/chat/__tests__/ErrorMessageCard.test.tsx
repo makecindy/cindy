@@ -32,6 +32,19 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText(STREAM_RAW)).toBeTruthy();
   });
 
+  it('localizes tool-loop terminal errors without exposing the internal category', () => {
+    render(
+      createElement(ErrorMessageCard, {
+        message: '内部熔断详情：missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      }),
+    );
+
+    expect(screen.getByText('logic.errors.toolUseLoopDetectedWithCount')).toBeTruthy();
+    expect(screen.queryByText('内部熔断详情：missing_required_field')).toBeNull();
+  });
+
   it('keeps genuine OpenAI errors as-is without an expander', () => {
     const raw = 'OpenAI API error (400): invalid_prompt';
     render(createElement(ErrorMessageCard, { message: raw }));

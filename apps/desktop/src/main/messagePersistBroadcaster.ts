@@ -67,6 +67,7 @@ import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-obser
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import { parseToolLoopErrorDetails, type ToolLoopErrorDetails } from '@cindy/maker-core';
 
 const log = createLogger('messagePersistBroadcaster');
 
@@ -2037,7 +2038,7 @@ function dropSessionTurnErrorReservations(sessionId: string): void {
  * whenTurnErrorPersisted(等到写入、跳过或释放,不以墙钟超时当作已落库)再按同一
  * id 标记 ignored。
  *
- * content 存结构化 { message, reason?, sdkError? }:reason 是 maker-core 的稳定
+ * content 存结构化 { message, reason?, sdkError?, toolLoop? }:reason 是 maker-core 的稳定
  * key('empty-response' / 'turn-failed' 等),renderer 渲染时按它走 i18n(规则 18),
  * message 是给非 renderer 消费方(IM / orca / 旧版本客户端)的兜底文案。
  */
@@ -2106,7 +2107,10 @@ function lookupTurnErrorPersistId(
  */
 export function reserveTurnErrorPersistId(
   sessionId: string,
-  data: { message?: unknown; reason?: unknown; sdkError?: unknown } | null | undefined,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
   agentMeta: AgentMeta | null = null,
 ): string | undefined {
   const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
@@ -2200,6 +2204,8 @@ export function onTurnErrorEvent(
   if (typeof data?.sdkError === 'string' && data.sdkError) {
     content.sdkError = redactSensitiveText(data.sdkError);
   }
+  const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
+  if (toolLoop) content.toolLoop = toolLoop satisfies ToolLoopErrorDetails;
   // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
   // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
   // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额

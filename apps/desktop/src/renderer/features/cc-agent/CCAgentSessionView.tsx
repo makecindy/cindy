@@ -1642,6 +1642,7 @@ export function CCAgentSessionView({
     retryLastError,
     continueAfterSilentStop,
     errorReason,
+    toolLoop,
     insertSystemCard,
     updateSystemCardData,
     error,
@@ -4665,6 +4666,7 @@ export function CCAgentSessionView({
                 <ErrorTailErrorBanner
                   errorText={errorTailText}
                   errorReason={errorTailMsg?.errorReason}
+                  toolLoop={errorTailMsg?.toolLoop}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -4724,6 +4726,7 @@ export function CCAgentSessionView({
               <ErrorBanner
                 error={error}
                 errorReason={errorReason}
+                toolLoop={toolLoop}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}

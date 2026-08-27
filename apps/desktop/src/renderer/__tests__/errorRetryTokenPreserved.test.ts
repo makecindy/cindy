@@ -155,4 +155,40 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
 
     expect(next.errorPersistId).toBe('err_persist_2');
   });
+
+  it('projects structured tool-loop details from terminal guard errors', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'contract', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toEqual({ kind: 'contract', count: 3 });
+  });
+
+  it('rejects malformed tool-loop details before they reach renderer state', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'missing_required_field', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toBeNull();
+  });
 });

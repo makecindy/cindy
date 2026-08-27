@@ -27,15 +27,19 @@ import {
 } from '@/utils/streamInterruptError';
 import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export function ErrorMessageCard({
   message,
   reason,
   providerId,
+  toolLoop,
 }: {
   message: string;
   reason?: string;
   providerId?: string;
+  /** Structured details for a tool-loop terminal error (optional for legacy rows). */
+  toolLoop?: ToolLoopErrorDetails;
 }) {
   const { t } = useTranslation();
   const [showRaw, setShowRaw] = useState(false);
@@ -48,12 +52,18 @@ export function ErrorMessageCard({
     providerId: providerId ?? null,
   });
   const unwrapped = unwrapProviderErrorDisplay(decoded);
+  const localizedReasonError =
+    reason === 'tool_use_loop_detected' && toolLoop?.count
+      ? t('logic.errors.toolUseLoopDetectedWithCount', { count: toolLoop.count })
+      : i18nKey
+        ? t(i18nKey)
+        : undefined;
   const text = isStreamInterrupted
     ? t('chat.errorBanner.streamInterruptedNoRetry')
     : isGatewayProxyTokenInvalid
       ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-      : i18nKey
-        ? t(i18nKey)
+      : localizedReasonError
+        ? localizedReasonError
         : unwrapped;
   const showRawToggle =
     isStreamInterrupted ||
