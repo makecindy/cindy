@@ -98,18 +98,18 @@ const realFs: LocalProfileDataMigrationFs = {
     try {
       sourceHandle = await fs.promises.open(source, 'r');
       try {
-        // O_EXCL is the no-replace claim. The target is created before any
-        // bytes are copied, so a competing cloud initializer can never leave
-        // us with a partially-written winner that recovery might delete.
-        // The copying marker is durable before this path is exposed. If the
-        // process dies after wx creates an empty target, recovery can therefore
-        // identify and remove that owned-but-incomplete publication.
+        // O_EXCL is the no-replace claim. Keep the marker in `claiming` until
+        // wx succeeds; before that point it is only an intention and must not
+        // authorize recovery to delete a target created by another process.
+        targetHandle = await fs.promises.open(target, 'wx', 0o600);
+        // A durable `copying` marker now proves that this process obtained the
+        // exclusive target claim. Recovery may remove only targets with that
+        // proof after an interrupted copy.
         updatePendingDatabaseCopyMarker(pending, {
           version: DB_COPY_PENDING_VERSION,
           attemptId,
           phase: 'copying',
         });
-        targetHandle = await fs.promises.open(target, 'wx', 0o600);
       } catch (error) {
         if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') {
           // The target is authoritative when another initializer won the
@@ -715,24 +715,26 @@ async function databaseFileGroupState(
   return { mainExists, sidecarExists: sidecarResults.some(Boolean) };
 }
 
+type DatabasePublicationRecovery = 'clean' | 'ambiguous';
+
 async function recoverIncompleteDatabasePublication(
   deps: LocalProfileDataMigrationDeps,
   targetDb: string,
-): Promise<void> {
+): Promise<DatabasePublicationRecovery> {
   const pending = `${targetDb}${DB_COPY_PENDING_SUFFIX}`;
   const raw = readAtomicFileSync(pending);
-  if (raw === null) return;
+  if (raw === null) return 'clean';
   const marker = parsePendingDatabaseCopyMarker(raw);
   if (!marker) throw new Error('database copy pending marker is malformed');
 
   const targetState = await databaseFileGroupState(deps, targetDb);
   if (marker.phase === 'claiming') {
     // A competing cloud initializer may have won after our marker was
-    // persisted. An ambiguous marker must never authorize deleting that
-    // authoritative target; leave both files in place and fail closed.
-    if (targetState.mainExists || targetState.sidecarExists) return;
+    // persisted. An ambiguous marker must never authorize deleting or opening
+    // that target; leave both files in place and fail closed.
+    if (targetState.mainExists || targetState.sidecarExists) return 'ambiguous';
     await deps.fs.removeIfExists(pending);
-    return;
+    return 'clean';
   }
   if (marker.phase === 'published') {
     // The snapshot was fully flushed before marker cleanup. Preserve the
@@ -743,14 +745,14 @@ async function recoverIncompleteDatabasePublication(
       }
     }
     await deps.fs.removeIfExists(pending);
-    return;
+    return 'clean';
   }
 
   if (marker.phase === 'raced') {
     // Another initializer won the no-replace claim. Never remove its target;
     // retire only this process's bookkeeping marker.
     await deps.fs.removeIfExists(pending).catch(() => undefined);
-    return;
+    return 'clean';
   }
 
   // Only the explicit copying phase proves that this process won the target's
@@ -761,6 +763,7 @@ async function recoverIncompleteDatabasePublication(
     await deps.fs.removeIfExists(`${targetDb}${suffix}`);
   }
   await deps.fs.removeIfExists(pending);
+  return 'clean';
 }
 
 export type PassiveLocalProfileAdoptionPreflight =
@@ -917,7 +920,13 @@ export async function adoptLocalProfileDatabase(
     if (reservation.status === 'failed') {
       throw new Error('failed to reserve local profile owner');
     }
-    await recoverIncompleteDatabasePublication(deps, targetDb);
+    const recovery = await recoverIncompleteDatabasePublication(deps, targetDb);
+    if (recovery === 'ambiguous') {
+      return {
+        status: 'failed',
+        error: 'database copy publication has an unproven target owner',
+      };
+    }
     // Reserve the local namespace even when it is currently empty. Otherwise a
     // later account could create or adopt local content after the first account
     // has already crossed the login boundary.

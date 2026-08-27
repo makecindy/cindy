@@ -227,7 +227,7 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
   });
 
-  it('persists the fallback copying marker before opening the exclusive target', async () => {
+  it('persists the fallback claiming marker before opening the exclusive target', async () => {
     const { root } = await fixture();
     const source = path.join(root, 'cindy-local-v1.db');
     const target = path.join(root, 'cindy-owner-a.db');
@@ -262,13 +262,13 @@ describe('adoptLocalProfileDatabase', () => {
     });
     expect(JSON.parse(markerBeforeTargetClaim!)).toMatchObject({
       version: 1,
-      phase: 'copying',
+      phase: 'claiming',
     });
     expect(openSpy).toHaveBeenCalled();
     await expect(fs.access(pending)).rejects.toThrow();
   });
 
-  it('recovers an empty target left after the fallback target claim was interrupted', async () => {
+  it('fails closed when target ownership is unproven after the fallback claim is interrupted', async () => {
     const { root } = await fixture();
     const source = path.join(root, 'cindy-local-v1.db');
     const target = path.join(root, 'cindy-owner-a.db');
@@ -304,15 +304,18 @@ describe('adoptLocalProfileDatabase', () => {
       status: 'failed',
     });
     await expect(fs.readFile(pending, 'utf8').then(JSON.parse)).resolves.toMatchObject({
-      phase: 'copying',
+      phase: 'claiming',
     });
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('');
 
-    await expect(adoptLocalProfileDatabase('owner-a', fallbackDeps)).resolves.toMatchObject({
-      status: 'adopted',
+    await expect(adoptLocalProfileDatabase('owner-a', fallbackDeps)).resolves.toEqual({
+      status: 'failed',
+      error: 'database copy publication has an unproven target owner',
     });
-    await expect(fs.stat(target)).resolves.toMatchObject({ size: expect.any(Number) });
-    await expect(fs.readFile(pending, 'utf8')).rejects.toThrow();
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('');
+    await expect(fs.readFile(pending, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      phase: 'claiming',
+    });
   });
 
   it('does not reclaim an invalid marker while another process holds the migration lock', async () => {
