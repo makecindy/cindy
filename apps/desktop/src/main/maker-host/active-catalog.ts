@@ -154,8 +154,13 @@ export interface XdGatewayModelInfo {
   /** AIGateway 缓存 token 单价(per token);参与「免费」判定与价格展示。 */
   cacheReadInputTokenCost?: number;
   cacheCreationInputTokenCost?: number;
-  /** 进哪些 runtime tab；v3 由服务端完整下发。 */
-  agents?: AgentKind[];
+  /**
+   * 进哪些 runtime tab；v3 由服务端完整下发。这里跟 shared/modelAccess 的
+   * `ModelAccessGatewayModel.agents` 逐字对齐(同一份服务端协议):网关目录只服务
+   * cc / codex / pi 三个 tab,grok-build 是本机 CLI、自带唯一内置模型,不进网关目录,
+   * 所以**不能**写成 `AgentKind[]` —— 那样两边协议类型会漂移。
+   */
+  agents?: ('claude-code' | 'codex' | 'pi')[];
   name?: string;
   group?: string;
   description?: string;

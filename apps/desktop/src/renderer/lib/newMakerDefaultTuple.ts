@@ -7,6 +7,12 @@ import {
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 
+/**
+ * 产品默认 tuple 只覆盖走 provider 路由的三个 harness。grok-build 自带唯一内置
+ * 模型、不参与来源/模型默认下放,所以不进这张种子表。
+ */
+type NewMakerDefaultAgent = Exclude<AgentKind, 'grok-build'>;
+
 export interface NewMakerDefaultTuple {
   vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi'>;
   providerId: string;
@@ -17,7 +23,7 @@ export interface NewMakerDefaultTuple {
 interface ProviderDefaultPolicy {
   providerId: 'openai' | 'anthropic' | 'xai' | 'xd';
   accessKind: 'subscription' | 'managed';
-  agents: readonly AgentKind[];
+  agents: readonly NewMakerDefaultAgent[];
   modelIds: readonly string[];
   requireNewSessionDefault?: boolean;
   requireImageInput?: boolean;
@@ -59,7 +65,7 @@ const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
   },
 ];
 
-function vendorForAgent(agent: AgentKind): NewMakerDefaultTuple['vendor'] {
+function vendorForAgent(agent: NewMakerDefaultAgent): NewMakerDefaultTuple['vendor'] {
   return agent === 'claude-code' ? 'cc' : agent;
 }
 
