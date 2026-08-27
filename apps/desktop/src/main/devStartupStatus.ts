@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { DevProfileKind } from './devCliFlags.js';
+import { withLocalProfileMigrationStartupBarrier } from './localProfileDataMigration.js';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -46,6 +47,7 @@ export interface DesktopDevInstanceRecord {
 
 export interface BeginDesktopDevInstanceOptions {
   userDataDir: string;
+  dbFilePrefix: string;
   rootDir: string;
   commit?: string | null;
   mode?: DesktopDevMode;
@@ -127,9 +129,9 @@ function updateTrackedInstance(
  * Register this Electron main process before single-instance arbitration.
  * The returned cleanup only removes the record when its random instanceId still owns it.
  */
-export function beginDesktopDevInstance(
+export async function beginDesktopDevInstance(
   options: BeginDesktopDevInstanceOptions,
-): () => void {
+): Promise<() => void> {
   mainWindowReady = false;
   applicationReady = false;
   startupSettled = false;
@@ -155,10 +157,19 @@ export function beginDesktopDevInstance(
   const filePath = path.join(record.userDataDir, '.dev-instances', `${pid}.json`);
 
   try {
-    atomicWriteJson(filePath, record);
-    trackedInstance = { filePath, record };
-  } catch {
-    trackedInstance = null;
+    await withLocalProfileMigrationStartupBarrier(record.userDataDir, options.dbFilePrefix, () => {
+      // Initial registration is part of the adoption safety protocol. If it
+      // cannot be published, fail startup rather than continuing invisibly and
+      // writing local-v1 while another process snapshots it.
+      atomicWriteJson(filePath, record);
+      trackedInstance = { filePath, record };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    markDesktopDevStartupFailed('INSTANCE_REGISTRATION_FAILED', message, {
+      phase: 'instance-registration',
+    });
+    throw error;
   }
 
   return () => {

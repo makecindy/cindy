@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   adoptLocalProfileDatabase,
   createProductionLocalProfileDataMigrationDeps,
+  inspectPassiveLocalProfileAdoption,
   LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX,
   LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX,
   LOCAL_PROFILE_MIGRATION_TMP_SUFFIX,
@@ -326,6 +327,44 @@ describe('adoptLocalProfileDatabase', () => {
     });
     await expect(fs.access(target)).rejects.toThrow();
     await expect(fs.readFile(`${target}-wal`, 'utf8')).resolves.toBe('orphaned-wal');
+  });
+
+  it('requires the primary instance when the retained source belongs to this owner', async () => {
+    const { root, deps } = await fixture();
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'required',
+    });
+    expect(reserveCommittedLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'required',
+    });
+    await expect(fs.access(path.join(root, 'cindy-owner-a.db'))).rejects.toThrow();
+  });
+
+  it('allows passive initialization when adoption is not applicable', async () => {
+    const { root, deps } = await fixture();
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'not-required',
+      reason: 'no-local-db',
+    });
+
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(path.join(root, 'cindy-owner-a.db'), 'cloud-db');
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'not-required',
+      reason: 'target-exists',
+    });
+
+    await fs.rm(path.join(root, 'cindy-owner-a.db'));
+    expect(reserveCommittedLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('claimed');
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'not-required',
+      reason: 'claimed-by-other-owner',
+    });
   });
 
   it('assigns the retained local source to only the first cloud owner', async () => {

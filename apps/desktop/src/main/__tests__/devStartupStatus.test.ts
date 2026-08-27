@@ -12,6 +12,7 @@ import {
   recordDesktopDevAuthStartupResult,
   recordDesktopDevLocalDbStartupResult,
 } from '../devStartupStatus.js';
+import { withLocalProfileMigrationStartupBarrier } from '../localProfileDataMigration.js';
 
 describe('devStartupStatus', () => {
   let tempDir: string;
@@ -31,10 +32,11 @@ describe('devStartupStatus', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('marks startup ready only after both the window and application are ready', () => {
+  it('marks startup ready only after both the window and application are ready', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: path.join(tempDir, 'repo'),
       commit: 'abc123',
       mode: 'remote',
@@ -73,10 +75,11 @@ describe('devStartupStatus', () => {
     });
   });
 
-  it('supports application readiness arriving before ready-to-show', () => {
+  it('supports application readiness arriving before ready-to-show', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -92,8 +95,9 @@ describe('devStartupStatus', () => {
 
   it('keeps restart pending when logged-out is only the auth timeout fallback', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -122,8 +126,9 @@ describe('devStartupStatus', () => {
 
   it('waits for localDb when manual login supersedes the timed-out refresh', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -155,10 +160,11 @@ describe('devStartupStatus', () => {
     });
   });
 
-  it('preserves a concrete main-process failure for the restart waiter', () => {
+  it('preserves a concrete main-process failure for the restart waiter', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       mode: 'remote',
       passive: true,
@@ -186,10 +192,11 @@ describe('devStartupStatus', () => {
     });
   });
 
-  it('forwards the localDb migration code and message to the restart waiter', () => {
+  it('forwards the localDb migration code and message to the restart waiter', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -213,10 +220,11 @@ describe('devStartupStatus', () => {
     });
   });
 
-  it('does not replace a completed startup with a later runtime failure', () => {
+  it('does not replace a completed startup with a later runtime failure', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -234,9 +242,10 @@ describe('devStartupStatus', () => {
     ))).toMatchObject({ state: 'ready' });
   });
 
-  it('cleanup never deletes a record that has been replaced by another owner', () => {
-    cleanup = beginDesktopDevInstance({
+  it('cleanup never deletes a record that has been replaced by another owner', async () => {
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -250,5 +259,39 @@ describe('devStartupStatus', () => {
     cleanup = null;
 
     expect(fs.existsSync(instancePath)).toBe(true);
+  });
+
+  it('publishes the instance record only after an in-flight adoption releases its barrier', async () => {
+    let releaseBarrier!: () => void;
+    let barrierEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      barrierEntered = resolve;
+    });
+    const holdBarrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const adoption = withLocalProfileMigrationStartupBarrier(tempDir, 'cindy', async () => {
+      barrierEntered();
+      await holdBarrier;
+    });
+    await entered;
+
+    const registration = beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4250,
+      instanceId: 'waited-for-adoption',
+    });
+    expect(fs.existsSync(path.join(tempDir, '.dev-instances', '4250.json'))).toBe(false);
+
+    releaseBarrier();
+    await adoption;
+    cleanup = await registration;
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4250.json'), 'utf8')),
+    ).toMatchObject({ instanceId: 'waited-for-adoption' });
   });
 });

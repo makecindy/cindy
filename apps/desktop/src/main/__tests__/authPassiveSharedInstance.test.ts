@@ -180,9 +180,20 @@ describe('passive shared-userData instance auth isolation', () => {
     const beforeEnsureReadyEnd = bootstrapSource.indexOf('\n    },\n    onReady:', beforeEnsureReadyStart);
     const beforeEnsureReady = bootstrapSource.slice(beforeEnsureReadyStart, beforeEnsureReadyEnd);
     const dbPassiveGuard = beforeEnsureReady.indexOf(
-      'if (authManager.isPassiveSharedUserDataInstance()) return;',
+      'if (authManager.isPassiveSharedUserDataInstance()) {',
     );
     expect(dbPassiveGuard).toBeGreaterThan(-1);
+    const passivePreflight = beforeEnsureReady.indexOf(
+      'inspectPassiveLocalProfileAdoption(',
+      dbPassiveGuard,
+    );
+    expect(passivePreflight).toBeGreaterThan(dbPassiveGuard);
+    expect(
+      beforeEnsureReady.indexOf("if (passivePreflight.status === 'required')", passivePreflight),
+    ).toBeGreaterThan(passivePreflight);
+    expect(beforeEnsureReady.indexOf('throw new Error(', passivePreflight)).toBeGreaterThan(
+      passivePreflight,
+    );
     const exclusiveAdoptionGate = beforeEnsureReady.indexOf(
       '() => hasExclusiveSharedLegacyUserDataAccess()',
     );

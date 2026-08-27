@@ -169,6 +169,30 @@ async function acquireLocalProfileMigrationLock(
   }
 }
 
+/**
+ * Serialize process registration with local-profile adoption. Adoption already
+ * holds this same crash-released SQLite writer lock through snapshot publication;
+ * a new process must publish its runtime record under the lock so it either
+ * becomes visible before adoption's exclusivity check or starts after the cloud
+ * target is durable.
+ */
+export async function withLocalProfileMigrationStartupBarrier<T>(
+  userDataDir: string,
+  dbFilePrefix: string,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  const marker = path.join(
+    userDataDir,
+    `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
+  );
+  const lockDb = await acquireLocalProfileMigrationLock(marker);
+  try {
+    return await operation();
+  } finally {
+    releaseLocalProfileMigrationLock(lockDb);
+  }
+}
+
 export type LocalProfileMigrationReservation =
   'claimed' | 'already-owned' | 'owned-by-other' | 'failed';
 
@@ -501,6 +525,64 @@ async function targetDatabaseFileGroupState(
     ...DB_SIDECAR_SUFFIXES.map((suffix) => deps.fs.pathExists(`${targetDb}${suffix}`)),
   ]);
   return { mainExists, sidecarExists: sidecarResults.some(Boolean) };
+}
+
+export type PassiveLocalProfileAdoptionPreflight =
+  | { status: 'not-required'; reason: 'no-local-db' | 'target-exists' | 'claimed-by-other-owner' }
+  | { status: 'required' }
+  | { status: 'failed'; error: string };
+
+/**
+ * Read-only guard for a passive shared-userData process. Passive instances must
+ * not claim or copy local-v1, but they also must not create an empty cloud target
+ * while the authoritative owner still needs to adopt the retained source.
+ */
+export async function inspectPassiveLocalProfileAdoption(
+  ownerId: string,
+  deps: LocalProfileDataMigrationDeps,
+): Promise<PassiveLocalProfileAdoptionPreflight> {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_PROFILE_DATA_OWNER_ID) {
+    return { status: 'failed', error: 'invalid cloud owner for local profile adoption' };
+  }
+
+  const sourceDb = dbPath(deps, LOCAL_PROFILE_DATA_OWNER_ID);
+  const targetDb = dbPath(deps, normalizedOwnerId);
+  try {
+    const targetState = await targetDatabaseFileGroupState(deps, targetDb);
+    if (targetState.sidecarExists && !targetState.mainExists) {
+      return {
+        status: 'failed',
+        error: 'target database sidecar exists without its main database',
+      };
+    }
+    if (targetState.mainExists) return { status: 'not-required', reason: 'target-exists' };
+    if (!(await deps.fs.pathExists(sourceDb))) {
+      return { status: 'not-required', reason: 'no-local-db' };
+    }
+
+    try {
+      const parsed = parseLocalProfileMigrationMarker(
+        await deps.fs.readFile(migrationMarkerPath(deps)),
+      );
+      if (!parsed) {
+        return { status: 'failed', error: 'local profile owner marker is malformed' };
+      }
+      if (parsed.ownerId !== normalizedOwnerId) {
+        return { status: 'not-required', reason: 'claimed-by-other-owner' };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+      // A missing marker can be repaired only by the primary instance. Until
+      // then, preserve the source by keeping this create-capable path closed.
+    }
+    return { status: 'required' };
+  } catch (error) {
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function copyDatabaseAtomically(
