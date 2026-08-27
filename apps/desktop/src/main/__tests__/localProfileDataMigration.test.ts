@@ -441,6 +441,21 @@ describe('adoptLocalProfileDatabase', () => {
     });
   });
 
+  it('keeps an existing passive cloud target authoritative when source access is unavailable', async () => {
+    const { root, deps } = await fixture();
+    await fs.writeFile(path.join(root, 'cindy-owner-a.db'), 'cloud-db');
+
+    await expect(
+      inspectPassiveLocalProfileAdoption('owner-a', {
+        ...deps,
+        hasExclusiveSourceAccess: () => false,
+      }),
+    ).resolves.toEqual({
+      status: 'not-required',
+      reason: 'target-exists',
+    });
+  });
+
   it('assigns the retained local source to only the first cloud owner', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
