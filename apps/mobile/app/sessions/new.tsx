@@ -323,7 +323,7 @@ import {
 import { mobileAgentLabel, mobileAgentVendor } from '@/session/sessionAgentSwitch';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftModelMemory';
-import { rowFastEditable } from '@/session/modelPickerRows';
+import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -6102,7 +6102,7 @@ function buildDraftRuntimeSummary(
   runtime: MobileSessionRuntimeOptions,
 ): { modelSummary: string; permissionLabel: string } {
   const modelLabel = runtime.currentModel?.label ?? draft.model;
-  const effortLabel = choiceLabel(runtime.effortOptions, draft.effort);
+  const effortLabel = effortLabelFromRuntime(runtime, draft.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),
     permissionLabel: choiceLabel(runtime.permissionOptions, draft.permissionMode),
