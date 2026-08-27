@@ -88,6 +88,15 @@ describe('native provider auth legacy binding', () => {
     expect(getNativeProviderAuthSource('xai')).toBe('explicit-provider-oauth');
     expect(isNativeProviderAuthSelfAuthorized('xai')).toBe(true);
   });
+
+  it('does not rewrite an unchanged legacy binding for the reserved owner', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const renameSpy = vi.spyOn(fs, 'renameSync');
+
+    migrateLegacyNativeProviderAuthBindings('owner-a', {});
+
+    expect(renameSpy).not.toHaveBeenCalledWith(expect.any(String), bindingFile);
+  });
 });
 
 describe('local → cloud native provider binding migration', () => {
@@ -97,7 +106,7 @@ describe('local → cloud native provider binding migration', () => {
 
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
 
-    expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r');
+    expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r+');
     if (process.platform !== 'win32') {
       expect(openSpy).toHaveBeenCalledWith(userDataDir, 'r');
     }

@@ -131,7 +131,10 @@ function writeBindings(value: BindingFile): void {
     // Flush the published file on every platform. On Windows this maps to
     // FlushFileBuffers and is the durable barrier available for a renamed
     // file; POSIX additionally flushes the parent directory below.
-    const finalHandle = fs.openSync(file, 'r');
+    // Windows requires a writable handle for FlushFileBuffers. The binding file is
+    // created with owner-only permissions, so r+ remains safe on POSIX while also
+    // making the post-rename durability barrier work on Windows.
+    const finalHandle = fs.openSync(file, 'r+');
     try {
       fs.fsyncSync(finalHandle);
     } finally {
@@ -523,13 +526,19 @@ export function migrateLegacyNativeProviderAuthBindings(
     const bindings = read.bindings;
     if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== ownerId) return;
 
-    const next: BindingFile = { ...bindings, legacyClaimOwner: ownerId };
+    const next: BindingFile = { ...bindings };
+    let changed = false;
+    if (!('legacyClaimOwner' in bindings)) {
+      next.legacyClaimOwner = ownerId;
+      changed = true;
+    }
     for (const provider of NATIVE_PROVIDER_IDS) {
       // 显式登出过的 provider 一律跳过:这条一次性迁移同样不能把用户弃用掉的残留凭证
       // 认领回来(PR #548 review)。
       if (bindings.revoked && provider in bindings.revoked) continue;
       if (available[provider] && !next[provider]) {
         next[provider] = ownerId;
+        changed = true;
         next.sources = {
           ...next.sources,
           [provider]: NATIVE_PROVIDER_CONNECTION_SOURCE[provider],
@@ -540,7 +549,7 @@ export function migrateLegacyNativeProviderAuthBindings(
         }
       }
     }
-    writeBindings(next);
+    if (changed) writeBindings(next);
   });
 }
 
