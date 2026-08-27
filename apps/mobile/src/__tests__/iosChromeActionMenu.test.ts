@@ -113,6 +113,19 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(searchBar).toContain("<NativePullDownMenu");
     expect(pullDown).toContain("MenuView");
     expect(pullDown).toContain("usesNativePullDownMenu");
+    const simpleHeader = readTextLf(
+      resolve(process.cwd(), "src/platform/chrome/SimpleStackHeader.tsx"),
+      "utf8",
+    );
+    const iosTitle = simpleHeader.slice(
+      simpleHeader.indexOf("headerTitle: () =>"),
+      simpleHeader.indexOf("headerLeft"),
+    );
+    expect(iosTitle).toContain("{title}");
+    expect(iosTitle).not.toContain("eyebrow");
+    expect(iosTitle).not.toContain("subtitle");
+    expect(simpleHeader).toContain("eyebrow={eyebrow}");
+    expect(simpleHeader).toContain("subtitle={subtitle}");
   });
 
   it("keeps Android fallback sheets and Maestro header anchors", () => {

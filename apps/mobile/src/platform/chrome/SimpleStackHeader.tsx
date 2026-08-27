@@ -17,7 +17,11 @@ import {
 } from "@/theme";
 import { lineHeight } from "@/theme/tokens";
 
-/** 简单页在 iOS 打开系统导航栏;Android 继续自绘 ScreenHeader。 */
+/**
+ * 简单页在 iOS 打开系统导航栏;Android 继续自绘 ScreenHeader。
+ * 不变量:iOS UINavigationBar 的 compact 标题槽只放单行 title。
+ * eyebrow / subtitle 仍传给 Android ScreenHeader,不进系统顶栏。
+ */
 export function usesNativeStackHeader(): boolean {
   return Platform.OS === "ios";
 }
@@ -71,19 +75,9 @@ export function SimpleStackHeader({
         headerTintColor: colors.textPrimary,
         headerTitle: () => (
           <View style={styles.wrap} testID={titleTestID}>
-            {eyebrow ? (
-              <Text numberOfLines={1} style={styles.eyebrow}>
-                {eyebrow}
-              </Text>
-            ) : null}
             <Text numberOfLines={1} style={styles.title}>
               {title}
             </Text>
-            {subtitle ? (
-              <Text numberOfLines={1} style={styles.subtitle}>
-                {subtitle}
-              </Text>
-            ) : null}
           </View>
         ),
         headerLeft: onBack
@@ -109,24 +103,10 @@ const makeNativeTitleStyles = (colors: ThemeColors) =>
       alignItems: "center",
       maxWidth: 220,
     },
-    eyebrow: {
-      color: colors.textTertiary,
-      fontSize: typeScale.micro,
-      fontWeight: fontWeight.medium,
-      letterSpacing: 0.4,
-      lineHeight: lineHeight.caption,
-      textTransform: "uppercase",
-    },
     title: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
       fontWeight: fontWeight.medium,
       lineHeight: lineHeight.body,
-    },
-    subtitle: {
-      color: colors.textSecondary,
-      fontSize: typeScale.caption,
-      fontWeight: fontWeight.regular,
-      lineHeight: lineHeight.caption,
     },
   });
