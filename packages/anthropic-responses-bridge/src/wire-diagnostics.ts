@@ -21,8 +21,11 @@ interface JsonTextSummary extends Record<string, unknown> {
   keys?: string[];
   types?: Record<string, JsonShape>;
   missingRequired?: string[];
-  extraKeys?: string[];
+  extraKeyCount?: number;
+  extraKeysSha256?: string;
 }
+
+type ToolFieldSchema = Pick<ToolSchemaSummary, 'propertyKeys' | 'required'>;
 
 interface ToolSchemaSummary {
   name: string;
@@ -119,10 +122,38 @@ function schemaParts(schema: Record<string, unknown>): { propertyKeys: string[];
   };
 }
 
+function summarizeJsonObject(
+  value: Record<string, unknown>,
+  schema?: ToolFieldSchema,
+): Pick<JsonTextSummary, 'keys' | 'types' | 'missingRequired' | 'extraKeyCount' | 'extraKeysSha256'> {
+  const keys = Object.keys(value).sort();
+  if (schema) {
+    const known = new Set(schema.propertyKeys);
+    const knownKeys = keys.filter((key) => known.has(key));
+    const extraKeys = keys.filter((key) => !known.has(key));
+    return {
+      keys: knownKeys,
+      types: Object.fromEntries(knownKeys.map((key) => [key, jsonShape(value[key])])),
+      missingRequired: schema.required.filter(
+        (key) => !Object.prototype.hasOwnProperty.call(value, key),
+      ),
+      ...(extraKeys.length > 0
+        ? { extraKeyCount: extraKeys.length, extraKeysSha256: hashJson(extraKeys) }
+        : {}),
+    };
+  }
+
+  // No schema means no field names are safe to emit: the model controls every
+  // key in the payload, so fail closed and retain only aggregate evidence.
+  return {
+    extraKeyCount: keys.length,
+    ...(keys.length > 0 ? { extraKeysSha256: hashJson(keys) } : {}),
+  };
+}
+
 function summarizeJsonText(
   raw: string,
-  required: readonly string[] = [],
-  propertyKeys: readonly string[] = [],
+  schema?: ToolFieldSchema,
 ): JsonTextSummary {
   const summary: JsonTextSummary = {
     bytes: Buffer.byteLength(raw, 'utf8'),
@@ -149,26 +180,13 @@ function summarizeJsonText(
     return summary;
   }
 
-  const keys = Object.keys(parsed).sort();
   summary.parsed = 'object';
-  summary.keys = keys;
-  summary.types = Object.fromEntries(keys.map((key) => [key, jsonShape(parsed[key])]));
-  summary.missingRequired = required.filter((key) => !Object.prototype.hasOwnProperty.call(parsed, key));
-  if (propertyKeys.length > 0) {
-    const known = new Set(propertyKeys);
-    summary.extraKeys = keys.filter((key) => !known.has(key));
-  }
-  return summary;
+  return { ...summary, ...summarizeJsonObject(parsed, schema) };
 }
 
-function summarizeJsonValue(value: unknown): Record<string, unknown> {
+function summarizeJsonValue(value: unknown, schema?: ToolFieldSchema): Record<string, unknown> {
   if (!isPlainObject(value)) return { parsed: jsonShape(value) };
-  const keys = Object.keys(value).sort();
-  return {
-    parsed: 'object',
-    keys,
-    types: Object.fromEntries(keys.map((key) => [key, jsonShape(value[key])])),
-  };
+  return { parsed: 'object', ...summarizeJsonObject(value, schema) };
 }
 
 function summarizeToolSchema(tool: AnthropicTool | Record<string, unknown>): ToolSchemaSummary | null {
@@ -194,7 +212,10 @@ function summarizeToolSchema(tool: AnthropicTool | Record<string, unknown>): Too
   };
 }
 
-function collectToolUses(req: AnthropicMessagesRequest): { count: number; items: ToolUseSummary[] } {
+function collectToolUses(
+  req: AnthropicMessagesRequest,
+  schemaByTool: ReadonlyMap<string, ToolFieldSchema>,
+): { count: number; items: ToolUseSummary[] } {
   let count = 0;
   const items: ToolUseSummary[] = [];
   for (const message of req.messages ?? []) {
@@ -206,7 +227,10 @@ function collectToolUses(req: AnthropicMessagesRequest): { count: number; items:
       items.push({
         name: typeof block.name === 'string' ? block.name : '(missing)',
         idSha256: typeof block.id === 'string' ? hashText(block.id) : hashText(''),
-        input: summarizeJsonValue(block.input),
+        input: summarizeJsonValue(
+          block.input,
+          schemaByTool.get(typeof block.name === 'string' ? block.name : ''),
+        ),
       });
     }
   }
@@ -230,11 +254,10 @@ function appendBounded(current: string, next: string): { value: string; overflow
 
 function summaryForCall(
   raw: string,
-  required: readonly string[] = [],
-  propertyKeys: readonly string[] = [],
+  schema: ToolFieldSchema | undefined,
   overflow = false,
 ): Record<string, unknown> {
-  const summary = summarizeJsonText(raw, required, propertyKeys);
+  const summary = summarizeJsonText(raw, schema);
   return overflow ? { ...summary, parsed: 'truncated' } : summary;
 }
 
@@ -272,7 +295,12 @@ export class WireDiagnosticsSession {
     for (const tool of responseTools) {
       this.requiredByTool.set(tool.name, { required: tool.required, propertyKeys: tool.propertyKeys });
     }
-    const history = collectToolUses(req);
+    for (const tool of requestTools) {
+      if (!this.requiredByTool.has(tool.name)) {
+        this.requiredByTool.set(tool.name, { required: tool.required, propertyKeys: tool.propertyKeys });
+      }
+    }
+    const history = collectToolUses(req, this.requiredByTool);
     this.emit('wire diagnostics: bridge request', {
       ...this.meta,
       historyToolUseCount: history.count,
@@ -431,13 +459,13 @@ export class WireDiagnosticsSession {
       outputIndex: state.outputIndex,
       tool: state.name ?? '(missing)',
       callIdSha256: state.callIdSha256,
-      argumentsDelta: summaryForCall(state.deltaArguments, schema?.required, schema?.propertyKeys, state.deltaOverflow),
+      argumentsDelta: summaryForCall(state.deltaArguments, schema, state.deltaOverflow),
       argumentsDone: state.argumentsDone === undefined
         ? '(missing)'
-        : summaryForCall(state.argumentsDone, schema?.required, schema?.propertyKeys),
+        : summaryForCall(state.argumentsDone, schema),
       itemDoneArguments: state.itemArguments === undefined
         ? '(missing)'
-        : summaryForCall(state.itemArguments, schema?.required, schema?.propertyKeys),
+        : summaryForCall(state.itemArguments, schema),
       deltaMatchesItem: state.itemArguments !== undefined && !state.deltaOverflow
         ? hashText(state.deltaArguments) === hashText(state.itemArguments)
         : '(not-comparable)',
@@ -453,7 +481,7 @@ export class WireDiagnosticsSession {
       blockIndex: state.blockIndex,
       tool: state.name ?? '(missing)',
       idSha256: state.idSha256,
-      arguments: summaryForCall(state.arguments, schema?.required, schema?.propertyKeys, state.overflow),
+      arguments: summaryForCall(state.arguments, schema, state.overflow),
     });
   }
 
@@ -467,15 +495,14 @@ export class WireDiagnosticsSession {
     const schema = this.requiredByTool.get(state.name ?? '');
     return summaryForCall(
       this.upstreamArguments(state),
-      schema?.required,
-      schema?.propertyKeys,
+      schema,
       state.itemArguments === undefined && state.argumentsDone === undefined && state.deltaOverflow,
     );
   }
 
   private downstreamArgumentSummary(state: DownstreamCallState): Record<string, unknown> {
     const schema = this.requiredByTool.get(state.name ?? '');
-    return summaryForCall(state.arguments, schema?.required, schema?.propertyKeys, state.overflow);
+    return summaryForCall(state.arguments, schema, state.overflow);
   }
 
   private emit(message: string, meta: Record<string, unknown>): void {

@@ -819,6 +819,21 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText('tool_use_loop_detected: missing_required_field')).toBeNull();
   });
 
+  it('describes a detection-window loop count instead of calling it failures', () => {
+    render(
+      <ErrorBanner
+        error="tool_use_loop_detected: pingpong"
+        errorReason="tool_use_loop_detected"
+        toolLoop={{ kind: 'pingpong', count: 12 }}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('logic.errors.toolUseLoopDetectedPingPongWithCount')).toBeTruthy();
+    expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
+  });
+
   it('exposes the explicit Continue After Reset action only when provided', () => {
     const onContinueAfterUsageReset = vi.fn();
     const { rerender } = render(

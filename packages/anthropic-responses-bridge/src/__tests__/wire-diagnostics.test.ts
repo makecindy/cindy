@@ -177,7 +177,42 @@ describe('WireDiagnosticsSession', () => {
     expect(serialized).not.toContain('PRIVATE_OLD_CONTENT');
     expect(serialized).not.toContain('PRIVATE_NEW_CONTENT');
     expect(serialized).not.toContain('BEARER_SECRET_VALUE');
+    expect(serialized).not.toContain('token');
     expect(serialized).toContain('file_path');
     expect(serialized).toContain('missingRequired');
+
+    const item = (comparison(entries).comparisons as Array<Record<string, unknown>>)[0];
+    const upstream = item.upstreamArguments as Record<string, unknown>;
+    expect(upstream.keys).toEqual(['file_path', 'new_string', 'old_string']);
+    expect(upstream.extraKeyCount).toBe(1);
+    expect(upstream.extraKeys).toBeUndefined();
+    expect(upstream.extraKeysSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('redacts unknown field names from historical tool-use summaries', () => {
+    const { logger, entries } = capture();
+    const probe = new WireDiagnosticsSession(logger, meta);
+    const { request, responses } = requestAndResponseTools();
+    request.messages = [{
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: 'history-call-1',
+        name: 'Edit',
+        input: {
+          file_path: '/tmp/secret.txt',
+          'user/private/path': 'do-not-log',
+        },
+      }],
+    }];
+    probe.recordRequest(request, responses);
+
+    const requestMeta = entries.find(({ message }) => message === 'wire diagnostics: bridge request')!.meta!;
+    const history = (requestMeta.historyToolUses as Array<Record<string, unknown>>)[0];
+    const input = history.input as Record<string, unknown>;
+    expect(input.keys).toEqual(['file_path']);
+    expect(input.extraKeyCount).toBe(1);
+    expect(input.extraKeys).toBeUndefined();
+    expect(JSON.stringify(entries)).not.toContain('user/private/path');
   });
 });

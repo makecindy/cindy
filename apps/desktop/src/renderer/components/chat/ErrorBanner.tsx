@@ -50,6 +50,7 @@ import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
@@ -278,9 +279,11 @@ export function ErrorBanner({
   const unwrappedDisplay = unwrapProviderErrorDisplay(error);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
+  const toolLoopI18nKey =
+    errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    errorReason === 'tool_use_loop_detected' && toolLoop?.count
-      ? t('logic.errors.toolUseLoopDetectedWithCount', { count: toolLoop.count })
+    toolLoopI18nKey && toolLoop
+      ? t(toolLoopI18nKey, { count: toolLoop.count })
       : errorReasonI18nKey
         ? t(errorReasonI18nKey)
         : undefined;

@@ -27,6 +27,7 @@ import {
 } from '@/utils/streamInterruptError';
 import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { getToolLoopI18nKey } from './toolLoopI18n';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export function ErrorMessageCard({
@@ -52,9 +53,10 @@ export function ErrorMessageCard({
     providerId: providerId ?? null,
   });
   const unwrapped = unwrapProviderErrorDisplay(decoded);
+  const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    reason === 'tool_use_loop_detected' && toolLoop?.count
-      ? t('logic.errors.toolUseLoopDetectedWithCount', { count: toolLoop.count })
+    toolLoopI18nKey && toolLoop
+      ? t(toolLoopI18nKey, { count: toolLoop.count })
       : i18nKey
         ? t(i18nKey)
         : undefined;

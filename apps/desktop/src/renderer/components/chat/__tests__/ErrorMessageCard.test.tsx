@@ -45,6 +45,19 @@ describe('ErrorMessageCard', () => {
     expect(screen.queryByText('内部熔断详情：missing_required_field')).toBeNull();
   });
 
+  it('uses the count wording for consecutive-call loops', () => {
+    render(
+      createElement(ErrorMessageCard, {
+        message: '内部熔断详情：consecutive',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'consecutive', count: 4 },
+      }),
+    );
+
+    expect(screen.getByText('logic.errors.toolUseLoopDetectedConsecutiveWithCount')).toBeTruthy();
+    expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
+  });
+
   it('keeps genuine OpenAI errors as-is without an expander', () => {
     const raw = 'OpenAI API error (400): invalid_prompt';
     render(createElement(ErrorMessageCard, { message: raw }));
