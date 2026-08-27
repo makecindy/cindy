@@ -148,6 +148,7 @@ function createCleanupFixture(): void {
     ['archived-boundary', 'archived', 1_000],
     ['archived-new', 'archived', 1_001],
     ['active-old', 'active', 100],
+    ['active-updated-after-scan', 'active', 100],
   ] as const) {
     insertSession.run(id, `title-${id}`, status, updatedAt);
     db.prepare('INSERT INTO messages (id, session_id, content) VALUES (?, ?, ?)').run(
@@ -170,6 +171,7 @@ function createCleanupFixture(): void {
       `content-${id}`,
     );
   }
+  db.prepare("UPDATE sessions SET cleared_at = 50 WHERE id = 'active-old'").run();
   insertSession.run('archived-empty', 'title-archived-empty', 'archived', 500);
   for (const sessionId of ['deleted-old', 'archived-boundary']) {
     db.prepare('INSERT INTO subagent_runs (id, session_id) VALUES (?, ?)').run(
@@ -268,6 +270,7 @@ describe('runDbSlimmingMaintenance', () => {
     expect(outcome.originalDatabaseReady).toBe(true);
     expect(outcome.result).toMatchObject({
       status: 'completed',
+      activeTaskCount: 0,
       deletedTaskCount: 1,
       archivedTaskCount: 1,
       messageCount: 2,
@@ -291,14 +294,16 @@ describe('runDbSlimmingMaintenance', () => {
         db.prepare('SELECT id FROM messages ORDER BY id').all().map((row) => (row as { id: string }).id),
       ).toEqual([
         'message-active-old',
+        'message-active-updated-after-scan',
         'message-archived-new',
         'message-deleted-new',
       ]);
-      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 3 });
+      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 4 });
       expect(
         db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
       ).toEqual([
         { message_id: 'message-active-old' },
+        { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
       ]);
@@ -312,6 +317,7 @@ describe('runDbSlimmingMaintenance', () => {
       expect(
         db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
       ).toEqual([
+        { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
       ]);
@@ -354,13 +360,104 @@ describe('runDbSlimmingMaintenance', () => {
       });
       expect(
         db.prepare(`
-          SELECT list_preview, list_preview_role, list_message_count
+          SELECT sdk_session_id, list_preview, list_preview_role, list_message_count,
+                 cleared_at, codex_plan_json
             FROM sessions WHERE id = 'active-old'
         `).get(),
       ).toEqual({
+        sdk_session_id: 'native-id',
         list_preview: 'stale preview',
         list_preview_role: 'assistant',
         list_message_count: 1,
+        cleared_at: 50,
+        codex_plan_json: '{}',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('cleans active, archived, and deleted task history while freezing active tasks at scan time', async () => {
+    createCleanupFixture();
+    const dbBeforeScanExecution = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+    try {
+      dbBeforeScanExecution
+        .prepare("UPDATE sessions SET updated_at = 2500 WHERE id = 'active-updated-after-scan'")
+        .run();
+    } finally {
+      dbBeforeScanExecution.close();
+    }
+    const beforeBytes = estimateDbFilesBytes(dbFilePath);
+
+    const outcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: request({
+        beforeBytes,
+        includeActiveTasks: true,
+        activeTaskCount: 2,
+      }),
+      now: () => 3_000,
+      log,
+    });
+
+    expect(outcome.result).toMatchObject({
+      status: 'completed',
+      activeTaskCount: 1,
+      deletedTaskCount: 1,
+      archivedTaskCount: 1,
+      messageCount: 3,
+    });
+    const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+    try {
+      expect(
+        db.prepare('SELECT id FROM messages ORDER BY id').all().map((row) => (row as { id: string }).id),
+      ).toEqual([
+        'message-active-updated-after-scan',
+        'message-archived-new',
+        'message-deleted-new',
+      ]);
+      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 3 });
+      expect(
+        db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
+      ).toEqual([
+        { message_id: 'message-active-updated-after-scan' },
+        { message_id: 'message-archived-new' },
+        { message_id: 'message-deleted-new' },
+      ]);
+      expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 7 });
+      expect(
+        db.prepare(`
+          SELECT status, updated_at, sdk_session_id, list_preview, list_preview_role,
+                 list_message_count, cleared_at, codex_plan_json, summary
+            FROM sessions WHERE id = 'active-old'
+        `).get(),
+      ).toEqual({
+        status: 'active',
+        updated_at: 2_000,
+        sdk_session_id: null,
+        list_preview: null,
+        list_preview_role: null,
+        list_message_count: null,
+        cleared_at: 2_000,
+        codex_plan_json: null,
+        summary: null,
+      });
+      expect(
+        db.prepare(`
+          SELECT updated_at, sdk_session_id, list_preview, list_preview_role,
+                 list_message_count, cleared_at, codex_plan_json, summary
+            FROM sessions WHERE id = 'active-updated-after-scan'
+        `).get(),
+      ).toEqual({
+        updated_at: 2_500,
+        sdk_session_id: 'native-id',
+        list_preview: 'stale preview',
+        list_preview_role: 'assistant',
+        list_message_count: 1,
+        cleared_at: null,
+        codex_plan_json: '{}',
+        summary: 'summary',
       });
     } finally {
       db.close();
@@ -420,7 +517,7 @@ describe('runDbSlimmingMaintenance', () => {
       fileMustExist: true,
     });
     try {
-      expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 5 });
+      expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 6 });
     } finally {
       backup.close();
     }

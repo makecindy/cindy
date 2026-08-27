@@ -32,6 +32,7 @@ function createHarness() {
   let dbClientOwnerId: string | null = owner.ownerId;
   let canSchedule = true;
   const queryOne = vi.fn(async () => ({
+    activeTaskCount: 0,
     deletedTaskCount: 1,
     archivedTaskCount: 2,
     messageCount: 3,
@@ -88,6 +89,60 @@ describe('local database maintenance IPC', () => {
       ).rejects.toThrow('[INVALID_PARAMS]');
     }
     expect(queryOne).toHaveBeenCalledTimes(4);
+  });
+
+  it('defaults active-task cleanup off for legacy callers and rejects non-boolean values', async () => {
+    const { handlers, queryOne } = createHarness();
+
+    const scan = await handlers.scan({ archiveAgeMonths: 3 });
+
+    expect(scan).toMatchObject({ includeActiveTasks: false, activeTaskCount: 0 });
+    expect(queryOne).toHaveBeenLastCalledWith(expect.stringContaining("status = 'active'"), [
+      scan.scannedAt,
+      scan.archivedBeforeMs,
+      0,
+      scan.scannedAt,
+    ]);
+
+    for (const includeActiveTasks of [null, 0, 'true', {}]) {
+      await expect(
+        handlers.scan({ archiveAgeMonths: 3, includeActiveTasks } as never),
+      ).rejects.toThrow('[INVALID_PARAMS]');
+    }
+    expect(queryOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('freezes an opted-in active-task scan and carries its scope into the request marker', async () => {
+    const harness = createHarness();
+    harness.queryOne.mockResolvedValueOnce({
+      activeTaskCount: 4,
+      deletedTaskCount: 1,
+      archivedTaskCount: 2,
+      messageCount: 7,
+      estimatedMessageBytes: 8_192,
+    });
+
+    const scan = await harness.handlers.scan({
+      archiveAgeMonths: '7-days',
+      includeActiveTasks: true,
+    });
+
+    expect(scan).toMatchObject({ includeActiveTasks: true, activeTaskCount: 4 });
+    expect(harness.queryOne).toHaveBeenLastCalledWith(
+      expect.stringContaining("status = 'active'"),
+      [scan.scannedAt, scan.archivedBeforeMs, 1, scan.scannedAt],
+    );
+
+    await expect(
+      harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: true }),
+    ).resolves.toEqual({ scheduled: true });
+    expect(readDbSlimmingRequest(tmpDir)).toMatchObject({
+      includeActiveTasks: true,
+      activeTaskCount: 4,
+      deletedTaskCount: 1,
+      archivedTaskCount: 2,
+      messageCount: 7,
+    });
   });
 
   it('subtracts exactly seven days for the seven day archive threshold', () => {
@@ -195,6 +250,7 @@ describe('local database maintenance IPC', () => {
   it('does not restart or copy the database when the scan found nothing to clean', async () => {
     const harness = createHarness();
     harness.queryOne.mockResolvedValueOnce({
+      activeTaskCount: 0,
       deletedTaskCount: 0,
       archivedTaskCount: 0,
       messageCount: 0,

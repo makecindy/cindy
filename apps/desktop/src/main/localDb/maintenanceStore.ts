@@ -31,6 +31,9 @@ export interface DbSlimmingRequestRecord {
   scannedAt: number;
   archivedBeforeMs: number;
   archiveAgeMonths: DbSlimmingArchiveAge;
+  /** Optional so an update can still finish a cleanup scheduled by an older build. */
+  includeActiveTasks?: boolean;
+  activeTaskCount?: number;
   deletedTaskCount: number;
   archivedTaskCount: number;
   messageCount: number;
@@ -239,6 +242,8 @@ function isDbSlimmingRequestRecord(value: unknown): value is DbSlimmingRequestRe
     !isFiniteNumber(value.scannedAt) ||
     !isFiniteNumber(value.archivedBeforeMs) ||
     !isArchiveAge(value.archiveAgeMonths) ||
+    (value.includeActiveTasks !== undefined && typeof value.includeActiveTasks !== 'boolean') ||
+    (value.activeTaskCount !== undefined && !Number.isInteger(value.activeTaskCount)) ||
     !Number.isInteger(value.deletedTaskCount) ||
     !Number.isInteger(value.archivedTaskCount) ||
     !Number.isInteger(value.messageCount) ||
@@ -287,6 +292,7 @@ function isDbSlimmingResultRecord(value: unknown): value is DbSlimmingResultReco
   }
   if (value.status !== 'completed') return false;
   return (
+    (value.activeTaskCount === undefined || Number.isInteger(value.activeTaskCount)) &&
     Number.isInteger(value.deletedTaskCount) &&
     Number.isInteger(value.archivedTaskCount) &&
     Number.isInteger(value.messageCount) &&
