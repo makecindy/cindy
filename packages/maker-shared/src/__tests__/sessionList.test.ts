@@ -16,7 +16,9 @@ import {
   sessionRowMessagePreview,
   summarizeRemoteSessionOverview,
   toRemoteSessionListItem,
+  formatRemoteSessionSidebarTime,
 } from '../sessionList.js';
+import type { PresentationLocalizer } from '../presentationLocalization.js';
 import type { RemoteSchedule, RemoteScheduleRun } from '../scheduleTypes.js';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../syntheticTrigger.js';
 
@@ -203,7 +205,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: '未命名任务',
       subtitle: 'Codex · gpt-5.4 · dialogue',
-      detail: '活跃 · 5 分钟前 · 12 条消息',
+      detail: '活跃 · 5 minutes ago · 12 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
     });
@@ -221,7 +223,7 @@ describe('sessionList', () => {
     }), new Date('2026-01-01T00:10:00.000Z').getTime());
 
     expect(item).toMatchObject({
-      detail: '活跃 · 5 分钟前 · 1000+ 条消息',
+      detail: '活跃 · 5 minutes ago · 1000+ 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
     });
@@ -424,7 +426,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: 'Legacy title',
       subtitle: 'Claude Code · claude-sonnet-4-6',
-      detail: '活跃 · 10 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '活跃 · 10 minutes ago · 自动化执行中 · 1 个自动化未读',
     });
     expect(item.scheduleInfo).toMatchObject({
       scheduleId: 'sched-1',
@@ -473,7 +475,7 @@ describe('sessionList', () => {
     expect(group).toMatchObject({
       title: '移动端巡检',
       subtitle: '自动化 · 2 个任务 · Claude Code · claude-sonnet-4-6',
-      detail: '2 个任务 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '2 个任务 · 4 minutes ago · 自动化执行中 · 1 个自动化未读',
       automationGroup: {
         key: 'schedule:sched-1',
         sessionIds: ['running', 'old'],
@@ -1079,3 +1081,43 @@ function createLargeSessionFixture(count: number): RemoteSession[] {
     });
   });
 }
+
+function zhTimeLocalizer(): PresentationLocalizer {
+  const dict: Record<string, string> = {
+    'devices.presentation.sessionList.time.justNow': '刚刚',
+    'devices.presentation.sessionList.time.minutesAgo': '{{count}} 分钟前',
+    'devices.presentation.sessionList.time.hoursAgo': '{{count}} 小时前',
+    'devices.presentation.sessionList.time.daysAgo': '{{count}} 天前',
+    'devices.presentation.sessionList.time.minutes': '{{count}} 分钟',
+    'devices.presentation.sessionList.time.hours': '{{count}} 小时',
+    'devices.presentation.sessionList.time.days': '{{count}} 天',
+    'devices.presentation.sessionList.time.weeks': '{{count}} 周',
+    'devices.presentation.sessionList.time.months': '{{count}} 月',
+    'devices.presentation.sessionList.time.years': '{{count}} 年',
+  };
+  return {
+    translate: (key, fallback, values) => {
+      const template = dict[key] ?? fallback;
+      return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? ''));
+    },
+  };
+}
+
+describe('formatRemoteSessionSidebarTime', () => {
+  const now = new Date('2026-01-01T12:00:00.000Z').getTime();
+
+  it('falls back to English when no localizer is passed', () => {
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now)).toBe('Just now');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now)).toBe('5 min');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now)).toBe('3 hr');
+    expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now)).toBe('2 d');
+  });
+
+  it('uses translated compact strings when a localizer is passed', () => {
+    const t = zhTimeLocalizer();
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now, t)).toBe('刚刚');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now, t)).toBe('5 分钟');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now, t)).toBe('3 小时');
+    expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now, t)).toBe('2 天');
+  });
+});

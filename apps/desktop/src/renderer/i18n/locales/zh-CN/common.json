@@ -7374,7 +7374,13 @@
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "本轮明细"
+      "userTurnCostDetailsTitle": "本轮明细",
+      "relative": {
+        "justNow": "刚刚",
+        "minutesAgo": "{{count}} 分钟前",
+        "hoursAgo": "{{count}} 小时前",
+        "daysAgo": "{{count}} 天前"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",

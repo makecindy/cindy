@@ -7384,7 +7384,13 @@
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "Request details"
+      "userTurnCostDetailsTitle": "Request details",
+      "relative": {
+        "justNow": "just now",
+        "minutesAgo": "{{count}} minutes ago",
+        "hoursAgo": "{{count}} hours ago",
+        "daysAgo": "{{count}} days ago"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",

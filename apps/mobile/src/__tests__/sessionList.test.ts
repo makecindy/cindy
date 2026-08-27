@@ -108,7 +108,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: '未命名任务',
       subtitle: 'Codex · gpt-5.4 · dialogue',
-      detail: '活跃 · 5 分钟前 · 12 条消息',
+      detail: '活跃 · 5 minutes ago · 12 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
     });
@@ -121,6 +121,19 @@ describe('sessionList', () => {
     expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now)).toBe('5 分钟');
     expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now)).toBe('3 小时');
     expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now)).toBe('2 天');
+  });
+
+  it('formats sidebar activity time in English when the app language is English', async () => {
+    const now = new Date('2026-01-01T12:00:00.000Z').getTime();
+    await i18n.changeLanguage('en');
+    try {
+      expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now)).toBe('Just now');
+      expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now)).toBe('5 min');
+      expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now)).toBe('3 hr');
+      expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now)).toBe('2 d');
+    } finally {
+      await i18n.changeLanguage('zh-CN');
+    }
   });
 
   it('includes the latest message preview in rendered session rows', () => {
@@ -221,7 +234,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: 'Legacy title',
       subtitle: 'Claude Code · claude-sonnet-4-6',
-      detail: '活跃 · 10 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '活跃 · 10 minutes ago · 自动化执行中 · 1 个自动化未读',
     });
     expect(item.scheduleInfo).toMatchObject({
       scheduleId: 'sched-1',

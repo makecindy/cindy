@@ -7382,7 +7382,13 @@
       "turnCostEstimated": "このターンの token 価値(API 単価換算)",
       "turnCostEstimatedValue": "価値 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "リクエストの明細"
+      "userTurnCostDetailsTitle": "リクエストの明細",
+      "relative": {
+        "justNow": "たった今",
+        "minutesAgo": "{{count}}分前",
+        "hoursAgo": "{{count}}時間前",
+        "daysAgo": "{{count}}日前"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",

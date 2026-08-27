@@ -7382,7 +7382,13 @@
       "turnCostEstimated": "이번 턴 토큰 가치(API 단가 환산)",
       "turnCostEstimatedValue": "가치 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "이번 요청 상세"
+      "userTurnCostDetailsTitle": "이번 요청 상세",
+      "relative": {
+        "justNow": "방금",
+        "minutesAgo": "{{count}}분 전",
+        "hoursAgo": "{{count}}시간 전",
+        "daysAgo": "{{count}}일 전"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
