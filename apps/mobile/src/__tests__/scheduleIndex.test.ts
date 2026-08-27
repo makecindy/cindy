@@ -95,6 +95,70 @@ describe('scheduleIndex', () => {
     ]);
   });
 
+  it('keeps trusted real run state for a scheduler session after the schedule is rebound', async () => {
+    const listSidebarIndexRuns = vi.fn(async () => ({
+      runs: [
+        {
+          runId: 'schedule-session-binding:sched-1:session-old',
+          scheduleId: 'sched-1',
+          sessionId: 'session-old',
+          firedAt: 100,
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+          status: 'success',
+          readAt: 100,
+        },
+        {
+          runId: 'run-old-unread',
+          scheduleId: 'sched-1',
+          sessionId: 'session-old',
+          firedAt: 200,
+          schedulerGeneratedAssociation: true,
+          status: 'success',
+        },
+        {
+          runId: 'run-old-running',
+          scheduleId: 'sched-1',
+          sessionId: 'session-old',
+          firedAt: 300,
+          schedulerGeneratedAssociation: true,
+          status: 'running',
+        },
+        {
+          runId: 'run-ordinary-stale',
+          scheduleId: 'sched-1',
+          sessionId: 'session-ordinary-stale',
+          firedAt: 400,
+          status: 'success',
+        },
+      ],
+      inflightRunIds: [],
+    }));
+    const maker = {
+      schedule: {
+        list: async () => [{
+          id: 'sched-1',
+          name: 'Daily',
+          status: 'active',
+          targetSessionId: 'session-current',
+        }],
+        listRuns: vi.fn(async () => []),
+        listSidebarIndexRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    const index = await loadSessionScheduleIndex(maker, {
+      sessionIds: ['session-old', 'session-ordinary-stale'],
+    });
+
+    expect(index.get('session-old')).toMatchObject({
+      running: true,
+      unreadCount: 1,
+      unreadRunIds: ['run-old-unread'],
+    });
+    expect(index.has('session-ordinary-stale')).toBe(false);
+  });
+
   it('falls back to listRuns for older Desktop sidebar channels and shapes', async () => {
     for (const listSidebarIndexRuns of [
       vi.fn(async () => {

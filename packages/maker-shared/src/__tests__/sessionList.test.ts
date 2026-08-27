@@ -459,6 +459,24 @@ describe('sessionList', () => {
           status: 'running',
           readAt: undefined,
         }),
+        run('scheduler-unread-real', 'sched-1', {
+          sessionId: 'old-scheduler-session',
+          schedulerGeneratedAssociation: true,
+          status: 'success',
+          readAt: undefined,
+        }),
+        run('scheduler-running-real', 'sched-1', {
+          sessionId: 'old-scheduler-session',
+          schedulerGeneratedAssociation: true,
+          status: 'running',
+        }),
+        run('association-only-running', 'sched-1', {
+          sessionId: 'association-only-session',
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+          status: 'running',
+          readAt: undefined,
+        }),
         run('stopped-association', 'sched-1', {
           sessionId: 'stopped-history-session',
           associationOnly: true,
@@ -472,16 +490,22 @@ describe('sessionList', () => {
       'old-real-session',
       'old-manual-session',
       'old-scheduler-session',
+      'association-only-session',
       'stopped-history-session',
     ]);
 
     expect(index.has('old-real-session')).toBe(false);
     expect(index.has('old-manual-session')).toBe(false);
     expect(index.get('old-scheduler-session')).toMatchObject({
+      unreadCount: 1,
+      unreadRunIds: ['scheduler-unread-real'],
+      running: true,
+      allSchedulesStopped: false,
+    });
+    expect(index.get('association-only-session')).toMatchObject({
       unreadCount: 0,
       unreadRunIds: [],
       running: false,
-      allSchedulesStopped: false,
     });
     expect(index.get('stopped-history-session')?.allSchedulesStopped).toBe(true);
     expect(index.has('current')).toBe(false);

@@ -58,6 +58,55 @@ function compactPagingMaker(
 }
 
 describe('markSessionScheduleRunsRead', () => {
+  it('marks a trusted real unread run after its generated session is rebound', async () => {
+    let read = false;
+    const listSidebarIndexRuns = vi.fn(async () => ({
+      runs: [
+        {
+          runId: 'schedule-session-binding:sched-1:session-old',
+          scheduleId: 'sched-1',
+          sessionId: 'session-old',
+          firedAt: 100,
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+          status: 'success',
+          readAt: 100,
+        },
+        ...(read ? [] : [{
+          runId: 'run-old-unread',
+          scheduleId: 'sched-1',
+          sessionId: 'session-old',
+          firedAt: 200,
+          schedulerGeneratedAssociation: true,
+          status: 'success' as const,
+        }]),
+      ],
+      inflightRunIds: [],
+    }));
+    const markRunRead = vi.fn(async (runId: string) => {
+      expect(runId).toBe('run-old-unread');
+      read = true;
+    });
+    const maker = {
+      schedule: {
+        list: async () => [{
+          id: 'sched-1',
+          name: 'Daily',
+          status: 'active',
+          targetSessionId: 'session-current',
+        }],
+        listRuns: vi.fn(async () => []),
+        listSidebarIndexRuns,
+        markRunRead,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    await expect(markSessionScheduleRunsRead(maker, 'session-old'))
+      .resolves.toEqual(['run-old-unread']);
+    expect(markRunRead).toHaveBeenCalledTimes(1);
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(2);
+  });
+
   it('marks only the target session unread runs as read', async () => {
     const markRunRead = vi.fn(async () => undefined);
     const maker = makerWith([

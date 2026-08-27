@@ -122,4 +122,27 @@ describe('schedule sidebar index compact IPC', () => {
     expect(() => serializeCompactSidebarIndexRuns([huge], 256)).toThrow(/PAYLOAD_TOO_LARGE/);
     expect(() => serializeCompactSidebarIndexRuns([huge], 4_096)).not.toThrow();
   });
+
+  it('preserves the trusted scheduler origin marker on a real compact run', () => {
+    expect(serializeCompactSidebarIndexRuns([{
+      runId: 'run-old-unread',
+      scheduleId: 'schedule-1',
+      scheduleName: 'Daily',
+      scheduleStatus: 'active',
+      sessionId: 'session-old',
+      firedAt: 100,
+      schedulerGeneratedAssociation: true,
+      status: 'success',
+    }])).toEqual({
+      runs: [{
+        runId: 'run-old-unread',
+        scheduleId: 'schedule-1',
+        sessionId: 'session-old',
+        firedAt: 100,
+        schedulerGeneratedAssociation: true,
+        status: 'success',
+      }],
+      inflightRunIds: [],
+    });
+  });
 });

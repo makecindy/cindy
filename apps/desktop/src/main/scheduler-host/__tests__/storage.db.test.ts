@@ -804,11 +804,17 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const generated = baseSchedule({
       id: 'sch-run-policy-generated',
       name: 'run policy generated',
+      targetSessionId: 'sess-run-policy-generated-current',
     });
-    const legacy = baseSchedule({ id: 'sch-run-policy-legacy', name: 'run policy legacy' });
+    const legacy = baseSchedule({
+      id: 'sch-run-policy-legacy',
+      name: 'run policy legacy',
+      targetSessionId: 'sess-run-policy-legacy-current',
+    });
     const prefixDisabled = baseSchedule({
       id: 'sch-run-policy-prefix-disabled',
       name: 'run policy prefix disabled',
+      targetSessionId: 'sess-run-policy-prefix-disabled-current',
     });
     const nullSession = baseSchedule({
       id: 'sch-run-policy-null-session',
@@ -825,8 +831,11 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           ('sess-run-policy-ordinary-a', 'former ordinary target', 'desktop', 1, 1),
           ('sess-run-policy-ordinary-b', 'current ordinary target', 'desktop', 2, 2),
           ('sess-run-policy-generated', 'generated without legacy title', 'scheduler', 3, 3),
-          ('sess-run-policy-legacy', '[Schedule] prior strict key', 'desktop', 4, 4),
-          ('sess-run-policy-prefix-disabled', '[Schedule] disabled prior key', 'desktop', 5, 5)
+          ('sess-run-policy-generated-current', 'current generated target', 'desktop', 4, 4),
+          ('sess-run-policy-legacy', '[Schedule] prior strict key', 'desktop', 5, 5),
+          ('sess-run-policy-legacy-current', 'current legacy target', 'desktop', 6, 6),
+          ('sess-run-policy-prefix-disabled', '[Schedule] disabled prior key', 'desktop', 7, 7),
+          ('sess-run-policy-prefix-disabled-current', 'current prefix-disabled target', 'desktop', 8, 8)
       `);
       await harness.storage.insert(ordinary);
       await harness.storage.insert(generated);
@@ -849,6 +858,13 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         sessionId: 'sess-run-policy-generated',
         firedAt: 110,
         status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-generated-current',
+        scheduleId: generated.id,
+        sessionId: 'sess-run-policy-generated-current',
+        firedAt: 115,
+        status: 'running',
       });
       await harness.storage.insertRun({
         id: 'run-policy-legacy',
@@ -915,32 +931,53 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         'sess-run-policy-ordinary-a',
         'sess-run-policy-ordinary-b',
         'sess-run-policy-generated',
+        'sess-run-policy-generated-current',
         'sess-run-policy-legacy',
         'sess-run-policy-prefix-disabled',
       ];
-      const compactRealRunIds = (await harness.storage.listSidebarIndexRuns({
+      const compactRuns = await harness.storage.listSidebarIndexRuns({
         compact: true,
         sessionIds: requestedSessionIds,
-      }))
+      });
+      const compactRealRunIds = compactRuns
         .filter((run) => run.associationOnly !== true)
         .map((run) => run.runId)
         .sort();
       expect(compactRealRunIds).toEqual([
         'run-policy-generated',
+        'run-policy-generated-current',
         'run-policy-legacy',
         'run-policy-ordinary-b',
       ]);
+      expect(compactRuns.find((run) => run.runId === 'run-policy-generated')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(compactRuns.find((run) => run.runId === 'run-policy-legacy')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(
+        compactRuns.find((run) => run.runId === 'run-policy-generated-current')
+          ?.schedulerGeneratedAssociation,
+      ).toBeUndefined();
+      expect(
+        compactRuns.find((run) => run.runId === 'run-policy-ordinary-b')
+          ?.schedulerGeneratedAssociation,
+      ).toBeUndefined();
 
-      const fullRealRunIds = (await harness.storage.listSidebarIndexRuns())
-        .filter((run) => run.associationOnly !== true)
+      const fullRuns = await harness.storage.listSidebarIndexRuns();
+      const fullRealRuns = fullRuns.filter((run) => run.associationOnly !== true);
+      const fullRealRunIds = fullRealRuns
         .map((run) => run.runId)
         .sort();
       expect(fullRealRunIds).toEqual([
         'run-policy-generated',
+        'run-policy-generated-current',
         'run-policy-legacy',
         'run-policy-null-session',
         'run-policy-ordinary-b',
       ]);
+      expect(fullRealRuns.every((run) => run.schedulerGeneratedAssociation === undefined))
+        .toBe(true);
 
       expect((await harness.storage.listRuns(ordinary.id)).map((run) => run.id).sort()).toEqual([
         'run-policy-ordinary-a',

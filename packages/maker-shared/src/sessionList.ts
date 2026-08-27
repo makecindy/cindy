@@ -626,10 +626,11 @@ export function buildSessionScheduleIndex(
     for (const run of runs) {
       if (!run.sessionId) continue;
       if (allowed && !allowed.has(run.sessionId)) continue;
-      // targetSessionId 是当前持久绑定的权威来源。schedule 改绑后，历史 run 仍保留旧
-      // sessionId；继续把它们算作当前绑定会污染旧会话的聚合状态与未读信息。
+      // targetSessionId 是普通持久绑定的权威来源。Desktop compact 会为 scheduler / 严格
+      // legacy 来源的 association 与真实 run 都附上可信标记；这些历史任务改绑后仍需保留
+      // 真实 running / unread 状态，未带标记的普通旧 run 则必须过滤。
       if (
-        !(run.associationOnly === true && run.schedulerGeneratedAssociation === true)
+        run.schedulerGeneratedAssociation !== true
         && schedule?.targetSessionId
         && run.sessionId !== schedule.targetSessionId
       ) continue;

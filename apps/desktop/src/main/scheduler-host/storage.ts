@@ -67,6 +67,7 @@ export interface ScheduleSidebarIndexRun {
   sessionId?: string;
   firedAt: number;
   associationOnly?: boolean;
+  /** Trusted scheduler/strict-legacy session origin for association and real-run rows. */
   schedulerGeneratedAssociation?: boolean;
   associationAllSchedulesStopped?: boolean;
   status: ScheduleRun['status'];
@@ -710,6 +711,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           }));
     const rows = options.compact
       ? await (() => {
+          const generatedAssociation = schedulerGeneratedScheduleSessionBindingWhere();
           const category = sql<string>`CASE WHEN ${scheduleRuns.status} = 'running' THEN 'running' ELSE 'unread' END`;
           const rankedRuns = db
             .select({
@@ -726,6 +728,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
               firedAt: sql<number>`${scheduleRuns.firedAt}`.as('ranked_fired_at'),
               status: sql<ScheduleRun['status']>`${scheduleRuns.status}`.as('run_status'),
               readAt: sql<number | null>`${scheduleRuns.readAt}`.as('ranked_read_at'),
+              schedulerGeneratedAssociation:
+                sql<number>`CASE WHEN ${generatedAssociation} THEN 1 ELSE 0 END`.as(
+                  'ranked_scheduler_generated_association',
+                ),
               category: category.as('run_category'),
               categoryRank:
                 sql<number>`row_number() over (partition by ${scheduleRuns.sessionId}, ${category} order by ${scheduleRuns.firedAt} desc, ${scheduleRuns.id} desc)`.as(
@@ -761,6 +767,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
               firedAt: rankedRuns.firedAt,
               status: rankedRuns.status,
               readAt: rankedRuns.readAt,
+              schedulerGeneratedAssociation: rankedRuns.schedulerGeneratedAssociation,
             })
             .from(rankedRuns)
             .where(or(
@@ -791,6 +798,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
             firedAt: scheduleRuns.firedAt,
             status: scheduleRuns.status,
             readAt: scheduleRuns.readAt,
+            // Full renderer rows keep their existing shape; the trust marker is only needed
+            // across the compact Desktop → Mobile boundary.
+            schedulerGeneratedAssociation: sql<number>`0`.as('run_scheduler_generated_association'),
           })
           .from(scheduleRuns)
           .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
@@ -820,6 +830,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       firedAt: row.firedAt,
       status: row.status,
       readAt: row.readAt ?? undefined,
+      ...(row.schedulerGeneratedAssociation === 1
+        ? { schedulerGeneratedAssociation: true }
+        : {}),
     }));
     const realRunBindings = new Set(
       indexedRuns
