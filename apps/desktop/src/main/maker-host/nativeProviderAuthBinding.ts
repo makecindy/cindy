@@ -221,21 +221,19 @@ function reserveLegacyNativeProviderAuthOwnerWithMode(
   if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) {
     return { status: 'failed' };
   }
-  // Stable-owner repair is frequently reached by ordinary provider reads. A
-  // tokenless matching (or different) owner is a definitive no-op, so avoid
-  // blocking the Electron main thread on the synchronous writer lock. Missing
-  // or provisional state still goes through the lock and is rechecked there.
-  if (!provisional) {
-    const snapshot = readBindingsOrFail();
-    if (!snapshot.ok) return { status: 'failed' };
-    const bindings = snapshot.bindings;
-    if ('legacyClaimOwner' in bindings) {
-      if (bindings.legacyClaimOwner !== normalizedOwnerId) {
-        return { status: 'owned-by-other' };
-      }
-      if (!('legacyClaimToken' in bindings)) {
-        return { status: 'already-owned' };
-      }
+  // Stable repair and ordinary same-owner refresh both reach this helper. A
+  // tokenless matching (or different) owner is a definitive no-op in either
+  // mode, so avoid blocking the Electron main thread on the synchronous writer
+  // lock. Missing or provisional state still enters the lock and is rechecked.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return { status: 'failed' };
+  const bindings = snapshot.bindings;
+  if ('legacyClaimOwner' in bindings) {
+    if (bindings.legacyClaimOwner !== normalizedOwnerId) {
+      return { status: 'owned-by-other' };
+    }
+    if (!('legacyClaimToken' in bindings)) {
+      return { status: 'already-owned' };
     }
   }
   return withNativeBindingMutationLock<LegacyNativeProviderAuthReservationDetails>(

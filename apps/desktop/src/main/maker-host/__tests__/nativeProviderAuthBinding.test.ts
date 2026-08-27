@@ -269,6 +269,17 @@ describe('local → cloud native provider binding migration', () => {
     expect(fs.existsSync(bindingLockDb)).toBe(false);
   });
 
+  it.each([
+    ['owner-a', 'already-owned'],
+    ['owner-b', 'owned-by-other'],
+  ] as const)('avoids the mutation lock for a provisional no-op (%s)', (ownerId, expected) => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)).toEqual({ status: expected });
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
   it('avoids the mutation lock when there is no pending native claim to recover', () => {
     expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
     fs.rmSync(bindingLockDb, { force: true });
