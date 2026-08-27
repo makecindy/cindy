@@ -40,7 +40,6 @@ import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import {
   MainWindowActionButton,
   MainWindowActionGroup,
-  ScreenHeader,
   StatusDot,
 } from '@/components/MobilePrimitives';
 import {
@@ -1484,8 +1483,8 @@ function VoiceDictionaryScreen({
       : t('settings.voiceDictionary.readOnlyHint');
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.voiceDictionary.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.voiceDictionary.screen">
+      <SimpleStackHeader
         backTestID="settings.voiceDictionary.backButton"
         onBack={onBack}
         title={t('settings.voiceDictionary.screenTitle')}
@@ -1572,8 +1571,8 @@ function RenameSelfDeviceScreen({
   const { colors } = useTheme();
   const { t } = useTranslation();
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.renameSelfDevice.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.renameSelfDevice.screen">
+      <SimpleStackHeader
         backTestID="settings.renameSelfDevice.backButton"
         onBack={onDone}
         title={t('settings.deviceNameEditor.screenTitle')}

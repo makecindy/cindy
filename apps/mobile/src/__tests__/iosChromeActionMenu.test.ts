@@ -151,6 +151,9 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(settings).toContain('backTestID="settings.backButton"');
     expect(settings).toContain('titleTestID="settings.title"');
     expect(settings).toContain("<SimpleStackHeader");
+    expect(settings).not.toContain("ScreenHeader");
+    expect(settings).toContain('backTestID="settings.voiceDictionary.backButton"');
+    expect(settings).toContain('backTestID="settings.renameSelfDevice.backButton"');
     expect(accountDeletion).toContain("<SimpleStackHeader");
     expect(accountDeletion).toContain(
       'backTestID="accountDeletion.backButton"',
