@@ -65,7 +65,8 @@ describe('validate job(realpath → stat → wx 探针 → 清理)', () => {
   it('可写目录回传解析后的真实路径且不留探针残留', async () => {
     const dir = path.join(root, 'project');
     fs.mkdirSync(dir);
-    await expect(runValidateJob(dir)).resolves.toEqual({ ok: true, realPath: dir });
+    const expectedRealPath = await fs.promises.realpath(dir);
+    await expect(runValidateJob(dir)).resolves.toEqual({ ok: true, realPath: expectedRealPath });
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
@@ -100,9 +101,7 @@ describe('availability job(stat → wx 探针 → 清理)', () => {
 
     failState.rmFailuresRemaining = 1;
     await expect(runAvailabilityJob(dir)).resolves.toEqual({ ok: true, usable: true });
-    const residue = fs
-      .readdirSync(dir)
-      .find((n) => n.startsWith('.cindy-workdir-probe-'))!;
+    const residue = fs.readdirSync(dir).find((n) => n.startsWith('.cindy-workdir-probe-'))!;
     expect(residue).toBeTruthy(); // 0 字节残留, 不重试不扫描
   });
 
