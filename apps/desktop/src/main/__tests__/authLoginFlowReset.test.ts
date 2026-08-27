@@ -308,7 +308,7 @@ describe('auth login-flow reset', () => {
     expect(prepareBody.indexOf('reserveCloudOwnerData')).toBeLessThan(
       prepareBody.indexOf('await opts.prepareCommit?.();'),
     );
-    expect(source).toContain('repairStableCloudOwnerDataReservations(currentUser.id);');
+    expect(source).toContain('await repairStableCloudOwnerDataReservations(currentUser.id);');
     expect(source).toContain('if (reservation && !reservation.finalize())');
     expect(source).toContain('if (!reservation.rollback())');
     expect(source).toContain('if (boundaryCommitApplied || commitApplied) return;');
@@ -323,8 +323,13 @@ describe('auth login-flow reset', () => {
       failureBody.indexOf('rollbackReservation = null;'),
     );
 
-    const repairStart = source.indexOf('function repairStableCloudOwnerDataReservations(');
-    const repairEnd = source.indexOf('\n}\n\nfunction commitCloudAppSession(', repairStart);
+    const repairStart = source.indexOf(
+      'function repairStableCloudOwnerDataReservationsWhileLocked(',
+    );
+    const repairEnd = source.indexOf(
+      '\n}\n\nasync function repairStableCloudOwnerDataReservations(',
+      repairStart,
+    );
     const repairBody = source.slice(repairStart, repairEnd);
     expect(repairBody).toContain('reserveCommittedLocalProfileDataOwnerDetailed(');
     expect(repairBody).toContain(
@@ -334,10 +339,24 @@ describe('auth login-flow reset', () => {
     expect(repairBody).not.toContain('reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)');
     expect(repairBody).toContain('remains authenticated with local adoption fail-closed');
     expect(repairBody).not.toContain('throw new Error');
+    const serializedRepairStart = source.indexOf(
+      'async function repairStableCloudOwnerDataReservations(',
+    );
+    const serializedRepairEnd = source.indexOf(
+      '\n}\n\nfunction commitCloudAppSession(',
+      serializedRepairStart,
+    );
+    const serializedRepairBody = source.slice(serializedRepairStart, serializedRepairEnd);
+    expect(serializedRepairBody).toContain(
+      'withStableOwnerBoundaryMutation(ownerId',
+    );
+    expect(serializedRepairBody).toContain(
+      'repairStableCloudOwnerDataReservationsWhileLocked(ownerId)',
+    );
 
     const reserveStart = source.indexOf('function reserveCloudOwnerData(');
     const reserveEnd = source.indexOf(
-      '\n}\n\nfunction repairStableCloudOwnerDataReservations(',
+      '\n}\n\nfunction repairStableCloudOwnerDataReservationsWhileLocked(',
       reserveStart,
     );
     const reserveBody = source.slice(reserveStart, reserveEnd);
@@ -353,7 +372,7 @@ describe('auth login-flow reset', () => {
     );
 
     const migrationStart = source.indexOf(
-      'function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): void {',
+      'async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {',
     );
     const migrationEnd = source.indexOf(
       '\n}\n\nasync function finishColdStartSignedOut(',
@@ -361,7 +380,7 @@ describe('auth login-flow reset', () => {
     );
     const migrationBody = source.slice(migrationStart, migrationEnd);
     expect(migrationBody).toContain(
-      'if (!repairStableCloudOwnerDataReservations(ownerId)) return;',
+      'if (!(await repairStableCloudOwnerDataReservations(ownerId))) return;',
     );
     expect(migrationBody.indexOf('repairStableCloudOwnerDataReservations')).toBeLessThan(
       migrationBody.indexOf('migrateLocalNativeProviderAuthBindings'),

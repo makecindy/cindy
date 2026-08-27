@@ -445,6 +445,17 @@ export async function withSharedGlobalSkillProjectionMutation<T>(
   if (isPassiveSharedUserDataInstance()) {
     throw new Error('Passive shared-userData instances cannot mutate global skill projections');
   }
+  return withStableOwnerBoundaryMutation(ownerId, mutation);
+}
+
+/** Serialize non-projection state that must agree with the same durable owner. */
+export async function withStableOwnerBoundaryMutation<T>(
+  ownerId: string | null,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  if (isPassiveSharedUserDataInstance()) {
+    throw new Error('Passive shared-userData instances cannot mutate stable owner state');
+  }
   const normalizedOwnerId = normalizeOwnerArgument(ownerId);
   return withStrictBoundaryLock(async () => {
     if (processProjectionQuarantined || isDurablyQuarantined()) {

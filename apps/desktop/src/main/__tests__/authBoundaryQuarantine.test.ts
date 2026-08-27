@@ -39,6 +39,7 @@ import {
   withGhostSkillProjectionOwnerCommit,
   withGhostSkillProjectionReadOnlyOwner,
   withGhostSkillProjectionReconcile,
+  withStableOwnerBoundaryMutation,
 } from '../authBoundaryQuarantine.js';
 
 function readPersistedState(): unknown {
@@ -434,6 +435,41 @@ describe('Ghost skill projection boundary state', () => {
     releaseCommit();
     await ownerCommit;
     await expect(reconcileResult).resolves.toBe(42);
+  });
+
+  it('rejects a stable-owner mutation after a concurrent owner replacement wins', async () => {
+    await withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: null,
+      nextOwnerId: 'owner-a',
+      prepareTransition: async () => {},
+      commit: () => undefined,
+    });
+    let releaseCommit!: () => void;
+    const commitBlocked = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const commitStarted = vi.fn();
+    const ownerCommit = withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: 'owner-a',
+      nextOwnerId: 'owner-b',
+      prepareTransition: async () => {},
+      commit: async () => {
+        commitStarted();
+        await commitBlocked;
+      },
+    });
+    await vi.waitFor(() => expect(commitStarted).toHaveBeenCalledOnce());
+    const mutation = vi.fn(async () => 42);
+    const staleOwnerMutation = withStableOwnerBoundaryMutation('owner-a', mutation);
+    await Promise.resolve();
+    expect(mutation).not.toHaveBeenCalled();
+
+    releaseCommit();
+    await ownerCommit;
+    await expect(staleOwnerMutation).rejects.toThrow(
+      'Ghost skill projection is not stable for the active owner',
+    );
+    expect(mutation).not.toHaveBeenCalled();
   });
 
   it('keeps a sticky process quarantine when stable publication is uncertain', async () => {

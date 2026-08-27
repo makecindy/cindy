@@ -171,7 +171,7 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body.indexOf('commitCloudAppSession(currentUser.id);')).toBeGreaterThan(repair);
 
     const migrationHelper = sliceBody(
-      'function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): void {',
+      'async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {',
       '\n}\n',
     );
     expect(migrationHelper).toContain('if (isPassiveSharedUserDataInstance()) return;');

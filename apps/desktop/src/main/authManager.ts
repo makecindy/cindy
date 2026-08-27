@@ -83,6 +83,7 @@ import {
   isGhostSkillProjectionBoundaryStableForOwner,
   withGhostSkillProjectionOwnerCommit,
   withGhostSkillProjectionReadOnlyOwner,
+  withStableOwnerBoundaryMutation,
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
 import { getResolvedMainLocale, t } from './i18n';
@@ -1227,7 +1228,7 @@ function reserveCloudOwnerData(
   }
 }
 
-function repairStableCloudOwnerDataReservations(ownerId: string): boolean {
+function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boolean {
   let profileReservation: ReturnType<typeof reserveCommittedLocalProfileDataOwnerDetailed> = {
     status: 'failed',
   };
@@ -1280,6 +1281,23 @@ function repairStableCloudOwnerDataReservations(ownerId: string): boolean {
   return authoritativeOwnerId === ownerId;
 }
 
+async function repairStableCloudOwnerDataReservations(ownerId: string): Promise<boolean> {
+  try {
+    // Cloud commits already hold this cross-process owner lock from reservation
+    // through finalize/rollback. Stable-owner repair must join the same lock so
+    // it cannot settle one namespace while a concurrent login settles the other.
+    return await withStableOwnerBoundaryMutation(ownerId, async () =>
+      repairStableCloudOwnerDataReservationsWhileLocked(ownerId),
+    );
+  } catch (error) {
+    log.warn('stable cloud owner reservation repair could not enter owner transaction', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 function commitCloudAppSession(ownerId: string): void {
   if (isPassiveSharedUserDataInstance()) {
     commitVolatileAppSession('cloud', ownerId);
@@ -1293,13 +1311,13 @@ function commitCloudAppSession(ownerId: string): void {
  * the durable owner boundary is stable. The binding layer keeps this
  * fail-closed for other cloud owners and corrupted state.
  */
-function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): void {
+async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {
   if (isPassiveSharedUserDataInstance()) return;
   try {
     // The profile marker is the single durable authority for both retained
     // local namespaces. Reconcile the native marker to that owner before any
     // legacy credential migration can run.
-    if (!repairStableCloudOwnerDataReservations(ownerId)) return;
+    if (!(await repairStableCloudOwnerDataReservations(ownerId))) return;
     if (migrateLocalNativeProviderAuthBindings(ownerId)) {
       log.info('migrated local native provider bindings to first cloud owner', { ownerId });
     }
@@ -2678,11 +2696,11 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       // reservations best-effort, but never turn malformed local metadata into
       // a renderer-visible logout while main remains signed in.
       if (!isPassiveSharedUserDataInstance()) {
-        repairStableCloudOwnerDataReservations(currentUser.id);
+        await repairStableCloudOwnerDataReservations(currentUser.id);
       }
       commitCloudAppSession(currentUser.id);
     }
-    migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);
+    await migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);
     await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');
     return snapshotAuthState();
   }
@@ -2966,7 +2984,7 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
-    migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
+    await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     scheduleCanaryFlagSync({
       token: refreshData.accessToken,
       expectedAuthEpoch: epochAtStart,
@@ -3141,7 +3159,7 @@ async function completeLogin(
       pendingAuthRealm = null;
     },
   });
-  migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
+  await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
   scheduleCanaryFlagSync({
     token: outcome.accessToken,
     expectedAuthEpoch: loginEpoch,
@@ -3734,7 +3752,7 @@ export async function refresh(): Promise<boolean> {
             commitCloudAppSession(currentUser.id);
           },
         });
-        migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
+        await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
         persistedRefreshTokenNeedsIdentityCheck = false;
         getProviderSecretStore().reconcileOwner(nextUser.id);
         if (accountSwitched) {
@@ -3792,7 +3810,7 @@ export async function refresh(): Promise<boolean> {
           commitCloudAppSession(currentUser.id);
         },
       });
-      migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
+      await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
       notifyRenderer();
