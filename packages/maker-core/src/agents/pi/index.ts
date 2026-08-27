@@ -452,6 +452,21 @@ function effortToPiThinkingLevel(effort: Effort): string {
 
 const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
+/**
+ * Last-resort maxTokens for models that provide no authoritative output limit.
+ * Explicit Model Access / native-provider metadata always wins. Pi separately clamps each
+ * request to the remaining context window, so keep this fallback context-bounded as well.
+ *
+ * This is deliberately a compatibility fallback rather than a claimed model capability:
+ * unknown upstreams may still have a lower output limit and should publish explicit metadata.
+ * Raising the legacy gateway/native defaults (32k/16k) to 64k prevents known long-thinking
+ * turns from being cut off solely by Cindy's synthetic value without making the fallback
+ * unbounded.
+ */
+function piMaxTokensFallback(contextWindow: number | undefined): number {
+  return contextWindow && contextWindow > 0 ? Math.min(contextWindow, 65_536) : 65_536;
+}
+
 /** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
   if (!model) return undefined;
@@ -1443,7 +1458,7 @@ export class PiAgent extends BaseAgent {
         input: supportsImageInput ? ['text', 'image'] : ['text'],
         // Model Access v3 requires this value; never replace the server limit with a client guess.
         contextWindow: m.contextWindow,
-        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
+        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : piMaxTokensFallback(m.contextWindow),
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
         cost: {
           input: m.cost?.input ?? 0,
@@ -1481,21 +1496,24 @@ export class PiAgent extends BaseAgent {
       }
       const nativeModels = (
         np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true) : np.models
-      ).map((m) => ({
-        id: m.wireId ?? m.id,
-        name: m.name ?? m.id,
-        ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
-        ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
-        ...(m.api ? { api: m.api } : {}),
-        reasoning: m.reasoning ?? false,
-        ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-        input: m.input ?? ['text'],
-        contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
-        maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
-        ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
-        ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
-        ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
-      }));
+      ).map((m) => {
+        const contextWindow = m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000;
+        return {
+          id: m.wireId ?? m.id,
+          name: m.name ?? m.id,
+          ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
+          ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
+          ...(m.api ? { api: m.api } : {}),
+          reasoning: m.reasoning ?? false,
+          ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
+          input: m.input ?? ['text'],
+          contextWindow,
+          maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
+          ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
+          ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
+          ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
+        };
+      });
       if (!np.inheritModels && !np.api) {
         throw new Error(`pi: native provider '${np.id}' has no default api`);
       }
