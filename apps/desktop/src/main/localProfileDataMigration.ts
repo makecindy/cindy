@@ -19,7 +19,7 @@ import {
   restrictDbFilePermissions,
 } from './localDb/betterSqliteFactory.js';
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
-import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
 export const LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX = '.local-profile-migration.json';
@@ -64,6 +64,10 @@ const realFs: LocalProfileDataMigrationFs = {
   readFile: (file) => fs.promises.readFile(file, 'utf8'),
   readDir: (directory) => fs.promises.readdir(directory),
   backupDatabase: async (source, target) => {
+    // Restrict the destination before SQLite starts its potentially long
+    // online backup; chmod-after-backup leaves a readable snapshot window.
+    const handle = fs.openSync(target, 'w', 0o600);
+    fs.closeSync(handle);
     const db = createBetterSqliteDatabase(source, { readonly: true, fileMustExist: true });
     try {
       await db.backup(target);
@@ -277,7 +281,10 @@ function reserveLocalProfileDataOwnerWhileLocked(
   })}\n`;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      const raw = fs.readFileSync(marker, 'utf8');
+      // Restore an atomic-write backup before deciding that the namespace is
+      // unclaimed. A stranded `.bak` is still a valid ownership snapshot.
+      const raw = readAtomicFileSync(marker);
+      if (raw === null) throw Object.assign(new Error('marker is absent'), { code: 'ENOENT' });
       const parsed = parseLocalProfileMigrationMarker(raw);
       if (parsed) {
         if (parsed.ownerId !== normalizedOwnerId) {

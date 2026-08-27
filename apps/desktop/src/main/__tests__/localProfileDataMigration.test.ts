@@ -69,6 +69,16 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
   });
 
+  it('restores an atomic-write backup before deciding ownership', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    await fs.writeFile(`${marker}.bak`, JSON.stringify({ ownerId: 'owner-a' }));
+
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+    await expect(fs.readFile(marker, 'utf8')).resolves.toContain('owner-a');
+    await expect(fs.access(`${marker}.bak`)).rejects.toThrow();
+  });
+
   it('does not reclaim an invalid marker while another process holds the migration lock', async () => {
     const { root } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
@@ -237,6 +247,9 @@ describe('adoptLocalProfileDatabase', () => {
       });
       if (process.platform !== 'win32') {
         expect(openSpy).toHaveBeenCalledWith(root, 'r');
+      }
+      if (process.platform !== 'win32') {
+        expect((await fs.stat(path.join(root, 'cindy-owner-a.db'))).mode & 0o777).toBe(0o600);
       }
 
       const targetDb = createBetterSqliteDatabase(path.join(root, 'cindy-owner-a.db'), {
