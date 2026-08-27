@@ -74,6 +74,7 @@ import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
   homeDisplayMenuPatch,
+  parseHomeScopePullDownAction,
   type HomeDisplayMenuKey,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
@@ -958,14 +959,20 @@ export default function HomeScreen() {
 
   const openRenameDevice = useCallback((item: MobileHomeDeviceFilterItem) => {
     if (!item.deviceId) return;
-    // 不能在菜单还没卸载时直接挂重命名 Modal(见 pendingMenuActionRef 注释),先关菜单再延后打开。
-    pendingMenuActionRef.current = () => {
+    const begin = () => {
       setRenameTarget(item);
       setRenameDraft(item.label);
       setError(null);
     };
-    setDeviceMenuOpen(false);
-  }, []);
+    // 自定义范围菜单还没卸掉时不能直接挂重命名 Modal。
+    // 原生 UIMenu 没有这层 Modal,可以立刻打开。
+    if (deviceMenuOpen) {
+      pendingMenuActionRef.current = begin;
+      setDeviceMenuOpen(false);
+      return;
+    }
+    begin();
+  }, [deviceMenuOpen]);
 
   // 菜单 Modal 完全关闭(淡出结束 + 卸载)后,执行延后的弹窗动作。
   const handleDeviceMenuClosed = useCallback(() => {
@@ -1887,9 +1894,36 @@ export default function HomeScreen() {
 
   const nativeHomeMenus = usesNativePullDownMenu();
   const homeScopePullDownActions = useMemo(
-    () => buildHomeScopePullDownActions(home.deviceFilters, t('devices.list.allConversations')),
+    () => buildHomeScopePullDownActions(
+      home.deviceFilters,
+      t('devices.list.allConversations'),
+      {
+        openLabel: t('devices.list.menu.openDevice'),
+        renameLabel: t('devices.list.menu.renameDevice'),
+        showTasksLabel: t('devices.list.menu.showDeviceTasks'),
+      },
+    ),
     [home.deviceFilters, t],
   );
+  const handleHomeScopeAction = useCallback((id: string) => {
+    const parsed = parseHomeScopePullDownAction(id);
+    if (parsed.kind === 'open') {
+      const item = home.deviceFilters.find((filter) => filter.deviceId === parsed.deviceId);
+      if (!item?.deviceId) return;
+      guardedPush({
+        pathname: '/devices/[deviceId]',
+        params: { deviceId: item.deviceId, name: item.label },
+      });
+      return;
+    }
+    if (parsed.kind === 'rename') {
+      const item = home.deviceFilters.find((filter) => filter.deviceId === parsed.deviceId);
+      if (item) openRenameDevice(item);
+      return;
+    }
+    const item = home.deviceFilters.find((filter) => filter.id === parsed.filterId);
+    if (item) selectHomeScope(item);
+  }, [guardedPush, home.deviceFilters, openRenameDevice, selectHomeScope]);
   const homeDisplayPullDownActions = useMemo(
     () => buildHomeDisplayPullDownActions({
       groupByProject,
@@ -1939,10 +1973,7 @@ export default function HomeScreen() {
           onOpenDeviceMenu={openDeviceMenu}
           onOpenDisplaySettings={openDisplaySettings}
           onOpenMenu={openChromeMenu}
-          onSelectScope={(id) => {
-            const item = home.deviceFilters.find((filter) => filter.id === id);
-            if (item) selectHomeScope(item);
-          }}
+          onSelectScope={handleHomeScopeAction}
           scopeActions={homeScopePullDownActions}
           showRemoteGuide={showRemoteGuide}
           title={selectedDeviceLabel}
@@ -1972,10 +2003,7 @@ export default function HomeScreen() {
         ) : (
           <NativePullDownMenu
             actions={homeScopePullDownActions}
-            onAction={(id) => {
-              const item = home.deviceFilters.find((filter) => filter.id === id);
-              if (item) selectHomeScope(item);
-            }}
+            onAction={handleHomeScopeAction}
           >
             <Pressable
               accessibilityLabel={t('devices.list.a11y.selectScope')}
