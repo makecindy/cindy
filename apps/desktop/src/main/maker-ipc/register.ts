@@ -182,7 +182,11 @@ import {
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeGeneratedImage } from '../cindy-media/generatedMedia.js';
-import { getDbClient, isDbClientNotReadyError } from '../localDb/client/current.js';
+import {
+  getCurrentDbClientSnapshot,
+  getDbClient,
+  isDbClientNotReadyError,
+} from '../localDb/client/current.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -940,6 +944,7 @@ import {
 } from './agentSkillListIpcBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
   tapWindowBroadcast,
 } from '../device-link/broadcast-tap.js';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
@@ -11966,6 +11971,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return row ?? null;
     },
     tryStripOversizedCodexHistory: async ({ sessionId, threadId, model, providerId, workingDir }) => {
+      const ownerScope = captureDataOwnerBroadcastScope();
+      const dbSnapshot = getCurrentDbClientSnapshot();
+      let committed = false;
       try {
         const classified = await classifyCodexHistoryOversized(threadId);
         if (classified === 'healthy') return 'not-needed';
@@ -11983,22 +11991,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           stripEncryptedReasoning: true,
           remoteHostId: null,
         });
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return 'failed';
+        const currentDb = getCurrentDbClientSnapshot();
+        if (!dbSnapshot || !currentDb || currentDb.clientEpoch !== dbSnapshot.clientEpoch) {
+          return 'failed';
+        }
         const now = Date.now();
-        await getDbClient()
+        const write = await getDbClient()
           .drizzle.update(sessions)
           .set({ sdkSessionId: forked.newSdkSessionId, updatedAt: now })
-          .where(eq(sessions.id, sessionId));
-        broadcastSessionPatched(sessionId, {
-          sdkSessionId: forked.newSdkSessionId,
-          updatedAt: new Date(now).toISOString(),
-        });
-        await createDbMessage(sessionId, {
-          clientId: `context-rebuild-card:${createId()}`,
-          role: 'assistant',
-          content: '',
-          agentKind: 'codex',
-          agentMeta: { contextRebuild: { reason: 'codex-history-strip' } } as AgentMeta,
-        });
+          .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, threadId)))
+          .run();
+        if (write.changes === 0) return 'failed';
+        committed = true;
+        try {
+          broadcastSessionPatched(
+            sessionId,
+            {
+              sdkSessionId: forked.newSdkSessionId,
+              updatedAt: new Date(now).toISOString(),
+            },
+            ownerScope,
+          );
+          await createDbMessage(sessionId, {
+            clientId: `context-rebuild-card:${createId()}`,
+            role: 'assistant',
+            content: '',
+            agentKind: 'codex',
+            agentMeta: { contextRebuild: { reason: 'codex-history-strip' } } as AgentMeta,
+          });
+        } catch (postError) {
+          log.warn('codex oversized history relink post-commit failed', {
+            sessionId,
+            threadId,
+            toThreadId: forked.newSdkSessionId,
+            error: postError instanceof Error ? postError.message : String(postError),
+          });
+        }
         log.info('codex oversized history relinked in place', {
           sessionId,
           fromThreadId: threadId,
@@ -12011,7 +12040,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           threadId,
           error: error instanceof Error ? error.message : String(error),
         });
-        return 'failed';
+        return committed ? 'recovered' : 'failed';
       }
     },
     getAutoCompactThresholdPct: () => readCompactionPct(),

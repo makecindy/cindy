@@ -881,9 +881,6 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const reused = childRows.find(
     (row) => row.status !== 'deleted' && String(row.title).startsWith(STRIP_FORK_TITLE_PREFIX),
   );
-  if (reused) {
-    return sessionToCamel({ ...reused, messageCount: 0 });
-  }
 
   const sourceMessages = await db
     .select()
@@ -900,6 +897,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     (max, message) => Math.max(max, Number(message.createdAt ?? 0)),
     0,
   );
+  if (reused && Number(reused.createdAt ?? 0) >= maxCreatedAt) {
+    return sessionToCamel({ ...reused, messageCount: 0 });
+  }
   const copyBeforeCreatedAt = maxCreatedAt + 1;
 
   await assertForkRangeDoesNotCrossAgentSwitch(

@@ -12515,9 +12515,14 @@ export class CodexAgent extends BaseAgent {
   private async createSafeForkRolloutCopy(threadId: string, preferredPath?: string): Promise<string> {
     const sourcePath = await this.findRolloutPath(threadId, preferredPath);
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-fork-'));
-    const copyPath = path.join(tempDir, path.basename(sourcePath));
-    await sanitizeCodexForkRolloutFile(sourcePath, copyPath);
-    return copyPath;
+    try {
+      const copyPath = path.join(tempDir, path.basename(sourcePath));
+      await sanitizeCodexForkRolloutFile(sourcePath, copyPath);
+      return copyPath;
+    } catch (error) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {

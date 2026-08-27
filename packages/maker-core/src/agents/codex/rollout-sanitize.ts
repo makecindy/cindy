@@ -295,6 +295,11 @@ export async function sanitizeCodexForkRolloutFile(
   const input = createReadStream(sourcePath, { encoding: 'utf8' });
   const rl = createInterface({ input, crlfDelay: Infinity });
   const output = createWriteStream(copyPath, { encoding: 'utf8' });
+  const outputFailed = once(output, 'error').then((args) => {
+    const err = Array.isArray(args) ? args[0] : args;
+    throw err instanceof Error ? err : new Error(String(err));
+  });
+  void outputFailed.catch(() => undefined);
   const stats: RolloutSanitizeStats = {
     bytesBefore: 0,
     bytesAfter: 0,
@@ -304,28 +309,40 @@ export async function sanitizeCodexForkRolloutFile(
   };
   let first = true;
   try {
-    for await (const line of rl) {
-      const newline = first ? '' : '\n';
-      first = false;
-      const originalBytes = Buffer.byteLength(line, 'utf8') + (newline ? 1 : 0);
-      stats.bytesBefore += originalBytes;
-      if (hasUnsafeForkRolloutPayload(line)) {
-        stats.unsafeLines += 1;
-        stats.strippedBytes += originalBytes;
-        continue;
-      }
-      const rewritten = rewriteOversizedToolOutputImages(line);
-      const result = `${newline}${rewritten}`;
-      const resultBytes = Buffer.byteLength(result, 'utf8');
-      stats.bytesAfter += resultBytes;
-      stats.strippedBytes += Math.max(0, originalBytes - resultBytes);
-      if (rewritten !== line) stats.rewrittenLines += 1;
-      await writeChunk(output, result);
-    }
-    if (!first) await writeChunk(output, '\n');
-    await new Promise<void>((resolve, reject) => output.end((error?: Error) => error ? reject(error) : resolve()));
+    await Promise.race([
+      (async () => {
+        for await (const line of rl) {
+          const newline = first ? '' : '\n';
+          first = false;
+          const originalBytes = Buffer.byteLength(line, 'utf8') + (newline ? 1 : 0);
+          stats.bytesBefore += originalBytes;
+          if (hasUnsafeForkRolloutPayload(line)) {
+            stats.unsafeLines += 1;
+            stats.strippedBytes += originalBytes;
+            continue;
+          }
+          const rewritten = rewriteOversizedToolOutputImages(line);
+          const result = `${newline}${rewritten}`;
+          const resultBytes = Buffer.byteLength(result, 'utf8');
+          stats.bytesAfter += resultBytes;
+          stats.strippedBytes += Math.max(0, originalBytes - resultBytes);
+          if (rewritten !== line) stats.rewrittenLines += 1;
+          await writeChunk(output, result);
+        }
+        if (!first) await writeChunk(output, '\n');
+        await new Promise<void>((resolve, reject) => {
+          output.end((error?: Error | null) => (error ? reject(error) : resolve()));
+        });
+      })(),
+      outputFailed,
+    ]);
+  } catch (error) {
+    output.destroy();
+    await outputFailed.catch(() => undefined);
+    throw error;
   } finally {
     rl.close();
+    input.destroy();
     if (!output.closed) output.destroy();
   }
   stats.bytesAfter += first ? 0 : 1;

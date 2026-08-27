@@ -535,12 +535,53 @@ describe('forkSessionAtMessage', () => {
     });
     selectQueue.push([source]);
     selectQueue.push([existing]);
+    selectQueue.push([]); // source has not advanced past the child
 
     const result = await forkSessionStripEncrypted('src-session');
 
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
     expect(txCalls).toHaveLength(0);
     expect(result.id).toBe('already-stripped');
+    expect(result.parentSessionId).toBe('src-session');
+  });
+
+  it('does not reuse a strip-fork child after the source history has advanced', async () => {
+    const source = makeSourceRow({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      sdkSessionId: 'codex-thread-source',
+    });
+    const existing = makeSourceRow({
+      id: 'already-stripped',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-stripped',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+      createdAt: 1500,
+    });
+    const later = makeMessageRow({ id: 'user-2', role: 'user', createdAt: 3000 });
+    selectQueue.push([source]);
+    selectQueue.push([existing]);
+    selectQueue.push([later]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        title: '[Fork·已剥离] Project A',
+        sdkSessionId: 'codex-thread-new',
+        parentSessionId: 'src-session',
+        forkedAtMessageId: null,
+      }),
+    ]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'codex-thread-new',
+      uuidMap: new Map<string, string>(),
+    });
+
+    const result = await forkSessionStripEncrypted('src-session');
+
+    expect(forkSdkSessionMock).toHaveBeenCalled();
     expect(result.parentSessionId).toBe('src-session');
   });
 

@@ -315,19 +315,22 @@ export function registerMessageIpc(): void {
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
     const listed = hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
-    // 不阻塞首屏。旧 reconnect-stalled 横幅在打开本地 Codex 会话后异步升格。
-    void maybeUpgradeCodexHistoryOversizedError(sid)
-      .then((upgrade) => {
-        if (upgrade.result === 'upgraded' && upgrade.message) {
-          broadcastMessageRow(sid, upgrade.message);
-        }
-      })
-      .catch((error) => {
-        log.warn('codex oversized history upgrade rejected', {
-          sessionId: sid,
-          error: error instanceof Error ? error.message : String(error),
+    // 不阻塞首屏。旧 reconnect-stalled 横幅只在首页扫描一次，分页不再读 rollout。
+    if (!before && beforeTs == null && !after) {
+      const ownerScope = captureOwnerBroadcastScope();
+      void maybeUpgradeCodexHistoryOversizedError(sid)
+        .then((upgrade) => {
+          if (upgrade.result !== 'upgraded' || !upgrade.message) return;
+          if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+          broadcastMessageRow(sid, upgrade.message, ownerScope);
+        })
+        .catch((error) => {
+          log.warn('codex oversized history upgrade rejected', {
+            sessionId: sid,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
+    }
     return listed;
   });
 
