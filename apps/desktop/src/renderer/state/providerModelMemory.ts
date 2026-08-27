@@ -29,11 +29,12 @@
  *   xd 来源同时服务 cc / codex 两个 agent,若只按 providerId 分槽,cc 会话与 codex 会话会
  *   互相覆盖对方在 xd 下的选择。agent 维度始终保留;只有同 agent 的同 model 才跨来源共享预设。
  *
- * 持久化频率极低(仅用户点 dropdown 触发),同步写 localStorage,不做 batch / debounce
+ * 按 dataOwnerId 分区持久化；升级时首个稳定 owner 一次性认领旧设备全局快照，避免多账号
+ * 互相继承 effort / Fast。持久化频率极低(仅用户点 dropdown 触发),同步写 localStorage,不做 batch / debounce
  * —— 与 newMakerDraft 的取舍一致(避免热更新 relaunch 强退丢最近一次改动)。
  *
- * 版本:STORAGE_KEY 为 v2(多槽)。冷启动时若只有历史 v1(单槽 {model,effort})数据,惰性迁移
- * 进缓存(下次 set 落盘到 v2),不破坏老用户的「来源 lastModel」连续性。
+ * 版本:STORAGE_KEY 为 v2(多槽)。未建立 owner 分区前若只有历史 v1(单槽 {model,effort})
+ * 数据,仍可迁移为首个 owner 的 v2 快照,不破坏老用户的「来源 lastModel」连续性。
  */
 
 import { useSyncExternalStore } from 'react';
@@ -46,6 +47,16 @@ const STORAGE_KEY = 'xdt:providerModelMemory:v2';
 const LEGACY_STORAGE_KEY_V1 = 'xdt:providerModelMemory:v1';
 /** v2 schema 内的保留来源 id:同一 agent 下跨真实 provider 共享的模型级预设槽。 */
 export const MODEL_PRESET_SLOT_ID = '*';
+
+let activeDataOwnerId: string | null = null;
+
+function ownerStorageKey(ownerId: string): string {
+  return `${STORAGE_KEY}:${encodeURIComponent(ownerId)}`;
+}
+
+function storageKey(): string {
+  return activeDataOwnerId ? ownerStorageKey(activeDataOwnerId) : STORAGE_KEY;
+}
 
 /**
  * 单个来源槽:真实来源槽记「上次选中的模型」+ 兼容副本;`*` 槽记权威模型级 effort / fast。
@@ -142,6 +153,34 @@ function migrateV1(raw: unknown): Record<string, ProviderMemory> {
   return out;
 }
 
+/**
+ * 旧版只有一份设备全局快照。升级后的第一个稳定 owner 一次性认领它；随后删除旧 key，
+ * 其它账号只读各自命名空间，避免 A 的 effort / Fast 让 B 被误判为已自定义。
+ */
+function migrateLegacyToOwner(ownerId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const scopedKey = ownerStorageKey(ownerId);
+    if (window.localStorage.getItem(scopedKey) !== null) return;
+
+    const rawV2 = window.localStorage.getItem(STORAGE_KEY);
+    const rawV1 = window.localStorage.getItem(LEGACY_STORAGE_KEY_V1);
+    const migrated = rawV2
+      ? sanitize(JSON.parse(rawV2))
+      : rawV1
+        ? migrateV1(JSON.parse(rawV1))
+        : null;
+    if (!migrated) return;
+
+    window.localStorage.setItem(scopedKey, JSON.stringify(migrated));
+    if (window.localStorage.getItem(scopedKey) === null) return;
+    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(LEGACY_STORAGE_KEY_V1);
+  } catch {
+    // 认领失败时保留旧 key；当前 owner 按空分区运行，绝不把未归属数据串给其它账号。
+  }
+}
+
 // 进程内缓存(惰性加载)。读多写少,避免每次读都 parse localStorage。
 let cache: Record<string, ProviderMemory> | null = null;
 
@@ -152,13 +191,15 @@ function load(): Record<string, ProviderMemory> {
     return cache;
   }
   try {
-    const rawV2 = window.localStorage.getItem(STORAGE_KEY);
+    const rawV2 = window.localStorage.getItem(storageKey());
     if (rawV2) {
       cache = sanitize(JSON.parse(rawV2));
       return cache;
     }
     // 无 v2 → 尝试从历史 v1 迁移(只灌缓存,下次 set 再落盘 v2)。
-    const rawV1 = window.localStorage.getItem(LEGACY_STORAGE_KEY_V1);
+    const rawV1 = activeDataOwnerId
+      ? null
+      : window.localStorage.getItem(LEGACY_STORAGE_KEY_V1);
     cache = rawV1 ? migrateV1(JSON.parse(rawV1)) : {};
   } catch {
     cache = {};
@@ -211,7 +252,7 @@ function persist(map: Record<string, ProviderMemory>): void {
   emit();
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    window.localStorage.setItem(storageKey(), JSON.stringify(map));
   } catch {
     // localStorage 满 / 私密窗口禁写 —— 忽略,不影响内存缓存。
   }
@@ -462,17 +503,30 @@ export function snapshotForSeed(): Record<
   return out;
 }
 
+/** 随认证 dataOwnerId 切换模型预设命名空间，和 newMakerDraft / modelEnginePrefs 同步。 */
+export function setProviderModelMemoryOwner(ownerId: string | null): void {
+  const normalized = typeof ownerId === 'string' && ownerId.trim().length > 0 ? ownerId : null;
+  if (activeDataOwnerId === normalized) return;
+  if (normalized) migrateLegacyToOwner(normalized);
+  activeDataOwnerId = normalized;
+  cache = null;
+  emit();
+}
+
 /** 测试用 —— 重置缓存 + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
+  const keyBeforeReset = storageKey();
   cache = null;
   if (typeof window !== 'undefined') {
     try {
+      window.localStorage.removeItem(keyBeforeReset);
       window.localStorage.removeItem(STORAGE_KEY);
       window.localStorage.removeItem(LEGACY_STORAGE_KEY_V1);
     } catch {
       // ignore
     }
   }
+  activeDataOwnerId = null;
 }
 
 export const __STORAGE_KEY = STORAGE_KEY;

@@ -360,12 +360,16 @@ function sanitize(raw: unknown): NewMakerDraft {
   // 用户意图证据。preserving 写回还可能只留下当前 cc 槽的 model,没有 marker / providerId,
   // 这条旧模型同样必须保护。反过来,仅 vendor=codex/pi 不能算用户选择:旧版会在 cc
   // 不可用时由系统自动 fallback 并持久化该 vendor。
+  const legacyCcPrefs = lastByVendorRaw.cc;
   const legacyCcModel =
     vendor === 'cc' &&
-    lastByVendorRaw.cc &&
-    typeof lastByVendorRaw.cc === 'object' &&
-    typeof lastByVendorRaw.cc.model === 'string' &&
-    lastByVendorRaw.cc.model.length > 0;
+    r.modelChosenByVendor === undefined &&
+    Object.keys(lastByVendorRaw).length === 1 &&
+    legacyCcPrefs &&
+    typeof legacyCcPrefs === 'object' &&
+    Object.keys(legacyCcPrefs).every((key) => key === 'model') &&
+    typeof legacyCcPrefs.model === 'string' &&
+    legacyCcPrefs.model.length > 0;
   const legacyDefaultTupleCustomized =
     r.defaultTupleCustomized === undefined &&
     (Object.values(modelChosenByVendor).some(Boolean) ||

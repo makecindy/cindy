@@ -61,6 +61,33 @@ describe('providerModelMemory store', () => {
     expect(effortMemory.hasAnyProviderModelOverride()).toBe(true);
   });
 
+  it('按 dataOwnerId 隔离 override，旧全局快照只由首个 owner 认领', async () => {
+    memStorage.setItem(
+      'xdt:providerModelMemory:v2',
+      JSON.stringify({
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'high' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    expect(m.hasAnyProviderModelOverride()).toBe(true);
+    expect(memStorage.getItem('xdt:providerModelMemory:v2')).toBeNull();
+
+    m.setProviderModelMemoryOwner('owner-b');
+    expect(m.hasAnyProviderModelOverride()).toBe(false);
+    m.setProviderModelFast('codex', 'openai', 'gpt-5.6-sol', false);
+    expect(m.hasAnyProviderModelOverride()).toBe(true);
+
+    m.setProviderModelMemoryOwner('owner-a');
+    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('high');
+    expect(m.getProviderModelFast('codex', 'openai', 'gpt-5.6-sol')).toBeUndefined();
+  });
+
   it('set/get 往返 + 跨重启持久化', async () => {
     const m1 = await loadModule();
     m1.setProviderModelChoice('claude-code', 'anthropic', 'claude-opus-4-8', 'high');

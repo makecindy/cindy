@@ -153,6 +153,37 @@ describe('newMakerDraft store', () => {
     expect(getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
   });
 
+  it('旧完整快照里的 cc 种子模型不误判成用户自定义', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        workingDir: '/tmp/project',
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'claude-sonnet-5' },
+          orca: { model: 'claude-sonnet-4-6' },
+        },
+      }),
+    );
+    vi.resetModules();
+    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    expect(getDraft().defaultTupleCustomized).toBe(false);
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(true);
+    expect(getDraft()).toMatchObject({
+      vendor: 'pi',
+      lastByVendor: { pi: { providerId: 'xai', model: 'grok-4.6', effort: 'high' } },
+    });
+  });
+
   it('旧版系统可用性 fallback 不迁移成用户自定义', async () => {
     for (const vendor of ['codex', 'pi'] as const) {
       memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
