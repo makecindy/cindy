@@ -176,7 +176,10 @@ const sessionTitleOverrides = new Map<string, SessionTitleOverride>();
 let sessionTitleRevision = 0;
 
 interface SessionStatusOverride {
+  /** status 事件版本；rollback 用它区分同向状态是否有更晚的权威写入。 */
   revision: number;
+  /** 后到的非 status 权威字段版本；只用于挡住更早起飞的列表快照。 */
+  rowRevision: number;
   patch: Partial<Session>;
   /** 状态变化前从任一已加载桶捕获的完整行；目标桶缺行时可直接迁移。 */
   session: Session | null;
@@ -188,6 +191,7 @@ interface SessionStatusOverride {
  */
 const sessionStatusOverrides = new Map<string, SessionStatusOverride>();
 let sessionStatusRevision = 0;
+let sessionStatusRowRevision = 0;
 
 export interface SessionStatusTransitionToken {
   sessionId: string;
@@ -331,6 +335,7 @@ function applySessionStatusOverrides(
   list: Session[],
   filter: ListStatusFilter,
   afterRevision: number,
+  afterRowRevision: number,
 ): Session[] {
   if (sessionStatusOverrides.size === 0) return list;
   let next = list;
@@ -340,6 +345,7 @@ function applySessionStatusOverrides(
     // DB 提交前启动的列表查询会把旧 active 行写回来。
     if (
       override.revision <= afterRevision &&
+      override.rowRevision <= afterRowRevision &&
       !pendingStatusTransitions.has(sessionId)
     ) {
       continue;
@@ -451,6 +457,7 @@ async function fetchFilter(
   const spendRevisionAtStart = sessionSpendRevision;
   const titleRevisionAtStart = sessionTitleRevision;
   const statusRevisionAtStart = sessionStatusRevision;
+  const statusRowRevisionAtStart = sessionStatusRowRevision;
   const startedAt = performance.now();
   const sessions = await sessionService.list(
     DEFAULT_LIMIT,
@@ -462,7 +469,12 @@ async function fetchFilter(
   const result = applyAutoTitlePreviews(
     applySessionTitleOverrides(
       applySessionSpendOverrides(
-        applySessionStatusOverrides(sessions, filter, statusRevisionAtStart),
+        applySessionStatusOverrides(
+          sessions,
+          filter,
+          statusRevisionAtStart,
+          statusRowRevisionAtStart,
+        ),
         spendRevisionAtStart,
       ),
       titleRevisionAtStart,
@@ -514,9 +526,38 @@ function recordStatusOverride(
   sessionStatusRevision += 1;
   sessionStatusOverrides.set(sessionId, {
     revision: sessionStatusRevision,
+    rowRevision: sessionStatusRowRevision,
     patch: { ...patch },
     session: patch.status === 'deleted' ? null : session,
   });
+}
+
+/**
+ * 状态覆盖可能携带一整行；后到的权威字段必须同时合并进去，否则旧 list 响应重放状态时
+ * 会把 model / effort / permissionMode 等 settings-only 更新盖回旧值。
+ */
+function mergeAuthoritativePatchIntoStatusOverride(
+  sessionId: string,
+  patch: Partial<Session>,
+): void {
+  const override = sessionStatusOverrides.get(sessionId);
+  if (!override) return;
+  if (override.patch.status !== 'deleted') {
+    sessionStatusRowRevision += 1;
+    override.rowRevision = sessionStatusRowRevision;
+    const previousCount = override.patch._count;
+    override.patch = { ...override.patch, ...patch };
+    if (patch._count) {
+      override.patch._count = { ...previousCount, ...patch._count };
+    }
+    if (override.session) {
+      override.session = mergeSession(override.session, patch);
+    }
+  }
+  const pending = pendingStatusTransitions.get(sessionId);
+  if (pending?.sourceSession) {
+    pending.sourceSession = mergeSession(pending.sourceSession, patch);
+  }
 }
 
 function applyAuthoritativeStatusSession(
@@ -851,6 +892,8 @@ export const sessionsStore = {
     const migratedSession = sourceSession ? mergeSession(sourceSession, patch) : null;
     if (patch.status !== undefined) {
       recordStatusOverride(id, patch, migratedSession);
+    } else {
+      mergeAuthoritativePatchIntoStatusOverride(id, patch);
     }
     // 权威标题落地(main 写完占位 / 智能标题后经 sessions:patched 回流,或用户手动改名)
     // → 无条件回收预览条目。留着它会在下一次全量刷新时把真实标题又顶掉。

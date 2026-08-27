@@ -267,10 +267,6 @@ describe('sessionsStore status bucket migration', () => {
       status: 'archived',
       pinnedAt: null,
     });
-    const staleRequest = deferred<Session[]>();
-    mocks.list.mockImplementationOnce(() => staleRequest.promise);
-    const staleRefresh = sessionsStore.forceRefresh('all');
-
     expect(
       sessionsStore.completeStatusTransition(transition!, {
         ...target,
@@ -279,6 +275,10 @@ describe('sessionsStore status bucket migration', () => {
         updatedAt: '2026-08-27T03:00:00.000Z',
       }),
     ).toBe(true);
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('all');
+
     sessionsStore.patchLocal('archive-me', {
       title: 'new authoritative title',
       totalCostUsd: 42,
@@ -334,6 +334,87 @@ describe('sessionsStore status bucket migration', () => {
         permissionMode: 'auto',
         fastMode: true,
         providerId: 'new-provider',
+      }),
+    );
+  });
+
+  it('replays settings fields that arrive after a complete status override', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      model: 'old-model',
+      effort: 'medium',
+      permissionMode: 'ask',
+      fastMode: false,
+      providerId: null,
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('all');
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ).toBe(true);
+    sessionsStore.patchLocal('archive-me', {
+      model: 'new-model',
+      effort: 'high',
+      permissionMode: 'auto',
+      fastMode: true,
+      providerId: 'new-provider',
+    });
+    staleRequest.resolve([target]);
+    await staleRefresh;
+
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({
+        status: 'archived',
+        model: 'new-model',
+        effort: 'high',
+        permissionMode: 'auto',
+        fastMode: true,
+        providerId: 'new-provider',
+      }),
+    );
+  });
+
+  it('keeps later settings fields when a pending status write rolls back', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      model: 'old-model',
+      effort: 'medium',
+      permissionMode: 'ask',
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    sessionsStore.patchLocal('archive-me', {
+      model: 'new-model',
+      effort: 'high',
+      permissionMode: 'auto',
+    });
+
+    expect(sessionsStore.rollbackStatusTransition(transition!)).toBe(true);
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({
+        status: 'active',
+        model: 'new-model',
+        effort: 'high',
+        permissionMode: 'auto',
       }),
     );
   });
