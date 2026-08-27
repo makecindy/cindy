@@ -149,6 +149,25 @@ describe('local → cloud native provider binding migration', () => {
     );
   });
 
+  it('restores the atomic backup before deriving a binding update', () => {
+    const retained = {
+      openai: 'owner-a',
+      legacyClaimOwner: 'owner-a',
+      revoked: { anthropic: 'owner-a' },
+    };
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(`${bindingFile}.bak`, JSON.stringify(retained));
+
+    bindNativeProviderAuth('xai');
+
+    expect(fs.existsSync(`${bindingFile}.bak`)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      ...retained,
+      xai: 'owner-a',
+      selfAuthorized: { xai: 'owner-a' },
+    });
+  });
+
   it('uses a crash-released SQLite transaction lock instead of a reclaimable lease file', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
 

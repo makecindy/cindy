@@ -16,7 +16,7 @@ import {
   type NativeHarnessInheritedProviderId,
   type NativeProviderId,
 } from './model-discovery/connection-source.js';
-import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 const NATIVE_PROVIDER_IDS = [
   'anthropic',
@@ -77,11 +77,13 @@ type BindingRead =
 function readBindingsOrFail(): BindingRead {
   let raw: string;
   try {
-    raw = fs.readFileSync(bindingPath(), 'utf8');
-  } catch (err) {
-    // 文件不存在 = 合法的首次状态（还没有任何人绑定过）；其它读失败（EACCES / EIO 等）
-    // 说明归属不明，不能当成空。
-    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return { ok: true, bindings: {} };
+    const restored = readAtomicFileSync(bindingPath());
+    // 文件确实不存在 = 合法的首次状态（还没有任何人绑定过）。主文件缺失但 .bak
+    // 存在时，readAtomicFileSync 会先恢复唯一有效快照；恢复失败则抛错并 fail closed。
+    if (restored === null) return { ok: true, bindings: {} };
+    raw = restored;
+  } catch {
+    // EACCES / EIO / 无法恢复原子备份都说明归属不明，不能当成空。
     return { ok: false, reason: 'unreadable' };
   }
   try {
