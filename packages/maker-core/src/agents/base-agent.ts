@@ -752,12 +752,13 @@ export interface AgentDeps {
    * 自定义 Codex 供应商上用户显式填写的 contextWindow。会话启动时据此选择隔离
    * app-server，并写入 thread/start|resume 的 `config.model_context_window` 与
    * `config.model_auto_compact_token_limit`,让 app-server 按该窗口 auto-compact。
-   * 返回 null / 缺省 = 不覆盖(官方订阅继续用 live catalog)。
+   * 可异步核对 Codex 静态目录；返回 null / 缺省 = 不覆盖(官方订阅继续用 live
+   * catalog，目录外自定义 slug 继续走 Codex fallback metadata)。
    */
   resolveCodexThreadContextWindow?: (
     providerId: string | null | undefined,
     modelId: string,
-  ) => number | null;
+  ) => number | null | Promise<number | null>;
 
   /**
    * Agent 起 session 时追加到 system prompt 末尾的字符串（host 注入）。

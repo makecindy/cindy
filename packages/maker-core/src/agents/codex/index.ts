@@ -2965,6 +2965,21 @@ export class CodexAgent extends BaseAgent {
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    const startupCleanup: { customContext?: () => Promise<void> } = {};
+    try {
+      return await this.startSessionInternal(opts, (cleanup) => {
+        startupCleanup.customContext = cleanup ?? undefined;
+      });
+    } catch (error) {
+      await startupCleanup.customContext?.();
+      throw error;
+    }
+  }
+
+  private async startSessionInternal(
+    opts: StartSessionOptions,
+    registerFailedCustomContextStartupCleanup: (cleanup: (() => Promise<void>) | null) => void,
+  ): Promise<AgentSessionHandle> {
     // scope 带完整 s:<sessionId> 前缀 → host logger 落盘时提取 business sessionId,
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
@@ -4199,7 +4214,7 @@ export class CodexAgent extends BaseAgent {
           model: opts.model,
         });
     const initialCustomContextWindow = !reviewMode && !opts.remoteHostId
-      ? this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
+      ? await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
     const usesCustomContextHost =
       typeof initialCustomContextWindow === 'number' &&
@@ -4248,6 +4263,26 @@ export class CodexAgent extends BaseAgent {
     });
     const hostGeneration = this.hostGenerations.get(currentHostKey) ?? 0;
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
+    const retireSingleSessionHost = async (): Promise<void> => {
+      if (!reviewMode && !usesCustomContextHost) return;
+      const purpose = reviewMode ? 'Review' : 'custom context';
+      await this.retireHostKey(currentHostKey, `Cindy ${purpose} host is single-session`, {
+        failIfActive: false,
+        logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
+        ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
+        expectedGeneration: hostGeneration,
+      }).catch((error) => {
+        log.warn(`${purpose} host retire failed`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+    if (usesCustomContextHost) {
+      registerFailedCustomContextStartupCleanup(async () => {
+        releaseHostBindingLeaseIfNeeded();
+        await retireSingleSessionHost();
+      });
+    }
     const connectionId = host.getConnectionId();
     const isCurrentHost = (): boolean => {
       if (sessionHostForceRetired) return false;
@@ -11071,21 +11106,6 @@ export class CodexAgent extends BaseAgent {
       });
       try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     }
-    const retireSingleSessionHost = async (): Promise<void> => {
-      if (!reviewMode && !usesCustomContextHost) return;
-      const purpose = reviewMode ? 'Review' : 'custom context';
-      await this.retireHostKey(currentHostKey, `Cindy ${purpose} host is single-session`, {
-        failIfActive: false,
-        logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
-        ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
-        expectedGeneration: hostGeneration,
-      }).catch((error) => {
-        log.warn(`${purpose} host retire failed`, {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    };
-
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const handle: AgentSessionHandle = {
       get id() { return sdkSessionId ?? '<pending>'; },
@@ -12177,7 +12197,7 @@ export class CodexAgent extends BaseAgent {
           : mutableProviderId;
         const requestedCustomContextWindow = opts.remoteHostId
           ? null
-          : resolveCodexThreadContextWindow?.(requestedProviderId, newModel) ?? null;
+          : await resolveCodexThreadContextWindow?.(requestedProviderId, newModel) ?? null;
         if (
           usesCustomContextHost &&
           (newModel !== initialCustomContextModel || requestedProviderId !== initialCustomContextProviderId)

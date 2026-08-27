@@ -28365,7 +28365,7 @@ describe('CodexAgent context window reporting', () => {
 describe('CodexAgent custom provider context window override', () => {
   it('uses a one-session host and injects the explicit window with the real model slug', async () => {
     const agent = new CodexAgent(createDeps({}, {
-      resolveCodexThreadContextWindow: (providerId, modelId) =>
+      resolveCodexThreadContextWindow: async (providerId, modelId) =>
         providerId === 'mygpt' && modelId === 'gpt-5.6-sol' ? 1_050_000 : null,
     }));
     const host = installFakeHost(agent);
@@ -28395,24 +28395,29 @@ describe('CodexAgent custom provider context window override', () => {
     await handle.close();
   });
 
-  it('omits model_context_window when host has no explicit custom window', async () => {
+  it('keeps the shared host when async catalog preflight rejects an unknown custom slug', async () => {
     const agent = new CodexAgent(createDeps({}, {
-      resolveCodexThreadContextWindow: () => null,
+      resolveCodexThreadContextWindow: async () => null,
     }));
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-no-custom-ctxwin',
-      model: 'gpt-5.6-sol',
-      providerId: 'xd',
+      model: 'MiniMax-M3',
+      providerId: 'my-minimax',
       workingDir: '/repo',
     });
     const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       model?: string;
       config?: Record<string, unknown>;
     };
-    expect(params.model).toBe('gpt-5.6-sol');
+    expect(params.model).toBe('MiniMax-M3');
     expect(params.config?.model_context_window).toBeUndefined();
     expect(params.config?.model_auto_compact_token_limit).toBeUndefined();
+    expect(host.getHost).toHaveBeenCalledWith(
+      undefined,
+      'provider-oauth',
+      { ignoreBindingLeases: 1 },
+    );
     await handle.close();
   });
 
@@ -28447,6 +28452,38 @@ describe('CodexAgent custom provider context window override', () => {
     expect(createdTransports[0]?.closed).toBe(false);
 
     await handle.close();
+
+    expect(createdTransports[0]?.closed).toBe(true);
+    expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    await agent.dispose();
+  });
+
+  it.each([
+    ['thread/start', 'start', undefined],
+    ['thread/resume', 'resume', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'],
+  ])('retires the isolated custom-context app-server when %s fails', async (method, label, resumeSessionId) => {
+    if (method === 'thread/start') {
+      MockCodexTransport.failThreadStart = true;
+    } else {
+      MockCodexTransport.onCreate = (transport) => {
+        transport.setMockResponse(Method.ThreadResume, {
+          error: { code: -32_000, message: 'thread resume boom' },
+        });
+      };
+    }
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 700_000,
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
+    }));
+
+    await expect(agent.startSession({
+      sessionId: `session-custom-startup-failure-${label}`,
+      sessionInstanceId: `instance-custom-startup-failure-${label}`,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+    })).rejects.toThrow(method === 'thread/start' ? 'thread start boom' : 'thread resume boom');
 
     expect(createdTransports[0]?.closed).toBe(true);
     expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);

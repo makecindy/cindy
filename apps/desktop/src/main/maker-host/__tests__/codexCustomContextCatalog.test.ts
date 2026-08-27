@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  bundledCodexCatalogHasModel,
   extractBundledCodexModelCatalog,
   prepareCodexCustomContextCatalog,
 } from '../codex-custom-context-catalog.js';
@@ -105,6 +106,19 @@ describe('Codex custom context model catalog', () => {
       '-c',
       `model_catalog_json=${JSON.stringify(prepared.catalogPath)}`,
     ]);
+  });
+
+  it('preflights catalog membership without synthesizing unknown model metadata', async () => {
+    const { binaryPath } = await createFixtureBinary({
+      models: [{ slug: 'gpt-5.6-sol', context_window: 272_000, max_context_window: 272_000 }],
+    });
+
+    await expect(bundledCodexCatalogHasModel(binaryPath, 'gpt-5.6-sol', {
+      scanChunkBytes: 64,
+    })).resolves.toBe(true);
+    await expect(bundledCodexCatalogHasModel(binaryPath, 'MiniMax-M3', {
+      scanChunkBytes: 64,
+    })).resolves.toBe(false);
   });
 
   it('fails closed when the exact real model slug is absent', async () => {

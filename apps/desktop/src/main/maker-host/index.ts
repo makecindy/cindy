@@ -111,7 +111,10 @@ import {
   resolveVerifiedContextWindow,
   resolveExplicitCustomContextWindow,
 } from './catalog-to-descriptors.js';
-import { prepareCodexCustomContextCatalog } from './codex-custom-context-catalog.js';
+import {
+  bundledCodexCatalogHasModel,
+  prepareCodexCustomContextCatalog,
+} from './codex-custom-context-catalog.js';
 import { buildPiAgent } from './pi-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
@@ -1302,13 +1305,27 @@ export function getMaker(): Maker {
       // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
-      resolveCodexThreadContextWindow: (providerId, modelId) =>
-        resolveExplicitCustomContextWindow(
+      resolveCodexThreadContextWindow: async (providerId, modelId) => {
+        const contextWindow = resolveExplicitCustomContextWindow(
           getDesktopSelectableCatalog(),
           'codex',
           providerId,
           modelId,
-        ),
+        );
+        if (contextWindow === null) return null;
+        try {
+          if (await bundledCodexCatalogHasModel(codexPath, modelId)) return contextWindow;
+          desktopMakerLogger.debug(
+            'Codex custom context override skipped: bundled catalog has no matching model',
+          );
+        } catch (error) {
+          desktopMakerLogger.warn(
+            'Codex custom context catalog preflight failed; using fallback model metadata',
+            { error: error instanceof Error ? error.message : String(error) },
+          );
+        }
+        return null;
+      },
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
       },

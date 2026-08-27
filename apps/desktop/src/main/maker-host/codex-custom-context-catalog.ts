@@ -188,6 +188,40 @@ export function buildCodexModelCatalogSpawnArgs(catalogPath: string): string[] {
   return ['-c', `model_catalog_json=${JSON.stringify(catalogPath)}`];
 }
 
+async function readBundledCatalog(
+  binaryPath: string,
+  scanChunkBytes?: number,
+): Promise<CodexModelCatalog> {
+  const cacheKey = path.resolve(binaryPath);
+  let bundledPromise = bundledCatalogByBinary.get(cacheKey);
+  if (!bundledPromise || scanChunkBytes !== undefined) {
+    bundledPromise = extractBundledCodexModelCatalog(binaryPath, { scanChunkBytes });
+    if (scanChunkBytes === undefined) bundledCatalogByBinary.set(cacheKey, bundledPromise);
+  }
+  try {
+    return await bundledPromise;
+  } catch (error) {
+    if (bundledCatalogByBinary.get(cacheKey) === bundledPromise) {
+      bundledCatalogByBinary.delete(cacheKey);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 只有静态目录里已有的真实 slug 才能安全抬高上限。未知 slug 会由 Codex 构造带专用
+ * base instructions 的 fallback metadata；克隆任意内置条目会静默改变模型行为。
+ */
+export async function bundledCodexCatalogHasModel(
+  binaryPath: string,
+  modelId: string,
+  options: { scanChunkBytes?: number } = {},
+): Promise<boolean> {
+  if (!modelId) return false;
+  const bundled = await readBundledCatalog(binaryPath, options.scanChunkBytes);
+  return bundled.models.some((model) => model.slug === modelId);
+}
+
 async function persistCatalog(codexHome: string, content: string): Promise<string> {
   if (!path.isAbsolute(codexHome)) {
     throw new Error('Codex home must be absolute');
@@ -242,23 +276,7 @@ export async function prepareCodexCustomContextCatalog(params: {
   contextWindow: number;
   scanChunkBytes?: number;
 }): Promise<{ catalogPath: string; extraArgs: string[] }> {
-  const cacheKey = path.resolve(params.binaryPath);
-  let bundledPromise = bundledCatalogByBinary.get(cacheKey);
-  if (!bundledPromise || params.scanChunkBytes !== undefined) {
-    bundledPromise = extractBundledCodexModelCatalog(params.binaryPath, {
-      scanChunkBytes: params.scanChunkBytes,
-    });
-    if (params.scanChunkBytes === undefined) bundledCatalogByBinary.set(cacheKey, bundledPromise);
-  }
-  let bundled: CodexModelCatalog;
-  try {
-    bundled = await bundledPromise;
-  } catch (error) {
-    if (bundledCatalogByBinary.get(cacheKey) === bundledPromise) {
-      bundledCatalogByBinary.delete(cacheKey);
-    }
-    throw error;
-  }
+  const bundled = await readBundledCatalog(params.binaryPath, params.scanChunkBytes);
   const patched = patchCodexModelMaxContextWindow(
     bundled,
     params.modelId,
