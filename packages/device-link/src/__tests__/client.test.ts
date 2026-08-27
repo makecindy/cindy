@@ -5782,12 +5782,18 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       protocolVersion: 1,
       appVersion: '1',
     }, 50);
+    // Attach the rejection handler before yielding to the relay/timer. On
+    // Windows the short timeout can fire before the later assertion, which
+    // turns the expected rejection into an unhandled-rejection failure.
+    const staleOpenRejection = expect(staleOpen).rejects.toMatchObject({
+      code: 'INVOKE_TIMEOUT',
+    });
     await relay.settle();
     const staleRequestId = (relay.deliveredTo.get('desktop') ?? [])
       .filter((env) => env.kind === 'link-open')
       .at(-1)?.id;
     expect(staleRequestId).toBeTruthy();
-    await expect(staleOpen).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    await staleOpenRejection;
 
     const liveInvoke = host.invoke('ios', {
       channel: 'maker:cross-generation-request',
