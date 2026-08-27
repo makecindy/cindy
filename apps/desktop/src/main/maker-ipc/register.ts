@@ -16370,7 +16370,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(MAKER_INVOKE.COMPUTER_INSTALL_DRIVER, async () => {
     try {
-      return await installComputerDriver();
+      return await installComputerDriver(undefined, undefined, (progress) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('computer-driver-update-progress', progress);
+          }
+        }
+      });
     } catch (err) {
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
