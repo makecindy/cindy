@@ -333,6 +333,12 @@ describe('auth login-flow reset', () => {
     const repairBody = source.slice(repairStart, repairEnd);
     expect(repairBody).toContain('reserveCommittedLocalProfileDataOwnerDetailed(');
     expect(repairBody).toContain(
+      'const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);',
+    );
+    expect(repairBody).toContain(
+      'reserveCommittedLocalProfileDataOwnerDetailed(\n      profileReservationOwnerId,',
+    );
+    expect(repairBody).toContain(
       'reserveCommittedLegacyNativeProviderAuthOwner(authoritativeOwnerId)',
     );
     expect(repairBody).not.toContain('reserveLocalProfileDataOwnerDetailed(');
@@ -360,6 +366,15 @@ describe('auth login-flow reset', () => {
       reserveStart,
     );
     const reserveBody = source.slice(reserveStart, reserveEnd);
+    expect(reserveBody).toContain(
+      'const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);',
+    );
+    expect(reserveBody).toContain(
+      'reserveLocalProfileDataOwnerDetailed(\n      profileReservationOwnerId,',
+    );
+    expect(reserveBody).toContain(
+      'releaseLocalProfileDataOwner(\n          profileReservationOwnerId,',
+    );
     expect(reserveBody).toContain('const authoritativeOwnerId = profileReservation.ownerId;');
     expect(reserveBody).toContain(
       'reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId)',

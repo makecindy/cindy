@@ -119,6 +119,7 @@ import {
 } from './ownerNamespaceMigration.js';
 import {
   migrateLocalNativeProviderAuthBindings,
+  readLegacyNativeProviderAuthOwner,
   recoverPendingLegacyNativeProviderAuthOwner,
   releaseLegacyNativeProviderAuthOwner,
   reserveCommittedLegacyNativeProviderAuthOwner,
@@ -1155,6 +1156,14 @@ function recoverCloudOwnerDataReservations(committedOwnerId: string | null): boo
   return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
 }
 
+function resolveProfileReservationOwnerId(ownerId: string): string {
+  const nativeOwner = readLegacyNativeProviderAuthOwner();
+  if (nativeOwner.status === 'failed') {
+    throw new Error('native provider ownership could not be read before profile reservation');
+  }
+  return nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId;
+}
+
 function reserveCloudOwnerData(
   ownerId: string,
   previousOwnerId: string | null,
@@ -1164,8 +1173,13 @@ function reserveCloudOwnerData(
     if (!recoverCloudOwnerDataReservations(previousOwnerId)) {
       throw new Error('pending cloud owner data reservation recovery failed');
     }
+    // Older builds could durably assign only the native-provider namespace.
+    // Preserve that first owner when introducing the profile marker: a
+    // different currently persisted account may authenticate, but must not
+    // reinterpret the still-shared local database as its own.
+    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
     const profileReservation = reserveLocalProfileDataOwnerDetailed(
-      ownerId,
+      profileReservationOwnerId,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
     );
@@ -1175,7 +1189,7 @@ function reserveCloudOwnerData(
     if (profileReservation.status === 'claimed' && profileReservation.claimToken) {
       rollbackActions.push(() => {
         releaseLocalProfileDataOwner(
-          ownerId,
+          profileReservationOwnerId,
           app.getPath('userData'),
           BRAND_IDENTITY.dbFilePrefix,
           profileReservation.claimToken!,
@@ -1240,8 +1254,9 @@ function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boo
     return false;
   }
   try {
+    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
     profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
-      ownerId,
+      profileReservationOwnerId,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
     );

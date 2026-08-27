@@ -213,6 +213,24 @@ export type PendingLegacyNativeProviderAuthRecovery =
   | 'released'
   | 'failed';
 
+export type LegacyNativeProviderAuthOwnerRead =
+  | { status: 'none' }
+  | { status: 'owned'; ownerId: string }
+  | { status: 'failed' };
+
+/** Read a durable legacy namespace owner without creating or finalizing a claim. */
+export function readLegacyNativeProviderAuthOwner(): LegacyNativeProviderAuthOwnerRead {
+  const read = readBindingsOrFail();
+  if (!read.ok) return { status: 'failed' };
+  const bindings = read.bindings;
+  if (!('legacyClaimOwner' in bindings)) return { status: 'none' };
+  if ('legacyClaimToken' in bindings) return { status: 'failed' };
+  const ownerId =
+    typeof bindings.legacyClaimOwner === 'string' ? bindings.legacyClaimOwner.trim() : '';
+  if (!ownerId || ownerId === LOCAL_DATA_OWNER_ID) return { status: 'failed' };
+  return { status: 'owned', ownerId };
+}
+
 function reserveLegacyNativeProviderAuthOwnerWithMode(
   ownerId: string,
   provisional: boolean,
@@ -548,7 +566,7 @@ export function migrateLegacyNativeProviderAuthBindings(
       // 显式登出过的 provider 一律跳过:这条一次性迁移同样不能把用户弃用掉的残留凭证
       // 认领回来(PR #548 review)。
       if (bindings.revoked && provider in bindings.revoked) continue;
-      if (available[provider] && !next[provider]) {
+      if (available[provider] && !(provider in bindings)) {
         next[provider] = ownerId;
         changed = true;
         next.sources = {
@@ -579,7 +597,7 @@ function needsLegacyNativeProviderAuthMigration(
     (provider) =>
       !(bindings.revoked && provider in bindings.revoked) &&
       available[provider] === true &&
-      !bindings[provider],
+      !(provider in bindings),
   );
 }
 

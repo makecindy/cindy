@@ -31,6 +31,7 @@ import {
   isNativeProviderAuthSelfAuthorized,
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
+  readLegacyNativeProviderAuthOwner,
   recoverPendingLegacyNativeProviderAuthOwner,
   reserveCommittedLegacyNativeProviderAuthOwner,
   reserveLegacyNativeProviderAuthOwner,
@@ -98,6 +99,21 @@ describe('native provider auth legacy binding', () => {
 
     expect(renameSpy).not.toHaveBeenCalledWith(expect.any(String), bindingFile);
     expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it('treats a malformed provider owner slot as occupied during repeatable migration', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ legacyClaimOwner: 'owner-a', openai: '' }),
+    );
+
+    migrateLegacyNativeProviderAuthBindings('owner-a', { openai: true });
+
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({
+      legacyClaimOwner: 'owner-a',
+      openai: '',
+    });
   });
 
   it('does not acquire the mutation lock for a known no-op claim', () => {
@@ -278,6 +294,15 @@ describe('local → cloud native provider binding migration', () => {
     expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('none');
     session.dataOwnerId = 'owner-b';
     expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('exposes only a valid tokenless native owner for profile-marker bootstrap', () => {
+    expect(readLegacyNativeProviderAuthOwner()).toEqual({ status: 'none' });
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    expect(readLegacyNativeProviderAuthOwner()).toEqual({ status: 'owned', ownerId: 'owner-a' });
+
+    fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: '' }));
+    expect(readLegacyNativeProviderAuthOwner()).toEqual({ status: 'failed' });
   });
 
   it.each([
