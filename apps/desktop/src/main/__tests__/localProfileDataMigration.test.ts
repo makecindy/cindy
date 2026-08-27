@@ -141,6 +141,41 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
   });
 
+  it('retries after an interrupted fallback copy leaves a pending target', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    const pending = `${target}.local-profile-copy-pending`;
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    let interrupted = true;
+    const recoveringDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async () => {
+          throw Object.assign(new Error('hard links unsupported'), { code: 'EOPNOTSUPP' });
+        },
+        copyNoReplace: async (source, destination) => {
+          if (interrupted) {
+            interrupted = false;
+            await fs.writeFile(pending, 'pending');
+            await fs.writeFile(destination, 'partial');
+            throw Object.assign(new Error('copy interrupted'), { code: 'EIO' });
+          }
+          await fs.copyFile(source, destination);
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', recoveringDeps)).resolves.toMatchObject({
+      status: 'failed',
+    });
+    await expect(adoptLocalProfileDatabase('owner-a', recoveringDeps)).resolves.toMatchObject({
+      status: 'adopted',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('local-db');
+    await expect(fs.access(pending)).rejects.toThrow();
+  });
+
   it('does not reclaim an invalid marker while another process holds the migration lock', async () => {
     const { root } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);

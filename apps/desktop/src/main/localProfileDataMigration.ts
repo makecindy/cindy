@@ -25,6 +25,7 @@ import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
 export const LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX = '.local-profile-migration.json';
 export const LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX = '.mutation-lock.sqlite';
+const DB_COPY_PENDING_SUFFIX = '.local-profile-copy-pending';
 
 const LOCAL_PROFILE_MIGRATION_LOCK_TIMEOUT_MS = 30_000;
 const LOCAL_PROFILE_MIGRATION_LOCK_RETRY_MS = 25;
@@ -83,8 +84,29 @@ const realFs: LocalProfileDataMigrationFs = {
     }
   },
   link: (source, target) => fs.promises.link(source, target),
-  copyNoReplace: (source, target) =>
-    fs.promises.copyFile(source, target, fsConstants.COPYFILE_EXCL),
+  copyNoReplace: async (source, target) => {
+    // COPYFILE_EXCL is the no-replace claim, but it writes the final file in
+    // place. Leave a durable pending marker so a crash during the copy cannot
+    // turn a truncated target into a permanent target-exists result.
+    const pending = `${target}${DB_COPY_PENDING_SUFFIX}`;
+    const marker = fs.openSync(pending, 'wx', 0o600);
+    fs.closeSync(marker);
+    try {
+      await fs.promises.copyFile(source, target, fsConstants.COPYFILE_EXCL);
+      const finalHandle = fs.openSync(target, 'r+');
+      try {
+        fs.fsyncSync(finalHandle);
+      } finally {
+        fs.closeSync(finalHandle);
+      }
+      await fs.promises.rm(pending, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') {
+        await fs.promises.rm(pending, { force: true });
+      }
+      throw error;
+    }
+  },
   removeIfExists: (file) => fs.promises.rm(file, { force: true }),
 };
 
@@ -570,6 +592,22 @@ async function databaseFileGroupState(
   return { mainExists, sidecarExists: sidecarResults.some(Boolean) };
 }
 
+async function recoverIncompleteDatabasePublication(
+  deps: LocalProfileDataMigrationDeps,
+  targetDb: string,
+): Promise<void> {
+  const pending = `${targetDb}${DB_COPY_PENDING_SUFFIX}`;
+  if (!(await deps.fs.pathExists(pending))) return;
+  // The marker is only created by the fallback publisher while this process
+  // owns the migration lock. Remove the incomplete target and its sidecars so
+  // the complete local-v1 snapshot can be retried after a crash.
+  await deps.fs.removeIfExists(targetDb);
+  for (const suffix of DB_SIDECAR_SUFFIXES) {
+    await deps.fs.removeIfExists(`${targetDb}${suffix}`);
+  }
+  await deps.fs.removeIfExists(pending);
+}
+
 export type PassiveLocalProfileAdoptionPreflight =
   | { status: 'not-required'; reason: 'no-local-db' | 'target-exists' | 'claimed-by-other-owner' }
   | { status: 'required' }
@@ -724,6 +762,7 @@ export async function adoptLocalProfileDatabase(
     if (reservation.status === 'failed') {
       throw new Error('failed to reserve local profile owner');
     }
+    await recoverIncompleteDatabasePublication(deps, targetDb);
     // Reserve the local namespace even when it is currently empty. Otherwise a
     // later account could create or adopt local content after the first account
     // has already crossed the login boundary.
