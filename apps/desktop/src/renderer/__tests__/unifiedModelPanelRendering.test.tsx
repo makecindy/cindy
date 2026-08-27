@@ -195,6 +195,7 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import type { UnifiedRailItem } from '@/components/new-chat/unifiedModelSelection';
 import {
   __resetForTest as resetEnginePrefs,
   getModelEngineOverride,
@@ -3241,5 +3242,64 @@ describe('列表样式试用开关(badge · v7 引擎徽标行)', () => {
     ) as HTMLElement;
     expect(header.className).not.toContain('sticky');
     expect(header.getAttribute('data-group-label')).toBe('Cindy AI');
+  });
+});
+
+// ── classic 左侧 rail 的高度约束(#3516)────────────────────────────────────
+// 自定义来源一多,rail 的 34px 格位累计高度会超过面板可用高度:根节点若无
+// min-h-0 / overflow-y-auto,子项按 visible 溢出向下绘制,直接叠到底部「添加模型」
+// footer 上。这里锁两件事:骨架类保留 + 溢出时格子一个不少、顺序不变。
+describe('classic 左侧 rail:超高时内部滚动,不叠压 footer(#3516)', () => {
+  function railItems(count: number): UnifiedRailItem[] {
+    return [
+      { kind: 'favorites' },
+      { kind: 'all' },
+      ...Array.from({ length: count }, (_, index) => ({
+        kind: 'provider' as const,
+        providerId: `src-${String(index).padStart(2, '0')}`,
+      })),
+    ];
+  }
+
+  async function mountRail(items: readonly UnifiedRailItem[]): Promise<HTMLElement> {
+    const { UnifiedModelRail } = await import('@/components/new-chat/UnifiedModelRail');
+    render(
+      React.createElement(UnifiedModelRail, {
+        items,
+        active: { kind: 'all' },
+        onSelect: vi.fn(),
+        providers: [],
+        providerLabel: (providerId: string) => providerId,
+      }),
+    );
+    return document.querySelector('[data-unified-model-rail]') as HTMLElement;
+  }
+
+  it('根节点保留 w-12 / shrink-0 骨架,并带 min-h-0 + overflow-y-auto 收缩滚动链', async () => {
+    const root = await mountRail(railItems(1));
+    expect(root).not.toBeNull();
+    for (const token of ['w-12', 'shrink-0', 'min-h-0', 'overflow-y-auto', 'overscroll-contain']) {
+      expect(root.className).toContain(token);
+    }
+  });
+
+  it('格位铺满超出可用高度时全部渲染、顺序不变(不靠裁剪或删项规避)', async () => {
+    const root = await mountRail(railItems(24));
+    // ★收藏 → 全部(带唯一的段间分隔线)→ 各来源,定位走 data-rail-item 稳定标记。
+    const keys = Array.from(root.querySelectorAll('button[data-rail-item]')).map((button) =>
+      button.getAttribute('data-rail-item'),
+    );
+    expect(keys).toHaveLength(26);
+    expect(keys[0]).toBe('favorites');
+    expect(keys[1]).toBe('all');
+    expect(root.querySelectorAll('[aria-hidden="true"]')).toHaveLength(1);
+    const providerIds = keys.slice(2).map((key) => key?.replace(/^provider:/, ''));
+    expect(providerIds[0]).toBe('src-00');
+    expect(providerIds[23]).toBe('src-23');
+    expect(new Set(providerIds).size).toBe(24);
+    // 可达性:title/aria-label 跟着 providerLabel 走,不能因为溢出就丢格子文案。
+    const lastButton = root.querySelector('button[data-rail-item="provider:src-23"]');
+    expect(lastButton?.getAttribute('title')).toBe('src-23');
+    expect(lastButton?.getAttribute('aria-label')).toBe('src-23');
   });
 });
