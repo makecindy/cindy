@@ -41,6 +41,7 @@ async function fixture(): Promise<{ root: string; deps: LocalProfileDataMigratio
         readDir: (directory) => fs.readdir(directory),
         backupDatabase: (source, target) => fs.copyFile(source, target),
         link: (source, target) => fs.link(source, target),
+        copyNoReplace: (source, target) => fs.copyFile(source, target),
         removeIfExists: (file) => fs.rm(file, { force: true }),
       },
     },
@@ -94,6 +95,50 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
     await expect(fs.readFile(marker, 'utf8')).resolves.toContain('owner-a');
     await expect(fs.access(`${marker}.bak`)).rejects.toThrow();
+  });
+
+  it('falls back to exclusive snapshot copy when hard links are unsupported', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    const fallbackDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async () => {
+          throw Object.assign(new Error('hard links unsupported'), { code: 'EOPNOTSUPP' });
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', fallbackDeps)).resolves.toMatchObject({
+      status: 'adopted',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('local-db');
+  });
+
+  it('keeps the cloud target when exclusive snapshot copy loses the race', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    const fallbackDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async () => {
+          throw Object.assign(new Error('hard links unsupported'), { code: 'EXDEV' });
+        },
+        copyNoReplace: async (_source, destination) => {
+          await fs.writeFile(destination, 'cloud-db');
+          throw Object.assign(new Error('target already exists'), { code: 'EEXIST' });
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', fallbackDeps)).resolves.toEqual({
+      status: 'target-exists',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
   });
 
   it('does not reclaim an invalid marker while another process holds the migration lock', async () => {

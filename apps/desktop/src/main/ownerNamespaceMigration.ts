@@ -2482,14 +2482,32 @@ async function findConcurrentLiveInstancePids(
     recordedAtMs: number | undefined;
     rootDir: string | undefined;
   }> = [];
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
+  const recordNames = new Set(
+    names.flatMap((name) => {
+      if (name.endsWith('.json')) return [name];
+      if (name.endsWith('.json.bak')) return [name.slice(0, -'.bak'.length)];
+      return [];
+    }),
+  );
+  for (const name of recordNames) {
     let raw: string;
     try {
       raw = await deps.readFile(path.join(registryDir, name));
     } catch (error) {
-      if (isMissing(error)) continue;
-      throw error;
+      if (isMissing(error)) {
+        // During atomic backup exchange the canonical record may be absent
+        // while `<pid>.json.bak` is the only snapshot. Read that snapshot
+        // without treating the instance as gone; the backup and canonical
+        // names represent one live registration.
+        try {
+          raw = await deps.readFile(path.join(registryDir, `${name}.bak`));
+        } catch (backupError) {
+          if (isMissing(backupError)) continue;
+          throw backupError;
+        }
+      } else {
+        throw error;
+      }
     }
     let record: RegisteredInstanceRecord;
     try {

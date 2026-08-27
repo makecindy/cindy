@@ -37,6 +37,8 @@ export interface LocalProfileDataMigrationFs {
   readDir(directory: string): Promise<string[]>;
   backupDatabase(source: string, target: string): Promise<void>;
   link(source: string, target: string): Promise<void>;
+  /** Publish a complete snapshot without replacing an existing target. */
+  copyNoReplace(source: string, target: string): Promise<void>;
   removeIfExists(file: string): Promise<void>;
 }
 
@@ -81,6 +83,8 @@ const realFs: LocalProfileDataMigrationFs = {
     }
   },
   link: (source, target) => fs.promises.link(source, target),
+  copyNoReplace: (source, target) =>
+    fs.promises.copyFile(source, target, fsConstants.COPYFILE_EXCL),
   removeIfExists: (file) => fs.promises.rm(file, { force: true }),
 };
 
@@ -679,8 +683,18 @@ async function claimDatabaseTargetWithoutReplacement(
     await deps.fs.link(dbTmp, targetDb);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
-    throw error;
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === 'EEXIST') return false;
+    if (!['EXDEV', 'EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'ENOSYS'].includes(code ?? '')) {
+      throw error;
+    }
+    try {
+      await deps.fs.copyNoReplace(dbTmp, targetDb);
+      return true;
+    } catch (fallbackError) {
+      if ((fallbackError as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+      throw fallbackError;
+    }
   }
 }
 
