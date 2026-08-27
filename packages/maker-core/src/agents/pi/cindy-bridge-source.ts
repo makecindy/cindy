@@ -68,6 +68,7 @@ import {
   createGrepTool,
   createLsTool,
 } from '@earendil-works/pi-coding-agent';
+import * as piCodingAgent from '@earendil-works/pi-coding-agent';
 
 const PERMISSION_TITLE = 'cindy:permission';
 const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
@@ -76,6 +77,9 @@ const PERMISSION_USER_DENY = 'user-deny';
 const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
+function isCindyShellTool(toolName: unknown): boolean {
+  return toolName === 'bash' || toolName === 'powershell';
+}
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
@@ -728,6 +732,14 @@ function bashExpandedPathCandidates(
   } catch {
     return { paths: [], unresolved: true };
   }
+}
+
+function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
+  if (!input || typeof input !== 'object') return { targets: [], unresolved: false };
+  const command = (input as Record<string, unknown>).command;
+  if (typeof command !== 'string' || !command) return { targets: [], unresolved: false };
+  // PowerShell 不走 bash 重定向解析器;整条命令当字符串叶子扫凭证特征。
+  return { targets: [command], unresolved: false };
 }
 
 function bashInputReadEvidence(input: unknown): BashInputReadEvidence {
@@ -2911,6 +2923,52 @@ export default async function cindyBridge(pi: any) {
     },
   });
 
+  // Pi v0.84.3 Windows powershell is the same spawn family as bash. Overlay only
+  // when the runtime exports the factory so 0.83.0 sessions keep loading.
+  const createPowerShellTool = (piCodingAgent as { createPowerShellTool?: typeof createBashTool }).createPowerShellTool;
+  if (typeof createPowerShellTool === 'function') {
+    const powershellTool = createPowerShellTool(process.cwd(), {
+      exposeSessionEnvironment: false,
+      spawnHook: ({ command, cwd, env }) => ({
+        command,
+        cwd,
+        env: isolatedBashEnvironment(env, bashPackageHome),
+      }),
+    });
+    var powershellParameters = powershellTool.parameters;
+    if (
+      powershellParameters &&
+      typeof powershellParameters === 'object' &&
+      powershellParameters.properties &&
+      typeof powershellParameters.properties === 'object' &&
+      powershellParameters.properties.timeout &&
+      typeof powershellParameters.properties.timeout === 'object'
+    ) {
+      powershellParameters.properties.timeout.description = cindyBashTimeoutDescription();
+    }
+    if (typeof powershellTool.description === 'string') {
+      powershellTool.description =
+        powershellTool.description +
+        ' Cindy enforces a ' +
+        CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS +
+        's default and a ' +
+        CINDY_PI_BASH_MAX_TIMEOUT_SECONDS +
+        's maximum.';
+    }
+    pi.registerTool({
+      ...powershellTool,
+      execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) => {
+        const nextParams = applyCindyBashTimeoutParams(params);
+        if (bashCommandMutatesPiPackages(nextParams)) {
+          throw new Error(
+            'Direct Pi extension changes are unavailable through bash. Use cindy_pi_extension so Cindy can request confirmation.',
+          );
+        }
+        return powershellTool.execute(id, nextParams as any, signal, onUpdate as any);
+      },
+    });
+  }
+
   // Cindy owns a separate Pi extension store. Directly running the bundled Pi
   // CLI from bash writes to Pi's default user home and bypasses Cindy's
   // compatibility/approval state. Normal local tasks therefore receive one
@@ -3128,7 +3186,7 @@ export default async function cindyBridge(pi: any) {
     // bash 读取任意进程的初始环境(/proc/<pid|self>/environ)是绕过密钥剥离的旁路:
     // spawn 边界虽删了子进程 env 的私密变量,父 pi 进程仍持有,cat /proc/PPID/environ
     // 同 UID 直取代理 token / 网关 / BYOM key(codex 报)→ 一律硬拦,含 Full access。
-    if (event.toolName === 'bash' && commandReadsProcessEnviron(event.input?.command)) {
+    if (isCindyShellTool(event.toolName) && commandReadsProcessEnviron(event.input?.command)) {
       return { block: true, reason: 'Cindy blocks reading process environment (/proc/*/environ), even with Full access.' };
     }
     // 凭证/密钥路径的内置只读工具与 bash 输入重定向都必须携带 canonical
@@ -3136,18 +3194,20 @@ export default async function cindyBridge(pi: any) {
     // parser 提取真实输入目标,才能识别工作区 symlink 指向的凭证文件。
     const bashReadEvidence = event.toolName === 'bash'
       ? bashInputReadEvidence(event.input)
-      : { targets: [], unresolved: false };
+      : event.toolName === 'powershell'
+        ? powershellInputReadEvidence(event.input)
+        : { targets: [], unresolved: false };
     const bashReadTargets = bashReadEvidence.targets;
     const readonlyCredentialEvidence = READONLY_BUILTINS.has(event.toolName)
       ? collectReadonlyCredentialEvidence(event.toolName, event.input)
       : null;
     const resolvedCredentialReadPaths = readonlyCredentialEvidence
       ? [...new Set(collectResolvedCredentialPaths(readonlyCredentialEvidence.paths))]
-      : event.toolName === 'bash'
+      : isCindyShellTool(event.toolName)
         ? [...new Set(collectResolvedCredentialPaths(bashReadTargets))]
         : [];
     const credentialRead = readonlyCredentialEvidence?.touchesCredential === true
-      || (event.toolName === 'bash' && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets)))
+      || (isCindyShellTool(event.toolName) && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets)))
       || resolvedCredentialReadPaths.length > 0;
     const credentialEvidenceForHost = resolvedCredentialEvidenceForHost(
       resolvedCredentialReadPaths,

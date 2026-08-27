@@ -181,7 +181,7 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 
 ## 6. 上线门禁
 
-- [x] **平台分发**:pin 已升级到 Pi `v0.83.0`，darwin arm64/x64、linux arm64/x64、
+- [x] **平台分发**:pin 已升级到 Pi `v0.84.3`，darwin arm64/x64、linux arm64/x64、
       win32 arm64/x64 六份官方资产都进入 digest pin；下载器兼容 Unix `pi/` 嵌套包与
       Windows 根目录平铺 zip。当前 Mac 已完成六资产 SHA-256 下载验收；非本机 OS 的
       最终启动 smoke 仍由对应发布 runner 执行。2026-08 起 pi 与 cc/codex 一样只走

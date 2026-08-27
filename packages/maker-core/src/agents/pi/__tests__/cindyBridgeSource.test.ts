@@ -919,7 +919,8 @@ describe('cindy-bridge extension source', () => {
           hasUnresolvedTarget: false,
         });
         expect(source).toContain("event.toolName === 'bash'\n      ? bashInputReadEvidence(event.input)");
-        expect(source).toContain('bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets)');
+        expect(source).toContain("event.toolName === 'powershell'\n        ? powershellInputReadEvidence(event.input)");
+        expect(source).toContain('isCindyShellTool(event.toolName) && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets))');
         expect(source).toContain('resolvedCredentialPaths: credentialEvidenceForHost');
       } finally {
         rmSync(tempRoot, { recursive: true, force: true });
@@ -933,6 +934,10 @@ describe('cindy-bridge extension source', () => {
     for (const tool of ['createBashTool', 'createFindTool', 'createGrepTool', 'createLsTool']) {
       expect(source).toContain(tool + ',');
     }
+    expect(source).toContain('import * as piCodingAgent from');
+    expect(source).toContain('createPowerShellTool');
+    expect(source).toContain('function isCindyShellTool');
+    expect(source).toContain('function powershellInputReadEvidence');
     expect(source).toContain("const args = ['--files', '--hidden', '--no-require-git']");
     expect(source).toContain("if (pattern.includes('/')) {");
     expect(source).toContain('path.basename(relative)');
