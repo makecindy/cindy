@@ -157,7 +157,10 @@ describe('adoptLocalProfileDatabase', () => {
         copyNoReplace: async (source, destination) => {
           if (interrupted) {
             interrupted = false;
-            await fs.writeFile(pending, 'pending');
+            await fs.writeFile(
+              pending,
+              JSON.stringify({ version: 1, attemptId: 'interrupted', phase: 'copying' }),
+            );
             await fs.writeFile(destination, 'partial');
             throw Object.assign(new Error('copy interrupted'), { code: 'EIO' });
           }
@@ -173,6 +176,95 @@ describe('adoptLocalProfileDatabase', () => {
       status: 'adopted',
     });
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('local-db');
+    await expect(fs.access(pending)).rejects.toThrow();
+  });
+
+  it('preserves a raced cloud target when pending-marker cleanup fails', async () => {
+    const { root } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    const pending = `${target}.local-profile-copy-pending`;
+    const source = path.join(root, 'cindy-local-v1.db');
+    await fs.writeFile(source, 'local-db');
+    const productionDeps = createProductionLocalProfileDataMigrationDeps(root, 'cindy');
+    const racingDeps: LocalProfileDataMigrationDeps = {
+      ...productionDeps,
+      fs: {
+        ...productionDeps.fs,
+        backupDatabase: async (sourcePath, destination) => fs.copyFile(sourcePath, destination),
+        link: async () => {
+          throw Object.assign(new Error('hard links unsupported'), { code: 'EXDEV' });
+        },
+      },
+    };
+    const originalOpen = originalFs.promises.open;
+    const originalRemove = originalFs.promises.rm;
+    let cleanupFailed = false;
+    vi.spyOn(originalFs.promises, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]) === target && args[1] === 'wx') {
+        await fs.writeFile(target, 'cloud-db');
+        throw Object.assign(new Error('target already exists'), { code: 'EEXIST' });
+      }
+      return originalOpen.apply(originalFs.promises, args);
+    });
+    vi.spyOn(originalFs.promises, 'rm').mockImplementation(async (...args) => {
+      if (String(args[0]) === pending) {
+        cleanupFailed = true;
+        throw Object.assign(new Error('pending marker is locked'), { code: 'EBUSY' });
+      }
+      return originalRemove.apply(originalFs.promises, args);
+    });
+
+    await expect(adoptLocalProfileDatabase('owner-a', racingDeps)).resolves.toEqual({
+      status: 'target-exists',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
+    expect(cleanupFailed).toBe(true);
+    await expect(fs.access(pending)).resolves.toBeUndefined();
+
+    await expect(adoptLocalProfileDatabase('owner-a', racingDeps)).resolves.toEqual({
+      status: 'target-exists',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
+  });
+
+  it('persists the fallback marker before opening the exclusive target', async () => {
+    const { root } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const target = path.join(root, 'cindy-owner-a.db');
+    const pending = `${target}.local-profile-copy-pending`;
+    const sourceDb = createBetterSqliteDatabase(source);
+    sourceDb.exec('CREATE TABLE items (value TEXT NOT NULL)');
+    sourceDb.prepare('INSERT INTO items (value) VALUES (?)').run('local');
+    sourceDb.close();
+
+    const deps = createProductionLocalProfileDataMigrationDeps(root, 'cindy');
+    const fallbackDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async () => {
+          throw Object.assign(new Error('hard links unsupported'), { code: 'EOPNOTSUPP' });
+        },
+      },
+    };
+    const originalOpen = originalFs.promises.open;
+    let markerBeforeTargetClaim: string | undefined;
+    const openSpy = vi.spyOn(originalFs.promises, 'open').mockImplementation(async (...args) => {
+      const file = String(args[0]);
+      if (file === target && args[1] === 'wx') {
+        markerBeforeTargetClaim = await fs.readFile(pending, 'utf8');
+      }
+      return originalOpen.apply(originalFs.promises, args);
+    });
+
+    await expect(adoptLocalProfileDatabase('owner-a', fallbackDeps)).resolves.toMatchObject({
+      status: 'adopted',
+    });
+    expect(JSON.parse(markerBeforeTargetClaim!)).toMatchObject({
+      version: 1,
+      phase: 'claiming',
+    });
+    expect(openSpy).toHaveBeenCalled();
     await expect(fs.access(pending)).rejects.toThrow();
   });
 

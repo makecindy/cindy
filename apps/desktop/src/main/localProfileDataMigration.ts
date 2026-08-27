@@ -26,6 +26,7 @@ export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp'
 export const LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX = '.local-profile-migration.json';
 export const LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX = '.mutation-lock.sqlite';
 const DB_COPY_PENDING_SUFFIX = '.local-profile-copy-pending';
+const DB_COPY_PENDING_VERSION = 1;
 
 const LOCAL_PROFILE_MIGRATION_LOCK_TIMEOUT_MS = 30_000;
 const LOCAL_PROFILE_MIGRATION_LOCK_RETRY_MS = 25;
@@ -85,26 +86,70 @@ const realFs: LocalProfileDataMigrationFs = {
   },
   link: (source, target) => fs.promises.link(source, target),
   copyNoReplace: async (source, target) => {
-    // COPYFILE_EXCL is the no-replace claim, but it writes the final file in
-    // place. Leave a durable pending marker so a crash during the copy cannot
-    // turn a truncated target into a permanent target-exists result.
     const pending = `${target}${DB_COPY_PENDING_SUFFIX}`;
-    const marker = fs.openSync(pending, 'wx', 0o600);
-    fs.closeSync(marker);
+    const attemptId = randomUUID();
+    writePendingDatabaseCopyMarker(pending, {
+      version: DB_COPY_PENDING_VERSION,
+      attemptId,
+      phase: 'claiming',
+    });
+    let sourceHandle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
+    let targetHandle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
     try {
-      await fs.promises.copyFile(source, target, fsConstants.COPYFILE_EXCL);
-      const finalHandle = fs.openSync(target, 'r+');
+      sourceHandle = await fs.promises.open(source, 'r');
       try {
-        fs.fsyncSync(finalHandle);
-      } finally {
-        fs.closeSync(finalHandle);
+        // O_EXCL is the no-replace claim. The target is created before any
+        // bytes are copied, so a competing cloud initializer can never leave
+        // us with a partially-written winner that recovery might delete.
+        targetHandle = await fs.promises.open(target, 'wx', 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') {
+          // Cleanup is best effort and must never hide the original EEXIST,
+          // because the existing target is authoritative.
+          await fs.promises.rm(pending, { force: true }).catch(() => undefined);
+        }
+        throw error;
       }
-      await fs.promises.rm(pending, { force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') {
-        await fs.promises.rm(pending, { force: true });
+      updatePendingDatabaseCopyMarker(pending, {
+        version: DB_COPY_PENDING_VERSION,
+        attemptId,
+        phase: 'copying',
+      });
+      const chunk = Buffer.allocUnsafe(1024 * 1024);
+      let position = 0;
+      for (;;) {
+        const { bytesRead } = await sourceHandle.read(chunk, 0, chunk.length, position);
+        if (bytesRead === 0) break;
+        let offset = 0;
+        while (offset < bytesRead) {
+          const { bytesWritten } = await targetHandle.write(
+            chunk,
+            offset,
+            bytesRead - offset,
+            position + offset,
+          );
+          if (bytesWritten <= 0) throw new Error('short write while copying database snapshot');
+          offset += bytesWritten;
+        }
+        position += bytesRead;
       }
-      throw error;
+      await targetHandle.sync();
+      await targetHandle.close();
+      targetHandle = undefined;
+      await sourceHandle.close();
+      sourceHandle = undefined;
+      // The open target handle was synced immediately before close; only the
+      // parent directory entry still needs an explicit barrier here.
+      syncMarkerDirectory(target);
+      updatePendingDatabaseCopyMarker(pending, {
+        version: DB_COPY_PENDING_VERSION,
+        attemptId,
+        phase: 'published',
+      });
+      await fs.promises.rm(pending, { force: true }).catch(() => undefined);
+    } finally {
+      await targetHandle?.close().catch(() => undefined);
+      await sourceHandle?.close().catch(() => undefined);
     }
   },
   removeIfExists: (file) => fs.promises.rm(file, { force: true }),
@@ -122,6 +167,12 @@ function migrationMarkerPath(deps: LocalProfileDataMigrationDeps): string {
 }
 
 type LocalProfileMigrationLockDb = ReturnType<typeof createBetterSqliteDatabase>;
+
+type PendingDatabaseCopyMarker = {
+  version: typeof DB_COPY_PENDING_VERSION;
+  attemptId: string;
+  phase: 'claiming' | 'copying' | 'published';
+};
 
 type LocalProfileMigrationLockAttempt =
   | { status: 'acquired'; db: LocalProfileMigrationLockDb }
@@ -271,15 +322,69 @@ function syncMarkerDirectory(marker: string): void {
   }
 }
 
+function flushFile(file: string): void {
+  const handle = fs.openSync(file, 'r+');
+  try {
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function writePendingDatabaseCopyMarker(
+  pending: string,
+  marker: PendingDatabaseCopyMarker,
+): void {
+  const handle = fs.openSync(pending, 'wx', 0o600);
+  try {
+    const bytes = Buffer.from(`${JSON.stringify(marker)}\n`, 'utf8');
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = fs.writeSync(handle, bytes, offset, bytes.length - offset);
+      if (written <= 0) throw new Error('short write while publishing database copy marker');
+      offset += written;
+    }
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+  syncMarkerDirectory(pending);
+}
+
+function updatePendingDatabaseCopyMarker(
+  pending: string,
+  marker: PendingDatabaseCopyMarker,
+): void {
+  atomicWriteFileSync(pending, `${JSON.stringify(marker)}\n`);
+  flushFile(pending);
+  syncMarkerDirectory(pending);
+}
+
+function parsePendingDatabaseCopyMarker(raw: string): PendingDatabaseCopyMarker | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<PendingDatabaseCopyMarker>;
+    if (
+      parsed.version !== DB_COPY_PENDING_VERSION ||
+      typeof parsed.attemptId !== 'string' ||
+      !parsed.attemptId ||
+      (parsed.phase !== 'claiming' && parsed.phase !== 'copying' && parsed.phase !== 'published')
+    ) {
+      return null;
+    }
+    return {
+      version: DB_COPY_PENDING_VERSION,
+      attemptId: parsed.attemptId,
+      phase: parsed.phase,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function flushPublishedDatabase(targetDb: string): void {
   // Hard-link publication is not durable until the published inode and its
   // containing directory have both crossed their filesystem barriers.
-  const finalHandle = fs.openSync(targetDb, 'r+');
-  try {
-    fs.fsyncSync(finalHandle);
-  } finally {
-    fs.closeSync(finalHandle);
-  }
+  flushFile(targetDb);
   syncMarkerDirectory(targetDb);
 }
 
@@ -597,10 +702,35 @@ async function recoverIncompleteDatabasePublication(
   targetDb: string,
 ): Promise<void> {
   const pending = `${targetDb}${DB_COPY_PENDING_SUFFIX}`;
-  if (!(await deps.fs.pathExists(pending))) return;
-  // The marker is only created by the fallback publisher while this process
-  // owns the migration lock. Remove the incomplete target and its sidecars so
-  // the complete local-v1 snapshot can be retried after a crash.
+  const raw = readAtomicFileSync(pending);
+  if (raw === null) return;
+  const marker = parsePendingDatabaseCopyMarker(raw);
+  if (!marker) throw new Error('database copy pending marker is malformed');
+
+  const targetState = await databaseFileGroupState(deps, targetDb);
+  if (marker.phase === 'claiming') {
+    // A competing cloud initializer may have won after our marker was
+    // persisted. An ambiguous marker must never authorize deleting that
+    // authoritative target; leave both files in place and fail closed.
+    if (targetState.mainExists || targetState.sidecarExists) return;
+    await deps.fs.removeIfExists(pending);
+    return;
+  }
+  if (marker.phase === 'published') {
+    // The snapshot was fully flushed before marker cleanup. Preserve the
+    // target and retire only the bookkeeping marker.
+    if (!targetState.mainExists) {
+      for (const suffix of DB_SIDECAR_SUFFIXES) {
+        await deps.fs.removeIfExists(`${targetDb}${suffix}`);
+      }
+    }
+    await deps.fs.removeIfExists(pending);
+    return;
+  }
+
+  // Only the explicit copying phase proves that this process won the target's
+  // O_EXCL claim. It is therefore the only state allowed to remove a partial
+  // target and retry adoption after a crash.
   await deps.fs.removeIfExists(targetDb);
   for (const suffix of DB_SIDECAR_SUFFIXES) {
     await deps.fs.removeIfExists(`${targetDb}${suffix}`);
