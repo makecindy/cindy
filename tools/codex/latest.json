@@ -1,33 +1,33 @@
 {
-  "version": "0.150.1",
-  "tag_name": "rust-v0.150.1",
-  "name": "0.150.1",
-  "published_at": "2026-08-27T01:56:54Z",
+  "version": "0.145.0",
+  "tag_name": "rust-v0.145.0",
+  "name": "0.145.0",
+  "published_at": "2026-07-21T18:21:04Z",
   "runtimeAssets": {
     "darwin-arm64": {
-      "url": "https://github.com/openai/codex/releases/download/rust-v0.150.1/codex-aarch64-apple-darwin.tar.gz",
-      "sha256": "f66f1c45f1eda49d6a8aef86faee24121b0c8913cd9023f23ee44262606fc7b6",
-      "size": 91484322
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.145.0/codex-aarch64-apple-darwin.tar.gz",
+      "sha256": "072a30a65f05666735889ef0f60b56db186adbdde9d5c5cc1a64be0b598530fe",
+      "size": 102106051
     },
     "darwin-x64": {
-      "url": "https://github.com/openai/codex/releases/download/rust-v0.150.1/codex-x86_64-apple-darwin.tar.gz",
-      "sha256": "d00bdeb113c2cb42b43fbe4916b681ab1405772ac38fc8ac7fa9cc0934d1d0aa",
-      "size": 99902684
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.145.0/codex-x86_64-apple-darwin.tar.gz",
+      "sha256": "4216d7a40aa49d74b65fab93d2a86d2e25a902482b827dbdb3f357777b09fadf",
+      "size": 111434065
     },
     "linux-x64": {
-      "url": "https://github.com/openai/codex/releases/download/rust-v0.150.1/codex-x86_64-unknown-linux-musl.tar.gz",
-      "sha256": "ab308870bc7fc048c23dc49d03f6b8af9ce7fc99b9da882d6688be7a90155c7a",
-      "size": 103098758
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.145.0/codex-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "bfaf13c9ba34f2ad764e4a916c49cf7177aeba329cf0f719e2227566fc8d662a",
+      "size": 113724150
     },
     "linux-arm64": {
-      "url": "https://github.com/openai/codex/releases/download/rust-v0.150.1/codex-aarch64-unknown-linux-musl.tar.gz",
-      "sha256": "5bb1f75e1a1588845b4a31f2c98fb2b394be5c2a8d90a24a8ab0ebbae1169264",
-      "size": 95376924
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.145.0/codex-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "d384f90bc842450b42bd675feef06a12a46a3b1ca97efcb22566b270e4a11227",
+      "size": 105110610
     },
     "win32-x64": {
-      "url": "https://github.com/openai/codex/releases/download/rust-v0.150.1/codex-x86_64-pc-windows-msvc.exe.tar.gz",
-      "sha256": "090693f9f21723bcb5f5e3b8b720c7e97f8bf3fd6a4cb820831557eba1cbebe0",
-      "size": 103940751
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.145.0/codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "2feb4ed809f4f71ccddbed531a19dd0652084d84e3ff66626d65f1e01f4963c0",
+      "size": 119781647
     }
   }
 }
