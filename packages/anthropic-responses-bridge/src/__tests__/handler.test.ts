@@ -119,6 +119,52 @@ describe('createResponsesHandler', () => {
     expect(standard.text).toContain('"service_tier":"default"');
   });
 
+  it('provider.strictFunctionTools 是生产控制面:启用 provider 逐工具 strict,未启用 provider 全 false', async () => {
+    const seen: Array<{ body: Record<string, unknown> }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push({ body: JSON.parse(String(init.body)) });
+      return new Response(sse(OK_SSE), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const handler = createResponsesHandler({
+      providers: [
+        providerConfig(), // chatgpt/:未声明 strictFunctionTools → 默认全 false
+        providerConfig({ prefix: 'xai/', strictFunctionTools: () => true }),
+      ],
+    });
+    const tools = [
+      {
+        name: 'Conforming',
+        input_schema: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      },
+      {
+        // Edit 真实形态:optional replace_all → 即使 provider 启用也回落 strict:false
+        name: 'Edit',
+        input_schema: {
+          type: 'object',
+          properties: { file_path: { type: 'string' }, replace_all: { type: 'boolean' } },
+          required: ['file_path'],
+          additionalProperties: false,
+        },
+      },
+    ];
+
+    await invoke(handler, { model: 'xai/grok-4.6', messages: [], stream: true, tools });
+    await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: true, tools });
+
+    expect(seen).toHaveLength(2);
+    const strictOf = (body: Record<string, unknown>): Array<boolean | undefined> =>
+      (body.tools as Array<{ strict?: boolean }>).map((t) => t.strict);
+    // xai/:合规工具 strict:true,不合规工具回落 false
+    expect(strictOf(seen[0].body)).toEqual([true, false]);
+    // chatgpt/:provider 未启用 → 全 false
+    expect(strictOf(seen[1].body)).toEqual([false, false]);
+  });
+
   it('上游 200 但整流零事件(非 SSE 正文)→ 合成带正文前缀的 error 事件而非空 200,并留 warn(#941)', async () => {
     const warns: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async () => new Response(

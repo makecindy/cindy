@@ -293,6 +293,12 @@ function xaiProviderConfig(): BridgeProviderConfig {
     maxOutputTokensSupported: true,
     // grok-code-fast / grok-build 系列不支持 reasoningEffort(实测 400),其余 grok 模型支持。
     supportsReasoning: (model) => !(model.startsWith('grok-code') || model.startsWith('grok-build')),
+    // Grok 工具参数保真度不足(2026-08 实锤:单 session 16 次 Edit 缺 file_path 的 malformed
+    // 重试风暴)。xAI 文档(docs.x.ai structured-outputs)称 tool calling 的 strict 隐式恒为
+    // true,因此这里的显式声明预期是 no-op —— 保留它是意图声明 + 上游语义变化时的保护;
+    // 真正承重的止损是 maker-core ToolLoopGuard 的契约错误层。逐工具兼容检查与回落由
+    // bridge 层负责,不合规 schema(Edit 的可选 replace_all、复杂 MCP 关键字)保持 strict:false。
+    strictFunctionTools: () => true,
     // Grok 的 X 实时视野来自 xAI 服务端工具 x_search:不声明就搜不了 X(见 xai-server-side-tools.ts)。
     serverSideTools: xaiServerSideTools,
     buildHeaders: async () => ({
@@ -328,6 +334,11 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
       // 订阅直连的上游(chatgpt.com / api.x.ai)由 handler 自己发出,不经 compat-proxy
       // 的转发层,拿不到那边的出站代理;必须显式注入(见 outbound-fetch.ts)。
       fetchImpl: outboundFetch,
+      // 一次性 Grok wire 归因取证开关;默认关闭,避免正常 agent 流量产生额外诊断日志。
+      wireDiagnostics: process.env.XDT_WIRE_DIAGNOSTICS === '1',
+      // dev-only strict spike(证据路径):生产控制面是上面 provider 配置的
+      // strictFunctionTools,此开关只供诊断实例叠加验证,不得当生产开关用。
+      wireDiagnosticsStrict: process.env.XDT_WIRE_DIAGNOSTICS_STRICT === '1',
     });
   } catch (err) {
     _handler = null;

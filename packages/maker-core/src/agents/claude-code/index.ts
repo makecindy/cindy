@@ -4738,7 +4738,10 @@ export class ClaudeCodeAgent extends BaseAgent {
                   if (verdict?.kind === 'hard') {
                     const loopHint = verdict.reason === 'consecutive'
                       ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
-                      : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
+                      : verdict.reason === 'contract'
+                        ? `连续 ${verdict.count} 次 ${verdict.toolName} 调用因同类参数错误`
+                          + `(${verdict.contractCategory ?? 'contract'})被拒`
+                        : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
                     // 报错归属:sidechain 命中时报 subagent 实际模型,不冤枉会话模型。
                     const loopModel = toolLoopGuardModelForScope(parentToolUseId);
                     // 与 upstream-idle watchdog 同款兜底: tool-loop 中断 = "整个 turn 序列已死",

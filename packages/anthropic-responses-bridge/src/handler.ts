@@ -22,6 +22,7 @@ import type { ServerResponse } from 'node:http';
 import { AnthropicMessageCollector } from './anthropic-message-collector.js';
 import { translateRequest, type ResponsesReasoningEffort } from './translate-request.js';
 import { SseTranslator, type AnthropicSseEvent } from './translate-sse.js';
+import { WireDiagnosticsSession } from './wire-diagnostics.js';
 import type {
   AnthropicMessagesRequest,
   BridgeLogger,
@@ -198,7 +199,13 @@ export interface BridgeSessionPrefs {
 /** createResponsesHandler 的 handle 入参 —— 与 compat-proxy LocalRequestHandler 的 args 同形 + prefs。 */
 export interface BridgeHandleArgs {
   parsedBody: unknown;
-  ctx: { readonly method: string; readonly url: string; readonly headers: Readonly<Record<string, string>> };
+  ctx: {
+    /** compat-proxy reqId; optional for direct handler tests and non-proxy callers. */
+    readonly reqId?: number;
+    readonly method: string;
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  };
   res: ServerResponse;
   prefs?: BridgeSessionPrefs;
 }
@@ -218,6 +225,10 @@ export interface ResponsesHandlerOptions {
    * responses-chat-bridge 的同名选项一致。
    */
   fetchImpl?: typeof fetch;
+  /** Explicit, temporary, xAI/Grok-only shape probe. Disabled by default. */
+  wireDiagnostics?: boolean;
+  /** Explicit, temporary strict-tool spike; only meaningful with wireDiagnostics. */
+  wireDiagnosticsStrict?: boolean;
 }
 
 // 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
@@ -309,6 +320,9 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // (2026-08-10 用随包 cc 二进制实测),按 `stream !== false` 判会把 fallback 误当流式、
     // 回一个 SSE,CLI 随即报 "empty or malformed response (HTTP 200)"。
     const downstreamStreaming = parsed.stream === true;
+    const wireDiagnosticsEnabled = opts.wireDiagnostics === true
+      && provider.prefix === 'xai/'
+      && realModel === 'grok-4.6';
     const responsesReq = translateRequest(parsed, {
       model: realModel,
       promptCacheKey: sessionId,
@@ -317,7 +331,22 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       serviceTier,
       providerPrefix: provider.prefix,
       serverSideTools,
+      // 生产控制面 = provider 配置(按 model 恒定,前缀稳定);dev-only strict spike
+      // 仅作诊断证据路径叠加,默认关闭,不得当生产开关用。
+      strictFunctionTools: provider.strictFunctionTools?.(realModel) === true
+        || (wireDiagnosticsEnabled && opts.wireDiagnosticsStrict === true),
     });
+    const diagnostics = wireDiagnosticsEnabled
+      ? new WireDiagnosticsSession(log, {
+        requestId: ctx.reqId ?? reqId,
+        bridgeReqId: reqId,
+        wireModel,
+        realModel,
+        providerPrefix: provider.prefix,
+        downstreamStreaming,
+      })
+      : null;
+    diagnostics?.recordRequest(parsed, responsesReq);
 
     const abort = new AbortController();
     res.on('close', () => abort.abort());
@@ -337,7 +366,11 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         signal: abort.signal,
       });
     } catch (err) {
-      if (abort.signal.aborted) return;
+      if (abort.signal.aborted) {
+        diagnostics?.finish({ reason: 'client-aborted-before-upstream-response' });
+        return;
+      }
+      diagnostics?.finish({ reason: 'upstream-fetch-error' });
       log.error?.('upstream fetch failed', { reqId, err: err instanceof Error ? err.message : String(err) });
       writeJson(res, 502, { type: 'error', error: { type: 'api_error', message: `upstream unreachable: ${String(err)}` } });
       return;
@@ -346,6 +379,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     if (!upstream.ok || !upstream.body) {
       const text = upstream.body ? await upstream.text().catch(() => '') : '';
       const status = upstream.ok ? 502 : upstream.status;
+      diagnostics?.finish({ status, reason: upstream.ok ? 'upstream-2xx-without-body' : 'upstream-http-error' });
       log.warn?.(upstream.ok ? 'upstream 2xx without response body' : 'upstream non-2xx', {
         reqId,
         status: upstream.status,
@@ -402,12 +436,16 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     if (!downstreamStreaming) {
       const translator = new SseTranslator(wireModel, serviceTier ?? 'default');
       const collector = new AnthropicMessageCollector();
-      const collect = (event: AnthropicSseEvent): void => collector.push(event);
+      const collect = (event: AnthropicSseEvent): void => {
+        diagnostics?.recordDownstreamEvent(event);
+        collector.push(event);
+      };
       try {
         const body = await readBodyWithLimit(upstream, MAX_NON_STREAM_BODY_BYTES);
         if (!body.trim()) throw new Error('provider returned an empty response body');
         if (upstreamIsSse) {
           for (const event of parseSsePayloads(body)) {
+            diagnostics?.recordUpstreamEvent(event);
             for (const output of translator.push(event)) collect(output);
           }
           for (const output of translator.finish()) collect(output);
@@ -417,8 +455,12 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         }
       } catch (err) {
         // 客户端已断开(res close → abort):上游读取抛错只是取消的副作用,不写响应。
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted) {
+          diagnostics?.finish({ status: upstream.status, reason: 'client-aborted-while-buffering' });
+          return;
+        }
         const message = err instanceof Error ? err.message : String(err);
+        diagnostics?.finish({ status: upstream.status, reason: 'invalid-upstream-non-stream-response' });
         log.warn?.('upstream non-stream response invalid', { reqId, error: message });
         writeJson(res, 502, {
           type: 'error',
@@ -428,6 +470,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       }
 
       const result = collector.finish();
+      diagnostics?.finish({ status: 200, reason: result.ok ? 'completed-non-stream' : 'collector-error' });
       if (!result.ok) {
         writeJson(res, 502, { type: 'error', error: result.error });
         return;
@@ -469,6 +512,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const RAW_PREFIX_LIMIT = 500;
     const writeOut = (ev: AnthropicSseEvent): void => {
       eventsWritten += 1;
+      diagnostics?.recordDownstreamEvent(ev);
       writeSseEvent(res, ev);
     };
     const finalizeStream = (): void => {
@@ -522,6 +566,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           } catch {
             continue;
           }
+          diagnostics?.recordUpstreamEvent(ev);
           for (const outEv of translator.push(ev)) writeOut(outEv);
         }
         if (start > 0) buf = buf.slice(start);
@@ -540,6 +585,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         for (const outEv of translator.fail(`upstream stream error: ${errMsg}`)) writeOut(outEv);
       }
     } finally {
+      diagnostics?.finish({ status: upstream.status, reason: 'stream-finished' });
       res.end();
     }
   }
