@@ -30,6 +30,24 @@ export const PLUGIN_SCOPES = ['public', 'organization', 'personal'] as const;
 /** `public` 对所有已登录身份可见；其余范围只对对应组织或自然人可见。 */
 export type PluginScope = (typeof PLUGIN_SCOPES)[number];
 
+/**
+ * 组织登记的插件前缀（不含尾连字符）。与服务端 `PLUGIN_PREFIX_PATTERN` 一致：
+ * 仅小写字母和数字，长度 2–16。
+ */
+export const PLUGIN_PREFIX_PATTERN = /^[a-z0-9]{2,16}$/;
+
+/** 列表响应当前组织身份与已登记前缀。仅出现在 `GET /api/plugins`。 */
+export interface PluginCurrentOrganization {
+  /** 当前组织的稳定 ID。 */
+  organizationId: string;
+  /**
+   * 已登记前缀原样保留，不带尾连字符。
+   * `null` 表示当前是组织身份，但该组织尚未登记前缀；
+   * 与「整段 currentOrganization 为 null」（非组织身份）含义不同。
+   */
+  pluginPrefix: string | null;
+}
+
 /** 服务端为当前客户端选择的 Release 图标元数据；URL 为短期授权地址。 */
 export interface PluginIconMetadata {
   /** 图标 MIME 类型，例如 image/png 或 image/svg+xml。 */
@@ -142,6 +160,11 @@ export interface ListPluginsResponse {
   nextCursor: string | null;
   /** 对请求身份可见的清理通告；服务端每页重复完整下发，缺失时规范化为空数组。 */
   removals: PluginRemovalNotice[];
+  /**
+   * 当前组织身份与已登记插件前缀。匿名 / token 降级 / Personal、以及老服务端缺字段时
+   * 规范化为 `null`。组织已登录但未登记前缀时为 `{ organizationId, pluginPrefix: null }`。
+   */
+  currentOrganization: PluginCurrentOrganization | null;
 }
 
 /** 单个 Plugin 详情响应。 */
@@ -370,12 +393,36 @@ function parseRemovals(value: unknown): PluginRemovalNotice[] {
   return notices;
 }
 
+function parseCurrentOrganization(value: unknown): PluginCurrentOrganization | null {
+  // 匿名 / token 降级 / Personal，以及老服务端整段缺失：规范化为 null。
+  if (value === null || value === undefined) return null;
+  const raw = object(value, 'response.currentOrganization');
+  const organizationId = string(
+    raw.organizationId,
+    'response.currentOrganization.organizationId',
+    128,
+  );
+  // 「对象在、但省略了 pluginPrefix key」是畸形响应，不能规范化成 null：
+  // 那会把「未登记前缀」和「取不到组织」混成一种，上层再也分不开。
+  if (!Object.prototype.hasOwnProperty.call(raw, 'pluginPrefix')) {
+    throw new PluginProtocolError('response.currentOrganization.pluginPrefix 缺失');
+  }
+  if (raw.pluginPrefix === null) {
+    return { organizationId, pluginPrefix: null };
+  }
+  if (typeof raw.pluginPrefix !== 'string' || !PLUGIN_PREFIX_PATTERN.test(raw.pluginPrefix)) {
+    throw new PluginProtocolError('response.currentOrganization.pluginPrefix 不合法');
+  }
+  return { organizationId, pluginPrefix: raw.pluginPrefix };
+}
+
 /**
  * 解析并规范化 Plugin 分页列表响应。
  *
  * 未知字段会被忽略；已知字段缺失、值不合法或 schema 版本不支持时抛出
  * `PluginProtocolError`。`removals` 缺失时规范化为空数组，动作未知的通告
- * 会被跳过而不影响其余内容。
+ * 会被跳过而不影响其余内容。`currentOrganization` 缺失或为 null 时规范化为
+ * `null`；对象存在但缺少 `pluginPrefix` 键时抛错。
  */
 export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
   const raw = object(value, 'response');
@@ -388,6 +435,7 @@ export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
     plugins: raw.plugins.map(parseVisiblePluginSummary),
     nextCursor: nextCursor(raw.nextCursor, 'response.nextCursor'),
     removals: parseRemovals(raw.removals),
+    currentOrganization: parseCurrentOrganization(raw.currentOrganization),
   };
 }
 

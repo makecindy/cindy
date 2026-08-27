@@ -40,8 +40,15 @@ export async function normalizeDmMessage(
     /** host 媒体总仓(可选):入站图片提升进内容寻址仓,缺省回落 mediaDir。 */
     media?: IMHostMediaCache;
   },
-): Promise<IMMessageEvent> {
+): Promise<IMMessageEvent | null> {
   const chatId = m.channelId ?? m.channel?.id ?? '';
+  if (!chatId) {
+    // Malformed event without a resolvable channel (e.g. partial presence
+    // or guild event leaking through the DM filter). Return null so the
+    // transport suppresses it entirely — emitting an event with an empty
+    // chatId could inject non-DM content into the owner's agent session.
+    return null;
+  }
   const attachments: IMAttachment[] = [];
   const unsupported: IMUnsupportedEntry[] = [];
 

@@ -42,8 +42,7 @@ export function hasNonCollapsedSelectionOutsideComposer(editorDom: HTMLElement):
 
 export function useComposerSendFocusRestore(
   editor: ComposerFocusEditor | null,
-  composerMutationLocked: boolean,
-  sendDispatchInFlight: boolean,
+  composerTypingLocked: boolean,
 ): () => void {
   const pendingRestoreRef = useRef<PendingComposerFocusRestore | null>(null);
 
@@ -66,7 +65,7 @@ export function useComposerSendFocusRestore(
   }, [editor]);
 
   useEffect(() => {
-    if (!editor || sendDispatchInFlight || composerMutationLocked) return;
+    if (!editor || composerTypingLocked) return;
 
     const pendingRestore = pendingRestoreRef.current;
     if (!pendingRestore) return;
@@ -101,9 +100,17 @@ export function useComposerSendFocusRestore(
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [composerMutationLocked, editor, sendDispatchInFlight]);
+  }, [composerTypingLocked, editor]);
 
   return useCallback(() => {
+    // dispatchSend 会在本地路径与远端路径各捕获一次焦点（第二处在 effort settle 后触发）。
+    // 旧实现 restoreFocusAfterDispatchRef 用 || 合并防止互相覆盖；此捕获函数是直接赋值，
+    // 本地路径第一处捕获后 setEditable(false) 已打掉焦点，第二处捕获时 editor.isFocused 为 false，
+    // 会把第一处记住的 intent 覆盖成 null，解锁后不再恢复光标。
+    // 因此同一 editor 已有待恢复 intent 时，后续捕获直接跳过。
+    if (pendingRestoreRef.current && pendingRestoreRef.current.editor === editor) {
+      return;
+    }
     pendingRestoreRef.current =
       editor && !editor.isDestroyed && editor.isFocused
         ? { editor, focusAnchor: editor.view.dom.ownerDocument.activeElement }

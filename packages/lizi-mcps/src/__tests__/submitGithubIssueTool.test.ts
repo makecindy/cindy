@@ -55,6 +55,14 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('submit_github_issue tool', () => {
+  it('要求按最小公开原则泛化用户原话与示例', () => {
+    const { registry } = setup();
+    const tool = registry.get('submit_github_issue');
+    expect(tool?.description).toContain('Bug 和功能建议都遵循最小公开原则');
+    expect(tool?.description).toContain('不要逐字复制用户消息');
+    expect(tool?.description).toContain('不能识别所有语义隐私');
+  });
+
   it('缺参数 → INVALID_ARGS, host 不被调', async () => {
     const { registry, submit } = setup();
     const res = await registry.call('submit_github_issue', {});

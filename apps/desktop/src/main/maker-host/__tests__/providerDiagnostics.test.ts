@@ -34,34 +34,55 @@ describe('classifyProviderError', () => {
     expect(classifyProviderError({ status: 401 }).code).toBe('AUTH_INVALID');
     expect(classifyProviderError({ status: 402 }).code).toBe('QUOTA_EXCEEDED');
     expect(classifyProviderError({ status: 403 }).code).toBe('AUTH_FORBIDDEN');
-    expect(classifyProviderError({ status: 429 })).toMatchObject({ code: 'RATE_LIMITED', retryable: true });
-    expect(classifyProviderError({ status: 529 })).toMatchObject({ code: 'RATE_LIMITED', retryable: true });
-    expect(classifyProviderError({ status: 503 })).toMatchObject({ code: 'UPSTREAM_ERROR', retryable: true });
+    expect(classifyProviderError({ status: 429 })).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryable: true,
+    });
+    expect(classifyProviderError({ status: 529 })).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryable: true,
+    });
+    expect(classifyProviderError({ status: 503 })).toMatchObject({
+      code: 'UPSTREAM_ERROR',
+      retryable: true,
+    });
   });
 
   it('404：模型措辞 → MODEL_NOT_FOUND，否则 ENDPOINT_NOT_FOUND', () => {
     expect(
-      classifyProviderError({ status: 404, bodyText: '{"error":{"message":"model: glm-x not found"}}' }).code,
+      classifyProviderError({
+        status: 404,
+        bodyText: '{"error":{"message":"model: glm-x not found"}}',
+      }).code,
     ).toBe('MODEL_NOT_FOUND');
-    expect(classifyProviderError({ status: 404, bodyText: 'no route' }).code).toBe('ENDPOINT_NOT_FOUND');
+    expect(classifyProviderError({ status: 404, bodyText: 'no route' }).code).toBe(
+      'ENDPOINT_NOT_FOUND',
+    );
   });
 
   it('400 按错误体 pattern 分流', () => {
     expect(
-      classifyProviderError({ status: 400, bodyText: 'The model `x` does not exist or you do not have access' }).code,
+      classifyProviderError({
+        status: 400,
+        bodyText: 'The model `x` does not exist or you do not have access',
+      }).code,
     ).toBe('MODEL_NOT_FOUND');
-    expect(classifyProviderError({ status: 400, bodyText: 'prompt is too long: 250000 tokens' }).code).toBe(
-      'CONTEXT_TOO_LONG',
+    expect(
+      classifyProviderError({ status: 400, bodyText: 'prompt is too long: 250000 tokens' }).code,
+    ).toBe('CONTEXT_TOO_LONG');
+    expect(classifyProviderError({ status: 400, bodyText: 'insufficient_quota' }).code).toBe(
+      'QUOTA_EXCEEDED',
     );
-    expect(classifyProviderError({ status: 400, bodyText: 'insufficient_quota' }).code).toBe('QUOTA_EXCEEDED');
-    expect(classifyProviderError({ status: 400, bodyText: 'Extra inputs are not permitted' }).code).toBe(
-      'WIRE_INCOMPATIBLE',
-    );
+    expect(
+      classifyProviderError({ status: 400, bodyText: 'Extra inputs are not permitted' }).code,
+    ).toBe('WIRE_INCOMPATIBLE');
     expect(classifyProviderError({ status: 400, bodyText: 'something odd' }).code).toBe('UNKNOWN');
   });
 
   it('403 命中鉴权措辞归 AUTH_INVALID（部分网关 key 无效报 403）', () => {
-    expect(classifyProviderError({ status: 403, bodyText: 'invalid api key provided' }).code).toBe('AUTH_INVALID');
+    expect(classifyProviderError({ status: 403, bodyText: 'invalid api key provided' }).code).toBe(
+      'AUTH_INVALID',
+    );
   });
 
   it('网络层错误 → UPSTREAM_UNREACHABLE / TIMEOUT（均可重试）', () => {
@@ -125,9 +146,7 @@ describe('buildProbeRequest', () => {
       requestPath: '/tenant/messages?beta=true',
       modelId: 'claude-sonnet-4-6',
     });
-    expect(url).toBe(
-      'https://provider.example/api/v1/tenant/messages?tenant=alpha&beta=true',
-    );
+    expect(url).toBe('https://provider.example/api/v1/tenant/messages?tenant=alpha&beta=true');
   });
 
   it('cc wire：/v1/messages + anthropic-version + 双鉴权头（与 api-key-header 路由分支对齐）', () => {
@@ -175,7 +194,8 @@ describe('buildProbeRequest', () => {
     ['minimax-cn', 'https://api.minimaxi.com/v1/responses'],
     ['minimax-global', 'https://api.minimax.io/v1/responses'],
   ])('%s 预设拼出官方 Responses 端点', (presetId, expectedUrl) => {
-    const runtime = BUNDLED_CATALOG.presets?.find((preset) => preset.id === presetId)?.runtimes.codex;
+    const runtime = BUNDLED_CATALOG.presets?.find((preset) => preset.id === presetId)?.runtimes
+      .codex;
     expect(runtime).toBeDefined();
     const { url, init } = buildProbeRequest({
       agent: 'codex',
@@ -228,18 +248,18 @@ describe('buildProbeRequest', () => {
       modelId: 'custom-model',
       requestPath: '/infer?stream=1&mode=fast',
     });
-    expect(url).toBe(
-      'https://gateway.example/api/infer?tenant=alpha&stream=1&mode=fast',
-    );
+    expect(url).toBe('https://gateway.example/api/infer?tenant=alpha&stream=1&mode=fast');
   });
 
   it('rejects base URL credentials when applying an exact request path', () => {
-    expect(() => buildProbeRequest({
-      agent: 'codex',
-      baseUrl: 'https://user:pass@gateway.example/api',
-      modelId: 'custom-model',
-      requestPath: '/infer',
-    })).toThrow('invalid provider base URL');
+    expect(() =>
+      buildProbeRequest({
+        agent: 'codex',
+        baseUrl: 'https://user:pass@gateway.example/api',
+        modelId: 'custom-model',
+        requestPath: '/infer',
+      }),
+    ).toThrow('invalid provider base URL');
   });
 
   it('无 key 时不注入鉴权头（端点可能靠自定义 headers 鉴权）', () => {
@@ -308,35 +328,72 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {
     const r = await runProviderProbe(
-      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
-      async () => new Response('data: {}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'm',
+        apiKey: 'k',
+        wireProtocol: 'openai-chat',
+      },
+      async () =>
+        new Response('data: {}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
     );
     expect(r.ok).toBe(true);
   });
 
   it('openai-chat 探测:200 SSE 顶层 error 帧 → 分类失败', async () => {
     const r = await runProviderProbe(
-      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
-      async () => new Response(
-        'data: {"error":{"type":"server_error","message":"model overloaded"}}\n\n',
-        { status: 200, headers: { 'content-type': 'text/event-stream' } },
-      ),
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'm',
+        apiKey: 'k',
+        wireProtocol: 'openai-chat',
+      },
+      async () =>
+        new Response('data: {"error":{"type":"server_error","message":"model overloaded"}}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
     );
     expect(r).toMatchObject({ ok: false, code: 'UPSTREAM_ERROR', status: 200 });
   });
 
   it('openai-chat 探测:200 SSE 无 data 帧 → WIRE_INCOMPATIBLE', async () => {
     const r = await runProviderProbe(
-      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
-      async () => new Response(': keepalive\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'm',
+        apiKey: 'k',
+        wireProtocol: 'openai-chat',
+      },
+      async () =>
+        new Response(': keepalive\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
     );
     expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 200 });
   });
 
   it('openai-chat 探测:200 但非 SSE(application/json)→ WIRE_INCOMPATIBLE(与真实桥同口径)', async () => {
     const r = await runProviderProbe(
-      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
-      async () => new Response('{"choices":[]}', { status: 200, headers: { 'content-type': 'application/json' } }),
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'm',
+        apiKey: 'k',
+        wireProtocol: 'openai-chat',
+      },
+      async () =>
+        new Response('{"choices":[]}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
     );
     expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 200 });
   });
@@ -344,7 +401,8 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
   it('原生 Responses(codex 无 openai-chat)不做 SSE 校验:200 JSON 仍 ok', async () => {
     const r = await runProviderProbe(
       { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
-      async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+      async () =>
+        new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
     );
     expect(r.ok).toBe(true);
   });
@@ -369,7 +427,9 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
 
   it('从 active-catalog 解析 user 供应商 + 注入 key reader 读 key', () => {
     setCustomProviders([buildUserProvider(config)]);
-    setDiagnosticsKeyReader((id, agent) => (id === 'my-relay' && agent === 'claude-code' ? 'sk-saved' : null));
+    setDiagnosticsKeyReader((id, agent) =>
+      id === 'my-relay' && agent === 'claude-code' ? 'sk-saved' : null,
+    );
     const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
     expect(spec).toMatchObject({
       baseUrl: 'https://relay.example/anthropic',
@@ -423,6 +483,65 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     );
     expect(seenUrl).toBe('https://api.deepseek.com/chat/completions');
+  });
+
+  it('Pi 的常用 Chat 默认仍显式进入 saved 探测，不误走 /responses', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'pi-chat',
+        name: 'Pi Chat',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://pi-chat.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'chat-model', name: 'Chat Model' }],
+          },
+        },
+      }),
+    ]);
+    setDiagnosticsKeyReader(() => 'pi-chat-key');
+
+    expect(resolveSavedProbeSpec('pi-chat', 'pi').wireProtocol).toBe('openai-chat');
+    let seenUrl = '';
+    await testProviderConnection(
+      { kind: 'saved', providerId: 'pi-chat', agent: 'pi' },
+      async (url) => {
+        seenUrl = String(url);
+        return new Response('data: [DONE]\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    );
+    expect(seenUrl).toBe('https://pi-chat.example/v1/chat/completions');
+  });
+
+  it('Pi saved 探测优先使用单模型协议覆盖', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'pi-model-override',
+        name: 'Pi Model Override',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://pi-override.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [
+              {
+                id: 'messages-model',
+                name: 'Messages Model',
+                piApi: 'anthropic-messages',
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    expect(resolveSavedProbeSpec('pi-model-override', 'pi')).toMatchObject({
+      baseUrl: 'https://pi-override.example/v1',
+      modelId: 'messages-model',
+      wireProtocol: 'anthropic-messages',
+    });
   });
 
   it('仅选择 glm-5.3 时 saved 探测使用模型级 Responses 路由', async () => {
@@ -517,8 +636,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       }),
     ]);
     setDiagnosticsKeyReader(() => 'sk-exact');
-    expect(resolveSavedProbeSpec('exact-path', 'codex').requestPath)
-      .toBe('/tenant/acme/infer');
+    expect(resolveSavedProbeSpec('exact-path', 'codex').requestPath).toBe('/tenant/acme/infer');
   });
 
   it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', () => {
@@ -536,8 +654,21 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
         models: {
           ...provider.models,
           'claude-code': [
-            { id: 'text-embedding-3-large', name: 'Embedding', contextWindow: 8191, efforts: [], defaultEffort: null, mode: 'embedding' },
-            { id: 'glm-5.2', name: 'GLM', contextWindow: 128_000, efforts: [], defaultEffort: null },
+            {
+              id: 'text-embedding-3-large',
+              name: 'Embedding',
+              contextWindow: 8191,
+              efforts: [],
+              defaultEffort: null,
+              mode: 'embedding',
+            },
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
           ],
         },
       },
@@ -554,7 +685,14 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
         models: {
           ...provider.models,
           'claude-code': [
-            { id: 'text-embedding-3-large', name: 'Embedding', contextWindow: 8191, efforts: [], defaultEffort: null, mode: 'embedding' },
+            {
+              id: 'text-embedding-3-large',
+              name: 'Embedding',
+              contextWindow: 8191,
+              efforts: [],
+              defaultEffort: null,
+              mode: 'embedding',
+            },
           ],
         },
       },

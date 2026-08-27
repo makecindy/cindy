@@ -9,18 +9,27 @@
  * no React): it returns structured data; each client formats labels in its own locale.
  *
  * The renderer/device-link `agent_task_update` transport remains live-only. The desktop host
- * consumes a main-only Subagent observation marker before forwarding the existing payload,
- * and separately projects that observation into Cindy's durable workspace. Mobile decodes
- * the live event via
- * `applyAgentTaskUpdateEvent`; the render layer links it to its originating tool-call.
+ * also projects exact terminal state onto the durable originating tool-call, so history replay
+ * does not have to infer failure from result text. Mobile decodes live updates via
+ * `applyAgentTaskUpdateEvent`; the render layer links either source to its originating tool-call.
  */
 
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
+export type AgentTaskTerminalStatus = Exclude<AgentTaskStatus, 'running'>;
+
+export function normalizeAgentTaskTerminalStatus(
+  value: unknown,
+): AgentTaskTerminalStatus | undefined {
+  return value === 'completed' || value === 'failed' || value === 'stopped'
+    ? value
+    : undefined;
+}
 
 export interface AgentTaskUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+  costUsd?: number;
 }
 
 /**
@@ -162,8 +171,13 @@ export interface AgentTaskUpdate {
 export function deriveAgentTaskStatus(
   updateStatus: AgentTaskStatus | undefined,
   result?: string,
-  options?: { resultIsLaunchReceipt?: boolean },
+  options?: {
+    resultIsLaunchReceipt?: boolean;
+    persistedStatus?: AgentTaskTerminalStatus;
+  },
 ): AgentTaskStatus {
+  const persistedStatus = normalizeAgentTaskTerminalStatus(options?.persistedStatus);
+  if (persistedStatus) return persistedStatus;
   const hasResult = typeof result === 'string' && result.trim().length > 0;
   if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
   return updateStatus ?? (hasResult ? 'completed' : 'running');
@@ -222,6 +236,7 @@ export function normalizeAgentTaskUpdate(
         ...(typeof usageRaw.totalTokens === 'number' ? { totalTokens: usageRaw.totalTokens } : {}),
         ...(typeof usageRaw.toolUses === 'number' ? { toolUses: usageRaw.toolUses } : {}),
         ...(typeof usageRaw.durationMs === 'number' ? { durationMs: usageRaw.durationMs } : {}),
+        ...(typeof usageRaw.costUsd === 'number' ? { costUsd: usageRaw.costUsd } : {}),
       }
     : undefined;
   const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
@@ -398,6 +413,10 @@ export function subagentSpawnResultIndicatesRunning(
   // Claude's asynchronous Agent tool returns a textual launch receipt while the
   // child is still running. Treat it like the structured Codex V1 receipt so a
   // paired stale `running` update does not close the task prematurely.
+  if (toolName === PI_SUBAGENT_TOOL_NAME
+    && trimmed === 'Cindy subagent launched. The agent is working in the background.') {
+    return true;
+  }
   if ((toolName === 'Agent' || toolName === 'Task')
     && (
       trimmed === 'Async agent launched successfully.'
@@ -419,9 +438,11 @@ export function buildAgentTaskCardModel(input: {
   toolInput?: unknown;
   update?: AgentTaskUpdate;
   result?: string;
+  persistedStatus?: AgentTaskTerminalStatus;
 }): AgentTaskCardModel {
-  const { toolName, toolInput, update, result } = input;
+  const { toolName, toolInput, update, result, persistedStatus } = input;
   const status = deriveAgentTaskStatus(update?.status, result, {
+    persistedStatus,
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
       || subagentSpawnResultIndicatesRunning(toolName, result),

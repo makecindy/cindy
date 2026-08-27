@@ -20,11 +20,20 @@
  *   --msg-tool-card-chevron: secondary(completed 置灰)
  */
 
-import { useEffect, useId, useRef, useState } from 'react';
-import { CircleCheck, CircleDot, Circle } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CircleDot,
+  Circle,
+  ListTodo,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -94,6 +103,133 @@ function ProgressRing({
   );
 }
 
+/**
+ * InlinePlanCard —— 计划在聊天时间线里的主呈现。
+ *
+ * 计划默认留在产生它的消息位置，用户滚回任务经过时能直接看到完整清单；
+ * composer 上方的 TodoListCard 只在这张卡离开可见区域后接力。两者消费同一份
+ * todos，但交互职责不同：流内卡负责阅读与历史，胶囊负责滚动后的轻量提醒。
+ */
+export function InlinePlanCard({
+  todos,
+  animated = false,
+}: {
+  todos: TodoItem[];
+  /** 只有会话确实在跑时，进行中行才呼吸；失败/中断后的历史卡保持静止。 */
+  animated?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(true);
+
+  if (!todos || todos.length === 0) return null;
+
+  const completed = todos.filter((todo) => todo.status === 'completed').length;
+  const total = todos.length;
+  const progress = total > 0 ? (completed / total) * 100 : 0;
+  const activeItem = todos.find((todo) => todo.status === 'in_progress');
+  const summary = activeItem?.content ?? todos[todos.length - 1]?.content ?? '';
+
+  return (
+    <div className="flex w-full justify-start" data-inline-plan-card="true">
+      <div
+        className={cn(
+          'max-w-full overflow-hidden rounded-[12px] border border-[var(--msg-tool-card-border)]',
+          'bg-[var(--msg-tool-card-bg)]',
+        )}
+      >
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+          className={cn(
+            'flex w-full cursor-pointer select-none items-center gap-2 px-[14px] py-[10px]',
+            'transition-opacity hover:opacity-80',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+            'focus-visible:ring-[var(--focus-ring)]',
+          )}
+        >
+          {expanded ? (
+            <ChevronDown size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+          ) : (
+            <ChevronRight size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+          )}
+          <ListTodo size={16} className="shrink-0 text-[var(--msg-tool-card-text)]" />
+          <span className="shrink-0 font-mono text-13 font-medium leading-none text-[var(--msg-tool-card-text)]">
+            {completed}/{total}
+          </span>
+          <span className="shrink-0 text-13 leading-none text-[var(--msg-tool-card-chevron)]">
+            ·
+          </span>
+          <span className="mt-px truncate text-13 leading-none text-[var(--msg-tool-card-text)]">
+            {summary}
+          </span>
+        </button>
+
+        {!expanded && (
+          <div className="h-[2px] w-full bg-[var(--todo-bar-track)]">
+            <div
+              className="h-full bg-[var(--msg-tool-card-text)] transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
+
+        {expanded && (
+          <div className="border-t border-[var(--msg-tool-card-border)] px-[14px] pb-[12px] pt-[10px]">
+            <div className="flex flex-col gap-[2px]">
+              {todos.map((todo, index) => (
+                <div
+                  key={`${todo.content}:${index}`}
+                  className="flex min-h-[30px] items-center gap-[10px]"
+                >
+                  {todo.status === 'completed' && (
+                    <CircleCheck
+                      size={18}
+                      strokeWidth={1.5}
+                      className="shrink-0 text-[var(--msg-tool-card-chevron)]"
+                    />
+                  )}
+                  {todo.status === 'in_progress' && (
+                    <span
+                      data-inline-plan-step-active="true"
+                      data-inline-plan-step-breathing={animated ? 'true' : 'false'}
+                      className={cn('inline-flex shrink-0', animated && 'session-status-breathing')}
+                    >
+                      <CircleDot
+                        size={18}
+                        strokeWidth={1.5}
+                        className="shrink-0 text-[var(--msg-tool-card-text)]"
+                      />
+                    </span>
+                  )}
+                  {todo.status === 'pending' && (
+                    <Circle
+                      size={18}
+                      strokeWidth={1.5}
+                      className="shrink-0 text-[var(--msg-tool-card-text)]"
+                    />
+                  )}
+                  <span
+                    className={cn(
+                      'min-w-0 break-words text-13 leading-[1.45]',
+                      todo.status === 'completed' &&
+                        'font-normal text-[var(--msg-tool-card-chevron)]',
+                      todo.status === 'in_progress' &&
+                        'font-medium text-[var(--msg-tool-card-text)]',
+                      todo.status === 'pending' && 'font-normal text-[var(--msg-tool-card-text)]',
+                    )}
+                  >
+                    {todo.content}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -102,6 +238,7 @@ export function TodoListCard({
   todos,
   animated = false,
   maxWidth,
+  onDismiss,
 }: {
   todos: TodoItem[];
   /**
@@ -111,7 +248,9 @@ export function TodoListCard({
    */
   animated?: boolean;
   /** Composer/chat column width. Keeps the flyout inside clipped compact panes. */
-  maxWidth?: number;
+  maxWidth?: CSSProperties['maxWidth'];
+  /** Hide the current rendered snapshot without mutating the agent's plan state. */
+  onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
   const flyoutId = useId();
@@ -162,7 +301,9 @@ export function TodoListCard({
   const flyoutMaxWidth =
     typeof maxWidth === 'number' && Number.isFinite(maxWidth) && maxWidth > 0
       ? `${Math.floor(maxWidth)}px`
-      : null;
+      : typeof maxWidth === 'string' && maxWidth.length > 0
+        ? maxWidth
+        : null;
 
   return (
     <div className="pointer-events-none flex w-auto shrink-0 justify-center">
@@ -243,7 +384,7 @@ export function TodoListCard({
             <div
               aria-hidden={!revealed}
               className={cn(
-                'w-full origin-bottom overflow-hidden rounded-[12px]',
+                'relative w-full origin-bottom overflow-hidden rounded-[12px]',
                 'border border-[var(--msg-tool-card-border)]',
                 'bg-[var(--msg-tool-card-bg)]',
                 revealed ? 'animate-float-in' : 'animate-float-out',
@@ -252,59 +393,81 @@ export function TodoListCard({
                 if (!revealed) setRenderFlyout(false);
               }}
             >
-              <div className="flex max-h-[280px] flex-col gap-[2px] overflow-y-auto px-[14px] py-[10px]">
+              {onDismiss && revealed && (
+                <Tip text={t('chat.planPill.dismiss')}>
+                  <button
+                    type="button"
+                    onClick={onDismiss}
+                    aria-label={t('chat.planPill.dismiss')}
+                    className={cn(
+                      'absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full',
+                      'text-[var(--msg-tool-card-chevron)] transition-colors',
+                      'hover:bg-[var(--model-item-hover)] hover:text-[var(--msg-tool-card-text)]',
+                      'active:scale-[0.98]',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    )}
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </Tip>
+              )}
+              <div
+                className={cn(
+                  'flex max-h-[280px] flex-col gap-[2px] overflow-y-auto py-[10px] pl-[14px]',
+                  onDismiss ? 'pr-10' : 'pr-[14px]',
+                )}
+              >
                 {todos.map((todo, i) => (
                   <div key={i} className="flex h-[30px] items-center gap-[10px]">
-                      {/* Icon */}
-                      {todo.status === 'completed' && (
-                        <CircleCheck
-                          size={18}
-                          strokeWidth={1.5}
-                          className="shrink-0 text-[var(--msg-tool-card-chevron)]"
-                        />
-                      )}
-                      {todo.status === 'in_progress' && (
-                        // 呼吸表达"正在干活":挂侧栏运行态同款动画。按 SVG 常驻
-                        // 动画红线,动画在 span wrapper 上,SVG 本体保持静态。
-                        // 会话空闲(停止/失败/中断后计划仍留屏)时静止:动画只在
-                        // 确有 running 语义时挂载,否则等于谎报该步骤仍在执行。
-                        <span
-                          data-plan-step-active="true"
-                          data-plan-step-breathing={animated ? 'true' : 'false'}
-                          className={cn(
-                            'inline-flex shrink-0',
-                            animated && 'session-status-breathing',
-                          )}
-                        >
-                          <CircleDot
-                            size={18}
-                            strokeWidth={1.5}
-                            className="shrink-0 text-[var(--msg-tool-card-text)]"
-                          />
-                        </span>
-                      )}
-                      {todo.status === 'pending' && (
-                        <Circle
+                    {/* Icon */}
+                    {todo.status === 'completed' && (
+                      <CircleCheck
+                        size={18}
+                        strokeWidth={1.5}
+                        className="shrink-0 text-[var(--msg-tool-card-chevron)]"
+                      />
+                    )}
+                    {todo.status === 'in_progress' && (
+                      // 呼吸表达"正在干活":挂侧栏运行态同款动画。按 SVG 常驻
+                      // 动画红线,动画在 span wrapper 上,SVG 本体保持静态。
+                      // 会话空闲(停止/失败/中断后计划仍留屏)时静止:动画只在
+                      // 确有 running 语义时挂载,否则等于谎报该步骤仍在执行。
+                      <span
+                        data-plan-step-active="true"
+                        data-plan-step-breathing={animated ? 'true' : 'false'}
+                        className={cn(
+                          'inline-flex shrink-0',
+                          animated && 'session-status-breathing',
+                        )}
+                      >
+                        <CircleDot
                           size={18}
                           strokeWidth={1.5}
                           className="shrink-0 text-[var(--msg-tool-card-text)]"
                         />
-                      )}
-
-                      {/* Text — 对齐 Codex:completed 置灰,in_progress 高亮,pending 正常。 */}
-                      <span
-                        className={cn(
-                          'mt-px truncate text-13',
-                          todo.status === 'completed' &&
-                            'font-normal text-[var(--msg-tool-card-chevron)]',
-                          todo.status === 'in_progress' &&
-                            'font-semibold text-[var(--msg-tool-card-text)]',
-                          todo.status === 'pending' &&
-                            'font-normal text-[var(--msg-tool-card-text)]',
-                        )}
-                      >
-                        {todo.content}
                       </span>
+                    )}
+                    {todo.status === 'pending' && (
+                      <Circle
+                        size={18}
+                        strokeWidth={1.5}
+                        className="shrink-0 text-[var(--msg-tool-card-text)]"
+                      />
+                    )}
+
+                    {/* Text — 对齐 Codex:completed 置灰,in_progress 高亮,pending 正常。 */}
+                    <span
+                      className={cn(
+                        'mt-px truncate text-13',
+                        todo.status === 'completed' &&
+                          'font-normal text-[var(--msg-tool-card-chevron)]',
+                        todo.status === 'in_progress' &&
+                          'font-semibold text-[var(--msg-tool-card-text)]',
+                        todo.status === 'pending' && 'font-normal text-[var(--msg-tool-card-text)]',
+                      )}
+                    >
+                      {todo.content}
+                    </span>
                   </div>
                 ))}
               </div>

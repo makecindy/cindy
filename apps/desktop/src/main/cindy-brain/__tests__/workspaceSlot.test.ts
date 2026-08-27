@@ -9,7 +9,7 @@ import {
   type WorkspaceSlotDeps,
 } from '../workspaceSlot';
 
-function workspaceGhost(options: { slots?: string[]; enabled?: boolean } = {}): InstalledGhost {
+function workspaceGhost(options: { workspace?: boolean; enabled?: boolean } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -18,7 +18,7 @@ function workspaceGhost(options: { slots?: string[]; enabled?: boolean } = {}): 
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: options.slots ?? ['workspace'],
+      ...(options.workspace === false ? {} : { workspace: true }),
     },
     dir: '/fake/ws-ghost',
     enabled: options.enabled ?? true,
@@ -67,8 +67,8 @@ const DIR_REQ = {
 } as const;
 
 describe('workspaceSlot · 资格审与载荷校验', () => {
-  it('未声明 workspace 槽 / 未启用 一律 PERMISSION_DENIED', async () => {
-    const noSlot = makeSlot({ getGhost: () => workspaceGhost({ slots: ['pick'] }) });
+  it('未声明 workspace 能力 / 未启用 一律 PERMISSION_DENIED', async () => {
+    const noSlot = makeSlot({ getGhost: () => workspaceGhost({ workspace: false }) });
     expect(await noSlot.slot.handleRequest('ws-ghost', PICK_REQ)).toMatchObject({
       ok: false,
       errorCode: 'PERMISSION_DENIED',

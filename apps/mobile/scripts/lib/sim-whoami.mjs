@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { dirname, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
 import { withLocalMobileRegionConfig } from './mobile-dev-region.mjs';
@@ -82,6 +82,155 @@ export function extractSimMetroPortArgs(args, defaultPort = 8081) {
   }
 
   return { port, explicit: seen, passthrough };
+}
+
+/** Parse the explicit simulator handoff permission used only by the personal Skill. */
+export function extractSimTakeoverArgs(args) {
+  let takeover = false;
+  const passthrough = [];
+
+  for (const arg of args) {
+    if (arg === '--takeover') {
+      if (takeover) throw new Error('--takeover 只能传一次');
+      takeover = true;
+    } else {
+      passthrough.push(arg);
+    }
+  }
+
+  return { takeover, passthrough };
+}
+
+/** Decide whether a listener has enough Cindy-specific identity for an explicit handoff. */
+export function classifySimMetroListener({ cwd, source, targetWorktree }) {
+  if (!cwd) return { confirmed: false, worktree: null };
+
+  const normalizedCwd = normalize(cwd).replaceAll('\\', '/').replace(/\/+$/, '');
+  const normalizedTarget = normalize(targetWorktree).replaceAll('\\', '/').replace(/\/+$/, '');
+  const suffix = '/apps/mobile';
+  if (!normalizedCwd.endsWith(suffix) || !source) {
+    return { confirmed: false, worktree: null };
+  }
+
+  const worktree = normalizedCwd.slice(0, -suffix.length);
+  return {
+    confirmed: true,
+    worktree,
+    isTarget: worktree === normalizedTarget,
+  };
+}
+
+/**
+ * Decide whether sim:start should reuse, restart, or refuse the occupant on 8081.
+ *
+ * `--takeover` may stop a confirmed Cindy Metro (cwd ends with /apps/mobile and
+ * the process has an injected source token). It does not require the occupying
+ * worktree's live git fingerprint to still match the running Metro. A missing
+ * worktree is an orphan Metro and is also eligible. Unknown occupants stay
+ * fail-closed even with `--takeover`.
+ */
+export function resolveSimMetroHandoff({
+  port = 8081,
+  cwd = null,
+  takeover = false,
+  envChanged = false,
+  currentSource,
+  runningSource,
+  listener,
+  listenerWorktreeExists = false,
+} = {}) {
+  const occupant = cwd || '(未知进程)';
+
+  if (!listener?.confirmed) {
+    return {
+      action: 'refuse',
+      code: 'occupied-unknown',
+      lines: [
+        `✗ 端口 ${port} 被其他进程占用:${occupant}`,
+        '  不是可确认的 Cindy Metro(需要 .../apps/mobile 工作目录 + 注入的源码指纹)。',
+        '  未知进程即使传 `--takeover` 也不会停。',
+      ],
+    };
+  }
+
+  if (listener.isTarget) {
+    if (runningSource === currentSource) {
+      if (envChanged && !takeover) {
+        return {
+          action: 'refuse',
+          code: 'target-env-stale',
+          lines: [
+            `✗ 已补/改 apps/mobile/.env,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
+            '  需要刷新 env 时传 `--takeover` 重起,新 env 才会生效。',
+          ],
+        };
+      }
+      if (envChanged && takeover) {
+        return { action: 'restart', code: 'target-env', lines: [] };
+      }
+      return {
+        action: 'reuse',
+        code: 'target-fresh',
+        lines: [
+          `✓ Metro 已在 ${port} 运行(本 worktree,源码指纹 ${currentSource})。改 JS 直接 Fast Refresh,无需重开。`,
+        ],
+      };
+    }
+    if (!takeover) {
+      return {
+        action: 'refuse',
+        code: 'target-stale',
+        lines: [
+          `✗ ${port} 上是本 worktree 的 Metro,但源码指纹已过期(运行中=${runningSource || '(无)'} ≠ 当前=${currentSource})。`,
+          '  这通常表示 Metro 启动后又 amend/rebase/reset/改过文件。需要接管时传 `--takeover` 重起。',
+        ],
+      };
+    }
+    return { action: 'restart', code: 'target-stale', lines: [] };
+  }
+
+  if (!listenerWorktreeExists) {
+    if (!takeover) {
+      return {
+        action: 'refuse',
+        code: 'occupied-orphan',
+        lines: [
+          `✗ 端口 ${port} 被已删除 worktree 的孤儿 Metro 占用:${occupant}`,
+          '  该目录已不存在,进程还占着端口。确认可以清掉时传 `--takeover`。',
+        ],
+      };
+    }
+    return { action: 'restart', code: 'occupied-orphan', lines: [] };
+  }
+
+  if (!takeover) {
+    return {
+      action: 'refuse',
+      code: 'occupied-foreign',
+      lines: [
+        `✗ 端口 ${port} 被其他 Cindy worktree 的 Metro 占用:${occupant}`,
+        '  当前版本需要这块端口。确认可以切换时传 `--takeover`。',
+      ],
+    };
+  }
+  return { action: 'restart', code: 'occupied-foreign', lines: [] };
+}
+
+/** Parse the machine-readable output switch for mobile:sim:whoami. */
+export function extractSimJsonArgs(args) {
+  let json = false;
+  const passthrough = [];
+
+  for (const arg of args) {
+    if (arg === '--json') {
+      if (json) throw new Error('--json 只能传一次');
+      json = true;
+    } else {
+      passthrough.push(arg);
+    }
+  }
+
+  return { json, passthrough };
 }
 
 /**

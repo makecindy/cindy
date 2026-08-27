@@ -1,4 +1,5 @@
 import type { RemoteSchedule, RemoteScheduleRun } from './scheduleTypes';
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export const DELETE_PREVIEW_RUN_LIMIT = 10_000;
 
@@ -91,12 +92,20 @@ export function isProjectAutomationSchedule(target: ScheduleDeleteTarget): boole
   return target.source === 'project' && !!target.workingDir && !!target.projectConfigId;
 }
 
-export function describeScheduleDeletePreview(preview: ScheduleDeletePreview): string {
+export function describeScheduleDeletePreview(
+  preview: ScheduleDeletePreview,
+  localizer?: PresentationLocalizer,
+): string {
   const sessionPart = preview.sessionCount === 0
-    ? '没有找到由它生成的任务'
-    : `找到 ${preview.sessionCount} 个由它生成的任务`;
+    ? presentationText(localizer, 'devices.automations.presentation.delete.noSessions', '没有找到由它生成的任务')
+    : presentationText(localizer, 'devices.automations.presentation.delete.sessions', `找到 ${preview.sessionCount} 个由它生成的任务`, {
+        count: preview.sessionCount,
+      });
   if (preview.inflightCount > 0) {
-    return `${sessionPart}，还有 ${preview.inflightCount} 次执行正在进行`;
+    return presentationText(localizer, 'devices.automations.presentation.delete.withInflight', `${sessionPart}，还有 ${preview.inflightCount} 次执行正在进行`, {
+      count: preview.inflightCount,
+      sessions: sessionPart,
+    });
   }
   return sessionPart;
 }

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 
 import {
   isValidPluginResourceId,
-  supportsCindyVersion,
+  type PluginCurrentOrganization,
   type PluginRemovalNotice,
   type VisiblePluginDetail,
   type VisiblePluginSummary,
@@ -12,16 +12,13 @@ import {
 import { app, dialog } from 'electron';
 
 import {
-  diffGhostPermissionItems,
-  diffInstalledGhostPermissionItems,
   GHOST_ICON_MAX_BYTES,
   ghostInstallApprovalToken,
-  ghostPermissionBaselineKey,
   ghostIconMimeType,
   isSafeGhostRelativePath,
   isOfficialGhostId,
+  isValidGhostId,
   validateGhostManifest,
-  validateNormalizedGhostManifest,
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -35,11 +32,8 @@ import type {
   PluginMarketItem,
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
-  PluginMarketPackageReviewFacts,
   PluginMarketSnapshot,
   PluginRemovalUserNotice,
-  PluginUpgradePermissionNotice,
-  PluginUpgradeUserNotice,
 } from '../../shared/pluginMarket.js';
 import {
   customMarketPluginId,
@@ -61,7 +55,10 @@ import {
   isBuiltinGhostRemovedByUser,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
-import { hasCindyOfficialTrustMetadata } from '../cindy-brain/GhostManager.js';
+import {
+  hasCindyOfficialTrustMetadata,
+  isCindyOfficialTrustInfo,
+} from '../cindy-brain/GhostManager.js';
 import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
@@ -75,10 +72,14 @@ import {
   GHOST_MANIFEST_MAX_BYTES,
   readBoundedFileNoFollowWithStat,
 } from '../utils/readBoundedFile.js';
-import { readInstalledGhostManifest } from '../installedGhostManifest.js';
+import {
+  readInstalledGhostManifest,
+  readInstalledGhostManifestDigestFormats,
+} from '../installedGhostManifest.js';
 import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
-import { GhostPackagePermissionReviewRequiredError } from '../cindy-brain/packagePermissionReview.js';
+import { ghostBrokerRedirectPortInstallError } from '../cindy-brain/ghostBrokerRedirectPort.js';
 import { PluginMarketApi } from './api.js';
+import { createOrganizationPrefixStore } from './organizationPrefixStore.js';
 import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
 import {
@@ -93,11 +94,8 @@ import { MarketSourceStore } from './sources/store.js';
 
 const log = createLogger('plugin-market');
 
-type PackagePermissionReviewer = (facts: PluginMarketPackageReviewFacts) => Promise<boolean>;
-
 class SilentUpgradeBusyError extends Error {}
 class SilentDefaultInstallCancelledError extends Error {}
-class SilentUpgradeStaleBaselineError extends Error {}
 
 /**
  * 来源增删改的互斥键。自定义市场安装的提交段也要拿这把锁，保证所选来源从
@@ -116,19 +114,8 @@ class SilentUpgradeStaleBaselineError extends Error {}
 const SOURCE_MUTATION_KEY = 'market-sources';
 const CUSTOM_ICON_PROJECTION_TOKEN_RE = /^[a-f0-9]{16}$/;
 const CUSTOM_MARKET_SNAPSHOT_TIMEOUT_MS = 3_000;
-
-function assertReviewedBaselineFresh(
-  installed: GhostManifest,
-  reviewedBaseline: string | undefined,
-): void {
-  if (reviewedBaseline === undefined) return;
-  if (ghostPermissionBaselineKey(installed) !== reviewedBaseline) {
-    throwIpcError(
-      'PRECONDITION_FAILED',
-      'Installed Plugin permissions changed after review; re-review required',
-    );
-  }
-}
+const AUTOMATIC_UPGRADE_RETRY_BASE_MS = 5 * 60 * 1_000;
+const AUTOMATIC_UPGRADE_RETRY_MAX_MS = 6 * 60 * 60 * 1_000;
 
 function captureMarketOwner(): ActiveAppSession {
   const session = getActiveAppSession();
@@ -142,10 +129,22 @@ function captureMarketOwner(): ActiveAppSession {
   return session;
 }
 
-function requireSameMarketOwner(expected: ActiveAppSession): void {
+function canCaptureMarketOwner(): boolean {
+  const session = getActiveAppSession();
+  return (
+    (session.mode === 'cloud' || session.mode === 'local') &&
+    Boolean(session.dataOwnerId) &&
+    !isAppSessionBoundaryPending()
+  );
+}
+
+function requireSameMarketOwner(
+  expected: ActiveAppSession,
+  options: { allowPendingBoundary?: boolean } = {},
+): void {
   const current = getActiveAppSession();
   if (
-    isAppSessionBoundaryPending() ||
+    (!options.allowPendingBoundary && isAppSessionBoundaryPending()) ||
     current.mode !== expected.mode ||
     current.dataOwnerId !== expected.dataOwnerId ||
     current.generation !== expected.generation
@@ -159,21 +158,16 @@ function visiblePluginsForOwner(
   plugins: readonly VisiblePluginSummary[],
 ): VisiblePluginSummary[] {
   return owner.mode === 'local'
-    ? plugins.filter(
-        (plugin) => plugin.scope === 'public' && isGhostAvailableForActiveSession(plugin.ghostId),
-      )
+    ? plugins.filter((plugin) => plugin.scope === 'public')
     : [...plugins];
 }
 
-/** 单条详情由服务端完成账号授权；本地模式仍需执行客户端能力边界。 */
+/** 目录 / 详情只按 scope 收口；账号能力只挡住运行时与默认安装。 */
 function requirePluginVisibleForOwner(
   owner: ActiveAppSession,
   plugin: VisiblePluginSummary | VisiblePluginDetail,
 ): void {
-  if (
-    owner.mode === 'local' &&
-    (plugin.scope !== 'public' || !isGhostAvailableForActiveSession(plugin.ghostId))
-  ) {
+  if (owner.mode === 'local' && plugin.scope !== 'public') {
     throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
   }
 }
@@ -229,8 +223,8 @@ function assertDetailMatchesSummary(
 /**
  * Claims a trusted legacy install without pretending its bytes came from the
  * current market release. A synthetic release id keeps the local version
- * visible as update-available until the user explicitly installs the market
- * release; the normal update path then replaces this with verified provenance.
+ * visible as update-available until the automatic market update replaces it
+ * with verified provenance.
  */
 function legacyRecordFrom(
   plugin: VisiblePluginSummary,
@@ -260,8 +254,12 @@ function ghostIdCounts(plugins: readonly VisiblePluginSummary[]): Map<string, nu
   return counts;
 }
 
-function manifestSupportsCurrentCindy(manifest: GhostManifest): boolean {
-  return supportsCindyVersion(app.getVersion(), manifest.minCindyVersion);
+function isGhostBusy(ghostId: string): boolean {
+  return (
+    hasPendingGhostCalls(ghostId) ||
+    hasRunningGhostErrand(ghostId) ||
+    hasRunningGhostCindyWork(ghostId)
+  );
 }
 
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
@@ -283,8 +281,8 @@ interface CustomMarketDiscoveryProgress {
 }
 
 export interface PluginMarketSnapshotOptions {
-  /** Renderer 目录请求先返回；默认安装/升级在同一 owner 上后台补做。 */
-  deferDefaultReconciliation?: boolean;
+  /** Renderer 目录请求先返回；默认安装和稳定来源升级在同一 owner 上后台补做。 */
+  deferReconciliation?: boolean;
   /** 延后对账完成（成功或失败）后通知 IPC 层刷新一次性提示。 */
   onDeferredReconciliationSettled?: () => void;
   /** Main-only completion signal; it is not part of the Renderer snapshot. */
@@ -309,9 +307,15 @@ function installedGhostRawManifest(dir: string): GhostManifest | null {
   return parsed.ok ? parsed.manifest : null;
 }
 
-function installedGhostRawManifestDigest(dir: string): string | null {
-  const manifest = installedGhostRawManifest(dir);
-  return manifest ? ghostManifestDigest(manifest) : null;
+function installedGhostRawManifestDigest(
+  dir: string,
+  expectedDigest?: string,
+): string | null {
+  const digests = readInstalledGhostManifestDigestFormats(dir, GHOST_MANIFEST_MAX_BYTES).map(
+    ghostManifestDigest,
+  );
+  if (expectedDigest !== undefined && digests.includes(expectedDigest)) return expectedDigest;
+  return digests[0] ?? null;
 }
 
 /**
@@ -436,7 +440,7 @@ function serverRecordMatchesInstalledGhost(
   }
   return (
     record.manifestDigest === undefined ||
-    record.manifestDigest === installedGhostRawManifestDigest(ghost.dir)
+    record.manifestDigest === installedGhostRawManifestDigest(ghost.dir, record.manifestDigest)
   );
 }
 
@@ -449,7 +453,10 @@ function canBackfillOfficialCindyGithubTrust(
     record.source === 'market' &&
     record.manifestDigest !== undefined &&
     installed.approval.state === 'approved' &&
-    !hasCindyOfficialTrustMetadata(installed.dir) &&
+    (
+      !isCindyOfficialTrustInfo(installed.trust) ||
+      !hasCindyOfficialTrustMetadata(installed.dir)
+    ) &&
     serverRecordMatchesInstalledGhost(record.pluginId, installed, record)
   );
 }
@@ -467,6 +474,27 @@ function sameMarketInstallation(
   );
 }
 
+function sameDisconnectedMarketInstallation(
+  current: PluginMarketInstallationRecord | null,
+  expected: PluginMarketInstallationRecord,
+): current is PluginMarketInstallationRecord {
+  return Boolean(
+    current
+    && !current.installed
+    && current.pluginId === expected.pluginId
+    && current.ghostId === expected.ghostId
+    && current.releaseId === expected.releaseId
+    && current.version === expected.version
+    && current.sha256 === expected.sha256
+    && current.scope === expected.scope
+    && current.organizationId === expected.organizationId
+    && current.source === expected.source
+    && current.updatedAt === expected.updatedAt
+    && current.sourceKey === expected.sourceKey
+    && current.manifestDigest === expected.manifestDigest,
+  );
+}
+
 /** Stable local facts reused while projecting one market catalog response. */
 interface LocalInstallSnapshot {
   /** Installed Ghost runtime facts indexed once for one market operation. */
@@ -477,15 +505,18 @@ interface LocalInstallSnapshot {
   rawDigestByGhostId: ReadonlyMap<string, string | null>;
 }
 
+/** 未登录浏览公开目录时不读本机账本 / 已装列表，避免带出上一账号的安装态。 */
+const EMPTY_LOCAL_INSTALL_SNAPSHOT: LocalInstallSnapshot = {
+  ghostsById: new Map(),
+  installations: {},
+  rawDigestByGhostId: new Map(),
+};
+
 /**
  * 清理通告 pending 汇总的 owner 隔离键。**故意不含 generation**：同一 owner
  * 重新登录（换代）后，未消费的通知仍应展示，不随会话代际作废。
  */
 function removalNoticeKey(owner: ActiveAppSession): string {
-  return `${owner.mode}:${owner.dataOwnerId}`;
-}
-
-function upgradeNoticeKey(owner: ActiveAppSession): string {
   return `${owner.mode}:${owner.dataOwnerId}`;
 }
 
@@ -497,7 +528,14 @@ export class PluginMarketService {
   private readonly mutations = new Map<string, Promise<unknown>>();
   private ledgerMutation: Promise<void> = Promise.resolve();
   private readonly pendingRemovalNotices = new Map<string, PluginRemovalUserNotice>();
-  private readonly pendingUpgradeNotices = new Map<string, PluginUpgradeUserNotice>();
+  /**
+   * 自动更新失败只在当前进程内按 owner + 来源路由 + release 退避。新版 release
+   * 立即解除，重启也自然清空；不新增持久队列或用户可配置状态。
+   */
+  private readonly automaticUpgradeRetries = new Map<
+    string,
+    { releaseKey: string; failures: number; retryAfter: number }
+  >();
   /**
    * Renderer 把 customIconKey 当不可变缓存 generation。每次重新投影市场都换代，
    * 使低精度文件系统上的同长度、同 stat 原地改写也会在刷新后重新按需读取。
@@ -516,6 +554,42 @@ export class PluginMarketService {
     ),
   ) {}
 
+  private automaticUpgradeRetryKey(
+    owner: ActiveAppSession,
+    source: 'server' | 'custom',
+    pluginId: string,
+  ): string {
+    return [owner.mode, owner.dataOwnerId, source, pluginId].join('\u0000');
+  }
+
+  private shouldDeferAutomaticUpgrade(retryKey: string, releaseKey: string): boolean {
+    const state = this.automaticUpgradeRetries.get(retryKey);
+    if (!state) return false;
+    if (state.releaseKey !== releaseKey) {
+      this.automaticUpgradeRetries.delete(retryKey);
+      return false;
+    }
+    return Date.now() < state.retryAfter;
+  }
+
+  private recordAutomaticUpgradeFailure(retryKey: string, releaseKey: string) {
+    const previous = this.automaticUpgradeRetries.get(retryKey);
+    const failures = previous?.releaseKey === releaseKey ? previous.failures + 1 : 1;
+    const delay = Math.min(
+      AUTOMATIC_UPGRADE_RETRY_BASE_MS * 2 ** Math.min(failures - 1, 16),
+      AUTOMATIC_UPGRADE_RETRY_MAX_MS,
+    );
+    const state = { releaseKey, failures, retryAfter: Date.now() + delay };
+    this.automaticUpgradeRetries.set(retryKey, state);
+    return state;
+  }
+
+  private clearAutomaticUpgradeFailure(retryKey: string, releaseKey: string): void {
+    if (this.automaticUpgradeRetries.get(retryKey)?.releaseKey === releaseKey) {
+      this.automaticUpgradeRetries.delete(retryKey);
+    }
+  }
+
   async snapshot(options: PluginMarketSnapshotOptions = {}): Promise<PluginMarketSnapshot> {
     // 自定义市场项完全来自本地数据，不依赖服务端与登录态；服务端不可用时
     // 仍然返回，unavailableReason 只表达服务端部分的不可用。
@@ -527,19 +601,25 @@ export class PluginMarketService {
     try {
       owner = captureMarketOwner();
     } catch {
-      // 无稳定会话(未登录/切换中):无法可靠确定自定义数据该按哪个账号
-      // 现查,返回空自定义项并标记原因,避免在切换窗口期把上一账号的
-      // 插件数据返回给当前 Renderer。
-      return {
-        items: [],
-        unavailableReason: isAppSessionBoundaryPending()
-          ? 'session-switching'
-          : getClientEndpoint('pluginApiBaseUrl')
-            ? 'authentication-required'
-            : 'not-configured',
-        customSourceNames: [],
-        unavailableCustomSourceNames: [],
-      };
+      // 切号窗口仍 fail-closed。未登录可以浏览公开目录，但不读自定义来源
+      // 或本机账本，避免把上一账号的插件数据交给当前 Renderer。
+      if (isAppSessionBoundaryPending()) {
+        return {
+          items: [],
+          unavailableReason: 'session-switching',
+          customSourceNames: [],
+          unavailableCustomSourceNames: [],
+        };
+      }
+      if (!getClientEndpoint('pluginApiBaseUrl')) {
+        return {
+          items: [],
+          unavailableReason: 'not-configured',
+          customSourceNames: [],
+          unavailableCustomSourceNames: [],
+        };
+      }
+      return this.snapshotPublicCatalogWithoutOwner();
     }
     const iconProjectionGeneration = this.nextCustomIconProjectionGeneration();
     const customSourceNames = this.customSourceNamesSafe(owner);
@@ -548,27 +628,61 @@ export class PluginMarketService {
       iconProjectionGeneration,
       customSourceNames,
     );
-    if (!getClientEndpoint('pluginApiBaseUrl')) {
-      const customDiscovery = await customDiscoveryPromise;
+    const customOnlySnapshot = async (
+      customDiscovery: CustomMarketDiscovery,
+      unavailableReason: string | null,
+    ): Promise<PluginMarketSnapshot> => {
       requireSameMarketOwner(owner);
-      return {
-        items: this.projectCustomItems(customDiscovery.entries),
-        unavailableReason: customSourceNames.length > 0 ? null : 'not-configured',
+      const ledger = this.ledgerForOwner(owner);
+      await this.ledgerMutation;
+      const reconcileCustomUpdates = async (): Promise<'completed' | 'failed'> => {
+        const completed = await this.applyAutomaticUpgrades(
+          [],
+          customDiscovery.entries,
+          owner,
+          ledger,
+        );
+        const outcome = completed ? 'completed' : 'failed';
+        options.onDefaultReconciliationOutcome?.(outcome);
+        return outcome;
+      };
+      if (!options.deferReconciliation) await reconcileCustomUpdates();
+      requireSameMarketOwner(owner);
+      const snapshot: PluginMarketSnapshot = {
+        items: this.projectCustomItems(customDiscovery.entries, this.localInstallSnapshot(ledger)),
+        unavailableReason,
         customSourceNames,
         unavailableCustomSourceNames: customDiscovery.unavailableSourceNames,
       };
+      if (options.deferReconciliation) {
+        void Promise.resolve()
+          .then(reconcileCustomUpdates)
+          .catch((error) => {
+            log.warn('deferred custom Plugin update reconciliation failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .finally(options.onDeferredReconciliationSettled);
+      }
+      return snapshot;
+    };
+    if (!getClientEndpoint('pluginApiBaseUrl')) {
+      const customDiscovery = await customDiscoveryPromise;
+      return customOnlySnapshot(
+        customDiscovery,
+        customSourceNames.length > 0 ? null : 'not-configured',
+      );
     }
     let plugins: VisiblePluginSummary[];
     let removals: PluginRemovalNotice[];
+    let currentOrganization: PluginCurrentOrganization | null | undefined;
     let customDiscovery: CustomMarketDiscovery;
     try {
       // 官方目录与自定义发现并行；单个本地/网络盘来源卡顿不会串行拖住官方请求。
-      const [catalog, discovered] = await Promise.all([
-        this.api.listAll(),
-        customDiscoveryPromise,
-      ]);
+      const [catalog, discovered] = await Promise.all([this.api.listAll(), customDiscoveryPromise]);
       plugins = visiblePluginsForOwner(owner, catalog.plugins);
       removals = catalog.removals;
+      currentOrganization = catalog.currentOrganization;
       customDiscovery = discovered;
     } catch (error) {
       log.warn('market list unavailable', {
@@ -577,18 +691,17 @@ export class PluginMarketService {
       // 本函数捕获 owner 后的每个 return 出口都必须先过 generation 校验:
       // listAll 失败(常因切号)时,不能把按旧账号发现的自定义项返回给当前会话。
       customDiscovery = await customDiscoveryPromise;
-      requireSameMarketOwner(owner);
-      return {
-        items: this.projectCustomItems(customDiscovery.entries),
-        unavailableReason: error instanceof Error ? error.message : String(error),
-        customSourceNames,
-        unavailableCustomSourceNames: customDiscovery.unavailableSourceNames,
-      };
+      return customOnlySnapshot(
+        customDiscovery,
+        error instanceof Error ? error.message : String(error),
+      );
     }
 
     requireSameMarketOwner(owner);
+    this.rememberCurrentOrganization(currentOrganization);
     const ledger = this.ledgerForOwner(owner);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
+    await this.recoverDisconnectedMarketInstallations(plugins, ledger, owner);
     await this.backfillOfficialCindyGithubTrust(ledger, owner);
     // A snapshot is passive discovery: an empty runtime list can be caused by
     // startup, an owner transition, or a transient filesystem view. Only an
@@ -598,7 +711,7 @@ export class PluginMarketService {
     // before its ledger write. Wait for queued ledger mutations before deciding
     // whether a default plugin should be installed again.
     await this.ledgerMutation;
-    const reconcileDefaults = async (): Promise<'completed' | 'failed'> => {
+    const reconcileMarketInstallations = async (): Promise<'completed' | 'failed'> => {
       // 自定义来源只影响自己的目录发现；暂时不可读的来源不能阻塞官方默认安装。
       // 已经落地的同 id 插件仍由 applyDefaultInstalls → installDetail 的本地事实检查保护。
       let completed = true;
@@ -611,10 +724,12 @@ export class PluginMarketService {
         });
       }
       try {
-        if (!(await this.applyDefaultUpgrades(plugins, owner, ledger))) completed = false;
+        if (!(await this.applyAutomaticUpgrades(plugins, customDiscovery.entries, owner, ledger))) {
+          completed = false;
+        }
       } catch (error) {
         completed = false;
-        log.warn('default plugin upgrade reconciliation failed', {
+        log.warn('automatic plugin upgrade reconciliation failed', {
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -622,7 +737,7 @@ export class PluginMarketService {
       options.onDefaultReconciliationOutcome?.(outcome);
       return outcome;
     };
-    if (!options.deferDefaultReconciliation) await reconcileDefaults();
+    if (!options.deferReconciliation) await reconcileMarketInstallations();
     requireSameMarketOwner(owner);
     const local = this.localInstallSnapshot(ledger);
     const serverItems = plugins.map((plugin) => this.toItem(plugin, local));
@@ -636,18 +751,67 @@ export class PluginMarketService {
       customSourceNames,
       unavailableCustomSourceNames: customDiscovery.unavailableSourceNames,
     };
-    if (options.deferDefaultReconciliation) {
+    if (options.deferReconciliation) {
       // 目录展示不等待默认插件下载；对账仍复用原有串行锁和 owner 校验。
       void Promise.resolve()
-        .then(reconcileDefaults)
+        .then(reconcileMarketInstallations)
         .catch((error) => {
-          log.warn('deferred default plugin reconciliation failed', {
+          log.warn('deferred Plugin market reconciliation failed', {
             error: error instanceof Error ? error.message : String(error),
           });
         })
         .finally(options.onDeferredReconciliationSettled);
     }
     return snapshot;
+  }
+
+  /** 未登录只浏览公开目录：不读自定义来源、不跑默认安装、不投影本机已装态。 */
+  private async snapshotPublicCatalogWithoutOwner(): Promise<PluginMarketSnapshot> {
+    try {
+      const catalog = await this.api.listAll();
+      return {
+        items: catalog.plugins
+          .filter((plugin) => plugin.scope === 'public')
+          .map((plugin) => this.toItem(plugin, EMPTY_LOCAL_INSTALL_SNAPSHOT)),
+        unavailableReason: null,
+        customSourceNames: [],
+        unavailableCustomSourceNames: [],
+      };
+    } catch (error) {
+      log.warn('public market list unavailable', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        items: [],
+        unavailableReason: error instanceof Error ? error.message : String(error),
+        customSourceNames: [],
+        unavailableCustomSourceNames: [],
+      };
+    }
+  }
+
+  /** 未登录只读公开插件详情；安装仍必须走 owner 门禁。 */
+  private async detailPublicCatalogWithoutOwner(pluginId: string): Promise<PluginMarketDetail> {
+    const catalog = await this.api.listAll();
+    const summary = catalog.plugins.find(
+      (plugin) => plugin.id === pluginId && plugin.scope === 'public',
+    );
+    if (!summary) {
+      throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
+    }
+    const plugin = await this.api.detail(pluginId);
+    assertDetailMatchesSummary(summary, plugin);
+    if (plugin.scope !== 'public') {
+      throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
+    }
+    const compatible = validateGhostManifest(plugin.currentRelease.manifest);
+    if (!compatible.ok) {
+      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+    }
+    return {
+      ...this.toItem(plugin, EMPTY_LOCAL_INSTALL_SNAPSHOT),
+      manifest: compatible.manifest,
+    };
   }
 
   /** 按当前 owner 消费一次清理汇总，避免组织插件名跨账号泄露。 */
@@ -667,22 +831,6 @@ export class PluginMarketService {
     }
   }
 
-  consumeUpgradeNotice(): PluginUpgradeUserNotice | null {
-    const key = upgradeNoticeKey(captureMarketOwner());
-    const notice = this.pendingUpgradeNotices.get(key) ?? null;
-    if (notice) this.pendingUpgradeNotices.delete(key);
-    return notice;
-  }
-
-  hasPendingUpgradeNotice(): boolean {
-    if (this.pendingUpgradeNotices.size === 0) return false;
-    try {
-      return this.pendingUpgradeNotices.has(upgradeNoticeKey(captureMarketOwner()));
-    } catch {
-      return false;
-    }
-  }
-
   async detail(pluginId: string): Promise<PluginMarketDetail> {
     // 自定义市场插件走本地发现，不要求服务端可用，也不受 CUID 形状约束。
     const customRef = parseCustomMarketPluginId(pluginId);
@@ -691,12 +839,20 @@ export class PluginMarketService {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
     this.requireConfigured();
+    if (!canCaptureMarketOwner()) {
+      if (isAppSessionBoundaryPending()) {
+        throwIpcError('PRECONDITION_FAILED', 'Plugin market requires a stable app session');
+      }
+      return this.detailPublicCatalogWithoutOwner(pluginId);
+    }
     return this.runForOwner(async (owner) => {
       // 本地(免账号)模式只对 public 插件暴露详情;目录 summary 也是 detail 身份
       // 绑定的依据,服务端返回的 id/ghostId/scope 与请求不一致时必须拒,防止把
       // A 的详情内容(含权限清单)呈现给请求 B 的 Renderer。
-      const catalog = visiblePluginsForOwner(owner, (await this.api.listAll()).plugins);
+      const listed = await this.api.listAll();
       requireSameMarketOwner(owner);
+      this.rememberCurrentOrganization(listed.currentOrganization);
+      const catalog = visiblePluginsForOwner(owner, listed.plugins);
       const summary = catalog.find((candidate) => candidate.id === pluginId);
       if (!summary) {
         throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
@@ -708,9 +864,6 @@ export class PluginMarketService {
       const compatible = validateGhostManifest(plugin.currentRelease.manifest);
       if (!compatible.ok) {
         throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-      }
-      if (!manifestSupportsCurrentCindy(compatible.manifest)) {
-        throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
       }
       return {
         ...this.toItem(plugin, this.localInstallSnapshot(this.ledgerForOwner(owner))),
@@ -873,11 +1026,10 @@ export class PluginMarketService {
   async install(
     pluginId: string,
     options: PluginMarketInstallOptions,
-    reviewPackagePermissions?: PackagePermissionReviewer,
   ): Promise<PluginMarketInstallResult> {
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
-      return this.customInstall(customRef, options, reviewPackagePermissions);
+      return this.customInstall(customRef, options);
     }
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -891,11 +1043,16 @@ export class PluginMarketService {
       // 可见性的条目在调用 detail 之前就要拒掉,不能把组织私有插件的详情拉下来。
       // 目录 summary 也是 detail 身份绑定的依据:detail 自报的 id/ghostId/scope/
       // 发布必须与用户确认时看到的那份 summary 一致,否则 A 的确认会被导向 B 的内容。
-      const catalog = visiblePluginsForOwner(owner, (await this.api.listAll()).plugins);
+      const listed = await this.api.listAll();
       requireSameMarketOwner(owner);
+      this.rememberCurrentOrganization(listed.currentOrganization);
+      const catalog = visiblePluginsForOwner(owner, listed.plugins);
       const selected = catalog.find((candidate) => candidate.id === pluginId);
       if (!selected) {
         throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
+      }
+      if (!isGhostAvailableForActiveSession(selected.ghostId)) {
+        throwIpcError('PERMISSION_DENIED', 'This Plugin requires a Cindy account');
       }
       const plugin = await this.api.detail(pluginId);
       requireSameMarketOwner(owner);
@@ -905,56 +1062,21 @@ export class PluginMarketService {
       if (plugin.currentRelease.id !== options.expectedReleaseId) {
         throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after selection');
       }
-      const compatible = validateGhostManifest(plugin.currentRelease.manifest);
-      if (!compatible.ok) {
-        throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-      }
-      if (!manifestSupportsCurrentCindy(compatible.manifest)) {
-        throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
-      }
-      // 用户审阅过的清单必须与市场当前返回的清单有相同的权限面：
-      // 同 releaseId 下市场在审阅→安装之间换 manifest 时，新增的权限
-      // 用户从没见过，不能当作"已审阅"递进安装。与自定义来源路径
-      // install.ts:184-191 的打包前比对同向（但此处比对的是预览清单而非
-      // 实际打包字节，名字/版本/作者差异不在此处检测）。
-      if (options.expectedManifest !== undefined) {
-        const reviewed = validateNormalizedGhostManifest(options.expectedManifest);
-        // 畸形 payload 会造成 ghostPermissionBaselineKey crash（slots.includes
-        // 等字段解引用），先验证再比对。验证失败时直接拒——审阅过的清单连基本
-        // 结构都不对，不能信任。
-        if (!reviewed.ok) {
-          throwIpcError('PRECONDITION_FAILED', reviewed.reason);
-        }
-        if (
-          ghostPermissionBaselineKey(compatible.manifest) !==
-          ghostPermissionBaselineKey(reviewed.manifest)
-        ) {
-          throwIpcError('PRECONDITION_FAILED', 'Plugin manifest changed after permission review');
-        }
-      }
       const existing = getGhostManager()
         .list()
         .find((ghost) => ghost.manifest.id === plugin.ghostId);
-      const ghost = await this.installDetail(
+      return this.installDetail(
         plugin,
         {
           expectedInstalled: Boolean(existing),
-          reviewedManifest: compatible.manifest,
           ...(options.expectedInstalledApproval !== undefined
             ? { expectedInstalledApproval: options.expectedInstalledApproval }
             : {}),
-          allowPermissionExpansion: options.allowPermissionExpansion === true,
-          ...(options.reviewedBaseline !== undefined
-            ? { reviewedBaseline: options.reviewedBaseline }
-            : {}),
-          permissionPolicy: { mode: 'manual', sourceType: 'server' },
-          reviewPackagePermissions,
           allowSourceReplacement: options.allowSourceReplacement === true,
         },
         owner,
         ledger,
       );
-      return ghost ? { ghost } : { cancelled: true };
     });
   }
 
@@ -1105,9 +1227,6 @@ export class PluginMarketService {
         if (!plugin) {
           throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
         }
-        if (!manifestSupportsCurrentCindy(plugin.manifest)) {
-          throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
-        }
         return {
           ...this.customToItem(
             {
@@ -1131,7 +1250,7 @@ export class PluginMarketService {
   /**
    * 自定义市场插件安装/更新。与服务端 installDetail 同一组防线：
    * release 一致性（重发现后比对 expectedReleaseId）、冲突先装先得、
-   * 权限扩张显式确认；打包与装入复用 installOrUpdateMarketGhostPackage。
+   * 市场 Manifest 能力上限；打包与装入复用 installOrUpdateMarketGhostPackage。
    *
    * 全程在 `withDiscoveredSource` 租约内执行:`plugin.dir` 指向 Git 源的缓存版本
    * 目录,打包要逐文件读它。租约必须一直持到打包结束,否则并发刷新的清理能在
@@ -1140,9 +1259,15 @@ export class PluginMarketService {
   private async customInstall(
     ref: { marketName: string; ghostId: string },
     options: PluginMarketInstallOptions,
-    reviewPackagePermissions?: PackagePermissionReviewer,
+    automatic = false,
+    owner = captureMarketOwner(),
   ): Promise<PluginMarketInstallResult> {
-    const owner = captureMarketOwner();
+    if (options.expectedManifest === undefined) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'Custom Plugin install must be bound to the selected manifest',
+      );
+    }
     const ledger = this.ledgerForOwner(owner);
     const manager = this.sourceManagerForOwner(owner);
     // 互斥键与 uninstall 一致使用规范化 pluginId，保证同插件的安装/更新/卸载串行。
@@ -1158,9 +1283,6 @@ export class PluginMarketService {
         if (!plugin) {
           throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
         }
-        if (!manifestSupportsCurrentCindy(plugin.manifest)) {
-          throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
-        }
         const pluginId = customMarketPluginId(ref.marketName, plugin.ghostId);
         const releaseId = customMarketReleaseId(ref.marketName, plugin.ghostId, plugin.version);
         if (releaseId !== options.expectedReleaseId) {
@@ -1170,23 +1292,24 @@ export class PluginMarketService {
           .list()
           .find((ghost) => ghost.manifest.id === plugin.ghostId);
         const sourceKey = marketSourceKey(discovered.config.source);
-        // 审阅时刻的已装内容摘要：确认等待和打包窗口内不能换掉当前包。
-        const reviewInstalledDigest = existing
-          ? installedGhostRawManifestDigest(existing.dir)
-          : null;
         const currentRecord = ledger.installationForGhost(plugin.ghostId);
+        // 选择时刻的已装内容摘要：打包窗口内不能换掉当前包。v2 存量记录可继续
+        // 使用升级前的 slots 摘要；新记录使用当前稳定投影。
+        const reviewInstalledDigest = existing
+          ? installedGhostRawManifestDigest(existing.dir, currentRecord?.manifestDigest)
+          : null;
         const matchesSelectedRoute = Boolean(
           existing &&
-            currentRecord?.installed &&
-            currentRecord.pluginId === pluginId &&
-            currentRecord.sourceKey === sourceKey &&
-            currentRecord.manifestDigest != null &&
-            currentRecord.manifestDigest === reviewInstalledDigest,
+          currentRecord?.installed &&
+          currentRecord.pluginId === pluginId &&
+          currentRecord.sourceKey === sourceKey &&
+          currentRecord.manifestDigest != null &&
+          currentRecord.manifestDigest === reviewInstalledDigest,
         );
         if (existing && !matchesSelectedRoute && options.allowSourceReplacement !== true) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
         }
-        const assertCustomReviewApproved = (installedNow: InstalledGhost | null): void => {
+        const assertCustomApprovalStateUnchanged = (installedNow: InstalledGhost | null): void => {
           if (!installedNow) return;
           if (options.expectedInstalledApproval === undefined) {
             throwIpcError(
@@ -1194,51 +1317,32 @@ export class PluginMarketService {
               'Plugin approval state was not bound to the market update',
             );
           }
-          if (ghostInstallApprovalToken(installedNow.approval) !== options.expectedInstalledApproval) {
+          if (
+            ghostInstallApprovalToken(installedNow.approval) !== options.expectedInstalledApproval
+          ) {
             throwIpcError(
               'PRECONDITION_FAILED',
-              'Plugin approval state changed after permission review',
+              'Plugin approval state changed during the update',
             );
           }
-          const requiresFullReview =
-            installedNow.approval.state !== 'approved' ||
-            diffInstalledGhostPermissionItems(installedNow, plugin.manifest).added.length > 0;
-          if (!requiresFullReview) return;
-          if (options.allowPermissionExpansion !== true) {
-            throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
-          }
-          assertReviewedBaselineFresh(installedNow.manifest, options.reviewedBaseline);
         };
-        // 无有效 receipt 时不信现场 manifest：目标包全部权限都必须重新确认。
-        assertCustomReviewApproved(existing ?? null);
+        assertCustomApprovalStateUnchanged(existing ?? null);
         // 来源只决定后台更新路由，不是 ghostId 的永久所有权。只有详情页明确
-        // 选择“替换”才允许原地切换来源；普通更新和“全部更新”必须保持当前路由。
-        // 权限基线始终取当前真实安装，避免换源绕过扩权确认。
-        // 只在已批准安装时给出基线：非 approved 的安装无批准基线，
-        // 目标包全部权限都必须重新确认，与官方市场路径 (commitDownloadedPackage) 一致。
-        const permissionBaselineManifest =
-          existing && existing.approval.state === 'approved'
-            ? installedGhostRawManifest(existing.dir)
-            : null;
+        // 选择“替换”才允许原地切换来源；自动更新和手动重试必须保持当前路由。
         let replacedRoute: PluginMarketInstallationRecord | null = null;
         let replacedRouteWasSuppressed = false;
         let packageLanded = false;
         requireSameMarketOwner(owner);
-        const ghost = await installCustomMarketPlugin({
+        const installResult = await installCustomMarketPlugin({
           pluginDir: plugin.dir,
           expected: options.expectedManifest,
           expectedGhostId: plugin.ghostId,
           expectedVersion: plugin.version,
-          sourceType: discovered.config.source.type === 'git' ? 'git-market' : 'local-market',
-          reviewPackagePermissions: async (facts) => {
-            requireSameMarketOwner(owner);
-            const approved = await reviewPackagePermissions?.(facts);
-            requireSameMarketOwner(owner);
-            return approved === true;
-          },
-          ...(permissionBaselineManifest ? { permissionBaselineManifest } : {}),
           beforeCommit: async () => {
             requireSameMarketOwner(owner);
+            if (automatic && isGhostBusy(plugin.ghostId)) {
+              throw new SilentUpgradeBusyError('Plugin is busy');
+            }
             // 所选来源必须**仍然存在且仍是同一个来源**:移除来源会先拿
             // SOURCE_MUTATION_KEY 删掉配置,租约只保住了目录字节;没有这道核对,
             // 安装会把一个已经没有对应来源的包装进运行时并写下孤儿账本记录。
@@ -1253,8 +1357,8 @@ export class PluginMarketService {
             // 当前已装目标也要复核:打包窗口(秒到分钟级)内,
             // 本地插件页可以卸载同 id 插件(那条路径不持本服务的互斥锁)——不查
             // 会把"更新"降级成"首装+带电启用";反向地,窗口内新装入的同 id
-            // 本地 .cindy 会被更新分支静默覆盖,还绕过了审阅时跳过的权限 diff。
-            // 判据与审阅时刻同一份:在场状态一致 + 已装内容摘要未变。
+            // 本地 .cindy 会被更新分支静默覆盖。判据与选择时刻同一份:
+            // 在场状态一致 + 已装内容摘要未变。
             const current = getGhostManager()
               .list()
               .find((ghost) => ghost.manifest.id === plugin.ghostId);
@@ -1266,23 +1370,30 @@ export class PluginMarketService {
                   : 'Plugin was uninstalled while the install was packaging',
               );
             }
-            if (current && installedGhostRawManifestDigest(current.dir) !== reviewInstalledDigest) {
+            if (
+              current &&
+              installedGhostRawManifestDigest(current.dir, reviewInstalledDigest ?? undefined) !==
+                reviewInstalledDigest
+            ) {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin changed during the install');
             }
-            // raw manifest 摘要不含 Host receipt；内容未变但批准态失效同样必须拒绝
-            // 旧确认，并在下一轮按无批准基线展示全部权限。
-            assertCustomReviewApproved(current ?? null);
+            // raw manifest 摘要不含 Host receipt；内容未变但批准态变化也必须拒绝。
+            assertCustomApprovalStateUnchanged(current ?? null);
           },
           expectedInstalledApproval: options.expectedInstalledApproval,
           beforePackagePlacement: () => {
+            requireSameMarketOwner(owner);
+            if (automatic && isGhostBusy(plugin.ghostId)) {
+              throw new SilentUpgradeBusyError('Plugin is busy');
+            }
             const record = ledger.installationForGhost(plugin.ghostId);
             const routeStillMatches = Boolean(
               existing &&
-                record?.installed &&
-                record.pluginId === pluginId &&
-                record.sourceKey === sourceKey &&
-                record.manifestDigest != null &&
-                record.manifestDigest === reviewInstalledDigest,
+              record?.installed &&
+              record.pluginId === pluginId &&
+              record.sourceKey === sourceKey &&
+              record.manifestDigest != null &&
+              record.manifestDigest === reviewInstalledDigest,
             );
             if (existing && !routeStillMatches && options.allowSourceReplacement !== true) {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin source changed');
@@ -1299,20 +1410,21 @@ export class PluginMarketService {
           onPackagePlaced: () => {
             packageLanded = true;
           },
-          // 复核与落位的双重互斥:
+          // 来源复核与落位的双重互斥:
           // - SOURCE_MUTATION_KEY:beforeCommit 返回后包检查还要跑一段,期间不能
           //   让来源被增删,否则复核结论在落位前过期。
           // - withGhostInstallLock(ghostId):与本地 .cindy 装入/更新/卸载共用同一
           //   按 id 互斥,beforeCommit 的 runtime 复核到 installOrUpdate 落位之间,
           //   同 id 的本地装入/卸载插不进来(否则复核仍会在落位前过期)。
           withCommitLock: (fn) =>
-            this.withMutation(SOURCE_MUTATION_KEY, () =>
-              withGhostInstallLock(plugin.ghostId, fn),
-            ),
+            this.withMutation(SOURCE_MUTATION_KEY, () => withGhostInstallLock(plugin.ghostId, fn)),
           // 溯源写入仍在上面那把 ghost 锁内(afterCommit 由 commit 段调用):
           // 放到锁外时,本地装入能插在"包已落位"与"写下溯源"之间换掉同 id 的包。
           // 锁序:pluginId → SOURCE_MUTATION_KEY → ghostId → ledgerMutation。
           afterCommit: async (_installed, packagedManifest) => {
+            // 这里已在 owner mutation lease 与同 id 安装锁内，且 ledger 绑定的是操作
+            // 开始时捕获的 owner。切号终止等待超时后当前 generation 可能已经推进，
+            // 但包既已落位，就仍须把溯源写回旧 owner；不能再读取当前 session 拒绝。
             // packGhostDirToFile 返回的是写入真实临时包的 canonical manifest；
             // Main 随后复验并用包 SHA 钉死同一文件，因此无需在包已经落位后
             // 再读一次目录。后置 I/O 失败不应把成功安装误报成失败或漏写来源。
@@ -1350,7 +1462,7 @@ export class PluginMarketService {
           }
           throw error;
         });
-        return ghost ? { ghost } : { cancelled: true };
+        return installResult;
       });
     });
   }
@@ -1444,7 +1556,6 @@ export class PluginMarketService {
         }
         const sourceEntries: CustomMarketEntry[] = [];
         for (const plugin of result.marketplace.plugins) {
-          if (!manifestSupportsCurrentCindy(plugin.manifest)) continue;
           sourceEntries.push({
             config,
             plugin,
@@ -1568,39 +1679,30 @@ export class PluginMarketService {
   }
 
   private async installDetail(
-    plugin: VisiblePluginSummary | VisiblePluginDetail,
+    plugin: VisiblePluginDetail,
     options: {
-      /** 手动安装时已向用户展示；默认安装时作为自动授权的目录权限上限。 */
-      reviewedManifest?: GhostManifest;
-      allowPermissionExpansion?: boolean;
       /** receipt 模型的并发护栏:比对 receipt 派生 token,状态变更即拒(与 main 硬化叠加)。 */
       expectedInstalledApproval?: string;
-      /** 安装前权限确认所依据的已装权限指纹。 */
-      reviewedBaseline?: string;
-      /** 手动安装确认真实包；默认安装只使用目录 manifest 作为 fail-closed 上限。 */
-      permissionPolicy?:
-        | { mode: 'manual'; sourceType: PluginMarketItem['sourceType'] }
-        | {
-            mode: 'cap';
-            manifest: GhostManifest;
-            sourceType: PluginMarketItem['sourceType'];
-          };
-      /** 真实包需要确认时，在当前安装事务内立即询问发起窗口。 */
-      reviewPackagePermissions?: PackagePermissionReviewer;
       /** 用户明确点击安装时，允许所选市场包原地替换其它来源的同 id 插件。 */
       allowSourceReplacement?: boolean;
-      /** 静默升级时基线不匹配是否按陈旧基线拒绝(不静默覆盖用户已审阅的基线)。 */
-      silentBaselineMismatch?: boolean;
       beforeCommitInLock?: () => void;
-      /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
+      /** 发起操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
     } = { expectedInstalled: false },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
-  ): Promise<InstalledGhost | null> {
+  ): Promise<PluginMarketInstallResult> {
     requireSameMarketOwner(owner);
     if (owner.mode === 'local' && plugin.scope !== 'public') {
       throwIpcError('PERMISSION_DENIED', 'Local mode can only access public Plugins');
+    }
+    const admissionManifest = validateGhostManifest(plugin.currentRelease.manifest);
+    if (!admissionManifest.ok) {
+      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+    }
+    const brokerPortError = ghostBrokerRedirectPortInstallError(admissionManifest.manifest);
+    if (brokerPortError) {
+      throwIpcError(brokerPortError.code, brokerPortError.reason);
     }
     const existing = getGhostManager()
       .list()
@@ -1613,10 +1715,7 @@ export class PluginMarketService {
     ) {
       throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
     }
-    // 受体并发护栏(TOCTOU):仅当调用方**显式**带来了确认时捕获的批准令牌才核对。
-    // 令牌是更新/恢复入口在渲染确认框那一刻钉下的当前受体;它对不上 = 确认往返
-    // 窗口里批准被换过,拒绝用旧同意批新包。自动播种/迁移/首装(不带令牌)不受此闸,
-    // 各自的 expectedInstalled / 所有权 / reviewedBaseline 门负责它们的关切。
+    // 更新必须用发起时的 receipt token 绑定当前受体；首装没有既有 token。
     if (existing) {
       if (options.expectedInstalledApproval === undefined) {
         throwIpcError(
@@ -1625,30 +1724,10 @@ export class PluginMarketService {
         );
       }
       if (ghostInstallApprovalToken(existing.approval) !== options.expectedInstalledApproval) {
-        throwIpcError('PRECONDITION_FAILED', 'Plugin approval state changed after permission review');
+        throwIpcError('PRECONDITION_FAILED', 'Plugin approval state changed during the update');
       }
     }
 
-    const reviewedManifest = options.reviewedManifest
-      ? validateNormalizedGhostManifest(options.reviewedManifest)
-      : null;
-    if (reviewedManifest && !reviewedManifest.ok) {
-      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-    }
-    const permissionCap =
-      options.permissionPolicy?.mode === 'cap'
-        ? validateNormalizedGhostManifest(options.permissionPolicy.manifest)
-        : null;
-    if (permissionCap && !permissionCap.ok) {
-      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-    }
-    this.assertServerPreviewExpansionApproved(
-      existing ?? null,
-      reviewedManifest?.manifest,
-      options.allowPermissionExpansion,
-      options.reviewedBaseline,
-      options.silentBaselineMismatch,
-    );
     const download = await this.api.download(plugin.id, plugin.currentRelease.id);
     requireSameMarketOwner(owner);
     if (
@@ -1669,98 +1748,41 @@ export class PluginMarketService {
     try {
       await downloadVerifiedPlugin(download.url, download, tempPath);
       requireSameMarketOwner(owner);
-      try {
-        return await this.commitDownloadedPackage(
-          tempPath,
-          plugin,
-          {
-            expectedInstalled: options.expectedInstalled,
-            ...(options.expectedInstalledApproval !== undefined
-              ? { expectedInstalledApproval: options.expectedInstalledApproval }
-              : {}),
-            ...(reviewedManifest?.ok ? { reviewedManifest: reviewedManifest.manifest } : {}),
-            allowPermissionExpansion: options.allowPermissionExpansion,
-            reviewedBaseline: options.reviewedBaseline,
-            silentBaselineMismatch: options.silentBaselineMismatch,
-            ...(options.permissionPolicy
-              ? {
-                  permissionPolicy:
-                    options.permissionPolicy.mode === 'cap' && permissionCap?.ok
-                      ? {
-                          ...options.permissionPolicy,
-                          manifest: permissionCap.manifest,
-                        }
-                        : options.permissionPolicy,
-                }
-              : {}),
-            allowSourceReplacement: options.allowSourceReplacement,
-            beforeCommitInLock: options.beforeCommitInLock,
-          },
-          owner,
-          ledger,
-        );
-      } catch (error) {
-        if (!(error instanceof GhostPackagePermissionReviewRequiredError)) throw error;
-        requireSameMarketOwner(owner);
-        const approved = await options.reviewPackagePermissions?.(error.review);
-        requireSameMarketOwner(owner);
-        if (approved !== true) return null;
-        return await this.commitDownloadedPackage(
-          tempPath,
-          plugin,
-          {
-            expectedInstalled: options.expectedInstalled,
-            ...(options.expectedInstalledApproval !== undefined
-              ? { expectedInstalledApproval: options.expectedInstalledApproval }
-              : {}),
-            ...(reviewedManifest?.ok ? { reviewedManifest: reviewedManifest.manifest } : {}),
-            allowPermissionExpansion: options.allowPermissionExpansion,
-            reviewedBaseline: options.reviewedBaseline,
-            silentBaselineMismatch: options.silentBaselineMismatch,
-            ...(options.permissionPolicy
-              ? {
-                  permissionPolicy:
-                    options.permissionPolicy.mode === 'cap' && permissionCap?.ok
-                      ? {
-                          ...options.permissionPolicy,
-                          manifest: permissionCap.manifest,
-                        }
-                        : options.permissionPolicy,
-                }
-              : {}),
-            approvedPackageSha256: error.review.packageSha256,
-            approvedPackageBaseline: error.review.installedBaseline,
-            allowSourceReplacement: options.allowSourceReplacement,
-            beforeCommitInLock: options.beforeCommitInLock,
-          },
-          owner,
-          ledger,
-        );
+      const inspected = await getGhostManager().inspect(tempPath);
+      if (!('rejection' in inspected)) {
+        if (
+          inspected.canonicalManifest.id !== plugin.ghostId ||
+          inspected.canonicalManifest.version !== plugin.currentRelease.version
+        ) {
+          throwIpcError('GHOST_FILE_INVALID', 'Downloaded Plugin package identity changed');
+        }
       }
+      const ghost = await this.commitDownloadedPackage(
+        tempPath,
+        plugin,
+        {
+          expectedInstalled: options.expectedInstalled,
+          ...(options.expectedInstalledApproval !== undefined
+            ? { expectedInstalledApproval: options.expectedInstalledApproval }
+            : {}),
+          allowSourceReplacement: options.allowSourceReplacement,
+          beforeCommitInLock: options.beforeCommitInLock,
+        },
+        owner,
+        ledger,
+      );
+      return { ghost };
     } finally {
       await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
     }
   }
 
-  /** 把已验证临时包提交到运行时；确认前后复用同一文件。 */
+  /** 把已验证临时包提交到运行时；校验与落位复用同一文件。 */
   private async commitDownloadedPackage(
     tempPath: string,
     plugin: VisiblePluginSummary | VisiblePluginDetail,
     options: {
-      permissionPolicy?:
-        | { mode: 'manual'; sourceType: PluginMarketItem['sourceType'] }
-        | {
-            mode: 'cap';
-            manifest: GhostManifest;
-            sourceType: PluginMarketItem['sourceType'];
-          };
-      approvedPackageSha256?: string;
-      approvedPackageBaseline?: string | null;
       expectedInstalledApproval?: string;
-      reviewedManifest?: GhostManifest;
-      allowPermissionExpansion?: boolean;
-      reviewedBaseline?: string;
-      silentBaselineMismatch?: boolean;
       allowSourceReplacement?: boolean;
       beforeCommitInLock?: () => void;
       expectedInstalled: boolean;
@@ -1805,41 +1827,17 @@ export class PluginMarketService {
         }
       }
       requireSameMarketOwner(owner);
-      this.assertServerPreviewExpansionApproved(
-        installedNow ?? null,
-        options.reviewedManifest,
-        options.allowPermissionExpansion,
-        options.reviewedBaseline,
-        options.silentBaselineMismatch,
-      );
-      const installedRawManifest = installedNow
-        ? installedGhostRawManifest(installedNow.dir)
-        : null;
-      // 权限基线只在已批准安装时给出：非 approved (legacy-unapproved/invalid)
-      // 无批准基线，目标包全部权限都必须重新确认，不能让旧确认带出的基线被
-      // 当成"已审阅过"。approved 安装的基线取当前真实运行包（不是 ledger 摘要），
-      // 更新路由由上方 serverRecordMatchesInstalledGhost 单独判断。
-      // 经来源账本摘要认证的已装清单；缺失时不得回退到可变运行时清单。
-      // currentRecordNow 是 provenance ledger 的记录（允许 source replacement 时不比对
-      // pluginId，但不影响摘要链——来源可以不同，安装目录的字节身份仍需与已记录摘要一致）。
-      const permissionBaselineManifest =
-        installedNow?.approval.state === 'approved' &&
-        installedRawManifest &&
-        currentRecordNow?.installed &&
-        (currentRecordNow.source === 'market' || currentRecordNow.source === 'legacy-adopted') &&
-        currentRecordNow.manifestDigest === ghostManifestDigest(installedRawManifest)
-          ? installedRawManifest
-          : null;
       const replacingSource = Boolean(
         installedNow &&
-          options.allowSourceReplacement &&
-          currentRecordNow?.installed &&
-          !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
+        options.allowSourceReplacement &&
+        currentRecordNow?.installed &&
+        !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
       );
       let routeDetached = false;
       let replacedRouteWasSuppressed = false;
       let packageLanded = false;
       const detachPreviousRoute = (): void => {
+        requireSameMarketOwner(owner);
         options.beforeCommitInLock?.();
         if (!replacingSource || !currentRecordNow) return;
         replacedRouteWasSuppressed = this.detachMarketRouteForReplacement(
@@ -1853,18 +1851,15 @@ export class PluginMarketService {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
         ...(plugin.ghostId === 'cindy-github' ? { officialCindyGithub: true } : {}),
-        ...(options.permissionPolicy
+        ...(plugin.scope === 'organization' && plugin.organizationId
           ? {
-              permissionPolicy: options.permissionPolicy,
-              ...(permissionBaselineManifest ? { permissionBaselineManifest } : {}),
-            }
-          : {}),
-        ...(options.approvedPackageSha256 !== undefined
-          ? {
-              approvedPackageSha256: options.approvedPackageSha256,
-              ...(options.approvedPackageBaseline !== null
-                ? { reviewedBaseline: options.approvedPackageBaseline }
-                : {}),
+              pendingMarketRecord: {
+                scope: plugin.scope,
+                organizationId: plugin.organizationId,
+                source: 'market',
+                installed: true,
+                sha256: plugin.currentRelease.sha256,
+              },
             }
           : {}),
         ...(options.expectedInstalledApproval !== undefined
@@ -1880,6 +1875,13 @@ export class PluginMarketService {
               },
             }
           : {}),
+        afterCommitInLock: async (committed) => {
+          // 包已落位且仍持原 owner mutation lease；即使切号终止等待超时推进了
+          // 当前 generation，也必须把来源写进操作开始时捕获的旧 owner 账本。
+          await this.withCapturedLedgerMutation(ledger, () => {
+            ledger.upsertInstallation(recordFrom(plugin, 'market', committed));
+          });
+        },
       }).catch((error) => {
         if (routeDetached && !packageLanded && currentRecordNow) {
           this.restoreMarketRouteAfterFailedReplacement(
@@ -1891,36 +1893,8 @@ export class PluginMarketService {
         }
         throw error;
       });
-      await this.withCapturedLedgerMutation(ledger, () => {
-        ledger.upsertInstallation(recordFrom(plugin, 'market', installed));
-      });
       return installed;
     });
-  }
-
-  private assertServerPreviewExpansionApproved(
-    installed: InstalledGhost | null,
-    reviewedManifest: GhostManifest | undefined,
-    allowPermissionExpansion: boolean | undefined,
-    reviewedBaseline: string | undefined,
-    silentBaselineMismatch = false,
-  ): void {
-    if (!installed || !reviewedManifest) return;
-    const requiresFullReview =
-      installed.approval.state !== 'approved' ||
-      diffInstalledGhostPermissionItems(installed, reviewedManifest).added.length > 0;
-    if (!requiresFullReview) return;
-    if (allowPermissionExpansion !== true) {
-      throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
-    }
-    if (
-      silentBaselineMismatch &&
-      reviewedBaseline !== undefined &&
-      ghostPermissionBaselineKey(installed.manifest) !== reviewedBaseline
-    ) {
-      throw new SilentUpgradeStaleBaselineError('Installed Plugin permissions changed');
-    }
-    assertReviewedBaselineFresh(installed.manifest, reviewedBaseline);
   }
 
   private requireConfigured(): void {
@@ -1994,6 +1968,145 @@ export class PluginMarketService {
         pluginId: matches[0].id,
         exactCurrentRelease: record.releaseId === matches[0].currentRelease.id,
       });
+    }
+  }
+
+  /**
+   * Repair an existing server provenance record that an older client left
+   * disconnected while its approved package remained installed.
+   * Recovery is entirely local. Modern receipts must retain the exact Release
+   * package hash. Legacy receipts intentionally omitted that source hash, so
+   * they additionally require the completed one-time migration to name this id
+   * and the raw installed manifest to equal the manifest frozen in that receipt.
+   * This evidence reconnects the server update route, not current code bytes;
+   * the ledger therefore demotes recovered organization records to
+   * legacy-adopted until a verified market update restores stronger trust.
+   */
+  private async recoverDisconnectedMarketInstallations(
+    plugins: readonly VisiblePluginSummary[],
+    ledger: PluginMarketLedger,
+    owner: ActiveAppSession,
+  ): Promise<void> {
+    const pluginIdCounts = new Map<string, number>();
+    const ghostCounts = ghostIdCounts(plugins);
+    for (const plugin of plugins) {
+      pluginIdCounts.set(plugin.id, (pluginIdCounts.get(plugin.id) ?? 0) + 1);
+    }
+    const summariesById = new Map(plugins.map((plugin) => [plugin.id, plugin]));
+    const records = Object.values(ledger.read().installations);
+    const installSubject = defaultInstallSubject(owner);
+
+    for (const record of records) {
+      const summary = summariesById.get(record.pluginId);
+      if (
+        record.installed
+        || (record.source !== 'market' && record.source !== 'legacy-adopted')
+        || !isValidPluginResourceId(record.pluginId)
+        || !isValidPluginResourceId(record.releaseId)
+        || !isValidGhostId(record.ghostId)
+        || !/^[a-f0-9]{64}$/.test(record.sha256)
+        || pluginIdCounts.get(record.pluginId) !== 1
+        || ghostCounts.get(record.ghostId) !== 1
+        || !summary
+        || summary.ghostId !== record.ghostId
+        || summary.scope !== record.scope
+        || summary.organizationId !== record.organizationId
+      ) {
+        continue;
+      }
+
+      const installed = getGhostManager()
+        .list()
+        .find((ghost) => ghost.manifest.id === record.ghostId);
+      if (!installed || installed.approval.state !== 'approved') continue;
+
+      try {
+        await this.withMutation(record.pluginId, async () => {
+          requireSameMarketOwner(owner);
+          await withGhostInstallLock(record.ghostId, async () => {
+            requireSameMarketOwner(owner);
+            const lockedRecord = ledger.installationForGhost(record.ghostId);
+            if (!sameDisconnectedMarketInstallation(lockedRecord, record)) return;
+            const currentInstalled = getGhostManager()
+              .list()
+              .find((ghost) => ghost.manifest.id === record.ghostId);
+            if (
+              !currentInstalled
+              || currentInstalled.approval.state !== 'approved'
+              || currentInstalled.manifest.version !== record.version
+            ) {
+              return;
+            }
+            const approvalEvidence = getGhostManager().approvedInstallEvidence(record.ghostId);
+            if (!approvalEvidence) return;
+            if (
+              approvalEvidence.packageSha256 !== null
+              && approvalEvidence.packageSha256 !== record.sha256
+            ) {
+              log.info('disconnected market recovery skipped', {
+                pluginId: record.pluginId,
+                ghostId: record.ghostId,
+                reason: 'receipt-package-sha-mismatch',
+              });
+              return;
+            }
+            const installedManifestDigest = installedGhostRawManifestDigest(
+              currentInstalled.dir,
+              record.manifestDigest,
+            );
+            if (approvalEvidence.packageSha256 === null) {
+              if (!approvalEvidence.legacyMigrated) {
+                log.info('disconnected market recovery skipped', {
+                  pluginId: record.pluginId,
+                  ghostId: record.ghostId,
+                  reason: 'approved-source-evidence-missing',
+                });
+                return;
+              }
+              if (
+                installedManifestDigest === null
+                || installedManifestDigest !== ghostManifestDigest(
+                  approvalEvidence.approvedManifest,
+                )
+              ) {
+                log.info('disconnected market recovery skipped', {
+                  pluginId: record.pluginId,
+                  ghostId: record.ghostId,
+                  reason: 'legacy-approved-manifest-mismatch',
+                });
+                return;
+              }
+            }
+            if (
+              record.manifestDigest !== undefined
+              && installedManifestDigest !== record.manifestDigest
+            ) {
+              log.info('disconnected market recovery skipped', {
+                pluginId: record.pluginId,
+                ghostId: record.ghostId,
+                reason: 'installed-manifest-mismatch',
+              });
+              return;
+            }
+            const restored = await this.withLedgerMutation(owner, () =>
+              ledger.restoreDisconnectedInstallation(record, installSubject));
+            if (restored) {
+              log.info('disconnected market installation recovered', {
+                pluginId: record.pluginId,
+                ghostId: record.ghostId,
+                releaseId: record.releaseId,
+              });
+            }
+          });
+        });
+      } catch (error) {
+        if (isIpcError(error) && error.code === 'PRECONDITION_FAILED') throw error;
+        log.warn('disconnected market recovery deferred', {
+          pluginId: record.pluginId,
+          ghostId: record.ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -2131,7 +2244,8 @@ export class PluginMarketService {
           // 目录里,digest 迁移永远补不上,fail-closed 会让老安装的合法清理永久失效。
           if (
             record?.manifestDigest != null &&
-            installedGhostRawManifestDigest(installed.dir) !== record.manifestDigest
+            installedGhostRawManifestDigest(installed.dir, record.manifestDigest) !==
+              record.manifestDigest
           ) {
             return skip(removal, 'manifest-digest-mismatch');
           }
@@ -2183,6 +2297,7 @@ export class PluginMarketService {
     const local = this.localInstallSnapshot(ledger, ledgerData.installations);
     for (const summary of plugins) {
       if (!summary.defaultInstall || !uniqueGhostIds.has(summary.ghostId)) continue;
+      if (!isGhostAvailableForActiveSession(summary.ghostId)) continue;
       if (ledgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) continue;
       if (isBuiltinGhostRemovedByUser(summary.ghostId)) continue;
       const state = this.toItem(summary, local).installState;
@@ -2201,30 +2316,16 @@ export class PluginMarketService {
           const detail = await this.api.detail(summary.id);
           requireSameMarketOwner(owner);
           assertDetailMatchesSummary(summary, detail);
-          const permissionCap = validateGhostManifest(detail.currentRelease.manifest);
-          if (!permissionCap.ok) {
-            throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-          }
           // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
           await this.installDetail(
             detail,
             {
               expectedInstalled: false,
-              // 默认安装没有用户发起窗口：目录 manifest 是自动安装可接受的权限
-              // 上限；真实包若额外扩权，installDetail 会安全取消并等待用户之后
-              // 从详情页手动安装、在原请求窗口完成确认。
-              permissionPolicy: {
-                mode: 'cap',
-                manifest: permissionCap.manifest,
-                sourceType: 'server',
-              },
               // 下载期间用户可能从本地插件页完成显式卸载。最终落位前在
               // ghostId 锁内重读卸载意图，不能让旧 snapshot 把插件装回来。
               beforeCommitInLock: () => {
                 const commitLedgerData = ledger.read();
-                if (
-                  commitLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)
-                ) {
+                if (commitLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) {
                   throw new SilentDefaultInstallCancelledError(
                     'Default Plugin was explicitly uninstalled',
                   );
@@ -2258,43 +2359,39 @@ export class PluginMarketService {
     return completed;
   }
 
-  private async applyDefaultUpgrades(
+  private async applyAutomaticUpgrades(
     plugins: readonly VisiblePluginSummary[],
+    customEntries: readonly CustomMarketEntry[],
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
   ): Promise<boolean> {
     let reconciled = true;
-    const local = this.localInstallSnapshot(ledger);
-    const completed: Array<{
-      name: string | null;
-      permissions: PluginUpgradePermissionNotice[];
-    }> = [];
+    let local = this.localInstallSnapshot(ledger);
     for (const summary of plugins) {
-      if (!summary.defaultInstall || summary.scope !== 'organization') continue;
-      if (this.toItem(summary, local).installState !== 'update-available') continue;
+      const retryKey = this.automaticUpgradeRetryKey(owner, 'server', summary.id);
+      const releaseKey = summary.currentRelease.id;
+      const record = local.installations[summary.ghostId];
       if (
-        hasPendingGhostCalls(summary.ghostId) ||
-        hasRunningGhostErrand(summary.ghostId) ||
-        hasRunningGhostCindyWork(summary.ghostId)
+        (record?.source !== 'market' && record?.source !== 'legacy-adopted') ||
+        this.toItem(summary, local).installState !== 'update-available' ||
+        isGhostBusy(summary.ghostId) ||
+        this.shouldDeferAutomaticUpgrade(retryKey, releaseKey)
       ) {
-        reconciled = false;
         continue;
       }
       try {
         await this.withMutation(summary.id, async () => {
           requireSameMarketOwner(owner);
-          if (
-            hasPendingGhostCalls(summary.ghostId) ||
-            hasRunningGhostErrand(summary.ghostId) ||
-            hasRunningGhostCindyWork(summary.ghostId)
-          ) {
+          if (isGhostBusy(summary.ghostId)) {
             throw new SilentUpgradeBusyError('Plugin is busy');
           }
           const freshLocal = this.localInstallSnapshot(ledger);
-          if (this.toItem(summary, freshLocal).installState !== 'update-available') {
-            log.debug?.('default plugin upgrade already reconciled', {
-              pluginId: summary.id,
-            });
+          if (
+            (freshLocal.installations[summary.ghostId]?.source !== 'market' &&
+              freshLocal.installations[summary.ghostId]?.source !== 'legacy-adopted') ||
+            this.toItem(summary, freshLocal).installState !== 'update-available'
+          ) {
+            log.debug?.('Plugin update already reconciled', { pluginId: summary.id });
             return;
           }
           const freshInstalled = freshLocal.ghostsById.get(summary.ghostId);
@@ -2304,96 +2401,97 @@ export class PluginMarketService {
             });
             return;
           }
-          // A legacy-unapproved or invalid install has no approved baseline: a
-          // silent default upgrade would let Main mint a fresh approved receipt
-          // without the full permission review the user must confirm. Skip the
-          // silent upgrade and leave the plugin in its current state so it goes
-          // through the reapproval/recovery flow instead.
+          // 无有效 receipt 的安装不能被后台更新静默恢复为已批准；保留现状，
+          // 等待用户从明确的手动安装/更新入口重新落位。
           if (freshInstalled.approval.state !== 'approved') {
-            log.warn('default plugin upgrade skipped for unapproved install', {
+            log.warn('automatic Plugin update skipped for unapproved install', {
               pluginId: summary.id,
               ghostId: summary.ghostId,
               approvalState: freshInstalled.approval.state,
             });
             return;
           }
-          const reviewedBaseline = ghostPermissionBaselineKey(freshInstalled.manifest);
           const detail = await this.api.detail(summary.id);
           requireSameMarketOwner(owner);
           assertDetailMatchesSummary(summary, detail);
-          const reviewedManifest = validateGhostManifest(detail.currentRelease.manifest);
-          if (!reviewedManifest.ok)
-            throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-          if (!manifestSupportsCurrentCindy(reviewedManifest.manifest)) {
-            log.warn('default plugin upgrade skipped for Cindy version', {
-              pluginId: summary.id,
-              minCindyVersion: reviewedManifest.manifest.minCindyVersion,
-            });
-            return;
-          }
-          const installed = await this.installDetail(detail, {
-            expectedInstalled: true,
-            reviewedManifest: reviewedManifest.manifest,
-            allowPermissionExpansion: true,
-            reviewedBaseline,
-            expectedInstalledApproval: ghostInstallApprovalToken(freshInstalled.approval),
-            silentBaselineMismatch: true,
-            permissionPolicy: {
-              mode: 'cap',
-              manifest: reviewedManifest.manifest,
-              sourceType: 'server',
+          await this.installDetail(
+            detail,
+            {
+              expectedInstalled: true,
+              expectedInstalledApproval: ghostInstallApprovalToken(freshInstalled.approval),
+              beforeCommitInLock: () => {
+                if (isGhostBusy(summary.ghostId)) {
+                  throw new SilentUpgradeBusyError('Plugin is busy');
+                }
+              },
             },
-            beforeCommitInLock: () => {
-              if (
-                hasPendingGhostCalls(summary.ghostId) ||
-                hasRunningGhostErrand(summary.ghostId) ||
-                hasRunningGhostCindyWork(summary.ghostId)
-              ) {
-                throw new SilentUpgradeBusyError('Plugin is busy');
-              }
-            },
-          }, owner, ledger);
-          if (installed) {
-            const addedPermissions = freshInstalled
-              ? diffGhostPermissionItems(freshInstalled.manifest, installed.manifest).added.map(
-                  ({ key, labelKey, labelArgs }) => ({
-                    key,
-                    labelKey,
-                    ...(labelArgs ? { labelArgs } : {}),
-                  }),
-                )
-              : [];
-            completed.push({
-              name: stripDirectionalControls(installed.manifest.name) || null,
-              permissions: addedPermissions,
-            });
-          }
+            owner,
+            ledger,
+          );
         });
+        local = this.localInstallSnapshot(ledger);
+        this.clearAutomaticUpgradeFailure(retryKey, releaseKey);
       } catch (error) {
         if (error instanceof SilentUpgradeBusyError) {
           reconciled = false;
         } else {
           reconciled = false;
-          log.warn('default plugin upgrade failed', {
+          const retry = this.recordAutomaticUpgradeFailure(retryKey, releaseKey);
+          log.warn('automatic Plugin update failed', {
             pluginId: summary.id,
+            releaseId: releaseKey,
+            failures: retry.failures,
+            retryAfter: new Date(retry.retryAfter).toISOString(),
             error: error instanceof Error ? error.message : String(error),
           });
         }
       }
     }
-    if (completed.length > 0) {
-      const key = upgradeNoticeKey(owner);
-      const count = (this.pendingUpgradeNotices.get(key)?.count ?? 0) + completed.length;
-      const hasPermissionExpansion =
-        (this.pendingUpgradeNotices.get(key)?.hasPermissionExpansion ?? false) ||
-        completed.some((entry) => entry.permissions.length > 0);
-      this.pendingUpgradeNotices.set(key, {
-        count,
-        name: count === 1 ? (completed[0]?.name ?? null) : null,
-        permissions:
-          count === 1 && completed[0]?.permissions.length ? completed[0].permissions : null,
-        hasPermissionExpansion,
-      });
+
+    for (const entry of customEntries) {
+      const projected = this.customToItem(entry, local);
+      const retryKey = this.automaticUpgradeRetryKey(owner, 'custom', projected.pluginId);
+      const releaseKey = projected.releaseId;
+      const installed = local.ghostsById.get(projected.ghostId);
+      if (
+        projected.installState !== 'update-available' ||
+        isGhostBusy(projected.ghostId) ||
+        installed?.approval.state !== 'approved' ||
+        this.shouldDeferAutomaticUpgrade(retryKey, releaseKey)
+      ) {
+        continue;
+      }
+      try {
+        requireSameMarketOwner(owner);
+        await this.customInstall(
+          { marketName: entry.config.name, ghostId: entry.plugin.ghostId },
+          {
+            expectedReleaseId: projected.releaseId,
+            expectedManifest: entry.plugin.manifest,
+            expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
+            allowSourceReplacement: false,
+          },
+          true,
+          owner,
+        );
+        local = this.localInstallSnapshot(ledger);
+        this.clearAutomaticUpgradeFailure(retryKey, releaseKey);
+      } catch (error) {
+        if (error instanceof SilentUpgradeBusyError) {
+          reconciled = false;
+        } else {
+          reconciled = false;
+          const retry = this.recordAutomaticUpgradeFailure(retryKey, releaseKey);
+          log.warn('automatic custom Plugin update failed', {
+            pluginId: projected.pluginId,
+            market: entry.config.name,
+            releaseId: releaseKey,
+            failures: retry.failures,
+            retryAfter: new Date(retry.retryAfter).toISOString(),
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
     return reconciled;
   }
@@ -2407,7 +2505,13 @@ export class PluginMarketService {
       ghostsById: new Map(ghosts.map((ghost) => [ghost.manifest.id, ghost])),
       installations,
       rawDigestByGhostId: new Map(
-        ghosts.map((ghost) => [ghost.manifest.id, installedGhostRawManifestDigest(ghost.dir)]),
+        ghosts.map((ghost) => {
+          const record = installations[ghost.manifest.id];
+          return [
+            ghost.manifest.id,
+            installedGhostRawManifestDigest(ghost.dir, record?.manifestDigest),
+          ];
+        }),
       ),
     };
   }
@@ -2415,6 +2519,30 @@ export class PluginMarketService {
   private ledgerForOwner(owner: ActiveAppSession): PluginMarketLedger {
     requireSameMarketOwner(owner);
     return this.ledger.bind(ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'));
+  }
+
+  /**
+   * Persist the org plugin prefix from a successful market list.
+   * Call only after `requireSameMarketOwner`, so the owner-scoped path matches
+   * the identity that received this list. Personal / unsigned lists send
+   * `currentOrganization: null` and are a no-op — they must not synthesize
+   * `pluginPrefix: null` for an org that was never listed.
+   */
+  private rememberCurrentOrganization(
+    currentOrganization: PluginCurrentOrganization | null | undefined,
+  ): void {
+    if (!currentOrganization) return;
+    try {
+      createOrganizationPrefixStore(
+        ownerScopedUserDataPath('plugin-market', 'organization.v1.json'),
+      ).remember(currentOrganization.organizationId, currentOrganization.pluginPrefix);
+    } catch (error) {
+      // This is a reconstructable cache. A failed write must not hide the market;
+      // a later lookup still fails closed as unavailable/absent.
+      log.warn('organization prefix cache write failed', {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+    }
   }
 
   private withLedgerMutation<T>(
@@ -2463,12 +2591,7 @@ export class PluginMarketService {
     try {
       ledger.markRemoved(record.ghostId, tracksDefaultInstall ? installSubject : null);
     } catch (error) {
-      this.restoreMarketRouteAfterFailedReplacement(
-        ledger,
-        record,
-        installSubject,
-        wasSuppressed,
-      );
+      this.restoreMarketRouteAfterFailedReplacement(ledger, record, installSubject, wasSuppressed);
       log.warn('failed to detach Plugin market route before replacement', {
         pluginId: record.pluginId,
         ghostId: record.ghostId,

@@ -141,6 +141,7 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'wechat_inbox')).toBe(true);
       expect(tableExists(db, 'wechat_outbox')).toBe(true);
       expect(tableExists(db, 'wechat_file_attachments')).toBe(true);
+      expect(columnNames(db, 'schedules')).toContain('session_title_template');
       expect(indexExists(db, 'idx_schedule_runs_session_schedule')).toBe(true);
       expect(tableExists(db, 'schedule_session_bindings')).toBe(true);
       expect(indexExists(db, 'idx_schedule_session_bindings_session_schedule')).toBe(true);

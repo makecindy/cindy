@@ -187,6 +187,14 @@ describe('窗口可见性广播（装饰动画闸门的兜底信号）', () => {
       // 将来这两个视图若引入常驻动画，删掉本豁免即可。
       '权限引导窗与 backdrop 视图无常驻装饰动画',
     ],
+    [
+      'doc-tools/htmlPdfRenderer.ts',
+      // render_pdf 的离屏排版窗：从不 show()、没有 Cindy 自己的 Renderer、不加载
+      // index.html，装的是任务给的任意 HTML —— 闸门根本不在这条链上，广播无处可送。
+      // 关节流是因为它全程隐藏：Chromium 会把隐藏窗口的定时器/rAF 降频，页面在打印前
+      // 需要跑的布局与字体加载会被拖慢甚至卡到超时。窗口即用即毁，节流关闭不会常驻耗电。
+      '离屏 PDF 排版窗从不显示、不加载 Cindy Renderer，装饰动画闸门不适用',
+    ],
   ]);
 
   it('关闭了 backgroundThrottling 的窗口要么装广播，要么显式登记豁免', () => {

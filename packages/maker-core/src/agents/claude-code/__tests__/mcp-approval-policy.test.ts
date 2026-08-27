@@ -206,6 +206,7 @@ async function startSession(
     }>;
     turnChangeCapture?: AgentDeps['turnChangeCapture'];
     getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
+    resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
   },
 ) {
   const configDir = await makeTempDir();
@@ -223,6 +224,7 @@ async function startSession(
   deps.capabilityRouting = options?.capabilityRouting;
   deps.turnChangeCapture = options?.turnChangeCapture;
   deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
+  deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
   const agent = new ClaudeCodeAgent(deps);
   const handle = await agent.startSession({
     sessionId: 'session-mcp-policy',
@@ -371,6 +373,27 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
         '/feishu-delegate:message-feishu-coworkers 改用这个来源',
     });
     await expect(preToolUse(toolInput)).resolves.toEqual({ continue: true });
+    await handle.close();
+  });
+
+  it('denies an unavailable Agent model in Full access before canUseTool', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'denied' }),
+    });
+    const preToolUse = hooks?.PreToolUse?.[0]?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'sonnet', run_in_background: true },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('sonnet'),
+      },
+    });
     await handle.close();
   });
 
@@ -936,6 +959,32 @@ describe('a custom server cannot take over a builtin name', () => {
     await handle.close();
   });
 
+  it('keeps Claude on direct per-server MCP registration instead of the Pi gateway', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+
+    const agent = new ClaudeCodeAgent(createDeps(() => 'prompt', [
+      'cindy_browser',
+      'cindy_contacts',
+    ]));
+    const handle = await agent.startSession({
+      sessionId: 'session-direct-mcp-contract',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, unknown>
+      | undefined;
+    expect(Object.keys(mcpServers ?? {}).sort()).toEqual(['cindy_browser', 'cindy_contacts']);
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_list_tools');
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_call_tool');
+    await handle.close();
+  });
+
   it('treats an unsafe object-key server name as an ordinary key', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -1036,6 +1085,7 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames?: readonly string[];
       getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
       getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
+      resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
     },
   ) {
     const configDir = await makeTempDir();
@@ -1043,10 +1093,12 @@ describe('remote sessions share the same permission semantics', () => {
     const workingDir = await makeTempDir();
 
     let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
+    let onSubagentModelAccessRequest: ((raw: unknown) => Promise<{ status?: string }>) | undefined;
     const deps = createDeps(policy);
     deps.getGhostRosterPrompt = options?.getGhostRosterPrompt;
     deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
     deps.capabilityRouting = options?.capabilityRouting;
+    deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
     // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
     deps.mcpProviders = (
       options?.mcpServerNames ?? ['cindy_browser', 'cindy_contacts']
@@ -1060,9 +1112,11 @@ describe('remote sessions share the same permission semantics', () => {
       sessionId: string;
       sessionInstanceId?: string;
       onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
+      onSubagentModelAccessRequest: (raw: unknown) => Promise<{ status?: string }>;
       startParams: Record<string, unknown>;
     }) => {
       onApprovalRequest = args.onApprovalRequest;
+      onSubagentModelAccessRequest = args.onSubagentModelAccessRequest;
       remoteStartParams = args.startParams;
       remoteIdentity = {
         sessionId: args.sessionId,
@@ -1093,7 +1147,15 @@ describe('remote sessions share the same permission semantics', () => {
       });
     }
     if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
-    return { handle, onApprovalRequest, seen, remoteStartParams, remoteIdentity };
+    if (!onSubagentModelAccessRequest) throw new Error('expected remote model access callback');
+    return {
+      handle,
+      onApprovalRequest,
+      onSubagentModelAccessRequest,
+      seen,
+      remoteStartParams,
+      remoteIdentity,
+    };
   }
 
   it('passes the runtime session instance id into the remote Claude factory', async () => {
@@ -1103,6 +1165,26 @@ describe('remote sessions share the same permission semantics', () => {
       sessionId: 'session-remote-mcp-policy',
       sessionInstanceId: 'instance-remote-mcp-policy',
     });
+    await handle.close();
+  });
+
+  it('keeps remote Full access on the same live tri-state resolver', async () => {
+    const resolveClaudeSubagentModelAccess = vi.fn(async () => ({ status: 'denied' as const }));
+    const { handle, onSubagentModelAccessRequest, remoteStartParams } = await startRemoteSession(
+      () => 'auto-approve',
+      {
+        permissionMode: 'bypassPermissions',
+        resolveClaudeSubagentModelAccess,
+      },
+    );
+
+    await expect(onSubagentModelAccessRequest({ model: 'sonnet' }))
+      .resolves.toEqual({ status: 'denied' });
+    expect(resolveClaudeSubagentModelAccess).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'sonnet',
+      parentModel: 'claude-opus-4-6',
+    }));
+    expect(remoteStartParams).not.toHaveProperty('subagentModelPolicy');
     await handle.close();
   });
 
@@ -1321,6 +1403,13 @@ describe('remote sessions share the same permission semantics', () => {
         denialMessage:
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
       },
+      {
+        toolNamePrefix: 'AskUserQuestion',
+        sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
     ]);
     await expect(
       natural.onApprovalRequest({
@@ -1430,7 +1519,7 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       remote.onApprovalRequest({
         requestId: 'r-user-mcp-collision',
@@ -1512,7 +1601,7 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       failed.onApprovalRequest({
         requestId: 'r-failed-settings-mcp-collision',

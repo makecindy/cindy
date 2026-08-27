@@ -19,6 +19,7 @@ export type {
   RoutingDescriptor,
   ModelCost,
   CatalogModel,
+  ProviderMediaModel,
   Provider,
   Catalog,
   CustomProviderConfig,
@@ -38,7 +39,13 @@ export type {
 
 export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
 
-export { effectivePiWireProtocol, preservesPiCatalogModels } from './pi-catalog-marker.js';
+export {
+  effectivePiWireProtocol,
+  preservesPiCatalogModels,
+  resolvePiModelRoute,
+  resolvePiModelWireProtocol,
+} from './pi-catalog-marker.js';
+export type { ResolvedPiModelRoute } from './pi-catalog-marker.js';
 
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
@@ -124,6 +131,7 @@ export type {
 export {
   modelDisableKey,
   isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
 } from './disableOverrides.js';
 export type { ModelDisableOverrides } from './disableOverrides.js';
@@ -159,6 +167,9 @@ export {
   XAI_MODEL_PREFIX,
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
   isSubscriptionDirectModel,
+  isExclusiveXaiModelId,
+  exclusiveXaiCatalogModelId,
+  isSubscriptionDirectRoute,
   CATEGORY_ORDER,
   CHAT_VENDOR_CATEGORY_ORDER,
   categorize,
@@ -173,6 +184,32 @@ export {
   formatContextWindow,
 } from './classification.js';
 export type { ModelCategory, DisplayModel, ModelBadges } from './classification.js';
+
+// 统一模型选择器(模型优先)M1:推荐引擎推导 + 跨引擎联合列表(纯逻辑)。
+// 规格 docs/product-rules/model-selector-unified.md §2.1 / §2.2 / §4。
+export {
+  UNIFIED_AGENT_PRIORITY,
+  unifiedModelKeyId,
+  normalizeModelIdForClassification,
+  catalogModelIdCandidates,
+  findCatalogModel,
+  resolveWireModelId,
+  candidateAgentsForModel,
+  nativeAgentForProviderModel,
+  pickRecommendedAgent,
+  recommendedAgentForModel,
+  resolveAgentCapability,
+  unifiedModelEntries,
+  partitionEntriesByNativeAgent,
+  sortEntriesForAgent,
+} from './unifiedSelection.js';
+export type {
+  SourceResolutionScope,
+  CandidateAgentsOptions,
+  UnifiedAgentCapability,
+  UnifiedModelEntry,
+  UnifiedModelEntriesOptions,
+} from './unifiedSelection.js';
 
 export { resolveModelInvocation } from './invocation.js';
 export type {

@@ -57,7 +57,9 @@ describe('IssueConfirmBridge', () => {
         githubUserIdentity: GITHUB_IDENTITY,
       },
     });
-    expect((payload as { request: { requestId: string } }).request.requestId).toBeTruthy();
+    expect((payload as { request: { requestId: string } }).request.requestId).toMatch(
+      /^desktop-confirm-source-/,
+    );
     expect(bridge.pendingSnapshots('other-session')).toEqual([]);
     expect(bridge.pendingSnapshots('sess-1')).toEqual([
       { sessionId: 'sess-1', request: (payload as { request: unknown }).request },

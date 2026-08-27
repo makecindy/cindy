@@ -21,17 +21,41 @@ import {
   readSentPastedTextRanges,
   readSentSlashCommandRanges,
 } from '@/session/sentMessageAtoms';
+import {
+  buildQueuePanelSummary as buildQueuePanelSummaryShared,
+  buildQueueRowPresentation as buildQueueRowPresentationShared,
+  type QueuePanelSummary,
+  type QueueRowPresentation,
+} from '@cindy/maker-shared/queue';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 export {
-  buildQueuePanelSummary,
-  buildQueueRowPresentation,
   isOrcaQueueItem,
   queueMoveTargetIndex,
   stopOptionsForProjection,
-  type QueuePanelSummary,
   type QueueRowActionId,
   type QueueRowActionPresentation,
-  type QueueRowPresentation,
 } from '@cindy/maker-shared/queue';
+
+export type { QueuePanelSummary, QueueRowPresentation };
+
+export function buildQueuePanelSummary(
+  projection: Parameters<typeof buildQueuePanelSummaryShared>[0],
+  readOnlyReason?: Parameters<typeof buildQueuePanelSummaryShared>[1],
+  collapsedVisibleRows?: Parameters<typeof buildQueuePanelSummaryShared>[2],
+): QueuePanelSummary {
+  return buildQueuePanelSummaryShared(
+    projection,
+    readOnlyReason,
+    collapsedVisibleRows,
+    mobilePresentationLocalizer,
+  );
+}
+
+export function buildQueueRowPresentation(
+  input: Parameters<typeof buildQueueRowPresentationShared>[0],
+): QueueRowPresentation {
+  return buildQueueRowPresentationShared(input, mobilePresentationLocalizer);
+}
 
 export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   sessionId: '',

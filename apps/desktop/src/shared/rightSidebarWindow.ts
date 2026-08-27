@@ -17,6 +17,8 @@ export interface RsbWindowState {
   lastOpen: boolean;
   /** 运行时:子窗口当前是否存在。不持久化。 */
   open: boolean;
+  /** 子窗口最近一次真正展示的宿主 session。关窗后仍保留，供主窗写折叠归属。 */
+  hostSessionId?: string | null;
 }
 
 /**
@@ -29,6 +31,8 @@ export interface RsbWindowContext {
   remoteHostId: string | null;
   /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
   deviceLinkDeviceId?: string | null;
+  /** Pi is the only harness that exposes the Subagents sidebar surface. */
+  subagentsAvailable?: boolean;
   /** 当前主窗视图是否有侧边栏语义(设置页等无会话视图为 false,子窗口显示占位空态)。 */
   available: boolean;
 }
@@ -36,6 +40,7 @@ export interface RsbWindowContext {
 /** main → 子窗口的命令推送(如主窗终端快捷键转发 / detached RSB 内定位文件)。 */
 export type RsbWindowCommand =
   | { type: 'open-terminal'; sessionId: string }
+  | { type: 'toggle-review-tab'; sessionId: string }
   | { type: 'open-web-browser'; sessionId: string; url: string }
   | {
       type: 'ensure-orca-workers-tab';

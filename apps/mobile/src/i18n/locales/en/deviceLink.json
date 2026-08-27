@@ -26,5 +26,42 @@
   "versionMismatchTitle": "Version mismatch",
   "versionMismatchHint": "This app version is incompatible with the service. Update to the latest version and try again.",
   "unstableTitle": "Connection keeps dropping",
-  "unstableHint": "Connection keeps dropping and reconnecting — check the network, or restart the app if it persists."
+  "unstableHint": "Connection keeps dropping and reconnecting — check the network, or restart the app if it persists.",
+  "relay": {
+    "label": {
+      "online": "Relay connected",
+      "connecting": "Connecting to Relay",
+      "stopped": "Relay disconnected"
+    },
+    "hint": {
+      "online": "Remote tasks can be synced.",
+      "lastSynced": "Last synced {{time}}",
+      "connecting": "Remote tasks will resubscribe automatically when the network recovers.",
+      "stopped": "The connection will resume when you return to the app or sign in again."
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} can't be used because no API key is configured on the computer. Configure one in {{appName}} on the computer under Settings → Model Providers, then try again.",
+    "noOauth": "{{agent}} can't be used because account authorization isn't complete on the computer. Reconnect the account in {{appName}} on the computer under Settings → Model Providers, then try again.",
+    "noCredentials": "{{agent}} can't be used because it isn't signed in on the computer. Sign in through {{appName}} on the computer under Settings → Model Providers, then try again.",
+    "noEncryption": "{{agent}} can't be used because secure system storage on the computer is unavailable. Check Keychain on macOS or account encryption on Windows, then restart {{appName}} on the computer.",
+    "proxyNotReady": "{{agent}} isn't ready on the computer yet. Try again shortly; if this continues, restart {{appName}} on the computer.",
+    "default": "{{agent}} can't be used because its computer sign-in is unavailable. Sign in again through {{appName}} on the computer under Settings → Model Providers. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "The controlled computer has disabled remote control.",
+    "channelNotAllowed": "The current desktop version doesn't support this remote capability.",
+    "accessRevoked": "This computer has revoked mobile access.",
+    "deviceUnresponsive": "The computer isn't responding. Automatic retry is in progress; try again shortly.",
+    "versionMismatch": "The service protocol version doesn't match. Update the app and try again.",
+    "payloadTooLarge": "This transfer is too large. Split it into smaller parts and try again.",
+    "mediaFetchFailed": "The file couldn't be fetched from the computer. Try again later.",
+    "voiceTranscribeFailed": "Voice transcription failed. Try again or use the keyboard.",
+    "linkNotOpen": "The control link to the computer was disconnected and is reconnecting.",
+    "accountChanged": "The Codex account or workspace changed. Refresh the quota and confirm again.",
+    "offerExpired": "The Codex reset offer expired. Refresh the quota and confirm again.",
+    "preconditionFailed": "The operation conditions changed. Refresh and confirm again.",
+    "transient": "The network or controlled computer is temporarily unavailable. Sync again later.",
+    "callFailed": "The remote call failed. Try again later. ({{error}})"
+  }
 }

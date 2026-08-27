@@ -902,6 +902,77 @@ export function transferSplitFraction(
   return finishOp(layout, next, 'transferSplitFraction rejected');
 }
 
+/**
+ * 多来源接力的份额转移:amount 全额从 sources(按下标顺序)转移到 toIndex,每个
+ * 来源各自保住 MIN_SPLIT_CHILD_FRACTION 下限 —— 前一个扣到下限后,剩余差额由
+ * 后面的继续接;接力走完仍有缺口则整单拒绝(返回原树)。
+ *
+ * 为什么需要(2026-08-17 实测):压缩 chat 的拖缝松手要把**像素口径**的增量写回
+ * 账本,但 chat 的画面宽(flex 吸收折叠邻居让出的空间)可以远大于自己的树份额,
+ * 两方转移会被 0.05 账本地板整单拒绝 —— chat 树份额被拖到 0.05 后那条缝彻底
+ * 冻住,压不到 400px 产品下限。差额改由"渲染宽为 0 却占着账"的折叠兄弟接力出账
+ * (画面上那块本就被弹性 chat 吸收),账本与画面重新对齐。调用方(LayoutRoot)
+ * 按"实测宽为 0"挑来源;本函数只管写树合法,不理解折叠语义。
+ */
+export function transferSplitFractionRelay(
+  layout: Layout,
+  splitId: string,
+  sources: number[],
+  toIndex: number,
+  amount: number,
+): LayoutOpResult {
+  if (!(Number.isFinite(amount) && amount > 0)) {
+    return { layout, applied: false, reason: 'amount must be a positive finite number' };
+  }
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return { layout, applied: false, reason: 'sources must be a non-empty array' };
+  }
+  if (!Number.isInteger(toIndex)) {
+    return { layout, applied: false, reason: `toIndex must be an integer: ${toIndex}` };
+  }
+  const seen = new Set<number>();
+  for (const index of sources) {
+    if (!Number.isInteger(index)) {
+      return { layout, applied: false, reason: `source index must be an integer: ${index}` };
+    }
+    if (index === toIndex) {
+      return { layout, applied: false, reason: 'toIndex must not appear in sources' };
+    }
+    if (seen.has(index)) {
+      return { layout, applied: false, reason: `duplicate source index: ${index}` };
+    }
+    seen.add(index);
+  }
+  const next = structuredClone(layout);
+  const split = findSplitById(next.content, splitId);
+  if (!split) return { layout, applied: false, reason: `split not found: ${splitId}` };
+  const bounds = split.children.length;
+  if (toIndex < 0 || toIndex >= bounds || sources.some((index) => index < 0 || index >= bounds)) {
+    return { layout, applied: false, reason: 'child index out of range' };
+  }
+  // 容差与两方转移同款:夹到下限的合法接力不能被浮点残差判死。
+  const floor = MIN_SPLIT_CHILD_FRACTION - FRACTION_TOLERANCE;
+  let remaining = amount;
+  for (const index of sources) {
+    if (remaining <= FRACTION_TOLERANCE) break;
+    const child = split.children[index];
+    const take = Math.min(remaining, child.fraction - floor);
+    if (take <= 0) continue;
+    child.fraction -= take;
+    remaining -= take;
+  }
+  if (remaining > FRACTION_TOLERANCE) {
+    return {
+      layout,
+      applied: false,
+      reason: `sources cannot cover the transfer, short by ${remaining}`,
+    };
+  }
+  split.children[toIndex].fraction += amount - remaining;
+  normalizeSplitFractions(split);
+  return finishOp(layout, next, 'transferSplitFractionRelay rejected');
+}
+
 function findSplitById(node: LayoutNode, splitId: string): SplitNode | null {
   if (node.type !== 'split') return null;
   if (node.id === splitId) return node;

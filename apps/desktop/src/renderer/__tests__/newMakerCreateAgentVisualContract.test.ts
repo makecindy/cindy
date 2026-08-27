@@ -28,10 +28,21 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('data-testid="create-agent-quick-starts"');
     expect(source).toContain('createAgentQuickStarts.map');
     expect(source).toContain('<ChatInput');
-    expect(source).toContain('<AgentSelect');
-    // 引擎切换在工具条上已由分段器换成下拉(定宽触发器,引擎数量不影响布局)
+    // 引擎切换控件在新建对话工具条上**统一面板真正启用时才撤除**
+    // (model-selector-unified §1.1):分段器 → 下拉(AgentSelect)→ 统一模型选择器把引擎
+    // 收进模型行。判据必须是 `unifiedModelPanelActive`(能力 × 形态偏好),不是只看能力的
+    // `unifiedModelPanelEnabled`:后者在默认的 'original' 形态下也为 true,composer 明明
+    // 回落了旧的「先选引擎再选模型」面板,工具条却已经把引擎下拉撤了 —— 新建草稿就此
+    // 没有任何换引擎入口。两条降级路径(device-link 老被控端 capabilities-only、形态停在
+    // 'original')都由 active 一并表达。
     expect(source).not.toContain('<VendorSegmentedSwitcher');
-    expect(source).toContain('middleToolbarSlot={');
+    expect(source).toContain('unifiedModelPanelActive ? undefined : (');
+    expect(source).toMatch(/middleToolbarSlot=\{\s*\n\s*unifiedModelPanelActive \? undefined : \(/);
+    expect(source).toMatch(
+      /compactMiddleToolbarSlot=\{\s*\n\s*unifiedModelPanelActive \? undefined : \(/,
+    );
+    // active 必须真的把形态偏好叠进去(只改名不改语义就白修了)。
+    expect(source).toMatch(/unifiedModelPanelEnabled && modelPickerLayoutPref !== 'original'/);
     expect(source).not.toContain('<HomeUsageDashboard');
     expect(source).not.toContain('newChat.createAgent.more');
     expect(source).not.toContain('data-testid="create-agent-sidebar"');
@@ -69,7 +80,8 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     // 内容列宽度从死锁 800px 改为跟随 useProportionalWidth 的 inputWidth(与进行中
     // 对话页同源,封顶 914+20=934px):大屏留出左右呼吸空间、发送后同一 ChatInput 无宽度跳变。
     expect(source).toContain('relative flex w-full flex-col items-start');
-    expect(source).toContain('style={{ maxWidth: inputWidth || 800 }}');
+    expect(source).toContain('style={{ maxWidth: inputWidth }}');
+    expect(source).toContain('responsiveBreakpoints: DRAFT_INPUT_WIDTH_BREAKPOINTS');
     expect(source).not.toContain('max-w-[800px]');
     expect(source).toContain('absolute right-0 top-[22px]');
     // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
@@ -95,7 +107,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'sessionId={undefined}',
       'initialWorkingDir={effectiveWorkingDir}',
       'remoteHostId={draft.remoteHostId ?? null}',
-      'deviceLinkDeviceId={effectiveDeviceLinkDeviceId}',
+      'deviceLinkDeviceId={effectiveDeviceLinkDeviceId ?? null}',
       'modelMemoryOverride={deviceLinkDraftMemory}',
       'initialModel={draftInitialModel}',
       'initialEffort={draftInitialEffort}',
@@ -123,8 +135,11 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'rememberedEffortByModel={isDeviceLinkDraft ? undefined : draft.effortByModel}',
       'onRememberedEffortChange={',
       'isDeviceLinkDraft ? undefined : handleRememberedEffortChange',
-      'placeholder="Hi Cindy!"',
-      'middleToolbarSlot={',
+      "placeholder={t('newChat.chatInput.createAgentPlaceholder')}",
+      // 统一模型选择器(M5):新会话的选中直通 + 收藏锚点选中态。撤掉 AgentSelect 后,
+      // 「换引擎」这件事只剩这一条路径 —— 掉了它草稿就再也换不了引擎。
+      'onUnifiedDraftSelect={handleUnifiedDraftSelect}',
+      'selectedFavoriteUid={selectedFavoriteUid}',
     ]) {
       expect(chatInputBlock).toContain(invariant);
     }

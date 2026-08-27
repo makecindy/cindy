@@ -24,8 +24,149 @@
     "voiceStopRecording": "停止錄音",
     "capabilitiesUnsupported": "遠端能力返回格式不支援"
   },
+  "presentation": {
+    "collaboration": {
+      "labelLead": "協同 Lead",
+      "labelWorker": "協同 Worker",
+      "labelRole": "協同 {{role}}",
+      "noticeLead": "這是電腦端的 Orca Lead 任務。你可以在手機上繼續傳送訊息；建立 Worker、切換焦點、Fork/Rewind、編輯佇列和修改任務設定等編排操作請在電腦端完成。",
+      "noticeWorker": "這是電腦端的 Orca Worker 任務。手機版第一版為唯讀，不提供傳送訊息、切換 Worker 焦點、封存 Worker 或停止協同。",
+      "noticeOther": "這是電腦端的協同任務。手機版第一版為唯讀，協同編排操作請在電腦端完成。",
+      "readOnlyReason": "協同模式在手機版第一版中為唯讀。確認處理、佇列編輯和任務修改請在電腦端完成。",
+      "composerReadOnlyReason": "這個協同子任務在手機版中為唯讀，請在電腦端傳送訊息。"
+    },
+    "composer": {
+      "voice": {
+        "listening": "正在聆聽",
+        "submitting": "轉寫中",
+        "refining": "正在潤飾",
+        "error": "語音發生錯誤",
+        "idle": "語音",
+        "sendingReason": "訊息正在傳送到電腦端，完成後再錄音。",
+        "processingReason": "語音正在處理，完成後再錄音。"
+      },
+      "attachment": {
+        "count": "附件 {{count}}",
+        "collapse": "收起附件",
+        "label": "附件",
+        "busyReason": "附件處理中，完成後再繼續新增。",
+        "sendingReason": "訊息正在傳送到電腦端，完成後再調整附件。"
+      },
+      "input": {
+        "sendingReason": "訊息正在傳送到電腦端。"
+      },
+      "send": {
+        "sendingReason": "訊息正在傳送到電腦端。",
+        "attachmentBusyReason": "附件上傳中，完成後再傳送。",
+        "voiceBusyReason": "語音正在處理，完成後再傳送。",
+        "emptyReason": "輸入文字、新增附件或引用後才能傳送。",
+        "sending": "傳送中",
+        "label": "傳送"
+      },
+      "stop": {
+        "queueBusyReason": "佇列操作同步中，暫時無法停止。",
+        "unavailableReason": "電腦端目前沒有可停止的執行。",
+        "processing": "處理中",
+        "label": "停止"
+      },
+      "placeholder": {
+        "listening": "正在聆聽……",
+        "submitting": "正在轉寫語音",
+        "refining": "正在潤飾語音",
+        "default": "繼續聊一聊…"
+      },
+      "guidance": {
+        "sending": "訊息正在寫入電腦端佇列，完成前請勿重複傳送。",
+        "queueBusy": "正在同步佇列操作，完成後會重新整理佇列狀態。",
+        "listeningWithDraft": "點擊傳送會結束語音並傳送目前文字；點擊輸入框會結束語音並開啟鍵盤。",
+        "listening": "正在聆聽；點擊傳送會結束語音並傳送辨識出的文字，點擊輸入框可結束語音並開啟鍵盤。",
+        "submitting": "正在轉寫語音，輸入框會暫時鎖定。",
+        "refining": "正在潤飾語音，完成後會更新輸入框。",
+        "attachmentBusy": "正在檢查或上傳附件，完成後會出現在附件清單。",
+        "attachmentsWithText": "將傳送 {{count}} 個附件和輸入框中的文字。",
+        "attachmentsOnly": "將只傳送 {{count}} 個附件，也可以補充說明後再傳送。",
+        "attachmentPickerOpen": "可以新增手機上的照片、截圖或檔案。",
+        "draft": "點擊傳送後會進入電腦端佇列，並依目前任務設定執行。",
+        "quotesOnly": "將傳送 {{count}} 處引用，也可以補充說明後再傳送。",
+        "canStop": "電腦端正在執行；可繼續排入輸入內容，或點擊停止並保留目前佇列。",
+        "empty": "輸入文字開始，使用 / 呼叫命令，使用 @ 引用專案資源。"
+      },
+      "status": {
+        "sending": "正在傳送到電腦端",
+        "queueBusy": "正在處理佇列操作",
+        "attachmentBusy": "正在處理附件",
+        "ready": "就緒"
+      },
+      "operation": {
+        "sessionSyncing": "目前任務尚未完成同步。",
+        "pendingInteraction": "請先處理電腦端的待處理請求，才能繼續輸入。"
+      }
+    },
+    "overview": {
+      "unavailable": "無法使用",
+      "pendingCount": "待處理 {{count}}",
+      "readOnly": "唯讀",
+      "queuePaused": "佇列已暫停",
+      "status": { "active": "作用中", "archived": "已封存", "deleted": "已刪除" },
+      "actions": {
+        "settings": { "label": "設定", "a11y": "開啟任務設定" },
+        "usage": { "label": "用量", "a11y": "查看任務用量" },
+        "files": { "label": "檔案", "a11y": "瀏覽遠端檔案" },
+        "queue": { "label": "佇列", "a11y": "開啟佇列面板" },
+        "search": { "label": "搜尋", "openA11y": "搜尋訊息", "closeA11y": "關閉訊息搜尋" }
+      },
+      "disabled": {
+        "files": "這個任務沒有遠端工作目錄，無法瀏覽檔案。",
+        "search": "目前沒有可搜尋的訊息。",
+        "queueUnavailable": "受控電腦暫時無法使用，重新同步後再查看佇列。",
+        "queuePending": "請先處理待處理請求，完成後佇列面板會恢復。",
+        "queuePausedEmpty": "佇列已暫停，但目前沒有可繼續的佇列訊息。",
+        "queueEmpty": "目前沒有佇列訊息。",
+        "queueDefault": "目前狀態無法開啟佇列面板。"
+      },
+      "actionCopy": {
+        "pending": "請先處理待處理請求，完成後輸入區會恢復。",
+        "archived": "任務已封存，還原後才能繼續傳送。",
+        "deleted": "任務已刪除，無法繼續操作。",
+        "queuePaused": "佇列已暫停，可在佇列面板繼續執行。"
+      }
+    },
+    "controls": {
+      "spend": {
+        "title": "任務用量",
+        "unavailable": "暫無任務用量",
+        "taskCost": "本任務 {{cost}}",
+        "contextWithLimit": "上下文 {{used}} / {{total}} · {{percentage}}",
+        "context": "上下文 {{used}} tokens"
+      },
+      "context": {
+        "title": "上下文用量",
+        "unavailable": "暫無上下文資料"
+      },
+      "rateLimit": {
+        "plan": "方案",
+        "remaining": "剩餘 {{percent}}",
+        "used": "已用 {{percent}}",
+        "resetsAt": "{{time}} 重設",
+        "status": "狀態",
+        "reached": "已觸發帳號限額",
+        "account": "帳號",
+        "availableResets": "可用重設",
+        "resetCount": "{{count}} 次",
+        "earliestExpiry": "最早過期",
+        "window": {
+          "default": "限額",
+          "days": "{{count}}天",
+          "week": "週"
+        }
+      }
+    }
+  },
   "screen": {
     "thinking": "思考中…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "正在重新連線…",
     "modelBusyRetrying": "模型服務繁忙，正在重試…",
     "rateLimitRetrying": "請求受到限流，正在重試…",

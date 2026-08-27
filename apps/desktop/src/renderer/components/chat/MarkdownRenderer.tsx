@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type AnimationEvent as ReactAnimationEvent, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -34,11 +34,11 @@ import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
 import {
   getOrCreateWordFadeState,
-  markSettledFromAnimationEnd,
   releaseWordFadeState,
-  rehypeStreamWordFade,
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
+import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
+import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
@@ -228,7 +228,7 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
 // rehypeKatex 必须排在 rehypeHighlight 之前:remark-math 产出的 hast 是
 // `<code class="language-math ...">`,先让 katex 消费掉,否则 highlight 会往
 // 里面塞 hljs span 破坏纯文本结构。strict:'ignore' 静默非致命 LaTeX 告警;
-// errorColor 走语义豁免 error token,解析失败的公式以错误色显示原文。
+// 解析失败的公式回落为正文色原文,避免模型格式错误把普通聊天染成错误红。
 // rehypeMathBlockMarker 紧随 rehypeKatex:把裸 `<span class="katex-display">`
 // 包进 `<div data-math-block>`,让下方 div 渲染器能挂「复制为图片」工具栏
 // (components 映射只认 tagName,认不了 class)。
@@ -237,7 +237,7 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
 // 打 data-fenced-code 供下方 code 渲染器按结构(而非语言标注)分派。
 const REHYPE_PLUGINS: PluggableList = [
   rehypeSlug,
-  [rehypeKatex, { strict: 'ignore', errorColor: 'var(--error-fg)' }],
+  [rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }],
   rehypeMathBlockMarker,
   rehypeHighlight,
   rehypeFencedCodeMarker,
@@ -429,7 +429,9 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
     };
   }, []);
 
-  return throttled;
+  // useEffect 在 paint 后才执行。流式结束时本次 render 直接返回最新原文，
+  // effect 只负责同步内部 state，供未来可能的新流式周期使用。
+  return enabled ? throttled : value;
 }
 
 /**
@@ -1637,35 +1639,21 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
-  // 流式逐词淡入(rehypeStreamWordFade,§14.4 第五个 sanctioned motion class):
-  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。state 按渲染器
-  // 实例持有(useMemo 键 isStreaming):流式期间跨 parse tick 记住每个词的 delay
-  // 保证不重播;根节点监听冒泡的 animationend 把播完的词落袋(settled),下一次
-  // parse 直接还原纯文本 —— 结构性 remount 也无从重播(双保险,详见插件头注释)。
-  // isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS —— 终版渲染无
-  // 任何 span 包装,插件、state 与监听一起被回收,静态路径零开销。
+  // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
+  // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
+  // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
   // 用户开关(Settings → 个性化 → 流式动效,默认开)与 reduced-motion 取 AND:
   // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
   const reducedMotion = useReducedMotion();
   const streamFadeEnabled = useStreamFadeEnabled();
   const streamFade = isStreaming && !reducedMotion && streamFadeEnabled;
-  const wordFade = useMemo(() => {
+  const wordFadeState = useMemo(() => {
     if (!streamFade) return null;
-    const state = getOrCreateWordFadeState(streamFadeKey);
-    return {
-      state,
-      plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, state]] as PluggableList,
-    };
+    return getOrCreateWordFadeState(streamFadeKey);
   }, [streamFade, streamFadeKey]);
   useEffect(() => {
     if (!isStreaming) releaseWordFadeState(streamFadeKey);
   }, [isStreaming, streamFadeKey]);
-  const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
-  const handleWordFadeAnimationEnd = useMemo(() => {
-    if (!wordFade) return undefined;
-    return (event: ReactAnimationEvent<HTMLDivElement>) =>
-      markSettledFromAnimationEnd(wordFade.state, event.nativeEvent);
-  }, [wordFade]);
   // LaTeX 定界符归一化(`\(...\)` / `\[...\]` → `$...$` / `$$...$$`)。
   // emitSourceLines(TextLightbox 行锚点 doc 模式,依赖 data-source-line 与
   // 源文件行号一致)时走保行数模式:单行 inline 照常转换(同行替换不改行
@@ -1682,6 +1670,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   const renderedContent = useMemo(
     () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
     [repairedContent, emitSourceLines],
+  );
+  const streamingChunks = useMemo(
+    () =>
+      isStreaming && !emitSourceLines
+        ? splitStreamingMarkdownChunks(renderedContent)
+        : [{ start: 0, content: renderedContent }],
+    [emitSourceLines, isStreaming, renderedContent],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
@@ -1709,7 +1704,6 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
-
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still
@@ -1875,16 +1869,37 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   );
 
   return (
-    <div className="msg-markdown select-text" onAnimationEnd={handleWordFadeAnimationEnd}>
-      <ReactMarkdown
-        remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-        rehypePlugins={rehypePlugins}
-        components={components}
-        urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
-        skipHtml
-      >
-        {renderedContent}
-      </ReactMarkdown>
+    <div className="msg-markdown select-text">
+      {isStreaming ? (
+        streamingChunks.map((chunk) => (
+          <StreamingMarkdownChunk
+            key={chunk.start}
+            sourceKey={String(chunk.start)}
+            content={chunk.content}
+            remarkPlugins={
+              allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
+            }
+            rehypePlugins={REHYPE_PLUGINS}
+            components={components}
+            urlTransform={
+              allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform
+            }
+            wordFadeState={wordFadeState}
+            emitSourceLines={emitSourceLines}
+            wholeDocument={streamingChunks.length === 1}
+          />
+        ))
+      ) : (
+        <ReactMarkdown
+          remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          components={components}
+          urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
+          skipHtml
+        >
+          {renderedContent}
+        </ReactMarkdown>
+      )}
       {lightboxSrc && (
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}

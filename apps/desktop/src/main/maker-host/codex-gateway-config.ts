@@ -71,10 +71,14 @@ export function buildCodexGatewayBaseUrl(upstream = claudeUpstreamEndpoint()): s
  *     proxy 直转 gateway(不破坏现有纯 key 用户)。
  *   - provider-oauth (如 xAI): env_key=XDT_CODEX_API_KEY → codex 带占位 key,
  *     proxy 按会话用供应商 OAuth token 覆盖 Authorization。
- * cindy_gateway 显式冻成 false；仅 oauth-bearer 额外定义的 cindy_openai 打开 WS。
- * 后者的 upgrade 由 loopback proxy 按 thread 转发，任何建连不兼容都会用 426 回到旧 HTTP。
+ * cindy_gateway 显式冻成 false；oauth-bearer 额外定义的 cindy_openai 始终打开 WS。
+ * 独立子代理 Provider 路由由 loopback proxy 根据 upgrade 携带的 thread / subagent 血缘
+ * 单独回 426，使对应子 thread 降到 HTTP；父 thread 继续保留原生 WS。
  */
-export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySpawnAuthMode): string[] {
+export function buildCodexProxySpawnArgs(
+  baseUrl: string,
+  authMode: CodexProxySpawnAuthMode,
+): string[] {
   const p = CODEX_GATEWAY_PROVIDER_ID;
   const authArg = authMode === 'oauth-bearer'
     ? `model_providers.${p}.requires_openai_auth=true`
@@ -125,6 +129,10 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
       //  - prompt 改走原生 developerInstructions:Codex 0.145 自动 compact 会把当前
       //    session 的 canonical developer context 重新注入 replacement history(中途
       //    compact)或下一次正常采样(pre-turn compact),无需 proxy 逐请求重复注入。
+      // Codex 的 WS 会话按 thread 建立；upgrade 带 thread id，collab_spawn 还会带
+      // subagent 身份与 parent thread id。loopback proxy 因此可以只对命中独立
+      // Subagent Provider 路由的子 thread 回 426，让该会话降到 HTTP transform，
+      // 无需牺牲父 thread 的原生 WS。
       '-c', `model_providers.${o}.supports_websockets=true`,
       // is_openai + codex-backend OAuth 命中时 codex 默认对 /responses 请求体做 zstd
       // 压缩(enable_request_compression 默认开);loopback proxy 要整段 JSON.parse

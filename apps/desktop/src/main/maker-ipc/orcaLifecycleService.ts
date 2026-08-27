@@ -15,7 +15,8 @@ import {
   type OrcaWorkerPermissionMode,
 } from '../../shared/orca-worker-permission-mode.js';
 
-export const ORCA_WORKER_READY_MESSAGE = '[系统] Orca Worker 已就绪，等待 Lead 分配任务。';
+export const ORCA_WORKER_READY_MESSAGE =
+  '[系统] Orca Worker 已就绪，当前没有待执行任务。不要调用任何工具来等待、观察或轮询 Lead。只回复一句简短确认并立即结束本轮；Lead 后续会主动发送任务。';
 
 /** 开启协同时的一次性入参；负责把 UI/MCP 的 worker 偏好归一到 worker 创建内核。 */
 export interface OrcaEnableTeamParams {

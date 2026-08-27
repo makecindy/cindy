@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_PUSH } from '../../maker-ipc/channels';
+import { createDesktopOnlyConfirmationRequestId } from '../desktopOnlyConfirmationProjection';
 import {
+  projectInteractionDismissedForRemote,
   GhostSetupInteractionBridge,
   parseGhostSetupInlineSubmit,
   parseGhostSetupInlineSubmitRequest,
   parseGhostSetupInteractionCommand,
+  projectInteractionRequestForRemote,
   projectPendingInteractionsForRemote,
   sanitizeGhostSetupRequestForRemote,
   sanitizeGhostSetupSnapshotForRemote,
@@ -392,16 +395,96 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
 
     const remote = projectPendingInteractionsForRemote(pending, true);
     expect(remote).not.toBe(pending);
-    expect(remote).toHaveLength(3);
+    expect(remote).toHaveLength(6);
     expect(JSON.stringify(remote[0])).not.toContain('desktop-only.example');
     expect(remote[1].request).toBe(permission.request);
     expect(remote[2].request).toBe(future.request);
     expect(JSON.stringify(remote)).not.toContain('private');
     expect(JSON.stringify(remote)).not.toContain('/Users/me/private.png');
+    for (const entry of remote.slice(3)) {
+      expect(entry.request).toEqual({
+        kind: expect.any(String),
+        requestId: expect.stringMatching(/^desktop-confirm-/),
+      });
+      expect(entry.request.requestId).not.toMatch(/issue-1|rename-1|grant-1/);
+    }
     expect(localSetup.request.steps[0].action.form.fields[0].externalLink).toEqual({
       url: 'https://desktop-only.example/keys',
     });
     expect(local).toEqual(pending);
+  });
+
+  it('maps a desktop-only confirmation dismissal to its opaque remote request id', () => {
+    const sourceRequest = {
+      kind: 'issue_confirm',
+      requestId: createDesktopOnlyConfirmationRequestId(),
+      draft: { title: 'private' },
+    };
+    const projected = projectInteractionRequestForRemote(sourceRequest)!;
+    const dismissed = projectInteractionDismissedForRemote({
+      sessionId: 'session-1',
+      requestId: sourceRequest.requestId,
+      reason: 'resolved',
+    });
+
+    expect(dismissed).toEqual({
+      sessionId: 'session-1',
+      requestId: projected.requestId,
+      reason: 'resolved',
+    });
+    expect(JSON.stringify(dismissed)).not.toContain(sourceRequest.requestId);
+  });
+
+  it('maps a dismissal when the desktop-only confirmation predates Device Link activation', () => {
+    const requestId = createDesktopOnlyConfirmationRequestId();
+
+    const dismissed = projectInteractionDismissedForRemote({
+      sessionId: 'session-1',
+      requestId,
+      reason: 'resolved',
+    });
+
+    expect(dismissed).toMatchObject({
+      sessionId: 'session-1',
+      requestId: expect.stringMatching(/^desktop-confirm-/),
+      reason: 'resolved',
+    });
+    expect(JSON.stringify(dismissed)).not.toContain(requestId);
+  });
+
+  it('keeps the opaque dismissal id stable after the Host confirmation timeout', () => {
+    vi.useFakeTimers();
+    try {
+      const requestId = createDesktopOnlyConfirmationRequestId();
+      const projected = projectInteractionRequestForRemote({
+        kind: 'issue_confirm',
+        requestId,
+      })!;
+      vi.advanceTimersByTime(9 * 60 * 1000);
+
+      expect(projectInteractionDismissedForRemote({ requestId })).toEqual({
+        requestId: projected.requestId,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('projects more than 128 concurrent confirmations without evicting source ids', () => {
+    const sourceRequestIds = Array.from(
+      { length: 256 },
+      () => createDesktopOnlyConfirmationRequestId(),
+    );
+
+    for (const requestId of sourceRequestIds) {
+      const projected = projectInteractionRequestForRemote({
+        kind: 'ghost_grant_confirm',
+        requestId,
+      })!;
+      const dismissed = projectInteractionDismissedForRemote({ requestId });
+      expect(dismissed).toEqual({ requestId: projected.requestId });
+      expect(JSON.stringify(dismissed)).not.toContain(requestId);
+    }
   });
 });
 

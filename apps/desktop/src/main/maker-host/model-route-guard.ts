@@ -32,6 +32,8 @@ import {
   effectiveSourceIdForModel,
   getModel,
   isAgentSelectableModel,
+  exclusiveXaiCatalogModelId,
+  isExclusiveXaiModelId,
   isModelSelectableForNewRoute,
   nativeDefaultSourceId,
   providerOffersModel,
@@ -45,8 +47,111 @@ export type ModelRouteVerdict =
   | { kind: 'reroute'; providerId: string }
   | {
       kind: 'reject';
-      reason: 'model-disabled' | 'explicit-source-disabled' | 'capability-model' | 'model-retired';
+      reason:
+        | 'model-disabled'
+        | 'explicit-source-disabled'
+        | 'capability-model'
+        | 'model-retired'
+        | 'exclusive-source-unavailable';
     };
+
+export type ExclusiveProviderRoute =
+  | { kind: 'keep' }
+  | { kind: 'pin'; providerId: string }
+  | { kind: 'reject' };
+
+/**
+ * Grok / SuperGrok 独占模型的无痛绑定:
+ * 默认网关服务不了这些 id,providerId=null 时能连 xAI 就钉死,否则拒绝。
+ * Claude/GPT 双来源不在这里处理,继续 spawn-aware 默认。
+ */
+export function materializeExclusiveProviderRoute(
+  views: readonly ProviderView[],
+  agent: AgentKind,
+  modelId: string,
+  providerId: string | null,
+): ExclusiveProviderRoute {
+  if (!isExclusiveXaiModelId(modelId)) return { kind: 'keep' };
+  const xai = views.find(
+    (provider) =>
+      provider.id === 'xai'
+      && provider.connected
+      && provider.suspended !== true
+      && provider.agents.includes(agent),
+  );
+  if (!xai) {
+    return providerId && !shouldApplyExclusiveProviderReroute(providerId, views) && providerId !== 'xai'
+      ? { kind: 'keep' }
+      : { kind: 'reject' };
+  }
+  const catalogId = exclusiveXaiCatalogModelId(modelId);
+  const copy =
+    (catalogId ? getModel(xai, catalogId, agent) : undefined)
+    ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), agent);
+  if (copy && !isModelSelectableForNewRoute(copy, { userProvider: false })) {
+    return { kind: 'reject' };
+  }
+  if (providerId === 'xai') return { kind: 'keep' };
+  if (providerId && !shouldApplyExclusiveProviderReroute(providerId, views)) return { kind: 'keep' };
+  return { kind: 'pin', providerId: 'xai' };
+}
+
+/** SET_MODEL: undefined = 保持当前来源,不能当成显式 null 去改绑。 */
+export function resolveSetModelGuardProviderId(
+  requestedProviderId: string | null | undefined,
+  currentProviderId: string | null,
+): string | null {
+  return requestedProviderId !== undefined ? requestedProviderId : currentProviderId;
+}
+
+/** 内存已 hydrate 用内存(含显式 null);尚未 hydrate 才回落 DB 持久值。 */
+export function resolveCurrentSetModelProviderId(
+  memoryHydrated: boolean,
+  memoryProviderId: string | null,
+  persistedProviderId: string | null,
+): string | null {
+  return memoryHydrated ? memoryProviderId : persistedProviderId;
+}
+
+/** SET_MODEL: 只有显式回到默认,或当前本来就没有来源时,才接受独占 pin。 */
+export function resolveExclusiveSetModelReroute(
+  requestedProviderId: string | null | undefined,
+  currentProviderId: string | null,
+  rerouteProviderId: string | undefined,
+  currentKnown = true,
+  views?: readonly Pick<ProviderView, 'id' | 'source'>[],
+): string | null | undefined {
+  if (!rerouteProviderId) return requestedProviderId;
+  if (!currentKnown) return requestedProviderId;
+  if (requestedProviderId === null) return rerouteProviderId;
+  if (
+    typeof requestedProviderId === 'string'
+    && shouldApplyExclusiveProviderReroute(requestedProviderId, views)
+  ) {
+    return rerouteProviderId;
+  }
+  if (
+    requestedProviderId === undefined
+    && shouldApplyExclusiveProviderReroute(currentProviderId, views)
+  ) {
+    return rerouteProviderId;
+  }
+  return requestedProviderId;
+}
+
+/** 非用户自定义来源上的独占 Grok 应改绑 SuperGrok。按 catalog source 判定,不维护 ID 名单。 */
+export function shouldApplyExclusiveProviderReroute(
+  providerId: string | null | undefined,
+  views?: readonly Pick<ProviderView, 'id' | 'source'>[],
+): boolean {
+  if (!providerId) return true;
+  if (providerId === 'xai') return false;
+  if (!views) return true;
+  const source = views.find((provider) => provider.id === providerId)?.source;
+  if (source === 'user') return false;
+  if (source) return true;
+  return false;
+}
 
 export interface ModelRouteGuardOptions {
   /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
@@ -74,7 +179,27 @@ function copyRetired(p: ProviderView, modelId: string, agent: AgentKind): boolea
   return getModel(p, modelId, agent)?.status === 'retired';
 }
 
-export function checkModelRoute(
+function applyExclusiveRoute(
+  views: readonly ProviderView[],
+  agent: AgentKind,
+  modelId: string,
+  providerId: string | null,
+  disableVerdict: ModelRouteVerdict,
+): ModelRouteVerdict {
+  if (disableVerdict.kind === 'reject') return disableVerdict;
+  const providerAfter =
+    disableVerdict.kind === 'reroute' ? disableVerdict.providerId : providerId;
+  const exclusive = materializeExclusiveProviderRoute(views, agent, modelId, providerAfter);
+  if (exclusive.kind === 'reject') {
+    return { kind: 'reject', reason: 'exclusive-source-unavailable' };
+  }
+  if (exclusive.kind === 'pin') {
+    return { kind: 'reroute', providerId: exclusive.providerId };
+  }
+  return disableVerdict;
+}
+
+function checkDisableAxisRoute(
   views: readonly ProviderView[],
   agent: AgentKind,
   modelId: string,
@@ -174,6 +299,23 @@ export function checkModelRoute(
     : { kind: 'reject', reason: 'model-disabled' };
 }
 
+/** 停用轴 + 独占 Grok 改绑。IM / Scheduler / create 都走这里,不再各自补一口。 */
+export function checkModelRoute(
+  views: readonly ProviderView[],
+  agent: AgentKind,
+  modelId: string,
+  providerId: string | null,
+  options: ModelRouteGuardOptions = {},
+): ModelRouteVerdict {
+  return applyExclusiveRoute(
+    views,
+    agent,
+    modelId,
+    providerId,
+    checkDisableAxisRoute(views, agent, modelId, providerId, options),
+  );
+}
+
 /**
  * 目录里第一份「已连接、启用、agent 可选」的对话模型拷贝(宽松降级的最终兜底;
  * IM 默认设置的 firstModel 亦复用,避免两处「兜底选模型」口径漂移)。
@@ -252,9 +394,7 @@ export function resolveLenientRoute(
   if (providerId) {
     verdict = checkModelRoute(views, agent, model, null, opts);
     if (verdict.kind === 'pass') return withEffort(model, null, true);
-    if (verdict.kind === 'reroute') {
-      return withEffort(model, verdict.providerId, true);
-    }
+    if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, true);
   }
   if (opts.fallbackModel && opts.fallbackModel !== model) {
     const fallback = resolveLenientRoute(views, agent, opts.fallbackModel, null, opts);

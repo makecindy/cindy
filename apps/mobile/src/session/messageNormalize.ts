@@ -10,6 +10,10 @@ import {
   type MessageNormalizeToolUse,
   type MessageToolResultPairing,
 } from '@cindy/maker-shared/message-normalize';
+import {
+  normalizeAgentTaskTerminalStatus,
+  type AgentTaskTerminalStatus,
+} from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import {
   buildPayloadToolDiff,
@@ -94,6 +98,8 @@ export interface NormalizedRemoteMessage {
   orcaCard?: OrcaCollabCard;
   /** tool 消息专用:tool_result 是否已到达(含被隐藏的 orca 空结果),驱动工具行 running/done 状态。 */
   toolSettled?: boolean;
+  /** Durable Agent/Task terminal lifecycle restored from tool_use metadata. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /** assistant 专用:是否本轮收尾正文(操作行只挂在收尾正文上,对齐桌面 #456);由 messageRenderModel 标注。 */
   isTurnFinalAssistant?: boolean;
   /** user 专用:scheduler 注入的消息来源(agentMeta.origin);驱动更紧的收起阈值与来源标签。 */
@@ -174,6 +180,9 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
 
     if (message.role === 'tool_use') {
       const tool = parseToolUse(message);
+      const agentTaskStatus = normalizeAgentTaskTerminalStatus(
+        message.agentMeta?.agentTaskStatus,
+      );
       if (tool.toolName === 'AskUserQuestion' || tool.toolName === 'ExitPlanMode') continue;
       // Lead 派活(create_worker / send_to_worker)→ 渲染成 dispatch 卡片(kind:'system' 使其成为
       // 独立卡片而非折叠进 tool_group),其余 tool 照常走下面的 tool 渲染。
@@ -208,6 +217,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         // 结束时刻(配对 tool_result 落库时间)驱动渲染层的历史空洞判定,详见共享类型上的说明。
         settledAt: toolResultPairing.resultCreatedAtFor(message, tool),
         toolSettled: toolResultPairing.hasResultFor(message, tool),
+        ...(agentTaskStatus ? { agentTaskStatus } : {}),
       });
       continue;
     }

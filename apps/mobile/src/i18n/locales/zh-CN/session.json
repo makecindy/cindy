@@ -24,8 +24,149 @@
     "voiceStopRecording": "停止录音",
     "capabilitiesUnsupported": "远程能力返回格式不支持"
   },
+  "presentation": {
+    "collaboration": {
+      "labelLead": "协同 Lead",
+      "labelWorker": "协同 Worker",
+      "labelRole": "协同 {{role}}",
+      "noticeLead": "这是桌面端 Orca Lead 任务。可以在手机上继续发消息；创建 Worker、切换焦点、Fork/Rewind、编辑队列和修改任务设置等编排操作请在电脑端完成。",
+      "noticeWorker": "这是桌面端 Orca Worker 任务。手机版第一版只读，不提供发送消息、切换 Worker 焦点、归档 Worker 或停止协同。",
+      "noticeOther": "这是桌面端协同任务。手机版第一版只读，协同编排操作请在电脑端完成。",
+      "readOnlyReason": "协同模式在手机版第一版中为只读。确认处理、队列编辑和任务修改请在电脑端完成。",
+      "composerReadOnlyReason": "这个协同子任务在手机版中只读，请在电脑端发送消息。"
+    },
+    "composer": {
+      "voice": {
+        "listening": "正在听",
+        "submitting": "转写中",
+        "refining": "正在润色",
+        "error": "语音出错",
+        "idle": "语音",
+        "sendingReason": "消息正在发送到电脑端，完成后再录音。",
+        "processingReason": "语音正在处理，完成后再录音。"
+      },
+      "attachment": {
+        "count": "附件 {{count}}",
+        "collapse": "收起附件",
+        "label": "附件",
+        "busyReason": "附件处理中，完成后再继续添加。",
+        "sendingReason": "消息正在发送到电脑端，完成后再调整附件。"
+      },
+      "input": {
+        "sendingReason": "消息正在发送到电脑端。"
+      },
+      "send": {
+        "sendingReason": "消息正在发送到电脑端。",
+        "attachmentBusyReason": "附件上传中，完成后再发送。",
+        "voiceBusyReason": "语音正在处理，完成后再发送。",
+        "emptyReason": "输入文字、添加附件或引用后才能发送。",
+        "sending": "发送中",
+        "label": "发送"
+      },
+      "stop": {
+        "queueBusyReason": "队列操作同步中，暂时不能停止。",
+        "unavailableReason": "电脑端当前没有可停止的执行。",
+        "processing": "处理中",
+        "label": "停止"
+      },
+      "placeholder": {
+        "listening": "正在听……",
+        "submitting": "正在转写语音",
+        "refining": "正在润色语音",
+        "default": "继续聊一聊…"
+      },
+      "guidance": {
+        "sending": "消息正在写入桌面端队列，完成前请不要重复发送。",
+        "queueBusy": "正在同步队列操作，完成后会刷新队列状态。",
+        "listeningWithDraft": "点发送会结束语音并发送当前文字；点输入框会结束语音并弹出键盘。",
+        "listening": "正在听；点发送会结束语音并发送识别的文字，点输入框可结束语音并弹出键盘。",
+        "submitting": "正在转写语音，输入框会暂时锁定。",
+        "refining": "正在润色语音，完成后会更新输入框。",
+        "attachmentBusy": "正在检查或上传附件，完成后会出现在附件列表。",
+        "attachmentsWithText": "将发送 {{count}} 个附件和输入框里的文字。",
+        "attachmentsOnly": "将只发送 {{count}} 个附件，也可以补充说明后再发送。",
+        "attachmentPickerOpen": "可以添加手机上的照片、截图或文件。",
+        "draft": "点发送后会进入桌面端队列，按当前任务设置执行。",
+        "quotesOnly": "将发送 {{count}} 处引用，也可以补充说明后再发送。",
+        "canStop": "电脑端正在执行；可继续排队输入，或点停止保留当前队列。",
+        "empty": "输入文字开始，使用 / 调命令，使用 @ 引用项目资源。"
+      },
+      "status": {
+        "sending": "正在发送到电脑端",
+        "queueBusy": "正在处理队列操作",
+        "attachmentBusy": "正在处理附件",
+        "ready": "就绪"
+      },
+      "operation": {
+        "sessionSyncing": "当前任务还没有同步完成。",
+        "pendingInteraction": "先处理电脑端的待处理请求后才能继续输入。"
+      }
+    },
+    "overview": {
+      "unavailable": "不可用",
+      "pendingCount": "待处理 {{count}}",
+      "readOnly": "只读",
+      "queuePaused": "队列暂停",
+      "status": { "active": "活跃", "archived": "已归档", "deleted": "已删除" },
+      "actions": {
+        "settings": { "label": "设置", "a11y": "打开任务设置" },
+        "usage": { "label": "用量", "a11y": "查看任务用量" },
+        "files": { "label": "文件", "a11y": "浏览远程文件" },
+        "queue": { "label": "队列", "a11y": "打开队列面板" },
+        "search": { "label": "搜索", "openA11y": "搜索消息", "closeA11y": "关闭消息搜索" }
+      },
+      "disabled": {
+        "files": "这个任务没有远程工作目录，不能浏览文件。",
+        "search": "当前没有可搜索的消息。",
+        "queueUnavailable": "被控电脑暂不可用，重新同步后再查看队列。",
+        "queuePending": "先处理待处理请求，处理后队列面板会恢复。",
+        "queuePausedEmpty": "队列已暂停，但当前没有可继续的队列消息。",
+        "queueEmpty": "当前没有队列消息。",
+        "queueDefault": "当前状态暂不能打开队列面板。"
+      },
+      "actionCopy": {
+        "pending": "先处理待处理请求，处理后输入区会恢复。",
+        "archived": "任务已归档，恢复后才能继续发送。",
+        "deleted": "任务已删除，不能继续操作。",
+        "queuePaused": "队列已暂停，可在队列面板继续执行。"
+      }
+    },
+    "controls": {
+      "spend": {
+        "title": "任务用量",
+        "unavailable": "暂无任务用量",
+        "taskCost": "本任务 {{cost}}",
+        "contextWithLimit": "上下文 {{used}} / {{total}} · {{percentage}}",
+        "context": "上下文 {{used}} tokens"
+      },
+      "context": {
+        "title": "上下文用量",
+        "unavailable": "暂无上下文数据"
+      },
+      "rateLimit": {
+        "plan": "套餐",
+        "remaining": "剩余 {{percent}}",
+        "used": "已用 {{percent}}",
+        "resetsAt": "{{time}} 重置",
+        "status": "状态",
+        "reached": "已触发账号限额",
+        "account": "账号",
+        "availableResets": "可用重置",
+        "resetCount": "{{count}} 次",
+        "earliestExpiry": "最早过期",
+        "window": {
+          "default": "限额",
+          "days": "{{count}}天",
+          "week": "周"
+        }
+      }
+    }
+  },
   "screen": {
     "thinking": "思考中…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "正在重新连接…",
     "modelBusyRetrying": "模型服务繁忙，正在重试…",
     "rateLimitRetrying": "请求受到限流，正在重试…",

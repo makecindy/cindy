@@ -137,9 +137,9 @@ export class GhostCardActionDispatcher {
       this.deps.log?.warn('card-action rejected: ghost unavailable', { ghostId, callId });
       return { ok: false, reason: 'ghost-unavailable' };
     }
-    if (!ghost.manifest.slots?.includes('card')) {
-      // 卡片是它发的却没 card 槽 = 不该发生;保险起见拒。
-      this.deps.log?.warn('card-action rejected: no card slot', { ghostId, callId });
+    if (!ghost.manifest.card) {
+      // 卡片是它发的却没声明 card 能力 = 不该发生;保险起见拒。
+      this.deps.log?.warn('card-action rejected: no card capability', { ghostId, callId });
       return { ok: false, reason: 'no-card-slot' };
     }
 
@@ -161,6 +161,7 @@ export class GhostCardActionDispatcher {
         await this.deps.wake(ghost);
         if (!ownerUsable()) return rejectStaleOwner(ghostId);
       }
+      // 卡片路径只发这一张一次性票；不另记面板手势，避免一次点击两份凭据。
       const userActionToken = this.deps.issueUserActionToken?.(ghostId, sessionId) ?? null;
       if (!ownerUsable()) return rejectStaleOwner(ghostId);
       this.deps.sendToGhost(ghostId, {

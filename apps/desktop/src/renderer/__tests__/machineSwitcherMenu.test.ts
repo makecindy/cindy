@@ -49,7 +49,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
   it('SidebarTopNav 不再渲染 MachineSwitcherMenu(2026-08-13 并入段头标题)', () => {
     expect(topNavSource).not.toContain("from '@/features/cc-agent/sidebar/MachineSwitcherMenu'");
     expect(topNavSource).not.toContain('<MachineSwitcherMenu />');
-    // 搜索行仍在(顶部导航收敛为 新建 / 自动任务 / 插件 / 搜索 四行)。
+    // 搜索行仍在；最小化面板存在且选用侧栏模式时，恢复入口插在插件与搜索之间。
     expect(topNavSource).toContain('<SidebarInlineSearch');
   });
 
@@ -67,7 +67,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(topNavSource).toContain("const showPinned = section !== 'scrollable'");
     expect(topNavSource).toContain("const showScrollable = section !== 'pinned'");
 
-    // Shell:接管时只画固定段,否则整块五行(插件页等无长列表的视图)。
+    // Shell:接管时只画固定段,否则整块常驻行(插件页等无长列表的视图)。
     expect(sidebarShellSource).toContain(
       "<SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />",
     );
@@ -85,9 +85,11 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(scrollableRowsIdx).toBeGreaterThan(scrollRefIdx);
     // 搜索打开时搜索行作为滚动容器直接子项 sticky;打开查询时记下并复位滚动,
     // 清查询时还原,不再用 overlay 盖住输入框。
-    expect(topNavSource).toContain("const pinSearch = section === 'scrollable' && search.query.trim().length > 0");
+    expect(topNavSource).toContain(
+      "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
+    );
     expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'");
-    expect(topNavSource).toContain('if (section === \'scrollable\')');
+    expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(
       'sidebarScrollRef.current?.scrollTo({ top: lastListScrollTopRef.current })',
@@ -96,12 +98,16 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(sidebarUpperSource).toContain('searchProjectKey');
     expect(sidebarUpperSource).toContain('onContextMenu={(event) => event.stopPropagation()}');
     expect(sidebarUpperSource).toContain('{searchActive ? (');
-    expect(sidebarUpperSource).toContain('<div hidden={searchActive} className="flex flex-col gap-2">');
+    expect(sidebarUpperSource).toContain(
+      '<div hidden={searchActive} className="flex flex-col gap-2">',
+    );
     expect(sidebarUpperSource).toContain('freezeListScrollOnOpenRef.current = true');
     expect(sidebarUpperSource).toContain('const restoreListScroll = useCallback');
     expect(sidebarUpperSource).toContain('const restoreListScrollAfterPointer = useCallback');
     expect(sidebarUpperSource).toContain('restoreListScrollAfterPointer()');
-    expect(sidebarUpperSource).toContain("window.addEventListener('pointerup', onPointerEnd, true)");
+    expect(sidebarUpperSource).toContain(
+      "window.addEventListener('pointerup', onPointerEnd, true)",
+    );
     expect(sidebarUpperSource).toContain("document.addEventListener('focusin', onFocusIn)");
     const inlineSearchSource = read('features', 'cc-agent', 'sidebar', 'SidebarInlineSearch.tsx');
     expect(inlineSearchSource).toContain('inputRef.current?.focus({ preventScroll: true })');
@@ -113,6 +119,31 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     // 声明语义与 useRegisterSidebarUpper 一致:卸载不复位,避免切到 /settings 时闪变。
     expect(featureContextSource).toContain('export function useOwnTopNavScrollableRows');
     expect(featureContextSource).toContain('export function useOwnsTopNavScrollableRows');
+  });
+
+  it('插件主视图紧随插件入口，面板恢复入口仍位于插件区与搜索之间', () => {
+    const expandedPluginsIdx = topNavSource.indexOf('{pluginsRow}');
+    const expandedMainViewsIdx = topNavSource.indexOf('{mainViewRows}', expandedPluginsIdx);
+    const expandedRestoreIdx = topNavSource.indexOf('{restoreRow}', expandedPluginsIdx);
+    const expandedSearchIdx = topNavSource.indexOf('{searchRow}', expandedRestoreIdx);
+    expect(expandedPluginsIdx).toBeGreaterThanOrEqual(0);
+    expect(expandedMainViewsIdx).toBeGreaterThan(expandedPluginsIdx);
+    expect(expandedRestoreIdx).toBeGreaterThan(expandedMainViewsIdx);
+    expect(expandedSearchIdx).toBeGreaterThan(expandedRestoreIdx);
+
+    const persistentPluginsIdx = topNavSource.lastIndexOf('{pluginsRow}');
+    const persistentMainViewsIdx = topNavSource.indexOf('{mainViewRows}', persistentPluginsIdx);
+    const persistentRestoreIdx = topNavSource.indexOf('{restoreRow}', persistentMainViewsIdx);
+    expect(persistentPluginsIdx).toBeGreaterThan(expandedPluginsIdx);
+    expect(persistentMainViewsIdx).toBeGreaterThan(persistentPluginsIdx);
+    expect(persistentRestoreIdx).toBeGreaterThan(persistentMainViewsIdx);
+
+    const railPluginsIdx = sidebarUpperSource.indexOf("label={t('sidebar.tabs.plugins')}");
+    const railRestoreIdx = sidebarUpperSource.indexOf('<GhostPanelRestoreEntry', railPluginsIdx);
+    const railSearchIdx = sidebarUpperSource.indexOf('<ConversationSearchBox', railRestoreIdx);
+    expect(railPluginsIdx).toBeGreaterThanOrEqual(0);
+    expect(railRestoreIdx).toBeGreaterThan(railPluginsIdx);
+    expect(railSearchIdx).toBeGreaterThan(railRestoreIdx);
   });
 
   // 2026-08-12 用户反馈:滚动后首行紧贴固定的「新建」被硬切、露出半截字。
@@ -155,9 +186,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       "labelKey: 'ccAgent.sidebar.viewStyleListWide', Icon: LayoutList",
     );
 
-    // 任务信息四项各配数据类型图标;时间用 Clock 而非 Timer(后者是自动任务专用字形)。
+    // 任务信息各项各配数据类型图标;时间用 Clock 而非 Timer(后者是自动任务专用字形)。
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest");
+    expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.tokens', Icon: Coins");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.cost', Icon: Wallet");
     expect(filterSource).not.toMatch(/taskInfo\.time', Icon: Timer/);
@@ -225,18 +257,19 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
   });
 
-  it('关项目分组时 hook 把 manual 回落到 recency', () => {
+  it('项目顺序与任务排序拆开,关分组不再改写 sortBy', () => {
     const hookSource = read('features', 'cc-agent', 'hooks', 'useSidebarFilter.ts');
-    expect(hookSource).toContain('nextSortByAfterGroupByChange');
-    expect(hookSource).toContain('const nextSort = nextSortByAfterGroupByChange(next, current)');
+    expect(hookSource).not.toContain('nextSortByAfterGroupByChange');
+    expect(hookSource).toContain('setProjectOrder');
+    expect(hookSource).toContain('migrateLegacyManualSort');
   });
 
   it('列表行也接收来源标签(平铺时项目会话不再丢项目名)', () => {
     const entryListSource = read('features', 'cc-agent', 'sidebar', 'SessionEntryList.tsx');
     expect(entryListSource).toContain('sourceLabel={sourceLabelMap?.get(entry.session.id)}');
-    expect(entryListSource.match(/sourceLabel=\{sourceLabelMap\?\.get\(entry\.session\.id\)\}/g)).toHaveLength(
-      2,
-    );
+    expect(
+      entryListSource.match(/sourceLabel=\{sourceLabelMap\?\.get\(entry\.session\.id\)\}/g),
+    ).toHaveLength(2);
     const automationGroupSource = read(
       'features',
       'cc-agent',
@@ -271,9 +304,11 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).not.toMatch(
       /onSelect=\{\(\) => setMainViewMode\(option\.value\)\}\s*\n\s*keepOpen/,
     );
-    expect(filterSource).toContain("checked={groupDevice && sortBy !== 'manual'}");
-    expect(filterSource).toContain("disabled={sortBy === 'manual'}");
-    expect(filterSource).toContain("t('ccAgent.sidebar.filterGroupByDeviceManualTip')");
+    expect(filterSource).not.toMatch(
+      /onSelect=\{\(\) => setProjectOrder\(option\.value\)\}\s*\n\s*keepOpen/,
+    );
+    expect(filterSource).toContain('checked={groupDevice}');
+    expect(filterSource).not.toContain("disabled={sortBy === 'manual'}");
   });
 
   // 2026-08-13 用户裁决:「优先级」光看标签猜不出排序依据,需要 hover 说明。
@@ -331,6 +366,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(infoMetaSource).toContain("if (field === 'pr' && hasPrRef)");
     expect(infoMetaSource).toContain("pieces.push({ key: 'pr', text: '' })");
     expect(infoMetaSource).toContain("piece.key === 'pr' ?");
+    expect(infoMetaSource).toContain("if (field === 'worktree' && hasWorktree)");
+    expect(infoMetaSource).toContain("piece.key === 'worktree' ?");
     // 菜单摘要的图标串同样按勾选顺序(遍历 taskInfoFields,不是遍历选项表)。
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
     expect(filterSource).toContain('{taskInfoFields.map((field) => {');
@@ -641,5 +678,27 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       'max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-y-auto',
     );
     expect(filterSource).toContain('collisionPadding={8}');
+  });
+
+  it('项目顺序菜单勾选跟 resolveDisplayedProjectOrder,不回退查看端偏好', () => {
+    const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
+    expect(filterSource).toContain('resolveDisplayedProjectOrder(');
+    expect(filterSource).toContain(
+      'scopedProjectOrder: FilterProjectOrder = resolveDisplayedProjectOrder(',
+    );
+    expect(filterSource).not.toContain("hostCustom ? 'custom' : projectOrder");
+  });
+
+  it('远程 GET 用 fetch fence,本机播种只在成功后按 owner 锁定', () => {
+    const hookSource = read('features', 'cc-agent', 'hooks', 'useRemoteHostProjectOrders.ts');
+    expect(hookSource).toContain('createProjectOrderFetchFence');
+    expect(hookSource).toContain('shouldApplyFetch');
+    expect(hookSource).toContain('shouldSeedLocalHostProjectOrder');
+    expect(hookSource).toContain('seededLocalHostOwners.add');
+    expect(hookSource).not.toContain('localHostSeedStarted = true');
+    expect(hookSource).toContain('void load(1)');
+    expect(hookSource).toContain(
+      "attempt < 3 && entries.some(([, result]) => result.kind === 'transient')",
+    );
   });
 });

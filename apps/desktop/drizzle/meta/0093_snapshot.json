@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "7c2c6bfb-9e95-49fa-a798-f7ca40a33ba5",
-  "prevId": "039ae996-266d-4d1d-a13e-407be4f712ef",
+  "id": "69107681-c10d-468b-ab20-f20b5cacd802",
+  "prevId": "ba4a24fc-8903-415b-9bf9-fee4bd54f907",
   "tables": {
     "account_usage_snapshots": {
       "name": "account_usage_snapshots",
@@ -1009,6 +1009,110 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "media_invocations": {
+      "name": "media_invocations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner": {
+          "name": "owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "model_id": {
+          "name": "model_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "capability": {
+          "name": "capability",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "guide_revision": {
+          "name": "guide_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "guide_json": {
+          "name": "guide_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "task_id": {
+          "name": "task_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "response_json": {
+          "name": "response_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "media_invocations_owner_created_at_idx": {
+          "name": "media_invocations_owner_created_at_idx",
+          "columns": [
+            "owner",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "media_invocations_owner_state_idx": {
+          "name": "media_invocations_owner_state_idx",
+          "columns": [
+            "owner",
+            "state"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "media_refs": {
       "name": "media_refs",
       "columns": {
@@ -1958,14 +2062,6 @@
             "fired_at"
           ],
           "isUnique": false
-        },
-        "idx_schedule_runs_session_schedule": {
-          "name": "idx_schedule_runs_session_schedule",
-          "columns": [
-            "session_id",
-            "schedule_id"
-          ],
-          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -2195,13 +2291,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "session_title_template": {
-          "name": "session_title_template",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "silent_when_idle": {
           "name": "silent_when_idle",
@@ -3484,6 +3573,27 @@
           "notNull": false,
           "autoincrement": false
         },
+        "returned_result": {
+          "name": "returned_result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "returned_result_empty": {
+          "name": "returned_result_empty",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "returned_result_truncated": {
+          "name": "returned_result_truncated",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "model": {
           "name": "model",
           "type": "text",
@@ -3515,6 +3625,13 @@
         "duration_ms": {
           "name": "duration_ms",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cost_usd": {
+          "name": "cost_usd",
+          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

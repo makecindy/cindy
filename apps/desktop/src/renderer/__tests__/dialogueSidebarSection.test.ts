@@ -65,11 +65,11 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     expect(sidebarSource).toContain('filter.projectsAsSet.has(DIALOGUE_FILTER_KEY)');
   });
 
-  it('keeps manual sort scoped to project rows (设计文档 §9.3 收窄)', () => {
-    // 手动排序只重排项目行;散排对话 / 对话组不进 manualProjectOrder。
-    expect(mainListModelSource).toContain("sortBy === 'manual'");
+  it('keeps custom project order scoped to project rows', () => {
+    // 自定义项目顺序只重排项目行;散排对话 / 对话组不进 manualProjectOrder。
+    expect(mainListModelSource).toContain("projectOrder === 'custom'");
     expect(mainListModelSource).toContain('normalizeManualProjectOrder');
-    expect(projectsSectionSource).toContain("filter.sortBy === 'manual' ? (");
+    expect(projectsSectionSource).toContain('customProjectOrder && !deviceGroupingActive');
   });
 
   it('holds the current priority rank before click-path attention clear', () => {
@@ -174,8 +174,11 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
   // 不再按当前机器作用域猜(作用域可能是「所有」或另一台设备)。
   it('creates the dialogue on the device that owns the group when grouping by device', () => {
     // 设备段把自己的设备作为创建目标传下去:本机段 null,远程段 {deviceId, deviceName}。
-    expect(projectsSectionSource).toMatch(
-      /renderNonProjectEntry\(\s*entry,\s*key,\s*section\.deviceId\s*\?\s*\{ deviceId: section\.deviceId, deviceName: name \}\s*:\s*null,\s*\)/,
+    expect(projectsSectionSource).toContain(
+      'const sectionDialogueTarget = section.deviceId',
+    );
+    expect(projectsSectionSource).toContain(
+      'renderNonProjectEntry(entry, key, sectionDialogueTarget)',
     );
     // 不按设备分组的两条渲染路径不传目标 → 上层沿用作用域推断。
     expect(projectsSectionSource).toContain('renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY)');

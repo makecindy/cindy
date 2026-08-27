@@ -29,6 +29,11 @@ import {
 } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 import { resolveRetiredRegistryModelForPi } from './model-plane/modelPlanePolicy.js';
+import {
+  applyLocalOverridesToRetiredRootModel,
+  EMPTY_MODEL_CATALOG_OVERRIDES,
+  type ModelCatalogOverrides,
+} from './model-plane/localCatalogOverrides.js';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
 interface ModelCapabilitiesTarget {
@@ -37,6 +42,10 @@ interface ModelCapabilitiesTarget {
 
 interface DescriptorProjectionOptions {
   preserveExplicitPiEfforts?: boolean;
+}
+
+function isOfficialGrok46Id(modelId: string): boolean {
+  return modelId === 'grok-4.6' || modelId.endsWith('/grok-4.6');
 }
 
 interface SeenModelProjection {
@@ -86,8 +95,9 @@ function toDescriptor(
   if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
-  const supportsImageInput = m.supportsImageInput
-    ?? (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
+  const supportsImageInput =
+    m.supportsImageInput ??
+    (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
   if (supportsImageInput !== undefined) d.supportsImageInput = supportsImageInput;
   return d;
 }
@@ -146,7 +156,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       const userProvider = provider.source === 'user';
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
       const descriptor = toDescriptor(m, agent, {
-        preserveExplicitPiEfforts: userProvider,
+        preserveExplicitPiEfforts: userProvider || (provider.id === 'xai' && isOfficialGrok46Id(m.id)),
       });
       const previous = seen.get(m.id);
       if (previous) {
@@ -180,23 +190,34 @@ export function resolvePiRuntimeModelDescriptor(
   catalog: Catalog,
   providerId: string | null | undefined,
   modelId: string,
+  options: { localOverrides?: ModelCatalogOverrides } = {},
 ): ModelDescriptor | null {
-  const providers = providerId === 'cindy'
-    ? catalog.providers.filter((provider) => provider.source !== 'user')
-    : providerId
-      ? catalog.providers.filter((provider) => provider.id === providerId)
-      : catalog.providers;
+  const providers =
+    providerId === 'cindy'
+      ? catalog.providers.filter((provider) => provider.source !== 'user')
+      : providerId
+        ? catalog.providers.filter((provider) => provider.id === providerId)
+        : catalog.providers;
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
       return toDescriptor(model, 'pi', {
-        preserveExplicitPiEfforts: provider.source === 'user',
+        preserveExplicitPiEfforts:
+          provider.source === 'user' || (provider.id === 'xai' && isOfficialGrok46Id(model.id)),
       });
     }
   }
 
   for (const provider of providers) {
-    const retired = resolveRetiredRegistryModelForPi(catalog.modelRegistry, provider.id, modelId);
+    const retired = resolveRetiredRegistryModelForPi(catalog.modelRegistry, provider.id, modelId, {
+      prepareRootModel: ({ providerId: matchedProviderId, rootAgent, model }) =>
+        applyLocalOverridesToRetiredRootModel(
+          matchedProviderId,
+          rootAgent,
+          model,
+          options.localOverrides ?? EMPTY_MODEL_CATALOG_OVERRIDES,
+        ),
+    });
     if (retired) return toDescriptor(retired, 'pi');
   }
   return null;

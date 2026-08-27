@@ -1,5 +1,10 @@
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import {
+  BARE_HTTP_URL_RE_SOURCE,
+  clipBareHttpAutolinkText,
+  markdownWrapMarkerFromPrefix,
+} from '@cindy/maker-shared/url-text-boundary';
+import {
   classifyChatPathLinkTarget,
   findBareFilePathMatch,
   resolveChatAbsPath,
@@ -804,6 +809,12 @@ export function parseMobileMarkdownInlines(
   return out.length > 0 ? out : [{ type: 'text', text: input }];
 }
 
+/** Mobile 只把 `~~` 当删除线，单个 `~` 是普通字符，不能当 URL 包裹标记。 */
+function mobileMarkdownWrapMarker(prefix: string): string | null {
+  const marker = markdownWrapMarkerFromPrefix(prefix);
+  return marker === '~' ? null : marker;
+}
+
 function findNextInlineToken(
   input: string,
   from: number,
@@ -868,8 +879,8 @@ function findNextInlineToken(
       type: 'emphasis' as const,
       text: match[2],
     }), 1),
-    // 裸链接:http(s) 通用形态 + 会话/项目深链(ASCII 白名单,CJK / 空白处
-    // 天然收尾;尾部粘连的英文句读由 trimUrlPunctuation 统一剥掉。project
+    // 裸链接:http(s) 走共享 BARE_HTTP_URL_RE_SOURCE + clipBareHttpAutolink
+    // （CJK/全角标点/包裹括号/尾部句读同一套）；会话/项目深链仍是。project
     // 白名单与桌面 PROJECT_DEEP_LINK_RE_SOURCE 同口径,含尾部负向前瞻
     // (白名单 ∪ `'(`):旧编码产出的链接可能含裸 `'` `(`,白名单在此截断
     // 会得到指错项目的前缀匹配——匹配终止处紧跟 `'` / `(` 时整段拒绝;
@@ -880,14 +891,22 @@ function findNextInlineToken(
         input,
         from,
         new RegExp(
-          `(?:https?://[^\\s<>()]+[^\\s<>().,;:!?]|(?:${DEEP_LINK_SCHEME_GROUP})://session/[A-Za-z0-9%~_-]+(?:\\?[A-Za-z0-9%&=~._-]*[A-Za-z0-9%~_-])?|(?:${DEEP_LINK_SCHEME_GROUP})://project/[A-Za-z0-9%~._!*-]+(?![A-Za-z0-9%~._!*('-]))`,
+          `(?:${BARE_HTTP_URL_RE_SOURCE}|(?:${DEEP_LINK_SCHEME_GROUP})://session/[A-Za-z0-9%~_-]+(?:\\?[A-Za-z0-9%&=~._-]*[A-Za-z0-9%~_-])?|(?:${DEEP_LINK_SCHEME_GROUP})://project/[A-Za-z0-9%~._!*-]+(?![A-Za-z0-9%~._!*('-]))`,
           'g',
         ),
-        (match) => ({
-          type: 'link' as const,
-          text: trimUrlPunctuation(match[0]),
-          url: trimUrlPunctuation(match[0]),
-        }),
+        (match) => {
+          const rawHref = match[0];
+          const href = /^https?:\/\//i.test(rawHref)
+            ? clipBareHttpAutolinkText(rawHref, {
+                prefix: input.slice(0, match.index),
+                markdownWrapMarker: mobileMarkdownWrapMarker(
+                  input.slice(0, match.index),
+                ),
+                cutPathBrackets: false,
+              })
+            : trimUrlPunctuation(rawHref);
+          return { type: 'link' as const, text: href, url: href };
+        },
       );
       // 剥掉的尾部句读要留在正文里:matchRegex 的 end 按未剥原文推进,而
       // project 白名单含 `.`(`!` 同理),`…%2Frepo.` 的句号会被吞掉不再

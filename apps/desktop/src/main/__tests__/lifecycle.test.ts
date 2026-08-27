@@ -50,6 +50,12 @@ vi.mock('../ghost-panel-window/registry.js', () => ({
     ghostPanelWebContentsIds.has(webContentsId),
 }));
 
+// lifecycle 只消费这个查询函数；owner-scoped Electron session 会让 adapter
+// 依赖 owner 持久化与进程锁，不应把整条运行时链带进退出编排单测。
+vi.mock('../cindy-brain/runtime/electronSandboxAdapter', () => ({
+  isGhostSandboxWebContentsId: () => false,
+}));
+
 const mocks = vi.hoisted(() => ({
   logger: {
     info: vi.fn(),

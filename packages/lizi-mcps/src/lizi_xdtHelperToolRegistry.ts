@@ -25,8 +25,8 @@ import { z } from 'zod';
  * history 单独成类是因为它和 cindy 自省虽都只读, 但语义不同 (自省 = "我是谁",
  * 查询 = "我和你聊过啥"), 拆开后 list_tools 入口更清晰。
  *
- * 第三类 'control' 是改变 Cindy 状态的副作用工具(当前:set_current_session_title /
- * rename_sessions 改会话标题)。
+ * 第三类 'control' 是会话控制面：标题 / 归档，以及跨 session 的本人队列消息控制、
+ * same-turn 插话、优雅停止与只读运行探针。
  *
  * 第四类 'feedback' 是向 Cindy 官方提交反馈的工具 (submit_github_issue),
  * 有副作用但提交前由 host 弹系统确认卡片把关。

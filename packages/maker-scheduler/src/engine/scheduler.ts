@@ -889,6 +889,8 @@ export class Scheduler extends EventEmitter {
           status: 'aborted',
           finishedAt,
           errorMsg: 'cancelled by user (schedule deleted or paused)',
+          // 系统/用户主动收口,不是要处理的失败;生而已读,侧栏不涂红。
+          readAt: finishedAt,
         });
         this.emitEvent({
           type: 'failed',
@@ -1174,6 +1176,7 @@ export class Scheduler extends EventEmitter {
         status: 'aborted',
         finishedAt,
         errorMsg: 'cancelled by user (schedule deleted or paused)',
+        readAt: finishedAt,
       });
       this.emitEvent({ type: 'failed', scheduleId: schedule.id, runId, error: 'aborted' });
     } else if (runError !== undefined) {

@@ -103,4 +103,34 @@ describe('SlashCommandDecoration', () => {
     expect(state.doc.firstChild?.firstChild?.isText).toBe(true);
     expect(decorationRanges(plugin, state)).toEqual([{ from: 1, to: 7 }]);
   });
+
+  it('matches Pi runtime aliases and hides the skill: prefix', () => {
+    const commands = [{
+      kind: 'agent-skill' as const,
+      name: 'git',
+      description: 'git skill',
+      source: 'skill' as const,
+      runtimeCommandName: 'skill:git',
+    }];
+    const source = doc(p(txt('/skill:git follow /git')));
+
+    expect(findSlashCommandMatches(source, commands)).toMatchObject([
+      { from: 1, to: 11, command: { name: 'git' } },
+      { from: 19, to: 23, command: { name: 'git' } },
+    ]);
+
+    const plugin = createSlashCommandPlugin();
+    let state = EditorState.create({
+      schema,
+      doc: source,
+      plugins: [plugin],
+    });
+    state = state.apply(state.tr.setMeta('slashCommandDecoration', commands));
+
+    expect(decorationRanges(plugin, state)).toEqual([
+      { from: 1, to: 11 },
+      { from: 2, to: 8 },
+      { from: 19, to: 23 },
+    ]);
+  });
 });

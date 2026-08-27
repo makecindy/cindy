@@ -20,6 +20,7 @@ export type DbTxName =
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
   | 'session.agentSwitchFallback'
+  | 'context.rebuild'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -260,12 +261,14 @@ export interface OrcaCancelStaleTeamsArgs {
 /** Archive every still-active worker session linked to one team. */
 export interface OrcaArchiveWorkersByTeamArgs {
   teamId: string;
+  sessionIds: string[];
   now: number;
 }
 
 /** Repair active worker sessions left behind under a lead's inactive teams. */
 export interface OrcaReconcileInactiveTeamWorkersForLeadArgs {
   leadSessionId: string;
+  sessionIds: string[];
   now: number;
 }
 
@@ -299,6 +302,18 @@ export interface SessionAgentSwitchFallbackArgs {
   boundaryClientId: string;
   boundaryContent: string;
   updatedAt: number;
+}
+
+/** 上下文超限后同一任务换干净原生会话：清 sdk 绑定并追加隐藏 context_rebuild。 */
+export interface ContextRebuildArgs {
+  sessionId: string;
+  markerId: string;
+  markerClientId: string;
+  markerContent: string;
+  markerCreatedAt: number;
+  updatedAt: number;
+  /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
+  expectedClearedAt?: number | null;
 }
 
 /**
@@ -758,6 +773,7 @@ export type DbTxArgsByName = {
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
+  'context.rebuild': ContextRebuildArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -803,6 +819,7 @@ export type DbTxResultByName = {
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
   'session.agentSwitchFallback': undefined;
+  'context.rebuild': undefined;
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

@@ -35,7 +35,9 @@ describe('history window backfill wiring', () => {
     // 取消判据对着 seq 比,不是"当前会话 id 是否仍等于启动时的"——后者会随切回来而摆回。
     expect(source).toContain('isCancelled: () => backfillLatestRunSeqRef.current !== runSeq');
     // 结论写入同样要求"我还是最新那一轮"。
-    expect(source).toContain('if (backfillLatestRunSeqRef.current !== runSeq) return;');
+    expect(source).toMatch(
+      /if \(\s*backfillLatestRunSeqRef\.current !== runSeq\s*\|\| !remoteSessionStore\.isSessionMessageAuthorityCurrent\(messageAuthority\)\s*\) return;/,
+    );
     // 收尾按 seq 精确清标记:按 sid 比会把切回同一会话后新起那一轮的标记误清。
     expect(source).toContain('setBackfillInFlightRun((current) => (current?.seq === runSeq ? null : current));');
     // 作废收敛成一个函数,三个入口共用(单向,不启动新轮):

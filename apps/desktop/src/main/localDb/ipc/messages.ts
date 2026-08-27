@@ -7,10 +7,11 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
+import { latestVisiblePreview, latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
 import {
   messageToCamel,
@@ -21,10 +22,7 @@ import {
 import { throwIpcError, requireString } from '../../utils/ipcValidate';
 import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
-import {
-  collectCindyMediaHashes,
-  commitMessageMediaRefs,
-} from '../../cindy-media/chatAttachments';
+import { collectCindyMediaHashes, commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
 import {
   removeRefs as removeMediaRefs,
   removeSessionAttachmentRefIfUnreferencedByLiveMessage,
@@ -57,6 +55,15 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
 const messageRowid = sql<number>`rowid`;
+/**
+ * Skip silent-stop autoResume user rows without letting one bad historical
+ * agent_meta blob fail the whole page query. SQLite may evaluate
+ * json_extract even when a sibling OR json_valid(...) = 0 is already true.
+ */
+function notAutoResumeAgentMetaSql() {
+  return sql`(${messages.agentMeta} IS NULL OR CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1)`;
+}
+
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
 type DataOwnerBroadcastScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>;
@@ -101,23 +108,88 @@ function ownerStampForBroadcast(
   return getSafeOwnerPushStamp();
 }
 
-// DbClient uses better-sqlite3 `.all()`: never return whole message bodies for
-// retention bookkeeping. JSON1 extracts only the distinct paths that startup
-// cleanup needs, while LIKE avoids invoking json_each for unrelated history.
-const PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN = '%chat-attachment-cache%';
-const PERSISTED_CHAT_ATTACHMENT_PATHS_SQL = `SELECT DISTINCT
-         attachment.atom AS filePath
-   FROM messages AS m
-   JOIN sessions AS s ON s.id = m.session_id
-   JOIN json_tree(
-          CASE WHEN json_valid(m.content) THEN m.content ELSE '{}' END,
-          '$.files'
-        ) AS attachment
-  WHERE s.status != 'deleted'
-    AND m.rewind_at IS NULL
-    AND m.content LIKE ?
-    AND attachment.key = 'path'
-    AND attachment.type = 'text'`;
+function broadcastOwnedPayload(
+  channel: string,
+  payload: unknown,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  const ownerStamp = ownerStampForBroadcast(ownerScope);
+  if (ownerStamp === null) return;
+  if (ownerScope !== undefined && ownerScope !== null) {
+    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+  } else if (ownerStamp === undefined) {
+    broadcastTap.tapWindowBroadcast(channel, payload);
+  } else {
+    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+  }
+  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    try {
+      if (hasCapturedScope) {
+        win.webContents.send(channel, payload, ownerStamp);
+      } else if (ownerStamp === undefined) {
+        win.webContents.send(channel, payload);
+      } else {
+        win.webContents.send(channel, payload, ownerStamp);
+      }
+    } catch {
+      /* swallow per-window broadcast failures */
+    }
+  }
+}
+
+function isVisibleSessionListPreviewRow(row: MessageRow): boolean {
+  if (row.role !== 'user' && row.role !== 'assistant') return false;
+  if (row.rewindAt != null) return false;
+  if (row.role === 'user' && isAutoResumeUserRow(row.agentMeta)) return false;
+  return true;
+}
+
+/**
+ * 可见 user/assistant 落库后立刻刷新侧栏 preview,不等 turn-done / 全量 reseed。
+ * 只广播当前仍是该会话最近可见消息的那一行:改写旧回复不得盖住已经更新的预览。
+ */
+async function maybeBroadcastSessionListPreview(
+  sessionId: string,
+  row: MessageRow,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): Promise<void> {
+  if (!isVisibleSessionListPreviewRow(row)) return;
+  let latest: Awaited<ReturnType<typeof latestVisiblePreviewRow>>;
+  try {
+    latest = await latestVisiblePreviewRow(sessionId);
+  } catch (err) {
+    log.warn('session list preview latest-row check failed (swallowed)', {
+      sessionId,
+      clientId: row.clientId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  if (latest?.clientId !== row.clientId) return;
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  broadcastOwnedPayload(
+    'local-db:sessions:patched',
+    { sessionId, patch: { preview: extractMessagePreview(row.content, row.role) } },
+    ownerScope,
+  );
+}
+
+function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
+  if (!agentMetaJson) return false;
+  try {
+    const parsed: unknown = JSON.parse(agentMetaJson);
+    return Boolean(
+      parsed &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        (parsed as { autoResume?: unknown }).autoResume === true,
+    );
+  } catch {
+    return false;
+  }
+}
 
 export interface EstimatedSessionValueEntry {
   clientId: string;
@@ -145,15 +217,6 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'plan_review',
   'thinking',
 ] as const);
-
-/** Return all staged attachment paths retained by the current owner's message DB. */
-export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
-  const rows = await getDbClient().query<{ filePath: unknown }>(
-    PERSISTED_CHAT_ATTACHMENT_PATHS_SQL,
-    [PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN],
-  );
-  return rows.flatMap((row) => (typeof row.filePath === 'string' ? [row.filePath] : []));
-}
 
 export function registerMessageIpc(): void {
   ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
@@ -442,8 +505,7 @@ export function registerMessageIpc(): void {
         ),
       );
     const entries = extractEstimatedSessionValueEntries(rows);
-    const totalValueMoney =
-      addCompatibleRegionalMoney(entries.map((entry) => entry.money));
+    const totalValueMoney = addCompatibleRegionalMoney(entries.map((entry) => entry.money));
     const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
     return {
       totalValueMoney,
@@ -616,30 +678,7 @@ export function broadcastMessageRow(
   msg: Message,
   ownerScope?: DataOwnerBroadcastScope | null,
 ): void {
-  const ownerStamp = ownerStampForBroadcast(ownerScope);
-  if (ownerStamp === null) return;
-  if (ownerScope !== undefined && ownerScope !== null) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
-  } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
-  } else {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
-  }
-  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      if (hasCapturedScope) {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
-      } else if (ownerStamp === undefined) {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg });
-      } else {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
-      }
-    } catch {
-      /* swallow per-window broadcast failures */
-    }
-  }
+  broadcastOwnedPayload('local-db:messages:created', { sessionId, message: msg }, ownerScope);
 }
 
 export interface MessageDeletedPayload {
@@ -890,7 +929,7 @@ export async function commitMessageDeletion(
   // agentMeta.autoResume / cleared_at。
   //
   // 刻意**不**广播 `_count.messages`：列表里 `_count.messages` 的权威口径是该会话的全部
-  // messages 行数（sessions.ts 的 SESSION_MESSAGE_COUNT_SQL / MESSAGE_COUNT_COL，不过滤
+  // messages 行数（sessions.ts 的 SESSION_MESSAGE_COUNT_SQL，不过滤
   // role / rewind_at / cleared_at），而下面这个可见投影只数 user/assistant 行——一个正常
   // 会话里 tool_use / tool_result / thinking / error 行往往是它的几十倍，拿它去 patch 会把
   // 侧栏与手机端卡片的「N 条消息」改成明显偏小的值，且 shallow merge 消费端不会自己纠正，
@@ -906,28 +945,7 @@ export async function commitMessageDeletion(
   // 口径要动得连 maker-shared/sessionList 的 messageCountLabel 一起改。
   let preview: string | null = null;
   try {
-    const db = getDbClient().drizzle;
-    const [sessionRow] = await db
-      .select({ clearedAt: sessions.clearedAt })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    const visibleAfterClear =
-      sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
-    const visibleMessageProjection = and(
-      eq(messages.sessionId, sessionId),
-      sql`${messages.role} IN ('user', 'assistant')`,
-      isNull(messages.rewindAt),
-      sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
-      visibleAfterClear,
-    );
-    const [latestRow] = await db
-      .select({ content: messages.content, role: messages.role })
-      .from(messages)
-      .where(visibleMessageProjection)
-      .orderBy(desc(messages.createdAt), desc(messageRowid))
-      .limit(1);
-    preview = extractMessagePreview(latestRow?.content, latestRow?.role);
+    preview = await latestVisiblePreview(sessionId);
   } catch (error) {
     // 删除已经原子提交；投影查询失败不能把成功操作伪装成失败。广播保守空值，
     // 后续 sessions:list / reseed 会按 DB 真相收敛。
@@ -944,6 +962,81 @@ export async function commitMessageDeletion(
     updatedAt: now,
     preview,
   };
+}
+
+export async function commitContextRebuild(
+  sessionId: string,
+  handoff: string,
+  meta: {
+    reason: 'context-overflow' | 'pi-prompt-timeout';
+    sourceUserClientId: string | null;
+    sourceAgentKind?: 'cc' | 'codex' | 'pi';
+    sourceModel?: string | null;
+    sourceProviderId?: string | null;
+    expectedClearedAt?: number | null;
+  },
+): Promise<{ updatedAt: number }> {
+  const now = Date.now();
+  await getDbClient().tx('context.rebuild', {
+    sessionId,
+    markerId: createId(),
+    markerClientId: `context-rebuild:${createId()}`,
+    markerContent: JSON.stringify({
+      handoff,
+      consumed: false,
+      reason: meta.reason,
+      sourceUserClientId: meta.sourceUserClientId,
+      ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
+      ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
+      ...(meta.sourceProviderId !== undefined ? { sourceProviderId: meta.sourceProviderId } : {}),
+    }),
+    markerCreatedAt: now,
+    updatedAt: now,
+    expectedClearedAt: meta.expectedClearedAt ?? null,
+  });
+  return { updatedAt: now };
+}
+
+export async function findLatestContextRebuildMeta(sessionId: string): Promise<{
+  reason?: string;
+  sourceUserClientId?: string | null;
+  sourceAgentKind?: 'cc' | 'codex' | 'pi';
+  sourceModel?: string | null;
+  sourceProviderId?: string | null;
+} | null> {
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({ content: messages.content })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'context_rebuild')))
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.content) as {
+      reason?: unknown;
+      sourceUserClientId?: unknown;
+      sourceAgentKind?: unknown;
+      sourceModel?: unknown;
+      sourceProviderId?: unknown;
+    };
+    return {
+      reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+      sourceUserClientId:
+        typeof parsed.sourceUserClientId === 'string' ? parsed.sourceUserClientId : null,
+      ...(parsed.sourceAgentKind === 'cc' ||
+      parsed.sourceAgentKind === 'codex' ||
+      parsed.sourceAgentKind === 'pi'
+        ? { sourceAgentKind: parsed.sourceAgentKind }
+        : {}),
+      ...(typeof parsed.sourceModel === 'string' ? { sourceModel: parsed.sourceModel } : {}),
+      ...(typeof parsed.sourceProviderId === 'string'
+        ? { sourceProviderId: parsed.sourceProviderId }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function broadcastMessageDeleted(
@@ -1127,9 +1220,7 @@ export async function supersedeRetriedUserTurn(
   const [retryRow] = await db
     .select({ createdAt: messages.createdAt, rowid: messageRowid })
     .from(messages)
-    .where(
-      and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)),
-    )
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)))
     .limit(1);
   if (!oldRow || !retryRow) return [];
   // 窗口两端都用 (created_at, rowid) 双键:error 行的 createdAt 取"本轮最后行 + 1",
@@ -1177,16 +1268,32 @@ export async function updateMessageContent(
   clientId: string,
   content: unknown,
 ): Promise<Message | null> {
+  const ownerScope = captureOwnerBroadcastScope();
   const db = getDbClient().drizzle;
+  const serialized = safeStringify(content);
   await db
     .update(messages)
-    .set({ content: safeStringify(content) })
+    .set({ content: serialized })
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
-  const [row] = await db
-    .select()
+  // 窄回读:刻意不选 content——tool_result 全文可达 MB 级,整行回读会把大字段
+  // 经 DB worker 的 postMessage 结构化克隆再送回主进程一次。content 就是本次
+  // 写入值,用 serialized 回填;行不存在(clientId 未落库)仍以回读判 null。
+  const [narrow] = await db
+    .select({
+      id: messages.id,
+      clientId: messages.clientId,
+      sessionId: messages.sessionId,
+      role: messages.role,
+      toolUseId: messages.toolUseId,
+      agentMeta: messages.agentMeta,
+      agentKind: messages.agentKind,
+      createdAt: messages.createdAt,
+      rewindAt: messages.rewindAt,
+    })
     .from(messages)
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
+  const row: MessageRow | undefined = narrow ? { ...narrow, content: serialized } : undefined;
   if (row) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
     // (review P2:vendor 事件顺序一变,首现于 update 的 blob URL 若不在这里
@@ -1202,6 +1309,7 @@ export async function updateMessageContent(
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);
   }
   return row ? messageToCamel(row) : null;
 }
@@ -1310,7 +1418,8 @@ export async function createMessage(
 ): Promise<Message> {
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
-  const guarded = opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
+  const guarded =
+    opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
   const expected = guarded ? opts?.expectedClearBoundaryMs : undefined;
   if (
     guarded &&
@@ -1337,7 +1446,7 @@ export async function createMessage(
   const visibleCreatedAt =
     guarded && expected !== null && expected !== undefined
       ? Math.max(body.createdAt ?? now, expected + 1)
-      : body.createdAt ?? now;
+      : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
   try {
     if (guarded) {
@@ -1436,8 +1545,23 @@ export async function createMessage(
     }
     throw err;
   }
-  const [row] = await db.select().from(messages).where(eq(messages.id, id));
-  if (!row) throw new Error('Message 创建后查询失败');
+  // 插入成功后不再整行回读:大 content(tool_result 全文)会经 DB worker 的
+  // postMessage 再送回主进程一次。insertRow 就是刚写入的行(新行 rewind_at 恒
+  // NULL);必须过 messageToCamel 走与回读完全相同的解析路径(JSON.parse 失败
+  // 回退裸串、assistant 引文剥离),否则返回值/广播行的类型语义会漂移。幂等命中
+  // 与 UNIQUE / guarded 回退路径仍保留各自的回读(上方),不受影响。
+  const row: MessageRow = {
+    id: insertRow.id,
+    clientId: insertRow.clientId,
+    sessionId: insertRow.sessionId,
+    role: insertRow.role,
+    content: insertRow.content,
+    toolUseId: insertRow.toolUseId ?? null,
+    agentMeta: insertRow.agentMeta ?? null,
+    agentKind: insertRow.agentKind ?? null,
+    createdAt: insertRow.createdAt,
+    rewindAt: null,
+  };
   const msg = messageToCamel(row);
   // 媒体总仓挂账钩子(规则 25):消息落库是"blob 归属本会话"的
   // 确定时点,覆盖所有落库来源(renderer IPC / hook / im / agent echo / 合成
@@ -1476,6 +1600,7 @@ export async function createMessage(
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
   if (opts?.shouldBroadcast?.() !== false) {
     broadcastMessageRow(sessionId, msg, opts?.broadcastOwnerScope);
+    await maybeBroadcastSessionListPreview(sessionId, row, opts?.broadcastOwnerScope);
   }
   // chat-history-embedder hook (Phase 1.2) —— fire-and-forget, 不 await。
   // 内部已有 enabled / cutoff / role / size 守卫; 关闭状态下零成本直接 return。
@@ -1599,6 +1724,45 @@ export async function patchMessageAgentMetaWithResult(
   const next = { ...previous, ...patch };
   await updateAgentMeta(sessionId, clientId, JSON.stringify(next));
   return { previous, next };
+}
+
+export interface VisibleToolUseMessageLink {
+  clientId: string;
+  toolUseId: string;
+}
+
+/**
+ * Recover a durable tool-use row after process-local event linkage was lost.
+ * The session clear boundary is part of visibility: a restart must not make a
+ * pre-clear row eligible for a late background terminal update again.
+ */
+export async function findVisibleToolUseMessageByAliases(
+  sessionId: string,
+  aliases: readonly string[],
+): Promise<VisibleToolUseMessageLink | null> {
+  const normalizedAliases = [...new Set(aliases.filter((alias) => alias.length > 0))];
+  if (!sessionId || normalizedAliases.length === 0) return null;
+  const [row] = await getDbClient()
+    .drizzle.select({
+      clientId: messages.clientId,
+      toolUseId: messages.toolUseId,
+    })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'tool_use'),
+        inArray(messages.toolUseId, normalizedAliases),
+        isNull(messages.rewindAt),
+        or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+      ),
+    )
+    .orderBy(desc(messages.createdAt))
+    .limit(1);
+  return row?.clientId && row.toolUseId
+    ? { clientId: row.clientId, toolUseId: row.toolUseId }
+    : null;
 }
 
 export async function patchMessageAgentMeta(
@@ -1730,8 +1894,7 @@ export async function readPriorUserRoundCost(
     if (isEstimate) estimatedCurrencies.add(segment.currency);
   }
   const money = addCompatibleRegionalMoney(values);
-  const hasEstimatedValue =
-    money !== null && estimatedCurrencies.has(money.currency);
+  const hasEstimatedValue = money !== null && estimatedCurrencies.has(money.currency);
   return {
     money,
     costUsd: money?.currency === 'USD' ? money.amount : 0,
@@ -1746,6 +1909,10 @@ export async function readPriorUserRoundCost(
  * correct user-round total without rewriting legacy data or changing the raw
  * segment values used by every billing aggregate. New messages already carry
  * the persisted field and skip this path.
+ *
+ * Scan only from the oldest row on this page back to the previous real user
+ * boundary. A full-session walk here used to re-read tens of thousands of
+ * agent_meta blobs on every history page.
  */
 async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]> {
   const legacyClientIds = new Set(
@@ -1767,6 +1934,9 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
 
   const sessionId = history[0]?.sessionId;
   if (!sessionId) return history;
+  const oldestOnPage = oldestHistoryMessage(history);
+  const oldestCreatedAtMs = Date.parse(oldestOnPage.createdAt);
+  if (!Number.isFinite(oldestCreatedAtMs)) return history;
   const db = getDbClient().drizzle;
   const [session] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -1775,6 +1945,47 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
     .limit(1);
   const visibleAfterClear =
     session?.clearedAt == null ? [] : [gt(messages.createdAt, session.clearedAt)];
+  const olderThanOldestOnPage =
+    oldestOnPage.rowid != null
+      ? or(
+          lt(messages.createdAt, oldestCreatedAtMs),
+          and(eq(messages.createdAt, oldestCreatedAtMs), lt(messageRowid, oldestOnPage.rowid)),
+        )
+      : lt(messages.createdAt, oldestCreatedAtMs);
+  const priorUser = await db
+    .select({
+      createdAt: messages.createdAt,
+      rowid: messageRowid,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'user'),
+        isNull(messages.rewindAt),
+        ...visibleAfterClear,
+        olderThanOldestOnPage,
+        notAutoResumeAgentMetaSql(),
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  const newestOnPage = newestHistoryMessage(history);
+  const newestCreatedAtMs = Date.parse(newestOnPage.createdAt);
+  const fromPriorUser = priorUser[0]
+    ? or(
+        gt(messages.createdAt, priorUser[0].createdAt),
+        and(eq(messages.createdAt, priorUser[0].createdAt), gte(messageRowid, priorUser[0].rowid)),
+      )
+    : undefined;
+  const throughNewestOnPage = Number.isFinite(newestCreatedAtMs)
+    ? newestOnPage.rowid != null
+      ? or(
+          lt(messages.createdAt, newestCreatedAtMs),
+          and(eq(messages.createdAt, newestCreatedAtMs), lte(messageRowid, newestOnPage.rowid)),
+        )
+      : lte(messages.createdAt, newestCreatedAtMs)
+    : undefined;
   const rows = await db
     .select({
       clientId: messages.clientId,
@@ -1782,7 +1993,15 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
       agentMeta: messages.agentMeta,
     })
     .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), ...visibleAfterClear))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        isNull(messages.rewindAt),
+        ...visibleAfterClear,
+        ...(fromPriorUser ? [fromPriorUser] : []),
+        ...(throughNewestOnPage ? [throughNewestOnPage] : []),
+      ),
+    )
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
   const totalsByClientId = new Map<string, PriorUserRoundCost>();
@@ -1852,6 +2071,29 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
 
 function isAutoResumeUserMessage(agentMeta: string | null): boolean {
   return parseAgentMetaRecord(agentMeta)?.autoResume === true;
+}
+
+function oldestHistoryMessage(history: Message[]): Message {
+  return history.reduce((oldest, message) =>
+    compareHistoryTimeline(message, oldest) < 0 ? message : oldest,
+  );
+}
+
+function newestHistoryMessage(history: Message[]): Message {
+  return history.reduce((newest, message) =>
+    compareHistoryTimeline(message, newest) > 0 ? message : newest,
+  );
+}
+
+function compareHistoryTimeline(a: Message, b: Message): number {
+  const timeDiff = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  if (Number.isFinite(timeDiff) && timeDiff !== 0) return timeDiff;
+  const aRowid = typeof a.rowid === 'number' ? a.rowid : Number.NaN;
+  const bRowid = typeof b.rowid === 'number' ? b.rowid : Number.NaN;
+  if (Number.isFinite(aRowid) && Number.isFinite(bRowid) && aRowid !== bRowid) {
+    return aRowid - bRowid;
+  }
+  return 0;
 }
 
 /** DB content 可为 JSON string、含 text 的对象，或迁移前遗留的裸文本。 */
@@ -2087,6 +2329,7 @@ export async function listMessagesForAgentHandoff(
     content: unknown;
     createdAt: number;
     agentMeta: Record<string, unknown> | null;
+    toolUseId: string | null;
   }>
 > {
   const db = getDbClient().drizzle;
@@ -2112,6 +2355,7 @@ export async function listMessagesForAgentHandoff(
       content: messages.content,
       createdAt: messages.createdAt,
       agentMeta: messages.agentMeta,
+      toolUseId: messages.toolUseId,
     })
     .from(messages)
     .where(
@@ -2120,12 +2364,83 @@ export async function listMessagesForAgentHandoff(
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(limit);
   rows.reverse();
-  return rows.map((r) => {
+  return rows
+    .map((r) => {
+      let content: unknown = r.content;
+      try {
+        content = JSON.parse(r.content);
+      } catch {
+        // 与 messageToCamel 同口径:非法 JSON 保留原字符串
+      }
+      let agentMeta: Record<string, unknown> | null = null;
+      if (r.agentMeta) {
+        try {
+          const parsed: unknown = JSON.parse(r.agentMeta);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            agentMeta = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // 非法 JSON 视为无 meta
+        }
+      }
+      if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
+        return null;
+      }
+      return {
+        clientId: r.clientId,
+        role: r.role,
+        content,
+        createdAt: r.createdAt,
+        agentMeta,
+        toolUseId: r.toolUseId ?? null,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+}
+
+/** 换窗身份用：不受 handoff 400 行窗口限制，找最近一条非 rewind 的 user。 */
+export async function findLatestUserMessageForRebuild(sessionId: string): Promise<{
+  clientId: string;
+  role: string;
+  content: unknown;
+  createdAt: number;
+  agentMeta: Record<string, unknown> | null;
+  toolUseId: string | null;
+} | null> {
+  const db = getDbClient().drizzle;
+  const [sessRow] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const clearedAt = sessRow?.clearedAt ?? null;
+  const afterClear = clearedAt === null ? undefined : gt(messages.createdAt, clearedAt);
+  const rows = await db
+    .select({
+      clientId: messages.clientId,
+      role: messages.role,
+      content: messages.content,
+      createdAt: messages.createdAt,
+      agentMeta: messages.agentMeta,
+      toolUseId: messages.toolUseId,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'user'),
+        isNull(messages.rewindAt),
+        afterClear,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(30);
+  for (const r of rows) {
     let content: unknown = r.content;
     try {
       content = JSON.parse(r.content);
     } catch {
-      // 与 messageToCamel 同口径:非法 JSON 保留原字符串
+      // 与 messageToCamel 同口径
     }
     let agentMeta: Record<string, unknown> | null = null;
     if (r.agentMeta) {
@@ -2138,8 +2453,25 @@ export async function listMessagesForAgentHandoff(
         // 非法 JSON 视为无 meta
       }
     }
-    return { clientId: r.clientId, role: r.role, content, createdAt: r.createdAt, agentMeta };
-  });
+    const text =
+      typeof content === 'string'
+        ? content
+        : content && typeof content === 'object' && !Array.isArray(content)
+          ? typeof (content as { text?: unknown }).text === 'string'
+            ? (content as { text: string }).text
+            : ''
+          : '';
+    if (isSyntheticTriggerText(text)) continue;
+    return {
+      clientId: r.clientId,
+      role: r.role,
+      content,
+      createdAt: r.createdAt,
+      agentMeta,
+      toolUseId: r.toolUseId ?? null,
+    };
+  }
+  return null;
 }
 
 /** Phase 2:目标引擎的停泊原生会话(由最近一次"它离场"的边界行派生)。 */

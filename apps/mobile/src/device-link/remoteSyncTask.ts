@@ -5,6 +5,45 @@ export interface RemoteSyncRunner {
   isRunning(): boolean;
 }
 
+export interface RemoteSyncReopenCoordinator {
+  captureVersion(): number;
+  reopenAfter(failedAtVersion: number): Promise<void>;
+}
+
+/**
+ * 同一轮 session sync 按「故障发生时看到的恢复版本」合并 peer 重开。
+ * 同一旧代上错峰返回的失败共用一次 reopen；reopen 后真正发出的请求若再次失败，
+ * 会携带新版本触发下一次 reopen。失败的 reopen 不推进版本，允许后续继续自愈。
+ */
+export function createRemoteSyncReopenCoordinator(
+  reopen: () => Promise<void>,
+): RemoteSyncReopenCoordinator {
+  let successfulVersion = 0;
+  let recovery: {
+    coveredFailureVersion: number;
+    promise: Promise<void>;
+  } | null = null;
+
+  return {
+    captureVersion: () => successfulVersion,
+    reopenAfter(failedAtVersion): Promise<void> {
+      if (recovery && recovery.coveredFailureVersion >= failedAtVersion) {
+        return recovery.promise;
+      }
+      const nextVersion = successfulVersion + 1;
+      const attempt = Promise.resolve().then(reopen).then(() => {
+        successfulVersion = nextVersion;
+      });
+      const entry = { coveredFailureVersion: failedAtVersion, promise: attempt };
+      recovery = entry;
+      void attempt.catch(() => {
+        if (recovery === entry) recovery = null;
+      });
+      return attempt;
+    },
+  };
+}
+
 /**
  * Coalesces repeated resync triggers into one in-flight run plus at most one
  * follow-up run. This matches mobile foreground/reconnect behavior where

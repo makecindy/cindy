@@ -268,6 +268,30 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
   });
 
+  it('does not delete a registry record after proving that its PID was reused', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
+    await writeDevInstanceRecord(root, 4242, root, {
+      instanceId: 'stale-instance',
+      startedAtMs,
+    });
+
+    await __testing.warmStaleProcessProvenance(
+      root,
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: 'C:\\Windows\\System32\\OpenConsole.exe --server',
+        }),
+      }),
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
+    await expect(fs.access(recordPath)).resolves.toBeUndefined();
+  });
+
   it('keeps local startup fail-closed when provenance warmup cannot read identity', async () => {
     const root = await tempRoot();
     await writeDevInstanceRecord(root, 4242, root, { startedAtMs: 1_000_000 });
@@ -3101,7 +3125,11 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
   it('reuses async stale-pid proof in sync guards and invalidates it when the record changes', async () => {
     const root = await tempRoot();
     const startedAtMs = 1_000_000;
-    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
+    await writeDevInstanceRecord(root, 4242, root, {
+      instanceId: 'stale-instance',
+      startedAtMs,
+    });
 
     await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
@@ -3116,10 +3144,20 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
 
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
 
-    await writeDevInstanceRecord(root, 4242, root, {
+    const replacementRaw = JSON.stringify({
+      schemaVersion: 1,
+      instanceId: 'replacement-instance',
+      pid: 4242,
+      userDataDir: root,
+      passive: false,
       startedAtMs: startedAtMs + 1,
     });
+    const replacementPath = `${recordPath}.replacement`;
+    await fs.writeFile(replacementPath, replacementRaw, 'utf-8');
+    await fs.rename(replacementPath, recordPath);
+
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    await expect(fs.readFile(recordPath, 'utf-8')).resolves.toBe(replacementRaw);
   });
 });
 
@@ -3195,7 +3233,7 @@ async function writeDevInstanceRecord(
   root: string,
   pid: number,
   userDataDir: string = root,
-  options: { startedAtMs?: number; rootDir?: string } = {},
+  options: { startedAtMs?: number; rootDir?: string; instanceId?: string } = {},
 ): Promise<void> {
   const registryDir = path.join(root, '.dev-instances');
   await fs.mkdir(registryDir, { recursive: true });

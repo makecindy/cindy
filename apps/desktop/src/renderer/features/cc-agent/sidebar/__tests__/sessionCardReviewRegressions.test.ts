@@ -7,6 +7,7 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
+const railNavSource = readFileSync(resolve(sidebarDir, 'RailNav.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(
   resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
   'utf8',
@@ -42,7 +43,7 @@ describe('SessionCard review regressions', () => {
 
   it('keeps awaiting text in list mode previews', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
     expect(sessionCardSource).toContain('{listPreview}');
   });
@@ -122,17 +123,19 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('titlePrefixWidth');
   });
 
-  it('merges remote activity into the left vendor-mark running state', () => {
-    // 远程会话的运行态原先只进右侧状态槽,左侧图标仍只看本地 running 集。
-    // 只并入 phase=running,与折叠 rail / remoteLampOf 同一口径;
-    // needs-interaction 继续由右侧 awaiting 表达。
+  it('projects local and remote activity through the shared session status model', () => {
+    // 左侧运行标记和右侧状态槽必须消费同一投影，避免各自组合本地/远程状态源。
+    expect(sessionItemSource).toContain('projectSidebarSessionActivity({');
     expect(sessionItemSource).toContain(
-      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
+    expect(sessionItemSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionCardSource).toContain('projectSidebarSessionActivity({');
     expect(sessionCardSource).toContain(
-      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
+    expect(sessionCardSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
     expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');
@@ -140,8 +143,9 @@ describe('SessionCard review regressions', () => {
 
   it('keeps card preview line budgets stable across content sources', () => {
     expect(sessionCardSource).toContain(
-      'const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2',
+      "const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary)",
     );
+    expect(sessionCardSource).toContain('const cardPreviewLineClamp = usesPinnedCardSummary');
     expect(sessionCardSource).toContain('style={{ WebkitLineClamp: cardPreviewLineClamp }}');
   });
 
@@ -231,11 +235,11 @@ describe('SessionCard review regressions', () => {
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
-    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? summaryPreview');
+    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? bodyPreview');
     expect(sessionCardSource).not.toContain(
-      'const cardPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const cardPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
   });
 
@@ -289,9 +293,6 @@ describe('SessionCard review regressions', () => {
       'const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;',
     );
     expect(sessionItemSource).toContain("!isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5'");
-    expect(automationGroupSource).toContain(
-      'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
-    );
     expect(automationGroupSource).toContain('className="flex min-w-0 items-center gap-1.5"');
   });
 
@@ -319,6 +320,12 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain(
       "isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon'",
     );
+  });
+
+  it('keeps rail hover backgrounds in the sidebar token family', () => {
+    expect(railNavSource).toContain('group-hover/pin:bg-sidebar-item-hover');
+    expect(railNavSource).toContain('hover:bg-sidebar-item-hover');
+    expect(railNavSource).not.toContain('update-btn-hover');
   });
 
   it('keeps selected sidebar hover actions inside the active color system', () => {

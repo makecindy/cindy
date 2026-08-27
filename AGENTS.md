@@ -95,6 +95,9 @@
   改动」豁免。
 - 修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、插件运行期
   可见性门禁或 FORGE_GUIDE 作者契约前，必须先读 `docs/ghost-progressive-discovery.md`。
+- 新增或修改插件持久 Library（library 槽、binding / 目录选择、随时迁移、
+  回收站删除、SQLite 语句门或 `/library/` 面板投影）前，必须先读
+  `docs/dev-rules/plugin-library-storage.md`。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、跨平台（macOS／

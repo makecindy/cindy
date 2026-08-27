@@ -73,7 +73,6 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['node'],
       node: {
         entry: 'node/worker.cjs',
         protocol: options.protocol ?? 'json-rpc-stdio',
@@ -898,7 +897,7 @@ describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
 describe('nodeRuntimeBroker · 权限与协议', () => {
   it('没声明 node 槽时拒绝且不启动进程', async () => {
     const ghost = fakeGhost();
-    ghost.manifest.slots = ['card'];
+    delete ghost.manifest.node;
     const spawnProcess = vi.fn();
     const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess });
 

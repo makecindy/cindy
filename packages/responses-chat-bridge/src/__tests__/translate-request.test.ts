@@ -75,6 +75,29 @@ describe('translateResponsesRequest', () => {
     expect(keep.messages[1]).toEqual({ role: 'developer', content: 'mid-conversation dev note' });
   });
 
+  it('coalesces mid-conversation system/developer into one leading system when asked', () => {
+    const source = base({
+      instructions: 'top-level',
+      input: [
+        { type: 'message', role: 'user', content: 'first' },
+        { type: 'message', role: 'assistant', content: 'ok' },
+        { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'later note' }] },
+        { type: 'message', role: 'user', content: 'second' },
+      ],
+    });
+    const out = translateResponsesRequest(source, {
+      capabilities: { systemMessagePolicy: 'coalesce-leading' },
+    });
+    expect(out.messages).toEqual([
+      { role: 'system', content: 'top-level\n\nlater note' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'second' },
+    ]);
+    const unchanged = translateResponsesRequest(source);
+    expect(unchanged.messages.filter((message) => message.role === 'system')).toHaveLength(2);
+  });
+
   it.each([
     { type: 'input_image', image_url: 'https://example.com/image.png' },
     { type: 'input_file', file_data: 'data:text/plain;base64,eA==' },
@@ -895,6 +918,79 @@ describe('translateResponsesRequest', () => {
     });
   });
 
+  it('compacts only oversized top-level custom exec descriptions', () => {
+    const execCatalog = `EXEC_CATALOG_START:${'nested-tool-doc;'.repeat(40_000)}:EXEC_CATALOG_END`;
+    const ordinaryFunctionDescription = `FUNCTION_DOCS_START:${'function-doc;'.repeat(8_000)}`;
+    const ordinaryCustomDescription = `CUSTOM_DOCS_START:${'custom-doc;'.repeat(8_000)}`;
+    const out = translateResponsesRequest(base({
+      tools: [
+        { type: 'custom', name: 'exec', description: execCatalog },
+        {
+          type: 'function',
+          name: 'large_function',
+          description: ordinaryFunctionDescription,
+          parameters: { type: 'object' },
+        },
+        { type: 'custom', name: 'large_custom', description: ordinaryCustomDescription },
+      ],
+      tool_choice: { type: 'custom', name: 'exec' },
+    }));
+
+    const execTool = out.tools?.[0]?.function;
+    expect(execTool).toMatchObject({
+      name: 'exec',
+      parameters: {
+        type: 'object',
+        properties: { input: { type: 'string', description: expect.any(String) } },
+        required: ['input'],
+      },
+    });
+    expect(execTool?.description).not.toContain('EXEC_CATALOG_START');
+    expect(execTool?.description).toContain('global `tools`');
+    expect(execTool?.description).toContain('`ALL_TOOLS`');
+    for (const protocol of [
+      '`await tools.<name>(...)`',
+      '`await tools.<namespace>__<name>(...)`',
+      '`yield_control()`',
+      '`exit()`',
+      '`text(...)`',
+      '`image(...)`',
+      '`audio(...)`',
+      '`generatedImage(...)`',
+      '`store(key, value)`',
+      '`load(key)`',
+      '`notify(value)`',
+    ]) {
+      expect(execTool?.description).toContain(protocol);
+    }
+    expect(execTool?.description).not.toContain('`await tools.<namespace>.<name>(...)`');
+    expect(Buffer.byteLength(JSON.stringify(out.tools?.[0]), 'utf8')).toBeLessThan(4_096);
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'exec' } });
+
+    expect(out.tools?.[1]?.function.description).toBe(ordinaryFunctionDescription);
+    const customDescription = out.tools?.[2]?.function.description ?? '';
+    expect(customDescription).toContain(ordinaryCustomDescription);
+    expect(customDescription.indexOf(ordinaryCustomDescription)).toBe(
+      customDescription.lastIndexOf(ordinaryCustomDescription),
+    );
+  });
+
+  it('does not apply the top-level exec adapter to a namespaced custom exec', () => {
+    const namespacedDescription = `NAMESPACED_EXEC:${'namespace-doc;'.repeat(4_000)}`;
+    const out = translateResponsesRequest(base({
+      tools: [{
+        type: 'namespace',
+        name: 'plugin',
+        tools: [{ type: 'custom', name: 'exec', description: namespacedDescription }],
+      }],
+    }));
+
+    expect(out.tools?.[0]?.function).toMatchObject({
+      name: 'plugin__exec',
+      description: expect.stringContaining(namespacedDescription),
+    });
+  });
+
   it('keeps the built-in tool-search adapter distinct from a user tool_search name', () => {
     const out = translateResponsesRequest(base({
       tools: [
@@ -910,6 +1006,22 @@ describe('translateResponsesRequest', () => {
     expect((out.messages[0] as {
       tool_calls?: Array<{ function: { name: string } }>;
     }).tool_calls?.[0]?.function.name).not.toBe('tool_search');
+  });
+
+  it('does not duplicate a large custom tool description in Chat metadata', () => {
+    const description = 'x'.repeat(200);
+    const out = translateResponsesRequest(base({
+      tools: [{
+        type: 'custom',
+        name: 'exec',
+        description,
+        format: { type: 'text' },
+      }],
+    }));
+    const chatDescription = out.tools?.[0]?.function.description ?? '';
+    expect(chatDescription.split(description)).toHaveLength(2);
+    expect(chatDescription).toContain('"format":{"type":"text"}');
+    expect(chatDescription).not.toContain(`"description":"${description}"`);
   });
 
   it('keeps function and custom tools with the same name distinct', () => {

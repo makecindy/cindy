@@ -1394,6 +1394,7 @@ describe('Scheduler', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('aborted');
     expect(runs[0].errorMsg).toMatch(/cancelled by user/);
+    expect(runs[0].readAt).toBe(runs[0].finishedAt);
   });
 
   it('pause aborts in-flight run, keeps schedule with status=paused', async () => {
@@ -1419,6 +1420,7 @@ describe('Scheduler', () => {
     const runs = await local.scheduler.listRuns(sch.id);
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('aborted');
+    expect(runs[0].readAt).toBe(runs[0].finishedAt);
     expect(local.scheduler.getInflightCount(sch.id)).toBe(0);
   });
 

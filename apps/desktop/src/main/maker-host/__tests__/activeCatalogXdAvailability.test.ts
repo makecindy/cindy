@@ -15,6 +15,7 @@ import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
 
 import {
   getActiveCatalog,
+  getXdGatewayModels,
   resolveXdPiGatewayWireProtocol,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
@@ -38,6 +39,9 @@ describe('XD 网关权威模型清单重建', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex')).toEqual([]);
+    const xd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(xd?.imageModels).toEqual([]);
+    expect(xd?.videoModels).toEqual([]);
   });
 
   it('显式空列表保持 XD 模型不可用', () => {
@@ -47,7 +51,7 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
-  it('current Catalog controls the XD media shell while /models controls chat membership', () => {
+  it('/models 同时控制 XD chat 与媒体成员，忽略 Catalog 里的旧媒体清单', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
     const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
     if (!catalogXd) throw new Error('missing XD provider fixture');
@@ -69,12 +73,42 @@ describe('XD 网关权威模型清单重建', () => {
     ];
 
     setActiveCatalog(catalog);
+    setXdGatewayModels([
+      {
+        id: 'openai/gpt-image-2',
+        name: 'GPT Image 2',
+        mode: 'image_generation',
+        agents: [],
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+      {
+        id: 'bytedance/seedance-2.5',
+        name: 'Seedance 2.5',
+        mode: 'video_generation',
+        agents: [],
+        modalities: { input: ['text', 'image'], output: ['video'] },
+      },
+    ]);
 
     const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
     expect(activeXd?.name).toBe('Catalog-supplied XD');
-    expect(activeXd?.imageModels).toEqual([]);
+    expect(activeXd?.imageModels).toEqual([
+      {
+        id: 'openai/gpt-image-2',
+        name: 'GPT Image 2',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+    expect(activeXd?.imageDefaults).toEqual({ standard: 'openai/gpt-image-2' });
     expect(activeXd?.embeddingModels).toEqual([]);
-    expect(activeXd?.videoModels).toEqual([{ id: 'seedance-fast', name: 'Seedance Fast' }]);
+    expect(activeXd?.videoModels).toEqual([
+      {
+        id: 'bytedance/seedance-2.5',
+        name: 'Seedance 2.5',
+        modalities: { input: ['text', 'image'], output: ['video'] },
+      },
+    ]);
+    expect(activeXd?.videoDefaults).toEqual({ standard: 'bytedance/seedance-2.5' });
     expect(xdModels('claude-code')).toEqual([]);
   });
 
@@ -102,11 +136,11 @@ describe('XD 网关权威模型清单重建', () => {
     });
   });
 
-  it('Pi 在 cindy provider 内只接受 v3 指定的 Responses API', () => {
+  it('Pi 在 cindy provider 内接受 v3 显式协议，并过滤缺失协议的模型', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
-        id: 'invalid-messages-wire',
+        id: 'messages-model',
         agents: ['claude-code', 'codex', 'pi'],
         perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
       },
@@ -116,17 +150,30 @@ describe('XD 网关权威模型清单重建', () => {
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
       {
+        id: 'missing-wire',
+        agents: ['claude-code', 'codex', 'pi'],
+      },
+      {
         id: 'claude-only-model',
         agents: ['claude-code'],
         perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
       },
     ]);
 
-    expect(resolveXdPiGatewayWireProtocol('invalid-messages-wire')).toBeNull();
+    expect(resolveXdPiGatewayWireProtocol('messages-model')).toBe('anthropic-messages');
     expect(resolveXdPiGatewayWireProtocol('responses-model')).toBe('openai-responses');
     expect(resolveXdPiGatewayWireProtocol('responses-model[1m]')).toBe('openai-responses');
+    expect(resolveXdPiGatewayWireProtocol('missing-wire')).toBeNull();
     expect(resolveXdPiGatewayWireProtocol('claude-only-model')).toBeUndefined();
     expect(resolveXdPiGatewayWireProtocol('unknown-model')).toBeUndefined();
+    expect(xdModels('pi').map((model) => model.id)).toEqual([
+      'messages-model',
+      'responses-model',
+    ]);
+    expect(xdModels('pi')).toMatchObject([
+      { id: 'messages-model', piApi: 'anthropic-messages' },
+      { id: 'responses-model', piApi: 'openai-responses' },
+    ]);
   });
 
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {
@@ -190,6 +237,37 @@ describe('XD 网关权威模型清单重建', () => {
 
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex').map((model) => model.id)).toEqual(['codex-native-only']);
+  });
+
+  it('媒体 mode 条目不进入聊天目录，并保留在原始 Gateway 快照', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'image-without-guide',
+        mode: 'image_generation',
+        agents: [],
+        name: 'Image Without Guide',
+      },
+      {
+        id: 'video-model',
+        mode: 'video_generation',
+        agents: [],
+        name: 'Video Model',
+      },
+      {
+        id: 'chat-model',
+        mode: 'chat',
+        agents: ['codex'],
+      },
+    ]);
+
+    expect(getXdGatewayModels().map((model) => model.id)).toEqual([
+      'image-without-guide',
+      'video-model',
+      'chat-model',
+    ]);
+    expect(xdModels('claude-code')).toEqual([]);
+    expect(xdModels('codex').map((model) => model.id)).toEqual(['chat-model']);
   });
 
   it('perAgent 覆盖块按 tab 应用(cc 无 Fast + 1M 窗口;codex 保持基线)', () => {
