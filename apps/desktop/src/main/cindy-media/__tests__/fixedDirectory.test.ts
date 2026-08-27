@@ -34,6 +34,44 @@ describe('openOrCreateFixedDirectory', () => {
     expect(openPath).toHaveBeenCalledWith('C:\\cache\\images');
   });
 
+  it('recreates a directory removed by concurrent cleanup before opening it', async () => {
+    const lstat = vi
+      .fn()
+      .mockRejectedValueOnce(missingPathError())
+      .mockRejectedValueOnce(missingPathError())
+      .mockResolvedValueOnce(directoryStat(true));
+    const mkdir = vi.fn().mockResolvedValue(undefined);
+    const openPath = vi.fn().mockResolvedValue('');
+
+    await expect(
+      openOrCreateFixedDirectory('/cache/images', {
+        fileSystem: { lstat, mkdir },
+        openPath,
+      }),
+    ).resolves.toBe(true);
+
+    expect(mkdir).toHaveBeenCalledTimes(2);
+    expect(openPath).toHaveBeenCalledWith('/cache/images');
+  });
+
+  it('keeps repeated concurrent deletion as a recoverable not-opened result', async () => {
+    const mkdir = vi.fn().mockResolvedValue(undefined);
+    const openPath = vi.fn();
+
+    await expect(
+      openOrCreateFixedDirectory('/cache/images', {
+        fileSystem: {
+          lstat: vi.fn().mockRejectedValue(missingPathError()),
+          mkdir,
+        },
+        openPath,
+      }),
+    ).resolves.toBe(false);
+
+    expect(mkdir).toHaveBeenCalledTimes(2);
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
   it('opens an existing fixed directory without creating it again', async () => {
     const lstat = vi.fn().mockResolvedValue(directoryStat(true));
     const mkdir = vi.fn();
@@ -129,5 +167,24 @@ describe('openOrCreateFixedDirectory', () => {
         openPath: vi.fn().mockResolvedValue('shell failed'),
       }),
     ).rejects.toThrow('shell failed');
+  });
+
+  it('keeps deletion during shell opening as a recoverable not-opened result', async () => {
+    const openPath = vi.fn().mockResolvedValue('path disappeared');
+
+    await expect(
+      openOrCreateFixedDirectory('/cache/images', {
+        fileSystem: {
+          lstat: vi
+            .fn()
+            .mockResolvedValueOnce(directoryStat(true))
+            .mockRejectedValueOnce(missingPathError()),
+          mkdir: vi.fn(),
+        },
+        openPath,
+      }),
+    ).resolves.toBe(false);
+
+    expect(openPath).toHaveBeenCalledWith('/cache/images');
   });
 });
