@@ -271,6 +271,7 @@ import {
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
+import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   getAllRegisteredDraftUrls,
@@ -7245,22 +7246,14 @@ const registerIpcHandlers = () => {
         throwIpcError('INTERNAL', 'fixed cache directory action failed');
       }
     };
-    const openExistingFixedDirectory = async (
+    const openFixedDirectory = (
       rootDir: string,
       canOpen: () => boolean = () => true,
-    ): Promise<boolean> => {
-      try {
-        const stat = await fs.promises.lstat(rootDir);
-        if (!stat.isDirectory()) return false;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
-        throw err;
-      }
-      if (!canOpen()) throw new Error('fixed directory owner changed before open');
-      const error = await shell.openPath(rootDir);
-      if (error) throw new Error(error);
-      return true;
-    };
+    ): Promise<boolean> =>
+      openOrCreateFixedDirectory(rootDir, {
+        canOpen,
+        openPath: (filePath) => shell.openPath(filePath),
+      });
     // These actions intentionally accept no renderer path. The frozen xdt-image
     // cache has no owner metadata, so its confirmed cleanup applies to the whole
     // profile-level legacy root. Chat attachments remain scoped to the active
@@ -7327,11 +7320,11 @@ const registerIpcHandlers = () => {
       getQueueScanTexts: collectAgentInputQueueScanTexts,
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
-      openLegacyImagesDir: () => openExistingFixedDirectory(imageCacheStore.getCacheRoot()),
+      openLegacyImagesDir: () => openFixedDirectory(imageCacheStore.getCacheRoot()),
       clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
       openChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
-          openExistingFixedDirectory(rootDir, isCurrentOwner),
+          openFixedDirectory(rootDir, isCurrentOwner),
         ),
       clearChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>

@@ -112,7 +112,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
   });
 
-  it('reports a missing legacy directory without creating one', async () => {
+  it('reports when Main cannot open the fixed legacy directory', async () => {
     vi.mocked(window.electronAPI.cindyMediaStorage.openLegacyImagesDir).mockResolvedValue({
       opened: false,
     });

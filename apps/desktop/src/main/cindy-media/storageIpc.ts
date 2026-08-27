@@ -43,7 +43,7 @@ export interface StorageIpcDeps {
   db?: ledger.LedgerDb;
   /** 测试注入死目录根;生产缺省 userData/cc-agent。 */
   legacyRootDir?: string;
-  /** Fixed-purpose directory opener. It returns false when the legacy directory is absent. */
+  /** Fixed-purpose directory opener. It returns false when the fixed path is not a directory. */
   openLegacyImagesDir?: () => Promise<boolean>;
   /** Delete only the fixed legacy image cache directory; no ledger or message lookup. */
   clearLegacyImagesDir?: () => Promise<void>;
