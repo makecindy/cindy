@@ -158,13 +158,25 @@ function rewriteDataUrisInText(text: string): string {
  * 超大 data URI 不能留在 image_url 里：Responses 会按 URL 校验，占位字符串会 400。
  * 结构化 input_image 改成 input_text；普通字符串输出才原位替换。
  */
+function isInputImageBlock(value: Record<string, unknown>): boolean {
+  return value.type === 'input_image' || value.type === 'inputImage';
+}
+
 function rewriteToolOutputValue(value: unknown): unknown {
   if (typeof value === 'string') return rewriteDataUrisInText(value);
   if (Array.isArray(value)) return value.map(rewriteToolOutputValue);
   if (!isRecord(value)) return value;
   const imageUrl = imageUrlFromBlock(value);
   if (imageUrl && isOversizedInlineDataUri(imageUrl)) {
-    return { type: 'input_text', text: omittedInlineImagePlaceholder(imageUrl.length) };
+    if (isInputImageBlock(value)) {
+      return { type: 'input_text', text: omittedInlineImagePlaceholder(imageUrl.length) };
+    }
+    const next: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'image_url' || key === 'imageUrl') continue;
+      next[key] = rewriteToolOutputValue(child);
+    }
+    return next;
   }
   const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
@@ -204,7 +216,6 @@ function addLineStats(stats: RolloutLiveTailStats, line: string): void {
   stats.tailBytes += lineBytes;
   if (hasUnsafeForkRolloutPayload(line)) {
     stats.unsafeLines += 1;
-    stats.strippedBytes += lineBytes;
     return;
   }
   const rewritten = rewriteOversizedToolOutputImages(line);
@@ -244,7 +255,8 @@ export function measureRolloutLiveTailBytesFromText(text: string): number {
 
 /** 是否有足够的可剥离证据，不把普通大文本历史误报为图片病。 */
 export function isOversizedLiveTailStats(stats: RolloutLiveTailStats): boolean {
-  return stats.tailBytes > CODEX_LIVE_TAIL_OVERSIZED_BYTES &&
+  return stats.rewrittenLines > 0 &&
+    stats.tailBytes > CODEX_LIVE_TAIL_OVERSIZED_BYTES &&
     stats.strippedBytes >= stats.tailBytes / 2 &&
     stats.projectedTailBytes <= CODEX_PROJECTED_LIVE_TAIL_MAX_BYTES;
 }

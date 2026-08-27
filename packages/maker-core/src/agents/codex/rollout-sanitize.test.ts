@@ -112,6 +112,25 @@ describe('rewriteOversizedToolOutputImages', () => {
       `[cindy-omitted-inline-image chars=${uri.length}] image generated successfully`,
     );
   });
+
+  it('keeps sibling metadata when an oversized image_url is not an input_image block', () => {
+    const uri = bigPngDataUri();
+    const line = JSON.stringify({
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'shot',
+        output: {
+          type: 'tool_meta',
+          caption: 'login screen',
+          image_url: uri,
+        },
+      },
+    });
+    const out = JSON.parse(rewriteOversizedToolOutputImages(line));
+    expect(out.payload.output).toEqual({ type: 'tool_meta', caption: 'login screen' });
+    expect(JSON.stringify(out)).not.toContain(';base64,');
+    expect(JSON.stringify(out)).not.toMatch(/"image_url":"\[cindy-omitted/);
+  });
 });
 
 describe('sanitizeCodexForkRollout', () => {
@@ -189,6 +208,20 @@ describe('live-tail classification', () => {
     ].join('\n');
     const stats = measureRolloutLiveTailStatsFromText(text);
     expect(stats.tailBytes).toBeGreaterThan(CODEX_LIVE_TAIL_OVERSIZED_BYTES);
+    expect(stats.strippedBytes).toBe(0);
+    expect(isOversizedLiveTailStats(stats)).toBe(false);
+  });
+
+  it('does not treat reasoning-heavy tails as an image problem', () => {
+    const blob = 'g'.repeat(CODEX_LIVE_TAIL_OVERSIZED_BYTES + 1);
+    const text = [
+      compactBoundary(),
+      JSON.stringify({ payload: { type: 'reasoning', encrypted_content: blob } }),
+    ].join('\n');
+    const stats = measureRolloutLiveTailStatsFromText(text);
+    expect(stats.tailBytes).toBeGreaterThan(CODEX_LIVE_TAIL_OVERSIZED_BYTES);
+    expect(stats.unsafeLines).toBe(1);
+    expect(stats.rewrittenLines).toBe(0);
     expect(stats.strippedBytes).toBe(0);
     expect(isOversizedLiveTailStats(stats)).toBe(false);
   });
