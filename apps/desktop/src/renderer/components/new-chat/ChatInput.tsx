@@ -6676,7 +6676,6 @@ export function ChatInput({
         // 那一路会被当成成功,后续持久化照跑,而会话上的意图其实一个字没变。
         return await performAgentSwitch(intent.target, newModelId, null, {
           ...(intent.effort ? { effort: intent.effort as Effort } : {}),
-          ...(typeof intent.fastMode === 'boolean' ? { fastMode: intent.fastMode } : {}),
         });
       }
       let rollbackModelAfterPersistFailure: { model: string; seq: number } | null = null;
@@ -7202,7 +7201,6 @@ export function ChatInput({
               : intent.effort
                 ? { effort: intent.effort as Effort }
                 : {}),
-            ...(typeof intent.fastMode === 'boolean' ? { fastMode: intent.fastMode } : {}),
           },
         );
       }
