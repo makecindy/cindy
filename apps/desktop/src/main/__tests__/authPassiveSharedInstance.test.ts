@@ -189,6 +189,14 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(beforeEnsureReady.indexOf('adoptLocalProfileDatabase(')).toBeGreaterThan(
       dbPassiveGuard,
     );
+    const adoptionFailure = beforeEnsureReady.indexOf(
+      "if (localProfileMigration.status === 'failed') {",
+    );
+    expect(adoptionFailure).toBeGreaterThan(dbPassiveGuard);
+    expect(beforeEnsureReady.indexOf('throw new Error(', adoptionFailure)).toBeGreaterThan(
+      adoptionFailure,
+    );
+    expect(beforeEnsureReady).not.toContain('continuing with cloud database');
   });
 
   it('relogin marker:passive 不消费整机一份的 marker,也不删 primary 的 token', () => {

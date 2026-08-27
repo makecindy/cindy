@@ -7861,10 +7861,11 @@ app.on('ready', async () => {
         ),
       );
       if (localProfileMigration.status === 'failed') {
-        dbClientLog.warn('local profile database adoption failed; continuing with cloud database', {
+        dbClientLog.error('local profile database adoption failed; blocking cloud database open', {
           userId,
           error: localProfileMigration.error,
         });
+        throw new Error(`local profile database adoption failed: ${localProfileMigration.error}`);
       } else if (localProfileMigration.status === 'claimed-by-other-owner') {
         dbClientLog.warn('local profile database is already reserved for another cloud owner', {
           userId,
