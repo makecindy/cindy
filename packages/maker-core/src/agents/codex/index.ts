@@ -6862,7 +6862,7 @@ export class CodexAgent extends BaseAgent {
         armReconnectStall();
         return;
       }
-      if (reconnectStallTimer && isReconnectRecoveryEvent(event)) {
+      if (isReconnectRecoveryEvent(event)) {
         clearReconnectStall();
       }
     }

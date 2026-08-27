@@ -8,7 +8,7 @@
  * 变成"孤儿 jsonl"，可接受（数量极少，留给后续清理脚本）。
  */
 
-import { eq, and, lt, gt, asc, isNull, or, sql } from 'drizzle-orm';
+import { eq, and, lt, gt, asc, desc, isNull, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
@@ -901,8 +901,16 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     (max, message) => Math.max(max, Number(message.createdAt ?? 0)),
     0,
   );
-  if (reused && Number(reused.createdAt ?? 0) >= maxCreatedAt) {
-    return sessionToCamel({ ...reused, messageCount: 0 });
+  if (reused) {
+    const [latestCopied] = await db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .where(and(eq(messages.sessionId, reused.id), isNull(messages.rewindAt)))
+      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .limit(1);
+    if (Number(latestCopied?.createdAt ?? 0) >= maxCreatedAt) {
+      return sessionToCamel({ ...reused, messageCount: 0 });
+    }
   }
   const copyBeforeCreatedAt = maxCreatedAt + 1;
 

@@ -535,7 +535,8 @@ describe('forkSessionAtMessage', () => {
     });
     selectQueue.push([source]);
     selectQueue.push([existing]);
-    selectQueue.push([]); // source has not advanced past the child
+    selectQueue.push([]); // source has not advanced
+    selectQueue.push([]); // child copied boundary still covers source
 
     const result = await forkSessionStripEncrypted('src-session');
 
@@ -565,6 +566,7 @@ describe('forkSessionAtMessage', () => {
     selectQueue.push([source]);
     selectQueue.push([existing]);
     selectQueue.push([later]);
+    selectQueue.push([makeMessageRow({ id: 'copied-old', role: 'user', createdAt: 1000 })]);
     selectQueue.push([
       makeSourceRow({
         agentKind: 'codex',
@@ -614,6 +616,7 @@ describe('forkSessionAtMessage', () => {
     selectQueue.push([source]);
     selectQueue.push([older, newer]);
     selectQueue.push([makeMessageRow({ id: 'user-2', role: 'user', createdAt: 3000 })]);
+    selectQueue.push([makeMessageRow({ id: 'copied', role: 'user', createdAt: 3000 })]);
 
     const result = await forkSessionStripEncrypted('src-session');
 
