@@ -37,6 +37,7 @@ import type {
   HistoryRole,
 } from '@cindy/mcps';
 
+import type { HistoryAgentKind } from './chatHistoryReader';
 import { getDbClient } from './client/current';
 import { messages as messagesTable, sessions as sessionsTable } from './schema';
 import { messageToCamel } from './mapper';
@@ -86,7 +87,12 @@ interface HitMeta {
 
 type SearchSessionStatus = 'active' | 'archived' | 'deleted';
 
-interface SearchChatHistoryEngineArgs extends SearchChatHistoryArgs {
+interface SearchChatHistoryEngineArgs extends Omit<SearchChatHistoryArgs, 'agentKind'> {
+  /**
+   * 桌面端会话搜索可按 grok-build 过滤;MCP wire 契约的 agentKind 只有三种,是这里的
+   * 真子集,工具层照旧直接传。过滤值就是 sessions.agent_kind 的存储形态。
+   */
+  agentKind: HistoryAgentKind | null;
   /**
    * Optional host-side filters for product entry points that should only expose
    * desktop-visible conversations. MCP callers omit these and keep the original

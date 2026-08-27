@@ -102,6 +102,7 @@ describe('主题注册表 · 引擎徽标标识色', () => {
     'engine-badge-cc': '#d97757',
     'engine-badge-codex': '#7a9dff',
     'engine-badge-pi': '#a78bfa',
+    'engine-badge-grok-build': '#6b7280',
   } as const;
 
   it.each(Object.entries(ENGINE_BADGE_TOKENS))(

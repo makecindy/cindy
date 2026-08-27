@@ -31,6 +31,7 @@ describe('buildNoProviderMessage (pi first-class)', () => {
       'claude-code': [],
       codex: [],
       pi: [snap('Cindy AI')],
+      'grok-build': [],
     });
     expect(msg).toContain('Pi(已连接:Cindy AI)');
   });

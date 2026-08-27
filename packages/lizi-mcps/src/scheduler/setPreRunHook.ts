@@ -19,6 +19,8 @@
 
 import { z } from 'zod';
 
+import type { AgentKind } from '@cindy/maker-core';
+
 import { withScheduler } from './_shared.js';
 import type { SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
@@ -88,7 +90,9 @@ export function registerScheduleSetPreRunHookTool(
         let currentCommand: string | undefined;
         let currentTimeoutMs: number | undefined;
         let providerId: string | undefined;
-        let agentKind: 'codex' | 'claude-code' | 'pi' | undefined;
+        // schedule.agentKind 由宿主写入,这里只透传;类型跟 maker-core 的 AgentKind 走,
+        // 不再自己抄一份三档字面量(抄漏一档就是本行原来的编译错误)。
+        let agentKind: AgentKind | undefined;
         let model: string | undefined;
         if (scheduleId) {
           const schedule = await scheduler.get(scheduleId);

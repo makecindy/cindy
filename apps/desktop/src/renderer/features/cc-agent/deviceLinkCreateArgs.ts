@@ -23,8 +23,8 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
 export interface DeviceLinkCreateParams {
-  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi'(persistedAgentKind)。 */
-  agentKind: 'cc' | 'codex' | 'pi';
+  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi' | 'grok-build'(persistedAgentKind)。 */
+  agentKind: 'cc' | 'codex' | 'pi' | 'grok-build';
   /**
    * 被控端上的项目目录。缺省 / 空白 = 在该设备上建**不绑项目的 standalone dialogue**,
    * workspaceKind 随之派生为 'dialogue',运行目录由被控端分配。
@@ -56,7 +56,7 @@ export interface DeviceLinkCreateParams {
 }
 
 export interface DeviceLinkCreateArgs {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   /** 仅远程 worktree 流程出现(与 worktree:create 登记的绑定同 id)。 */
   id?: string;
   /** 仅项目会话出现;dialogue 不带此字段(被控端自行分配运行目录)。 */
@@ -111,7 +111,7 @@ export interface DeviceLinkSubmissionCandidate {
 }
 
 export interface DeviceLinkSubmissionParams {
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'grok-build';
   workingDir?: string;
   id?: string;
   extraDirs?: string[];
@@ -217,7 +217,7 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     // 侧边栏按这条时间轴排序,新会话该立刻浮到顶部。
     userSendAt: p.nowIso,
     status: 'active',
-    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
+    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi' | 'grok-build'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
     extraDirs: p.args.extraDirs ?? [],
     createdAt: p.nowIso,

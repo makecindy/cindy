@@ -82,6 +82,8 @@ const providerRouting = (
         'pi-model': { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
       },
     }],
+    // grok-build 走本机 grok CLI,没有可路由的供应商。
+    'grok-build': [],
   },
   resolveDefaultProviderIdForModel: (agent: AgentKind) => defaults[agent] ?? (
     agent === 'claude-code' ? 'anthropic' : agent === 'codex' ? 'openai' : 'xd'
@@ -311,6 +313,7 @@ describe('resolveSendToSessionExecutionConfig', () => {
             },
           }],
           pi: [],
+          'grok-build': [],
         },
         resolveDefaultProviderIdForModel: () => 'xd',
       },

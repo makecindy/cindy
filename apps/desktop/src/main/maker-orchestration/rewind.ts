@@ -184,6 +184,12 @@ async function loadRewindContext(
   if (makerSession.isTurnRunning()) {
     throw rewindError('SESSION_RUNNING', '会话进行中，无法回滚');
   }
+  // grok-build 的 capabilities 里 rewind / fork 都是 supported: false(ACP 没有
+  // checkpoint / rollback 原语)。这里 fail-closed 拦下,否则下面的三元会把它当
+  // 'claude-code',走 Claude checkpoint 分支回滚一个根本没有 checkpoint 的会话。
+  if (makerSession.agentKind === 'grok-build') {
+    throw rewindError('REWIND_UNSUPPORTED_HISTORY', 'Grok Build 会话不支持回滚');
+  }
   const agentKind = makerSession.agentKind === 'codex'
     ? 'codex'
     : makerSession.agentKind === 'pi'

@@ -1,3 +1,5 @@
+import type { DbAgentKind } from './agentKindConversion';
+
 /**
  * A scheduler-facing snapshot of a session reference.
  *
@@ -10,5 +12,5 @@ export interface SessionReference {
   state: 'available' | 'deleted' | 'missing';
   status?: 'active' | 'archived' | 'deleted';
   title?: string;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: DbAgentKind;
 }

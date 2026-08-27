@@ -55,6 +55,7 @@ import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import { commitMessageMediaRefs } from './cindy-media/chatAttachments.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
+import type { DbAgentKind } from '../shared/agentKindConversion.js';
 import { capToolResultTextForPersist } from '../shared/toolResultPersistCap.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
@@ -154,13 +155,13 @@ type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>
  * session.agent_kind 只代表"当前引擎",历史行的 agent_meta 必须按写入时引擎解析。
  * clearSessionPersistState 时清理。
  */
-const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
+const dbAgentKindBySession = new Map<string, DbAgentKind>();
 
-export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
+export function noteSessionAgentKind(sessionId: string, dbAgentKind: DbAgentKind): void {
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 
-export function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null {
+export function getSessionDbAgentKind(sessionId: string): DbAgentKind | null {
   return dbAgentKindBySession.get(sessionId) ?? null;
 }
 

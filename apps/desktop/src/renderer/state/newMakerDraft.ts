@@ -463,6 +463,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
+      'grok-build': sanitizeVendorPrefs(lastByVendorRaw['grok-build'], 'grok-build'),
     },
     modelChosenByVendor,
     defaultTupleCustomized,

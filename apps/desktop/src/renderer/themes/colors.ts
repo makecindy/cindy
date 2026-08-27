@@ -1084,7 +1084,8 @@ registerColor('fast-accent', {
 // 各自来源:
 //   · cc    = Anthropic 陶土橙,与 ClaudeMark 的 brand variant 同一支色;
 //   · codex = Codex 官方渐变的中段蓝(CodexMark brand 的 0.5 stop);
-//   · pi    = 上游无官方品牌色,取一支与前两者可区分的紫(统一选择器设计稿 v7)。
+//   · pi    = 上游无官方品牌色,取一支与前两者可区分的紫(统一选择器设计稿 v7);
+//   · grok-build = 上游品牌是黑白单色,取中性石墨灰,避免与前三支撞色。
 // 徽标底色(14%)与描边(30%)由组件用 color-mix 从**同一个 var** 派生,PiMark 的
 // currentColor 也接同一个 var —— TS 侧不再持有这三个 hex,不会出现「组件拿常量、
 // 主题拿 token」两条路各画各的。
@@ -1100,6 +1101,10 @@ registerColor('engine-badge-pi', {
   light: '#a78bfa',
   dark: '#a78bfa',
 }, 'Pi 引擎徽标色 — 自选紫,上游无官方品牌色(light/dark 同值)');
+registerColor('engine-badge-grok-build', {
+  light: '#6b7280',
+  dark: '#6b7280',
+}, 'Grok Build 引擎徽标色 — 上游品牌为黑白单色,取一支与前三支可区分的中性石墨灰(light/dark 同值)');
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',

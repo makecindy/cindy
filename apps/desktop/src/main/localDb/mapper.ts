@@ -41,6 +41,7 @@ import type {
   ScriptCapability,
   PreRunHookRunResult,
 } from '@cindy/maker-scheduler';
+import type { DbAgentKind } from '../../shared/agentKindConversion.js';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
@@ -435,7 +436,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: DbAgentKind | null;
     createdAt?: number;
   },
   now: number,

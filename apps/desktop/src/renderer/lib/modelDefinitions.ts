@@ -29,7 +29,7 @@ export interface ModelDefinition {
    * 解耦)。缺省 = 不作为默认。getDefaultModelForVendor / newSessionDefaultModelId 据它选默认;
    * Pi 只接受自己的 v3 标记，不借用其它 Agent 的默认策略。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'grok-build')[];
 }
 
 function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build'): ModelDefinition {

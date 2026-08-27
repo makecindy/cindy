@@ -113,6 +113,9 @@ export function isRegistryTombstoneForConsumer(
   if (agent === 'pi') {
     return piRegistryMatch(registry, providerId, modelId)?.entry.status === 'retired';
   }
+  // Grok Build is outside the model plane: it ships one built-in model and no provider
+  // routing, so no Registry entry can ever name it and nothing can be tombstoned for it.
+  if (agent === 'grok-build') return false;
   const registryAgent =
     policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent) ? agent : null;
   if (!registryAgent) return false;

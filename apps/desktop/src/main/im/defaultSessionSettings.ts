@@ -25,6 +25,8 @@ import {
 import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
+  isImDefaultAgentKind,
+  type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
 } from '../../shared/imDefaultSettings.js';
@@ -72,7 +74,10 @@ export async function resolveImSessionDefaults(
   const requestedSettings = raw.agents[requestedAgent];
   const model = pickModel(requestedAgent, requestedSettings, config, providers);
   const agentKind = model.agentKind;
-  const agentSettings = raw.agents[agentKind] ?? requestedSettings;
+  // IM 默认设置只为可选的三个 agent 存 per-agent 拷贝;渠道配置把会话落到目录之外的
+  // agent(grok-build)时,沿用请求 agent 的那份,来源/档位随后仍按落地模型 reconcile。
+  const agentSettings =
+    (isImDefaultAgentKind(agentKind) ? raw.agents[agentKind] : undefined) ?? requestedSettings;
   // 先定来源再定 effort:effort 支持是 per-(来源, 模型) 的,保存的来源被停用改道后,
   // 必须按**最终落地来源**的拷贝 reconcile —— 按第一份 connected 拷贝(可能正是那份
   // 停用拷贝)算出的档位,启用替代来源未必支持,直建会话会被上游拒
@@ -122,7 +127,8 @@ export async function resolveDefaultProviderIdForModel(
 }
 
 function pickModel(
-  requestedAgent: AgentKind,
+  // 请求 agent 恒来自 IM 默认设置(三选一);兜底才可能落到渠道配置的其它 agent。
+  requestedAgent: ImDefaultAgentKind,
   settings: ImDefaultAgentSettings,
   config: ImOrchestratorConfig,
   providers: ProviderView[] | null,

@@ -30,12 +30,18 @@ export type UnifiedEngine = SelectableVendor;
 
 /** vendor → AgentKind(查目录 / 能力 / 记忆时用)。 */
 export function agentKindOfEngine(engine: UnifiedEngine): AgentKind {
-  return engine === 'cc' ? 'claude-code' : engine === 'codex' ? 'codex' : 'pi';
+  if (engine === 'cc') return 'claude-code';
+  if (engine === 'codex') return 'codex';
+  if (engine === 'grok-build') return 'grok-build';
+  return 'pi';
 }
 
 /** AgentKind → vendor(落 store / draft 时用)。未知值回落 cc,与既有 sanitize 方向一致。 */
 export function engineOfAgentKind(agent: AgentKind): UnifiedEngine {
-  return agent === 'codex' ? 'codex' : agent === 'pi' ? 'pi' : 'cc';
+  if (agent === 'codex') return 'codex';
+  if (agent === 'pi') return 'pi';
+  if (agent === 'grok-build') return 'grok-build';
+  return 'cc';
 }
 
 /**

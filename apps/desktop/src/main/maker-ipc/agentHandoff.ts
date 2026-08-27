@@ -13,8 +13,21 @@
 
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
-/** DB 层引擎标识(sessions.agent_kind / messages.agent_kind 的值域)。 */
-export type DbAgentKind = 'cc' | 'codex' | 'pi';
+import type { DbAgentKind } from '../../shared/agentKindConversion.js';
+
+/** DB 层引擎标识(sessions.agent_kind / messages.agent_kind 的值域),正本在 shared。 */
+export type { DbAgentKind };
+
+/**
+ * 交接 framing 与边界卡展示用的引擎名。放在这里(而不是各调用点自己 ternary)是因为
+ * 漏一个分支就会把别家引擎的会话写成 Claude Code —— 新增 agent 只改这一处。
+ */
+export function agentEngineLabel(dbKind: DbAgentKind): string {
+  if (dbKind === 'codex') return 'Codex';
+  if (dbKind === 'pi') return 'Pi';
+  if (dbKind === 'grok-build') return 'Grok Build';
+  return 'Claude Code';
+}
 
 /** 构造交接文本所需的最小消息投影(content 已 JSON.parse,即 camel Message.content)。 */
 export interface HandoffSourceMessage {

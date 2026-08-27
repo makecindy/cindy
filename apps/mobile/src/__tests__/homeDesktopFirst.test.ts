@@ -271,7 +271,9 @@ describe('mobile home desktop-first surface', () => {
     expect(providerMarkSource).not.toContain('CLAUDE_AGENT_PATH');
     expect(providerMarkSource).not.toContain('CODEX_AGENT_FLOWER_PATH');
     expect(vendorIconSource).toContain("import { MobileAgentMark } from './MobileAgentMark';");
-    expect(vendorIconSource).toContain("agentKind={vendor === 'codex' || vendor === 'pi' ? vendor : 'claude-code'}");
+    expect(vendorIconSource).toContain(
+      "agentKind={vendor === 'codex' || vendor === 'pi' || vendor === 'grok-build' ? vendor : 'claude-code'}",
+    );
     expect(vendorIconSource).not.toContain('viewBox="136 137 282 158"');
     expect(vendorIconSource).not.toContain('transform="translate(');
     expect(vendorIconSource).toContain('Easing.inOut(Easing.ease)');

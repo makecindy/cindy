@@ -113,6 +113,11 @@ type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 
 const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
 
+/** grok-build 不在本面板:它是本机 CLI,没有自定义 provider / baseUrl 可配。 */
+function isDialogAgentKind(value: string): value is DialogAgentKind {
+  return (AGENTS as string[]).includes(value);
+}
+
 const VISIBLE_AGENTS: DialogAgentKind[] = AGENTS;
 
 const DIALOG_FOCUSABLE_SELECTOR = [
@@ -784,7 +789,7 @@ export function CustomProviderDialog({
       // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
       // 卡死报错却找不到对应输入框(review P1)。
       setWindowDrafts({});
-      const first = configuredPresetAgents(p)[0];
+      const first = configuredPresetAgents(p).find(isDialogAgentKind);
       if (first) setActiveTab(first);
     },
     [i18n.language, setRtSynced],
@@ -1484,8 +1489,8 @@ export function CustomProviderDialog({
     for (const [draftKey, draftText] of Object.entries(windowDrafts)) {
       if (isCommittableWindowText(draftText)) continue;
       const sep = draftKey.lastIndexOf(':');
-      const draftAgent = draftKey.slice(0, sep) as AgentKind;
-      if (!VISIBLE_AGENTS.includes(draftAgent)) continue;
+      const draftAgent = draftKey.slice(0, sep);
+      if (!isDialogAgentKind(draftAgent) || !VISIBLE_AGENTS.includes(draftAgent)) continue;
       // 该 runtime 未配置 baseUrl、或该行 id/name 为空:两者都会在下面序列化时
       // 被丢弃,不会写进最终配置,草稿再非法也不该挡住一个原本有效的保存
       // (review P1)。

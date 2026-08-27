@@ -25,6 +25,7 @@
 import { BrowserWindow } from 'electron';
 import { and, count, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 
+import { dbToMakerAgentKind } from '../shared/agentKindConversion.js';
 import { getMaker } from './maker-host/index.js';
 import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
 import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
@@ -316,10 +317,9 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     const inactiveMs = Date.now() - (session.userSendAt ?? session.updatedAt);
     const tier = pickTier({ inactiveMs, messageCount, isScheduled });
 
-    const agentKind =
-      session.agentKind === 'codex' || session.agentKind === 'pi'
-        ? session.agentKind
-        : 'claude-code';
+    // 走映射正本:就地 ternary 会把新引擎(grok-build)当成 claude-code,摘要就跑去了
+    // 错的 oneShot 兜底(agentSupportsOneShot 的判定也随之失真)。
+    const agentKind = dbToMakerAgentKind(session.agentKind);
     const prompt = SUMMARY_PROMPT(session.title, userMsg, assistantMsg, tier);
     // 模型走系统统一配置:优先用"轻量任务模型链"(utility-model,与起标题同源,
     // 由 getUtilityModelChainProfiles 决定),配置缺失/不可用时再回退到 agent 自带的

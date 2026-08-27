@@ -16,8 +16,9 @@
 import { cn } from '@/lib/utils';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { GrokBuildMark } from '@/components/icons/GrokBuildMark';
 
-export type VendorIconKind = 'cc' | 'codex' | 'pi';
+export type VendorIconKind = 'cc' | 'codex' | 'pi' | 'grok-build';
 
 /**
  * agentKind → VendorIcon vendor 的唯一映射。所有渲染 agent 身份图标的调用点
@@ -25,7 +26,10 @@ export type VendorIconKind = 'cc' | 'codex' | 'pi';
  * 吞成 Claude 脸,2026-07-30 实测 bug)。兼容 'claude-code' 别名与 null。
  */
 export function agentKindToVendor(kind: string | null | undefined): VendorIconKind {
-  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+  if (kind === 'codex') return 'codex';
+  if (kind === 'pi') return 'pi';
+  if (kind === 'grok-build') return 'grok-build';
+  return 'cc';
 }
 
 interface VendorIconProps {
@@ -59,6 +63,8 @@ export function VendorIcon({
     <span className={wrapperClassName}>
       {vendor === 'codex' ? (
         <CodexMark size={size} />
+      ) : vendor === 'grok-build' ? (
+        <GrokBuildMark size={size} />
       ) : vendor === 'pi' ? (
         <span
           aria-hidden

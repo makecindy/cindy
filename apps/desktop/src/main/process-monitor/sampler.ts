@@ -69,6 +69,7 @@ const AGENT_KIND_TO_USAGE_KIND: Record<MonitoredAgentKind, ProcessUsageKind> = {
   claude: 'agent-claude',
   codex: 'agent-codex',
   pi: 'agent-pi',
+  'grok-build': 'agent-grok-build',
 };
 
 export interface ProcessMonitorSampler {

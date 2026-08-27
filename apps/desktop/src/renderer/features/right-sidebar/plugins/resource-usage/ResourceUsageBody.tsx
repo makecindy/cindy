@@ -40,12 +40,14 @@ const KIND_ICON: Record<ProcessUsageEntry['kind'], LucideIcon> = {
   utility: Cog,
   'agent-claude': Bot,
   'agent-codex': Bot,
+  'agent-grok-build': Bot,
   'agent-pi': Bot,
 };
 
 const AGENT_NAME: Record<string, string> = {
   'agent-claude': 'Claude Code',
   'agent-codex': 'Codex',
+  'agent-grok-build': 'Grok Build',
   'agent-pi': 'Pi',
 };
 

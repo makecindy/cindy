@@ -52,7 +52,9 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
             modelRegistry,
             provider.id,
             model.id,
-            agent === 'pi' ? undefined : agent,
+            // Registry routes only key claude-code/codex; Pi is client-projected and
+            // Grok Build has no provider routing, so both look up agent-agnostically.
+            agent === 'pi' || agent === 'grok-build' ? undefined : agent,
           );
           return matched ? [[model.id, matched.entry.id]] : [];
         }),

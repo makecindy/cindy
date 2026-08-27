@@ -585,7 +585,11 @@ import {
   runPiPackageListIpcBoundary,
   runPiPackageMutationIpcBoundary,
 } from './piPackageMutationIpc.js';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import {
+  dbToMakerAgentKind,
+  makerToDbAgentKind,
+  normalizeDbAgentKind,
+} from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import {
@@ -2073,7 +2077,11 @@ export function stopOrcaIdleWatcher(): void {
   idleReleaseWatcher = null;
 }
 
-function requireAgentKind(value: unknown): AgentKind {
+/**
+ * 这些 wire 入口(capabilities / New Maker 草稿镜像等)只认三个可在控制端建草稿的
+ * agent;grok-build 是本机可选 harness,没有草稿 vendor 槽,继续按非法参数拒绝。
+ */
+function requireAgentKind(value: unknown): 'claude-code' | 'codex' | 'pi' {
   if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
@@ -6917,10 +6925,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : undefined;
         const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
         const builtins = maker.listAgentCommands(kind);
+        // Pi 包体系只存在于 Pi 会话;其它 agent(含 grok-build)按「不是本机普通 Pi
+        // 任务」传 null,与 shouldListPiPackageCommands 内部的 fail-closed 判定同义。
+        const piSessionMeta =
+          sessionMeta?.agentKind === 'pi' ? { ...sessionMeta, agentKind: 'pi' as const } : null;
         const mayListPackageCommands = shouldListPiPackageCommands(
           kind,
           sessionId !== undefined,
-          sessionMeta,
+          piSessionMeta,
           params.allowManagedPiPackagePreview !== false,
         );
         let packageCommands: Array<{ name: string; description: string }> = [];
@@ -12089,12 +12101,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      const cardAgentKind =
-        sessionKindRow?.agentKind === 'codex'
-          ? 'codex'
-          : sessionKindRow?.agentKind === 'pi'
-            ? 'pi'
-            : 'cc';
+      // 走映射正本:就地 ternary 会把 'cc' / 'codex' / 'pi' 之外的引擎写成 'cc',
+      // 重建卡片就挂到了错的引擎名下。
+      const cardAgentKind = normalizeDbAgentKind(sessionKindRow?.agentKind);
       broadcastSessionPatched(sessionId, {
         sdkSessionId: null,
         updatedAt: new Date(updatedAt).toISOString(),
@@ -16736,7 +16745,9 @@ async function checkWorkDirExists(
   // 或者 agent 真跑起来时由远端 codex 自己报 ENOENT)。这里直接放行。
   if (remoteHostId) return true;
   if (!workingDir?.trim()) return true;
-  const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  // 已知 agent 原样透传(否则 grok-build 会被写成 claude-code);只有老 session 的
+  // 未知来源才按注释里的 'claude-code' 兜底。
+  const source: AgentKind = agentKind ?? 'claude-code';
   // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
   // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
   const suppress = opts?.suppressMissingBroadcast === true;

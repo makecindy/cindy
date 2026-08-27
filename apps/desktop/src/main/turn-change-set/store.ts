@@ -81,7 +81,7 @@ interface TurnChangeActionStateV1 {
   states: Record<string, { workspaceState: TurnChangeWorkspaceState; updatedAt: number }>;
 }
 
-const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi']);
+const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi', 'grok-build']);
 const STATES = new Set<TurnChangeSetState>(['complete', 'partial']);
 const WORKSPACE_STATES = new Set<TurnChangeWorkspaceState>(['applied', 'undone']);
 const INCOMPLETE_REASONS = new Set<TurnChangeIncompleteReason>([

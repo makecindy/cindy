@@ -178,7 +178,7 @@ export function ErrorTailErrorBanner({
   errorText: string;
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'grok-build';
   remoteHostId?: string;
   deviceLinkDeviceId?: string | null;
   modelId?: string;

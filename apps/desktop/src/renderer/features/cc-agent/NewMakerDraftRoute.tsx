@@ -71,6 +71,7 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import {
   dbToMakerAgentKind,
   normalizeDbAgentKind,
+  type DbAgentKind,
   type MakerAgentKindWire,
 } from '../../../shared/agentKindConversion';
 import { getBranchName } from '../../../shared/managedWorktreeBranches';
@@ -771,8 +772,8 @@ export function NewMakerDraftRoute() {
    * 并清掉 —— 持久化之后那等于一切引擎只能记住最后一次选择。
    */
   const draftFavoriteAnchor = useDraftFavoriteAnchor(normalizeDbAgentKind(draft.vendor));
-  const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
-  const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
+  const persistedAgentKind: DbAgentKind = normalizeDbAgentKind(draft.vendor);
+  const authVendor: DbAgentKind = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
 
   // 品牌区跟随当前主题；icon / logo 的固定布局统一由 ThemeBrandLockup 负责。
@@ -2144,7 +2145,7 @@ export function NewMakerDraftRoute() {
   const carryDraftFavoriteAnchorToSession = useCallback(
     (
       newSessionId: string,
-      engine: 'cc' | 'codex' | 'pi',
+      engine: 'cc' | 'codex' | 'pi' | 'grok-build',
       model: string,
       providerId: string | null,
     ): void => {
@@ -2366,7 +2367,7 @@ export function NewMakerDraftRoute() {
   const handleRemoteProjectAdded = useCallback(
     async (target: RemoteProjectTarget) => {
       // vendor 由外层 VendorSegmentedSwitcher (draft.vendor) 单一决策 —— dialog 不再让用户选。
-      const draftVendor: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
+      const draftVendor: DbAgentKind = normalizeDbAgentKind(draft.vendor);
 
       if (target.kind === 'device-link') {
         // device-link:**不**像 SSH 立即建会话(会在被控端留空会话)。改为把当前草稿指向该被控
@@ -3847,7 +3848,10 @@ export function NewMakerDraftRoute() {
           // agent 启动时看到的工作区已是迁移后的状态。fail-soft：检测错误只 warn，不阻塞 send。
           try {
             const wd = effectiveWorkingDir;
-            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
+            // 迁移只覆盖 CLAUDE.md ↔ AGENTS.md 两家;pi 与 grok-build 没有对应的约定文件。
+            const crossAgentMigratable =
+              persistedAgentKind === 'cc' || persistedAgentKind === 'codex';
+            if (wd && !isRemoteProjectDraft && crossAgentMigratable) {
               const r = await crossAgentConvertService.detect(
                 wd,
                 persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,

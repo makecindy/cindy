@@ -19,9 +19,17 @@ import { sessionToCamel } from '../localDb/mapper';
 import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
 import { createBusinessSessionId } from '../sessionIds.js';
-import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import {
+  dbToMakerAgentKind,
+  normalizeDbAgentKind,
+  type DbAgentKind,
+} from '../../shared/agentKindConversion.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
-import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
+import {
+  agentEngineLabel,
+  buildHandoffText,
+  type HandoffSourceMessage,
+} from '../maker-ipc/agentHandoff.js';
 import {
   type ClaudeTranscriptAnchorIndex,
   loadClaudeTranscriptAnchorIndex,
@@ -61,8 +69,6 @@ function normalizePositiveInt(value: unknown): number {
 }
 
 const messageRowid = sql<number>`rowid`;
-
-type DbAgentKind = 'cc' | 'codex' | 'pi';
 
 interface MessagePosition {
   createdAt: number;
@@ -129,8 +135,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
       toolUseId: row.toolUseId,
     }));
   const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
-  const label =
-    opts.agentKind === 'codex' ? 'Codex' : opts.agentKind === 'pi' ? 'Pi' : 'Claude Code';
+  // 同引擎重建的交接 framing 用真实引擎名 —— 落到默认分支等于把会话写成 Claude Code。
+  const label = agentEngineLabel(opts.agentKind);
   const handoff = buildHandoffText(handoffMessages, {
     fromLabel: label,
     toLabel: label,
@@ -582,6 +588,12 @@ export async function forkSessionAtMessage(
     .limit(1);
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
+  }
+  // 与 rewind 同一条边界:grok-build 声明 fork: supported: false,不拦的话下面
+  // 「非 codex / pi 即 Claude」的分叉会拿 message-uuid 锚点去 fork 一个没有
+  // Claude transcript 的会话。
+  if (source.agentKind === 'grok-build') {
+    throw forkError('UNSUPPORTED_HISTORY', 'Grok Build 会话不支持 fork');
   }
 
   // 轮 26 发现 5 防御深度:远端会话 fork 由 SDK 层拒绝(pi forkSdkSession 抛

@@ -119,6 +119,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     await expect(mod.loadLocalCapabilitiesSnapshot()).resolves.toEqual([
       ['claude-code', caps('local:claude-code')],
       ['codex', caps('local:codex')],
+      ['grok-build', caps('local:grok-build')],
     ]);
     expect(getCapabilities).toHaveBeenCalledWith('pi');
   });
@@ -443,8 +444,8 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       mod.prefetchDeviceCapabilities('dev-1'),
       mod.prefetchDeviceCapabilities('dev-1'),
     ]);
-    // cc + codex + pi 各一次 = 3 次,而非 6 次
-    expect(invoke).toHaveBeenCalledTimes(3);
+    // cc + codex + pi + grok-build 各一次 = 4 次,而非 8 次
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 
   it('驱逐:evict 只清该设备,本地与其它设备保留', async () => {
