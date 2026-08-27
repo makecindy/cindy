@@ -40,6 +40,7 @@ import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
 import { AgentResourceSection } from './AgentResourceSection';
+import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSection';
 import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
@@ -371,6 +372,15 @@ export function SettingsView() {
                       aria-label={t('settings.sections.collaboration')}
                     >
                       <CollaborationSection />
+                    </section>
+
+                    {/* Section — 新建对话默认权限 (renderer 本地偏好, 非 IM server prefs)。 */}
+                    <section
+                      id="settings-new-chat-default-permission"
+                      className="py-[18px]"
+                      aria-label={t('settings.newChatDefaults.title')}
+                    >
+                      <NewChatDefaultPermissionSection />
                     </section>
 
                     {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}

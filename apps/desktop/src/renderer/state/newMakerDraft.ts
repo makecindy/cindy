@@ -35,6 +35,25 @@ function storageKey(): string {
   return activeDataOwnerId ? `${STORAGE_KEY}:${encodeURIComponent(activeDataOwnerId)}` : STORAGE_KEY;
 }
 
+/**
+ * 合法权限模式枚举(runtime 校验用)。renderer 的 PermissionMode 类型别名是 string(合法值
+ * 由 maker capabilities 运行时给出),但本地偏好持久化的权限值必须限定在已知档位上,
+ * 未知字符串会污染 vendor 草稿并透传到会话创建流程 —— 这里按官方式 maker-core 枚举做
+ * 白名单(见 packages/maker-core/src/types/common.ts 的 PermissionMode)。
+ */
+const VALID_PERMISSION_MODES = new Set([
+  'ask',
+  'default',
+  'acceptEdits',
+  'plan',
+  'auto',
+  'bypassPermissions',
+]);
+
+function isPermissionMode(value: unknown): value is PermissionMode {
+  return typeof value === 'string' && VALID_PERMISSION_MODES.has(value);
+}
+
 export interface VendorPrefs {
   model: string;
   effort: Effort;
@@ -154,6 +173,24 @@ export interface NewMakerDraft {
    * 也不得在已打标后改写 lastByVendor.model / providerId / effort。
    */
   modelChosenByVendor: Partial<Record<MakerVendor, boolean>>;
+  /**
+   * 「新建对话默认权限模式」全局 override（与 vendor 无关的根级字段）。
+   * null = 未自定义 = 跟随系统默认（seed auto / 自动审批）。只有用户显式设置才写入；
+   * 有效值 = 本字段 ?? seed 默认。与 worktreeEnabled/worktreePreferenceCustomized 同
+   * 一口径（「系统默认 + 显式 override」合成），持久化只存 override 不存完整默认。
+   * 联动：defaultVendorPrefs 的 permissionMode 种子在读到这里时优先返回本 override。
+   */
+  newChatDefaultPermissionMode: PermissionMode | null;
+  /**
+   * 用户是否**显式**选过该 vendor 的权限（新建页 picker）。
+   * 语义与 modelChosenByVendor 对应：lastByVendor 整个快照随任意 draft 写入落盘后，
+   * vendor 权限即使从没被用户碰过也会带上 sanitize 的种子默认值（auto）——仅凭
+   * lastByVendor 无法区分「真选过」和「默认回填」。全局 newChatDefaultPermissionMode
+   * 要能穿透「从未显式选过」的 vendor，必须靠这个标记：标记者保留显式值，未标记者读
+   * 全局 override（未设 override 时回落 seed auto）。patchVendorPrefs 收到显式
+   * permissionMode 时置 true；清除 override / 远程回写不得打标、不得清标。
+   */
+  permissionModeChosenByVendor: Partial<Record<MakerVendor, boolean>>;
 }
 
 /**
@@ -161,7 +198,11 @@ export interface NewMakerDraft {
  * 这里曾写死 codex → 'gpt-5.4',与 modelDefinitions 里写死的 'gpt-5.5' 漂移成两个值,而两者
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
-function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+function defaultVendorPrefs(vendor: MakerVendor, newChatDefaultPermissionMode: PermissionMode | null = null): VendorPrefs {
+  // 新建对话默认权限来自全局 override(见 NewMakerDraft.newChatDefaultPermissionMode)；
+  // 无 override(null)时保持历史 seed 默认 auto(自动审批)。只有用户显式选择并
+  // 持久化的 override 才放宽为完全访问 —— 不改变存量未自定义行为。
+  const permissionMode = newChatDefaultPermissionMode ?? 'auto';
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -169,7 +210,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
       model: 'claude-sonnet-5',
       effort: 'high',
       // 新 Pi 草稿默认走 Auto Review；完全访问只能由用户显式选择并持久化。
-      permissionMode: 'auto',
+      permissionMode,
       planMode: false,
       providerId: null,
     };
@@ -178,7 +219,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
     return {
       model: getDefaultModelForVendor('codex').id,
       effort: 'high',
-      permissionMode: 'auto',
+      permissionMode,
       planMode: false,
       providerId: null,
     };
@@ -188,7 +229,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
     effort: 'medium',
     // 三种 vendor 都保留 Auto-review 种子默认；已有用户落盘的
     // lastByVendor 记忆不受影响(sanitize 只在缺失 / 脏值时回落本默认)。
-    permissionMode: 'auto',
+    permissionMode,
     planMode: false,
     providerId: null,
   };
@@ -220,6 +261,8 @@ function makeDefault(): NewMakerDraft {
       codex: defaultVendorPrefs('codex'),
     },
     modelChosenByVendor: {},
+    newChatDefaultPermissionMode: null,
+    permissionModeChosenByVendor: {},
   };
 }
 
@@ -321,25 +364,13 @@ function sanitize(raw: unknown): NewMakerDraft {
     };
   })();
   const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };
-  const sanitizeVendorPrefs = (p: Partial<VendorPrefs> | undefined, v: MakerVendor): VendorPrefs => {
-    const fallback = defaultVendorPrefs(v);
-    if (!p || typeof p !== 'object') return fallback;
-    // 计划模式独立成一级开关后, 历史草稿里 permissionMode='plan' 迁移为
-    // planMode=true + 该 vendor 默认权限档(与 DB 迁移同语义)。
-    const legacyPlanPermission = p.permissionMode === 'plan';
-    return {
-      model: typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model,
-      effort: typeof p.effort === 'string' ? (p.effort as Effort) : fallback.effort,
-      permissionMode:
-        typeof p.permissionMode === 'string' && !legacyPlanPermission
-          ? (p.permissionMode as PermissionMode)
-          : fallback.permissionMode,
-      planMode: p.planMode === true || legacyPlanPermission,
-      // providerId: 接受非空 string 或 null;脏数据 / 缺字段一律落 null(跟随默认路由)。
-      providerId:
-        typeof p.providerId === 'string' && p.providerId.length > 0 ? p.providerId : null,
-    };
-  };
+  // 新建对话默认权限 override:只接受合法 PermissionMode 字符串,脏值 / 缺字段一律置 null
+  // (跟随系统默认)。与 worktreePreferenceCustomized 同理,持久化只存显式 override。
+  const newChatDefaultPermissionMode: PermissionMode | null = isPermissionMode(
+    r.newChatDefaultPermissionMode,
+  )
+    ? r.newChatDefaultPermissionMode
+    : null;
   // modelChosenByVendor: 老版本 localStorage 没有这个字段 → 空对象兜底
   //（语义上等于"全部 vendor 都没显式选过",调度三级回退会落到成本保守兜底)。
   const modelChosenRaw =
@@ -347,9 +378,67 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
+  // permissionModeChosenByVendor: 与 modelChosenByVendor 同口径,区分「显式选过权限」与
+  // 「种子回填」,让全局 newChatDefaultPermissionMode 能穿透「从未显式选过」的 vendor。
+  const permissionModeChosenRaw =
+    r.permissionModeChosenByVendor && typeof r.permissionModeChosenByVendor === 'object'
+      ? (r.permissionModeChosenByVendor as Record<string, unknown>)
+      : {};
+  const permissionModeChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
   for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
+    if (permissionModeChosenRaw[v] === true) permissionModeChosenByVendor[v] = true;
+    // 迁移:老数据没有 permissionModeChosenByVendor 标记,但某 vendor 权限值**非** auto
+    // (seed 默认)且非空 → 只可能是用户显式选择,补打标记,绝不被全局默认穿透。auto/null
+    // 才视为可能是种子回填,允许用户改全局默认时被 override 覆盖。
+    const legacyPerm = lastByVendorRaw[v] as Partial<VendorPrefs> | undefined;
+    const legacyPermValue = legacyPerm?.permissionMode;
+    if (
+      legacyPermValue != null &&
+      legacyPermValue !== 'auto' &&
+      legacyPermValue !== 'plan' &&
+      (typeof legacyPermValue === 'string' && VALID_PERMISSION_MODES.has(legacyPermValue))
+    ) {
+      permissionModeChosenByVendor[v] = true;
+    }
   }
+  const sanitizeVendorPrefs = (p: Partial<VendorPrefs> | undefined, v: MakerVendor): VendorPrefs => {
+    const fallback = defaultVendorPrefs(v, newChatDefaultPermissionMode);
+    if (!p || typeof p !== 'object') return fallback;
+    // 计划模式独立成一级开关后, 历史草稿里 permissionMode='plan' 迁移为
+    // planMode=true + 该 vendor 默认权限档(与 DB 迁移同语义)。
+    const legacyPlanPermission = p.permissionMode === 'plan';
+    // 该 vendor 是否显式选过权限:标记者保留持久化显式值;未标记者,当全局
+    // newChatDefaultPermissionMode 有 override(且持久化值正是 seed auto)时用它穿透,
+    // 否则回落 seed auto。已显式选过的 vendor 一律保留用户自己的选择,绝不被全局
+    // override 顶掉(2026-07 安全口径:不得静默放宽用户显式收紧的档)。
+    // 该 vendor 持久化权限是否合法;非法值(未知字符串)一律归一为 fallback,
+    // 避免脏值写进 vendor 草稿并透传给会话创建流程(Greptile Issue#2)。
+    const storedPermissionMode = isPermissionMode(p.permissionMode)
+      ? (p.permissionMode as PermissionMode)
+      : fallback.permissionMode;
+    const chosenPermission = permissionModeChosenByVendor[v] === true;
+    const effectivePermissionMode =
+      chosenPermission || newChatDefaultPermissionMode == null
+        ? !legacyPlanPermission
+          ? storedPermissionMode
+          : fallback.permissionMode
+        : // 未显式选过 + 设了全局 override:仅当持久化值确为 seed auto 时用 override 穿透,
+          // 其余非 auto 值(只能是显式选择)一律保留,绝不被全局 override 顶掉
+          // (2026-07 安全口径:不得静默放宽用户显式收紧的档)。
+          storedPermissionMode === 'auto'
+          ? newChatDefaultPermissionMode
+          : storedPermissionMode;
+    return {
+      model: typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model,
+      effort: typeof p.effort === 'string' ? (p.effort as Effort) : fallback.effort,
+      permissionMode: effectivePermissionMode,
+      planMode: p.planMode === true || legacyPlanPermission,
+      // providerId: 接受非空 string 或 null;脏数据 / 缺字段一律落 null(跟随默认路由)。
+      providerId:
+        typeof p.providerId === 'string' && p.providerId.length > 0 ? p.providerId : null,
+    };
+  };
   // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，
   // 可安全迁移为 override；旧 false 无法区分“默认快照”与“明确关闭”，按未自定义处理。
   const worktreePreferenceCustomized =
@@ -387,6 +476,8 @@ function sanitize(raw: unknown): NewMakerDraft {
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },
     modelChosenByVendor,
+    newChatDefaultPermissionMode,
+    permissionModeChosenByVendor,
   };
 }
 
@@ -626,12 +717,57 @@ export function setWorktreePreference(enabled: boolean): void {
   emit();
 }
 
+/**
+ * 设置「新建对话默认权限模式」的全局 override。
+ *
+ * 与 setWorktreePreference 同口径：只存显式 override；mode 传 null 表示清除 override、
+ * 回落到系统默认（seed auto / 自动审批）。只接受合法的 PermissionMode 字符串，
+ * 脏值丢弃不改。设置后对「从未显式选过权限」的 vendor 联动重算 lastByVendor 种子档，
+ * 已显式选过权限的 vendor 保留用户自己的选择。写入的是完整当前草稿快照。
+ */
+export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): void {
+  if (mode != null && !isPermissionMode(mode)) return;
+  const next: PermissionMode | null = mode;
+  // 只对「从未显式选过权限」的 vendor 联动重算种子档,让新默认立即生效(设为 null 时
+  // 回 auto)。已显式选过权限的 vendor(permissionModeChosenByVendor=true,或老数据迁移
+  // 时在 sanitize 被补打标)保留用户自己的选择,不被全局 override 顶掉 —— 否则升级用户
+  // 改全局默认会静默丢失原有权限档(如 acceptEdits 被放宽成 bypassPermissions)。
+  const chosen = currentDraft.permissionModeChosenByVendor ?? {};
+  const seedPermission = next ?? 'auto';
+  const lastByVendor = { ...currentDraft.lastByVendor };
+  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
+    const prefs = lastByVendor[v];
+    if (!prefs) continue;
+    if (chosen[v] !== true) {
+      lastByVendor[v] = { ...prefs, permissionMode: seedPermission };
+    }
+  }
+  const nextDraft: NewMakerDraft = {
+    ...currentDraft,
+    newChatDefaultPermissionMode: next,
+    lastByVendor,
+  };
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(storageKey(), JSON.stringify(nextDraft));
+      preferenceSyncFallback = null;
+    } catch {
+      preferenceSyncFallback = 'full-draft';
+    }
+  }
+  currentDraft = nextDraft;
+  emit();
+}
+
 export function patchDraft(patch: Partial<NewMakerDraft>): void {
   const normalizedPatch: Partial<NewMakerDraft> = { ...patch };
   // worktree 偏好只能经 setWorktreePreference 写入。把这条约束放在 store 边界，
   // 避免项目切换、草稿恢复或未来的通用 patch 调用方绕过「仅 checkbox 修改」契约。
   delete normalizedPatch.worktreeEnabled;
   delete normalizedPatch.worktreePreferenceCustomized;
+  // 新建对话默认权限 override 只能经 setNewChatDefaultPermissionMode 写入
+  // （同上：专用 setter 负责只存 override + 校验合法值，通用 patch 不得绕过）。
+  delete normalizedPatch.newChatDefaultPermissionMode;
   if ('workingDir' in normalizedPatch) {
     normalizedPatch.workingDir = normalizeDraftWorkingDir(normalizedPatch.workingDir);
   }
@@ -740,6 +876,7 @@ function patchVendorPrefsInternal(
   opts: { markModelChoice: boolean },
 ): void {
   const modelChosen = { ...currentDraft.modelChosenByVendor };
+  const permissionModeChosen = { ...currentDraft.permissionModeChosenByVendor };
   const nextPatch = { ...patch };
   if (typeof nextPatch.model === 'string' && nextPatch.model.length > 0) {
     if (opts.markModelChoice) {
@@ -748,6 +885,12 @@ function patchVendorPrefsInternal(
     }
     // markModelChoice=false 仍可写回当前活动模型(远程草稿 / 旧控制端 wire
     // 会带 modelId),但不得打标,也不得清掉已有标记。
+  }
+  // 用户在新建页显式切换权限档 → 打 permissionModeChosenByVendor 标记,下次新建
+  // 保留这次显式选择,不被全局 newChatDefaultPermissionMode 顶掉。远程回写
+  // (markModelChoice=false)不视为显式选择,不得打标。
+  if (typeof nextPatch.permissionMode === 'string' && opts.markModelChoice) {
+    permissionModeChosen[vendor] = true;
   }
   if (!opts.markModelChoice && modelChosen[vendor] === true) {
     const savedModel = currentDraft.lastByVendor[vendor].model;
@@ -766,6 +909,7 @@ function patchVendorPrefsInternal(
   currentDraft = {
     ...currentDraft,
     modelChosenByVendor: modelChosen,
+    permissionModeChosenByVendor: permissionModeChosen,
     lastByVendor: {
       ...currentDraft.lastByVendor,
       [vendor]: { ...currentDraft.lastByVendor[vendor], ...nextPatch },
