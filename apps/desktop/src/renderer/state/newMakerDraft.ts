@@ -870,12 +870,42 @@ export function markDefaultTupleCustomized(selectionCustomized = true): void {
 }
 
 /**
- * 「恢复推荐」只撤销 effort / Fast 造成的组合封锁。若用户还选过 Harness / 来源 / 模型，
- * selection marker 继续保留，后续登录或目录变化仍不得覆盖那次选择。
+ * 「恢复推荐」删除当前模型的旧草稿调档，并在所有 override 都已清空时撤销组合封锁。
+ *
+ * providerModelMemory / modelEnginePrefs 是独立 store，由调用方先删当前项、再把同步重读后的
+ * 汇总结果传进来。草稿内仍需在同一次写入里删除 legacy effort / Fast 键；否则 marker 虽清，
+ * 重启后残留记忆仍会把旧档顶回来。任一模型选择、其它模型调档或外部 override 仍存在时，
+ * defaultTupleCustomized 必须继续保护用户意图。
  */
-export function clearDefaultTupleTuningCustomization(): void {
-  if (!currentDraft.defaultTupleCustomized || currentDraft.defaultTupleSelectionCustomized) return;
-  currentDraft = { ...currentDraft, defaultTupleCustomized: false };
+export function clearDefaultTupleTuningCustomization(args: {
+  modelId: string;
+  hasExternalOverrides: boolean;
+}): void {
+  const nextEffortByModel = { ...currentDraft.effortByModel };
+  const nextFastModeByModel = { ...currentDraft.fastModeByModel };
+  const hadEffortOverride = args.modelId in nextEffortByModel;
+  const hadFastOverride = args.modelId in nextFastModeByModel;
+  delete nextEffortByModel[args.modelId];
+  delete nextFastModeByModel[args.modelId];
+
+  const hasSelectionOverride =
+    currentDraft.defaultTupleSelectionCustomized ||
+    Object.values(currentDraft.modelChosenByVendor).some(Boolean);
+  const hasRemainingDraftTuning =
+    Object.keys(nextEffortByModel).length > 0 || Object.keys(nextFastModeByModel).length > 0;
+  const shouldUnlock =
+    currentDraft.defaultTupleCustomized &&
+    !hasSelectionOverride &&
+    !hasRemainingDraftTuning &&
+    !args.hasExternalOverrides;
+  if (!hadEffortOverride && !hadFastOverride && !shouldUnlock) return;
+
+  currentDraft = {
+    ...currentDraft,
+    effortByModel: nextEffortByModel,
+    fastModeByModel: nextFastModeByModel,
+    ...(shouldUnlock ? { defaultTupleCustomized: false } : {}),
+  };
   scheduleWrite();
   emit();
 }

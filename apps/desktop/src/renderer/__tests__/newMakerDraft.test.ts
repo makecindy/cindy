@@ -121,15 +121,86 @@ describe('newMakerDraft store', () => {
       defaultTupleCustomized: true,
       defaultTupleSelectionCustomized: false,
     });
-    tuningOnly.clearDefaultTupleTuningCustomization();
+    tuningOnly.clearDefaultTupleTuningCustomization({
+      modelId: 'claude-sonnet-4-6',
+      hasExternalOverrides: false,
+    });
     expect(tuningOnly.getDraft().defaultTupleCustomized).toBe(false);
 
     tuningOnly.markDefaultTupleCustomized();
     tuningOnly.markDefaultTupleCustomized(false);
-    tuningOnly.clearDefaultTupleTuningCustomization();
+    tuningOnly.clearDefaultTupleTuningCustomization({
+      modelId: 'claude-sonnet-4-6',
+      hasExternalOverrides: false,
+    });
     expect(tuningOnly.getDraft()).toMatchObject({
       defaultTupleCustomized: true,
       defaultTupleSelectionCustomized: true,
+    });
+  });
+
+  it.each(['effort', 'fast'] as const)(
+    '当前默认模型只改 %s 时，恢复推荐清空旧记忆并允许后续默认变化',
+    async (kind) => {
+      const modelId = 'claude-sonnet-4-6';
+      const draft = await loadModule();
+      draft.markDefaultTupleCustomized(false);
+      if (kind === 'effort') draft.setEffortForModel(modelId, 'high');
+      else draft.setFastModeForModel(modelId, true);
+
+      draft.clearDefaultTupleTuningCustomization({
+        modelId,
+        hasExternalOverrides: false,
+      });
+      expect(draft.getDraft()).toMatchObject({
+        defaultTupleCustomized: false,
+        defaultTupleSelectionCustomized: false,
+        effortByModel: {},
+        fastModeByModel: {},
+      });
+      expect(
+        draft.applySuggestedDefaultTuple({
+          vendor: 'pi',
+          providerId: 'xai',
+          model: 'grok-4.6',
+          effort: 'high',
+        }),
+      ).toBe(true);
+
+      vi.resetModules();
+      const reloaded = await loadModule();
+      expect(reloaded.getDraft()).toMatchObject({
+        defaultTupleCustomized: false,
+        effortByModel: {},
+        fastModeByModel: {},
+      });
+    },
+  );
+
+  it('恢复当前项后仍有其它草稿或外部 override 时继续保护默认组合', async () => {
+    const draft = await loadModule();
+    draft.markDefaultTupleCustomized(false);
+    draft.setEffortForModel('claude-sonnet-4-6', 'high');
+    draft.setFastModeForModel('gpt-5.5', true);
+
+    draft.clearDefaultTupleTuningCustomization({
+      modelId: 'claude-sonnet-4-6',
+      hasExternalOverrides: false,
+    });
+    expect(draft.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      effortByModel: {},
+      fastModeByModel: { 'gpt-5.5': true },
+    });
+
+    draft.clearDefaultTupleTuningCustomization({
+      modelId: 'gpt-5.5',
+      hasExternalOverrides: true,
+    });
+    expect(draft.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      effortByModel: {},
+      fastModeByModel: {},
     });
   });
 
@@ -305,7 +376,10 @@ describe('newMakerDraft store', () => {
       defaultTupleCustomized: true,
       defaultTupleSelectionCustomized: false,
     });
-    clearDefaultTupleTuningCustomization();
+    clearDefaultTupleTuningCustomization({
+      modelId: 'grok-4.6',
+      hasExternalOverrides: false,
+    });
     expect(getDraft().defaultTupleCustomized).toBe(false);
   });
 
@@ -329,7 +403,10 @@ describe('newMakerDraft store', () => {
       defaultTupleCustomized: true,
       defaultTupleSelectionCustomized: true,
     });
-    clearDefaultTupleTuningCustomization();
+    clearDefaultTupleTuningCustomization({
+      modelId: 'grok-4.6',
+      hasExternalOverrides: false,
+    });
     expect(getDraft().defaultTupleCustomized).toBe(true);
   });
 

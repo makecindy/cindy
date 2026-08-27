@@ -2830,7 +2830,13 @@ export function NewMakerDraftRoute() {
         // 只调过 effort / Fast 的用户在记忆键被删后重新跟随产品默认；已有模型 / 来源 /
         // Harness 选择仍由 selection marker 保护。
         patchVendorPrefsPreservingModelChoice(selection.vendor, nextPrefs);
-        clearDefaultTupleTuningCustomization();
+        clearDefaultTupleTuningCustomization({
+          modelId: selection.modelId,
+          // resetStoredConfig 已同步删除当前行三类 override；这里重读完整 store，只有其它行也
+          // 没有留下用户配置时才允许后续授权 / 推荐变化重新应用产品默认。
+          hasExternalOverrides:
+            hasAnyModelEngineOverride() || hasAnyProviderModelOverride(),
+        });
       } else {
         markDefaultTupleCustomized();
         // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
