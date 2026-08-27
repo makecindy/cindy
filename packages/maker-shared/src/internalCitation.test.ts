@@ -94,7 +94,7 @@ describe('leaked model stop tokens', () => {
     expect(holdStandaloneStopTokenDelta(a, '<|eo')).toBeNull();
     expect(holdStandaloneStopTokenDelta(b, 'answer')).toBe('answer');
     expect(holdStandaloneStopTokenDelta(a, 's|>')).toBeNull();
-    expect(a).toEqual({ pending: '', emitted: false });
+    expect(a).toEqual({ pending: '<|eos|>', emitted: false });
     expect(b).toEqual({ pending: '', emitted: true });
   });
 
@@ -102,7 +102,8 @@ describe('leaked model stop tokens', () => {
     const buffer = { pending: '', emitted: false };
     const padded = `${' '.repeat(23)}<|eos|>`;
     expect(holdStandaloneStopTokenDelta(buffer, padded)).toBeNull();
-    expect(buffer).toEqual({ pending: '', emitted: false });
+    expect(buffer.emitted).toBe(false);
+    expect(buffer.pending.endsWith('<|eos|>')).toBe(true);
   });
 
   it('holds whitespace-only deltas without releasing a later leftover token', () => {
@@ -110,7 +111,8 @@ describe('leaked model stop tokens', () => {
     expect(holdStandaloneStopTokenDelta(buffer, ' '.repeat(23))).toBeNull();
     expect(buffer.pending).toBe(' '.repeat(23));
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
-    expect(buffer).toEqual({ pending: '', emitted: false });
+    expect(buffer.emitted).toBe(false);
+    expect(buffer.pending.trim()).toBe('<|eos|>');
   });
 
   it('keeps ordinary leading whitespace when later prose arrives', () => {
@@ -123,21 +125,22 @@ describe('leaked model stop tokens', () => {
     const buffer = { pending: '', emitted: false };
     expect(holdStandaloneStopTokenDelta(buffer, '<')).toBeNull();
     expect(holdStandaloneStopTokenDelta(buffer, '|eos|>')).toBeNull();
-    expect(buffer).toEqual({ pending: '', emitted: false });
+    expect(buffer).toEqual({ pending: '<|eos|>', emitted: false });
+  });
+
+  it('keeps a split leftover so later prose reconstructs the original text', () => {
+    const buffer = { pending: '', emitted: false };
+    expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
+    expect(holdStandaloneStopTokenDelta(buffer, 'answer')).toBe('<|eos|>answer');
   });
 
   it('drops a completed leftover so a second copy cannot flush it as prose', () => {
     const buffer = { pending: '', emitted: false };
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
-    expect(buffer).toEqual({ pending: '', emitted: false });
-    expect(holdStandaloneStopTokenDelta(buffer, 'answer')).toBe('answer');
-  });
-
-  it('does not glue a completed leftover onto later prose in the same stream', () => {
-    const buffer = { pending: '', emitted: false };
-    expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
-    expect(holdStandaloneStopTokenDelta(buffer, 'answer')).toBe('answer');
+    expect(buffer.emitted).toBe(false);
+    expect(buffer.pending.trim()).toBe('<|eos|><|eos|>');
+    expect(holdStandaloneStopTokenDelta(buffer, 'answer')).toBe('<|eos|><|eos|>answer');
   });
 
   it('still strips a split web citation after ordinary prose has been emitted', () => {

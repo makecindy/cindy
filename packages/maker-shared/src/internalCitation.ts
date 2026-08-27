@@ -92,8 +92,8 @@ function isIncompleteStopTokenPrefix(text: string): boolean {
 /**
  * Eat a leading run of known stop tokens and the whitespace around them.
  * Completed messages only disappear when nothing remains. The streaming
- * hold still drops recognized tokens from `pending` so a second copy
- * cannot flush the earlier leftover as prose.
+ * hold keeps a recognized run pending until later prose proves the block
+ * is not stop-control-only, then emits that original text.
  */
 function consumeLeadingStopControl(text: string): { remainder: string; consumedToken: boolean } {
   let index = 0;
@@ -149,11 +149,12 @@ export interface StandaloneStopTokenHold {
 
 /**
  * Hold leftover stop-token control until this stream has either completed
- * it or proven it is ordinary prose. Completed tokens are dropped from the
- * buffer so a later copy cannot flush the earlier leftover as visible text.
- * After visible prose starts, still hold an unfinished Web-citation tail
- * so split markers are not emitted raw. The buffer is per stream; callers
- * must not share it across concurrent text streams.
+ * it or proven it is ordinary prose. A recognized run stays pending so a
+ * later `answer` can still reconstruct `<|eos|>answer`; only a later copy
+ * of the same control run is dropped. After visible prose starts, still
+ * hold an unfinished Web-citation tail so split markers are not emitted
+ * raw. The buffer is per stream; callers must not share it across
+ * concurrent text streams.
  */
 export function holdStandaloneStopTokenDelta(
   buffer: StandaloneStopTokenHold,
@@ -161,9 +162,9 @@ export function holdStandaloneStopTokenDelta(
 ): string | null {
   const combined = buffer.pending + delta;
   if (!buffer.emitted) {
-    const { remainder, consumedToken } = consumeLeadingStopControl(combined);
+    const { remainder } = consumeLeadingStopControl(combined);
     if (remainder.length === 0 || isIncompleteStopTokenPrefix(remainder)) {
-      buffer.pending = consumedToken ? remainder : combined;
+      buffer.pending = combined;
       return null;
     }
   }

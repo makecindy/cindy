@@ -484,7 +484,7 @@ describe('Claude Code assistant text streaming contract', () => {
     ]);
     expect(ctx.turn.uiEmittedText).toBe('answer');
     expect(ctx.rt.streamStopTokenByKey.get('toolu-a:0')).toEqual({
-      pending: '',
+      pending: '<|eos|>',
       emitted: false,
     });
   });
@@ -525,7 +525,7 @@ describe('Claude Code assistant text streaming contract', () => {
     ]);
     expect(ctx.turn.uiEmittedText).toBe('先看一眼。');
     expect(ctx.rt.streamStopTokenByKey.get('__main__:0')).toEqual({
-      pending: '',
+      pending: '<|eos|>',
       emitted: false,
     });
   });
@@ -573,7 +573,7 @@ describe('Claude Code assistant text streaming contract', () => {
       { text: '先看一眼。', isFinal: false },
     ]);
     expect(ctx.rt.streamStopTokenByKey.get('__main__:1')).toEqual({
-      pending: '',
+      pending: '<|eos|>',
       emitted: false,
     });
   });
