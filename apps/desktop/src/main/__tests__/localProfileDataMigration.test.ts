@@ -227,7 +227,7 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
   });
 
-  it('persists the fallback marker before opening the exclusive target', async () => {
+  it('persists the fallback copying marker before opening the exclusive target', async () => {
     const { root } = await fixture();
     const source = path.join(root, 'cindy-local-v1.db');
     const target = path.join(root, 'cindy-owner-a.db');
@@ -262,10 +262,57 @@ describe('adoptLocalProfileDatabase', () => {
     });
     expect(JSON.parse(markerBeforeTargetClaim!)).toMatchObject({
       version: 1,
-      phase: 'claiming',
+      phase: 'copying',
     });
     expect(openSpy).toHaveBeenCalled();
     await expect(fs.access(pending)).rejects.toThrow();
+  });
+
+  it('recovers an empty target left after the fallback target claim was interrupted', async () => {
+    const { root } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const target = path.join(root, 'cindy-owner-a.db');
+    const pending = `${target}.local-profile-copy-pending`;
+    const sourceDb = createBetterSqliteDatabase(source);
+    sourceDb.exec('CREATE TABLE items (value TEXT NOT NULL)');
+    sourceDb.prepare('INSERT INTO items (value) VALUES (?)').run('local');
+    sourceDb.close();
+
+    const deps = createProductionLocalProfileDataMigrationDeps(root, 'cindy');
+    const fallbackDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        link: async () => {
+          throw Object.assign(new Error('hard links unsupported'), { code: 'EOPNOTSUPP' });
+        },
+      },
+    };
+    const originalOpen = originalFs.promises.open;
+    let interruptTargetOpen = true;
+    vi.spyOn(originalFs.promises, 'open').mockImplementation(async (...args) => {
+      const file = String(args[0]);
+      if (interruptTargetOpen && file === target && args[1] === 'wx') {
+        interruptTargetOpen = false;
+        await fs.writeFile(target, '');
+        throw Object.assign(new Error('process interrupted after target claim'), { code: 'EIO' });
+      }
+      return originalOpen.apply(originalFs.promises, args);
+    });
+
+    await expect(adoptLocalProfileDatabase('owner-a', fallbackDeps)).resolves.toMatchObject({
+      status: 'failed',
+    });
+    await expect(fs.readFile(pending, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      phase: 'copying',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('');
+
+    await expect(adoptLocalProfileDatabase('owner-a', fallbackDeps)).resolves.toMatchObject({
+      status: 'adopted',
+    });
+    await expect(fs.stat(target)).resolves.toMatchObject({ size: expect.any(Number) });
+    await expect(fs.readFile(pending, 'utf8')).rejects.toThrow();
   });
 
   it('does not reclaim an invalid marker while another process holds the migration lock', async () => {

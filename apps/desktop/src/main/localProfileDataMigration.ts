@@ -101,20 +101,35 @@ const realFs: LocalProfileDataMigrationFs = {
         // O_EXCL is the no-replace claim. The target is created before any
         // bytes are copied, so a competing cloud initializer can never leave
         // us with a partially-written winner that recovery might delete.
+        // The copying marker is durable before this path is exposed. If the
+        // process dies after wx creates an empty target, recovery can therefore
+        // identify and remove that owned-but-incomplete publication.
+        updatePendingDatabaseCopyMarker(pending, {
+          version: DB_COPY_PENDING_VERSION,
+          attemptId,
+          phase: 'copying',
+        });
         targetHandle = await fs.promises.open(target, 'wx', 0o600);
       } catch (error) {
         if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') {
+          // The target is authoritative when another initializer won the
+          // no-replace claim. Persist that outcome before best-effort cleanup
+          // so a restart can never treat this marker as our partial target.
+          try {
+            updatePendingDatabaseCopyMarker(pending, {
+              version: DB_COPY_PENDING_VERSION,
+              attemptId,
+              phase: 'raced',
+            });
+          } catch {
+            // Keep the original EEXIST as the authoritative result.
+          }
           // Cleanup is best effort and must never hide the original EEXIST,
           // because the existing target is authoritative.
           await fs.promises.rm(pending, { force: true }).catch(() => undefined);
         }
         throw error;
       }
-      updatePendingDatabaseCopyMarker(pending, {
-        version: DB_COPY_PENDING_VERSION,
-        attemptId,
-        phase: 'copying',
-      });
       const chunk = Buffer.allocUnsafe(1024 * 1024);
       let position = 0;
       for (;;) {
@@ -171,7 +186,7 @@ type LocalProfileMigrationLockDb = ReturnType<typeof createBetterSqliteDatabase>
 type PendingDatabaseCopyMarker = {
   version: typeof DB_COPY_PENDING_VERSION;
   attemptId: string;
-  phase: 'claiming' | 'copying' | 'published';
+  phase: 'claiming' | 'copying' | 'raced' | 'published';
 };
 
 type LocalProfileMigrationLockAttempt =
@@ -367,7 +382,10 @@ function parsePendingDatabaseCopyMarker(raw: string): PendingDatabaseCopyMarker 
       parsed.version !== DB_COPY_PENDING_VERSION ||
       typeof parsed.attemptId !== 'string' ||
       !parsed.attemptId ||
-      (parsed.phase !== 'claiming' && parsed.phase !== 'copying' && parsed.phase !== 'published')
+      (parsed.phase !== 'claiming' &&
+        parsed.phase !== 'copying' &&
+        parsed.phase !== 'raced' &&
+        parsed.phase !== 'published')
     ) {
       return null;
     }
@@ -725,6 +743,13 @@ async function recoverIncompleteDatabasePublication(
       }
     }
     await deps.fs.removeIfExists(pending);
+    return;
+  }
+
+  if (marker.phase === 'raced') {
+    // Another initializer won the no-replace claim. Never remove its target;
+    // retire only this process's bookkeeping marker.
+    await deps.fs.removeIfExists(pending).catch(() => undefined);
     return;
   }
 
