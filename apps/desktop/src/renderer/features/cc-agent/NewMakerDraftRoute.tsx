@@ -85,6 +85,7 @@ import {
   patchCurrentVendorPrefs,
   patchVendorPrefs,
   applySuggestedDefaultTuple,
+  fallbackUnavailableVendor,
   markDefaultTupleCustomized,
   resetDraftWorkspaceTargets,
   getFastModeForModel,
@@ -107,6 +108,7 @@ import {
 import {
   getProviderModelEffort,
   getProviderModelFast,
+  hasAnyProviderModelOverride,
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
@@ -1206,9 +1208,10 @@ export function NewMakerDraftRoute() {
   // 本地草稿用本机 providers。fast 判定统一交给 resolveFastSupported(不在控制端另写远程逻辑)。
   const { providers: localProviders, loading: localProvidersLoading } = useProviders();
   const modelEnginePrefsVersion = useModelEnginePrefsVersion();
-  const hasLegacyHarnessChoice = useMemo(
-    () => hasAnyModelEngineOverride(),
-    [modelEnginePrefsVersion],
+  const modelPresetVersion = useProviderModelMemoryVersion();
+  const hasLegacyDefaultChoice = useMemo(
+    () => hasAnyModelEngineOverride() || hasAnyProviderModelOverride(),
+    [modelEnginePrefsVersion, modelPresetVersion],
   );
   const suggestedDefaultTuple = useMemo(
     () =>
@@ -1226,7 +1229,7 @@ export function NewMakerDraftRoute() {
       !suggestedDefaultTuple ||
       effectiveDeviceLinkDeviceId ||
       draft.remoteHostId ||
-      hasLegacyHarnessChoice
+      hasLegacyDefaultChoice
     )
       return;
     applySuggestedDefaultTuple(suggestedDefaultTuple);
@@ -1234,7 +1237,7 @@ export function NewMakerDraftRoute() {
     suggestedDefaultTuple,
     effectiveDeviceLinkDeviceId,
     draft.remoteHostId,
-    hasLegacyHarnessChoice,
+    hasLegacyDefaultChoice,
   ]);
   const {
     providers: deviceProviders,
@@ -1379,7 +1382,6 @@ export function NewMakerDraftRoute() {
   // 首页是“下一次创建会话”的配置草稿,没有正在运行的当前模型需要保护。其它对话更新同一模型
   // 的全局预设后,即使该模型正显示在首页 trigger 上,也应立即采用新 effort / fast。真实会话仍
   // 由 CCAgentSessionView 的 live DB/runtime props 保护,不会走这里。
-  const modelPresetVersion = useProviderModelMemoryVersion();
   const localDraftEffort = useMemo<Effort>(() => {
     if (isDeviceLinkDraft || !effectiveSourceId) return chatPrefs.effort;
     const provider = providers.find((item) => item.id === effectiveSourceId);
@@ -2570,18 +2572,8 @@ export function NewMakerDraftRoute() {
   // 只在已加载可用性后收敛;fallback 一定可见,收敛一次即稳定(switchVendor 同值早返,不成环)。
   useEffect(() => {
     if (!availableAgentsLoaded) return;
-    if (!hiddenSwitcherVendors.includes(draft.vendor)) return;
-    const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
-      availableVendors.has(vendor),
-    );
-    if (fallback && fallback !== draft.vendor) switchVendor(fallback, currentPrefs);
-  }, [
-    availableAgentsLoaded,
-    hiddenSwitcherVendors,
-    availableVendors,
-    draft.vendor,
-    currentPrefs,
-  ]);
+    fallbackUnavailableVendor(availableVendors);
+  }, [availableAgentsLoaded, availableVendors]);
 
   // ─── 用户在 ChatInput 改 model/effort/permission 后,落进当前 vendor 的 prefs ──
   const patchActivePrefs = useCallback((patch: Partial<VendorPrefs>) => {

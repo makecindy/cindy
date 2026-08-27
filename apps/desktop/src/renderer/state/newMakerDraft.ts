@@ -356,12 +356,20 @@ function sanitize(raw: unknown): NewMakerDraft {
   for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
-  // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast，或当前 vendor 不是
-  // 历史硬默认 cc，都是足够强的用户意图证据。只有完全原始的 cc 种子接受新产品默认。
+  // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast 都是足够强的
+  // 用户意图证据。preserving 写回还可能只留下当前 cc 槽的 model,没有 marker / providerId,
+  // 这条旧模型同样必须保护。反过来,仅 vendor=codex/pi 不能算用户选择:旧版会在 cc
+  // 不可用时由系统自动 fallback 并持久化该 vendor。
+  const legacyCcModel =
+    vendor === 'cc' &&
+    lastByVendorRaw.cc &&
+    typeof lastByVendorRaw.cc === 'object' &&
+    typeof lastByVendorRaw.cc.model === 'string' &&
+    lastByVendorRaw.cc.model.length > 0;
   const legacyDefaultTupleCustomized =
     r.defaultTupleCustomized === undefined &&
     (Object.values(modelChosenByVendor).some(Boolean) ||
-      vendor !== 'cc' ||
+      legacyCcModel ||
       Object.keys(effortByModel).length > 0 ||
       Object.keys(fastModeByModel).length > 0 ||
       Object.values(lastByVendorRaw).some(
@@ -749,6 +757,24 @@ export function switchVendor(next: MakerVendor, currentPrefs: VendorPrefs): void
   };
   scheduleWrite();
   emit();
+}
+
+/**
+ * 当前草稿 Harness 不可用时按系统顺序回退。
+ *
+ * 必须在调用瞬间读取模块级 currentDraft:产品默认 effect 可能刚把 cc 改成 Pi,若这里继续
+ * 使用 React 上一轮 closure 的 cc/currentPrefs,会把 xAI→Pi 又覆盖成 Codex。系统回退不标记
+ * defaultTupleCustomized,因为它不是用户选择。
+ */
+export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVendor>): boolean {
+  const currentVendor = currentDraft.vendor;
+  if (availableVendors.has(currentVendor)) return false;
+  const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
+    availableVendors.has(vendor),
+  );
+  if (!fallback) return false;
+  switchVendor(fallback, currentDraft.lastByVendor[currentVendor]);
+  return true;
 }
 
 export interface SuggestedDefaultTuple {

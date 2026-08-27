@@ -191,6 +191,21 @@ export function subscribeProviderModelMemory(listener: () => void): () => void {
   return subscribe(listener);
 }
 
+/**
+ * 是否已有任一模型级预设 override。
+ *
+ * 旧版本可能只在本表留下 effort / Fast（或 thinking）而没有 newMakerDraft 的模型标记；
+ * 这些仍是明确的用户设置，连接态默认组合不得把它们覆盖掉。
+ */
+export function hasAnyProviderModelOverride(): boolean {
+  return Object.values(load()).some(
+    (slot) =>
+      Object.keys(slot.effortByModel).length > 0 ||
+      Object.keys(slot.fastByModel).length > 0 ||
+      Object.keys(slot.thinkingByModel).length > 0,
+  );
+}
+
 function persist(map: Record<string, ProviderMemory>): void {
   cache = map;
   emit();

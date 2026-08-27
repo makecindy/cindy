@@ -118,10 +118,10 @@ describe('newMakerDraft store', () => {
     expect(getDraft().defaultTupleCustomized).toBe(false);
   });
 
-  it('旧草稿的 Harness、模型、来源、思考深度或 Fast 选择会迁移成已自定义', async () => {
+  it('旧草稿的模型、来源、思考深度或 Fast 选择会迁移成已自定义', async () => {
     for (const saved of [
-      { vendor: 'codex' },
       { vendor: 'cc', modelChosenByVendor: { cc: true } },
+      { vendor: 'cc', lastByVendor: { cc: { model: 'claude-opus-4-8' } } },
       { vendor: 'cc', lastByVendor: { cc: { providerId: 'anthropic' } } },
       { vendor: 'cc', effortByModel: { 'claude-opus-5': 'high' } },
       { vendor: 'cc', fastModeByModel: { 'claude-opus-5': true } },
@@ -131,6 +131,73 @@ describe('newMakerDraft store', () => {
       const { getDraft } = await loadModule();
       expect(getDraft().defaultTupleCustomized).toBe(true);
     }
+  });
+
+  it('旧 preserving 路径仅留下 cc.model 时仍保护旧模型', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({ vendor: 'cc', lastByVendor: { cc: { model: 'claude-opus-4-8' } } }),
+    );
+    vi.resetModules();
+    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    expect(getDraft().defaultTupleCustomized).toBe(true);
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(false);
+    expect(getDraft().vendor).toBe('cc');
+    expect(getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
+  });
+
+  it('旧版系统可用性 fallback 不迁移成用户自定义', async () => {
+    for (const vendor of ['codex', 'pi'] as const) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      vi.resetModules();
+      const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+      expect(getDraft().defaultTupleCustomized).toBe(false);
+      expect(
+        applySuggestedDefaultTuple({
+          vendor: 'pi',
+          providerId: 'xai',
+          model: 'grok-4.6',
+          effort: 'high',
+        }),
+      ).toBe(true);
+      expect(getDraft()).toMatchObject({
+        vendor: 'pi',
+        defaultTupleCustomized: false,
+        lastByVendor: { pi: { providerId: 'xai', model: 'grok-4.6', effort: 'high' } },
+      });
+    }
+  });
+
+  it('默认组合先落 Pi 后，可用性回退读取实时草稿且不被旧 cc 闭包覆盖', async () => {
+    const { applySuggestedDefaultTuple, fallbackUnavailableVendor, getDraft } = await loadModule();
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(true);
+    expect(fallbackUnavailableVendor(new Set(['codex', 'pi']))).toBe(false);
+    expect(getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: false,
+      lastByVendor: { pi: { providerId: 'xai', model: 'grok-4.6', effort: 'high' } },
+    });
+  });
+
+  it('系统可用性回退本身不标记用户自定义', async () => {
+    const { fallbackUnavailableVendor, getDraft } = await loadModule();
+    expect(fallbackUnavailableVendor(new Set(['codex', 'pi']))).toBe(true);
+    expect(getDraft().vendor).toBe('codex');
+    expect(getDraft().defaultTupleCustomized).toBe(false);
   });
 
   it('persists an explicit Pi model choice across reload', async () => {

@@ -153,7 +153,7 @@
 |---|---|
 | 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-5.6-Sol / Codex / high；Anthropic 订阅→Claude Opus 5 / Claude Code / high；xAI 订阅→Grok 4.6 / Pi / high；CN / Global Cindy Gateway→原生多模态 GLM-5.3-Flash / Codex / high。Gateway 默认还必须明确声明图片输入能力；首选 Harness 未安装时才在同一来源内降级 |
 | 多来源 | 可用订阅优先于 Gateway；客户端没有“最近连接时间”时，多订阅稳定按 OpenAI→Anthropic→xAI。来源仍在加载、账号目录没有目标模型、或零来源时不编造组合，保留连接引导 |
-| 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。历史非 cc Harness、显式模型或显式来源迁移为已自定义，避免升级后换掉真实使用组合 |
+| 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
 | 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
 

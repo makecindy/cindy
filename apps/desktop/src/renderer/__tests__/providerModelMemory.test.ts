@@ -45,9 +45,20 @@ async function loadModule() {
 
 describe('providerModelMemory store', () => {
   it('默认无记录:getProviderModelChoice 返回 undefined', async () => {
-    const { getProviderModelChoice } = await loadModule();
+    const { getProviderModelChoice, hasAnyProviderModelOverride } = await loadModule();
     expect(getProviderModelChoice('claude-code', 'xd')).toBeUndefined();
     expect(getProviderModelChoice('codex', 'openai')).toBeUndefined();
+    expect(hasAnyProviderModelOverride()).toBe(false);
+  });
+
+  it('仅有 effort 或 Fast 记忆也视为既有模型自定义', async () => {
+    const effortMemory = await loadModule();
+    effortMemory.setProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8', 'high');
+    expect(effortMemory.hasAnyProviderModelOverride()).toBe(true);
+
+    effortMemory.__resetForTest();
+    effortMemory.setProviderModelFast('codex', 'openai', 'gpt-5.6-sol', false);
+    expect(effortMemory.hasAnyProviderModelOverride()).toBe(true);
   });
 
   it('set/get 往返 + 跨重启持久化', async () => {
