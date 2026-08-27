@@ -10459,6 +10459,128 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
   });
 });
 
+describe('AgentInputCoordinator stable queue slot upsert', () => {
+  const stableItem = (
+    clientId: string,
+    text: string,
+    senderSessionId = 'dispatcher',
+    queueKey = 'pr-followup:repo#1',
+  ) =>
+    makeItem(clientId, text, {
+      origin: { kind: 'session', senderSessionId, queueKey, displayText: text },
+    });
+  const matchesStableSlot = (item: AgentInputQueuedMessage) =>
+    item.origin?.kind === 'session' &&
+    item.origin.senderSessionId === 'dispatcher' &&
+    item.origin.queueKey === 'pr-followup:repo#1';
+
+  it('matches and replaces inside one live-queue critical section while isolating sender and key', async () => {
+    const h = createHarness();
+    const sid = 'stable-slot-isolation';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, stableItem('other-sender', 'foreign', 'other'));
+    h.coordinator.enqueue(sid, stableItem('other-key', 'foreign-key', 'dispatcher', 'other-key'));
+    h.coordinator.enqueue(sid, stableItem('stable-old', 'old'));
+    const acceptedAt = h.coordinator
+      .getQueueControlSnapshot(sid)
+      .pendingQueue.find((item) => item.clientId === 'stable-old')?.hostAcceptedAtMs;
+
+    const result = h.coordinator.replaceOrEnqueueQueuedMessageAtomically(
+      sid,
+      stableItem('stable-new', 'latest'),
+      matchesStableSlot,
+    );
+
+    expect(result).toEqual({ queuedMessageId: 'stable-old', queueAction: 'replaced' });
+    expect(
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => [
+        item.clientId,
+        item.text,
+        item.origin?.kind === 'session' ? item.origin.senderSessionId : null,
+        item.origin?.kind === 'session' ? item.origin.queueKey : null,
+      ]),
+    ).toEqual([
+      ['other-sender', 'foreign', 'other', 'pr-followup:repo#1'],
+      ['other-key', 'foreign-key', 'dispatcher', 'other-key'],
+      ['stable-old', 'latest', 'dispatcher', 'pr-followup:repo#1'],
+    ]);
+    expect(
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue.at(-1)?.hostAcceptedAtMs,
+    ).toBe(acceptedAt);
+  });
+
+  it('preserves an edit-locked row and keeps exactly one replaceable latest row behind it', async () => {
+    const h = createHarness();
+    const sid = 'stable-slot-edit-lock';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, stableItem('editing', 'draft'));
+    h.coordinator.setEditLock(sid, 'editing', true);
+
+    expect(
+      h.coordinator.replaceOrEnqueueQueuedMessageAtomically(
+        sid,
+        stableItem('latest-1', 'latest one'),
+        matchesStableSlot,
+      ),
+    ).toEqual({ queuedMessageId: 'latest-1', queueAction: 'enqueued' });
+    expect(
+      h.coordinator.replaceOrEnqueueQueuedMessageAtomically(
+        sid,
+        stableItem('latest-2', 'latest two'),
+        matchesStableSlot,
+      ),
+    ).toEqual({ queuedMessageId: 'latest-1', queueAction: 'replaced' });
+
+    expect(
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => [
+        item.clientId,
+        item.text,
+      ]),
+    ).toEqual([
+      ['editing', 'draft'],
+      ['latest-1', 'latest two'],
+    ]);
+  });
+
+  it('does not overwrite a row that drained while the replacement was being built', async () => {
+    const h = createHarness();
+    const sid = 'stable-slot-drain-race';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, stableItem('old', 'old'));
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([]);
+
+    expect(
+      h.coordinator.replaceOrEnqueueQueuedMessageAtomically(
+        sid,
+        stableItem('latest-1', 'latest one'),
+        matchesStableSlot,
+      ),
+    ).toEqual({ queuedMessageId: 'latest-1', queueAction: 'enqueued' });
+    expect(
+      h.coordinator.replaceOrEnqueueQueuedMessageAtomically(
+        sid,
+        stableItem('latest-2', 'latest two'),
+        matchesStableSlot,
+      ),
+    ).toEqual({ queuedMessageId: 'latest-1', queueAction: 'replaced' });
+    expect(
+      h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => [
+        item.clientId,
+        item.text,
+      ]),
+    ).toEqual([['latest-1', 'latest two']]);
+  });
+});
+
 describe('AgentInputCoordinator 中断自动续跑', () => {
   // 上游把「已经干到一半」的 turn 打断时,main 守卫自动替用户点一次「继续」。
   // coordinator 这一侧只负责两件事:把带结构化信号的失败告知 host(判据不在这里),

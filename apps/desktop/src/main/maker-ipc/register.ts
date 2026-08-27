@@ -165,7 +165,6 @@ import {
 } from './sessionQueueInspection.js';
 import {
   createSessionControlService,
-  findPendingSessionQueueItemByStableKey,
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
@@ -10096,38 +10095,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
     await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
     const desiredOrigin = params.origin?.kind === 'session' ? params.origin : undefined;
+    const queued = await buildSessionControlInputItem(params);
     if (desiredOrigin?.queueKey) {
       if (!inputCoordinator.isQueueRestored(params.targetSessionId)) {
         throw new Error(
           `queue restore incomplete for stable send_to_session slot: ${params.targetSessionId}`,
         );
       }
-      const existing = findPendingSessionQueueItemByStableKey(
-        inputCoordinator.getQueueControlSnapshot(params.targetSessionId).pendingQueue,
-        desiredOrigin,
+      const result = inputCoordinator.replaceOrEnqueueQueuedMessageAtomically(
+        params.targetSessionId,
+        queued,
+        (item) =>
+          item.origin?.kind === 'session' &&
+          item.origin.senderSessionId === desiredOrigin.senderSessionId &&
+          item.origin.queueKey === desiredOrigin.queueKey,
       );
-      if (existing) {
-        const replacement = await buildSessionControlInputItem({
-          ...params,
-          clientId: existing.clientId,
-        });
-        if (
-          inputCoordinator.replaceQueuedMessage(
-            params.targetSessionId,
-            existing.clientId,
-            replacement,
-          )
-        ) {
-          log.info('send_to_session replaced queued message by stable key', {
-            targetSessionId: params.targetSessionId,
-            clientId: existing.clientId,
-            queueKey: desiredOrigin.queueKey,
-          });
-          return { queuedMessageId: existing.clientId, queueAction: 'replaced' };
-        }
-      }
+      log.info(`send_to_session ${result.queueAction} queued message by stable key`, {
+        targetSessionId: params.targetSessionId,
+        clientId: result.queuedMessageId,
+        queueKey: desiredOrigin.queueKey,
+      });
+      return result;
     }
-    const queued = await buildSessionControlInputItem(params);
     if (params.onAccepted) {
       orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
         params.clientId,

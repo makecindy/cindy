@@ -2974,6 +2974,56 @@ export class AgentInputCoordinator {
   }
 
   /**
+   * Stable-slot upsert for externally built queue items. The async caller may
+   * spend time resolving model/session metadata before this method runs, so
+   * matching and mutation must happen together against the live queue.
+   *
+   * The earliest replaceable match keeps the stable slot's original position.
+   * Edit-locked or steering rows are left
+   * untouched; when every match is locked/in-flight, enqueue creates the one
+   * trailing latest slot. A later update replaces that trailing slot instead
+   * of growing the queue again.
+   */
+  replaceOrEnqueueQueuedMessageAtomically(
+    sessionId: string,
+    next: AgentInputQueuedMessage,
+    matches: (item: AgentInputQueuedMessage) => boolean,
+  ): { queuedMessageId: string; queueAction: 'enqueued' | 'replaced' } {
+    const state = this.getState(sessionId);
+    let replaceIndex = -1;
+    for (let index = 0; index < state.pendingQueue.length; index += 1) {
+      const current = state.pendingQueue[index];
+      if (!current || !matches(current)) continue;
+      if (state.queueEditLocks.includes(current.clientId)) continue;
+      if (state.steeringQueueClientIds.includes(current.clientId)) continue;
+      replaceIndex = index;
+      break;
+    }
+    if (replaceIndex < 0) {
+      this.enqueue(sessionId, next);
+      return { queuedMessageId: next.clientId, queueAction: 'enqueued' };
+    }
+
+    const current = state.pendingQueue[replaceIndex];
+    if (!current) {
+      this.enqueue(sessionId, next);
+      return { queuedMessageId: next.clientId, queueAction: 'enqueued' };
+    }
+    const replacement: AgentInputQueuedMessage = {
+      ...next,
+      clientId: current.clientId,
+      chatMessage: { ...next.chatMessage, clientId: current.clientId },
+    };
+    if (current.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
+    else replacement.hostAcceptedAtMs = current.hostAcceptedAtMs;
+    const nextQueue = [...state.pendingQueue];
+    nextQueue[replaceIndex] = replacement;
+    state.pendingQueue = nextQueue;
+    this.emit(sessionId);
+    return { queuedMessageId: current.clientId, queueAction: 'replaced' };
+  }
+
+  /**
    * Atomically replace a consecutive set of pending rows with one survivor.
    * The survivor keeps the first row's identity and queue position; removed
    * rows are discarded through the normal callback settlement path. The

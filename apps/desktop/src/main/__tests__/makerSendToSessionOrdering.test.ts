@@ -1052,16 +1052,24 @@ function extractSendToSessionSource(): string {
 }
 
 describe('send_to_session stable queue slot', () => {
-  it('reuses the pending message identity for the same dispatcher and queue key', () => {
+  it('re-checks and upserts the live queue atomically after async message construction', () => {
     const block = extractBetween(
       source,
       'async function enqueueSendToSessionMessage',
       'async function buildSessionControlInputItem',
     );
-    expect(block).toContain('findPendingSessionQueueItemByStableKey(');
     expect(block).toContain('if (!inputCoordinator.isQueueRestored(params.targetSessionId))');
-    expect(block).toContain("clientId: existing.clientId");
-    expect(block).toContain("queueAction: 'replaced'");
+    expect(block).toContain('const queued = await buildSessionControlInputItem(params);');
+    expect(block).toContain('inputCoordinator.replaceOrEnqueueQueuedMessageAtomically(');
+    expect(block).toContain('item.origin.senderSessionId === desiredOrigin.senderSessionId');
+    expect(block).toContain('item.origin.queueKey === desiredOrigin.queueKey');
+    expectOrder(
+      block,
+      'const queued = await buildSessionControlInputItem(params);',
+      'inputCoordinator.replaceOrEnqueueQueuedMessageAtomically(',
+    );
+    expect(block).not.toContain('findPendingSessionQueueItemByStableKey(');
+    expect(block).not.toContain('inputCoordinator.replaceQueuedMessage(');
   });
 });
 

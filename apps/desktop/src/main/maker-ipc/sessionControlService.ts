@@ -331,16 +331,3 @@ export function sessionQueueOriginForDispatcher(params: {
     displayText: params.message,
   };
 }
-
-export function findPendingSessionQueueItemByStableKey(
-  pendingQueue: readonly AgentInputQueuedMessage[],
-  desiredOrigin: Extract<AgentInputQueuedMessage['origin'], { kind: 'session' }>,
-): AgentInputQueuedMessage | undefined {
-  if (!desiredOrigin.queueKey) return undefined;
-  return pendingQueue.find(
-    (item) =>
-      item.origin?.kind === 'session' &&
-      item.origin.senderSessionId === desiredOrigin.senderSessionId &&
-      item.origin.queueKey === desiredOrigin.queueKey,
-  );
-}
