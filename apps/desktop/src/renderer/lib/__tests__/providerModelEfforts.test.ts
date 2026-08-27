@@ -205,7 +205,7 @@ describe('resolveProviderModelEfforts', () => {
       'intent.effort ? { effort: intent.effort as Effort }',
     );
     expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
-      'reconciledEffort\n              ? { effort: reconciledEffort }',
+      'resolveIntentReselectEffort(reconciledEffort, intent.effort)',
     );
     expect(source.slice(modelChangeStart, modelChangeEnd)).toMatch(
       /resolveModelEfforts\(\s*newModelId,\s*effectiveSourceId,?\s*\)/,

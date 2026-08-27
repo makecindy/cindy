@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveEffort,
   resolveRequestedEffort,
+  resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,
 } from '../effortResolution.js';
@@ -162,6 +163,25 @@ describe('resolveRequestedEffort —— 面板/收藏显式档 vs 本端再查�
         activeEffort: 'low',
       }),
     ).toBe('low');
+  });
+});
+
+describe('resolveIntentReselectEffort —— 意图期改选不把空串回落成旧 high', () => {
+  it('空串 = 目标明确无档,不继承旧意图 high', () => {
+    expect(resolveIntentReselectEffort('', 'high')).toBeUndefined();
+  });
+
+  it('非空新档压过旧意图', () => {
+    expect(resolveIntentReselectEffort('medium', 'high')).toBe('medium');
+  });
+
+  it('调用方没给新档 → 才继承旧意图', () => {
+    expect(resolveIntentReselectEffort(undefined, 'high')).toBe('high');
+  });
+
+  it('两边都空 → 不传 override', () => {
+    expect(resolveIntentReselectEffort(undefined, undefined)).toBeUndefined();
+    expect(resolveIntentReselectEffort('', '')).toBeUndefined();
   });
 });
 

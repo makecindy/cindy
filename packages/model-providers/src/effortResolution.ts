@@ -78,6 +78,23 @@ export function resolveRequestedEffort(args: {
 }
 
 /**
+ * 意图期内改选模型/来源时,面板交出来的档 vs 旧意图档。
+ *
+ * ModelSelector 对无思考档的行传空串(`rowEffortOf ?? ''`)。空串是「目标明确没有可调档」,
+ * 不能当成 falsy 再回落到旧意图的 high —— 否则会把目标不支持的档登记进意图、下次发送应用。
+ * 调用方没给新档(`undefined`)时才继承旧意图。
+ */
+export function resolveIntentReselectEffort(
+  selectedEffort: string | undefined,
+  intentEffort?: string,
+): string | undefined {
+  if (typeof selectedEffort === 'string') {
+    return selectedEffort || undefined;
+  }
+  return intentEffort || undefined;
+}
+
+/**
  * 「同模型只切来源」时落档。与 resolveEffort 的关键区别是没有 activeEffort 沿用档:
  * 有显式模型预设就按目标来源支持范围恢复;没有预设则回落模型默认,避免把当前会话 live 值
  * 意外写成全局默认。

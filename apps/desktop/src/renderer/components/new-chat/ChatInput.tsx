@@ -146,6 +146,7 @@ import {
   isSelectedSourceDisconnected,
   resolveEffort,
   resolveRequestedEffort,
+  resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -7194,16 +7195,13 @@ export function ChatInput({
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
         // 同 performModelChange:await 并透传真实结果,别把「意图重登记失败」当成已应用
         // (Chris 2026-08-19)。
+        const nextEffort = resolveIntentReselectEffort(reconciledEffort, intent.effort);
         return await performAgentSwitch(
           intent.target,
           reconciledModelId ?? intent.model,
           newProviderId,
           {
-            ...(reconciledEffort
-              ? { effort: reconciledEffort }
-              : intent.effort
-                ? { effort: intent.effort as Effort }
-                : {}),
+            ...(nextEffort ? { effort: nextEffort as Effort } : {}),
           },
         );
       }
