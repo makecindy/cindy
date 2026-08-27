@@ -493,6 +493,29 @@ interface StoredWorktreePreference {
   worktreePreferenceCustomized: boolean;
 }
 
+type StoredDefaultTuplePreference = Pick<
+  NewMakerDraft,
+  | 'vendor'
+  | 'fastModeByModel'
+  | 'effortByModel'
+  | 'lastByVendor'
+  | 'modelChosenByVendor'
+  | 'defaultTupleCustomized'
+  | 'defaultTupleSelectionCustomized'
+>;
+
+function defaultTuplePreferenceOf(draft: NewMakerDraft): StoredDefaultTuplePreference {
+  return {
+    vendor: draft.vendor,
+    fastModeByModel: draft.fastModeByModel,
+    effortByModel: draft.effortByModel,
+    lastByVendor: draft.lastByVendor,
+    modelChosenByVendor: draft.modelChosenByVendor,
+    defaultTupleCustomized: draft.defaultTupleCustomized,
+    defaultTupleSelectionCustomized: draft.defaultTupleSelectionCustomized,
+  };
+}
+
 function parseStoredWorktreePreference(
   raw: string | null,
 ): StoredWorktreePreference | undefined {
@@ -513,6 +536,14 @@ function parseStoredWorktreePreference(
   };
 }
 
+function parseStoredDefaultTuplePreference(
+  raw: string | null,
+): StoredDefaultTuplePreference | undefined {
+  const parsed = parseStoredDraftRecord(raw);
+  if (!parsed) return undefined;
+  return defaultTuplePreferenceOf(sanitize(parsed));
+}
+
 function readStoredDraftRecord(): StoredDraftRecord | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
@@ -531,20 +562,39 @@ function readStoredWorktreePreference(): StoredWorktreePreference | undefined {
   }
 }
 
+function readStoredDefaultTuplePreference(): StoredDefaultTuplePreference | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    return parseStoredDefaultTuplePreference(window.localStorage.getItem(storageKey()));
+  } catch {
+    return undefined;
+  }
+}
+
+function hasSameDefaultTuplePreference(
+  left: StoredDefaultTuplePreference,
+  right: StoredDefaultTuplePreference,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 type PreferenceSyncFallback = 'full-draft' | 'worktree-only' | null;
 let preferenceSyncFallback: PreferenceSyncFallback = null;
 
 /**
  * Persist a complete draft snapshot without letting another renderer's stale in-memory copy
- * overwrite the workstation-wide worktree preference.
+ * overwrite workstation-wide worktree or user-customized default-tuple preferences.
  *
  * Electron windows do not share this module instance. A storage event normally refreshes the
- * other windows below, but that event is asynchronous; rebasing this one shared field at write
+ * other windows below, but that event is asynchronous; rebasing shared preferences at write
  * time also closes the race where a secondary/sidebar window mutates another draft field before
  * it has received the event.
  */
 function scheduleWrite(
-  options: { preserveStoredWorktreePreference?: boolean } = {},
+  options: {
+    preserveStoredWorktreePreference?: boolean;
+    preserveStoredDefaultTupleCustomization?: boolean;
+  } = {},
 ): void {
   if (typeof window === 'undefined') return;
   const storedWorktreePreference = options.preserveStoredWorktreePreference !== false
@@ -559,6 +609,20 @@ function scheduleWrite(
     )
   ) {
     currentDraft = { ...currentDraft, ...storedWorktreePreference };
+  }
+  const storedDefaultTuplePreference =
+    options.preserveStoredDefaultTupleCustomization !== false
+      ? readStoredDefaultTuplePreference()
+      : undefined;
+  // 旧 renderer 还拿着未自定义草稿时，任意其它字段的完整快照写入都不能回滚另一个
+  // renderer 刚保存的用户组合。两个 marker 必须和 Harness / 来源 / 模型 / 深度 / Fast
+  // 整体 rebase；只 OR boolean 会留下“已自定义”却指向旧 tuple 的撕裂状态。
+  // 显式「恢复推荐」通过 option 跳过本保护，保留合法的 true → false 通道。
+  if (
+    storedDefaultTuplePreference?.defaultTupleCustomized === true
+    && currentDraft.defaultTupleCustomized === false
+  ) {
+    currentDraft = { ...currentDraft, ...storedDefaultTuplePreference };
   }
   try {
     window.localStorage.setItem(storageKey(), JSON.stringify(currentDraft));
@@ -583,9 +647,9 @@ const removeStorageListener = (() => {
     if (event.storageArea && event.storageArea !== window.localStorage) return;
     // A queued storage event can arrive after this window has already written a newer value.
     // Re-read the shared storage truth first so the event payload itself cannot roll state back.
-    const livePreference = readStoredWorktreePreference();
-    const nextPreference =
-      livePreference ??
+    const liveWorktreePreference = readStoredWorktreePreference();
+    const nextWorktreePreference =
+      liveWorktreePreference ??
       (
         event.newValue == null
           ? {
@@ -594,17 +658,34 @@ const removeStorageListener = (() => {
             }
           : parseStoredWorktreePreference(event.newValue)
       );
-    if (
-      nextPreference === undefined
-      || (
-        nextPreference.worktreeEnabled === currentDraft.worktreeEnabled
-        && nextPreference.worktreePreferenceCustomized
-          === currentDraft.worktreePreferenceCustomized
-      )
-    ) return;
-    // Only this workstation-wide preference is cross-window shared. Keep transient per-window
-    // draft targets (deviceLinkDeviceId/extraDirs, etc.) untouched.
-    currentDraft = { ...currentDraft, ...nextPreference };
+    const liveDefaultTuplePreference = readStoredDefaultTuplePreference();
+    const nextDefaultTuplePreference =
+      liveDefaultTuplePreference ??
+      (
+        event.newValue == null
+          ? defaultTuplePreferenceOf(makeDefault())
+          : parseStoredDefaultTuplePreference(event.newValue)
+      );
+    const worktreeChanged =
+      nextWorktreePreference !== undefined
+      && (
+        nextWorktreePreference.worktreeEnabled !== currentDraft.worktreeEnabled
+        || nextWorktreePreference.worktreePreferenceCustomized
+          !== currentDraft.worktreePreferenceCustomized
+      );
+    const defaultTupleChanged =
+      nextDefaultTuplePreference !== undefined
+      && !hasSameDefaultTuplePreference(
+        nextDefaultTuplePreference,
+        defaultTuplePreferenceOf(currentDraft),
+      );
+    if (!worktreeChanged && !defaultTupleChanged) return;
+    // 只有工作端级偏好跨窗口同步；deviceLinkDeviceId / extraDirs 等单窗口临时目标保持不动。
+    currentDraft = {
+      ...currentDraft,
+      ...(worktreeChanged ? nextWorktreePreference : {}),
+      ...(defaultTupleChanged ? nextDefaultTuplePreference : {}),
+    };
     emit();
   };
   window.addEventListener('storage', onStorage);
@@ -906,7 +987,7 @@ export function clearDefaultTupleTuningCustomization(args: {
     fastModeByModel: nextFastModeByModel,
     ...(shouldUnlock ? { defaultTupleCustomized: false } : {}),
   };
-  scheduleWrite();
+  scheduleWrite({ preserveStoredDefaultTupleCustomization: !shouldUnlock });
   emit();
 }
 
@@ -1027,6 +1108,7 @@ export function clearDraft(): void {
   currentDraft = makeDefault();
   scheduleWrite({
     preserveStoredWorktreePreference: false,
+    preserveStoredDefaultTupleCustomization: false,
   });
   emit();
 }

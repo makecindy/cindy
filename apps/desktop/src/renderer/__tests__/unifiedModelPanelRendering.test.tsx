@@ -2203,28 +2203,43 @@ describe('统一面板 · 恢复推荐删记忆键', () => {
   }
 
   it('恢复推荐后记忆槽里没有该键(不是写了一份「等于当前默认」的快照)', async () => {
-    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    setModelEngineOverride('openai', 'gpt-5.6', 'cc');
     const memory = makeMemory({
-      effort: { 'codex|xd|gpt-5.5': 'low' },
-      fast: { 'codex|xd|gpt-5.5': true },
+      effort: {
+        'claude-code|openai|chatgpt/gpt-5.6': 'low',
+        'codex|openai|gpt-5.6': 'low',
+        'pi|openrouter|other-model': 'medium',
+      },
+      fast: {
+        'claude-code|openai|chatgpt/gpt-5.6': true,
+        'codex|openai|gpt-5.6': true,
+        'pi|openrouter|other-model': true,
+      },
     });
-    // 选中的是 Opus 5 → GPT-5.5 那一行不是 live 行,只走持久化那一半。
+    // 选中的是 Opus 5 → GPT-5.6 那一行不是 live 行,只走持久化那一半。
     renderPanel({
       modelMemory: memory.accessors,
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
     });
     await act(async () => {
-      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+      fireEvent.pointerEnter(rowFor('GPT-5.6'));
     });
     const flyout = await screen.findByTestId('unified-model-config-flyout');
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    // 键被**删掉**:留一份 'high' / false 的快照就是把这一版的默认固化成用户配置。
-    expect(memory.effort.has('codex|xd|gpt-5.5')).toBe(false);
-    expect(memory.fast.has('codex|xd|gpt-5.5')).toBe(false);
+    expect(getModelEngineOverride('openai', 'gpt-5.6')).toBeUndefined();
+    // 当前 Claude Code bridge 与推荐 Codex root 的 wire ID 不同，两格都必须删除。
+    for (const key of [
+      'claude-code|openai|chatgpt/gpt-5.6',
+      'codex|openai|gpt-5.6',
+    ]) {
+      expect(memory.effort.has(key)).toBe(false);
+      expect(memory.fast.has(key)).toBe(false);
+    }
+    expect(memory.effort.get('pi|openrouter|other-model')).toBe('medium');
+    expect(memory.fast.get('pi|openrouter|other-model')).toBe(true);
   });
 
   it('恢复推荐之后目录默认档变了 → 行展示跟随新默认(不被旧值钉死)', async () => {
@@ -2293,7 +2308,9 @@ describe('统一面板 · 恢复推荐删记忆键', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
+    expect(setEffort).toHaveBeenCalledWith('claude-code', 'xd', 'gpt-5.5', 'medium');
     expect(setEffort).toHaveBeenCalledWith('codex', 'xd', 'gpt-5.5', 'high');
+    expect(setFast).toHaveBeenCalledWith('claude-code', 'xd', 'gpt-5.5', false);
     expect(setFast).toHaveBeenCalledWith('codex', 'xd', 'gpt-5.5', false);
   });
 });

@@ -1062,6 +1062,80 @@ describe('newMakerDraft store', () => {
     });
   });
 
+  it('旧窗口的完整草稿写入不会覆盖另一窗口刚保存的默认模型组合', async () => {
+    // 两个 renderer 的模块内存独立；旧窗口仍停在未自定义的 cc 草稿。
+    const staleWindow = await loadModule();
+    vi.resetModules();
+    const activeWindow = await loadModule();
+
+    activeWindow.markDefaultTupleCustomized();
+    activeWindow.switchVendor('pi', activeWindow.getCurrentVendorPrefs());
+    activeWindow.patchVendorPrefs('pi', {
+      model: 'grok-4.6',
+      providerId: 'xai',
+      effort: 'high',
+    });
+    activeWindow.setEffortForModel('grok-4.6', 'high');
+    activeWindow.setFastModeForModel('grok-4.6', true);
+    expect(staleWindow.getDraft().defaultTupleCustomized).toBe(false);
+
+    // storage event 尚未送达时，旧窗口只改无关的工作目录。完整写入前必须把用户组合
+    // 整体 rebase，不能只保住 marker 而丢 Harness / 来源 / 模型 / 深度 / Fast。
+    staleWindow.patchDraft({ workingDir: '/projects/stale-window' });
+
+    const expectedTuple = {
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      effortByModel: { 'grok-4.6': 'high' },
+      fastModeByModel: { 'grok-4.6': true },
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'grok-4.6',
+          providerId: 'xai',
+          effort: 'high',
+        }),
+      },
+    };
+    expect(staleWindow.getDraft()).toMatchObject(expectedTuple);
+    expect(staleWindow.getDraft().workingDir).toBe('/projects/stale-window');
+    expect(
+      JSON.parse(memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}'),
+    ).toMatchObject(expectedTuple);
+  });
+
+  it('旧窗口只清调档但未解锁时仍保住另一窗口的新默认组合', async () => {
+    const staleWindow = await loadModule();
+    staleWindow.setEffortForModel('legacy-model', 'high');
+    vi.resetModules();
+    const activeWindow = await loadModule();
+
+    activeWindow.markDefaultTupleCustomized();
+    activeWindow.switchVendor('pi', activeWindow.getCurrentVendorPrefs());
+    activeWindow.patchVendorPrefs('pi', {
+      model: 'grok-4.6',
+      providerId: 'xai',
+      effort: 'high',
+    });
+
+    // staleWindow 自己仍是 false，所以这不是合法的 true → false 解锁；清理写入也必须 rebase。
+    staleWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: true,
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      lastByVendor: {
+        pi: expect.objectContaining({ model: 'grok-4.6', providerId: 'xai' }),
+      },
+    });
+  });
+
   it('远程 worktree 广播不会让旧窗口回滚持久草稿或 main 偏好镜像', async () => {
     // 先让附属窗口持有旧的模型/目录，再由活跃窗口保存新值；两个模块实例模拟两个 renderer。
     const staleWindow = await loadModule();
@@ -1152,6 +1226,21 @@ describe('newMakerDraft store', () => {
       ...draftStore.getDraft(),
       worktreeEnabled: true,
       worktreePreferenceCustomized: true,
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      effortByModel: { 'grok-4.6': 'high' },
+      fastModeByModel: { 'grok-4.6': true },
+      lastByVendor: {
+        ...draftStore.getDraft().lastByVendor,
+        pi: {
+          ...draftStore.getDraft().lastByVendor.pi,
+          model: 'grok-4.6',
+          providerId: 'xai',
+          effort: 'high',
+        },
+      },
     });
     memStorage.setItem(draftStore.__STORAGE_KEY, serialized);
 
@@ -1162,6 +1251,21 @@ describe('newMakerDraft store', () => {
 
     expect(draftStore.getDraft().worktreeEnabled).toBe(true);
     expect(draftStore.getDraft().worktreePreferenceCustomized).toBe(true);
+    expect(draftStore.getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      effortByModel: { 'grok-4.6': 'high' },
+      fastModeByModel: { 'grok-4.6': true },
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'grok-4.6',
+          providerId: 'xai',
+          effort: 'high',
+        }),
+      },
+    });
     expect(subscriber).toHaveBeenCalledTimes(1);
 
     // 旧 false 事件若迟到,当前 localStorage 的 true 仍是权威值,不得回滚内存或 main 镜像。
