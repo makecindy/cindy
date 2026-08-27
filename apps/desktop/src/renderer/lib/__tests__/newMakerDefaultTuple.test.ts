@@ -109,7 +109,7 @@ describe('resolveNewMakerDefaultTuple', () => {
       expected: { vendor: 'pi', providerId: 'xai', model: 'grok-4.6', effort: 'high' },
     },
     {
-      name: '中国区 Gateway',
+      name: 'Cindy Gateway（CN / Global）',
       source: provider({
         id: 'xd',
         access: 'managed',
@@ -183,7 +183,7 @@ describe('resolveNewMakerDefaultTuple', () => {
     });
   });
 
-  it('Gateway 没有服务端区域默认标记时保持空态', () => {
+  it('Gateway 没有服务端默认标记时保持空态', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
