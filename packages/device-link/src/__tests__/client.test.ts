@@ -5777,17 +5777,17 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
 
     relay.dropNext((senderId, env) => senderId === 'desktop' && env.kind === 'link-accept');
-    const staleOpen = controller.openLink('desktop', {
+    const staleOpenError = controller.openLink('desktop', {
       controllerName: 'iPhone',
       protocolVersion: 1,
       appVersion: '1',
-    }, 50);
+    }, 50).catch((error: unknown) => error);
     await relay.settle();
     const staleRequestId = (relay.deliveredTo.get('desktop') ?? [])
       .filter((env) => env.kind === 'link-open')
       .at(-1)?.id;
     expect(staleRequestId).toBeTruthy();
-    await expect(staleOpen).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    expect(await staleOpenError).toMatchObject({ code: 'INVOKE_TIMEOUT' });
 
     const liveInvoke = host.invoke('ios', {
       channel: 'maker:cross-generation-request',
