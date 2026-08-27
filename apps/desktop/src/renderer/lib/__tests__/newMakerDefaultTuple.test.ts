@@ -8,6 +8,7 @@ function model(
   id: string,
   effort: CatalogModel['defaultEffort'] = 'high',
   newSessionDefault?: CatalogModel['newSessionDefault'],
+  inputModalities?: string[],
 ): CatalogModel {
   return {
     id,
@@ -16,6 +17,9 @@ function model(
     efforts: effort ? [effort] : [],
     defaultEffort: effort,
     newSessionDefault,
+    ...(inputModalities
+      ? { modalities: { input: inputModalities, output: ['text'] } }
+      : {}),
   };
 }
 
@@ -113,12 +117,14 @@ describe('resolveNewMakerDefaultTuple', () => {
       source: provider({
         id: 'xd',
         access: 'managed',
-        models: { codex: [model('deepseek/deepseek-v4-pro', 'high', ['codex'])] },
+        models: {
+          codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text', 'image'])],
+        },
       }),
       expected: {
         vendor: 'codex',
         providerId: 'xd',
-        model: 'deepseek/deepseek-v4-pro',
+        model: 'z-ai/glm-5.3-flash',
         effort: 'high',
       },
     },
@@ -130,7 +136,9 @@ describe('resolveNewMakerDefaultTuple', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
-      models: { codex: [model('deepseek/deepseek-v4-pro', 'high', ['codex'])] },
+      models: {
+        codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text', 'image'])],
+      },
     });
     const anthropic = provider({
       id: 'anthropic',
@@ -175,7 +183,9 @@ describe('resolveNewMakerDefaultTuple', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
-      models: { codex: [model('deepseek/deepseek-v4-pro', 'high', ['codex'])] },
+      models: {
+        codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text', 'image'])],
+      },
     });
     expect(resolve([failedOpenai, gateway])).toMatchObject({
       providerId: 'xd',
@@ -187,7 +197,18 @@ describe('resolveNewMakerDefaultTuple', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
-      models: { codex: [model('deepseek/deepseek-v4-pro')] },
+      models: {
+        codex: [model('z-ai/glm-5.3-flash', 'high', undefined, ['text', 'image'])],
+      },
+    });
+    expect(resolve([gateway])).toBeNull();
+  });
+
+  it('Gateway 默认标记误落到纯文本模型时保持空态', () => {
+    const gateway = provider({
+      id: 'xd',
+      access: 'managed',
+      models: { codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text'])] },
     });
     expect(resolve([gateway])).toBeNull();
   });

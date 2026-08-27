@@ -20,6 +20,7 @@ interface ProviderDefaultPolicy {
   agents: readonly AgentKind[];
   modelIds: readonly string[];
   requireNewSessionDefault?: boolean;
+  requireImageInput?: boolean;
 }
 
 /**
@@ -52,8 +53,9 @@ const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
     providerId: 'xd',
     accessKind: 'managed',
     agents: ['codex', 'claude-code', 'pi'],
-    modelIds: ['deepseek/deepseek-v4-pro', 'deepseek-v4-pro'],
+    modelIds: ['z-ai/glm-5.3-flash', 'glm-5.3-flash'],
     requireNewSessionDefault: true,
+    requireImageInput: true,
   },
 ];
 
@@ -61,11 +63,18 @@ function vendorForAgent(agent: AgentKind): NewMakerDefaultTuple['vendor'] {
   return agent === 'claude-code' ? 'cc' : agent;
 }
 
+function supportsImageInput(model: NonNullable<ProviderView['models'][AgentKind]>[number]): boolean {
+  return (
+    model.supportsImageInput === true || model.modalities?.input.includes('image') === true
+  );
+}
+
 function matchingModel(
   provider: ProviderView,
   agent: AgentKind,
   modelIds: readonly string[],
   requireNewSessionDefault = false,
+  requireImageInput = false,
 ) {
   const models = provider.models[agent] ?? [];
   return modelIds
@@ -75,6 +84,7 @@ function matchingModel(
         model !== undefined &&
         model.defaultEnabled !== false &&
         (!requireNewSessionDefault || model.newSessionDefault?.includes(agent) === true) &&
+        (!requireImageInput || supportsImageInput(model)) &&
         isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
     );
 }
@@ -113,6 +123,7 @@ export function resolveNewMakerDefaultTuple(args: {
         agent,
         policy.modelIds,
         policy.requireNewSessionDefault,
+        policy.requireImageInput,
       );
       if (!model) continue;
       return {
