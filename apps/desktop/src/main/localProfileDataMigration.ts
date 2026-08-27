@@ -314,40 +314,14 @@ function replaceLocalProfileMigrationMarker(marker: string, contents: string): v
 
 function restoreClaimedLocalProfileMarker(candidate: string, marker: string): boolean {
   try {
-    // linkSync is an exclusive restore: it never overwrites a replacement that
-    // another process may have published after this process claimed candidate.
+    // Restore only into an absent canonical path; never overwrite a newer
+    // reservation that may have appeared after this process claimed candidate.
     fs.linkSync(candidate, marker);
     fs.unlinkSync(candidate);
     syncMarkerDirectory(marker);
     return true;
   } catch {
-    // Keep the claimed entry as ownership evidence when a newer canonical
-    // marker prevents restoration. Deleting either entry would be unsafe.
-    return false;
-  }
-}
-
-function reclaimInvalidLocalProfileMarker(marker: string, inspectedRaw: string): boolean {
-  const candidate = `${marker}.reclaim.${randomUUID()}`;
-  try {
-    // Claim exactly the entry that was inspected. Validation happens after the
-    // atomic rename, so a replacement is never unlinked based on stale reads.
-    fs.renameSync(marker, candidate);
-  } catch {
-    return false;
-  }
-
-  try {
-    const movedRaw = fs.readFileSync(candidate, 'utf8');
-    if (movedRaw !== inspectedRaw || parseLocalProfileMigrationMarker(movedRaw)) {
-      restoreClaimedLocalProfileMarker(candidate, marker);
-      return false;
-    }
-    fs.unlinkSync(candidate);
-    syncMarkerDirectory(marker);
-    return true;
-  } catch {
-    restoreClaimedLocalProfileMarker(candidate, marker);
+    // Keeping the claimed candidate is safer than deleting ownership evidence.
     return false;
   }
 }
@@ -382,11 +356,10 @@ function reserveLocalProfileDataOwnerWhileLocked(
         }
         return { status: 'already-owned', ownerId: normalizedOwnerId };
       }
-      // Legacy writers created the canonical entry before its contents were
-      // durable, so a crash could leave an empty/truncated marker that blocks
-      // the first owner forever. Reclaim only the exact malformed entry that
-      // was inspected; a concurrent replacement is restored/preserved.
-      if (!reclaimInvalidLocalProfileMarker(marker, raw)) return { status: 'failed' };
+      // A malformed marker is not evidence of an unused namespace. It may be
+      // a damaged committed owner record, so preserve it and fail closed rather
+      // than allowing a later account to adopt the retained local database.
+      return { status: 'failed' };
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
         return { status: 'failed' };
