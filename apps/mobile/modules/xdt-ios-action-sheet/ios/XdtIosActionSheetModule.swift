@@ -3,6 +3,9 @@ import UIKit
 
 public class XdtIosActionSheetModule: Module {
   private var pendingPromise: Promise?
+  /// 每次 present 递增。旧 Sheet 的延迟回调必须对不上代次,不能结算后来的请求。
+  private var requestGeneration = 0
+  private weak var currentSheet: CindyBottomActionSheetController?
 
   public func definition() -> ModuleDefinition {
     Name("XdtIosActionSheet")
@@ -15,9 +18,18 @@ public class XdtIosActionSheetModule: Module {
   }
 
   private func present(options: [String: Any], promise: Promise) {
+    requestGeneration += 1
+    let generation = requestGeneration
     if let pendingPromise {
       pendingPromise.resolve(-1)
       self.pendingPromise = nil
+    }
+    if let currentSheet {
+      currentSheet.onPick = nil
+      if currentSheet.presentingViewController != nil || currentSheet.isBeingPresented {
+        currentSheet.dismiss(animated: false)
+      }
+      self.currentSheet = nil
     }
 
     guard let labels = options["options"] as? [String], !labels.isEmpty else {
@@ -38,8 +50,10 @@ public class XdtIosActionSheetModule: Module {
       messageText: stringOption(options["message"])
     )
     sheet.onPick = { [weak self] index in
-      guard let current = self?.pendingPromise else { return }
-      self?.pendingPromise = nil
+      guard let self, self.requestGeneration == generation else { return }
+      guard let current = self.pendingPromise else { return }
+      self.pendingPromise = nil
+      self.currentSheet = nil
       current.resolve(index)
     }
 
@@ -62,6 +76,7 @@ public class XdtIosActionSheetModule: Module {
     }
 
     pendingPromise = promise
+    currentSheet = sheet
     presenter.present(sheet, animated: true)
   }
 

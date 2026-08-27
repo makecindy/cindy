@@ -206,6 +206,7 @@ export function ModelOptionsSheetView({
             {t("models.options.fastMode")}
           </Text>
           <NativeSwitch
+            accessibilityLabel={t("models.options.fastMode")}
             disabled={disabled}
             onValueChange={setFast}
             seedColor={colors.cta}

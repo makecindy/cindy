@@ -29,6 +29,7 @@ export function SessionOptionsPresenter(props: SessionOptionsProps) {
 function SessionOptionsExpoSheet({
   onAction,
   onClose,
+  onClosed,
   pinnedAt,
   status,
   visible,
@@ -42,7 +43,10 @@ function SessionOptionsExpoSheet({
     <Host>
       <BottomSheet
         isPresented={visible}
-        onDismiss={onClose}
+        onDismiss={() => {
+          onClose();
+          onClosed?.();
+        }}
         showDragIndicator
         testID="home.sessionActions"
       >

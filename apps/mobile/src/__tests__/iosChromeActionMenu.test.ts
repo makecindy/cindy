@@ -80,6 +80,8 @@ describe("iOS chrome presenters stay on the system menu path", () => {
 
     expect(sessionActions).toContain("setActionSheetSession(session)");
     expect(sessionActions).not.toContain("showActionMenu({");
+    expect(sessionActions).toContain("action === 'rename'");
+    expect(sessionActions).not.toContain("Platform.OS !== 'ios'");
     const expoSheet = readTextLf(
       resolve(process.cwd(), "src/session/SessionOptionsExpoSheet.tsx"),
       "utf8",
@@ -88,6 +90,7 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(expoSheet).toContain("<BottomSheet");
     expect(expoSheet).toContain("<List>");
     expect(expoSheet).toContain("<ListItem");
+    expect(expoSheet).toContain("onClosed?.()");
     expect(expoSheet).not.toContain("snapPoints");
     expect(home).toContain("<SessionOptionsPresenter");
     const actionMenu = readTextLf(
@@ -157,5 +160,19 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(deviceDetail).toContain("<SimpleStackHeader");
     expect(deviceDetail).toContain('backTestID="deviceDetail.backButton"');
     expect(deviceDetail).toContain("<SessionOptionsPresenter");
+    const nativeSwitch = readTextLf(
+      resolve(process.cwd(), "src/platform/chrome/NativeSwitch.tsx"),
+      "utf8",
+    );
+    expect(nativeSwitch).toContain("accessibilityLabel?: string");
+    expect(settings).toContain(
+      "accessibilityLabel={t('settings.notifications.taskDone')}",
+    );
+    expect(settings).toContain(
+      "accessibilityLabel={t('settings.betaChannel.title')}",
+    );
+    expect(settings).toContain(
+      "accessibilityLabel={t('settings.legal.analytics')}",
+    );
   });
 });

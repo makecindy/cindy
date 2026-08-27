@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Alert, Platform } from 'react-native';
+import { Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -130,8 +130,9 @@ export function useSessionListActions() {
     const session = actionSheetSession;
     setActionSheetSession(null);
     if (!session) return;
-    if (action === 'rename' && Platform.OS !== 'ios') {
-      // Android 自绘 Modal 必须等卸载后再挂重命名弹窗。
+    if (action === 'rename') {
+      // Android 自绘 Modal 与 iOS Expo BottomSheet 都必须等卸载后再挂重命名弹窗,
+      // 否则 present-during-dismiss 会把新弹窗吞掉或压在 Sheet 后面。
       pendingSheetActionRef.current = () => applySessionSheetAction(session, action);
       return;
     }

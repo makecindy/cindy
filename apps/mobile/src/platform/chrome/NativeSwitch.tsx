@@ -1,14 +1,17 @@
 import { Host, Switch } from "@expo/ui";
+import { View } from "react-native";
 import { useTheme } from "@/theme";
 
 /** 收起时仍占原来的开关位;iOS/Android 点开是系统 Switch。 */
 export function NativeSwitch({
+  accessibilityLabel,
   disabled,
   onValueChange,
   seedColor,
   testID,
   value,
 }: {
+  accessibilityLabel?: string;
   disabled?: boolean;
   onValueChange(value: boolean): void;
   seedColor?: string;
@@ -17,13 +20,20 @@ export function NativeSwitch({
 }) {
   const { mode } = useTheme();
   return (
-    <Host colorScheme={mode} matchContents seedColor={seedColor}>
-      <Switch
-        disabled={disabled}
-        onValueChange={onValueChange}
-        testID={testID}
-        value={value}
-      />
-    </Host>
+    <View
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value, disabled: Boolean(disabled) }}
+      accessible={Boolean(accessibilityLabel)}
+    >
+      <Host colorScheme={mode} matchContents seedColor={seedColor}>
+        <Switch
+          disabled={disabled}
+          onValueChange={onValueChange}
+          testID={testID}
+          value={value}
+        />
+      </Host>
+    </View>
   );
 }

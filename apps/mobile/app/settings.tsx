@@ -1039,6 +1039,7 @@ export default function SettingsScreen() {
                   ) : null}
                 </View>
                 <NativeSwitch
+                  accessibilityLabel={t('settings.notifications.taskDone')}
                   disabled={pushBusy}
                   onValueChange={() => void togglePushNotifications()}
                   seedColor={colors.inputCaret}
@@ -1152,6 +1153,7 @@ export default function SettingsScreen() {
                     <Text style={styles.hint}>{t('settings.betaChannel.description')}</Text>
                   </View>
                   <NativeSwitch
+                    accessibilityLabel={t('settings.betaChannel.title')}
                     disabled={betaBusy || !betaReady}
                     onValueChange={() => void toggleBeta()}
                     seedColor={colors.inputCaret}
@@ -1180,6 +1182,7 @@ export default function SettingsScreen() {
               ) : null}
             </View>
             <NativeSwitch
+              accessibilityLabel={t('settings.legal.analytics')}
               disabled={analyticsBusy || !analyticsReady}
               onValueChange={() => void toggleAnalytics()}
               seedColor={colors.inputCaret}
