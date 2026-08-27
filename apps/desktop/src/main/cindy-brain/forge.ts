@@ -2981,7 +2981,9 @@ Auth 的企业服务。主机只在当前登录账号属于组织 Membership，�
 保有本次包的完整 sha256。两路都要求清单声明目标服务域名。
 audience 与组织身份由主机推导,插件清单和运行时代码都不能选择、读取或保存
 audience/token；audience 固定为 \`\${orgSlug}:\${ghostId}\`,总长不得超过 64 字符。
-个人身份与手动导入不签发；企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
+个人身份与手动导入默认不签发。点名例外：\`ghostId\` 精确等于 \`mivo-canvas\` 的组织成员本地安装，
+在已装清单声明的精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 时可解析 audience；其它本地插件、其它精确 host 仍不签发。已有市场
+organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成无记录。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
 确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
 该凭证必须固定声明
 \`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,
@@ -4382,7 +4384,8 @@ const opened = await cindy.iosSimulator.request({
    数据与面板位置，同版本也可覆盖。不要因为 scaffold 或 pack 成功就自动调用本工具。
    企业身份下若清单声明 \`source:"oidc-token"\`，提交安装前会展示插件名、id 与精确请求
    域名，并要求用户手输相同 id；取消不会安装。只有确认后的企业作者自测才会取得 Forge
-   作者资格并可签发 Connection JWT；个人身份下的 Forge 安装和手动导入都不会取得这项资格；
+   作者资格并可签发 Connection JWT；个人身份下的 Forge 安装和手动导入都不会取得这项资格。
+   本地安装另有一条点名例外，见 §4.7：仅 \`ghostId\` 精确等于 \`mivo-canvas\` 且精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 的组织成员本地安装可解析 audience；
 4. 安装后再让用户 \`$<command> <内容>\` 试一单，看聊天图卡/面板是否符合预期。
 
 企业组织成员需要发布时，调用 \`ghost_forge_pack({ dir: '<绝对路径>', intent: 'publish' })\`。

@@ -14,6 +14,30 @@
   ],
   "terms": [
     {
+      "id": "harness",
+      "status": "proposed",
+      "en": "Harness",
+      "translations": {
+        "zh-CN": "Harness",
+        "zh-TW": "Harness",
+        "ja": "Harness",
+        "ko": "Harness"
+      },
+      "note": "用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。"
+    },
+    {
+      "id": "model-id",
+      "status": "proposed",
+      "en": "Model ID",
+      "translations": {
+        "zh-CN": "Model ID",
+        "zh-TW": "Model ID",
+        "ja": "Model ID",
+        "ko": "Model ID"
+      },
+      "note": "用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。"
+    },
+    {
       "id": "plugin-main-view",
       "status": "proposed",
       "en": "Main view",
@@ -288,6 +312,7 @@
       "en": "Dev",
       "translations": {
         "zh-CN": "Dev",
+        "zh-TW": "Dev",
         "ja": "Dev",
         "ko": "Dev"
       },
@@ -315,7 +340,20 @@
         "desktop:settings.about.debugLogDescription",
         "desktop:settings.voiceInput.permissions.inputMonitoring.tooltip"
       ],
-      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。"
+      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。2026-08-26 起 CindyDev 内部的业务服务器环境切换也沿用 Dev 标签；这里只表示所连接的服务环境，不能据此改变安装包区域或身份。"
+    },
+    {
+      "id": "dev-server-environment-release",
+      "status": "proposed",
+      "en": "Release",
+      "translations": {
+        "zh-CN": "Release",
+        "zh-TW": "Release",
+        "ja": "Release",
+        "ko": "Release"
+      },
+      "checkCase": false,
+      "note": "CindyDev 内部设置中的正式业务服务器环境标签，五语固定保留英文 Release。它表示 App 当前连接哪套服务，不代表安装包发行版本、OTA 通道或 cn / global 区域；因 release 也是普通英文单词，关闭全局大小写扫描，具体 UI key 由 Mobile 定向测试约束。"
     },
     {
       "id": "agent",
@@ -1756,6 +1794,18 @@
         "ko": "로컬 모델"
       },
       "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。"
+    },
+    {
+      "id": "database-cleanup",
+      "status": "proposed",
+      "en": "Database cleanup",
+      "translations": {
+        "zh-CN": "数据库清理",
+        "zh-TW": "資料庫清理",
+        "ja": "データベースのクリーンアップ",
+        "ko": "데이터베이스 정리"
+      },
+      "note": "设置 → 存储空间内主动备份、清理非活跃任务消息并压缩本地数据库的功能名称。先登记为 proposed，待实际使用后再固化。"
     }
   ]
 }

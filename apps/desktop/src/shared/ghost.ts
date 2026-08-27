@@ -867,7 +867,9 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
  *   JWT。当前组织的可信市场安装，或企业作者通过 ghost_forge_install 明确安装且
- *   id 命中本组织登记前缀时可签发；手动导入不取得该资格。
+ *   id 命中本组织登记前缀时可签发；手动导入默认不取得该资格。点名例外：
+ *   ghostId 精确等于 mivo-canvas 的组织成员本地安装，在已装清单声明的精确
+ *   oidc-token host 仅为 mivo-canvas.dsworks.cn 时可签发；其它本地插件、其它精确 host 仍不签发，已有市场记录（含 installed:false）仍走 digest。市场账本损坏不得当成无记录。
  *   Host 根据当前组织和插件 id 推导 audience，插件不能声明或读取。
  *   令牌只在 networkSlot 发请求时注入，且永不进入 Node Worker。
  *

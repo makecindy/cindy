@@ -1508,6 +1508,9 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).toContain('不要因为 scaffold 或 pack 成功就自动调用本工具');
     expect(FORGE_GUIDE).toContain('同版本也可覆盖');
     expect(FORGE_GUIDE).toContain('个人身份下的 Forge 安装和手动导入都不会取得这项资格');
+    expect(FORGE_GUIDE).toContain(
+      '仅 `ghostId` 精确等于 `mivo-canvas` 且精确 oidc-token host 仅为 `mivo-canvas.dsworks.cn` 的组织成员本地安装可解析 audience',
+    );
   });
 
   it('开场白要求读完沙箱红线与打包测试两章', () => {

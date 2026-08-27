@@ -24,6 +24,57 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain('LanguageOptionRow');
   });
 
+  it('shows the server switch only in CindyDev and clears the old session before reloading', () => {
+    const settingsSource = readTextLf(
+      resolve(process.cwd(), 'app/settings.tsx'),
+      'utf8',
+    );
+    const environmentSource = readTextLf(
+      resolve(process.cwd(), 'src/config/devServerEnvironment.ts'),
+      'utf8',
+    );
+    const switchStart = settingsSource.indexOf(
+      'const switchDevServerEnvironment = useCallback(',
+    );
+    const logoutIndex = settingsSource.indexOf(
+      'await auth.logout();',
+      switchStart,
+    );
+    const reloadUnavailableIndex = settingsSource.indexOf(
+      'if (!reload) {',
+      switchStart,
+    );
+    const transactionalReloadIndex = settingsSource.indexOf(
+      'await switchDevServerEnvironmentAndReload({',
+      switchStart,
+    );
+    const reloadIndex = settingsSource.indexOf(
+      '? () => DevSettings.reload()',
+      switchStart,
+    );
+
+    expect(settingsSource).toContain(
+      '...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED',
+    );
+    expect(settingsSource).toContain(
+      'testID="settings.devServerEnvironment"',
+    );
+    expect(environmentSource).toContain(
+      "process.env.EXPO_PUBLIC_CINDY_AUTH_REGION === 'dev'",
+    );
+    expect(environmentSource).not.toContain('TextInput');
+    expect(switchStart).toBeGreaterThan(-1);
+    expect(reloadUnavailableIndex).toBeGreaterThan(switchStart);
+    expect(reloadUnavailableIndex).toBeLessThan(logoutIndex);
+    expect(logoutIndex).toBeGreaterThan(switchStart);
+    expect(transactionalReloadIndex).toBeGreaterThan(logoutIndex);
+    expect(reloadIndex).toBeGreaterThan(switchStart);
+    expect(reloadIndex).toBeLessThan(reloadUnavailableIndex);
+    expect(settingsSource).not.toContain(
+      'settings.devServerEnvironment.restartRequired',
+    );
+  });
+
   it('keeps the device-link hello name and settings device name on one source', () => {
     expect(buildMobileDeviceName({ constantsDeviceName: ' Carol iPhone ', platform: 'ios' })).toBe('Carol iPhone');
     expect(buildMobileDeviceName({ constantsDeviceName: '   ', platform: 'android' })).toBe('Cindy android');

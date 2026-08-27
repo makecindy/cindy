@@ -116,6 +116,7 @@
     "controlFork": "세션 분기",
     "markdownDocAriaLabel": "메시지 본문",
     "toolOutputTitle": "{{label}} 출력",
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "빈 Mermaid 다이어그램.",
     "diffEditCount": "{{n}}개 편집"
   },

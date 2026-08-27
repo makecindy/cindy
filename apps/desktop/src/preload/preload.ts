@@ -148,6 +148,7 @@ import {
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
+import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
 import type { BrowserBackendHealth, BrowserBackendRecoveryResult } from '../shared/browserBackend';
 import type {
   ReviewBranchDiffData,
@@ -431,6 +432,9 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutDbSlimmingStartupProgress = createIpcFanOut(
+  DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL,
+);
 const fanOutUpdateChannelSettings = createIpcFanOut('update-channel-settings');
 const fanOutWindowBackdropMaterialChanged = createIpcFanOut(
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
@@ -4505,7 +4509,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       action: 'connect' | 'provider' | 'add-to-group',
     ): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:hook-control:provider-open-action', { provider, action }),
-    // 目录偏好远程读写(数据正本在 slack-hook-server, 与 Slack /model 卡同一份;
+    // 目录偏好本机读写(正本在本地; 连上后镜像到 hook server 供 /model 卡使用;
     // teamId 为 multi-team 下的归属 team, 单绑定缺省)
     getWorkspacePrefs: (): Promise<{ prefs: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:prefs-get'),
@@ -4851,6 +4855,40 @@ contextBridge.exposeInMainWorld('electronAPI', {
       userId: string,
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
       ipcRenderer.invoke('local-db:ensure-ready', userId),
+    maintenance: {
+      scan: (
+        input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
+      ): Promise<import('../shared/localDbMaintenance').DbSlimmingScanResult> =>
+        ipcRenderer.invoke('local-db:maintenance:scan', input),
+      chooseBackupDirectory: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingBackupDirectorySelection
+      > => ipcRenderer.invoke('local-db:maintenance:choose-backup-directory'),
+      schedule: (
+        input: import('../shared/localDbMaintenance').DbSlimmingScheduleInput,
+      ): Promise<import('../shared/localDbMaintenance').DbSlimmingScheduleResult> =>
+        ipcRenderer.invoke('local-db:maintenance:schedule', input),
+      getLastResult: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingResult | null
+      > => ipcRenderer.invoke('local-db:maintenance:last-result'),
+      openLastBackupDirectory: (): Promise<{ opened: boolean }> =>
+        ipcRenderer.invoke('local-db:maintenance:open-last-backup-directory'),
+      getStartupProgress: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null
+      > => ipcRenderer.invoke('local-db:maintenance:startup-progress'),
+      cancelStartup: (): Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupCancelResult
+      > => ipcRenderer.invoke('local-db:maintenance:cancel-startup'),
+      onStartupProgress: (
+        callback: (
+          progress: import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null,
+        ) => void,
+      ): (() => void) =>
+        fanOutDbSlimmingStartupProgress((progress) => {
+          callback(
+            progress as import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null,
+          );
+        }),
+    },
     sessions: {
       list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
@@ -5579,7 +5617,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }>;
     }): Promise<{ ok: true; runId: string; reviewerSessionId: string }> =>
       ipcRenderer.invoke('maker:review:start', input),
-
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',
       params: { sessionId?: string; allowManagedPiPackagePreview?: boolean } = {},

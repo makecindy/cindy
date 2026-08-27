@@ -500,7 +500,13 @@ export async function clearContext(sessionId: string): Promise<void> {
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
-    .set({ sdkSessionId: null, clearedAt: Date.now(), updatedAt: Date.now() })
+    .set({
+      sdkSessionId: null,
+      clearedAt: Date.now(),
+      updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
+    })
     .where(eq(sessions.id, sessionId));
 }
 
@@ -537,6 +543,8 @@ export async function resetSessionToDefaults(
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
   setSessionProvider(sessionId, defaults.providerId);
@@ -563,6 +571,8 @@ export async function switchSessionWorkingDir(
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
   broadcastSessionCreated(sessionId);

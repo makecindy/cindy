@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
-const { default: migration0097 } = (await import(
-  '../../../../drizzle/scripts/0097_schedule_session_title_bindings'
+const { default: migration0098 } = (await import(
+  '../../../../drizzle/scripts/0098_schedule_session_title_bindings'
 )) as { default: { run(db: Database.Database): void } };
 
 function tableExists(db: Database.Database, tableName: string): boolean {
@@ -40,11 +40,11 @@ function bindingRows(
     .all() as Array<{ schedule_id: string; session_id: string; last_run_at: number }>;
 }
 
-describe('0097 schedule-session title bindings migration', () => {
+describe('0098 schedule-session title bindings migration', () => {
   it('is safe on an empty database', () => {
     const db = new Database(':memory:');
     try {
-      expect(() => migration0097.run(db)).not.toThrow();
+      expect(() => migration0098.run(db)).not.toThrow();
       expect(tableExists(db, 'schedule_session_bindings')).toBe(false);
     } finally {
       db.close();
@@ -72,7 +72,7 @@ describe('0097 schedule-session title bindings migration', () => {
           ('run-unbound', 'schedule-1', NULL, 400);
       `);
 
-      migration0097.run(db);
+      migration0098.run(db);
 
       expect(columnNames(db, 'schedules')).toContain('session_title_template');
       expect(indexExists(db, 'idx_schedule_runs_session_schedule')).toBe(true);
@@ -87,7 +87,7 @@ describe('0097 schedule-session title bindings migration', () => {
       db.prepare(
         'UPDATE schedule_session_bindings SET last_run_at = ? WHERE schedule_id = ? AND session_id = ?',
       ).run(500, 'schedule-1', 'session-a');
-      migration0097.run(db);
+      migration0098.run(db);
       expect(bindingRows(db)).toEqual([
         { schedule_id: 'schedule-1', session_id: 'session-a', last_run_at: 500 },
       ]);
@@ -143,7 +143,7 @@ describe('0097 schedule-session title bindings migration', () => {
           ('missing-session', 'schedule-1', 'session-missing', 300);
       `);
 
-      migration0097.run(db);
+      migration0098.run(db);
       expect(bindingRows(db)).toEqual([
         { schedule_id: 'schedule-1', session_id: 'session-a', last_run_at: 100 },
       ]);

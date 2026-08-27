@@ -611,6 +611,17 @@ function createHarness(opts?: {
   let liveRunningOverride: boolean | null | 'unknown' = null;
   let liveSessionPresentOverride: boolean | null | 'unknown' = null;
   let turnGeneration = 0;
+  let observedCurrentTurnTerminal:
+    | {
+        kind: 'none' | 'done' | 'error';
+        generation?: number;
+        message?: string;
+        reason?: string;
+        sdkError?: string;
+        errorStatus?: number;
+      }
+    | undefined = { kind: 'none' };
+  let observedCurrentTurnTerminalThrows = false;
   let turnSessionIdentity: object = { instanceId: 'harness-session' };
   let pendingInteraction = false;
   let agentKind: AgentInputCreateOpts['agentKind'] | null = 'claude-code';
@@ -618,6 +629,7 @@ function createHarness(opts?: {
 
   const sendToAgent = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(
     async (sessionId, _message, _createOpts, sendOpts) => {
+      sendOpts.onVendorTurnReserved?.(turnGeneration);
       await persistQueuedUserMessage(sessionId, sendOpts);
       running = true;
       return sendSuccess();
@@ -668,8 +680,10 @@ function createHarness(opts?: {
   >(() => resumableTurnErrorTakeover);
   // 纯判定(无副作用):这条 error 有没有可能被接管。host 侧接的是 isInterruptedTurnError,
   // 这里默认认所有带 sdkError='server_error' 的,够表达"候选 / 非候选"两种分支。
-  let resumableTurnErrorCandidate: (signals: { sdkError?: string }) => boolean = (signals) =>
-    signals.sdkError === 'server_error';
+  let resumableTurnErrorCandidate: (signals: {
+    sdkError?: string;
+    reason?: string;
+  }) => boolean = (signals) => signals.sdkError === 'server_error';
   const isResumableTurnErrorCandidate = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['isResumableTurnErrorCandidate']>
   >((signals) => resumableTurnErrorCandidate(signals));
@@ -745,6 +759,10 @@ function createHarness(opts?: {
       return true;
     },
     getTurnGeneration: () => turnGeneration,
+    getObservedCurrentTurnTerminal: () => {
+      if (observedCurrentTurnTerminalThrows) throw new Error('registry switched');
+      return observedCurrentTurnTerminal;
+    },
     getTurnSessionIdentity: () => turnSessionIdentity,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
@@ -831,6 +849,24 @@ function createHarness(opts?: {
     setTurnGeneration(value: number) {
       turnGeneration = value;
     },
+    setObservedCurrentTurnTerminal(
+      value:
+        | {
+            kind: 'none' | 'done' | 'error';
+            generation?: number;
+            message?: string;
+            reason?: string;
+            sdkError?: string;
+            errorStatus?: number;
+          }
+        | undefined,
+    ) {
+      observedCurrentTurnTerminal = value;
+      observedCurrentTurnTerminalThrows = false;
+    },
+    setObservedCurrentTurnTerminalThrows(value = true) {
+      observedCurrentTurnTerminalThrows = value;
+    },
     getTurnSessionIdentity() {
       return turnSessionIdentity;
     },
@@ -863,7 +899,9 @@ function createHarness(opts?: {
       resumableTurnErrorTakeover = value;
     },
     /** 改写"这条 error 有没有可能被接管"的纯判定(决定横幅与落库要不要先按住)。 */
-    setResumableTurnErrorCandidate(fn: (signals: { sdkError?: string }) => boolean) {
+    setResumableTurnErrorCandidate(
+      fn: (signals: { sdkError?: string; reason?: string }) => boolean,
+    ) {
       resumableTurnErrorCandidate = fn;
     },
     persistQueueSnapshot,
@@ -6436,6 +6474,167 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.errorRetryText).toBe('second');
   });
 
+  it('recovers a missed same-generation error when only paired done arrives during steer persist', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setResumableTurnErrorCandidate((signals) => signals.reason === 'empty-response');
+    const sid = 'steer-persist-missed-error-snapshot';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    const persistStarted = deferred<void>();
+    const persistSucceeded = deferred<void>();
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    const steerPromise = h.coordinator.steer(sid, second, { removeFromQueue: true });
+    await persistStarted.promise;
+
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'error',
+      generation: 0,
+      message: 'Authorization: Bearer secret-token',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 0,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    persistSucceeded.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.recovery).toEqual({ kind: 'active-turn', item: second });
+    expect(projection.error).toBe('Authorization: [REDACTED]');
+    expect(JSON.stringify(projection)).not.toContain('secret-token');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers a missed same-generation error when steer persist settles on an idle turn', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setResumableTurnErrorCandidate((signals) => signals.reason === 'empty-response');
+    const sid = 'steer-idle-missed-error-snapshot';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'error',
+      generation: 0,
+      message: 'Authorization: Bearer secret-token',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(true);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.recovery).toEqual({ kind: 'active-turn', item: second });
+    expect(projection.error).toBe('Authorization: [REDACTED]');
+    expect(JSON.stringify(projection)).not.toContain('secret-token');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not success-settle a steer leftover when a later generation already replaced it', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'steer-idle-superseded-generation';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    const third = makeItem('q-3', 'third');
+    const persistStarted = deferred<void>();
+    const persistSucceeded = deferred<void>();
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    const steerPromise = h.coordinator.steer(sid, second, { removeFromQueue: true });
+    await persistStarted.promise;
+
+    h.setTurnGeneration(1);
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'done',
+      generation: 1,
+    });
+
+    persistSucceeded.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    h.coordinator.enqueue(sid, third);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
+  it('does not settle a deferred persist done against a later-generation error snapshot', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'steer-persist-done-error-generation-mismatch';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    const persistStarted = deferred<void>();
+    const persistSucceeded = deferred<void>();
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    const steerPromise = h.coordinator.steer(sid, second, { removeFromQueue: true });
+    await persistStarted.promise;
+
+    h.setLiveRunning(false);
+    h.setLiveSessionPresent(true);
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({
+      kind: 'error',
+      generation: 2,
+      message: 'later turn failed',
+    });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 2,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    persistSucceeded.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
   it('suppresses stale steer persist failure after clearSession wins during persistence', async () => {
     const h = createHarness();
     h.setAgentKind('codex');
@@ -6647,6 +6846,943 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
+  });
+
+  it('reclaims a leftover activeTurn when the live Session already observed the current terminal', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-coordinator-only';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-idle');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      // Session + tracker both idle; only coordinator leftover activeTurn remains.
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 0 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, second);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-idle',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover activeTurn from a later generation terminal', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-generation-mismatch';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-later-turn'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('binds leftover reclaim to the reserved generation, not the post-await latest generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-reserved-generation-not-latest';
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+        sendOpts.onVendorTurnReserved?.(1);
+        h.setTurnGeneration(2);
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        h.setRunning(true);
+        return sendSuccess();
+      });
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-later-turn'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 1 });
+      h.coordinator.enqueue(sid, makeItem('q-3', 'queued-after-match'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-later-turn',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forwards structured leftover error signals into resumable recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-empty-response';
+      h.setResumableTurnErrorCandidate((signals) => signals.reason === 'empty-response');
+      h.setResumableTurnErrorTakeover({
+        error: 'empty response',
+        attempt: 1,
+        maxAttempts: 5,
+        sessionTotal: 1,
+      });
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: 'Authorization: Bearer secret-token',
+        reason: 'empty-response',
+        sdkError: 'server_error',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-error'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.autoResumePending?.attempt).toBe(1);
+      expect(projection.error).toBeNull();
+      expect(JSON.stringify(projection)).not.toContain('secret-token');
+      expect(h.onResumableTurnError).toHaveBeenCalledWith(
+        sid,
+        expect.objectContaining({
+          reason: 'empty-response',
+          sdkError: 'server_error',
+          message: 'Authorization: [REDACTED]',
+        }),
+        expect.objectContaining({ clientId: 'q-1' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover activeTurn when the current-generation terminal probe is unavailable', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-terminal-probe-unknown';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-idle');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal(undefined);
+      h.coordinator.enqueue(sid, second);
+      await flush();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover activeTurn when the terminal probe throws after Session-present succeeds', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-terminal-probe-throws';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.setObservedCurrentTurnTerminalThrows();
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-throw'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover activeTurn when the terminal probe is undefined and the tracker stays busy', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-terminal-probe-undefined-tracker-busy';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.setObservedCurrentTurnTerminal(undefined);
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-undefined'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('binds leftover steer reclaim to the generation captured at steer start', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'steer-binds-snapshot-generation';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      let releaseSteer!: () => void;
+      h.steerToAgent.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSteer = resolve;
+          }),
+      );
+      const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'injected'));
+      await flush();
+      expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+
+      h.setTurnGeneration(1);
+      releaseSteer();
+      await expect(steerPromise).resolves.toBe(true);
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 1 });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-later-done'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 1,
+        message: 'later turn failed',
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a planned-upgrade remote_daemon_closed silent when the paired done arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-paired-done';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] daemon restarting',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-upgrade-done'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery).toBeNull();
+      expect(projection.error).toBeNull();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(projection.pendingQueue.map((q) => q.clientId)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not recover a suppressed planned-upgrade error through leftover reconcile', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-leftover';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] daemon restarting',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-upgrade'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery).toBeNull();
+      expect(projection.error).toBeNull();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still recovers a real remote_daemon_closed that was not host-suppressed', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-unplanned-daemon-closed';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] unexpected',
+        reason: 'remote_daemon_closed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toContain('REMOTE_DAEMON_CLOSED');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears a planned-upgrade marker on Session close so a replacement instance cannot consume it', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-closed-replacement';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+        instanceId: 'harness-session',
+      });
+      h.coordinator.onSessionClosed(sid);
+      h.setTurnSessionIdentity({ instanceId: 'replacement-session' });
+      h.setTurnGeneration(0);
+      h.setRunning(false);
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setObservedCurrentTurnTerminal({ kind: 'none' });
+
+      h.coordinator.enqueue(sid, makeItem('q-2', 'after-rebuild'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] unexpected after rebuild',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'replacement-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toContain('REMOTE_DAEMON_CLOSED');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not consume a stale planned-upgrade marker after identity swap even without close', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-stale-instance';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+        instanceId: 'harness-session',
+      });
+      h.setTurnSessionIdentity({ instanceId: 'replacement-session' });
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] unexpected after swap',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'replacement-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toContain('REMOTE_DAEMON_CLOSED');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reclaim leftover error as planned-upgrade after close + generation reuse', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-leftover-reuse';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true });
+      h.setTurnSessionIdentity({ instanceId: 'replacement-session' });
+      h.setTurnGeneration(0);
+      h.setRunning(false);
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setObservedCurrentTurnTerminal({ kind: 'none' });
+
+      h.coordinator.enqueue(sid, makeItem('q-2', 'after-rebuild'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] unexpected leftover',
+        reason: 'remote_daemon_closed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-3', 'queued-after-error'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toContain('REMOTE_DAEMON_CLOSED');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-3']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still silences planned-upgrade close on the same Session instance', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-planned-upgrade-same-instance';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: '[REMOTE_DAEMON_CLOSED] daemon restarting',
+        reason: 'remote_daemon_closed',
+      });
+      h.coordinator.noteSuppressedTerminalError(sid, {
+        generation: 0,
+        reason: 'remote_daemon_closed',
+        instanceId: 'harness-session',
+      });
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery).toBeNull();
+      expect(projection.error).toBeNull();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not treat an observed terminal error as a successful leftover settlement', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-error';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-error');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: 'Authorization: Bearer secret-token',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, second);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toBe('Authorization: [REDACTED]');
+      expect(JSON.stringify(projection)).not.toContain('secret-token');
+      expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({ kind: 'none' });
+      h.coordinator.retryLastError(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'first' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('routes a paired done through leftover error recovery before the 250ms reconcile', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-paired-done-before-error-reconcile';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: 'Authorization: Bearer secret-token',
+        reason: 'empty-response',
+        sdkError: 'server_error',
+        errorStatus: 529,
+      });
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+
+      const projection = latestProjection(h.projections);
+      expect(projection.recovery?.kind).toBe('active-turn');
+      expect(projection.error).toBe('Authorization: [REDACTED]');
+      expect(JSON.stringify(projection)).not.toContain('secret-token');
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({ kind: 'none' });
+      h.coordinator.retryLastError(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'first' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not settle leftover activeTurn as success when done arrives with a mismatched error snapshot', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-paired-done-error-generation-mismatch';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-mismatch'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 2,
+        message: 'later turn failed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 2,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a pending Stop abort boundary when a later-generation terminal arrives', async () => {
+    const h = createHarness();
+    const sid = 'stop-abort-ignores-later-generation-terminal';
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind: 'codex' },
+    });
+    const second = makeItem('q-2', 'second', {
+      createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind: 'codex' },
+    });
+    const abort = deferred<void>();
+    h.setAgentKind('codex');
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    await flush();
+    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+
+    h.setTurnGeneration(1);
+    h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 1 });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 1,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+
+    h.coordinator.onTurnEvent(sid, 'error', 'later turn failed', undefined, {
+      sessionTurnGeneration: 1,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 0 });
+    h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+      sessionTurnGeneration: 0,
+      sessionInstanceId: 'harness-session',
+    });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
+  it('does not settle leftover activeTurn from a later-generation done callback', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-direct-next-turn-done-mismatch';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-direct-send'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 2,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles leftover activeTurn when the matching generation done arrives after a later turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-late-matching-done-after-direct-send';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-direct-send'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 2,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-direct-send',
+      });
+      expect(latestProjection(h.projections).recovery).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not recover leftover activeTurn from a later-generation error callback', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-direct-next-turn-error-mismatch';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-direct-send'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      h.setTurnGeneration(2);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 2,
+        message: 'later turn failed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+
+      h.coordinator.onTurnEvent(sid, 'error', 'later turn failed', undefined, {
+        sessionTurnGeneration: 2,
+        sessionInstanceId: 'harness-session',
+      });
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+        'q-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('routes a leftover terminal error through recovery even when the tracker stays busy', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-error-tracker-busy';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: 'provider failed',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-error'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not reclaim leftover activeTurn in the post-send agent_start gap', async () => {

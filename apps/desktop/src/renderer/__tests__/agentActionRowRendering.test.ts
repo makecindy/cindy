@@ -24,13 +24,20 @@ vi.mock('react-i18next', () => ({
   // t 返回原 key(带 count 时后缀 :count),断言直接对 key 做,避免复制文案表。
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
-      options && typeof options.count === 'number' ? `${key}:${String(options.count)}` : key,
+      options && typeof options.count === 'number'
+        ? `${key}:${String(options.count)}`
+        : options && typeof options.size === 'string'
+          ? `${key}:${options.size}`
+          : key,
   }),
 }));
 
 // Lightbox 家族与文件 chip 菜单只在交互后出现,渲染测试不涉及 — mock 掉,
 // 避免拖进重型依赖(DiffView / 文稿浏览器)。
-vi.mock('@/components/chat/TextLightbox', () => ({ TextLightbox: () => null }));
+vi.mock('@/components/chat/TextLightbox', () => ({
+  formatBytes: (bytes: number) => `${bytes / 1024} KB`,
+  TextLightbox: () => null,
+}));
 vi.mock('@/components/chat/ImageLightbox', () => ({ ImageLightbox: () => null }));
 vi.mock('@/components/chat/ToolPayloadLightbox', () => ({
   ToolPayloadLightbox: ({ payload }: { payload: unknown }) => JSON.stringify(payload),
@@ -393,6 +400,24 @@ describe('AgentActionRow — 行主文案', () => {
     expect(screen.getByText('git status')).toBeTruthy();
     expect(screen.getAllByText('查看工作区状态')).toHaveLength(1);
     expect(screen.queryByText(/^# /)).toBeNull();
+  });
+
+  it('已精简的工具结果显示释放提示与原始大小', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'Bash', { command: 'git status' }),
+        toolResult: JSON.stringify({
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 128 * 1024,
+          compactedAt: 500,
+        }),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText('chat.toolResultCompacted:128 KB')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('tool_result_compacted');
   });
 
   it('exposes the tool clientId as a viewport child anchor', () => {

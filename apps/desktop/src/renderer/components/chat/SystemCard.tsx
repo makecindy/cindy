@@ -25,6 +25,7 @@ import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import { LearnStatusCard } from '@/features/learn/LearnStatusCard';
 import {
+  isStaleReviewFailureCode,
   readReviewFailureCode,
   reviewFailureCodeFromLegacyError,
   type ReviewFailureCode,
@@ -1212,14 +1213,18 @@ const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
 function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; workingDir?: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const status =
-    data?.status === 'completed' || data?.status === 'failed' ? data.status : 'running';
   const reviewerSessionId =
     typeof data?.reviewerSessionId === 'string' ? data.reviewerSessionId : '';
   const result = typeof data?.result === 'string' ? data.result : '';
   const error = typeof data?.error === 'string' ? data.error : '';
   const failureCode =
     readReviewFailureCode(data?.failureCode) ?? reviewFailureCodeFromLegacyError(error);
+  const status =
+    data?.status === 'failed' && reviewerSessionId && isStaleReviewFailureCode(failureCode)
+      ? 'stale'
+      : data?.status === 'completed' || data?.status === 'failed'
+        ? data.status
+        : 'running';
   const failureMessage = failureCode
     ? t(REVIEW_FAILURE_I18N_KEY[failureCode])
     : error || t('chat.systemCard.review.noResult');
@@ -1231,6 +1236,8 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           <Spinner size={15} className="text-muted-foreground" />
         ) : status === 'completed' ? (
           <Check size={15} className="shrink-0 text-muted-foreground" />
+        ) : status === 'stale' ? (
+          <RefreshCw size={15} className="shrink-0 text-muted-foreground" />
         ) : (
           <X size={15} className="shrink-0 text-[var(--error-fg)]" />
         )}
@@ -1251,12 +1258,23 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           {t('chat.systemCard.review.readOnlyHint')}
         </p>
       )}
-      {status === 'failed' && (
-        <p className="mt-1.5 pl-[23px] text-xs text-[var(--error-fg)]">{failureMessage}</p>
+      {(status === 'stale' || status === 'failed') && (
+        <p
+          className={cn(
+            'mt-1.5 pl-[23px] text-xs',
+            status === 'stale' ? 'text-muted-foreground' : 'text-[var(--error-fg)]',
+          )}
+        >
+          {failureMessage}
+        </p>
       )}
-      {status === 'completed' && result && (
+      {(status === 'completed' || status === 'stale') && result && (
         <div className="mt-3 border-t border-border pt-3">
-          <MarkdownRenderer content={result} workingDir={workingDir ?? ''} />
+          <MarkdownRenderer
+            content={result}
+            workingDir={workingDir ?? ''}
+            allowPrivilegedLinks={status !== 'stale'}
+          />
         </div>
       )}
     </div>

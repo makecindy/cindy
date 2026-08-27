@@ -116,6 +116,7 @@
     "controlFork": "分叉任务",
     "markdownDocAriaLabel": "消息正文",
     "toolOutputTitle": "{{label}} 输出",
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "空 Mermaid 图表。",
     "diffEditCount": "{{n}} 处编辑"
   },

@@ -485,6 +485,57 @@ describe('inline attachment temporary files', () => {
     await expect(fs.lstat(ownerRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('persists exact liveness before writing an owner record and protects a live owner past its deadline', async () => {
+    const owner = {
+      instanceId: 'exact-live-owner',
+      processId: process.pid,
+    } as {
+      instanceId: string;
+      processId: number;
+      liveness?: { version: 1; port: number; token: string };
+    };
+    const ensureOwnerLiveness = vi.fn(async () => {
+      owner.liveness = {
+        version: 1,
+        port: 43_101,
+        token: 'exact-live-owner-token',
+      };
+    });
+    configureTempAttachmentOwner(owner, ensureOwnerLiveness);
+
+    const normalized = await normalizeUserMessage('exact-live-session', {
+      type: 'user',
+      content: [{
+        type: 'file',
+        base64: Buffer.from('still in use').toString('base64'),
+        mimeType: 'text/plain',
+      }],
+    });
+    if (typeof normalized === 'string' || typeof normalized.content === 'string') {
+      throw new Error('expected block message');
+    }
+    const filePath = normalized.content[0]?.path;
+    if (typeof filePath !== 'string') throw new Error('expected materialized file path');
+    const ownerRoot = path.dirname(path.dirname(filePath));
+    const record = JSON.parse(
+      await fs.readFile(path.join(ownerRoot, '.cindy-owner.json'), 'utf8'),
+    ) as { expiresAt: number; owner: typeof owner };
+
+    expect(ensureOwnerLiveness).toHaveBeenCalledOnce();
+    expect(record.owner.liveness).toEqual(owner.liveness);
+    const ownerLivenessProbe = vi.fn(() => 'alive' as const);
+    await cleanupOrphanedTempAttachments({
+      currentOwner: { instanceId: 'other-main', processId: process.pid + 100_000 },
+      root: path.join(tempRoot.value, 'cindy-attachments'),
+      processIsAlive: () => true,
+      ownerLivenessProbe,
+      now: () => record.expiresAt + 1,
+    });
+
+    expect(ownerLivenessProbe).toHaveBeenCalledWith(record.owner);
+    await expect(fs.lstat(ownerRoot)).resolves.toMatchObject({});
+  });
+
   it.each(['shared root', 'session directory'] as const)(
     'refuses a symlinked temporary attachment %s',
     async (target) => {

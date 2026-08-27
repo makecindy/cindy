@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "参数无效，请检查后重试。",
+    "PRECONDITION_FAILED": "当前状态下无法执行此操作，请稍后重试。",
     "SESSION_RUNNING": "当前任务正在运行，请稍后再试。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任务中运行，本次来源切换未生效（本任务仍使用原来源）。等它结束后再试。",
@@ -39,6 +40,12 @@
     "details": "错误详情"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "数据库清理中断",
+      "interruptedDescription": "数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。",
+      "recoveryFailedTitle": "本地数据库无法安全恢复",
+      "recoveryFailedDescription": "数据库清理恢复失败，Cindy 已停止打开本地数据库以避免覆盖原始数据。"
+    },
     "updateReady": {
       "title": "需要更新后才能继续",
       "description": "本地数据已由更新版本的 Cindy 升级，当前版本无法打开。新版本已下载就绪，重启安装后即可恢复使用。",
@@ -842,9 +849,54 @@
         "chatAttachmentsClearConfirmTitle": "清理消息附件缓存？",
         "chatAttachmentsClearConfirmDescription": "只会删除消息附件缓存目录中的文件，不会读取消息数据库。清理后，历史消息中的部分附件可能无法打开，且无法恢复。",
         "chatAttachmentsClearConfirmButton": "清理附件缓存",
-        "chatAttachmentsCleared": "消息附件缓存已清理",
-        "chatAttachmentsClearFailed": "无法清理消息附件缓存，请重试",
-        "cleanupLabel": "磁盘清理",
+          "chatAttachmentsCleared": "消息附件缓存已清理",
+          "chatAttachmentsClearFailed": "无法清理消息附件缓存，请重试",
+          "dbSlimmingBackupDirectoryDialogTitle": "选择数据库清理备份目录",
+          "dbSlimmingLabel": "数据库清理",
+          "dbSlimmingDescription": "扫描软删除任务和长时间归档任务中的历史消息，确认后重启 Cindy，在数据库打开前清理并压缩。不会删除磁盘附件或生成媒体。",
+          "dbSlimmingScanButton": "扫描数据库",
+          "dbSlimmingScanLoading": "正在扫描数据库，请稍候…",
+          "dbSlimmingScanResultTitle": "数据库扫描结果",
+          "dbSlimmingExecutionLoading": "正在准备数据库清理，Cindy 即将重启…",
+          "dbSlimmingArchiveAgeLabel": "清理归档时间超过",
+          "dbSlimmingArchiveAgeOption7Days": "7 天",
+          "dbSlimmingArchiveAgeOption1": "1 个月",
+          "dbSlimmingArchiveAgeOption3": "3 个月",
+          "dbSlimmingArchiveAgeOption6": "6 个月",
+          "dbSlimmingBackupLabel": "清理前备份数据库",
+          "dbSlimmingBackupDefaultLocation": "数据库所在目录（只保留最近一次清理备份）",
+          "dbSlimmingUseDefaultDirectoryButton": "使用默认目录",
+          "dbSlimmingChooseDirectoryButton": "选择备份目录",
+          "dbSlimmingBackupDirectoryFailed": "无法选择备份目录，请重试",
+          "dbSlimmingScanFailed": "无法扫描数据库，请重试",
+          "dbSlimmingScheduleFailed": "无法安排数据库清理，请重新扫描后重试",
+          "dbSlimmingBackupMissing": "没有找到最近一次清理备份",
+          "dbSlimmingBackupOpenFailed": "无法打开清理备份位置，请重试",
+          "dbSlimmingReportTasks": "将清理软删除任务 {{deleted}} 个、归档任务 {{archived}} 个",
+          "dbSlimmingReportMessages": "预计清理 {{count}} 条消息内容（约 {{size}}）",
+          "dbSlimmingReportSpace": "数据库 {{database}}；临时空间至少需要 {{temporary}}；当前可用 {{free}}",
+          "dbSlimmingSpaceUnknown": "未知",
+          "dbSlimmingInsufficientSpace": "当前磁盘空间不足，无法安全创建工作副本并压缩数据库。",
+          "dbSlimmingConfirmButton": "确认数据库清理",
+          "dbSlimmingConfirmTitle": "重启并清理数据库？",
+          "dbSlimmingConfirmDescriptionWithBackup": "Cindy 将优雅重启，并在下次启动、数据库打开前完成备份、历史清理、压缩和完整性校验。备份写入并校验通过后才会清理数据。",
+          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy 将优雅重启，并在下次启动、数据库打开前清理和压缩。本次不创建备份，清除的历史内容无法恢复。",
+          "dbSlimmingRestartButton": "重启并清理数据库",
+          "dbSlimmingResultCompleted": "已清除 {{tasks}} 个任务中的 {{messages}} 条消息，数据库缩小 {{size}}。",
+          "dbSlimmingOpenBackupButton": "打开清理备份",
+          "dbSlimmingToastCompleted": "数据库清理完成，已释放 {{size}}",
+          "dbSlimmingHistoryCleared": "历史内容已清除",
+          "dbSlimmingFailure": {
+            "backup-failed": "未能创建或保留数据库备份，未清理历史内容。",
+            "cleanup-failed": "数据库清理未完成，原数据库保持不变。",
+            "database-in-use": "数据库正被其他实例使用，未执行清理。",
+            "insufficient-space": "磁盘空间不足，未执行数据库清理。",
+            "integrity-check-failed": "数据库完整性校验未通过，已恢复原数据库。",
+            "replacement-failed": "无法安装压缩后的数据库，已恢复原数据库。",
+            "recovery-failed": "数据库恢复失败，Cindy 已停止打开数据库以保护原始数据。",
+            "unknown": "数据库清理未完成，请重试。"
+          },
+          "cleanupLabel": "磁盘清理",
         "cleanupDescription": "扫描没有被任何任务引用的媒体文件、超限缓存与废弃目录。先报数，确认后才删除；输入框草稿和排队消息里的图片会被自动保护。",
         "scanButton": "扫描",
         "scanFailed": "扫描失败",
@@ -3469,6 +3521,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "连接 {{provider}} 后可编辑（先在上方开启对应开关并等待连接成功）。",
+        "offlineLocal": "{{provider}} 暂时连不上，改动会保存在本机；连上后同步到对话里的模型卡。",
         "requireBinding": "先完成 {{provider}} 账号关联后可编辑。",
         "serverUnsupported": "服务器版本过旧或暂时无应答，无法读取偏好。",
         "retry": "重试",
@@ -5229,6 +5282,32 @@
       "envFailed": "环境初始化失败，点击重试"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
+    "databaseCleanup": {
+      "title": "正在清理数据库",
+      "progressLabel": "数据库清理进度",
+      "phase": {
+        "preparing": "正在准备清理",
+        "backingUp": "正在备份数据库",
+        "copying": "正在创建清理工作副本",
+        "cleaning": "正在删除过期消息",
+        "compacting": "正在压缩数据库",
+        "verifying": "正在校验数据库",
+        "finalizing": "正在安全替换数据库",
+        "cancelling": "正在取消清理"
+      },
+      "elapsedAndRemaining": "已用 {{elapsed}} · 约剩余 {{remaining}}",
+      "elapsedFinalizing": "已用 {{elapsed}} · 即将完成",
+      "duration": {
+        "seconds": "{{count}} 秒",
+        "minutes": "{{count}} 分钟"
+      },
+      "cancelAction": "取消清理并进入 Cindy",
+      "cancellingAction": "正在取消清理…",
+      "finalizingAction": "正在完成，请稍候…",
+      "cancelHint": "可随时取消；取消后会保留原数据库并继续启动 Cindy。",
+      "cancellingHint": "正在停止清理，原数据库不会被修改。",
+      "finalizingHint": "正在安全替换数据库，请勿关闭 Cindy。"
+    },
     "envFailed": {
       "title": "环境初始化失败",
       "retry": "重试"
@@ -7527,6 +7606,7 @@
       "promptSend": "发送",
       "promptCancel": "取消"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "无可展示内容",
       "fileChange": {
@@ -7726,6 +7806,7 @@
       "review": {
         "running": "正在审查当前成果",
         "completed": "审查完成",
+        "stale": "审查已完成 · 结果已过期",
         "failed": "审查未完成",
         "openTask": "打开审查任务",
         "readOnlyHint": "独立任务 · 无开发记忆 · 只读",
@@ -9590,7 +9671,8 @@
       "publicNameHint": "该署名会公开显示在 Issue 正文中",
       "anonymous": "匿名",
       "useAnonymous": "使用匿名署名",
-      "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}} · 界面语言 {{uiLanguage}}",
+      "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面语言 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
       "regionLine": "版本区域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "1282c625-5cf2-4e6f-ac39-ec3421412e3e",
+  "id": "1a52644f-09ab-4a17-ad9d-878590e73f6d",
   "prevId": "0301f553-95d2-4bd4-a120-d131780848c7",
   "tables": {
     "account_usage_snapshots": {
@@ -2094,14 +2094,6 @@
             "fired_at"
           ],
           "isUnique": false
-        },
-        "idx_schedule_runs_session_schedule": {
-          "name": "idx_schedule_runs_session_schedule",
-          "columns": [
-            "session_id",
-            "schedule_id"
-          ],
-          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -2133,81 +2125,6 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "schedule_session_bindings": {
-      "name": "schedule_session_bindings",
-      "columns": {
-        "schedule_id": {
-          "name": "schedule_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "last_run_at": {
-          "name": "last_run_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_schedule_session_bindings_session_schedule": {
-          "name": "idx_schedule_session_bindings_session_schedule",
-          "columns": [
-            "session_id",
-            "schedule_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "schedule_session_bindings_schedule_id_schedules_id_fk": {
-          "name": "schedule_session_bindings_schedule_id_schedules_id_fk",
-          "tableFrom": "schedule_session_bindings",
-          "tableTo": "schedules",
-          "columnsFrom": [
-            "schedule_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "schedule_session_bindings_session_id_sessions_id_fk": {
-          "name": "schedule_session_bindings_session_id_sessions_id_fk",
-          "tableFrom": "schedule_session_bindings",
-          "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "schedule_session_bindings_schedule_id_session_id_pk": {
-          "columns": [
-            "schedule_id",
-            "session_id"
-          ],
-          "name": "schedule_session_bindings_schedule_id_session_id_pk"
-        }
-      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -2406,13 +2323,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "session_title_template": {
-          "name": "session_title_template",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "silent_when_idle": {
           "name": "silent_when_idle",
@@ -3103,6 +3013,27 @@
         },
         "last_turn_ended_at": {
           "name": "last_turn_ended_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "list_preview": {
+          "name": "list_preview",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "list_preview_role": {
+          "name": "list_preview_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "list_message_count": {
+          "name": "list_message_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
