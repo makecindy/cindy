@@ -4213,15 +4213,40 @@ export class CodexAgent extends BaseAgent {
           providerId: opts.providerId,
           model: opts.model,
         });
+    const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
     const initialCustomContextWindow = !reviewMode && !opts.remoteHostId
-      ? await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
+      ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
-    const usesCustomContextHost =
-      typeof initialCustomContextWindow === 'number' &&
-      Number.isFinite(initialCustomContextWindow) &&
-      initialCustomContextWindow > 0;
-    const initialCustomContextModel = usesCustomContextHost ? opts.model : null;
-    const initialCustomContextProviderId = usesCustomContextHost ? opts.providerId : null;
+    const customContextCatalogIdentity = (
+      model: string,
+      contextWindow: number | null,
+    ): string | null =>
+      typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
+        ? `${model}\0${Math.floor(contextWindow)}`
+        : null;
+    const initialCustomContextCatalogIdentity = customContextCatalogIdentity(
+      opts.model,
+      initialCustomContextWindow,
+    );
+    const usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
+    const resolveModelSwitchCatalogIdentity = async (
+      newModel: string,
+      setOpts?: { providerId?: string | null },
+    ): Promise<string | null> => {
+      const providerId = setOpts && Object.hasOwn(setOpts, 'providerId')
+        ? setOpts.providerId
+        : mutableProviderId;
+      const contextWindow = reviewMode || opts.remoteHostId
+        ? null
+        : await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
+      return customContextCatalogIdentity(newModel, contextWindow);
+    };
+    const modelSwitchRequiresRebuild = async (
+      newModel: string,
+      setOpts?: { providerId?: string | null },
+    ): Promise<boolean> =>
+      (await resolveModelSwitchCatalogIdentity(newModel, setOpts)) !==
+        initialCustomContextCatalogIdentity;
     const currentHostKey = reviewMode
       ? localReviewHostKey(sid)
       : usesCustomContextHost
@@ -4251,7 +4276,7 @@ export class CodexAgent extends BaseAgent {
             ? {
                 keyOverride: currentHostKey,
                 hostPurpose: 'custom-context' as const,
-                customContextModel: initialCustomContextModel ?? undefined,
+                customContextModel: opts.model,
                 customContextWindow: initialCustomContextWindow ?? undefined,
               }
             : {}),
@@ -4266,7 +4291,8 @@ export class CodexAgent extends BaseAgent {
     const retireSingleSessionHost = async (): Promise<void> => {
       if (!reviewMode && !usesCustomContextHost) return;
       const purpose = reviewMode ? 'Review' : 'custom context';
-      await this.retireHostKey(currentHostKey, `Cindy ${purpose} host is single-session`, {
+      const reason = `Cindy ${purpose} host is single-session`;
+      await this.retireHostKey(currentHostKey, reason, {
         failIfActive: false,
         logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
         ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
@@ -5167,7 +5193,6 @@ export class CodexAgent extends BaseAgent {
       cleanup: () => host.unsubscribeThread(detachedThreadId),
     });
     const hasHostShellCommandPolicy = Boolean(this.deps.getShellCommandPolicy);
-    const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
     function currentApprovalConfig(): CodexPermissionConfig {
       if (reviewMode) {
         return { approvalPolicy: 'never', sandbox: 'read-only' };
@@ -12189,31 +12214,18 @@ export class CodexAgent extends BaseAgent {
         interactionResolver = resolver;
       },
 
+      requiresModelSwitchRebuild: modelSwitchRequiresRebuild,
+
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
       async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
         if (reviewMode) return;
-        const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
-          ? setOpts.providerId
-          : mutableProviderId;
-        const requestedCustomContextWindow = opts.remoteHostId
-          ? null
-          : await resolveCodexThreadContextWindow?.(requestedProviderId, newModel) ?? null;
-        if (
-          usesCustomContextHost &&
-          (newModel !== initialCustomContextModel || requestedProviderId !== initialCustomContextProviderId)
-        ) {
-          throw new Error(
-            'A custom context window is fixed when this Codex task starts. Start a new task to change its model or provider.',
+        const catalogIdentity = await resolveModelSwitchCatalogIdentity(newModel, setOpts);
+        if (catalogIdentity !== initialCustomContextCatalogIdentity) {
+          const error = new Error(
+            'Codex model switch requires rebuilding the current session handle',
           );
-        }
-        if (
-          !usesCustomContextHost &&
-          typeof requestedCustomContextWindow === 'number' &&
-          requestedCustomContextWindow > 0
-        ) {
-          throw new Error(
-            'This Codex task did not start with a custom context catalog. Start a new task to use that model.',
-          );
+          (error as { code?: string }).code = 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD';
+          throw error;
         }
         // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
         // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。

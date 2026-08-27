@@ -28490,9 +28490,85 @@ describe('CodexAgent custom provider context window override', () => {
     await agent.dispose();
   });
 
-  it('requires a new task when runtime model switching would cross the catalog boundary', async () => {
-    const resolveCodexThreadContextWindow = (providerId: string | null | undefined, modelId: string) =>
-      providerId === 'mygpt' && modelId === 'gpt-5.6-sol' ? 700_000 : null;
+  it('retires the isolated custom-context app-server when initialize fails', async () => {
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.Initialize, {
+        error: { code: -32_000, message: 'initialize boom' },
+      });
+    };
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 700_000,
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
+    }));
+
+    await expect(agent.startSession({
+      sessionId: 'session-custom-initialize-failure',
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+    })).rejects.toThrow('initialize boom');
+
+    expect(createdTransports[0]?.closed).toBe(true);
+    expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    await agent.dispose();
+  });
+
+  it('retires the isolated custom-context app-server when capability preparation fails', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 700_000,
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
+      resolveCapabilityRouting: async () => {
+        throw new Error('capability preparation boom');
+      },
+    }));
+
+    await expect(agent.startSession({
+      sessionId: 'session-custom-capability-failure',
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+    })).rejects.toThrow('capability preparation boom');
+
+    expect(createdTransports[0]?.closed).toBe(true);
+    expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    await agent.dispose();
+  });
+
+  it('creates a fresh custom-context host when the same session retries after startup failure', async () => {
+    MockCodexTransport.failThreadStart = true;
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 700_000,
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
+    }));
+    const options = {
+      sessionId: 'session-custom-startup-retry',
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      workingDir: '/repo',
+    } as const;
+
+    await expect(agent.startSession(options)).rejects.toThrow('thread start boom');
+    expect(createdTransports[0]?.closed).toBe(true);
+
+    MockCodexTransport.failThreadStart = false;
+    const handle = await agent.startSession(options);
+
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[1]?.closed).toBe(false);
+    await handle.close();
+    expect(createdTransports[1]?.closed).toBe(true);
+    await agent.dispose();
+  });
+
+  it('reports catalog-boundary rebuilds without requiring a new business task', async () => {
+    let configuredWindow = 700_000;
+    const resolveCodexThreadContextWindow = (
+      providerId: string | null | undefined,
+      modelId: string,
+    ) =>
+      (providerId === 'mygpt' || providerId === 'mygpt-alt') && modelId === 'gpt-5.6-sol'
+        ? configuredWindow
+        : null;
     const customAgent = new CodexAgent(createDeps({}, { resolveCodexThreadContextWindow }));
     installFakeHost(customAgent);
     const customHandle = await customAgent.startSession({
@@ -28502,8 +28578,21 @@ describe('CodexAgent custom provider context window override', () => {
       workingDir: '/repo',
     });
 
+    await expect(
+      customHandle.requiresModelSwitchRebuild?.('gpt-5.6-sol', { providerId: 'mygpt' }),
+    ).resolves.toBe(false);
+    await expect(
+      customHandle.requiresModelSwitchRebuild?.('gpt-5.6-sol', { providerId: 'mygpt-alt' }),
+    ).resolves.toBe(false);
+    await expect(
+      customHandle.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'xd' }),
+    ).resolves.toBe(true);
+    configuredWindow = 900_000;
+    await expect(
+      customHandle.requiresModelSwitchRebuild?.('gpt-5.6-sol', { providerId: 'mygpt' }),
+    ).resolves.toBe(true);
     await expect(customHandle.setModel?.('gpt-5.4', { providerId: 'xd' })).rejects.toThrow(
-      'custom context window is fixed',
+      'requires rebuilding the current session handle',
     );
     await customHandle.close();
 
@@ -28516,8 +28605,14 @@ describe('CodexAgent custom provider context window override', () => {
       workingDir: '/repo',
     });
 
+    await expect(
+      normalHandle.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'xd' }),
+    ).resolves.toBe(false);
+    await expect(
+      normalHandle.requiresModelSwitchRebuild?.('gpt-5.6-sol', { providerId: 'mygpt' }),
+    ).resolves.toBe(true);
     await expect(normalHandle.setModel?.('gpt-5.6-sol', { providerId: 'mygpt' })).rejects.toThrow(
-      'did not start with a custom context catalog',
+      'requires rebuilding the current session handle',
     );
     await normalHandle.close();
   });

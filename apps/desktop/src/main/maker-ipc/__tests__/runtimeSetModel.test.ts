@@ -885,6 +885,75 @@ describe('applyRuntimeSetModelChange', () => {
     expect(setModel).not.toHaveBeenCalled();
   });
 
+  it('rebuilds an idle Codex Session when its handle reports a context-host boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-context-host-rebuild');
+    setSessionProvider(sessionId, 'mygpt');
+    const setModel = vi.fn(async () => {});
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.4',
+        setModel,
+        requiresModelSwitchRebuild,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      clearPendingCredentialSwitch: vi.fn(),
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
+      providerId: 'mygpt',
+    });
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('defers a busy Codex context-host rebuild to the turn boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-context-host-defer');
+    setSessionProvider(sessionId, 'mygpt');
+    const registerPendingCredentialSwitch = vi.fn();
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.4',
+        setModel,
+        requiresModelSwitchRebuild: async () => true,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => true },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      registerPendingCredentialSwitch,
+    })).resolves.toEqual({ status: 'deferred' });
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+    });
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
   it('defers a busy Orca Worker rebuild to the turn boundary', async () => {
     const sessionId = rememberSession('runtime-set-model-orca-worker-defer');
     setSessionProvider(sessionId, 'xd');

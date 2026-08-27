@@ -1808,6 +1808,16 @@ export interface AgentSessionHandle {
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
   setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
 
+  /**
+   * 当前 provider handle 是否必须先关闭、再由同一业务任务 cold resume 才能应用目标模型。
+   * 缺省 false；用于 Codex 这类把部分模型配置冻结在 app-server spawn / thread resume
+   * 边界的 adapter。调用方必须在任何 route store 写入前完成该预检。
+   */
+  requiresModelSwitchRebuild?(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): boolean | Promise<boolean>;
+
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;
 

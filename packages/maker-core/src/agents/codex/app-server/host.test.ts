@@ -69,6 +69,43 @@ class DelayedTransport implements Transport {
   }
 }
 
+class RejectedInitializeTransport implements Transport {
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+  closed = false;
+
+  async writeLine(line: string): Promise<void> {
+    const message = JSON.parse(line) as { id?: unknown; method?: string };
+    if (message.id == null || message.method !== 'initialize') return;
+    for (const handler of this.lineHandlers) {
+      handler(JSON.stringify({
+        id: message.id,
+        error: { code: -32_000, message: 'initialize boom' },
+      }));
+    }
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  onStderr(_handler: StderrHandler): () => void {
+    return () => {};
+  }
+
+  async close(reason = 'test close'): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    for (const handler of this.closeHandlers) handler({ reason });
+  }
+}
+
 class NotificationTransport implements Transport {
   private readonly lineHandlers = new Set<LineHandler>();
   private readonly closeHandlers = new Set<CloseHandler>();
@@ -300,6 +337,20 @@ describe('AppServerHost.request startup timeout', () => {
 });
 
 describe('AppServerHost.ensureStartedWithTimeout', () => {
+  it('closes the failed transport when initialize rejects', async () => {
+    const transport = new RejectedInitializeTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    await expect(host.ensureStarted()).rejects.toThrow('initialize boom');
+
+    expect(transport.closed).toBe(true);
+    await host.shutdown();
+  });
+
   it('rejects when startup hangs past the budget and keeps the shared bootstrap reusable (codex R13 P1)', async () => {
     // startSession 的 initialize 直调与 request() 的 startup deadline 同款语义:
     // 超时只截断本次等待, startPromise 后台继续, 后续调用直接复用不重新 spawn。

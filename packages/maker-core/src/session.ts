@@ -1478,6 +1478,13 @@ export class Session {
     await this.handle.setModel(model, opts);
   }
 
+  async requiresModelSwitchRebuild(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): Promise<boolean> {
+    return await this.handle.requiresModelSwitchRebuild?.(model, opts) ?? false;
+  }
+
   async setEffort(effort: Effort): Promise<void> {
     if (!this.capabilities.effort.supported) {
       throw new NotSupportedError('effort', this.capabilities.effort);

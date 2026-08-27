@@ -480,10 +480,20 @@ export class AppServerHost {
       return Promise.reject(new Error('AppServerHost: cannot ensureStarted() during shutdown'));
     }
     if (this.startPromise) return this.startPromise;
-    this.startPromise = this.bootstrap(capabilities).catch((err) => {
+    this.startPromise = this.bootstrap(capabilities).catch(async (err) => {
       // bootstrap 失败 → 清掉 startPromise 让下次调用能重试
+      const failedClient = this.client;
       this.startPromise = null;
       this.client = null;
+      if (failedClient) {
+        try {
+          await failedClient.close({ reason: 'AppServerHost bootstrap failed' });
+        } catch (closeError) {
+          this.logger.warn('failed to close app-server client after bootstrap failure', {
+            error: closeError instanceof Error ? closeError.message : String(closeError),
+          });
+        }
+      }
       throw err;
     });
     return this.startPromise;
