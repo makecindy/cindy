@@ -7376,9 +7376,9 @@
       "userTurnCostDetailsTitle": "本輪明細",
       "relative": {
         "justNow": "剛剛",
-        "minutesAgo": "{{count}} 分鐘前",
-        "hoursAgo": "{{count}} 小時前",
-        "daysAgo": "{{count}} 天前"
+        "minutesAgo_other": "{{count}} 分鐘前",
+        "hoursAgo_other": "{{count}} 小時前",
+        "daysAgo_other": "{{count}} 天前"
       }
     },
     "runningStatus": {

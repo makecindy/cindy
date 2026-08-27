@@ -7385,9 +7385,9 @@
       "userTurnCostDetailsTitle": "リクエストの明細",
       "relative": {
         "justNow": "たった今",
-        "minutesAgo": "{{count}}分前",
-        "hoursAgo": "{{count}}時間前",
-        "daysAgo": "{{count}}日前"
+        "minutesAgo_other": "{{count}}分前",
+        "hoursAgo_other": "{{count}}時間前",
+        "daysAgo_other": "{{count}}日前"
       }
     },
     "runningStatus": {

@@ -7385,9 +7385,9 @@
       "userTurnCostDetailsTitle": "이번 요청 상세",
       "relative": {
         "justNow": "방금",
-        "minutesAgo": "{{count}}분 전",
-        "hoursAgo": "{{count}}시간 전",
-        "daysAgo": "{{count}}일 전"
+        "minutesAgo_other": "{{count}}분 전",
+        "hoursAgo_other": "{{count}}시간 전",
+        "daysAgo_other": "{{count}}일 전"
       }
     },
     "runningStatus": {
