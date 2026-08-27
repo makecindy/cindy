@@ -538,6 +538,42 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
   });
 
+  it('keeps a cloud database created during the online backup', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+
+    let backupStarted!: () => void;
+    let releaseBackup!: () => void;
+    const backupStartedPromise = new Promise<void>((resolve) => {
+      backupStarted = resolve;
+    });
+    const backupRelease = new Promise<void>((resolve) => {
+      releaseBackup = resolve;
+    });
+    const racingDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        backupDatabase: async (_source, destination) => {
+          await fs.writeFile(destination, 'local-snapshot');
+          backupStarted();
+          await backupRelease;
+        },
+      },
+    };
+
+    const adoption = adoptLocalProfileDatabase('owner-a', racingDeps);
+    await backupStartedPromise;
+    // A separate initializer can create the cloud target after the adoption
+    // preflight; the atomic target claim must preserve that database.
+    await fs.writeFile(target, 'cloud-db');
+    releaseBackup();
+
+    await expect(adoption).resolves.toEqual({ status: 'target-exists' });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('cloud-db');
+  });
+
   it('does not publish WAL sidecars when the main target loses the race', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');

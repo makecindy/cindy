@@ -635,18 +635,10 @@ async function copyDatabaseAtomically(
     if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
     }
-    // Hard-link publication is intentionally no-replace on every supported
-    // platform. Never use rename here: a later same-owner initializer must
-    // lose with EEXIST rather than overwrite the database already published
-    // by the first initializer.
-    let linked = false;
-    try {
-      await deps.fs.link(dbTmp, targetDb);
-      linked = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
-      throw error;
-    }
+    // Claim the target with a no-replace filesystem primitive. Never use
+    // rename here: a later initializer must lose with EEXIST rather than
+    // overwrite the database already published by the first initializer.
+    const linked = await claimDatabaseTargetWithoutReplacement(deps, dbTmp, targetDb);
     if (!linked) return false;
     published = true;
     flushPublishedDatabase(targetDb);
@@ -656,6 +648,20 @@ async function copyDatabaseAtomically(
     throw error;
   } finally {
     await deps.fs.removeIfExists(dbTmp);
+  }
+}
+
+async function claimDatabaseTargetWithoutReplacement(
+  deps: LocalProfileDataMigrationDeps,
+  dbTmp: string,
+  targetDb: string,
+): Promise<boolean> {
+  try {
+    await deps.fs.link(dbTmp, targetDb);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+    throw error;
   }
 }
 
