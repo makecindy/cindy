@@ -389,6 +389,95 @@ describe('sessionsStore status bucket migration', () => {
     );
   });
 
+  it('keeps concurrent settings after optimistic archive removes the last cached row', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      model: 'old-model',
+      effort: 'medium',
+      permissionMode: 'ask',
+      fastMode: false,
+      providerId: null,
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('active');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    expect(sessionsStore.findById('archive-me')).toBeNull();
+    sessionsStore.patchLocal('archive-me', {
+      model: 'new-model',
+      effort: 'high',
+      permissionMode: 'auto',
+      fastMode: true,
+      providerId: 'new-provider',
+    });
+
+    const archivedRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => archivedRequest.promise);
+    const archivedLoad = sessionsStore.ensureByFilter('archived');
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ).toBe(true);
+    archivedRequest.resolve([]);
+    await archivedLoad;
+
+    expect(sessionsStore.getByFilter('archived')?.[0]).toEqual(
+      expect.objectContaining({
+        status: 'archived',
+        updatedAt: '2026-08-27T03:00:00.000Z',
+        model: 'new-model',
+        effort: 'high',
+        permissionMode: 'auto',
+        fastMode: true,
+        providerId: 'new-provider',
+      }),
+    );
+  });
+
+  it('keeps concurrent settings when a pending transition started without a cached source row', async () => {
+    mocks.list.mockResolvedValueOnce([]);
+    await sessionsStore.ensureByFilter('archived');
+    const transition = sessionsStore.beginStatusTransition('not-cached', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    sessionsStore.patchLocal('not-cached', {
+      model: 'new-model',
+      effort: 'high',
+      permissionMode: 'auto',
+    });
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...session('not-cached', 'active', '2026-08-27T01:00:00.000Z'),
+        status: 'archived',
+        pinnedAt: null,
+        model: 'old-model',
+        effort: 'medium',
+        permissionMode: 'ask',
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      } as Session),
+    ).toBe(true);
+
+    expect(sessionsStore.getByFilter('archived')?.[0]).toEqual(
+      expect.objectContaining({
+        id: 'not-cached',
+        status: 'archived',
+        updatedAt: '2026-08-27T03:00:00.000Z',
+        model: 'new-model',
+        effort: 'high',
+        permissionMode: 'auto',
+      }),
+    );
+  });
+
   it('replays settings fields that arrive after a complete status override', async () => {
     const target = {
       ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),

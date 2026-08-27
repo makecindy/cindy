@@ -110,6 +110,17 @@ function mergeSession(prev: Session, patch: Partial<Session>): Session {
   return next;
 }
 
+function mergeSessionPatch(
+  prev: Partial<Session>,
+  patch: Partial<Session>,
+): Partial<Session> {
+  const next = { ...prev, ...patch };
+  if (patch._count) {
+    next._count = { ...prev._count, ...patch._count };
+  }
+  return next;
+}
+
 /**
  * 自动起名的「即时标题预览」叠加层（sessionId → 预览标题）。
  *
@@ -210,6 +221,8 @@ interface PendingStatusTransition {
   hasSucceeded: boolean;
   rollbackPatch: Partial<Session>;
   sourceSession: Session | null;
+  /** 状态写在途期间后到的非 status 权威字段；成功行落缓存前必须最后重放。 */
+  concurrentAuthoritativePatch: Partial<Session>;
   titleRevisionAtStart: number;
   spendRevisionAtStart: number;
   buckets: Map<ListStatusFilter, StatusBucketSnapshot>;
@@ -545,23 +558,25 @@ function mergeAuthoritativePatchIntoStatusOverride(
   sessionId: string,
   patch: Partial<Session>,
 ): void {
+  const pending = pendingStatusTransitions.get(sessionId);
+  if (pending) {
+    pending.concurrentAuthoritativePatch = mergeSessionPatch(
+      pending.concurrentAuthoritativePatch,
+      patch,
+    );
+    if (pending.sourceSession) {
+      pending.sourceSession = mergeSession(pending.sourceSession, patch);
+    }
+  }
   const override = sessionStatusOverrides.get(sessionId);
   if (!override) return;
   if (override.patch.status !== 'deleted') {
     sessionStatusRowRevision += 1;
     override.rowRevision = sessionStatusRowRevision;
-    const previousCount = override.patch._count;
-    override.patch = { ...override.patch, ...patch };
-    if (patch._count) {
-      override.patch._count = { ...previousCount, ...patch._count };
-    }
+    override.patch = mergeSessionPatch(override.patch, patch);
     if (override.session) {
       override.session = mergeSession(override.session, patch);
     }
-  }
-  const pending = pendingStatusTransitions.get(sessionId);
-  if (pending?.sourceSession) {
-    pending.sourceSession = mergeSession(pending.sourceSession, patch);
   }
 }
 
@@ -722,6 +737,7 @@ export const sessionsStore = {
       hasSucceeded: false,
       rollbackPatch,
       sourceSession: source,
+      concurrentAuthoritativePatch: {},
       titleRevisionAtStart: sessionTitleRevision,
       spendRevisionAtStart: sessionSpendRevision,
       buckets,
@@ -801,10 +817,14 @@ export const sessionsStore = {
     pending.hasSucceeded = true;
     if (pending.tokens.size === 0) clearPendingStatusTransition(token.sessionId, pending);
     const current = this.findById(token.sessionId);
-    const authoritative =
+    const authoritativeBase =
       current?.status === persisted.status && updatedAtMs(current) >= updatedAtMs(persisted)
         ? current
         : persisted;
+    // 只有源桶加载时，乐观归档会先移除最后一份缓存行；这期间到达的 settings-only
+    // 权威广播无法从 findById 取回。它们晚于状态请求起飞，必须在 persisted 完整行之上
+    // 最后重放，同时保留 persisted 的新 status / updatedAt。
+    const authoritative = mergeSession(authoritativeBase, pending.concurrentAuthoritativePatch);
     const [withOverrides] = applyAutoTitlePreviews(
       applySessionTitleOverrides(
         applySessionSpendOverrides([authoritative], pending.spendRevisionAtStart),
