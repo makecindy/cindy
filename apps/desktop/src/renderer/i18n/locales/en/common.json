@@ -9107,7 +9107,7 @@
       "sessionCost": "Session cost {{cost}}",
       "sessionValue": "Session value {{value}}",
       "runCost": "Run cost {{cost}}",
-      "runValue": "Estimated run value {{value}}",
+      "runTokens": "Token usage {{tokens}}",
       "costUnavailable": "Cost unavailable",
       "legacyCostUnavailable": "Historical cost unavailable",
       "persistentSessionGroup": "Persistent session {{session}} · {{count}} runs",

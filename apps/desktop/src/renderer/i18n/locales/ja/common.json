@@ -9092,7 +9092,7 @@
       "sessionCost": "セッションコスト {{cost}}",
       "sessionValue": "セッション価値 {{value}}",
       "runCost": "実行コスト {{cost}}",
-      "runValue": "実行の推定価値 {{value}}",
+      "runTokens": "トークン使用量 {{tokens}}",
       "costUnavailable": "コストを取得できません",
       "legacyCostUnavailable": "過去のコストは実行別に分割できません",
       "persistentSessionGroup": "継続セッション {{session}} · {{count}} 回の実行",

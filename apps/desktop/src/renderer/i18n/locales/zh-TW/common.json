@@ -9084,7 +9084,7 @@
       "sessionCost": "任務開銷 {{cost}}",
       "sessionValue": "任務價值 {{value}}",
       "runCost": "本次開銷 {{cost}}",
-      "runValue": "本次估算價值 {{value}}",
+      "runTokens": "Token 消耗 {{tokens}}",
       "costUnavailable": "費用不可用",
       "legacyCostUnavailable": "歷史費用無法拆分",
       "persistentSessionGroup": "持續任務 {{session}} · {{count}} 次執行",

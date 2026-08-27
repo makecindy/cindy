@@ -6855,8 +6855,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // runId 不是特权数据(renderer 的标记里就存着它)。
       listSidebarIndexRuns: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:schedule:list-sidebar-index-runs'),
-      listCostSummaries: (): Promise<unknown[]> =>
-        ipcRenderer.invoke('maker:schedule:list-cost-summaries'),
       deleteRun: (runId: string): Promise<void> =>
         ipcRenderer.invoke('maker:schedule:delete-run', runId),
       /** delete/pause 前查这条 schedule 当前 in-flight run 数,>0 时 renderer 弹二次确认。 */

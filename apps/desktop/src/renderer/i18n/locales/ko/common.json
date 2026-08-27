@@ -9092,7 +9092,7 @@
       "sessionCost": "세션 비용 {{cost}}",
       "sessionValue": "세션 가치 {{value}}",
       "runCost": "실행 비용 {{cost}}",
-      "runValue": "실행 추정 가치 {{value}}",
+      "runTokens": "토큰 사용량 {{tokens}}",
       "costUnavailable": "비용을 확인할 수 없음",
       "legacyCostUnavailable": "이전 비용은 실행별로 구분할 수 없습니다",
       "persistentSessionGroup": "지속 세션 {{session}} · {{count}}회 실행",

@@ -9084,7 +9084,7 @@
       "sessionCost": "任务开销 {{cost}}",
       "sessionValue": "任务价值 {{value}}",
       "runCost": "本次开销 {{cost}}",
-      "runValue": "本次估算价值 {{value}}",
+      "runTokens": "Token 消耗 {{tokens}}",
       "costUnavailable": "费用不可用",
       "legacyCostUnavailable": "历史费用无法拆分",
       "persistentSessionGroup": "持续任务 {{session}} · {{count}} 次运行",
