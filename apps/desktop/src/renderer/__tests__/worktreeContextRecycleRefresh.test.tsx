@@ -17,10 +17,17 @@ const mocks = {
   worktreeGetForSession: vi.fn(),
   worktreeDetectCwd: vi.fn(),
   listeners: new Set<(payload: { sessionId: string }) => void>(),
+  sessionCreatedListeners: new Set<
+    (payload: { sessionId: string }, ownerStamp?: unknown) => void
+  >(),
 };
 
 function emitWorktreeChanged(sessionId: string): void {
   mocks.listeners.forEach((cb) => cb({ sessionId }));
+}
+
+function emitSessionCreated(sessionId: string, ownerStamp?: unknown): void {
+  mocks.sessionCreatedListeners.forEach((cb) => cb({ sessionId }, ownerStamp));
 }
 
 function Probe() {
@@ -45,6 +52,7 @@ beforeEach(() => {
     gitInstalled: true,
   });
   mocks.listeners.clear();
+  mocks.sessionCreatedListeners.clear();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -54,6 +62,16 @@ beforeEach(() => {
       onWorktreeChanged: (cb: (payload: { sessionId: string }) => void) => {
         mocks.listeners.add(cb);
         return () => mocks.listeners.delete(cb);
+      },
+      localDb: {
+        sessionsPush: {
+          onCreated: (
+            cb: (payload: { sessionId: string }, ownerStamp?: unknown) => void,
+          ) => {
+            mocks.sessionCreatedListeners.add(cb);
+            return () => mocks.sessionCreatedListeners.delete(cb);
+          },
+        },
       },
     },
   });
@@ -195,6 +213,68 @@ describe('WorktreeContext recycle refresh', () => {
     expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
   });
 
+  it('discovers a worktree created by a local background session without scanning all worktrees', async () => {
+    mocks.worktreeListAll.mockResolvedValueOnce([]);
+    mocks.worktreeGetForSession.mockResolvedValueOnce({
+      sessionId: 'background',
+      path: '/tmp/wt/background',
+    });
+    const view = render(
+      <WorktreeProvider>
+        <Probe />
+      </WorktreeProvider>,
+    );
+    await waitFor(() => expect(mocks.worktreeListAll).toHaveBeenCalledOnce());
+
+    act(() => emitSessionCreated('background'));
+
+    await waitFor(() => {
+      expect(view.getByTestId('ids').textContent).toBe('background:/tmp/wt/background');
+    });
+    expect(mocks.worktreeGetForSession).toHaveBeenCalledWith('background');
+    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
+    expect(mocks.worktreeDetectCwd).toHaveBeenCalledOnce();
+  });
+
+  it('does not run Git validation for a local background session without a worktree', async () => {
+    mocks.worktreeListAll.mockResolvedValueOnce([]);
+    mocks.worktreeGetForSession.mockResolvedValueOnce(null);
+    render(
+      <WorktreeProvider>
+        <Probe />
+      </WorktreeProvider>,
+    );
+    await waitFor(() => expect(mocks.worktreeListAll).toHaveBeenCalledOnce());
+
+    act(() => emitSessionCreated('notification-only'));
+
+    await waitFor(() => {
+      expect(mocks.worktreeGetForSession).toHaveBeenCalledWith('notification-only');
+    });
+    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
+    expect(mocks.worktreeDetectCwd).not.toHaveBeenCalled();
+  });
+
+  it('ignores remote session creation pushes for the local worktree cache', async () => {
+    mocks.worktreeListAll.mockResolvedValueOnce([]);
+    render(
+      <WorktreeProvider>
+        <Probe />
+      </WorktreeProvider>,
+    );
+    await waitFor(() => expect(mocks.worktreeListAll).toHaveBeenCalledOnce());
+
+    act(() => {
+      emitSessionCreated('remote-collision', {
+        dataOwnerId: 'owner',
+        ownerGeneration: 1,
+      });
+    });
+
+    expect(mocks.worktreeGetForSession).not.toHaveBeenCalled();
+    expect(mocks.worktreeListAll).toHaveBeenCalledOnce();
+  });
+
   it('still performs a full validation when the window regains focus', async () => {
     mocks.worktreeListAll.mockResolvedValue([]);
     render(
@@ -220,6 +300,7 @@ describe('WorktreeContext recycle refresh', () => {
 
     view.unmount();
     expect(mocks.listeners.size).toBe(0);
+    expect(mocks.sessionCreatedListeners.size).toBe(0);
 
     emitWorktreeChanged('archived-one');
     expect(mocks.worktreeListAll).toHaveBeenCalledTimes(1);

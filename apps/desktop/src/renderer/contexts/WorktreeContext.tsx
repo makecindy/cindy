@@ -5,6 +5,8 @@
  * worktree-parallel-sessions 前端方案 M2：
  *   - mount 时拉一次 listAll
  *   - create / restore 成功后由调用方按 sessionId 主动增量更新
+ *   - Scheduler / hook 等 main 侧后台创建完成后，复用 sessions:created 按
+ *     sessionId 增量发现 worktree
  *   - 归档/删除的 worktree 回收跑完后，由 main 的 `worktree:changed` 推送按
  *     sessionId 增量更新；启动和窗口聚焦时才做全量存活校验
  *
@@ -137,6 +139,20 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
     if (!subscribe) return;
     return subscribe(({ sessionId }) => {
       if (!sessionId) return;
+      void refreshSession(sessionId);
+    });
+  }, [refreshSession]);
+
+  // Renderer 主动创建/恢复时调用方会直接 refreshSession；Scheduler、hook-control
+  // 等后台入口只会在 session 建成后广播 sessions:created。这里同样只查该 session，
+  // 没有 worktree 时 getForSession 返回 null，不会进入路径探测，更不会扫描全表。
+  // 本机 emitSessionCreated 不带 ownerStamp；带 stamp 的是 device-link 转发，远端
+  // worktree 元数据不归本机 WorktreeContext，必须忽略以防相同 sessionId 误贴。
+  useEffect(() => {
+    const subscribe = window.electronAPI?.localDb?.sessionsPush?.onCreated;
+    if (!subscribe) return;
+    return subscribe(({ sessionId }, ownerStamp) => {
+      if (ownerStamp !== undefined || !sessionId) return;
       void refreshSession(sessionId);
     });
   }, [refreshSession]);
