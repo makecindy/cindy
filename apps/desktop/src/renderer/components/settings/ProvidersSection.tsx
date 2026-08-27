@@ -1500,10 +1500,12 @@ function OllamaHeader({ provider, onDelete }: { provider: ProviderView; onDelete
 
 function CustomProviderHeader({
   provider,
+  accountUsageMutationRevision,
   onEdit,
   onDelete,
 }: {
   provider: ProviderView;
+  accountUsageMutationRevision: number;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -1512,14 +1514,17 @@ function CustomProviderHeader({
     (agent) => provider.routing[agent]?.accountUsage !== undefined,
   );
   // 稳定字符串而非整个 ProviderView：目录每次重建都会换对象引用，但账户查询身份
-  // 只跟 provider、连接态和各 runtime 的集成端点走（PR #3472 review）。
+  // 只跟 provider、连接态、编辑代次和各 runtime 的非敏感端点配置走（PR #3472 review）。
   const accountUsageRevision = [
     provider.id,
     provider.connected ? '1' : '0',
-    ...accountUsageAgents.map(
-      (agent) => `${agent}=${provider.routing[agent]?.accountUsage?.integrationId ?? ''}`,
-    ),
-  ].join('');
+    accountUsageMutationRevision,
+    ...accountUsageAgents.flatMap((agent) => [
+      agent,
+      provider.routing[agent]?.upstream ?? '',
+      provider.routing[agent]?.accountUsage?.integrationId ?? '',
+    ]),
+  ].join('\0');
   const accountUsage = useProviderAccountUsage(
     provider.id,
     accountUsageAgents,
@@ -1920,6 +1925,7 @@ export function ProvidersSection() {
   const [dialog, setDialog] = useState<
     null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
   >(null);
+  const [accountUsageMutationRevision, setAccountUsageMutationRevision] = useState(0);
   const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
@@ -2367,6 +2373,7 @@ export function ProvidersSection() {
     return (
       <CustomProviderHeader
         provider={p}
+        accountUsageMutationRevision={accountUsageMutationRevision}
         onEdit={() => setDialog({ mode: 'edit', config: providerViewToCustomProviderConfig(p) })}
         onDelete={() => void handleDelete(p)}
       />
@@ -2712,6 +2719,9 @@ export function ProvidersSection() {
           returnFocusRef={dialog.mode === 'create' ? addProviderButtonRef : undefined}
           onClose={() => setDialog(null)}
           onSaved={() => {
+            if (dialog.mode === 'edit') {
+              setAccountUsageMutationRevision((revision) => revision + 1);
+            }
             setDialog(null);
             refetch();
           }}

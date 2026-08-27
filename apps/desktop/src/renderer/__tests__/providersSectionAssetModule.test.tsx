@@ -7,6 +7,7 @@
  *   2. 企业账号 → 整块不渲染（不是灰置、不给占位）。
  *   3. 凭据同步失败 → 故障说明 + 重试，且**不显示「已连接」**（凭据没同步上，说已连接是假的）。
  *   4. 正常态版面上不出现「重试 / 重新获取凭据 / 轮换密钥」这类按钮 —— 它们退进「···」菜单。
+ *   5. 编辑自定义供应商连接后，即使目录仍返回同一对象，也重新查询账户用量。
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -15,6 +16,11 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
+
+const getProviderAccountUsage = vi.fn(async () => ({
+  status: 'unavailable' as const,
+  error: 'network' as const,
+}));
 
 const { providersState, authState, creditUsageState, modelAccessState, apiKeyState } = vi.hoisted(
   () => ({
@@ -115,7 +121,12 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 }));
 
 vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: () => null,
+  CustomProviderDialog: ({ onSaved }: { onSaved: () => void }) =>
+    React.createElement(
+      'button',
+      { type: 'button', onClick: onSaved },
+      'custom-provider-dialog-save',
+    ),
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({
@@ -142,13 +153,42 @@ function makeXd(): ProviderView {
   } as unknown as ProviderView;
 }
 
+function makeOpenRouter(upstream = 'https://openrouter.ai/api/v1'): ProviderView {
+  return {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    source: 'user',
+    agents: ['codex'],
+    auth: { method: 'apiKey' },
+    routing: {
+      codex: {
+        upstream,
+        authStrategy: 'api-key-header',
+        accountUsage: { integrationId: 'openrouter-key-usage-v1' },
+      },
+    },
+    models: {
+      codex: [
+        {
+          id: 'openrouter/model',
+          name: 'OpenRouter model',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    },
+    connected: true,
+  } as ProviderView;
+}
+
 function SearchProbe() {
   const location = useLocation();
   return <div data-testid="search">{`${location.pathname}${location.search}`}</div>;
 }
 
-function renderSection() {
-  return render(
+function SectionHarness() {
+  return (
     <MemoryRouter initialEntries={['/settings?tab=providers']}>
       <Routes>
         <Route
@@ -161,8 +201,12 @@ function renderSection() {
           }
         />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+}
+
+function renderSection() {
+  return render(<SectionHarness />);
 }
 
 beforeEach(() => {
@@ -180,6 +224,7 @@ beforeEach(() => {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
       setProviderOrder: vi.fn(async () => ({ ok: true })),
+      getProviderAccountUsage,
     },
     modelAccess: {
       retry: vi.fn(async () => undefined),
@@ -286,5 +331,31 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.getByText('sk-••••••ef2a')).toBeTruthy();
     // 共用菜单里既有的供应商级动作不被挤掉。
     expect(screen.getByText('settings.providers.menu.disableProvider')).toBeTruthy();
+  });
+});
+
+describe('ProvidersSection — 自定义供应商账户用量', () => {
+  it('权威目录中的非敏感上游地址变化时重新查询', async () => {
+    providersState.providers = [makeOpenRouter()];
+    const section = renderSection();
+    await waitFor(() => expect(getProviderAccountUsage).toHaveBeenCalledTimes(1));
+
+    providersState.providers = [makeOpenRouter('https://openrouter.ai/api/v2')];
+    section.rerender(<SectionHarness />);
+
+    await waitFor(() => expect(getProviderAccountUsage).toHaveBeenCalledTimes(2));
+  });
+
+  it('编辑连接保存后重新查询，即使目录仍返回同一个 ProviderView 对象', async () => {
+    const provider = makeOpenRouter();
+    providersState.providers = [provider];
+
+    renderSection();
+    await waitFor(() => expect(getProviderAccountUsage).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.editAria' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'custom-provider-dialog-save' }));
+
+    await waitFor(() => expect(getProviderAccountUsage).toHaveBeenCalledTimes(2));
   });
 });
