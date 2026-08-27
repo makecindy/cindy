@@ -5445,6 +5445,10 @@ export function handleStreamEvent(
       // F1-a: assistant 文本落库已收口 main(messagePersistBroadcaster 在 done 边界
       // flushAssistantBlock),renderer 这里只做 UI 收尾(finalize 在飞气泡)。
       const finalized = finalizeStreamingInState(state);
+      // A terminal tool-loop error may be followed by the SDK's done event.
+      // Keep its structured details for the live banner while the terminal
+      // error remains visible; a clean done must still clear stale details.
+      const preservedToolLoop = finalized.error !== null ? state.toolLoop : null;
 
       // Side-effect (titleUpdateCallbacks) is fired by the stream handler in
       // `initGlobalListeners`, not from inside this reducer — reducers stay pure.
@@ -5519,7 +5523,7 @@ export function handleStreamEvent(
         streamingText: '',
         isStreaming: false,
         recoverableError: null,
-        toolLoop: null,
+        toolLoop: preservedToolLoop,
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
