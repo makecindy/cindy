@@ -27,8 +27,33 @@ export const CODEX_INLINE_IMAGE_STRIP_MIN_CHARS = 64 * 1024;
 /** 扫描保护：历史过大判定不应无界读取异常文件。 */
 export const CODEX_ROLLOUT_SCAN_MAX_BYTES = 256 * 1024 * 1024;
 
+/** 只吃 base64 本体，不把后面的明文一起吞掉。空白也不能进字符集。 */
 const INLINE_IMAGE_DATA_RE =
-  /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/g;
+  /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}/g;
+
+function omittedInlineImagePlaceholder(chars: number): string {
+  return `[cindy-omitted-inline-image chars=${chars}]`;
+}
+
+function isOversizedInlineDataUri(value: string): boolean {
+  return (
+    value.startsWith('data:image/') &&
+    value.includes(';base64,') &&
+    value.length >= CODEX_INLINE_IMAGE_STRIP_MIN_CHARS
+  );
+}
+
+function imageUrlFromBlock(value: Record<string, unknown>): string | null {
+  if (typeof value.image_url === 'string') return value.image_url;
+  if (typeof value.imageUrl === 'string') return value.imageUrl;
+  if (isRecord(value.image_url) && typeof value.image_url.url === 'string') {
+    return value.image_url.url;
+  }
+  if (isRecord(value.imageUrl) && typeof value.imageUrl.url === 'string') {
+    return value.imageUrl.url;
+  }
+  return null;
+}
 
 const TOOL_OUTPUT_TYPES = new Set([
   'custom_tool_call_output',
@@ -113,18 +138,41 @@ function imageBytesInLine(line: string): number {
   return total;
 }
 
+function rewriteDataUrisInText(text: string): string {
+  return text.replace(INLINE_IMAGE_DATA_RE, (match) => {
+    if (match.length < CODEX_INLINE_IMAGE_STRIP_MIN_CHARS) return match;
+    return omittedInlineImagePlaceholder(match.length);
+  });
+}
+
+/**
+ * 超大 data URI 不能留在 image_url 里：Responses 会按 URL 校验，占位字符串会 400。
+ * 结构化 input_image 改成 input_text；普通字符串输出才原位替换。
+ */
+function rewriteToolOutputValue(value: unknown): unknown {
+  if (typeof value === 'string') return rewriteDataUrisInText(value);
+  if (Array.isArray(value)) return value.map(rewriteToolOutputValue);
+  if (!isRecord(value)) return value;
+  const imageUrl = imageUrlFromBlock(value);
+  if (imageUrl && isOversizedInlineDataUri(imageUrl)) {
+    return { type: 'input_text', text: omittedInlineImagePlaceholder(imageUrl.length) };
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    next[key] = rewriteToolOutputValue(child);
+  }
+  return next;
+}
+
 export function rewriteOversizedToolOutputImages(line: string): string {
   if (!line.includes(';base64,')) return line;
   try {
     const parsed: unknown = JSON.parse(line);
     if (!isRecord(parsed) || !isToolOutputPayload(parsed.payload)) return line;
+    return JSON.stringify(rewriteToolOutputValue(parsed));
   } catch {
     return line;
   }
-  return line.replace(INLINE_IMAGE_DATA_RE, (match) => {
-    if (match.length < CODEX_INLINE_IMAGE_STRIP_MIN_CHARS) return match;
-    return `[cindy-omitted-inline-image chars=${match.length}]`;
-  });
 }
 
 export function sanitizeCodexForkRollout(text: string): string {

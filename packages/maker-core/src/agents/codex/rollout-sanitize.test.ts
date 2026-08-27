@@ -68,6 +68,48 @@ describe('rewriteOversizedToolOutputImages', () => {
     });
     expect(rewriteOversizedToolOutputImages(generation)).toBe(generation);
   });
+
+  it('turns oversized input_image blocks into input_text instead of invalid image_url', () => {
+    const first = bigPngDataUri(620406);
+    const second = bigPngDataUri(1366914);
+    const line = JSON.stringify({
+      timestamp: '2026-08-27T10:00:33.906Z',
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'shot',
+        output: [
+          { type: 'input_text', text: 'Script completed\n' },
+          { type: 'input_image', image_url: first, detail: 'high' },
+          { type: 'input_image', image_url: { url: second }, detail: 'high' },
+        ],
+      },
+    });
+    const out = JSON.parse(rewriteOversizedToolOutputImages(line));
+    expect(out.payload.call_id).toBe('shot');
+    expect(out.payload.output).toEqual([
+      { type: 'input_text', text: 'Script completed\n' },
+      { type: 'input_text', text: `[cindy-omitted-inline-image chars=${first.length}]` },
+      { type: 'input_text', text: `[cindy-omitted-inline-image chars=${second.length}]` },
+    ]);
+    expect(JSON.stringify(out)).not.toMatch(/"image_url":"\[cindy-omitted/);
+    expect(JSON.stringify(out)).not.toContain(';base64,');
+  });
+
+  it('does not swallow trailing tool text after a data URI', () => {
+    const uri = bigPngDataUri();
+    const line = JSON.stringify({
+      payload: {
+        type: 'function_call_output',
+        call_id: 'c1',
+        output: `${uri} image generated successfully`,
+      },
+    });
+    const out = JSON.parse(rewriteOversizedToolOutputImages(line));
+    expect(out.payload.output).toBe(
+      `[cindy-omitted-inline-image chars=${uri.length}] image generated successfully`,
+    );
+  });
 });
 
 describe('sanitizeCodexForkRollout', () => {
