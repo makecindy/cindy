@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   beginDesktopDevInstance,
@@ -293,5 +293,41 @@ describe('devStartupStatus', () => {
     expect(
       JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4250.json'), 'utf8')),
     ).toMatchObject({ instanceId: 'waited-for-adoption' });
+  });
+
+  it('retries a transient Windows rename lock while publishing the mandatory instance record', async () => {
+    const instancePath = path.join(tempDir, '.dev-instances', '4251.json');
+    fs.mkdirSync(path.dirname(instancePath), { recursive: true });
+    fs.writeFileSync(instancePath, '{"instanceId":"stale-owner"}\n');
+
+    const realRename = fs.renameSync;
+    let transientFailures = 2;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from).endsWith('.tmp') && String(to) === instancePath && transientFailures > 0) {
+        transientFailures -= 1;
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    try {
+      cleanup = await beginDesktopDevInstance({
+        userDataDir: tempDir,
+        dbFilePrefix: 'cindy',
+        rootDir: tempDir,
+        passive: false,
+        isolated: false,
+        pid: 4251,
+        instanceId: 'replacement-owner',
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(transientFailures).toBe(0);
+    expect(JSON.parse(fs.readFileSync(instancePath, 'utf8'))).toMatchObject({
+      instanceId: 'replacement-owner',
+      state: 'starting',
+    });
   });
 });

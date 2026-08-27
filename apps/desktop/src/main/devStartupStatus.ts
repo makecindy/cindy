@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { DevProfileKind } from './devCliFlags.js';
 import { withLocalProfileMigrationStartupBarrier } from './localProfileDataMigration.js';
+import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -67,15 +68,7 @@ let applicationReady = false;
 let startupSettled = false;
 
 function atomicWriteJson(filePath: string, value: unknown): void {
-  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(tempPath, `${JSON.stringify(value)}\n`, { mode: 0o600 });
-    fs.renameSync(tempPath, filePath);
-  } catch (error) {
-    fs.rmSync(tempPath, { force: true });
-    throw error;
-  }
+  atomicWriteFileSync(filePath, `${JSON.stringify(value)}\n`);
 }
 
 function readJson(filePath: string): Record<string, unknown> | null {
