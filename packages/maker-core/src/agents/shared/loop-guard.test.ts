@@ -9,9 +9,10 @@ function feed(
   name: string,
   input: unknown,
   output: string,
+  isError = false,
 ): ToolLoopGuardVerdict {
   guard.onToolUse(id, name, input);
-  return guard.onToolResult(id, output);
+  return guard.onToolResult(id, output, isError);
 }
 
 describe('ToolLoopGuard', () => {
@@ -224,9 +225,9 @@ describe('ToolLoopGuard', () => {
 
   it('同工具连续 3 次同类契约错误判 contract,input 各不相同也计(对应 grok 16 次 Edit 缺 file_path 实锤)', () => {
     const g = new ToolLoopGuard();
-    expect(feed(g, 'e0', 'Edit', { old_string: 'a', new_string: 'b' }, MISSING).kind).toBe('ok');
-    expect(feed(g, 'e1', 'Edit', { old_string: 'c', new_string: 'd' }, MISSING).kind).toBe('ok');
-    expect(feed(g, 'e2', 'Edit', { old_string: 'e', new_string: 'f' }, MISSING)).toMatchObject({
+    expect(feed(g, 'e0', 'Edit', { old_string: 'a', new_string: 'b' }, MISSING, true).kind).toBe('ok');
+    expect(feed(g, 'e1', 'Edit', { old_string: 'c', new_string: 'd' }, MISSING, true).kind).toBe('ok');
+    expect(feed(g, 'e2', 'Edit', { old_string: 'e', new_string: 'f' }, MISSING, true)).toMatchObject({
       kind: 'hard',
       reason: 'contract',
       count: 3,
@@ -237,13 +238,13 @@ describe('ToolLoopGuard', () => {
 
   it('中间插入成功结果打断契约错误的"连续"', () => {
     const g = new ToolLoopGuard();
-    feed(g, 'e0', 'Edit', { old_string: 'a' }, MISSING);
-    feed(g, 'e1', 'Edit', { old_string: 'b' }, MISSING);
+    feed(g, 'e0', 'Edit', { old_string: 'a' }, MISSING, true);
+    feed(g, 'e1', 'Edit', { old_string: 'b' }, MISSING, true);
     // 成功输出重置 streak
     expect(feed(g, 'ok', 'Edit', { file_path: '/f', old_string: 'x', new_string: 'y' }, 'The file /f has been updated.').kind).toBe('ok');
-    expect(feed(g, 'e2', 'Edit', { old_string: 'c' }, MISSING).kind).toBe('ok'); // 重新从 1 计
-    expect(feed(g, 'e3', 'Edit', { old_string: 'd' }, MISSING).kind).toBe('ok'); // 2
-    expect(feed(g, 'e4', 'Edit', { old_string: 'e' }, MISSING)).toMatchObject({ kind: 'hard', reason: 'contract' });
+    expect(feed(g, 'e2', 'Edit', { old_string: 'c' }, MISSING, true).kind).toBe('ok'); // 重新从 1 计
+    expect(feed(g, 'e3', 'Edit', { old_string: 'd' }, MISSING, true).kind).toBe('ok'); // 2
+    expect(feed(g, 'e4', 'Edit', { old_string: 'e' }, MISSING, true)).toMatchObject({ kind: 'hard', reason: 'contract' });
   });
 
   it('交替类别不判 contract(stale / ambiguous 各自重新计数)', () => {
@@ -262,7 +263,7 @@ describe('ToolLoopGuard', () => {
     const g = new ToolLoopGuard();
     for (let i = 0; i < 12; i += 1) {
       const tool = i % 2 === 0 ? 'Edit' : 'Write';
-      expect(feed(g, `x-${i}`, tool, { n: i }, MISSING.replace('Edit', tool)).kind).toBe('ok');
+      expect(feed(g, `x-${i}`, tool, { n: i }, MISSING.replace('Edit', tool), true).kind).toBe('ok');
     }
   });
 
@@ -276,7 +277,7 @@ describe('ToolLoopGuard', () => {
   it('TaskOutput 轮询穿插在契约错误之间不重置 streak,也不隐藏它', () => {
     const g = new ToolLoopGuard();
     for (let i = 0; i < 3; i += 1) {
-      const v = feed(g, `e-${i}`, 'Edit', { old_string: `s-${i}` }, MISSING);
+      const v = feed(g, `e-${i}`, 'Edit', { old_string: `s-${i}` }, MISSING, true);
       if (i < 2) expect(v.kind).toBe('ok');
       else expect(v).toMatchObject({ kind: 'hard', reason: 'contract', count: 3 });
 
@@ -290,20 +291,29 @@ describe('ToolLoopGuard', () => {
     const g = new ToolLoopGuard();
     const longEcho = `The file /repo/loop-guard.test.ts has been updated. Here is a snippet:\n${'x'.repeat(700)}\nString to replace not found in file.`;
     for (let i = 0; i < 10; i += 1) {
-      expect(feed(g, `echo-${i}`, 'Edit', { old_string: `s-${i}` }, longEcho).kind).toBe('ok');
+      expect(feed(g, `echo-${i}`, 'Edit', { old_string: `s-${i}` }, longEcho, false).kind).toBe('ok');
+    }
+  });
+
+  it('成功结果即使包含短错误文案也不会进入契约错误熔断', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 6; i += 1) {
+      expect(
+        feed(g, `read-${i}`, 'Read', { file_path: `fixture-${i}.txt` }, 'The pages must be numbered', false).kind,
+      ).toBe('ok');
     }
   });
 
   it('resetTurn 同样清空契约错误计数', () => {
     const g = new ToolLoopGuard();
-    feed(g, 'c0', 'Edit', { old_string: 'a' }, MISSING);
-    feed(g, 'c1', 'Edit', { old_string: 'b' }, MISSING); // streak 2
+    feed(g, 'c0', 'Edit', { old_string: 'a' }, MISSING, true);
+    feed(g, 'c1', 'Edit', { old_string: 'b' }, MISSING, true); // streak 2
 
     g.resetTurn();
 
-    expect(feed(g, 'd0', 'Edit', { old_string: 'c' }, MISSING).kind).toBe('ok'); // 重新从 1
-    expect(feed(g, 'd1', 'Edit', { old_string: 'd' }, MISSING).kind).toBe('ok'); // 2
-    expect(feed(g, 'd2', 'Edit', { old_string: 'e' }, MISSING)).toMatchObject({ kind: 'hard', reason: 'contract' });
+    expect(feed(g, 'd0', 'Edit', { old_string: 'c' }, MISSING, true).kind).toBe('ok'); // 重新从 1
+    expect(feed(g, 'd1', 'Edit', { old_string: 'd' }, MISSING, true).kind).toBe('ok'); // 2
+    expect(feed(g, 'd2', 'Edit', { old_string: 'e' }, MISSING, true)).toMatchObject({ kind: 'hard', reason: 'contract' });
   });
 });
 

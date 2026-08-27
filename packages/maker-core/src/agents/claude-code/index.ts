@@ -4731,10 +4731,15 @@ export class ClaudeCodeAgent extends BaseAgent {
                 getToolLoopGuard(parentToolUseId)?.onToolUse(id, toolName, input);
                 clearUpstreamResponseIdle();
               },
-              onToolResultDone: (id: string, output: string, parentToolUseId?: string) => {
+              onToolResultDone: (
+                id: string,
+                output: string,
+                parentToolUseId?: string,
+                isError?: boolean,
+              ) => {
                 pendingToolIds.delete(id);
                 if (turnInFlight) {
-                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(id, output);
+                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(id, output, isError === true);
                   if (verdict?.kind === 'hard') {
                     const loopHint = verdict.reason === 'consecutive'
                       ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`

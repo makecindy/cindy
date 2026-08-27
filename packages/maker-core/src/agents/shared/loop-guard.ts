@@ -203,10 +203,10 @@ export class ToolLoopGuard {
   }
 
   /**
-   * 工具结果到达后配对并按两层判据判断。没有配到完整 tool_use 时直接放行,
-   * 避免用不完整信息误判。
+   * 工具结果到达后配对并按四层判据判断。没有配到完整 tool_use 时直接放行,
+   * 避免用不完整信息误判。契约错误层只接受明确标记为失败的结果。
    */
-  onToolResult(toolUseId: string, output: string): ToolLoopGuardVerdict {
+  onToolResult(toolUseId: string, output: string, isError = false): ToolLoopGuardVerdict {
     const toolUse = this.pendingToolUses.get(toolUseId);
     this.pendingToolUses.delete(toolUseId);
     if (!toolUse) return { kind: 'ok' };
@@ -215,7 +215,7 @@ export class ToolLoopGuard {
     // 第 4 层: 同工具同类契约错误连续出现(input 各不相同也计)。放在 1-3 层之前:
     // 它的阈值(3)低于第 1 层(4),同 input 的重复契约错误也应更早止损。
     // 未分类结果(成功或 other 错误)打断"连续"——other 永不触发熔断。
-    const contractCategory = classifyToolContractError(toolUse.name, output);
+    const contractCategory = isError ? classifyToolContractError(toolUse.name, output) : null;
     if (contractCategory !== null) {
       const contractKey = `${toolUse.name}\n${contractCategory}`;
       this.contractStreak = contractKey === this.lastContractKey ? this.contractStreak + 1 : 1;

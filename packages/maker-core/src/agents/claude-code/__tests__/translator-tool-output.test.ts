@@ -49,6 +49,47 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator tool output normalization', () => {
+  it.each([true, false])('propagates tool_result.is_error=%s to the loop-guard callback', (isError) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const onToolResultDone = vi.fn();
+    const ctx = { ...createCtx(), onToolResultDone };
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_error_flag', name: 'Read', input: { file_path: 'fixture.txt' } }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'toolu_error_flag',
+            content: 'The pages must be numbered',
+            is_error: isError,
+          }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    expect(onToolResultDone).toHaveBeenCalledWith(
+      'toolu_error_flag',
+      'The pages must be numbered',
+      undefined,
+      isError,
+    );
+  });
+
   it('preserves a 64KB ghost_manual JSON envelope as an MCP tool result', async () => {
     const { content, wire } = makeGhostManual64KiBFixture();
     expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(64 * 1024);
