@@ -23,8 +23,8 @@
  * 推给用户(这也是 maker-core 侧 claude translator 只透过载类的同一条理由)。
  * 将来要放开某一类, 在这里按 kind 补一条文案即可, 不要直接外发原文。
  *
- * 文案硬编码中文, 与 hook-control/interactions.ts 的卡片按钮、dispatcher.ts 的
- * NOTICE_* 同规 —— 渠道侧文案不进 renderer 的 locale 文件
+ * 文案硬编码中文, 与 hook-control/interactions.ts 的卡片按钮同规 ——
+ * 渠道侧文案不进 renderer 的 locale 文件
  * (见 docs/dev-rules/engineering-conventions.md §5)。
  */
 

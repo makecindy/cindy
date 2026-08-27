@@ -623,7 +623,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('会话被移出工作目录映射 -> 断开绑定、换新对话并说明, 不跟随到映射外', async () => {
+  it('会话被移出工作目录映射 -> 断开绑定、换新对话, 不跟随到映射外', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
     const fr = fakeRunner({ sessions });
@@ -651,10 +651,7 @@ describe('dispatcher 核心语义', () => {
 
     fr.finish({ finalText: '新对话的回答' });
     await tick();
-    const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原任务已不在可用的工作目录里');
-    expect(finalText).toContain('把它所在的目录加进来');
-    expect(finalText).toContain('新对话的回答');
+    expect(c.last('turn.end')!.payload.finalText).toBe('新对话的回答');
   });
 
   it('旧任务还在跑时被移出映射: 新消息不排进旧会话(快路径也过边界)', async () => {
@@ -969,7 +966,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('工作目录映射被改(会话目录没变) -> 仍丢绑定重建, 并说明原因', async () => {
+  it('工作目录映射被改(会话目录没变) -> 仍丢绑定重建', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
     const fr = fakeRunner({ sessions });
@@ -998,9 +995,7 @@ describe('dispatcher 核心语义', () => {
 
     fr.finish({ finalText: '新会话的回答' });
     await tick();
-    const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原任务已不在可用的工作目录里');
-    expect(finalText).toContain('新会话的回答');
+    expect(c.last('turn.end')!.payload.finalText).toBe('新会话的回答');
   });
 
   it('存量绑定(带早期版本残留字段)照常判定: 在映射内即复用, 越界即重建', async () => {
@@ -1034,7 +1029,7 @@ describe('dispatcher 核心语义', () => {
     fr2.finish();
   });
 
-  it('绑定的会话已归档/删除 -> 重建并说明是原对话没了', async () => {
+  it('绑定的会话已归档/删除 -> 重建, 渠道回复不夹说明', async () => {
     const bindings = memoryBindings();
     const fr = fakeRunner({ sessions: { 'gone-session': { workingDir: WS_DIR, usable: false } } });
     const { d } = makeDispatcher({ runner: fr.runner, bindings });
@@ -1047,8 +1042,7 @@ describe('dispatcher 核心语义', () => {
 
     fr.finish({ finalText: '新的回答' });
     await tick();
-    // 措辞留余地: inspect 的 null 也可能是读库瞬时失败, 不能一口咬定会话没了
-    expect(c.last('turn.end')!.payload.finalText).toContain('原任务现在读不到');
+    expect(c.last('turn.end')!.payload.finalText).toBe('新的回答');
   });
 
   it('切账号期间异步定位失败也不回写旧代 rejected ack', async () => {
