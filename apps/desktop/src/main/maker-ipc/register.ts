@@ -12013,13 +12013,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
             ownerScope,
           );
-          await createDbMessage(sessionId, {
-            clientId: `context-rebuild-card:${createId()}`,
-            role: 'assistant',
-            content: '',
-            agentKind: 'codex',
-            agentMeta: { contextRebuild: { reason: 'codex-history-strip' } } as AgentMeta,
-          });
+          const cardOwnerCurrent =
+            isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+            getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch;
+          if (!cardOwnerCurrent) {
+            log.warn('codex oversized history card skipped: owner changed after relink', {
+              sessionId,
+              threadId,
+              toThreadId: forked.newSdkSessionId,
+            });
+          } else {
+            await createDbMessage(
+              sessionId,
+              {
+                clientId: `context-rebuild-card:${createId()}`,
+                role: 'assistant',
+                content: '',
+                agentKind: 'codex',
+                agentMeta: { contextRebuild: { reason: 'codex-history-strip' } } as AgentMeta,
+              },
+              {
+                broadcastOwnerScope: ownerScope,
+                shouldBroadcast: () =>
+                  isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+                  getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch,
+              },
+            );
+          }
         } catch (postError) {
           log.warn('codex oversized history relink post-commit failed', {
             sessionId,
