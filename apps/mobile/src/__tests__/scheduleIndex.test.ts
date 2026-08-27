@@ -282,6 +282,37 @@ describe('scheduleIndex', () => {
     expect(index.has('session-400')).toBe(true);
   });
 
+  it('deduplicates full snapshots from an older Desktop that ignores each batch scope', async () => {
+    const sessionIds = Array.from({ length: 401 }, (_, index) => `session-${index}`);
+    const listRuns = vi.fn(async () => []);
+    const listSidebarIndexRuns = vi.fn(async (_scope: readonly string[] | undefined) => ({
+      runs: [{
+        runId: 'run-unread',
+        scheduleId: 'sched-1',
+        sessionId: 'session-0',
+        firedAt: 1,
+        status: 'success' as const,
+      }],
+      inflightRunIds: [],
+    }));
+    const maker = {
+      schedule: {
+        list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+        listRuns,
+        listSidebarIndexRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    const index = await loadSessionScheduleIndex(maker, { sessionIds });
+
+    expect(listSidebarIndexRuns.mock.calls.map(([scope]) => scope?.length)).toEqual([200, 200, 1]);
+    expect(listRuns).not.toHaveBeenCalled();
+    expect(index.get('session-0')).toMatchObject({
+      unreadCount: 1,
+      unreadRunIds: ['run-unread'],
+    });
+  });
+
   it('bisects an oversized compact batch before considering legacy listRuns', async () => {
     const sessionIds = Array.from({ length: 200 }, (_, index) => `session-${index}`);
     const listRuns = vi.fn(async () => []);
@@ -292,16 +323,25 @@ describe('scheduleIndex', () => {
         });
       }
       return {
-        runs: (scope ?? []).map((sessionId) => ({
-          runId: `association-${sessionId}`,
-          scheduleId: 'sched-1',
-          sessionId,
-          firedAt: 1,
-          associationOnly: true,
-          schedulerGeneratedAssociation: true,
-          status: 'success',
-          readAt: 1,
-        })),
+        runs: [
+          {
+            runId: 'shared-unread',
+            scheduleId: 'sched-1',
+            sessionId: 'session-0',
+            firedAt: 2,
+            status: 'success' as const,
+          },
+          ...(scope ?? []).map((sessionId) => ({
+            runId: `association-${sessionId}`,
+            scheduleId: 'sched-1',
+            sessionId,
+            firedAt: 1,
+            associationOnly: true,
+            schedulerGeneratedAssociation: true,
+            status: 'success' as const,
+            readAt: 1,
+          })),
+        ],
         inflightRunIds: [],
       };
     });
@@ -317,6 +357,10 @@ describe('scheduleIndex', () => {
     expect(listSidebarIndexRuns.mock.calls.map(([scope]) => scope?.length)).toEqual([200, 100, 100]);
     expect(listRuns).not.toHaveBeenCalled();
     expect(index.size).toBe(200);
+    expect(index.get('session-0')).toMatchObject({
+      unreadCount: 1,
+      unreadRunIds: ['shared-unread'],
+    });
   });
 
   it('loads schedule unread and running metadata without failing the whole index on one bad schedule', async () => {

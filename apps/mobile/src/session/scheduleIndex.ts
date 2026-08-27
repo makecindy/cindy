@@ -21,6 +21,31 @@ type LoadSessionScheduleIndexOptions = {
   isDeviceUnresponsive?: () => boolean;
 };
 
+function mergeCompactScheduleRuns(
+  target: Map<string, RemoteScheduleRun[]>,
+  runSlotsBySchedule: Map<string, Map<string, number>>,
+  incoming: ReadonlyMap<string, readonly RemoteScheduleRun[]>,
+): void {
+  for (const [scheduleId, runs] of incoming) {
+    const mergedRuns = target.get(scheduleId) ?? [];
+    const runSlots = runSlotsBySchedule.get(scheduleId) ?? new Map<string, number>();
+    for (const run of runs) {
+      const existingSlot = runSlots.get(run.id);
+      if (existingSlot === undefined) {
+        runSlots.set(run.id, mergedRuns.length);
+        mergedRuns.push(run);
+      } else {
+        // Older Desktop handlers ignore the scoped request and can return the same
+        // full snapshot for every Mobile batch. Keep its stable position while using
+        // the latest observation in case the run changed between sequential reads.
+        mergedRuns[existingSlot] = run;
+      }
+    }
+    target.set(scheduleId, mergedRuns);
+    runSlotsBySchedule.set(scheduleId, runSlots);
+  }
+}
+
 export async function loadSessionScheduleIndex(
   maker: Pick<MobileMakerTransport, 'schedule'>,
   options: LoadSessionScheduleIndexOptions = {},
@@ -43,6 +68,7 @@ export async function loadSessionScheduleIndex(
               ),
             );
       const mergedPairs = new Map<string, RemoteScheduleRun[]>();
+      const mergedRunSlots = new Map<string, Map<string, number>>();
       let valid = true;
       const loadCompactScope = async (
         scope: readonly string[] | undefined,
@@ -59,10 +85,10 @@ export async function loadSessionScheduleIndex(
             const left = await loadCompactScope(scope.slice(0, middle));
             const right = await loadCompactScope(scope.slice(middle));
             if (!left || !right) return null;
-            const merged = new Map(left);
-            for (const [scheduleId, runs] of right) {
-              merged.set(scheduleId, [...(merged.get(scheduleId) ?? []), ...runs]);
-            }
+            const merged = new Map<string, RemoteScheduleRun[]>();
+            const runSlots = new Map<string, Map<string, number>>();
+            mergeCompactScheduleRuns(merged, runSlots, left);
+            mergeCompactScheduleRuns(merged, runSlots, right);
             return merged;
           }
           throw error;
@@ -74,9 +100,7 @@ export async function loadSessionScheduleIndex(
           valid = false;
           break;
         }
-        for (const [scheduleId, runs] of pairs) {
-          mergedPairs.set(scheduleId, [...(mergedPairs.get(scheduleId) ?? []), ...runs]);
-        }
+        mergeCompactScheduleRuns(mergedPairs, mergedRunSlots, pairs);
       }
       // Older Desktop builds already expose this channel but omit firedAt. A malformed
       // snapshot therefore means "unsupported shape", not an empty schedule index.
