@@ -6179,25 +6179,28 @@ export function ChatInput({
         });
         // Fast 目标值:目标 (来源,模型) 支持时按目标引擎全局预设,否则 false——
         // 旧引擎的 fastMode 不能原样带进新引擎。
+        // 显式 override 也必须过目标能力门:意图期改选到不支持 Fast 的模型/来源时,
+        // 旧 intent.fastMode=true 不能绕过 resolveFastSupported 写进新意图。
+        const fastCapable = resolveFastSupported({
+          deviceId: deviceLinkDeviceId ?? undefined,
+          deviceProviders: remoteProviders.providers,
+          localProviders: localProviders.providers,
+          capabilities:
+            targetAgentKind === 'codex'
+              ? codexCaps.capabilities
+              : targetAgentKind === 'pi'
+                ? piCaps.capabilities
+                : ccCaps.capabilities,
+          providerId,
+          modelId: newModelId,
+          agentKind: targetAgentKind,
+        });
         const targetFast =
           overrides?.fastMode !== undefined
-            ? overrides.fastMode
-            : !!providerId &&
+            ? overrides.fastMode && fastCapable
+            : fastCapable &&
+              !!providerId &&
               !!modelMemory &&
-              resolveFastSupported({
-                deviceId: deviceLinkDeviceId ?? undefined,
-                deviceProviders: remoteProviders.providers,
-                localProviders: localProviders.providers,
-                capabilities:
-                  targetAgentKind === 'codex'
-                    ? codexCaps.capabilities
-                    : targetAgentKind === 'pi'
-                      ? piCaps.capabilities
-                      : ccCaps.capabilities,
-                providerId,
-                modelId: newModelId,
-                agentKind: targetAgentKind,
-              }) &&
               (modelMemory.getFast(targetAgentKind, providerId, newModelId) ?? false);
 
         // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
