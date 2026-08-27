@@ -10,9 +10,10 @@ function feed(
   input: unknown,
   output: string,
   isError = false,
+  toolResultBatchId?: string,
 ): ToolLoopGuardVerdict {
   guard.onToolUse(id, name, input);
-  return guard.onToolResult(id, output, isError);
+  return guard.onToolResult(id, output, isError, toolResultBatchId);
 }
 
 describe('ToolLoopGuard', () => {
@@ -314,6 +315,32 @@ describe('ToolLoopGuard', () => {
     expect(feed(g, 'd0', 'Edit', { old_string: 'c' }, MISSING, true).kind).toBe('ok'); // 重新从 1
     expect(feed(g, 'd1', 'Edit', { old_string: 'd' }, MISSING, true).kind).toBe('ok'); // 2
     expect(feed(g, 'd2', 'Edit', { old_string: 'e' }, MISSING, true)).toMatchObject({ kind: 'hard', reason: 'contract' });
+  });
+
+  it('同一 assistant 批次的多个同类失败只计一次,模型仍有机会看到第一批错误', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 3; i += 1) {
+      expect(
+        feed(g, `batch-a-${i}`, 'Edit', { old_string: `a-${i}` }, MISSING, true, 'batch-a').kind,
+      ).toBe('ok');
+    }
+
+    expect(feed(g, 'batch-b-0', 'Edit', { old_string: 'b-0' }, MISSING, true, 'batch-b').kind).toBe('ok');
+    expect(feed(g, 'batch-c-0', 'Edit', { old_string: 'c-0' }, MISSING, true, 'batch-c')).toMatchObject({
+      kind: 'hard',
+      reason: 'contract',
+      count: 3,
+      toolName: 'Edit',
+      contractCategory: 'missing_required_field',
+    });
+  });
+
+  it('同一批次去重仍要求 is_error=true', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 4; i += 1) {
+      expect(feed(g, `success-${i}`, 'Edit', { old_string: `s-${i}` }, MISSING, false, 'same-batch').kind).toBe('ok');
+    }
+    expect(feed(g, 'failed', 'Edit', { old_string: 'failed' }, MISSING, true, 'next-batch').kind).toBe('ok');
   });
 });
 

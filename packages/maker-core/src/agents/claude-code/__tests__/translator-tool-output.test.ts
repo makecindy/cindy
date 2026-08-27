@@ -87,7 +87,53 @@ describe('Claude Code translator tool output normalization', () => {
       'The pages must be numbered',
       undefined,
       isError,
+      expect.any(String),
     );
+  });
+
+  it('把同一 user tool-result 消息中的并行结果标记为同一批次', () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const onToolResultDone = vi.fn();
+    const ctx = { ...createCtx(), onToolResultDone };
+    const toolUses = ['toolu_batch_1', 'toolu_batch_2', 'toolu_batch_3'];
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: toolUses.map((id) => ({
+            type: 'tool_use',
+            id,
+            name: 'Edit',
+            input: { old_string: id },
+          })),
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: toolUses.map((id) => ({
+            type: 'tool_result',
+            tool_use_id: id,
+            content: 'The required parameter `file_path` is missing',
+            is_error: true,
+          })),
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const batchIds = onToolResultDone.mock.calls.map((call) => call[4]);
+    expect(batchIds).toHaveLength(3);
+    expect(new Set(batchIds).size).toBe(1);
+    expect(batchIds[0]).toEqual(expect.any(String));
   });
 
   it('preserves a 64KB ghost_manual JSON envelope as an MCP tool result', async () => {

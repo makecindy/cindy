@@ -179,8 +179,9 @@ export class ToolLoopGuard {
   // 第 2/3 层共用状态: 最近 max(windowSize, rotationWindowSize) 个 name+input 指纹
   private callWindow: string[] = [];
 
-  // 第 4 层状态: 最近一次契约错误的 name+类别键与连续计数
+  // 第 4 层状态: 最近一次契约错误的 name+类别键、批次与连续计数
   private lastContractKey: string | null = null;
+  private lastContractBatchId: string | null = null;
   private contractStreak = 0;
 
   constructor(options: ToolLoopGuardOptions = {}) {
@@ -204,9 +205,15 @@ export class ToolLoopGuard {
 
   /**
    * 工具结果到达后配对并按四层判据判断。没有配到完整 tool_use 时直接放行,
-   * 避免用不完整信息误判。契约错误层只接受明确标记为失败的结果。
+   * 避免用不完整信息误判。契约错误层只接受明确标记为失败的结果；同一批次内
+   * 的同类错误只计一次，避免并行 tool_result 在模型观察错误前伪造多轮重试。
    */
-  onToolResult(toolUseId: string, output: string, isError = false): ToolLoopGuardVerdict {
+  onToolResult(
+    toolUseId: string,
+    output: string,
+    isError = false,
+    toolResultBatchId?: string,
+  ): ToolLoopGuardVerdict {
     const toolUse = this.pendingToolUses.get(toolUseId);
     this.pendingToolUses.delete(toolUseId);
     if (!toolUse) return { kind: 'ok' };
@@ -218,8 +225,14 @@ export class ToolLoopGuard {
     const contractCategory = isError ? classifyToolContractError(toolUse.name, output) : null;
     if (contractCategory !== null) {
       const contractKey = `${toolUse.name}\n${contractCategory}`;
-      this.contractStreak = contractKey === this.lastContractKey ? this.contractStreak + 1 : 1;
+      const sameBatch = contractKey === this.lastContractKey
+        && toolResultBatchId !== undefined
+        && toolResultBatchId === this.lastContractBatchId;
+      if (!sameBatch) {
+        this.contractStreak = contractKey === this.lastContractKey ? this.contractStreak + 1 : 1;
+      }
       this.lastContractKey = contractKey;
+      this.lastContractBatchId = toolResultBatchId ?? null;
       if (this.contractStreak >= this.contractConsecutiveLimit) {
         return {
           kind: 'hard',
@@ -231,6 +244,7 @@ export class ToolLoopGuard {
       }
     } else {
       this.lastContractKey = null;
+      this.lastContractBatchId = null;
       this.contractStreak = 0;
     }
 
@@ -299,6 +313,7 @@ export class ToolLoopGuard {
     this.consecutiveStreak = 0;
     this.callWindow = [];
     this.lastContractKey = null;
+    this.lastContractBatchId = null;
     this.contractStreak = 0;
   }
 }

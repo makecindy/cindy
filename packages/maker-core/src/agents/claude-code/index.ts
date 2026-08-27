@@ -4736,10 +4736,16 @@ export class ClaudeCodeAgent extends BaseAgent {
                 output: string,
                 parentToolUseId?: string,
                 isError?: boolean,
+                toolResultBatchId?: string,
               ) => {
                 pendingToolIds.delete(id);
                 if (turnInFlight) {
-                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(id, output, isError === true);
+                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(
+                    id,
+                    output,
+                    isError === true,
+                    toolResultBatchId,
+                  );
                   if (verdict?.kind === 'hard') {
                     const loopHint = verdict.reason === 'consecutive'
                       ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
