@@ -10,7 +10,6 @@
  */
 import { createReadStream, createWriteStream } from 'node:fs';
 import { once } from 'node:events';
-import { createInterface } from 'node:readline';
 
 /** 与 compaction-storm 同族的终态 reason：磁盘实测活尾巴过大，不是普通 timeout。 */
 export const CODEX_HISTORY_OVERSIZED_REASON = 'codex_history_oversized';
@@ -26,6 +25,16 @@ export const CODEX_INLINE_IMAGE_STRIP_MIN_CHARS = 64 * 1024;
 
 /** 扫描保护：历史过大判定不应无界读取异常文件。 */
 export const CODEX_ROLLOUT_SCAN_MAX_BYTES = 256 * 1024 * 1024;
+
+/** 单行上限：必须在拼出完整字符串之前截断，不能等 readline 整行进内存。 */
+export const CODEX_ROLLOUT_LINE_MAX_BYTES = 16 * 1024 * 1024;
+
+export class CodexRolloutScanLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CodexRolloutScanLimitError';
+  }
+}
 
 /** 只吃 base64 本体，不把后面的明文一起吞掉。空白也不能进字符集。 */
 const INLINE_IMAGE_DATA_RE =
@@ -240,15 +249,54 @@ export function isOversizedLiveTailStats(stats: RolloutLiveTailStats): boolean {
     stats.projectedTailBytes <= CODEX_PROJECTED_LIVE_TAIL_MAX_BYTES;
 }
 
+async function* iterateRolloutLines(
+  filePath: string,
+  opts: { maxBytes?: number; maxLineBytes?: number } = {},
+): AsyncGenerator<string> {
+  const maxBytes = opts.maxBytes ?? CODEX_ROLLOUT_SCAN_MAX_BYTES;
+  const maxLineBytes = opts.maxLineBytes ?? CODEX_ROLLOUT_LINE_MAX_BYTES;
+  const input = createReadStream(filePath);
+  let scanned = 0;
+  let pending = Buffer.alloc(0);
+  try {
+    for await (const chunk of input) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      scanned += buf.length;
+      if (scanned > maxBytes) {
+        throw new CodexRolloutScanLimitError(`Codex rollout scan exceeded ${maxBytes} bytes`);
+      }
+      pending = pending.length === 0 ? buf : Buffer.concat([pending, buf]);
+      let start = 0;
+      for (let i = 0; i < pending.length; i += 1) {
+        if (pending[i] !== 0x0a) continue;
+        const lineBytes = i - start;
+        if (lineBytes > maxLineBytes) {
+          throw new CodexRolloutScanLimitError(`Codex rollout line exceeded ${maxLineBytes} bytes`);
+        }
+        const end = i > start && pending[i - 1] === 0x0d ? i - 1 : i;
+        yield pending.subarray(start, end).toString('utf8');
+        start = i + 1;
+      }
+      pending = start === 0 ? pending : pending.subarray(start);
+      if (pending.length > maxLineBytes) {
+        throw new CodexRolloutScanLimitError(`Codex rollout line exceeded ${maxLineBytes} bytes`);
+      }
+    }
+    if (pending.length > 0) {
+      if (pending.length > maxLineBytes) {
+        throw new CodexRolloutScanLimitError(`Codex rollout line exceeded ${maxLineBytes} bytes`);
+      }
+      yield pending.toString('utf8');
+    }
+  } finally {
+    input.destroy();
+  }
+}
+
 export async function measureRolloutLiveTailStats(
   filePath: string,
-  opts: { maxBytes?: number } = {},
+  opts: { maxBytes?: number; maxLineBytes?: number } = {},
 ): Promise<RolloutLiveTailStats> {
-  const maxBytes = opts.maxBytes ?? CODEX_ROLLOUT_SCAN_MAX_BYTES;
-  const rl = createInterface({
-    input: createReadStream(filePath, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
   const stats: RolloutLiveTailStats = {
     tailBytes: 0,
     projectedTailBytes: 0,
@@ -257,24 +305,17 @@ export async function measureRolloutLiveTailStats(
     unsafeLines: 0,
     scannedBytes: 0,
   };
-  try {
-    for await (const line of rl) {
-      stats.scannedBytes += Buffer.byteLength(line, 'utf8') + 1;
-      if (stats.scannedBytes > maxBytes) {
-        throw new Error(`Codex rollout scan exceeded ${maxBytes} bytes`);
-      }
-      if (isCompactionBoundaryLine(line)) {
-        stats.tailBytes = 0;
-        stats.projectedTailBytes = 0;
-        stats.strippedBytes = 0;
-        stats.rewrittenLines = 0;
-        stats.unsafeLines = 0;
-        continue;
-      }
-      addLineStats(stats, line);
+  for await (const line of iterateRolloutLines(filePath, opts)) {
+    stats.scannedBytes += Buffer.byteLength(line, 'utf8') + 1;
+    if (isCompactionBoundaryLine(line)) {
+      stats.tailBytes = 0;
+      stats.projectedTailBytes = 0;
+      stats.strippedBytes = 0;
+      stats.rewrittenLines = 0;
+      stats.unsafeLines = 0;
+      continue;
     }
-  } finally {
-    rl.close();
+    addLineStats(stats, line);
   }
   return stats;
 }
@@ -292,8 +333,6 @@ export async function sanitizeCodexForkRolloutFile(
   sourcePath: string,
   copyPath: string,
 ): Promise<RolloutSanitizeStats> {
-  const input = createReadStream(sourcePath, { encoding: 'utf8' });
-  const rl = createInterface({ input, crlfDelay: Infinity });
   const output = createWriteStream(copyPath, { encoding: 'utf8' });
   const outputFailed = once(output, 'error').then((args) => {
     const err = Array.isArray(args) ? args[0] : args;
@@ -311,7 +350,7 @@ export async function sanitizeCodexForkRolloutFile(
   try {
     await Promise.race([
       (async () => {
-        for await (const line of rl) {
+        for await (const line of iterateRolloutLines(sourcePath)) {
           const newline = first ? '' : '\n';
           first = false;
           const originalBytes = Buffer.byteLength(line, 'utf8') + (newline ? 1 : 0);
@@ -341,8 +380,6 @@ export async function sanitizeCodexForkRolloutFile(
     await outputFailed.catch(() => undefined);
     throw error;
   } finally {
-    rl.close();
-    input.destroy();
     if (!output.closed) output.destroy();
   }
   stats.bytesAfter += first ? 0 : 1;

@@ -52,7 +52,7 @@ export function isOversizedHistoryErrorData(data: unknown): boolean {
   return (data as { reason?: unknown }).reason === CODEX_HISTORY_OVERSIZED_REASON;
 }
 
-export type CodexStripRelinkResult = 'recovered' | 'not-needed' | 'failed' | 'busy';
+export type CodexStripRelinkResult = 'recovered' | 'not-needed' | 'failed' | 'busy' | 'stale';
 
 const PI_PROMPT_RPC_TIMEOUT_RE = /pi rpc timeout after \d+ms: prompt\b/i;
 

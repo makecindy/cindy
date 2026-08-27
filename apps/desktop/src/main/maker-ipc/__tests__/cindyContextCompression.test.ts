@@ -60,4 +60,8 @@ describe('afterStripAttempt', () => {
   it('does not rebuild when the turn is still running', () => {
     expect(afterStripAttempt('busy', { local: true, tokens: 'violated' })).toBe('none');
   });
+
+  it('does not rebuild when the owner snapshot is stale', () => {
+    expect(afterStripAttempt('stale', { local: true, tokens: 'violated' })).toBe('none');
+  });
 });

@@ -585,6 +585,42 @@ describe('forkSessionAtMessage', () => {
     expect(result.parentSessionId).toBe('src-session');
   });
 
+  it('reuses the newest strip-fork child that still covers source history', async () => {
+    const source = makeSourceRow({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      sdkSessionId: 'codex-thread-source',
+    });
+    const older = makeSourceRow({
+      id: 'strip-old',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-old',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+      createdAt: 1000,
+    });
+    const newer = makeSourceRow({
+      id: 'strip-new',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-new',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+      createdAt: 4000,
+    });
+    selectQueue.push([source]);
+    selectQueue.push([older, newer]);
+    selectQueue.push([makeMessageRow({ id: 'user-2', role: 'user', createdAt: 3000 })]);
+
+    const result = await forkSessionStripEncrypted('src-session');
+
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(result.id).toBe('strip-new');
+  });
+
   it('remaps agentMeta uuid via maker uuidMap so chained fork (B → C) keeps valid uuids', async () => {
     // 场景: A → fork → B 时, SDK 把 jsonl 里 uuid 全部 remap。源 DB 里的 agentMeta
     // 携带的是 A 的旧 uuid; 写入 B 时必须替换成 B jsonl 里的新 uuid (从 uuidMap),

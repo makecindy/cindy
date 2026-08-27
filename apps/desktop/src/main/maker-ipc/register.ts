@@ -11991,10 +11991,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           stripEncryptedReasoning: true,
           remoteHostId: null,
         });
-        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return 'failed';
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return 'stale';
         const currentDb = getCurrentDbClientSnapshot();
         if (!dbSnapshot || !currentDb || currentDb.clientEpoch !== dbSnapshot.clientEpoch) {
-          return 'failed';
+          return 'stale';
         }
         const now = Date.now();
         const write = await getDbClient()

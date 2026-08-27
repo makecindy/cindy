@@ -42,15 +42,15 @@ export function decideCindyCompression(input: {
   return 'none';
 }
 
-export type StripAttemptResult = 'recovered' | 'not-needed' | 'failed' | 'busy';
+export type StripAttemptResult = 'recovered' | 'not-needed' | 'failed' | 'busy' | 'stale';
 
-/** 剥图之后：成功结束；busy 中止；已健康则按更新后的字节预算再判；失败则重建。 */
+/** 剥图之后：成功结束；busy/stale 中止且不得重建；已健康则按更新后的字节预算再判；失败则重建。 */
 export function afterStripAttempt(
   result: StripAttemptResult,
   rest: { local: boolean; tokens: CompressionBudgetState },
 ): 'done' | CindyCompressionAction {
   if (result === 'recovered') return 'done';
-  if (result === 'busy') return 'none';
+  if (result === 'busy' || result === 'stale') return 'none';
   if (result === 'failed') return 'rebuild';
   return decideCindyCompression({ local: rest.local, bytes: 'ok', tokens: rest.tokens });
 }

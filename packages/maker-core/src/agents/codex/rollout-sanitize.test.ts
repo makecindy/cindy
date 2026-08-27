@@ -7,9 +7,11 @@ import { describe, expect, it } from 'vitest';
 import {
   CODEX_INLINE_IMAGE_STRIP_MIN_CHARS,
   CODEX_LIVE_TAIL_OVERSIZED_BYTES,
+  CodexRolloutScanLimitError,
   hasUnsafeForkRolloutPayload,
   isOversizedLiveTailStats,
   measureRolloutLiveTailBytesFromText,
+  measureRolloutLiveTailStats,
   measureRolloutLiveTailStatsFromText,
   rewriteOversizedToolOutputImages,
   sanitizeCodexForkRollout,
@@ -189,5 +191,18 @@ describe('live-tail classification', () => {
     expect(stats.tailBytes).toBeGreaterThan(CODEX_LIVE_TAIL_OVERSIZED_BYTES);
     expect(stats.strippedBytes).toBe(0);
     expect(isOversizedLiveTailStats(stats)).toBe(false);
+  });
+
+  it('stops before a single JSONL line exceeds the byte cap', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rollout-line-cap-'));
+    const source = path.join(dir, 'source.jsonl');
+    await fs.writeFile(source, `${'A'.repeat(200)}\n`, 'utf8');
+    try {
+      await expect(
+        measureRolloutLiveTailStats(source, { maxLineBytes: 50 }),
+      ).rejects.toBeInstanceOf(CodexRolloutScanLimitError);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

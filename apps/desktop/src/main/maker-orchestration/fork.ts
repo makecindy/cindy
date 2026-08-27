@@ -878,9 +878,13 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     .where(
       and(eq(sessions.parentSessionId, sourceSessionId), isNull(sessions.forkedAtMessageId)),
     );
-  const reused = childRows.find(
-    (row) => row.status !== 'deleted' && String(row.title).startsWith(STRIP_FORK_TITLE_PREFIX),
-  );
+  const reused = childRows.reduce<(typeof childRows)[number] | null>((latest, row) => {
+    if (row.status === 'deleted' || !String(row.title).startsWith(STRIP_FORK_TITLE_PREFIX)) {
+      return latest;
+    }
+    if (!latest || Number(row.createdAt ?? 0) > Number(latest.createdAt ?? 0)) return row;
+    return latest;
+  }, null);
 
   const sourceMessages = await db
     .select()
