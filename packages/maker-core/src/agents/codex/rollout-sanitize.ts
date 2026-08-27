@@ -261,6 +261,12 @@ export function isOversizedLiveTailStats(stats: RolloutLiveTailStats): boolean {
     stats.projectedTailBytes <= CODEX_PROJECTED_LIVE_TAIL_MAX_BYTES;
 }
 
+function decodeRolloutLine(parts: Buffer[]): string {
+  const line = parts.length === 1 ? parts[0] : Buffer.concat(parts);
+  const end = line.length > 0 && line[line.length - 1] === 0x0d ? line.length - 1 : line.length;
+  return line.subarray(0, end).toString('utf8');
+}
+
 async function* iterateRolloutLines(
   filePath: string,
   opts: { maxBytes?: number; maxLineBytes?: number } = {},
@@ -269,7 +275,8 @@ async function* iterateRolloutLines(
   const maxLineBytes = opts.maxLineBytes ?? CODEX_ROLLOUT_LINE_MAX_BYTES;
   const input = createReadStream(filePath);
   let scanned = 0;
-  let pending = Buffer.alloc(0);
+  let pending: Buffer[] = [];
+  let pendingBytes = 0;
   try {
     for await (const chunk of input) {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -277,28 +284,33 @@ async function* iterateRolloutLines(
       if (scanned > maxBytes) {
         throw new CodexRolloutScanLimitError(`Codex rollout scan exceeded ${maxBytes} bytes`);
       }
-      pending = pending.length === 0 ? buf : Buffer.concat([pending, buf]);
-      let start = 0;
-      for (let i = 0; i < pending.length; i += 1) {
-        if (pending[i] !== 0x0a) continue;
-        const lineBytes = i - start;
-        if (lineBytes > maxLineBytes) {
+      let offset = 0;
+      while (offset < buf.length) {
+        const nl = buf.indexOf(0x0a, offset);
+        if (nl === -1) {
+          const rest = buf.subarray(offset);
+          if (pendingBytes + rest.length > maxLineBytes) {
+            throw new CodexRolloutScanLimitError(`Codex rollout line exceeded ${maxLineBytes} bytes`);
+          }
+          pending.push(rest);
+          pendingBytes += rest.length;
+          break;
+        }
+        const piece = buf.subarray(offset, nl);
+        if (pendingBytes + piece.length > maxLineBytes) {
           throw new CodexRolloutScanLimitError(`Codex rollout line exceeded ${maxLineBytes} bytes`);
         }
-        const end = i > start && pending[i - 1] === 0x0d ? i - 1 : i;
-        yield pending.subarray(start, end).toString('utf8');
-        start = i + 1;
-      }
-      pending = start === 0 ? pending : pending.subarray(start);
-      if (pending.length > maxLineBytes) {
-        throw new CodexRolloutScanLimitError(`Codex rollout line exceeded ${maxLineBytes} bytes`);
+        yield decodeRolloutLine(pendingBytes === 0 ? [piece] : [...pending, piece]);
+        pending = [];
+        pendingBytes = 0;
+        offset = nl + 1;
       }
     }
-    if (pending.length > 0) {
-      if (pending.length > maxLineBytes) {
+    if (pendingBytes > 0) {
+      if (pendingBytes > maxLineBytes) {
         throw new CodexRolloutScanLimitError(`Codex rollout line exceeded ${maxLineBytes} bytes`);
       }
-      yield pending.toString('utf8');
+      yield decodeRolloutLine(pending);
     }
   } finally {
     input.destroy();

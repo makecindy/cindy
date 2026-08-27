@@ -11997,7 +11997,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return 'stale';
         }
         const now = Date.now();
-        const write = await getDbClient()
+        const write = await dbSnapshot.client
           .drizzle.update(sessions)
           .set({ sdkSessionId: forked.newSdkSessionId, updatedAt: now })
           .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, threadId)))
