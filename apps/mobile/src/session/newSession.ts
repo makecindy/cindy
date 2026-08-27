@@ -23,15 +23,26 @@ export const NEW_SESSION_AGENT_OPTIONS: readonly { kind: NewSessionAgentKind; la
 ];
 
 /**
+ * 需要用户自行在被控端装好本机 CLI 才会注册的 runtime。Claude Code / Codex / Pi 的
+ * 二进制随桌面端分发,几乎总是注册;grok-build 只有 PATH 上有 grok 才注册,因此不进
+ * fail-open 名单——否则拉取注册集合的那段时间里,多数用户会看到一个建了就报
+ * not-registered 的入口。
+ */
+const OPT_IN_NEW_SESSION_AGENT_KINDS: ReadonlySet<NewSessionAgentKind> = new Set(['grok-build']);
+
+/**
  * 按被控端 runtime 已注册的 agent 集合过滤新建入口(maker:list-available-agents)。
- * `available === null` = 尚未拉到 → fail-open 返回全部(避免异步期间误隐藏合法 agent);
+ * `available === null` = 尚未拉到 → fail-open 返回随桌面端分发的那几个(避免异步期间
+ * 误隐藏合法 agent,同时不提前露出需自行安装的 runtime);
  * 拉到后只保留已注册的 kind —— Pi 二进制缺失时被控端无 pi,过滤掉可防用户建出最终
  * requireAgent 报 not-registered 的会话(codex review P2)。
  */
 export function availableNewSessionAgentOptions(
   available: ReadonlySet<NewSessionAgentKind> | null,
 ): readonly { kind: NewSessionAgentKind; label: string }[] {
-  if (!available) return NEW_SESSION_AGENT_OPTIONS;
+  if (!available) {
+    return NEW_SESSION_AGENT_OPTIONS.filter((option) => !OPT_IN_NEW_SESSION_AGENT_KINDS.has(option.kind));
+  }
   const filtered = NEW_SESSION_AGENT_OPTIONS.filter((option) => available.has(option.kind));
   // 防御:被控端异常返回空集时不至于把入口清空到无法创建(至少保留 Claude)。
   return filtered.length > 0 ? filtered : NEW_SESSION_AGENT_OPTIONS.filter((o) => o.kind === 'claude-code');
@@ -155,6 +166,8 @@ const DEFAULT_MODELS: Record<NewSessionAgentKind, string> = {
   'claude-code': 'claude-sonnet-4-6',
   codex: 'gpt-5.4',
   pi: 'gpt-5.4',
+  // grok-build 只有内置的单一模型条目(GrokBuildAgent.capabilities.availableModels)。
+  'grok-build': 'grok-build',
 };
 
 /** 新建交互式会话的权限种子默认；三个 agent 都保留 Auto-review。 */

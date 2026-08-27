@@ -121,7 +121,9 @@ function registryEffortMetadata(
   modelId: string,
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  if (agent === "pi" || !registry) return undefined;
+  // pi 与 grok-build 不在参考价 registry 的 agent 维度里(前者动态 BYOM,后者本机
+  // CLI 自带单一模型条目),直接判无 effort 元数据。
+  if (agent === "pi" || agent === "grok-build" || !registry) return undefined;
 
   // Stage 1 — exact lookup: only the original modelId.
   const exactMatches = registry.models.filter((entry) =>

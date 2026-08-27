@@ -18,7 +18,8 @@ function fakeSpawn(handler: (stdin: PassThrough, stdout: PassThrough) => void): 
       pid: 99,
       killed: false,
       kill: () => {
-        child.killed = true;
+        // killed 在 ChildProcess 类型上是只读的,伪造对象用赋值语法会过不了 tsc。
+        Object.assign(child, { killed: true });
         child.emit('exit', 0, null);
         return true;
       },

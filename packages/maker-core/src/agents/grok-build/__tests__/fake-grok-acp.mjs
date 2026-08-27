@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import readline from 'node:readline';
 
 const failInit = process.env.FAKE_GROK_FAIL_INIT === '1';

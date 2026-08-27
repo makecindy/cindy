@@ -21,6 +21,16 @@ function textOf(content: AcpContentBlock | undefined): string {
   return '';
 }
 
+/**
+ * AcpSessionUpdate 末尾有 `{ sessionUpdate: string; [key: string]: unknown }` 兜底成员,
+ * 判别式是 string,所以 switch 收窄后 content 仍是 unknown。内容来自外部进程,这里按
+ * 结构校验再收窄,而不是硬转。
+ */
+function contentOf(content: unknown): AcpContentBlock | undefined {
+  if (!isRecord(content) || typeof content.type !== 'string') return undefined;
+  return content as AcpContentBlock;
+}
+
 function toolNameOf(call: Partial<AcpToolCall>): string {
   return call.title || call.kind || 'tool';
 }
@@ -42,7 +52,7 @@ export function translateSessionUpdate(
   const events: AgentEvent[] = [];
   switch (update.sessionUpdate) {
     case 'agent_message_chunk': {
-      const text = textOf(update.content);
+      const text = textOf(contentOf(update.content));
       if (!text) break;
       events.push({
         type: 'text',
@@ -52,7 +62,7 @@ export function translateSessionUpdate(
       break;
     }
     case 'agent_thought_chunk': {
-      const text = textOf(update.content);
+      const text = textOf(contentOf(update.content));
       if (!text) break;
       events.push({
         type: 'thinking',

@@ -167,7 +167,7 @@ export class GrokBuildAgent extends BaseAgent {
     let closed = false;
     let promptInFlight = false;
     const lastUserIntent = { text: '' };
-    const thought = { blockId: randomUUID() };
+    const thought = { thoughtBlockId: randomUUID() };
     let onTurnAccepted: (() => void) | undefined;
     const autoReviewNotice = createAutoReviewUnavailableNotice((message) => {
       events.push({ type: 'error', data: { message, isTerminal: false }, source: GROK_BUILD_SOURCE });
@@ -211,7 +211,7 @@ export class GrokBuildAgent extends BaseAgent {
       if (!isRecord(params) || !isRecord(params.toolCall)) {
         return { outcome: { outcome: 'cancelled' } };
       }
-      const toolCall = params.toolCall as AcpToolCall;
+      const toolCall = params.toolCall as unknown as AcpToolCall;
       const options = Array.isArray(params.options) ? params.options as AcpPermissionOption[] : [];
       return this.resolvePermission({
         permissionMode,
@@ -282,14 +282,16 @@ export class GrokBuildAgent extends BaseAgent {
         });
         promptInFlight = true;
         let sendReturned = false;
-        let acceptState: 'pending' | 'accepted' | 'rejected' = 'pending';
+        // markAccepted / prompt catch 分处两个闭包,用对象持有状态,避免 TS 把读取处
+        // 收窄成写入前的字面量类型。
+        const accept: { state: 'pending' | 'accepted' | 'rejected' } = { state: 'pending' };
         let acceptResolve = () => {};
         const accepted = new Promise<void>((resolve) => {
           acceptResolve = resolve;
         });
         const markAccepted = () => {
-          if (acceptState !== 'pending') return;
-          acceptState = 'accepted';
+          if (accept.state !== 'pending') return;
+          accept.state = 'accepted';
           acceptResolve();
         };
         const publishAfterSend = (event: AgentEvent) => {
@@ -307,12 +309,12 @@ export class GrokBuildAgent extends BaseAgent {
             markAccepted();
             publishAfterSend(translatePromptResult(result));
           } catch (err) {
-            if (acceptState === 'accepted' || sendReturned) {
+            if (accept.state === 'accepted' || sendReturned) {
               const messageText = err instanceof Error ? err.message : String(err);
               publishAfterSend(translateError(messageText, true));
               return;
             }
-            acceptState = 'rejected';
+            accept.state = 'rejected';
             throw err;
           } finally {
             promptInFlight = false;
