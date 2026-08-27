@@ -3278,7 +3278,16 @@ describe('classic 左侧 rail:超高时内部滚动,不叠压 footer(#3516)', ()
   it('根节点保留 w-12 / shrink-0 骨架,并带 min-h-0 + overflow-y-auto 收缩滚动链', async () => {
     const root = await mountRail(railItems(1));
     expect(root).not.toBeNull();
-    for (const token of ['w-12', 'shrink-0', 'min-h-0', 'overflow-y-auto', 'overscroll-contain']) {
+    // scrollbar-hide:Windows 非 overlay 环境的全局 12px 滚动条槽会挤掉 34px 按钮
+    // (#3516 review P2),原生槽必须藏;滚轮 / 触控板照常滚。
+    for (const token of [
+      'w-12',
+      'shrink-0',
+      'min-h-0',
+      'overflow-y-auto',
+      'overscroll-contain',
+      'scrollbar-hide',
+    ]) {
       expect(root.className).toContain(token);
     }
   });

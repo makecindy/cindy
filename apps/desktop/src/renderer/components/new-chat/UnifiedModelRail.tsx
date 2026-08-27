@@ -1,10 +1,8 @@
 import { LayoutGrid, Star } from 'lucide-react';
-import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 
 import { agentOptionOf } from './agentOptions';
@@ -43,14 +41,6 @@ export function UnifiedModelRail({
   // rail 常驻,不做「项数少就整条隐藏」——设计稿的分类栏在单来源时也在(★/全部/来源),
   // 隐藏会让收藏与快速切换不可发现(Chris 2026-08-13 实测反馈)。
   const activeKey = railItemKey(active);
-  const railRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = railRef.current;
-    if (!el) return;
-    // 格位铺得下时不闪滚动条;超出一屏才提示「下面还有来源」。与右侧列表同一套提示节奏。
-    const raf = requestAnimationFrame(() => flashScrollbar(el));
-    return () => cancelAnimationFrame(raf);
-  }, [items]);
   return (
     // 设计稿 .rail:宽 48(含 6px 侧距 + 1px 右分隔线)、纵向 8px、格间 2px。
     // min-h-0 + overflow-y-auto:自定义来源一多,34px 格位累计高度会超过面板可用高度 ——
@@ -58,10 +48,12 @@ export function UnifiedModelRail({
     // footer 上(#3516)。与右侧列表(UnifiedModelPanel 的 min-h-0 + overflow-y-auto)
     // 同一套收缩滚动链:父级高度受限时 rail 自己收缩并内部滚动,w-12 shrink-0 骨架不变,
     // 不引入折叠 / 截断等新的产品规则;不用 scrollbar-gutter:stable(48px 窄栏留给 34px 按钮)。
+    // scrollbar-hide:原生滚动条必须藏 —— Windows 等非 overlay 环境下全局 12px 槽位会把
+    // 内容区挤到 24px,34px 按钮放不下(#3516 review P2);折叠侧栏窄 rail 同一取舍
+    // (CCAgentSidebarUpper)。滚轮 / 触控板 / 键盘照常滚动。
     <div
-      ref={railRef}
       data-unified-model-rail="true"
-      className="flex w-12 min-h-0 shrink-0 flex-col items-center gap-0.5 overflow-y-auto overscroll-contain border-r border-[var(--model-dropdown-border)] px-1.5 py-2"
+      className="flex w-12 min-h-0 shrink-0 flex-col items-center gap-0.5 overflow-y-auto overscroll-contain border-r border-[var(--model-dropdown-border)] px-1.5 py-2 scrollbar-hide"
     >
       {items.map((item) => {
         const key = railItemKey(item);
