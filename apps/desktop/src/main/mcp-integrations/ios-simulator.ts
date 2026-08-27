@@ -122,6 +122,7 @@ import {
 
 const logger = createLogger('mcp/cindy_ios_simulator');
 const BUILD_DIAGNOSTICS_TTL_MS = 30 * 60_000;
+const BUILD_LEASE_HEARTBEAT_MS = 20_000;
 const PLUGIN_ENVIRONMENT_CACHE_MS = 30_000;
 const MAX_BUILD_DIAGNOSTICS = 32;
 const MANAGED_BUILD_RESULT_BUNDLE_PATTERN = /^CindyBuild(?:-[0-9a-f-]+)?\.xcresult$/i;
@@ -135,6 +136,11 @@ const IOS_SIMULATOR_BUILD_CACHE_LAST_USED_FILE = '.cindy-last-used';
 const IOS_SIMULATOR_BUILD_CACHE_PRUNE_CONCURRENCY = 4;
 const UUID_V4_PATTERN_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const MANAGED_BUILD_CACHE_KEY_PATTERN = /^[0-9a-f]{20}$/i;
+const MANAGED_BUILD_CACHE_TRASH_PATTERN = new RegExp(
+  `^\\.trash-[0-9a-f]{20}-${UUID_V4_PATTERN_SOURCE}$`,
+  'i',
+);
 const MANAGED_ARTIFACT_COPY_PATTERN = new RegExp(`^${UUID_V4_PATTERN_SOURCE}\\.app$`, 'i');
 const ARTIFACT_COPY_TRASH_PREFIX = '.trash-artifact-';
 const MANAGED_ARTIFACT_COPY_TRASH_PATTERN = new RegExp(
@@ -163,9 +169,7 @@ function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return (
     relative === '' ||
-    (relative !== '..' &&
-      !relative.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relative))
+    (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
   );
 }
 
@@ -175,9 +179,7 @@ function isPathInside(root: string, candidate: string): boolean {
  * traversing them: real directories are walked once, while each link's final
  * target must resolve inside the copied `.app` tree. Dangling links fail too.
  */
-async function assertIOSSimulatorArtifactSymlinksContained(
-  appPath: string,
-): Promise<void> {
+async function assertIOSSimulatorArtifactSymlinksContained(appPath: string): Promise<void> {
   let root: string;
   try {
     root = await realpath(appPath);
@@ -227,9 +229,7 @@ async function assertIOSSimulatorArtifactSymlinksContained(
   }
 }
 
-async function readIOSSimulatorBuildCacheLastUsedMs(
-  cacheDir: string,
-): Promise<number | null> {
+async function readIOSSimulatorBuildCacheLastUsedMs(cacheDir: string): Promise<number | null> {
   try {
     const raw = await readFile(
       path.join(cacheDir, IOS_SIMULATOR_BUILD_CACHE_LAST_USED_FILE),
@@ -266,11 +266,11 @@ export async function pruneStaleIOSSimulatorBuildCaches(
     } catch {
       continue;
     }
-    const candidates = entries.filter(
-      (entry) =>
-        entry.isDirectory() &&
-        (entry.name.startsWith('.trash-') || !isSkip?.(entry.name)),
-    );
+    const candidates = entries.filter((entry) => {
+      if (!entry.isDirectory()) return false;
+      if (MANAGED_BUILD_CACHE_TRASH_PATTERN.test(entry.name)) return true;
+      return MANAGED_BUILD_CACHE_KEY_PATTERN.test(entry.name) && !isSkip?.(entry.name);
+    });
     let cursor = 0;
     const pruneNext = async (): Promise<void> => {
       while (cursor < candidates.length) {
@@ -280,10 +280,8 @@ export async function pruneStaleIOSSimulatorBuildCaches(
           // A crash or force-quit may interrupt deletion after the atomic
           // rename. Trash names are never cache keys, so resume them without
           // another seven-day wait.
-          if (entry.name.startsWith('.trash-')) {
-            await rm(full, { recursive: true, force: true }).catch(
-              () => undefined,
-            );
+          if (MANAGED_BUILD_CACHE_TRASH_PATTERN.test(entry.name)) {
+            await rm(full, { recursive: true, force: true }).catch(() => undefined);
             continue;
           }
           const lastUsedMs = await readIOSSimulatorBuildCacheLastUsedMs(full);
@@ -298,10 +296,7 @@ export async function pruneStaleIOSSimulatorBuildCaches(
           // Atomically move the key aside before the (async, slow) recursive
           // delete. A build admitted during deletion recreates the original key
           // instead of racing the in-progress rm.
-          const trash = path.join(
-            root,
-            `.trash-${entry.name}-${randomUUID()}`,
-          );
+          const trash = path.join(root, `.trash-${entry.name}-${randomUUID()}`);
           try {
             renameSync(full, trash);
           } catch {
@@ -312,9 +307,7 @@ export async function pruneStaleIOSSimulatorBuildCaches(
             // cross-device.
             continue;
           }
-          await rm(trash, { recursive: true, force: true }).catch(
-            () => undefined,
-          );
+          await rm(trash, { recursive: true, force: true }).catch(() => undefined);
         } catch {
           // Best-effort per entry.
         }
@@ -323,10 +316,7 @@ export async function pruneStaleIOSSimulatorBuildCaches(
     await Promise.all(
       Array.from(
         {
-          length: Math.min(
-            IOS_SIMULATOR_BUILD_CACHE_PRUNE_CONCURRENCY,
-            candidates.length,
-          ),
+          length: Math.min(IOS_SIMULATOR_BUILD_CACHE_PRUNE_CONCURRENCY, candidates.length),
         },
         () => pruneNext(),
       ),
@@ -534,6 +524,8 @@ export interface IOSSimulatorHostOptions {
   h264FramePump?: IOSSimulatorH264FramePump;
   appLifecycle?: IOSSimulatorAppLifecycleAdapter;
   projectBuilder?: IOSSimulatorProjectBuilderAdapter;
+  /** Test seam for scheduling the active-build lease heartbeat. */
+  scheduleBuildLeaseHeartbeat?: (heartbeat: () => void) => () => void;
   /** Test seam for lifecycle-owned opportunistic cache pruning. */
   pruneBuildCaches?: typeof pruneStaleIOSSimulatorBuildCaches;
   mediaCapture?: IOSSimulatorMediaCaptureAdapter;
@@ -1349,6 +1341,13 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
     });
   const appLifecycle = options.appLifecycle ?? new IOSSimulatorAppLifecycle();
   const projectBuilder = options.projectBuilder ?? new IOSSimulatorProjectBuilder();
+  const scheduleBuildLeaseHeartbeat =
+    options.scheduleBuildLeaseHeartbeat ??
+    ((heartbeat: () => void) => {
+      const timer = setInterval(heartbeat, BUILD_LEASE_HEARTBEAT_MS);
+      timer.unref?.();
+      return () => clearInterval(timer);
+    });
   const appArtifacts = new Map<
     string,
     {
@@ -1406,8 +1405,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
   // two sessions on the same worktree must not run two xcodebuild processes
   // against one DerivedData/SPM checkout. beginBuild only serializes per instance.
   const activeBuildCacheKeys = new Set<string>();
-  const pruneBuildCaches =
-    options.pruneBuildCaches ?? pruneStaleIOSSimulatorBuildCaches;
+  const pruneBuildCaches = options.pruneBuildCaches ?? pruneStaleIOSSimulatorBuildCaches;
   let buildCachePrunePromise: Promise<void> | null = null;
   const sessionOperationAdmissionEpochs = new Map<string, number>();
   const sessionRemovalAdmissionEpochs = new Map<string, number>();
@@ -1465,8 +1463,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
     }
   >();
   const getOwnerScopeKey = options.getOwnerScopeKey ?? activeOwnerScopeKey;
-  const isOwnerBoundaryPending =
-    options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
+  const isOwnerBoundaryPending = options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
   const pendingCreateEvidence = options.pendingCreateEvidence ?? null;
   let ownershipReconciledScopeKey: string | null = null;
   // Persisted `viewerState` can only be stale on the first sweep that actually
@@ -1768,7 +1765,9 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       relative.startsWith(`..${path.sep}`) ||
       path.isAbsolute(relative) ||
       segments.length !== 3 ||
-      segments[1] !== 'artifacts'
+      segments[1] !== 'artifacts' ||
+      !MANAGED_BUILD_CACHE_KEY_PATTERN.test(segments[0] ?? '') ||
+      !MANAGED_ARTIFACT_COPY_PATTERN.test(segments[2] ?? '')
     ) {
       return Promise.resolve();
     }
@@ -2221,10 +2220,10 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
     const nativeDiagnostics = manager.diagnostics?.(instance.instanceId)?.nativeSidecar;
     const nativeRecoveryAvailable = Boolean(
       manager.recoverNativeSidecar &&
-        nativeFallback &&
-        (stream.reasonCode === 'native-stream-disconnected' ||
-          (nativeDiagnostics?.recoveryEligible === true &&
-            nativeDiagnostics.admission?.launch.allowed === true)),
+      nativeFallback &&
+      (stream.reasonCode === 'native-stream-disconnected' ||
+        (nativeDiagnostics?.recoveryEligible === true &&
+          nativeDiagnostics.admission?.launch.allowed === true)),
     );
     return {
       sessionId: instance.sessionId,
@@ -2957,8 +2956,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
 
   function isViewerStateNormalized(scopeKey: string, instanceId: string): boolean {
     return (
-      viewerStateNormalizedScopeKey === scopeKey &&
-      viewerStateNormalizedInstanceIds.has(instanceId)
+      viewerStateNormalizedScopeKey === scopeKey && viewerStateNormalizedInstanceIds.has(instanceId)
     );
   }
 
@@ -5225,9 +5223,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
             return {
               ok: true,
               data: {
-                ...instanceData(
-                  await actor.detach(route, finalizeDetachedResourceRelease),
-                ),
+                ...instanceData(await actor.detach(route, finalizeDetachedResourceRelease)),
                 ...(mediaCleanupWarning ? { mediaCleanupWarning } : {}),
               },
             };
@@ -6128,11 +6124,27 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           // build registered that never reaches the cleanup finally below.
           const containerPath = readOptionalString(args, 'containerPath', 4_096);
           const activeBuild = beginBuild(instance, buildAdmissionEpoch);
+          let buildLeaseHeartbeatError: unknown = null;
+          let stopBuildLeaseHeartbeat: (() => void) | null = null;
           const expectedArch = process.arch === 'x64' ? 'x86_64' : 'arm64';
           let ownedBuildCacheKey: string | null = null;
           let derivedDataPath: string | null = null;
           let clonedSourcePackagesDirPath: string | null = null;
           try {
+            // A build can legitimately outlive the one-minute control lease.
+            // Keep the admitted route alive while the Host owns this build;
+            // a replaced generation/lease still cancels the operation instead
+            // of being silently renewed under different authority.
+            actor.heartbeat(route);
+            stopBuildLeaseHeartbeat = scheduleBuildLeaseHeartbeat(() => {
+              if (activeBuild.controller.signal.aborted || buildLeaseHeartbeatError) return;
+              try {
+                actor.heartbeat(route);
+              } catch (error) {
+                buildLeaseHeartbeatError = error;
+                activeBuild.controller.abort();
+              }
+            });
             // Resolve the project before any cache I/O. Equivalent spellings
             // (`Demo.xcodeproj`, `./Demo.xcodeproj`, absolute paths, or the
             // implicit single-container selection) must share one identity,
@@ -6141,6 +6153,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
               ? await projectBuilder.inspect(instance.worktreeRoot, containerPath)
               : null;
             if (disposePromise) throw new IOSSimulatorHostDisposedError();
+            if (buildLeaseHeartbeatError) throw buildLeaseHeartbeatError;
             if (activeBuild.controller.signal.aborted) {
               throw new IOSSimulatorInstanceError(
                 'MUTATION_CANCELLED',
@@ -6149,16 +6162,15 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
               );
             }
             actor.assertRoute(route);
-            const canonicalWorktreeRoot =
-              inspectedProject?.worktreeRoot ?? instance.worktreeRoot;
+            const canonicalWorktreeRoot = inspectedProject?.worktreeRoot ?? instance.worktreeRoot;
             const canonicalContainerPath = inspectedProject
-              ? inspectedProject.containerPath ?? undefined
+              ? (inspectedProject.containerPath ?? undefined)
               : containerPath;
             const containerIdentity = inspectedProject
               ? `${inspectedProject.kind}\0${
                   inspectedProject.containerPath ?? inspectedProject.projectRoot
                 }`
-              : containerPath ?? '';
+              : (containerPath ?? '');
             // Share DerivedData + SPM checkouts across sessions for the same
             // canonical worktree+arch+container, so repeated builds are
             // incremental instead of re-cloning and recompiling per session.
@@ -6213,6 +6225,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
                 );
                 throw new IOSSimulatorHostDisposedError();
               }
+              if (buildLeaseHeartbeatError) throw buildLeaseHeartbeatError;
               if (activeBuild.controller.signal.aborted) {
                 throw new IOSSimulatorInstanceError(
                   'MUTATION_CANCELLED',
@@ -6233,6 +6246,10 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
             if (disposePromise) {
               await discardManagedBuildResultBundle(built.resultBundlePath ?? null);
               throw new IOSSimulatorHostDisposedError();
+            }
+            if (buildLeaseHeartbeatError) {
+              await discardManagedBuildResultBundle(built.resultBundlePath ?? null);
+              throw buildLeaseHeartbeatError;
             }
             if (activeBuild.controller.signal.aborted) {
               await discardManagedBuildResultBundle(built.resultBundlePath ?? null);
@@ -6256,10 +6273,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
             // would otherwise overwrite the same `.app` path and corrupt a
             // still-pending artifact handle (install would ship the newer build).
             const immutableArtifactRoot = path.join(derivedDataPath, 'artifacts');
-            const immutableAppPath = path.join(
-              immutableArtifactRoot,
-              `${randomUUID()}.app`,
-            );
+            const immutableAppPath = path.join(immutableArtifactRoot, `${randomUUID()}.app`);
             try {
               await mkdir(immutableArtifactRoot, { recursive: true });
               await cp(built.appPath, immutableAppPath, {
@@ -6275,6 +6289,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
               if (disposePromise || error instanceof IOSSimulatorHostDisposedError) {
                 throw new IOSSimulatorHostDisposedError();
               }
+              if (buildLeaseHeartbeatError) throw buildLeaseHeartbeatError;
               if (activeBuild.controller.signal.aborted) {
                 throw new IOSSimulatorInstanceError(
                   'MUTATION_CANCELLED',
@@ -6306,6 +6321,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
                 if (disposePromise || error instanceof IOSSimulatorHostDisposedError) {
                   throw new IOSSimulatorHostDisposedError();
                 }
+                if (buildLeaseHeartbeatError) throw buildLeaseHeartbeatError;
                 if (activeBuild.controller.signal.aborted) {
                   throw new IOSSimulatorInstanceError(
                     'MUTATION_CANCELLED',
@@ -6316,6 +6332,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
                 return buildFailureWithDiagnostics(error, sessionId, diagnostics);
               }
               assertHostActive();
+              if (buildLeaseHeartbeatError) throw buildLeaseHeartbeatError;
               if (activeBuild.controller.signal.aborted) {
                 throw new IOSSimulatorInstanceError(
                   'MUTATION_CANCELLED',
@@ -6358,6 +6375,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
               if (!artifactRegistered) void discardArtifactCopy(immutableAppPath);
             }
           } finally {
+            stopBuildLeaseHeartbeat?.();
             if (derivedDataPath && clonedSourcePackagesDirPath) {
               await Promise.all([
                 touchIOSSimulatorBuildCacheLastUsed(derivedDataPath),
@@ -6826,10 +6844,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           if (environment.ready && instances.length === 0) {
             // Advertised names only: a recommendation the model cannot find in
             // list_tools sends it back to the ambiguous superseded name.
-            recommendedActions.push(
-              'list_simulator_devices',
-              'create_instance_or_attach_device',
-            );
+            recommendedActions.push('list_simulator_devices', 'create_instance_or_attach_device');
           }
           if (instances.some((entry) => !entry.running)) recommendedActions.push('start_instance');
           if (
@@ -7170,10 +7185,8 @@ async function readPassiveIOSSimulatorPluginStatus(
   }
   try {
     const getOwnerScopeKey = options.getOwnerScopeKey ?? activeOwnerScopeKey;
-    const isOwnerBoundaryPending =
-      options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
-    const isHostClosing =
-      options.isHostClosing ?? (() => defaultIOSSimulatorRuntimeClosing);
+    const isOwnerBoundaryPending = options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
+    const isHostClosing = options.isHostClosing ?? (() => defaultIOSSimulatorRuntimeClosing);
     if (isHostClosing() || isOwnerBoundaryPending()) {
       return {
         ok: false,
@@ -7193,11 +7206,7 @@ async function readPassiveIOSSimulatorPluginStatus(
         };
       });
     const session = await getSession(normalizedSessionId);
-    if (
-      isHostClosing() ||
-      isOwnerBoundaryPending() ||
-      getOwnerScopeKey() !== ownerScopeKey
-    ) {
+    if (isHostClosing() || isOwnerBoundaryPending() || getOwnerScopeKey() !== ownerScopeKey) {
       return {
         ok: false,
         errorCode: 'IOS_SIMULATOR_HOST_ERROR',
@@ -7221,11 +7230,7 @@ async function readPassiveIOSSimulatorPluginStatus(
     const environment = options.inspectEnvironment
       ? projectPluginEnvironment(await options.inspectEnvironment())
       : await readPassivePluginEnvironment();
-    if (
-      isHostClosing() ||
-      isOwnerBoundaryPending() ||
-      getOwnerScopeKey() !== ownerScopeKey
-    ) {
+    if (isHostClosing() || isOwnerBoundaryPending() || getOwnerScopeKey() !== ownerScopeKey) {
       return {
         ok: false,
         errorCode: 'IOS_SIMULATOR_HOST_ERROR',
@@ -7320,12 +7325,7 @@ export function initializeIOSSimulatorHost(): IOSSimulatorHost {
   const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
   const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
   const persistedActor = createDefaultActor(lifecycle, registry);
-  return installDefaultIOSSimulatorHost(
-    lifecycle,
-    persistedActor,
-    registry,
-    pendingCreateEvidence,
-  );
+  return installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry, pendingCreateEvidence);
 }
 
 function currentIOSSimulatorHost(): IOSSimulatorHost | null {
@@ -7636,9 +7636,7 @@ export function getIOSSimulatorMcpDeps(
   options: IOSSimulatorMcpDepsOptions = {},
 ): IOSSimulatorMcpDeps {
   const getHost = (): IOSSimulatorHost => options.host ?? initializeIOSSimulatorHost();
-  const resolveAccess = (
-    context?: IOSSimulatorMcpCallContext,
-  ): IOSSimulatorMcpAccessDecision => {
+  const resolveAccess = (context?: IOSSimulatorMcpCallContext): IOSSimulatorMcpAccessDecision => {
     const decision = options.resolveAccess?.(context);
     if (decision) return decision;
     if (options.isIOSSimulatorEnabled && !options.isIOSSimulatorEnabled(context)) {

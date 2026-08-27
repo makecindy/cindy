@@ -799,8 +799,12 @@ describe("IOSSimulatorProjectBuilder", () => {
         return { stdout: "", stderr: "", exitCode: 0 };
       },
     );
+    const inspectionTimeoutMs = 5 * 60_000;
+    const buildTimeoutMs = 30 * 60_000;
     const result = await new IOSSimulatorProjectBuilder({
       commandRunner: { run },
+      inspectionTimeoutMs,
+      buildTimeoutMs,
     }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
@@ -827,6 +831,11 @@ describe("IOSSimulatorProjectBuilder", () => {
     expect(xcodeCalls[3]).toEqual(
       expect.arrayContaining(["-showBuildSettings", "-json"]),
     );
+    for (const [, args, options] of run.mock.calls) {
+      expect(options?.timeoutMs).toBe(
+        args.includes("build") ? buildTimeoutMs : inspectionTimeoutMs,
+      );
+    }
   });
 
   it("disables the resolved-file pin for the remaining build after Xcode 26.5 rejects -list", async () => {

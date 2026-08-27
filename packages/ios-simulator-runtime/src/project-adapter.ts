@@ -46,6 +46,8 @@ export class IOSSimulatorProjectBuildError extends IOSSimulatorInstanceError {
 export interface IOSSimulatorProjectBuilderOptions {
   commandRunner?: IOSSimulatorCommandRunner;
   buildTimeoutMs?: number;
+  /** Xcode project queries may resolve a cold SPM graph before compilation starts. */
+  inspectionTimeoutMs?: number;
   /** Test/integration seam; only the shared child-process allowlist is retained. */
   environment?: NodeJS.ProcessEnv;
 }
@@ -274,12 +276,14 @@ function throwIfLaunchValidationCancelled(signal?: AbortSignal): void {
 export class IOSSimulatorProjectBuilder {
   readonly #runner: IOSSimulatorCommandRunner;
   readonly #buildTimeoutMs: number;
+  readonly #inspectionTimeoutMs: number;
   readonly #childEnvironment: NodeJS.ProcessEnv;
 
   constructor(options: IOSSimulatorProjectBuilderOptions = {}) {
     this.#runner =
       options.commandRunner ?? createNodeIOSSimulatorCommandRunner();
     this.#buildTimeoutMs = options.buildTimeoutMs ?? 30 * 60_000;
+    this.#inspectionTimeoutMs = options.inspectionTimeoutMs ?? 5 * 60_000;
     this.#childEnvironment = createWdaChildEnvironment(
       options.environment ?? process.env,
     );
@@ -507,7 +511,7 @@ export class IOSSimulatorProjectBuilder {
       ],
       {
         cwd: project.projectRoot,
-        timeoutMs: 60_000,
+        timeoutMs: this.#inspectionTimeoutMs,
         maxBufferBytes: 1024 * 1024,
         signal: input.signal,
         env: this.#childEnvironment,
@@ -574,7 +578,7 @@ export class IOSSimulatorProjectBuilder {
         [...commonArgs, "-showBuildSettings", "-json"],
         {
           cwd: project.projectRoot,
-          timeoutMs: 60_000,
+          timeoutMs: this.#inspectionTimeoutMs,
           maxBufferBytes: 4 * 1024 * 1024,
           signal: input.signal,
           env: this.#childEnvironment,
@@ -670,7 +674,7 @@ export class IOSSimulatorProjectBuilder {
       [...commonArgs, "-showBuildSettings", "-json"],
       {
         cwd: project.projectRoot,
-        timeoutMs: 60_000,
+        timeoutMs: this.#inspectionTimeoutMs,
         maxBufferBytes: 4 * 1024 * 1024,
         signal: input.signal,
         env: this.#childEnvironment,

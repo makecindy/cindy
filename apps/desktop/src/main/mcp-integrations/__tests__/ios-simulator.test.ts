@@ -94,8 +94,8 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
   it('removes directories older than the max age and keeps fresh ones', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
     try {
-      const stale = path.join(root, 'stale');
-      const fresh = path.join(root, 'fresh');
+      const stale = path.join(root, 'a'.repeat(20));
+      const fresh = path.join(root, 'b'.repeat(20));
       await mkdir(stale);
       await mkdir(fresh);
       const now = Date.now();
@@ -121,8 +121,8 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
   it('keeps a cache whose directory mtime is old when the last-used marker is fresh', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
     try {
-      const used = path.join(root, 'used-key');
-      const idle = path.join(root, 'idle-key');
+      const used = path.join(root, 'c'.repeat(20));
+      const idle = path.join(root, 'd'.repeat(20));
       await mkdir(used);
       await mkdir(idle);
       const now = Date.now();
@@ -142,8 +142,9 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
   it('keeps active (skipped) caches even when their mtime is stale', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
     try {
-      const active = path.join(root, 'active-key');
-      const idle = path.join(root, 'idle-key');
+      const activeKey = 'e'.repeat(20);
+      const active = path.join(root, activeKey);
+      const idle = path.join(root, 'f'.repeat(20));
       await mkdir(active);
       await mkdir(idle);
       const now = Date.now();
@@ -154,7 +155,7 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
         [root],
         7 * 24 * 60 * 60 * 1000,
         () => now,
-        (name) => name === 'active-key',
+        (name) => name === activeKey,
       );
       await expect(stat(active)).resolves.toBeTruthy();
       await expect(stat(idle)).rejects.toThrow();
@@ -166,7 +167,8 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
   it('rechecks live cache use after reading stale metadata', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
     try {
-      const cache = path.join(root, 'racing-key');
+      const racingKey = '1'.repeat(20);
+      const cache = path.join(root, racingKey);
       const now = Date.now();
       await touchIOSSimulatorBuildCacheLastUsed(cache, () => now - 8 * 24 * 60 * 60 * 1000);
       let skipChecks = 0;
@@ -174,7 +176,7 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
         [root],
         7 * 24 * 60 * 60 * 1000,
         () => now,
-        (name) => name === 'racing-key' && ++skipChecks >= 2,
+        (name) => name === racingKey && ++skipChecks >= 2,
       );
       expect(skipChecks).toBe(2);
       await expect(stat(cache)).resolves.toBeTruthy();
@@ -186,11 +188,14 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
   it('reclaims abandoned trash without waiting for the cache TTL again', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
     try {
-      const trash = path.join(root, '.trash-old-key-interrupted');
+      const trash = path.join(root, `.trash-${'2'.repeat(20)}-${crypto.randomUUID()}`);
+      const unmanagedTrash = path.join(root, '.trash-not-managed');
       await mkdir(trash);
+      await mkdir(unmanagedTrash);
       await writeFile(path.join(trash, 'partial'), 'left by interrupted deletion');
       await pruneStaleIOSSimulatorBuildCaches([root], 7 * 24 * 60 * 60 * 1000, Date.now);
       await expect(stat(trash)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(unmanagedTrash)).resolves.toBeDefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -8227,6 +8232,215 @@ describe('iOS Simulator host', () => {
     expect(resourceScheduler.runningCount()).toBe(0);
   });
 
+  it('keeps an admitted build lease alive while project inspection is pending', async () => {
+    let now = 0;
+    const clock = { now: () => now };
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-build-lease-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-build-lease-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation(() => userData);
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({
+        createId: () => crypto.randomUUID(),
+        clock,
+        leaseDurationMs: 60_000,
+      }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(),
+        shutdownExact: vi.fn(),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+      clock,
+    });
+    let stopInspection: () => void = () => undefined;
+    let markInspectionStarted: () => void = () => undefined;
+    const inspectionStarted = new Promise<void>((resolve) => {
+      markInspectionStarted = resolve;
+    });
+    const inspectionGate = new Promise<never>((_resolve, reject) => {
+      stopInspection = () =>
+        reject(
+          new IOSSimulatorInstanceError(
+            'MUTATION_CANCELLED',
+            'The project inspection was stopped after lease verification.',
+            true,
+          ),
+        );
+    });
+    let runHeartbeat: () => void = () => undefined;
+    const stopHeartbeat = vi.fn();
+    const projectBuilderBuild = vi.fn<IOSSimulatorProjectBuilderAdapter['build']>();
+    const host = createIOSSimulatorHost({
+      actor,
+      scheduleBuildLeaseHeartbeat: vi.fn((heartbeat) => {
+        runHeartbeat = heartbeat;
+        return stopHeartbeat;
+      }),
+      projectBuilder: {
+        inspect: vi.fn(async () => {
+          markInspectionStarted();
+          return await inspectionGate;
+        }),
+        build: projectBuilderBuild,
+      },
+      appLifecycle: {
+        inspectArtifact: vi.fn(),
+        installExact: vi.fn(),
+        launchExact: vi.fn(),
+        terminateExact: vi.fn(),
+        openUrlExact: vi.fn(),
+      },
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+      resourceScheduler: testResourceScheduler(),
+      runtime: {
+        inspect: vi.fn(async () => ({
+          ...READY_REPORT,
+          devices: [{ ...READY_REPORT.devices[0]!, state: 'Shutdown' }],
+        })),
+      },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-slow-build', origin: 'user' },
+      );
+      const instance = actor.list('session-slow-build')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      const build = host.callTool('build_app', route, {
+        sessionId: 'session-slow-build',
+        origin: 'user',
+      });
+      await inspectionStarted;
+      now = 31_000;
+      runHeartbeat();
+      expect(Date.parse(actor.list('session-slow-build')[0]!.lease.expiresAt)).toBe(91_000);
+      now = 70_000;
+      runHeartbeat();
+      expect(Date.parse(actor.list('session-slow-build')[0]!.lease.expiresAt)).toBe(130_000);
+      expect(() => actor.assertRoute({ ...route, sessionId: 'session-slow-build' })).not.toThrow();
+      stopInspection();
+
+      await expect(build).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'MUTATION_CANCELLED',
+      });
+      const current = actor.list('session-slow-build')[0]!;
+      expect(current.lease.id).toBe(route.leaseId);
+      expect(Date.parse(current.lease.expiresAt)).toBeGreaterThan(now);
+      expect(stopHeartbeat).toHaveBeenCalledOnce();
+      expect(projectBuilderBuild).not.toHaveBeenCalled();
+    } finally {
+      stopInspection();
+      await host.dispose();
+      getPath.mockRestore();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('cancels an admitted build when its exact lease is replaced', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-build-stale-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-build-stale-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation(() => userData);
+    const store = new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() });
+    const actor = new IOSSimulatorInstanceActor({
+      store,
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(),
+        shutdownExact: vi.fn(),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    let markBuildStarted: () => void = () => undefined;
+    const buildStarted = new Promise<void>((resolve) => {
+      markBuildStarted = resolve;
+    });
+    let runHeartbeat: () => void = () => undefined;
+    const stopHeartbeat = vi.fn();
+    const host = createIOSSimulatorHost({
+      actor,
+      scheduleBuildLeaseHeartbeat: vi.fn((heartbeat) => {
+        runHeartbeat = heartbeat;
+        return stopHeartbeat;
+      }),
+      projectBuilder: {
+        build: vi.fn(async ({ signal }) => {
+          markBuildStarted();
+          return await new Promise<never>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(new Error('build aborted')), {
+              once: true,
+            });
+          });
+        }),
+      },
+      appLifecycle: {
+        inspectArtifact: vi.fn(),
+        installExact: vi.fn(),
+        launchExact: vi.fn(),
+        terminateExact: vi.fn(),
+        openUrlExact: vi.fn(),
+      },
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+      resourceScheduler: testResourceScheduler(),
+      runtime: {
+        inspect: vi.fn(async () => ({
+          ...READY_REPORT,
+          devices: [{ ...READY_REPORT.devices[0]!, state: 'Shutdown' }],
+        })),
+      },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-stale-build', origin: 'user' },
+      );
+      const instance = actor.list('session-stale-build')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      const build = host.callTool('build_app', route, {
+        sessionId: 'session-stale-build',
+        origin: 'user',
+      });
+      await buildStarted;
+      const replacement = store.renew(instance.instanceId, instance.sessionId);
+      expect(replacement.lease.id).not.toBe(route.leaseId);
+      runHeartbeat();
+
+      await expect(build).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'LEASE_EXPIRED',
+      });
+      expect(stopHeartbeat).toHaveBeenCalledOnce();
+    } finally {
+      await host.dispose();
+      getPath.mockRestore();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
   it('routes build, install, launch, terminate, and URL actions through injected adapters', async () => {
     const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-routing-ud-'));
     const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-routing-wt-'));
@@ -8562,8 +8776,23 @@ describe('iOS Simulator host', () => {
         installedPayload = await readFile(path.join(artifact.appPath, 'Payload.txt'), 'utf8');
       },
     );
+    const driverManager = {
+      get: vi.fn(() => null),
+      start: vi.fn(
+        async (options) =>
+          ({
+            instanceId: options.instanceId,
+            simulatorUdid: options.simulatorUdid,
+            pid: 42,
+            driver: {},
+            driverSessionId: 'wda-session',
+          }) as unknown as Promise<WdaRunningInstance>,
+      ),
+      stop: vi.fn(async () => undefined),
+    };
     const host = createIOSSimulatorHost({
       actor,
+      driverManager,
       projectBuilder: {
         build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => ({
           kind: 'xcode-project' as const,
@@ -9356,8 +9585,23 @@ describe('iOS Simulator host', () => {
         createdAt: new Date(Date.UTC(2026, 7, 26)).toISOString(),
       }),
     );
+    const driverManager = {
+      get: vi.fn(() => null),
+      start: vi.fn(
+        async (options) =>
+          ({
+            instanceId: options.instanceId,
+            simulatorUdid: options.simulatorUdid,
+            pid: 42,
+            driver: {},
+            driverSessionId: 'wda-session',
+          }) as unknown as Promise<WdaRunningInstance>,
+      ),
+      stop: vi.fn(async () => undefined),
+    };
     const host = createIOSSimulatorHost({
       actor,
+      driverManager,
       projectBuilder: {
         build: vi.fn(async (input) => {
           buildInputs.push(input);
@@ -10147,8 +10391,23 @@ describe('iOS Simulator host', () => {
       });
       let derivedDataPath = '';
       const inspectArtifact = vi.fn<IOSSimulatorAppLifecycleAdapter['inspectArtifact']>();
+      const driverManager = {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      };
       const host = createIOSSimulatorHost({
         actor,
+        driverManager,
         projectBuilder: {
           build: vi.fn(async (input) => {
             derivedDataPath = input.derivedDataPath;
@@ -10263,8 +10522,23 @@ describe('iOS Simulator host', () => {
       copyStarted();
       await copyFailure;
     });
+    const driverManager = {
+      get: vi.fn(() => null),
+      start: vi.fn(
+        async (options) =>
+          ({
+            instanceId: options.instanceId,
+            simulatorUdid: options.simulatorUdid,
+            pid: 42,
+            driver: {},
+            driverSessionId: 'wda-session',
+          }) as unknown as Promise<WdaRunningInstance>,
+      ),
+      stop: vi.fn(async () => undefined),
+    };
     const host = createIOSSimulatorHost({
       actor,
+      driverManager,
       projectBuilder: {
         build: vi.fn(async (input) => {
           buildSignal = input.signal;
@@ -10365,8 +10639,23 @@ describe('iOS Simulator host', () => {
         return inspectionFailure;
       },
     );
+    const driverManager = {
+      get: vi.fn(() => null),
+      start: vi.fn(
+        async (options) =>
+          ({
+            instanceId: options.instanceId,
+            simulatorUdid: options.simulatorUdid,
+            pid: 42,
+            driver: {},
+            driverSessionId: 'wda-session',
+          }) as unknown as Promise<WdaRunningInstance>,
+      ),
+      stop: vi.fn(async () => undefined),
+    };
     const host = createIOSSimulatorHost({
       actor,
+      driverManager,
       projectBuilder: {
         build: vi.fn(async (input) => {
           buildSignal = input.signal;
