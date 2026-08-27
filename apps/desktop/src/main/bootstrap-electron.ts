@@ -271,6 +271,7 @@ import {
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
+import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   getAllRegisteredDraftUrls,
@@ -2220,11 +2221,11 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
 
-// ── 资源监视器独立窗口 ──────────────────────────────────────────────
-// 单实例轻量独立窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
+// ── 资源监视器辅助窗口 ──────────────────────────────────────────────
+// 单实例轻量辅助窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
 // 不需要 session 上下文转发。后台预热后常驻复用，普通关窗只隐藏。
-// macOS 全屏时监视器自己进新的 Space，不能挂 parent；其它平台仍挂主窗，
-// 这样最小化 / 关到托盘时监视器一起消失。
+// macOS 使用独立顶层窗口，打开时保留系统原生 Space / 全屏呈现，不再由 controller
+// 主动镜像 owner；Windows / Linux 保持 parent 关系。owner 最小化或关到托盘时仍一起收起。
 const resourceUsageWindowController = new ResourceUsageWindowController({
   createWindow: () => {
     const owner = mainWindowRef;
@@ -7245,22 +7246,14 @@ const registerIpcHandlers = () => {
         throwIpcError('INTERNAL', 'fixed cache directory action failed');
       }
     };
-    const openExistingFixedDirectory = async (
+    const openFixedDirectory = (
       rootDir: string,
       canOpen: () => boolean = () => true,
-    ): Promise<boolean> => {
-      try {
-        const stat = await fs.promises.lstat(rootDir);
-        if (!stat.isDirectory()) return false;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
-        throw err;
-      }
-      if (!canOpen()) throw new Error('fixed directory owner changed before open');
-      const error = await shell.openPath(rootDir);
-      if (error) throw new Error(error);
-      return true;
-    };
+    ): Promise<boolean> =>
+      openOrCreateFixedDirectory(rootDir, {
+        canOpen,
+        openPath: (filePath) => shell.openPath(filePath),
+      });
     // These actions intentionally accept no renderer path. The frozen xdt-image
     // cache has no owner metadata, so its confirmed cleanup applies to the whole
     // profile-level legacy root. Chat attachments remain scoped to the active
@@ -7327,11 +7320,11 @@ const registerIpcHandlers = () => {
       getQueueScanTexts: collectAgentInputQueueScanTexts,
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
-      openLegacyImagesDir: () => openExistingFixedDirectory(imageCacheStore.getCacheRoot()),
+      openLegacyImagesDir: () => openFixedDirectory(imageCacheStore.getCacheRoot()),
       clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
       openChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
-          openExistingFixedDirectory(rootDir, isCurrentOwner),
+          openFixedDirectory(rootDir, isCurrentOwner),
         ),
       clearChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
