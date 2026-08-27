@@ -70,6 +70,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       action: 'delete' | 'archive',
       { activeSessionId, deleteRedirectRoute }: RunSessionActionOptions,
     ) => {
+      const actionStartedAt = performance.now();
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
       const isDeviceLinkSession = Boolean(getStickySessionDeviceId(sessionId));
       let statusTransition: SessionStatusTransitionToken | null = null;
@@ -130,17 +131,32 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // query,不影响列表,没有理由挤在用户等着看到行消失的那一段前面。
       makerChatStore.closeSessionQuery(sessionId);
 
+      const statusWriteStartedAt = performance.now();
+      let statusWriteFinishedAt = statusWriteStartedAt;
       let persisted: Session;
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
         persisted = await sessionService.setStatus(sessionId, targetStatus);
+        statusWriteFinishedAt = performance.now();
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);
         }
       } catch (err) {
         log.error('[session action]', err);
         if (statusTransition) sessionsStore.rollbackStatusTransition(statusTransition);
+        if (action === 'archive') {
+          const failedAt = performance.now();
+          log.warn('archive timing', {
+            event: 'renderer.session.archive.timing',
+            outcome: 'failed',
+            sessionId,
+            deviceLink: isDeviceLinkSession,
+            preWriteMs: Math.round(statusWriteStartedAt - actionStartedAt),
+            writeMs: Math.round(failedAt - statusWriteStartedAt),
+            totalMs: Math.round(failedAt - actionStartedAt),
+          });
+        }
         toast.error(
           action === 'delete'
             ? t('ccAgent.sidebar.deleteFailed')
@@ -148,6 +164,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         );
         return;
       }
+      const statusConvergedAt = performance.now();
 
       if (action === 'delete' && !isDeviceLinkSession) {
         // DB 已确认删除成功后再让 sessionsStore 修正所有已加载的筛选桶。
@@ -170,6 +187,20 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         // RSB 布局偏好(fraction / treeWidth / collapsed)按 sessionId 持久化在
         // localStorage,删 session 时一起清掉,避免僵尸数据堆积。
         cleanupSessionLayoutPrefs(sessionId);
+      }
+      if (action === 'archive') {
+        const finishedAt = performance.now();
+        log.info('archive timing', {
+          event: 'renderer.session.archive.timing',
+          outcome: 'success',
+          sessionId,
+          deviceLink: isDeviceLinkSession,
+          preWriteMs: Math.round(statusWriteStartedAt - actionStartedAt),
+          writeMs: Math.round(statusWriteFinishedAt - statusWriteStartedAt),
+          convergeMs: Math.round(statusConvergedAt - statusWriteFinishedAt),
+          cleanupMs: Math.round(finishedAt - statusConvergedAt),
+          totalMs: Math.round(finishedAt - actionStartedAt),
+        });
       }
 
       // sessionsStore 已用任一缓存桶中的完整 row 同步迁移 active / archived / all；

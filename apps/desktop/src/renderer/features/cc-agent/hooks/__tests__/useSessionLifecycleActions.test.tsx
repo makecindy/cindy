@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   cleanupSessionLayoutPrefs: vi.fn(),
   cleanupSessionImages: vi.fn(),
   toastError: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -80,7 +83,11 @@ vi.mock('@/hooks/useCCSessions', () => ({
 }));
 
 vi.mock('@/lib/logger', () => ({
-  createLogger: () => ({ error: vi.fn(), warn: vi.fn() }),
+  createLogger: () => ({
+    info: mocks.logInfo,
+    warn: mocks.logWarn,
+    error: mocks.logError,
+  }),
 }));
 
 import { useSessionLifecycleActions } from '../useSessionLifecycleActions';
@@ -138,6 +145,20 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     );
     expect(mocks.emitRefresh).not.toHaveBeenCalled();
     expect(mocks.refreshSessions).not.toHaveBeenCalled();
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      'archive timing',
+      expect.objectContaining({
+        event: 'renderer.session.archive.timing',
+        outcome: 'success',
+        sessionId: 'session-1',
+        deviceLink: false,
+        preWriteMs: expect.any(Number),
+        writeMs: expect.any(Number),
+        convergeMs: expect.any(Number),
+        cleanupMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      }),
+    );
   });
 
   it('navigates first when the archived row stays visible in the all bucket', async () => {
@@ -196,6 +217,18 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     });
     expect(mocks.toastError).toHaveBeenCalledWith('ccAgent.sidebar.archiveFailed');
     expect(mocks.purgeSession).not.toHaveBeenCalled();
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      'archive timing',
+      expect.objectContaining({
+        event: 'renderer.session.archive.timing',
+        outcome: 'failed',
+        sessionId: 'session-1',
+        deviceLink: false,
+        preWriteMs: expect.any(Number),
+        writeMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      }),
+    );
   });
 
   it('does not turn consecutive archives into global or current-bucket refreshes', async () => {
