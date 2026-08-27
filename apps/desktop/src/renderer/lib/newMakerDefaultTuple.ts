@@ -52,7 +52,7 @@ const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
   {
     providerId: 'xd',
     accessKind: 'managed',
-    agents: ['codex', 'claude-code', 'pi'],
+    agents: ['pi'],
     modelIds: ['z-ai/glm-5.3-flash', 'glm-5.3-flash'],
     requireNewSessionDefault: true,
     requireImageInput: true,
@@ -83,6 +83,7 @@ function matchingModel(
       (model) =>
         model !== undefined &&
         model.defaultEnabled !== false &&
+        model.efforts.includes('high') &&
         (!requireNewSessionDefault || model.newSessionDefault?.includes(agent) === true) &&
         (!requireImageInput || supportsImageInput(model)) &&
         isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
@@ -130,7 +131,7 @@ export function resolveNewMakerDefaultTuple(args: {
         vendor,
         providerId: provider.id,
         model: model.id,
-        effort: model.efforts.includes('high') ? 'high' : model.defaultEffort,
+        effort: 'high',
       };
     }
   }

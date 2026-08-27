@@ -118,11 +118,11 @@ describe('resolveNewMakerDefaultTuple', () => {
         id: 'xd',
         access: 'managed',
         models: {
-          codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text', 'image'])],
+          pi: [model('z-ai/glm-5.3-flash', 'high', ['pi'], ['text', 'image'])],
         },
       }),
       expected: {
-        vendor: 'codex',
+        vendor: 'pi',
         providerId: 'xd',
         model: 'z-ai/glm-5.3-flash',
         effort: 'high',
@@ -137,7 +137,7 @@ describe('resolveNewMakerDefaultTuple', () => {
       id: 'xd',
       access: 'managed',
       models: {
-        codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text', 'image'])],
+        pi: [model('z-ai/glm-5.3-flash', 'high', ['pi'], ['text', 'image'])],
       },
     });
     const anthropic = provider({
@@ -153,6 +153,27 @@ describe('resolveNewMakerDefaultTuple', () => {
     expect(resolve([gateway, anthropic, openai])).toMatchObject({
       vendor: 'codex',
       providerId: 'openai',
+    });
+  });
+
+  it('本机 xAI 订阅优先于 Gateway，不会被 GLM 默认改写', () => {
+    const gateway = provider({
+      id: 'xd',
+      access: 'managed',
+      models: {
+        pi: [model('z-ai/glm-5.3-flash', 'high', ['pi'], ['text', 'image'])],
+      },
+    });
+    const xai = provider({
+      id: 'xai',
+      access: 'subscription',
+      models: { pi: [model('grok-4.6')] },
+    });
+    expect(resolve([gateway, xai])).toEqual({
+      vendor: 'pi',
+      providerId: 'xai',
+      model: 'grok-4.6',
+      effort: 'high',
     });
   });
 
@@ -184,12 +205,12 @@ describe('resolveNewMakerDefaultTuple', () => {
       id: 'xd',
       access: 'managed',
       models: {
-        codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text', 'image'])],
+        pi: [model('z-ai/glm-5.3-flash', 'high', ['pi'], ['text', 'image'])],
       },
     });
     expect(resolve([failedOpenai, gateway])).toMatchObject({
       providerId: 'xd',
-      vendor: 'codex',
+      vendor: 'pi',
     });
   });
 
@@ -198,7 +219,18 @@ describe('resolveNewMakerDefaultTuple', () => {
       id: 'xd',
       access: 'managed',
       models: {
-        codex: [model('z-ai/glm-5.3-flash', 'high', undefined, ['text', 'image'])],
+        pi: [model('z-ai/glm-5.3-flash', 'high', undefined, ['text', 'image'])],
+      },
+    });
+    expect(resolve([gateway])).toBeNull();
+  });
+
+  it('Gateway 只有旧 Codex 标记时不把 GLM 默认塞进其它 Harness', () => {
+    const gateway = provider({
+      id: 'xd',
+      access: 'managed',
+      models: {
+        codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text', 'image'])],
       },
     });
     expect(resolve([gateway])).toBeNull();
@@ -208,8 +240,17 @@ describe('resolveNewMakerDefaultTuple', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
-      models: { codex: [model('z-ai/glm-5.3-flash', 'high', ['codex'], ['text'])] },
+      models: { pi: [model('z-ai/glm-5.3-flash', 'high', ['pi'], ['text'])] },
     });
     expect(resolve([gateway])).toBeNull();
+  });
+
+  it('推荐模型不支持 high 时不静默降档为默认组合', () => {
+    const openai = provider({
+      id: 'openai',
+      access: 'subscription',
+      models: { codex: [model('chatgpt/gpt-5.6-sol', 'medium')] },
+    });
+    expect(resolve([openai])).toBeNull();
   });
 });
