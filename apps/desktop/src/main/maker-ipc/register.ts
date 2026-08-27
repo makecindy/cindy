@@ -11976,6 +11976,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let committed = false;
       try {
         const classified = await classifyCodexHistoryOversized(threadId);
+        if (
+          !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
+          !dbSnapshot ||
+          getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+        ) {
+          return 'stale';
+        }
         if (classified === 'healthy') return 'not-needed';
         if (classified !== 'oversized') return 'failed';
         const live = getMaker().getSession(sessionId);

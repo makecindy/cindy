@@ -905,7 +905,13 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     const [latestCopied] = await db
       .select({ createdAt: messages.createdAt })
       .from(messages)
-      .where(and(eq(messages.sessionId, reused.id), isNull(messages.rewindAt)))
+      .where(
+        and(
+          eq(messages.sessionId, reused.id),
+          isNull(messages.rewindAt),
+          lt(messages.createdAt, Number(reused.createdAt ?? 0)),
+        ),
+      )
       .orderBy(desc(messages.createdAt), desc(messageRowid))
       .limit(1);
     if (Number(latestCopied?.createdAt ?? 0) >= maxCreatedAt) {
