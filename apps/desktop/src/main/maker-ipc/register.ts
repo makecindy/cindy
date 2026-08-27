@@ -881,6 +881,7 @@ import {
   applyRuntimeSetModelChange,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
+import { relinkCodexProviderThread } from './codexProviderThreadRelink.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
@@ -3053,7 +3054,11 @@ export function cancelPendingAgentSwitchForSession(sessionId: string): void {
  */
 export async function registerPendingCredentialSwitchForSession(
   sessionId: string,
-  target: { model: string; providerId: string | null },
+  target: {
+    model: string;
+    providerId: string | null;
+    rebuildCodexThread?: boolean;
+  },
 ): Promise<void> {
   const service = pendingCredentialSwitchHolder;
   if (!service) {
@@ -3105,6 +3110,83 @@ export async function registerPendingCredentialSwitchForSession(
         }
       : {}),
   });
+}
+
+/**
+ * 跨订阅远端压缩身份边界时，把旧 rollout 安全 fork 到新 thread，再以 CAS
+ * 替换同一个 Cindy session 的 sdkSessionId。该函数同时供 Desktop 与 IM 模型选择
+ * 使用；调用方必须先关闭 live Session，并保持输入队列 gated。
+ */
+export async function relinkCodexThreadForCredentialSwitch(input: {
+  sessionId: string;
+  model: string;
+  providerId: string | null;
+}): Promise<void> {
+  const ownerScope = captureDataOwnerBroadcastScope();
+  const dbSnapshot = getCurrentDbClientSnapshot();
+  if (!dbSnapshot) throw new Error('Codex provider thread relink requires an active database');
+
+  await relinkCodexProviderThread(
+    {
+      readSource: async (sessionId) => {
+        const [row] = await dbSnapshot.client
+          .drizzle.select({
+            sdkSessionId: sessions.sdkSessionId,
+            workingDir: sessions.workingDir,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        return row ?? null;
+      },
+      fork: async ({ sourceSdkSessionId, model, providerId, workingDir }) => {
+        const forked = await getMaker().forkSdkSession('codex', {
+          sourceSdkSessionId,
+          model,
+          providerId,
+          upToMessageId: undefined,
+          ...(workingDir ? { workingDir } : {}),
+          stripEncryptedReasoning: true,
+          remoteHostId: null,
+        });
+        return { newSdkSessionId: forked.newSdkSessionId };
+      },
+      commit: async ({ sessionId, expectedSdkSessionId, newSdkSessionId }) => {
+        if (
+          !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
+          getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+        ) {
+          return false;
+        }
+        const now = Date.now();
+        const write = await dbSnapshot.client
+          .drizzle.update(sessions)
+          .set({ sdkSessionId: newSdkSessionId, updatedAt: now })
+          .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, expectedSdkSessionId)))
+          .run();
+        if (write.changes === 0) return false;
+        broadcastSessionPatched(
+          sessionId,
+          {
+            sdkSessionId: newSdkSessionId,
+            updatedAt: new Date(now).toISOString(),
+          },
+          ownerScope,
+        );
+        return true;
+      },
+      onCommitted: ({ sessionId, previousSdkSessionId, newSdkSessionId }) => {
+        log.info('Codex provider thread relinked before credential switch', {
+          sessionId,
+          fromThreadId: previousSdkSessionId,
+          toThreadId: newSdkSessionId,
+          model: input.model,
+          providerId: input.providerId,
+        });
+      },
+    },
+    input,
+  );
 }
 
 export function clearPendingCredentialSwitchForSession(
@@ -13426,6 +13508,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onApplied: (sessionId) => {
       inputCoordinator.wakeSession(sessionId, 'pending-credential-switch-applied');
     },
+    relinkCodexThreadForProviderSwitch: relinkCodexThreadForCredentialSwitch,
     // 停用轴:deferred 切换收口前重裁决(SET_MODEL 时刻裁决过,但生效可能在数分钟
     // 后,期间目标可能被停用;PR #744 review 第七轮,第十四轮换宽松降级形态 ——
     // 目标全停时连模型一起换到启用兜底)。
@@ -15256,6 +15339,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
               // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
               codexAuthInjection: getCodexProxyAuthInjectionState(),
+              relinkCodexThreadForProviderSwitch: relinkCodexThreadForCredentialSwitch,
               logger: log,
             })
           : { status: 'applied' as const };

@@ -41,6 +41,9 @@ function createHarness(
   const persistRoute = vi.fn<NonNullable<PendingCredentialSwitchDeps['persistRoute']>>(
     async () => {},
   );
+  const relinkCodexThreadForProviderSwitch = vi.fn<
+    NonNullable<PendingCredentialSwitchDeps['relinkCodexThreadForProviderSwitch']>
+  >(async () => {});
   const service = new PendingCredentialSwitchService({
     maker: {
       listActiveSessions: () => sessions,
@@ -49,10 +52,19 @@ function createHarness(
     broadcastApplied,
     onApplied,
     persistRoute,
+    relinkCodexThreadForProviderSwitch,
     ...(opts?.resolveRoute ? { resolveRoute: opts.resolveRoute } : {}),
     ...(opts?.retryDelayMs !== undefined ? { retryDelayMs: opts.retryDelayMs } : {}),
   });
-  return { service, closeSession, broadcastApplied, onApplied, persistRoute, sessions };
+  return {
+    service,
+    closeSession,
+    broadcastApplied,
+    onApplied,
+    persistRoute,
+    relinkCodexThreadForProviderSwitch,
+    sessions,
+  };
 }
 
 describe('PendingCredentialSwitchService', () => {
@@ -91,6 +103,53 @@ describe('PendingCredentialSwitchService', () => {
       providerId: 'xd',
     });
     expect(h.onApplied).toHaveBeenCalledWith(sessionId);
+  });
+
+  it('relinks a deferred Codex thread before route persistence and queue wake', async () => {
+    const sessionId = rememberSession('pending-switch-relink-codex-thread');
+    setSessionProvider(sessionId, 'xd');
+    const h = createHarness([
+      { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+    ]);
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.closeSession).toHaveBeenCalledWith(sessionId);
+    expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    });
+    expect(h.relinkCodexThreadForProviderSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      h.onApplied.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('keeps a deferred switch gated when the Codex thread relink fails', async () => {
+    const sessionId = rememberSession('pending-switch-relink-failed');
+    setSessionProvider(sessionId, 'xd');
+    const h = createHarness([
+      { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+    ]);
+    h.relinkCodexThreadForProviderSwitch.mockRejectedValueOnce(new Error('fork failed'));
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(h.persistRoute).not.toHaveBeenCalled();
+    expect(h.onApplied).not.toHaveBeenCalled();
+    h.service.clear(sessionId);
   });
 
   it('re-registration overwrites the previous pending target (last click wins)', async () => {

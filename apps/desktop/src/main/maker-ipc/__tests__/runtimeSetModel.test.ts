@@ -235,6 +235,7 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'codex/gpt-5.5',
       providerId: 'xd',
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
     });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
@@ -270,6 +271,7 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'xai/grok-4.3',
       providerId: 'xai',
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
     });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
@@ -343,6 +345,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
+      rebuildCodexThread: true,
     });
     expect(closeSession).not.toHaveBeenCalled();
     expect(setModel).not.toHaveBeenCalled();
@@ -357,6 +360,7 @@ describe('applyRuntimeSetModelChange', () => {
     const setModel = vi.fn(async () => {});
     const closeSession = vi.fn(async () => {});
     const registerPendingCredentialSwitch = vi.fn();
+    const relinkCodexThreadForProviderSwitch = vi.fn(async () => {});
     const maker: RuntimeSetModelMaker = {
       getSession: () => ({
         agentKind: 'codex', remoteHostId: null, codexProxyActive: true,
@@ -376,12 +380,87 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'xd',
       registerPendingCredentialSwitch,
       codexAuthInjection: 'oauth-bearer',
+      relinkCodexThreadForProviderSwitch,
     });
 
     expect(result).toEqual({ status: 'applied' });
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
     expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
+      sessionId,
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+    });
     expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
+  it('relinks an XD Codex thread before switching the same Cindy session to subscription', async () => {
+    const sessionId = rememberSession('runtime-set-model-xd-to-subscription-relink');
+    setSessionProvider(sessionId, 'xd');
+    const closeSession = vi.fn(async () => {});
+    const relinkCodexThreadForProviderSwitch = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway',
+        model: 'codex/gpt-5.6-sol',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => false,
+      }],
+      closeSession,
+    };
+
+    await expect(
+      applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        codexAuthInjection: 'oauth-bearer',
+        relinkCodexThreadForProviderSwitch,
+      }),
+    ).resolves.toEqual({ status: 'applied' });
+
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    });
+    expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+
+  it('fails closed when a cross-provider switch has no thread relink dependency', async () => {
+    const sessionId = rememberSession('runtime-set-model-missing-thread-relink');
+    setSessionProvider(sessionId, 'xd');
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex', remoteHostId: null, codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway', model: 'codex/gpt-5.6-sol',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [{
+        id: sessionId, agentKind: 'codex', remoteHostId: null,
+        isTurnRunning: () => false,
+      }],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      codexAuthInjection: 'oauth-bearer',
+    })).rejects.toThrow(/thread relink is required/);
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
@@ -413,6 +492,7 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'deepseek/deepseek-v4-pro',
       providerId: 'deepseek',
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
     });
 
     expect(result).toEqual({ status: 'applied' });
@@ -451,6 +531,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
+      rebuildCodexThread: true,
     });
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('openai');
@@ -584,6 +665,7 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'xai/grok-4.3',
       providerId: 'xai',
       codexAuthInjection: 'oauth-bearer',
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
     });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
@@ -618,6 +700,7 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
       registerPendingCredentialSwitch: vi.fn(),
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
     });
 
     expect(result).toEqual({ status: 'applied' });
@@ -658,6 +741,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'gpt-5.5',
       providerId: 'xd',
+      rebuildCodexThread: true,
     });
     expect(closeSession).not.toHaveBeenCalled();
     // route 保持旧值:运行中的 turn 继续用原来源,pending 兑现时才写新值。
@@ -764,6 +848,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'gpt-5.4',
       providerId: 'xd',
+      rebuildCodexThread: true,
     });
     // route 保持旧值,等 pending 兑现。
     expect(getSessionProvider(sessionId)).toBe('openai');
@@ -780,6 +865,7 @@ describe('applyRuntimeSetModelChange', () => {
     });
     const wakeSessionInputQueue = vi.fn(() => { order.push('wake'); });
     const closeSession = vi.fn(async () => { order.push('close'); });
+    const relinkCodexThreadForProviderSwitch = vi.fn(async () => { order.push('relink'); });
     const maker: RuntimeSetModelMaker = {
       getSession: () => ({
         agentKind: 'codex',
@@ -801,12 +887,13 @@ describe('applyRuntimeSetModelChange', () => {
       registerPendingCredentialSwitch: vi.fn(),
       clearPendingCredentialSwitch,
       wakeSessionInputQueue,
+      relinkCodexThreadForProviderSwitch,
     });
 
     expect(result).toEqual({ status: 'applied' });
     // clear 必须不带唤醒(否则 drain 趁 close 窗口把队首派发到旧会话),
     // 唤醒在 close + 写路由完成之后。
-    expect(order).toEqual(['clear-no-wake', 'close', 'wake']);
+    expect(order).toEqual(['clear-no-wake', 'close', 'relink', 'wake']);
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 

@@ -38,6 +38,8 @@ const PENDING_APPLY_RETRY_DELAY_MS = 10_000;
 export interface PendingCredentialSwitch {
   model: string;
   providerId: string | null;
+  /** 跨 cindy_gateway / cindy_openai 身份边界，收口前必须换成新的 native thread。 */
+  rebuildCodexThread?: boolean;
   /** 目标会话的 agent(register 时由调用方捕获,收口前的停用重裁决用;可缺席 = 不裁决)。 */
   agentKind?: AgentKind;
   /**
@@ -102,6 +104,15 @@ export interface PendingCredentialSwitchDeps {
     sessionId: string,
     route: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean },
   ) => Promise<void>;
+  /**
+   * 把旧 Codex rollout 安全 fork 到目标来源使用的新 thread，并 CAS 替换持久化
+   * sdkSessionId。失败时 pending 保留、输入队列继续 gated，等待自愈重试。
+   */
+  relinkCodexThreadForProviderSwitch?: (input: {
+    sessionId: string;
+    model: string;
+    providerId: string | null;
+  }) => Promise<void>;
   /** 自愈兜底重试间隔覆写(测试用)。 */
   retryDelayMs?: number;
   logger?: {
@@ -125,6 +136,7 @@ export class PendingCredentialSwitchService {
     target: {
       model: string;
       providerId: string | null;
+      rebuildCodexThread?: boolean;
       agentKind?: AgentKind;
       previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
     },
@@ -132,6 +144,7 @@ export class PendingCredentialSwitchService {
     this.pending.set(sessionId, {
       model: target.model,
       providerId: target.providerId,
+      ...(target.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
       ...(target.agentKind ? { agentKind: target.agentKind } : {}),
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
       requestedAt: Date.now(),
@@ -341,6 +354,39 @@ export class PendingCredentialSwitchService {
     reason: string,
   ): Promise<void> {
     if (resolved.apply) {
+      if (target.rebuildCodexThread) {
+        const relink = this.deps.relinkCodexThreadForProviderSwitch;
+        if (!relink) {
+          this.deps.logger?.error?.(
+            'pending credential switch: Codex thread relink dependency is unavailable; keeping queue gated',
+            { sessionId, model: resolved.model ?? target.model, providerId: resolved.providerId },
+          );
+          if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
+          return;
+        }
+        try {
+          await relink({
+            sessionId,
+            model: resolved.model ?? target.model,
+            providerId: resolved.providerId,
+          });
+        } catch (err) {
+          this.deps.logger?.error?.(
+            'pending credential switch: Codex thread relink failed; keeping queue gated for retry',
+            {
+              sessionId,
+              model: resolved.model ?? target.model,
+              providerId: resolved.providerId,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          );
+          if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
+          return;
+        }
+        if (this.pending.get(sessionId) !== target) return;
+        // persistRoute 失败会重试本 target；thread 已完成 CAS 换代，不得再次 fork。
+        target.rebuildCodexThread = false;
+      }
       setSessionProvider(sessionId, resolved.providerId);
       // 裁决改了落地路由(reroute / 丢弃停用显式来源 / 全停换模型或清空):回写 DB
       // —— renderer 在 deferred 接受时已按请求值落盘 sessions 行,不纠正的话下一次

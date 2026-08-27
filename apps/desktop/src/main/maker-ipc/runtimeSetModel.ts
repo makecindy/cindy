@@ -61,7 +61,11 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   registerPendingCredentialSwitch?: (
     sessionId: string,
-    target: { model: string; providerId: string | null },
+    target: {
+      model: string;
+      providerId: string | null;
+      rebuildCodexThread?: boolean;
+    },
   ) => void | Promise<void>;
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
@@ -91,6 +95,16 @@ export interface ApplyRuntimeSetModelChangeInput {
    * 是否跨「远端压缩身份」边界;不传时该判定按未知保守处理(倾向关会话重建)。
    */
   codexAuthInjection?: CodexProxyAuthInjection | null;
+  /**
+   * Codex 跨 cindy_gateway / cindy_openai 身份边界时，把旧 rollout 安全 fork 到
+   * 新 thread 并原子替换 sessions.sdk_session_id。关 live Session 本身不会清除
+   * 持久化 thread id；漏掉此步会在新来源下继续 resume 旧 thread。
+   */
+  relinkCodexThreadForProviderSwitch?: (input: {
+    sessionId: string;
+    model: string;
+    providerId: string | null;
+  }) => Promise<void>;
   logger?: RuntimeSetModelLogger;
 }
 
@@ -143,8 +157,8 @@ export async function applyRuntimeSetModelChange(
       : pendingTarget !== undefined
         ? pendingTarget.providerId
         : currentProviderId;
-  const shouldCloseSession = sess
-    ? input.forceSessionRebuild === true || shouldCloseSessionForCredentialSwitch({
+  const shouldCloseForCredentialSwitch = sess
+    ? shouldCloseSessionForCredentialSwitch({
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
         currentProviderId,
@@ -156,6 +170,11 @@ export async function applyRuntimeSetModelChange(
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;
+  const shouldCloseSession = input.forceSessionRebuild === true || shouldCloseForCredentialSwitch;
+  const shouldRelinkCodexThread =
+    shouldCloseForCredentialSwitch &&
+    sess?.agentKind === 'codex' &&
+    !sess.remoteHostId;
   let selfBusyMemo: boolean | undefined;
   const isSelfBusy = (): boolean => {
     if (selfBusyMemo !== undefined) return selfBusyMemo;
@@ -184,6 +203,7 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
       });
       logger?.info('set-model: Codex provider route switch deferred until turn end', {
         sessionId,
@@ -205,6 +225,7 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
       });
       logger?.info('set-model: credential switch deferred until turn end', {
         sessionId,
@@ -231,6 +252,19 @@ export async function applyRuntimeSetModelChange(
         sessionId,
         isSessionInTurn,
       });
+      if (shouldRelinkCodexThread) {
+        const relinkCodexThreadForProviderSwitch = input.relinkCodexThreadForProviderSwitch;
+        if (!relinkCodexThreadForProviderSwitch) {
+          throw new Error(
+            'Codex provider thread relink is required for a credential-family switch',
+          );
+        }
+        await relinkCodexThreadForProviderSwitch({
+          sessionId,
+          model,
+          providerId: nextProviderId,
+        });
+      }
     } catch (err) {
       // 空闲判定与 close 之间的竞态(恰好起了新 turn):有 pending 通道就转延迟,
       // 没有(老调用方)保持抛 busy 的旧语义。
@@ -238,6 +272,7 @@ export async function applyRuntimeSetModelChange(
         input.registerPendingCredentialSwitch(sessionId, {
           model,
           providerId: nextProviderId,
+          ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
         });
         logger?.info('set-model: credential switch deferred after busy race', {
           sessionId,

@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   resolveLenientSessionRoute: vi.fn(),
   applyRuntimeSetModelChange:
     vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
+  relinkCodexThreadForCredentialSwitch: vi.fn(async () => {}),
   registerPendingCredentialSwitchForSession: vi.fn(),
   clearPendingCredentialSwitchForSession: vi.fn(),
   wakeSessionInputAfterCredentialSwitch: vi.fn(),
@@ -97,6 +98,7 @@ vi.mock('../../../maker-ipc/runtimeSetModel', () => ({
 vi.mock('../../../maker-ipc/register', () => ({
   cancelPendingAgentSwitchForSession: mocks.cancelPendingAgentSwitchForSession,
   isSessionInTurn: mocks.isSessionInTurn,
+  relinkCodexThreadForCredentialSwitch: mocks.relinkCodexThreadForCredentialSwitch,
   registerPendingCredentialSwitchForSession: mocks.registerPendingCredentialSwitchForSession,
   clearPendingCredentialSwitchForSession: mocks.clearPendingCredentialSwitchForSession,
   wakeSessionInputAfterCredentialSwitch: mocks.wakeSessionInputAfterCredentialSwitch,

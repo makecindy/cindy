@@ -38,6 +38,7 @@ import {
   clearPendingCredentialSwitchForSession,
   getPendingCredentialSwitchTarget,
   isSessionInTurn,
+  relinkCodexThreadForCredentialSwitch,
   registerPendingCredentialSwitchForSession,
   withSendToSessionLock,
   wakeSessionInputAfterCredentialSwitch,
@@ -393,6 +394,7 @@ export function createCardActionHandler(
           clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
           wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
           getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+          relinkCodexThreadForProviderSwitch: relinkCodexThreadForCredentialSwitch,
           logger: log,
         });
 

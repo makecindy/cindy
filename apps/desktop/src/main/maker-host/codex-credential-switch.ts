@@ -247,8 +247,9 @@ export function shouldCloseSessionForCredentialSwitch(
   // oauth spawn 的订阅直连 thread 以 OpenAI 身份 provider 创建(codex 据此走
   // OpenAI 远端压缩),而 provider 身份是 thread 级冻结、settings/update 改不了;
   // 网关 / xAI 等上游不支持远端压缩且失败无本地回退。因此凡切换跨过
-  // oauth-bearer(订阅直连)家族边界,必须关会话、由下一次发送按新路由 resume
-  // 重建 thread(resume 会按新家族重新决定 provider 身份)。这有意收窄了
+  // oauth-bearer(订阅直连)家族边界,必须关会话，并由 host 把旧 rollout 安全 fork
+  // 成新 thread 后再按新路由 resume（直接 resume 同一 thread 会把供应商私有历史
+  // 带到另一条路由）。这有意收窄了
   // 方案 A 的「oauth 超集 host 热切 gateway-key / provider-oauth 会话」范围:
   // host 仍复用不重建,只是该会话自身要走关闭重建。隐式来源解析不出家族且
   // 未提供 codexAuthInjection 时按未知处理 → 与另一侧不同即保守关闭。
@@ -259,7 +260,7 @@ export function shouldCloseSessionForCredentialSwitch(
 
     // provider store 可能先于运行时切换被 UI/持久层覆盖。此时仅比较 currentMode/nextMode
     // 会把两边误判为同一家族，并在仍绑定 cindy_openai 的 thread 上热切 DeepSeek/xAI/XD。
-    // start/resume 响应才是 thread 身份的事实源；与目标身份不一致就必须 close + resume。
+    // start/resume 响应才是 thread 身份的事实源；与目标身份不一致就必须 close + fork。
     if (isCodexThreadModelProviderIdentityMismatch(input)) {
       return true;
     }

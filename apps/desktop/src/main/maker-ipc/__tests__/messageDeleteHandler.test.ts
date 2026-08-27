@@ -87,8 +87,10 @@ describe('performMessageDeletion', () => {
       resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
       'utf8',
     );
-    const onCommittedStart = registerSource.indexOf('onCommitted:');
-    expect(onCommittedStart).toBeGreaterThan(-1);
+    const deleteHandlerStart = registerSource.indexOf('registerMakerMessageDeleteHandler(');
+    expect(deleteHandlerStart).toBeGreaterThan(-1);
+    const onCommittedStart = registerSource.indexOf('onCommitted:', deleteHandlerStart);
+    expect(onCommittedStart).toBeGreaterThan(deleteHandlerStart);
     const patchStart = registerSource.indexOf(
       'broadcastSessionPatched(sessionId, {',
       onCommittedStart,
