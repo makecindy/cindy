@@ -109,18 +109,21 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
           flushSync(leaveArchivedSession);
         }
         if (!isDeviceLinkSession) {
-          if (
-            sessionsStore.hasPendingStatusTransition(sessionId) &&
-            !(await sessionsStore.waitForStatusTransition(sessionId))
-          ) {
-            return;
-          }
-          flushSync(() => {
-            statusTransition = sessionsStore.beginStatusTransition(sessionId, {
+          statusTransition = await sessionsStore.beginStatusTransitionWhenReady(
+            sessionId,
+            {
               status: 'archived',
               pinnedAt: null,
-            });
-          });
+            },
+            (begin) => {
+              let transition: SessionStatusTransitionToken | null = null;
+              flushSync(() => {
+                transition = begin();
+              });
+              return transition;
+            },
+          );
+          if (!statusTransition) return;
         }
         if (!archivedRowStaysInList) {
           leaveArchivedSession();
@@ -227,16 +230,10 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     async (sessionId: string) => {
       const statusWriteTarget = await sessionService.resolveStatusWriteTarget(sessionId);
       const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
-      if (
-        !isDeviceLinkSession &&
-        sessionsStore.hasPendingStatusTransition(sessionId) &&
-        !(await sessionsStore.waitForStatusTransition(sessionId))
-      ) {
-        return;
-      }
       const statusTransition = isDeviceLinkSession
         ? null
-        : sessionsStore.beginStatusTransition(sessionId, { status: 'active' });
+        : await sessionsStore.beginStatusTransitionWhenReady(sessionId, { status: 'active' });
+      if (!isDeviceLinkSession && !statusTransition) return;
       try {
         const persisted = await sessionService.setStatus(sessionId, 'active', statusWriteTarget);
         if (statusTransition) {

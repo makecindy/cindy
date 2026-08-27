@@ -11,8 +11,7 @@ const mocks = vi.hoisted(() => ({
   emitRefresh: vi.fn(),
   patchLocal: vi.fn(),
   beginStatusTransition: vi.fn(),
-  hasPendingStatusTransition: vi.fn(),
-  waitForStatusTransition: vi.fn(),
+  beginStatusTransitionWhenReady: vi.fn(),
   completeStatusTransition: vi.fn(),
   rollbackStatusTransition: vi.fn(),
   closeSessionQuery: vi.fn(),
@@ -65,8 +64,7 @@ vi.mock('@/lib/sessionsBus', () => ({
 vi.mock('@/lib/sessionsStore', () => ({
   sessionsStore: {
     beginStatusTransition: mocks.beginStatusTransition,
-    hasPendingStatusTransition: mocks.hasPendingStatusTransition,
-    waitForStatusTransition: mocks.waitForStatusTransition,
+    beginStatusTransitionWhenReady: mocks.beginStatusTransitionWhenReady,
     completeStatusTransition: mocks.completeStatusTransition,
     rollbackStatusTransition: mocks.rollbackStatusTransition,
   },
@@ -102,8 +100,12 @@ beforeEach(() => {
     sessionId,
     token: 1,
   }));
-  mocks.hasPendingStatusTransition.mockReturnValue(false);
-  mocks.waitForStatusTransition.mockResolvedValue(true);
+  mocks.beginStatusTransitionWhenReady.mockImplementation(
+    async (sessionId: string, patch: unknown, apply?: (begin: () => unknown) => unknown) => {
+      const begin = () => mocks.beginStatusTransition(sessionId, patch);
+      return apply ? apply(begin) : begin();
+    },
+  );
   mocks.completeStatusTransition.mockReturnValue(true);
   mocks.rollbackStatusTransition.mockReturnValue(true);
   mocks.refreshSessions.mockResolvedValue([]);
@@ -246,8 +248,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.refreshSessions).not.toHaveBeenCalled();
   });
 
-  it('waits for an in-flight restore before starting the opposite archive write', async () => {
-    mocks.hasPendingStatusTransition.mockReturnValue(true);
+  it('uses the serialized begin before starting the archive write', async () => {
     const { result } = renderHook(() =>
       useSessionLifecycleActions({ includeArchived: 'all' }),
     );
@@ -258,9 +259,10 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
       });
     });
 
-    expect(mocks.waitForStatusTransition).toHaveBeenCalledWith('session-1');
-    expect(mocks.waitForStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.beginStatusTransition.mock.invocationCallOrder[0],
+    expect(mocks.beginStatusTransitionWhenReady).toHaveBeenCalledWith(
+      'session-1',
+      { status: 'archived', pinnedAt: null },
+      expect.any(Function),
     );
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.setStatus.mock.invocationCallOrder[0],
@@ -353,8 +355,7 @@ describe('useSessionLifecycleActions delete cache invalidation', () => {
 });
 
 describe('useSessionLifecycleActions unarchive convergence', () => {
-  it('waits for an in-flight archive before starting the opposite write', async () => {
-    mocks.hasPendingStatusTransition.mockReturnValue(true);
+  it('uses the serialized begin before starting the restore write', async () => {
     const { result } = renderHook(() =>
       useSessionLifecycleActions({ includeArchived: 'archived' }),
     );
@@ -363,18 +364,16 @@ describe('useSessionLifecycleActions unarchive convergence', () => {
       await result.current.unarchiveSession('session-1');
     });
 
-    expect(mocks.waitForStatusTransition).toHaveBeenCalledWith('session-1');
-    expect(mocks.waitForStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.beginStatusTransition.mock.invocationCallOrder[0],
-    );
+    expect(mocks.beginStatusTransitionWhenReady).toHaveBeenCalledWith('session-1', {
+      status: 'active',
+    });
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.setStatus.mock.invocationCallOrder[0],
     );
   });
 
   it('stops a queued restore when the session store resets', async () => {
-    mocks.hasPendingStatusTransition.mockReturnValue(true);
-    mocks.waitForStatusTransition.mockResolvedValueOnce(false);
+    mocks.beginStatusTransitionWhenReady.mockResolvedValueOnce(null);
     const { result } = renderHook(() =>
       useSessionLifecycleActions({ includeArchived: 'archived' }),
     );

@@ -646,6 +646,32 @@ export const sessionsStore = {
     return generation === statusTransitionGeneration;
   },
 
+  /**
+   * 等待既有状态写收敛后原子地 begin；多个等待者即使同时被唤醒，后续等待者也会
+   * 看到前一个刚登记的 pending，不会用异向迁移覆盖它。apply 可保留调用侧 flushSync。
+   */
+  async beginStatusTransitionWhenReady(
+    id: string,
+    patch: Partial<Session> & { status: Session['status'] },
+    apply?: (
+      begin: () => SessionStatusTransitionToken | null,
+    ) => SessionStatusTransitionToken | null,
+  ): Promise<SessionStatusTransitionToken | null> {
+    if (!id) return null;
+    const generation = statusTransitionGeneration;
+    while (pendingStatusTransitions.has(id)) {
+      await new Promise<void>((resolve) => {
+        const waiters = pendingStatusTransitionWaiters.get(id) ?? new Set<() => void>();
+        waiters.add(resolve);
+        pendingStatusTransitionWaiters.set(id, waiters);
+      });
+      if (generation !== statusTransitionGeneration) return null;
+    }
+    if (generation !== statusTransitionGeneration) return null;
+    const begin = () => this.beginStatusTransition(id, patch);
+    return apply ? apply(begin) : begin();
+  },
+
   /** 用写库返回的完整行结束乐观迁移，并按服务端 updatedAt DESC 重排所有已加载桶。 */
   completeStatusTransition(token: SessionStatusTransitionToken, persisted: Session): boolean {
     const pending = pendingStatusTransitions.get(token.sessionId);
@@ -664,7 +690,7 @@ export const sessionsStore = {
     if (pending.tokens.size === 0) clearPendingStatusTransition(token.sessionId, pending);
     const current = this.findById(token.sessionId);
     const authoritative =
-      current?.status === persisted.status && updatedAtMs(current) > updatedAtMs(persisted)
+      current?.status === persisted.status && updatedAtMs(current) >= updatedAtMs(persisted)
         ? current
         : persisted;
     const [withOverrides] = applyAutoTitlePreviews(

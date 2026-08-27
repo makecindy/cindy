@@ -295,6 +295,49 @@ describe('sessionsStore status bucket migration', () => {
     );
   });
 
+  it('keeps concurrent settings updates when the persisted status row has the same updatedAt', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      model: 'old-model',
+      effort: 'medium',
+      permissionMode: 'ask',
+      fastMode: false,
+      providerId: null,
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    sessionsStore.patchLocal('archive-me', {
+      model: 'new-model',
+      effort: 'high',
+      permissionMode: 'auto',
+      fastMode: true,
+      providerId: 'new-provider',
+    });
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+      }),
+    ).toBe(true);
+    expect(sessionsStore.getByFilter('all')?.[0]).toEqual(
+      expect.objectContaining({
+        status: 'archived',
+        model: 'new-model',
+        effort: 'high',
+        permissionMode: 'auto',
+        fastMode: true,
+        providerId: 'new-provider',
+      }),
+    );
+  });
+
   it('applies a newer auto-title preview after a complete status override', async () => {
     const target = {
       ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
@@ -579,7 +622,62 @@ describe('sessionsStore status bucket migration', () => {
     );
   });
 
-  it('stops a queued opposite status action when the store resets', async () => {
+  it('begins queued status actions one at a time so opposite transitions cannot replace each other', async () => {
+    const target = session('archive-me', 'active', '2026-08-27T01:00:00.000Z');
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const initialArchive = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    let laterArchiveStarted = false;
+    const queuedRestore = sessionsStore.beginStatusTransitionWhenReady('archive-me', {
+      status: 'active',
+    });
+    const queuedArchive = sessionsStore
+      .beginStatusTransitionWhenReady('archive-me', {
+        status: 'archived',
+        pinnedAt: null,
+      })
+      .then((transition) => {
+        laterArchiveStarted = true;
+        return transition;
+      });
+
+    expect(
+      sessionsStore.completeStatusTransition(initialArchive!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+      }),
+    ).toBe(true);
+    const restore = await queuedRestore;
+    expect(restore).not.toBeNull();
+    expect(laterArchiveStarted).toBe(false);
+
+    expect(
+      sessionsStore.completeStatusTransition(restore!, {
+        ...target,
+        status: 'active',
+        pinnedAt: null,
+      }),
+    ).toBe(true);
+    const laterArchive = await queuedArchive;
+    expect(laterArchive).not.toBeNull();
+    expect(laterArchiveStarted).toBe(true);
+    expect(
+      sessionsStore.completeStatusTransition(laterArchive!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+      }),
+    ).toBe(true);
+    expect(sessionsStore.hasPendingStatusTransition('archive-me')).toBe(false);
+    expect(sessionsStore.getByFilter('all')?.[0].status).toBe('archived');
+  });
+
+  it('stops queued waits and atomic begins when the store resets', async () => {
     mocks.list.mockResolvedValueOnce([session('archive-me')]);
     await sessionsStore.ensureByFilter('active');
     sessionsStore.beginStatusTransition('archive-me', {
@@ -587,10 +685,14 @@ describe('sessionsStore status bucket migration', () => {
       pinnedAt: null,
     });
     const queued = sessionsStore.waitForStatusTransition('archive-me');
+    const queuedBegin = sessionsStore.beginStatusTransitionWhenReady('archive-me', {
+      status: 'active',
+    });
 
     sessionsStore.reset();
 
     await expect(queued).resolves.toBe(false);
+    await expect(queuedBegin).resolves.toBeNull();
     expect(sessionsStore.getByFilter('active')).toBeNull();
   });
 
