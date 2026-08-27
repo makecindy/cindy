@@ -9,18 +9,17 @@ import type { ToolRowWording } from '@cindy/maker-shared/message-presentation';
 
 import { i18n } from '@/i18n';
 import {
-  FILE_CHANGE_FILES_I18N_KEY,
+  FILE_CHANGE_UPDATED_FILES_I18N_KEY,
   INTENT_ROW_VERB_KEY,
   TOOL_ROW_VERB_I18N_KEY,
-  UPDATED_VERB_I18N_KEY,
 } from '@/i18n/agentActionVerbKeys';
 
 export function createMobileToolRowWording(): ToolRowWording {
   return {
     verb: (key) => i18n.t(TOOL_ROW_VERB_I18N_KEY[key]),
     intentVerb: (action) => i18n.t(INTENT_ROW_VERB_KEY[action]),
-    updateFilesLabel: (count) =>
-      `${i18n.t(UPDATED_VERB_I18N_KEY)} ${i18n.t(FILE_CHANGE_FILES_I18N_KEY, { count })}`,
+    // 整句 key:语序按语言走,不在这里拼动词与文件数(ja/ko 拼出来不成句)。
+    updateFilesLabel: (count) => i18n.t(FILE_CHANGE_UPDATED_FILES_I18N_KEY, { count }),
   };
 }
 

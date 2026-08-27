@@ -5,6 +5,8 @@
       "deleted": "削除",
       "renamed": "名前変更",
       "files": "{{count}} ファイル",
+      "updatedFiles_one": "{{count}} ファイルを更新",
+      "updatedFiles_other": "{{count}} ファイルを更新",
       "rawData": "元データを表示"
     },
     "verb": {

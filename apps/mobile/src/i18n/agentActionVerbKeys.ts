@@ -131,6 +131,11 @@ export const TOOL_ROW_VERB_I18N_KEY: Record<ToolRowVerbKey, string> = {
   updateTodos: 'chat.agentActionRow.verb.updateTodos',
 };
 
-/** fileChange 多文件短语的组成 key:`${t(UPDATED_VERB)} ${t(FILES).replace('{{count}}', n)}`。 */
 export const UPDATED_VERB_I18N_KEY = 'chat.agentActionRow.verb.updated';
 export const FILE_CHANGE_FILES_I18N_KEY = 'chat.agentActionRow.fileChange.files';
+/**
+ * fileChange 多文件短语走**整句** key,不拼「动词 + 文件数」:日文语序是
+ * 「N ファイルを更新」、韩文是「파일 N개 업데이트」,拼接出来的
+ * 「更新 N ファイル」/「업데이트 파일 N개」都不成句。i18next 复数后缀由 count 选择。
+ */
+export const FILE_CHANGE_UPDATED_FILES_I18N_KEY = 'chat.agentActionRow.fileChange.updatedFiles';

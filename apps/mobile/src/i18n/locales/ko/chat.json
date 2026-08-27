@@ -5,6 +5,8 @@
       "deleted": "삭제",
       "renamed": "이름 변경",
       "files": "파일 {{count}}개",
+      "updatedFiles_one": "파일 {{count}}개 업데이트",
+      "updatedFiles_other": "파일 {{count}}개 업데이트",
       "rawData": "원본 데이터 보기"
     },
     "verb": {

@@ -5,6 +5,8 @@
       "deleted": "刪除",
       "renamed": "重新命名",
       "files": "{{count}} 個檔案",
+      "updatedFiles_one": "更新 {{count}} 個檔案",
+      "updatedFiles_other": "更新 {{count}} 個檔案",
       "rawData": "檢視原始資料"
     },
     "verb": {

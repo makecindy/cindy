@@ -5,6 +5,8 @@
       "deleted": "Deleted",
       "renamed": "Renamed",
       "files": "{{count}} files",
+      "updatedFiles_one": "Updated {{count}} file",
+      "updatedFiles_other": "Updated {{count}} files",
       "rawData": "View raw data"
     },
     "verb": {
