@@ -84,9 +84,11 @@ import {
   patchCollab,
   patchCurrentVendorPrefs,
   patchVendorPrefs,
+  patchVendorPrefsPreservingModelChoice,
   applySuggestedDefaultTuple,
   fallbackUnavailableVendor,
   markDefaultTupleCustomized,
+  clearDefaultTupleTuningCustomization,
   resetDraftWorkspaceTargets,
   getFastModeForModel,
   setFastModeForModel,
@@ -2623,7 +2625,7 @@ export function NewMakerDraftRoute() {
       if (!supportsFastMode) {
         return;
       }
-      markDefaultTupleCustomized();
+      markDefaultTupleCustomized(false);
       // 权威库:per-(agent, 来源, 模型),与 resolveDraftFast 的读源对齐(ModelSelector 的 Edit 面板
       // 对选中模型也会写这一份;此处显式写一遍,使 onFastModeChange 走任何路径都自洽、不依赖选择器侧写)。
       // 写入键必须与 effectiveFastMode 的读取键同源:两者都用**校准后**的模型。若这里仍写
@@ -2652,7 +2654,7 @@ export function NewMakerDraftRoute() {
         pushActiveDraftPref({ effort: newEffort }); // 选中模型 effort 写穿被控端
         return;
       }
-      markDefaultTupleCustomized();
+      markDefaultTupleCustomized(false);
       patchActivePrefs({ effort: newEffort });
     },
     [isDeviceLinkDraft, patchActivePrefs, pushActiveDraftPref],
@@ -2726,6 +2728,7 @@ export function NewMakerDraftRoute() {
       effort?: Effort;
       fast: boolean;
       favoriteUid: string | null;
+      resetToRecommended?: true;
     }) => {
       // 收藏锚点写进**目标引擎的槽**(Chris 2026-08-19 起持久化,见 draftFavoriteAnchor 的
       // 说明):记的是 uid + **本次写进草稿的 wire id**,失效判定才有可比的同类值。
@@ -2817,15 +2820,23 @@ export function NewMakerDraftRoute() {
         );
         return;
       }
-      markDefaultTupleCustomized();
-      // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
-      // 这是用户在 New Maker picker 里的**显式**模型选择,modelChosenByVendor 必须打标
-      // (scheduler 的成本兜底默认模型依赖它)。
-      patchVendorPrefs(selection.vendor, {
+      const nextPrefs = {
         model: selection.modelId,
         providerId: selection.providerId,
         ...(selection.effort ? { effort: selection.effort } : {}),
-      });
+      };
+      if (selection.resetToRecommended) {
+        // 恢复推荐沿既有选择链把推荐配置真正应用到草稿，但不能把它重新记成显式选择。
+        // 只调过 effort / Fast 的用户在记忆键被删后重新跟随产品默认；已有模型 / 来源 /
+        // Harness 选择仍由 selection marker 保护。
+        patchVendorPrefsPreservingModelChoice(selection.vendor, nextPrefs);
+        clearDefaultTupleTuningCustomization();
+      } else {
+        markDefaultTupleCustomized();
+        // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
+        // 这是用户在 New Maker picker 里的**显式**模型选择,modelChosenByVendor 必须打标。
+        patchVendorPrefs(selection.vendor, nextPrefs);
+      }
     },
     [
       draft.vendor,

@@ -773,6 +773,8 @@ interface ChatInputProps {
     effort?: Effort;
     fast: boolean;
     favoriteUid: string | null;
+    /** 来自配置浮层「恢复推荐」，不得把推荐档重新写成用户 override。 */
+    resetToRecommended?: true;
   }) => void;
   /**
    * 统一面板里被选中的收藏锚点 uid(与 onUnifiedDraftSelect 成对,由草稿层持有)。
@@ -6621,10 +6623,11 @@ export function ChatInput({
       favoriteUid: string | null;
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
       rowModelId?: string;
+      resetToRecommended?: true;
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
-      if (targetKind && selection.providerId) {
+      if (targetKind && selection.providerId && !selection.resetToRecommended) {
         if (selection.effort) {
           modelMemory?.setEffort(
             targetKind,
@@ -6644,6 +6647,7 @@ export function ChatInput({
         ...(selection.effort ? { effort: selection.effort } : {}),
         fast: selection.fast,
         favoriteUid: selection.favoriteUid,
+        ...(selection.resetToRecommended ? { resetToRecommended: true as const } : {}),
       });
     },
     [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],

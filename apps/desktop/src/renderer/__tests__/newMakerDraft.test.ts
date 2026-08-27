@@ -67,6 +67,7 @@ describe('newMakerDraft store', () => {
     expect(d.worktreeEnabled).toBe(false);
     expect(d.worktreePreferenceCustomized).toBe(false);
     expect(d.defaultTupleCustomized).toBe(false);
+    expect(d.defaultTupleSelectionCustomized).toBe(false);
   });
 
   it('产品默认原子写入完整组合，但不伪装成用户显式选模', async () => {
@@ -110,6 +111,26 @@ describe('newMakerDraft store', () => {
     ).toBe(false);
     expect(getDraft().vendor).toBe('cc');
     expect(getDraft().defaultTupleCustomized).toBe(true);
+    expect(getDraft().defaultTupleSelectionCustomized).toBe(true);
+  });
+
+  it('恢复推荐只撤销 effort/Fast 调档，不清除模型/来源/Harness 选择', async () => {
+    const tuningOnly = await loadModule();
+    tuningOnly.markDefaultTupleCustomized(false);
+    expect(tuningOnly.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: false,
+    });
+    tuningOnly.clearDefaultTupleTuningCustomization();
+    expect(tuningOnly.getDraft().defaultTupleCustomized).toBe(false);
+
+    tuningOnly.markDefaultTupleCustomized();
+    tuningOnly.markDefaultTupleCustomized(false);
+    tuningOnly.clearDefaultTupleTuningCustomization();
+    expect(tuningOnly.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+    });
   });
 
   it('只改权限不把模型组合误标成用户自定义', async () => {
@@ -153,6 +174,45 @@ describe('newMakerDraft store', () => {
     expect(getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
   });
 
+  it('旧 device-link preserving 完整快照与空 marker 仍保护 cc 旧模型', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        modelChosenByVendor: {},
+        lastByVendor: {
+          cc: {
+            model: 'claude-opus-4-8',
+            providerId: null,
+            effort: 'medium',
+            permissionMode: 'auto',
+            planMode: false,
+          },
+          codex: { model: 'gpt-5.5', providerId: null, effort: 'high' },
+          pi: { model: 'claude-sonnet-5', providerId: null, effort: 'high' },
+          orca: { model: 'claude-sonnet-4-6', providerId: null, effort: 'medium' },
+        },
+      }),
+    );
+    vi.resetModules();
+    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    expect(getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      lastByVendor: { cc: { model: 'claude-opus-4-8', providerId: null, effort: 'medium' } },
+    });
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(false);
+    expect(getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
+  });
+
   it('旧完整快照里的 cc 种子模型不误判成用户自定义', async () => {
     memStorage.setItem(
       'xdt:newMakerDraft:v1',
@@ -182,6 +242,95 @@ describe('newMakerDraft store', () => {
       vendor: 'pi',
       lastByVendor: { pi: { providerId: 'xai', model: 'grok-4.6', effort: 'high' } },
     });
+  });
+
+  it('旧 head 已标明系统默认时，不因 Gateway 来源反推成用户选择', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'pi',
+        defaultTupleCustomized: false,
+        modelChosenByVendor: {},
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'grok-4.6', providerId: 'xai', effort: 'high' },
+        },
+      }),
+    );
+    vi.resetModules();
+    const { getDraft } = await loadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: false,
+      defaultTupleSelectionCustomized: false,
+    });
+  });
+
+  it('旧 head 已标明自定义时，从显式模型证据补出 selection marker', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        defaultTupleCustomized: true,
+        modelChosenByVendor: { cc: true },
+        lastByVendor: { cc: { model: 'claude-opus-4-8' } },
+      }),
+    );
+    vi.resetModules();
+    const { getDraft } = await loadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+    });
+  });
+
+  it('旧 head 的 Gateway 默认来源加调档，不误补成 selection marker', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'pi',
+        defaultTupleCustomized: true,
+        modelChosenByVendor: {},
+        effortByModel: { 'grok-4.6': 'medium' },
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'grok-4.6', providerId: 'xai', effort: 'medium' },
+        },
+      }),
+    );
+    vi.resetModules();
+    const { clearDefaultTupleTuningCustomization, getDraft } = await loadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: false,
+    });
+    clearDefaultTupleTuningCustomization();
+    expect(getDraft().defaultTupleCustomized).toBe(false);
+  });
+
+  it('旧 head 只换来源时，即使没有 modelChosen marker 也保护真实来源选择', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'pi',
+        defaultTupleCustomized: true,
+        modelChosenByVendor: {},
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'grok-4.6', providerId: 'openrouter', effort: 'high' },
+        },
+      }),
+    );
+    vi.resetModules();
+    const { clearDefaultTupleTuningCustomization, getDraft } = await loadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+    });
+    clearDefaultTupleTuningCustomization();
+    expect(getDraft().defaultTupleCustomized).toBe(true);
   });
 
   it('旧版系统可用性 fallback 不迁移成用户自定义', async () => {

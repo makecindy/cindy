@@ -63,6 +63,23 @@ function vendorForAgent(agent: AgentKind): NewMakerDefaultTuple['vendor'] {
   return agent === 'claude-code' ? 'cc' : agent;
 }
 
+/**
+ * 仅供旧草稿迁移辨认“产品曾自动写入的 tuple 身份”。这里不判断账号实时可用性，
+ * 也不产生默认值；真正下放仍只能走 resolveNewMakerDefaultTuple 的实时能力门控。
+ */
+export function isKnownProductDefaultTupleIdentity(args: {
+  vendor: MakerVendor;
+  providerId: string;
+  model: string;
+}): boolean {
+  return DEFAULT_POLICIES.some(
+    (policy) =>
+      policy.providerId === args.providerId &&
+      policy.modelIds.includes(args.model) &&
+      policy.agents.some((agent) => vendorForAgent(agent) === args.vendor),
+  );
+}
+
 function supportsImageInput(model: NonNullable<ProviderView['models'][AgentKind]>[number]): boolean {
   return (
     model.supportsImageInput === true || model.modalities?.input.includes('image') === true

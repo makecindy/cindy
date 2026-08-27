@@ -388,6 +388,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       fast: false,
       favoriteUid: null,
       rowModelId: args.anchor.modelId,
+      resetToRecommended: true,
     });
   };
 
@@ -709,6 +710,20 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       return;
     }
 
+    // 本地/被控端草稿没有会话运行态；即使推荐引擎没变，也必须走草稿整行直通。
+    // 走 effort/Fast live 回调会先把推荐档重新写进记忆并再次打上 tuning custom，随后
+    // resetStoredConfig 虽删掉记忆键，却没有入口撤销草稿层的 custom lock。
+    if (!inSession) {
+      resetStoredConfig();
+      applyDefaultsToDraft({
+        anchor,
+        engine: recommendedEngine,
+        wireModelId: recommendedWireId,
+        effort: defaultEffort,
+      });
+      return;
+    }
+
     // ★ live 选中行还得把推荐配置**真的应用到正在跑的那一份**(2026-08-17 review):
     // 会话的实时深度 / Fast、草稿的 vendor+model 配置都**不读记忆表**(选中行读的是 live 值,
     // 见 UnifiedModelPanel.configOf)。只清记忆的话,用户点完「恢复推荐」当前任务照旧用着
@@ -746,14 +761,6 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       });
       return;
     }
-    // 草稿换引擎无损:先落 override / 记忆,再把推荐引擎的整份配置按既有选中链路写回草稿。
-    resetStoredConfig();
-    applyDefaultsToDraft({
-      anchor,
-      engine: recommendedEngine,
-      wireModelId: recommendedWireId,
-      effort: defaultEffort,
-    });
   };
 
   const addFavorite: UnifiedRowActions['addFavorite'] = (anchor, config) => {

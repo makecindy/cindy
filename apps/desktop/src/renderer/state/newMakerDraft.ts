@@ -24,6 +24,7 @@ import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
+import { isKnownProductDefaultTupleIdentity } from '@/lib/newMakerDefaultTuple';
 import type { OrcaWorkerPermissionMode } from '../../shared/orca-worker-permission-mode';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths';
@@ -159,6 +160,11 @@ export interface NewMakerDraft {
    * false 才允许连接态为新任务下放产品默认；目录热更与登录变化不得覆盖 true。
    */
   defaultTupleCustomized: boolean;
+  /**
+   * 自定义里是否包含 Harness / 来源 / 模型选择。与只调 effort / Fast 分开记，
+   * 这样「恢复推荐」只能撤销调档意图，不会顺手清掉真正的路由选择。
+   */
+  defaultTupleSelectionCustomized: boolean;
 }
 
 /**
@@ -226,6 +232,7 @@ function makeDefault(): NewMakerDraft {
     },
     modelChosenByVendor: {},
     defaultTupleCustomized: false,
+    defaultTupleSelectionCustomized: false,
   };
 }
 
@@ -357,33 +364,60 @@ function sanitize(raw: unknown): NewMakerDraft {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
   // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast 都是足够强的
-  // 用户意图证据。preserving 写回还可能只留下当前 cc 槽的 model,没有 marker / providerId,
-  // 这条旧模型同样必须保护。反过来,仅 vendor=codex/pi 不能算用户选择:旧版会在 cc
-  // 不可用时由系统自动 fallback 并持久化该 vendor。
+  // 用户意图证据。preserving 写回会保留完整 vendor 快照与空 marker,所以不能再用
+  // 「只有 cc 单槽单字段」识别；cc 模型偏离当时同源的 seed 才是可保护的旧选择。
+  // 反过来,仅 vendor=codex/pi 不能算用户选择:旧版会在 cc 不可用时由系统自动 fallback。
   const legacyCcPrefs = lastByVendorRaw.cc;
-  const legacyCcModel =
+  // 已经随旧版完整草稿自然落盘过的 cc seed。它们不是用户选择，不能因为新版目录换了
+  // seed 就反过来把系统快照认成自定义；这里只服务一次性迁移，不参与新会话默认决策。
+  const legacyCcSeedModels = new Set([def.lastByVendor.cc.model, 'claude-sonnet-4-6']);
+  const isKnownProductTuple = (slotVendor: MakerVendor, prefs: Partial<VendorPrefs>): boolean =>
+    typeof prefs.providerId === 'string' &&
+    prefs.providerId.length > 0 &&
+    typeof prefs.model === 'string' &&
+    prefs.model.length > 0 &&
+    isKnownProductDefaultTupleIdentity({
+      vendor: slotVendor,
+      providerId: prefs.providerId,
+      model: prefs.model,
+    });
+  const legacyCcModelCandidate =
     vendor === 'cc' &&
-    r.modelChosenByVendor === undefined &&
-    Object.keys(lastByVendorRaw).length === 1 &&
     legacyCcPrefs &&
     typeof legacyCcPrefs === 'object' &&
-    Object.keys(legacyCcPrefs).every((key) => key === 'model') &&
     typeof legacyCcPrefs.model === 'string' &&
-    legacyCcPrefs.model.length > 0;
-  const legacyDefaultTupleCustomized =
-    r.defaultTupleCustomized === undefined &&
-    (Object.values(modelChosenByVendor).some(Boolean) ||
-      legacyCcModel ||
-      Object.keys(effortByModel).length > 0 ||
-      Object.keys(fastModeByModel).length > 0 ||
-      Object.values(lastByVendorRaw).some(
-        (prefs) =>
-          prefs &&
-          typeof prefs === 'object' &&
-          typeof prefs.providerId === 'string' &&
-          prefs.providerId.length > 0,
-      ));
-  const defaultTupleCustomized = r.defaultTupleCustomized === true || legacyDefaultTupleCustomized;
+    legacyCcPrefs.model.length > 0 &&
+    !legacyCcSeedModels.has(legacyCcPrefs.model);
+  const legacyCcModel =
+    legacyCcModelCandidate &&
+    (r.defaultTupleCustomized === undefined || !isKnownProductTuple('cc', legacyCcPrefs));
+  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi'] as const).some((slotVendor) => {
+    const prefs = lastByVendorRaw[slotVendor];
+    if (
+      !prefs ||
+      typeof prefs !== 'object' ||
+      typeof prefs.providerId !== 'string' ||
+      prefs.providerId.length === 0
+    ) {
+      return false;
+    }
+    // 老版本完全没有组合标记时，来源是唯一可用的显式证据；已有单一 boolean 的过渡
+    // 版本则只排除产品策略能够自动写出的精确 tuple，保住“只换来源”的真实选择。
+    return r.defaultTupleCustomized === undefined || !isKnownProductTuple(slotVendor, prefs);
+  });
+  const legacySelectionCustomized =
+    Object.values(modelChosenByVendor).some(Boolean) || legacyCcModel || legacySourceSelection;
+  const legacyTuningCustomized =
+    Object.keys(effortByModel).length > 0 || Object.keys(fastModeByModel).length > 0;
+  const defaultTupleSelectionCustomized =
+    r.defaultTupleSelectionCustomized === true ||
+    (r.defaultTupleSelectionCustomized === undefined &&
+      r.defaultTupleCustomized !== false &&
+      legacySelectionCustomized);
+  const defaultTupleCustomized =
+    r.defaultTupleCustomized === true ||
+    defaultTupleSelectionCustomized ||
+    (r.defaultTupleCustomized === undefined && legacyTuningCustomized);
   // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，
   // 可安全迁移为 override；旧 false 无法区分“默认快照”与“明确关闭”，按未自定义处理。
   const worktreePreferenceCustomized =
@@ -422,6 +456,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     },
     modelChosenByVendor,
     defaultTupleCustomized,
+    defaultTupleSelectionCustomized,
   };
 }
 
@@ -817,9 +852,30 @@ export function applySuggestedDefaultTuple(tuple: SuggestedDefaultTuple): boolea
 }
 
 /** 用户开始调整默认组合后立刻封住后续自动下放。 */
-export function markDefaultTupleCustomized(): void {
-  if (currentDraft.defaultTupleCustomized) return;
-  currentDraft = { ...currentDraft, defaultTupleCustomized: true };
+export function markDefaultTupleCustomized(selectionCustomized = true): void {
+  if (
+    currentDraft.defaultTupleCustomized &&
+    (!selectionCustomized || currentDraft.defaultTupleSelectionCustomized)
+  ) {
+    return;
+  }
+  currentDraft = {
+    ...currentDraft,
+    defaultTupleCustomized: true,
+    defaultTupleSelectionCustomized:
+      currentDraft.defaultTupleSelectionCustomized || selectionCustomized,
+  };
+  scheduleWrite();
+  emit();
+}
+
+/**
+ * 「恢复推荐」只撤销 effort / Fast 造成的组合封锁。若用户还选过 Harness / 来源 / 模型，
+ * selection marker 继续保留，后续登录或目录变化仍不得覆盖那次选择。
+ */
+export function clearDefaultTupleTuningCustomization(): void {
+  if (!currentDraft.defaultTupleCustomized || currentDraft.defaultTupleSelectionCustomized) return;
+  currentDraft = { ...currentDraft, defaultTupleCustomized: false };
   scheduleWrite();
   emit();
 }
@@ -835,9 +891,8 @@ function patchVendorPrefsInternal(
   patch: Partial<VendorPrefs>,
   opts: { markModelChoice: boolean },
 ): void {
-  const marksDefaultTuple =
-    opts.markModelChoice &&
-    ('model' in patch || 'providerId' in patch || 'effort' in patch);
+  const marksSelection = opts.markModelChoice && ('model' in patch || 'providerId' in patch);
+  const marksDefaultTuple = marksSelection || (opts.markModelChoice && 'effort' in patch);
   const modelChosen = { ...currentDraft.modelChosenByVendor };
   const nextPatch = { ...patch };
   if (typeof nextPatch.model === 'string' && nextPatch.model.length > 0) {
@@ -865,6 +920,8 @@ function patchVendorPrefsInternal(
   currentDraft = {
     ...currentDraft,
     defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
+    defaultTupleSelectionCustomized:
+      currentDraft.defaultTupleSelectionCustomized || marksSelection,
     modelChosenByVendor: modelChosen,
     lastByVendor: {
       ...currentDraft.lastByVendor,
