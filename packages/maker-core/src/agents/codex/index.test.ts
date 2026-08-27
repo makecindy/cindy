@@ -8280,6 +8280,62 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     });
 
+    it('does not arm HTTP fallback for remote compact encrypted-content 400', async () => {
+      const compactEncrypted =
+        'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }';
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-remote-compact-encrypted',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: compactEncrypted,
+          additionalDetails: compactEncrypted,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: compactEncrypted },
+        },
+      });
+
+      await waitForExpectation(() => {
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'error' &&
+              (event.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
+              (event.data as { reason?: string }).reason === 'context-overflow',
+          ),
+        ).toBe(true);
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      expect(armCodexHttpRecovery).not.toHaveBeenCalled();
+      await handle.close();
+    });
+
     it.each([false, true])(
       'defers HTTP fallback until an early recovery error gets turn/start ownership (started=%s)',
       async (startedBeforeError) => {

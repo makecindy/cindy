@@ -109,6 +109,7 @@ import {
   overloadRetryDelayMs,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { buildCodexEnv } from './env-builder.js';
 import {
   buildCodexCapabilityConfigOverrides,
@@ -8770,6 +8771,10 @@ export class CodexAgent extends BaseAgent {
       const additionalDetails =
         typeof error?.additionalDetails === 'string' ? error.additionalDetails : null;
       if (!message && !additionalDetails) return null;
+      const classifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+      // 远端 compact 密文 400 是 Codex 内部硬失败，HTTP 剥密文跳过 compaction blob，
+      // 重投必再 400。不得当推理密文 400 去 arm WS→HTTP recovery。
+      if (isRemoteCompactEncryptedContentError(classifyText)) return null;
       try {
         return this.deps.armCodexHttpRecovery({
           sessionId: sid,
