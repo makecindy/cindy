@@ -2031,7 +2031,7 @@
       "restartBusyDescription": "当前有任务正在进行中，重启会打断它们。确定要立即重启吗？",
       "unavailable": "Beta 测试渠道暂不可用，无法连接到 Beta 更新服务器。",
       "toast": {
-        "disabled": "Beta 测试渠道已关闭，重启后生效",
+        "disabled": "Beta 测试渠道已关闭，将继续使用当前版本，等正式版推出更高版本后自动切换",
         "toggleFailed": "切换 Beta 测试渠道失败"
       }
     },

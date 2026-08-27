@@ -2031,7 +2031,7 @@
       "restartBusyDescription": "目前有任務進行中，重新啟動會中斷它們。確定要立即重新啟動嗎？",
       "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。",
       "toast": {
-        "disabled": "Beta 測試管道已關閉，重新啟動後生效",
+        "disabled": "Beta 測試管道已關閉，將繼續使用目前版本，等正式版推出較新版本後自動切換",
         "toggleFailed": "切換 Beta 測試管道失敗"
       }
     },
