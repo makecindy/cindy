@@ -460,13 +460,17 @@ describe('adoptLocalProfileDatabase', () => {
   it('fails promptly when the SQLite migration lock cannot be opened', async () => {
     const { root, deps } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const target = path.join(root, 'cindy-owner-a.db');
+    const activeSnapshot = `${target}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.active-holder`;
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(activeSnapshot, 'active-snapshot');
     await fs.mkdir(`${marker}${LOCAL_PROFILE_MIGRATION_LOCK_DB_SUFFIX}`, { recursive: true });
 
     await expect(adoptLocalProfileDatabase('owner-a', deps)).resolves.toEqual({
       status: 'failed',
       error: expect.stringContaining('failed to acquire local profile migration lock'),
     });
+    await expect(fs.readFile(activeSnapshot, 'utf8')).resolves.toBe('active-snapshot');
   });
 
   it('cleans interrupted temporary files before retrying', async () => {

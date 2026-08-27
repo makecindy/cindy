@@ -16,6 +16,7 @@ import {
   type NativeHarnessInheritedProviderId,
   type NativeProviderId,
 } from './model-discovery/connection-source.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
 const NATIVE_PROVIDER_IDS = [
   'anthropic',
@@ -112,49 +113,20 @@ function readBindingsOrFail(): BindingRead {
 
 function writeBindings(value: BindingFile): void {
   const file = bindingPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  let handle: number | undefined;
+  atomicWriteFileSync(file, JSON.stringify(value, null, 2));
+  // Flush the published file on every platform. On Windows this maps to
+  // FlushFileBuffers and is the durable barrier available for a renamed
+  // file; POSIX additionally flushes the parent directory below.
+  // Windows requires a writable handle for FlushFileBuffers. The binding file is
+  // created with owner-only permissions, so r+ remains safe on POSIX while also
+  // making the post-rename durability barrier work on Windows.
+  const finalHandle = fs.openSync(file, 'r+');
   try {
-    handle = fs.openSync(tmp, 'wx', 0o600);
-    const bytes = Buffer.from(JSON.stringify(value, null, 2), 'utf8');
-    let offset = 0;
-    while (offset < bytes.length) {
-      const written = fs.writeSync(handle, bytes, offset, bytes.length - offset);
-      if (written <= 0) throw new Error('short write while publishing native provider bindings');
-      offset += written;
-    }
-    fs.fsyncSync(handle);
-    fs.closeSync(handle);
-    handle = undefined;
-    fs.renameSync(tmp, file);
-    // Flush the published file on every platform. On Windows this maps to
-    // FlushFileBuffers and is the durable barrier available for a renamed
-    // file; POSIX additionally flushes the parent directory below.
-    // Windows requires a writable handle for FlushFileBuffers. The binding file is
-    // created with owner-only permissions, so r+ remains safe on POSIX while also
-    // making the post-rename durability barrier work on Windows.
-    const finalHandle = fs.openSync(file, 'r+');
-    try {
-      fs.fsyncSync(finalHandle);
-    } finally {
-      fs.closeSync(finalHandle);
-    }
-    syncParentDirectory(file);
+    fs.fsyncSync(finalHandle);
   } finally {
-    if (handle !== undefined) {
-      try {
-        fs.closeSync(handle);
-      } catch {
-        // Best-effort close before removing the private candidate.
-      }
-    }
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      // The rename normally removed the temporary path; cleanup is best effort.
-    }
+    fs.closeSync(finalHandle);
   }
+  syncParentDirectory(file);
 }
 
 const BINDING_MUTATION_LOCK_DB_SUFFIX = '.mutation-lock.db';

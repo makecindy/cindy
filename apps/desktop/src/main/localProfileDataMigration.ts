@@ -572,7 +572,11 @@ export async function adoptLocalProfileDatabase(
     const adopted = await copyDatabaseAtomically(deps, sourceDb, targetDb);
     return adopted ? { status: 'adopted', sourceDb, targetDb } : { status: 'target-exists' };
   } catch (error) {
-    await cleanupTemps(deps, targetDb).catch(() => undefined);
+    // Migration snapshots are shared across processes. Only the SQLite writer
+    // lock owner may classify matching UUID files as stale; a contender that
+    // timed out before acquiring the lock must not unlink the active holder's
+    // snapshot while SQLite is still writing it.
+    if (lockDb) await cleanupTemps(deps, targetDb).catch(() => undefined);
     return {
       status: 'failed',
       error: error instanceof Error ? error.message : String(error),

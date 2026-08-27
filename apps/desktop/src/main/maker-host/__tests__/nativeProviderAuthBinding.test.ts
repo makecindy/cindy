@@ -126,6 +126,29 @@ describe('local → cloud native provider binding migration', () => {
     expect(fsyncSpy).toHaveBeenCalled();
   });
 
+  it('retries transient Windows-style binding publication locks', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const originalRenameSync = fs.renameSync.bind(fs);
+    let blocked = false;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (!blocked && to === bindingFile) {
+        blocked = true;
+        throw Object.assign(new Error('file is temporarily busy'), { code: 'EBUSY' });
+      }
+      return originalRenameSync(from, to);
+    });
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner('owner-a')).toBe('finalized');
+    expect(blocked).toBe(true);
+    expect(renameSpy.mock.calls.filter(([, to]) => to === bindingFile)).toHaveLength(2);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      legacyClaimOwner: 'owner-a',
+    });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty(
+      'legacyClaimToken',
+    );
+  });
+
   it('uses a crash-released SQLite transaction lock instead of a reclaimable lease file', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
 
