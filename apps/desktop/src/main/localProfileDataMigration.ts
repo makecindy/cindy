@@ -57,8 +57,9 @@ const realFs: LocalProfileDataMigrationFs = {
     try {
       await fs.promises.access(file);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return false;
+      throw error;
     }
   },
   readFile: (file) => fs.promises.readFile(file, 'utf8'),
@@ -257,13 +258,13 @@ function publishLocalProfileMigrationMarker(
 
 function replaceLocalProfileMigrationMarker(marker: string, contents: string): void {
   atomicWriteFileSync(marker, contents);
-  if (process.platform !== 'win32') {
-    const finalHandle = fs.openSync(marker, 'r');
-    try {
-      fs.fsyncSync(finalHandle);
-    } finally {
-      fs.closeSync(finalHandle);
-    }
+  // Windows requires a writable handle for FlushFileBuffers. The marker is
+  // created with owner-only permissions, so r+ is safe on POSIX as well.
+  const finalHandle = fs.openSync(marker, 'r+');
+  try {
+    fs.fsyncSync(finalHandle);
+  } finally {
+    fs.closeSync(finalHandle);
   }
   syncMarkerDirectory(marker);
 }

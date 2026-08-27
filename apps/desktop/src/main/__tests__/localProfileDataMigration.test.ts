@@ -115,10 +115,13 @@ describe('adoptLocalProfileDatabase', () => {
 
   it('finalizes a pending claim for the committed owner', async () => {
     const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const openSpy = vi.spyOn(originalFs, 'openSync');
     const reservation = reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy');
     expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
 
     expect(recoverPendingLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('finalized');
+    expect(openSpy).toHaveBeenCalledWith(marker, 'r+');
     expect(releaseLocalProfileDataOwner('owner-a', root, 'cindy', reservation.claimToken!)).toBe(
       false,
     );
@@ -379,6 +382,30 @@ describe('adoptLocalProfileDatabase', () => {
         entry.includes(LOCAL_PROFILE_MIGRATION_TMP_SUFFIX),
       ),
     ).toEqual([]);
+  });
+
+  it('blocks initialization when probing the local database fails', async () => {
+    const { root, deps } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(source, 'local-db');
+    const failingDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        pathExists: async (file) => {
+          if (file === source)
+            throw Object.assign(new Error('local database probe failed'), { code: 'EIO' });
+          return deps.fs.pathExists(file);
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', failingDeps)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'local database probe failed',
+    });
+    await expect(fs.access(target)).rejects.toThrow();
   });
 
   it('ignores a stale legacy lease even when its PID has been recycled', async () => {
