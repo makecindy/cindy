@@ -322,6 +322,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   // 才会把同一代暴露给页面。这样全局补齐与页面首开使用完全相同的 single-flight key。
   const connectionEpochRef = useRef(0);
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
+  const accountGenerationRef = useRef<number | null>(null);
+
+  const clearPerAccountDeviceLinkState = useCallback(() => {
+    remoteSessionStore.clear();
+    remoteScheduleEventStore.clearAll();
+    revokedDevicesStore.clearAll();
+    resetDeviceResponsivenessTracking();
+    clearAllDeviceProviders();
+    clearAllDeviceModelMeta();
+    resetAgentCapabilitiesCache();
+    resetComposerPaletteCache();
+    setLastPresenceSnapshot(null);
+    setPresenceVersion((version) => version + 1);
+  }, []);
 
   /**
    * availability 放在 ref 里供 transport 同步读取；每次真实的三态变化也必须发布给
@@ -648,6 +662,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [rehydrateWithClient]);
 
   useEffect(() => {
+    const accountGenerationChanged =
+      accountGenerationRef.current !== auth.accountGeneration;
+    accountGenerationRef.current = auth.accountGeneration;
     if (!auth.isAuthenticated) {
       clientRef.current?.stop();
       clientRef.current = null;
@@ -666,22 +683,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       backgroundReleaseInFlightRef.current = false;
       setStatus('stopped');
       setConnectionIssue(null);
-      remoteSessionStore.clear();
-      remoteScheduleEventStore.clearAll();
-      revokedDevicesStore.clearAll();
-      resetDeviceResponsivenessTracking();
       // 登出 / 进程内切号:清掉所有 per-account 残留,避免下一个账号串到上一个账号的数据。
       // - 供应商目录是 module 级单例缓存(useDeviceProviders 按 deviceId 命中),不随组件卸载清;
       // - lastPresenceSnapshot 是本 context 的 state,home 屏据它 patch 设备列表。
       // 二者若不重置,切号后会短暂看到 / 用到上一个账号的桌面端与供应商数据。
-      clearAllDeviceProviders();
-      clearAllDeviceModelMeta();
-      resetAgentCapabilitiesCache();
-      resetComposerPaletteCache();
-      setLastPresenceSnapshot(null);
-      setPresenceVersion((n) => n + 1);
+      clearPerAccountDeviceLinkState();
       return;
     }
+
+    // 账号切换期间 isAuthenticated 始终为 true，不能依赖上面的登出分支。
+    // effect cleanup 只负责 transport；新账号建连前必须同步清掉旧账号的任务、
+    // 调度、设备与 presence 投影，避免无设备的新账号永远保留旧快照。
+    if (accountGenerationChanged) clearPerAccountDeviceLinkState();
 
     const client = new DeviceLinkClient({
       getWsUrl: () => deviceLinkWsUrl(),
@@ -1072,8 +1085,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (clientRef.current === client) clientRef.current = null;
     };
   }, [
+    auth.accountGeneration,
     auth.getAccessToken,
     auth.isAuthenticated,
+    clearPerAccountDeviceLinkState,
     clearRehydrateRetry,
     publishPresenceAvailabilityMutation,
     rehydrateWithClient,

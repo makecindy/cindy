@@ -193,6 +193,7 @@ import type {
   DesktopAccountDeletionConfirmInput,
   DesktopAccountDeletionConfirmResult,
   DesktopAccountDeletionStatusResult,
+  DesktopAccountSwitcherSnapshot,
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
@@ -1868,6 +1869,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   authGetCaptchaChallengeUrl: (): Promise<string> =>
     ipcRenderer.invoke('auth:get-captcha-challenge-url'),
   authLogout: (): Promise<void> => ipcRenderer.invoke('auth:logout'),
+  authListAccounts: (): Promise<DesktopAccountSwitcherSnapshot> =>
+    ipcRenderer.invoke('auth:accounts:list'),
+  authSyncAccounts: (): Promise<DesktopAccountSwitcherSnapshot> =>
+    ipcRenderer.invoke('auth:accounts:sync'),
+  authSwitchAccount: (accountKey: string): Promise<void> =>
+    ipcRenderer.invoke('auth:accounts:switch', accountKey),
+  authBeginAddAccount: (): Promise<DesktopLoginActionResult> =>
+    ipcRenderer.invoke('auth:accounts:begin-add'),
+  authCancelAddAccount: (): Promise<void> => ipcRenderer.invoke('auth:accounts:cancel-add'),
   authEnterLocal: () => ipcRenderer.invoke('auth:enter-local'),
   authExitLocal: () => ipcRenderer.invoke('auth:exit-local'),
   authRefresh: (): Promise<boolean> => ipcRenderer.invoke('auth:refresh'),

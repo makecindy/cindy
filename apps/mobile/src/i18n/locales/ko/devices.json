@@ -189,6 +189,14 @@
       "close": "닫기",
       "cancelRename": "이름 변경 취소"
     },
+    "accounts": {
+      "title": "계정 전환",
+      "add": "다른 계정으로 로그인",
+      "syncFailed": "계정 정보를 업데이트할 수 없습니다",
+      "runningTitle": "계정을 전환할까요?",
+      "runningMessage": "실행 중인 작업이 있습니다. 전환 후에도 컴퓨터에서는 계속 실행되지만 이 휴대폰에서는 해당 작업을 받거나 제어할 수 없습니다.",
+      "switchConfirm": "계속"
+    },
     "menu": {
       "groupByProject": "프로젝트별 그룹화",
       "groupDialogue": "대화 묶기",

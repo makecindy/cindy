@@ -184,7 +184,7 @@ import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel } from '@cindy/model-providers/registry';
 import { clearSessionMirror, makeSessionMirrorAccessors } from '@/session/sessionModelMirror';
-import { rowFastEditable } from '@/session/modelPickerRows';
+import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import {
   buildMobileModelSections,
   isSelectedSourceDisconnected,
@@ -647,7 +647,7 @@ function buildComposerRuntimeSummary(
   runtime: MobileSessionRuntimeOptions,
 ): ComposerRuntimeSummary {
   const modelLabel = runtime.currentModel?.label ?? session.model;
-  const effortLabel = choiceLabel(runtime.effortOptions, session.effort);
+  const effortLabel = effortLabelFromRuntime(runtime, session.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),
     permissionLabel: choiceLabel(runtime.permissionOptions, session.permissionMode),
@@ -2256,7 +2256,8 @@ export default function SessionScreen() {
     () => composerDisplaySession && composerDisplayRuntimeOptions
       ? buildComposerRuntimeSummary(composerDisplaySession, composerDisplayRuntimeOptions)
       : null,
-    [composerDisplayRuntimeOptions, composerDisplaySession],
+    // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
+    [composerDisplayRuntimeOptions, composerDisplaySession, i18nInstance.language],
   );
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
   const composerDeviceProviders = useDeviceProviders(deviceId || undefined);

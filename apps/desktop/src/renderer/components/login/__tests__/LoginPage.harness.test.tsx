@@ -93,7 +93,12 @@ async function realmConfirmationState(targetRegion: 'cn' | 'global') {
   });
 }
 
-function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
+function mount(
+  state: AuthFlowState | null,
+  extra?: Partial<typeof loginHook.value>,
+  intent: 'sign-in' | 'add-account' = 'sign-in',
+  onClose?: () => void,
+) {
   loginHook.value = {
     isLoading: false,
     errorCode: null,
@@ -109,7 +114,7 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
   return render(
     <>
       <LoginBrandStage />
-      <LoginPage />
+      <LoginPage intent={intent} onClose={onClose} />
     </>,
   );
 }
@@ -221,6 +226,32 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(screen.queryByTestId('login-social-guest')).toBeNull();
     expect(screen.queryByTestId('login-stage-footer')).toBeNull();
     expect(screen.queryByTestId('login-local-mode')).toBeNull();
+  });
+
+  it('登录更多账号流程不提供跳过登录入口', async () => {
+    mount(await identifierState('providers:both'), undefined, 'add-account');
+    expect(screen.queryByTestId('login-skip-entry')).toBeNull();
+    expect(screen.queryByTestId('login-local-mode')).toBeNull();
+  });
+
+  it.each([
+    ['darwin', 'mr-2'],
+    ['win32', 'mr-1'],
+  ] as const)('登录更多账号在 %s 标题栏右侧提供关闭按钮', async (platform, marginClass) => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { platform, acceptPrivacyConsent: async () => ({ allowed: true }) },
+    });
+    const onClose = vi.fn();
+    mount(await identifierState('providers:both'), undefined, 'add-account', onClose);
+
+    const dragBar = screen.getByTestId('login-drag-bar');
+    const close = screen.getByTestId('add-account-close');
+    expect(dragBar.contains(close)).toBe(true);
+    expect(close.className).toContain(marginClass);
+
+    fireEvent.click(close);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('「跳过登录」槽与错误提示槽首尾相接且不重叠(error 出现不推移跳过入口)', async () => {
@@ -392,20 +423,14 @@ describe('ssoOrgMode 子视图', () => {
     const historyList = screen.getByTestId('login-sso-org-history-list');
     const panel = screen.getByTestId('login-panel-sso-org');
     expect(panel.contains(historyList)).toBe(false);
-    expect(Number.parseFloat(historyList.style.left)).toBe(
-      Number.parseFloat(input.style.left),
-    );
-    expect(Number.parseFloat(historyList.style.width)).toBe(
-      Number.parseFloat(input.style.width),
-    );
+    expect(Number.parseFloat(historyList.style.left)).toBe(Number.parseFloat(input.style.left));
+    expect(Number.parseFloat(historyList.style.width)).toBe(Number.parseFloat(input.style.width));
     expect(Number.parseFloat(historyList.style.top)).toBe(
       Number.parseFloat(input.style.top) + Number.parseFloat(input.style.height) + 8,
     );
     expect(
       Number.parseFloat(historyList.style.top) + Number.parseFloat(historyList.style.maxHeight),
-    ).toBeLessThanOrEqual(
-      Number.parseFloat(panel.style.height),
-    );
+    ).toBeLessThanOrEqual(Number.parseFloat(panel.style.height));
     expect(historyList.className).toContain('overflow-y-auto');
     expect(historyList.className).toContain('[scrollbar-width:none]');
     expect(historyList.className).toContain('[&::-webkit-scrollbar]:hidden');
@@ -433,9 +458,7 @@ describe('ssoOrgMode 子视图', () => {
     fireEvent.click(screen.getByTestId('login-sso-org-continue'));
     await waitFor(() => {
       fireEvent.focus(screen.getByTestId('login-sso-org-input'));
-      expect(screen.getByTestId('login-sso-org-history-option-0').textContent).toBe(
-        'Example-Corp',
-      );
+      expect(screen.getByTestId('login-sso-org-history-option-0').textContent).toBe('Example-Corp');
     });
   });
 

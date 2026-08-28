@@ -49,6 +49,21 @@ function makeClient(scenario: string, region: AuthRegion = 'cn') {
 }
 
 describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
+  it('keeps retained accounts reachable after the active session expires', () => {
+    expect(loginSource).toContain(
+      "import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';",
+    );
+    expect(loginSource).toContain(
+      'void auth.syncSavedAccounts().catch(() => undefined);',
+    );
+    expect(loginSource).toContain('auth.savedAccounts.length > 0');
+    expect(loginSource).toContain('testID="login.accountSwitcher"');
+    expect(loginSource).toContain("label={t('devices.list.accounts.title')}");
+    expect(loginSource).toContain('<AccountSwitcherSheet');
+    expect(loginSource).toContain('hasRunningTasks={hasRunningTasks}');
+    expect(loginSource).toContain('remoteSessionStore.isSessionRunning(session.id)');
+  });
+
   it('identifier:providers 真链加载→identifier 步骤,区域定形态(无 tabs)/输入/主按钮/圆钮行接线', async () => {
     const client = makeClient('providers:both');
     const providers = await client.getProviders();

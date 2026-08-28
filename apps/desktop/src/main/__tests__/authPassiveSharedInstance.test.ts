@@ -301,11 +301,8 @@ describe('passive shared-userData instance auth isolation', () => {
     const acceptStart = authSource.indexOf('async function acceptLoginOutcome(');
     const acceptEnd = authSource.indexOf('\n}\n\nasync function runLoginAction', acceptStart);
     const acceptBody = authSource.slice(acceptStart, acceptEnd);
-    const acceptGuard = acceptBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
-    expect(acceptGuard).toBeGreaterThan(-1);
-    expect(acceptBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
-      acceptGuard,
-    );
+    expect(acceptBody).not.toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
+    expect(acceptBody).not.toContain('commitWithClearedAccountDeletionReceipt(');
 
     const completeStart = authSource.indexOf('async function completeLogin(');
     const completeEnd = authSource.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
@@ -315,10 +312,16 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(completeBody.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
       completeGuard,
     );
-    expect(completeBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
-      completeGuard,
-    );
+    expect(completeBody).toContain('commitWithClearedAccountDeletionReceipt(() => {');
     expect(completeBody.indexOf('clearReloginFlag();')).toBeGreaterThan(completeGuard);
+
+    const receiptCommit = sliceBody(
+      'function commitWithClearedAccountDeletionReceipt(commit: () => void): void {',
+      '\n}\n',
+    );
+    expect(receiptCommit).toContain(
+      'if (isPassiveSharedUserDataInstance()) return commit();',
+    );
   });
 
   it('冷启动确定性失效:passive 不删盘,非 passive 也只做 compare-and-delete', () => {

@@ -24,6 +24,7 @@ import {
   type AuthFlowState,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
+  type DesktopAccountSwitcherSnapshot,
   type User,
 } from '@/lib/authService';
 import {
@@ -80,6 +81,11 @@ export interface AuthContextValue {
   loadLoginState: () => Promise<DesktopLoginActionResult>;
   dispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   logout: () => Promise<void>;
+  listAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  syncAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  switchAccount: (accountKey: string) => Promise<void>;
+  beginAddAccount: () => Promise<DesktopLoginActionResult>;
+  cancelAddAccount: () => Promise<void>;
   enterLocalMode: () => Promise<void>;
   exitLocalMode: () => Promise<void>;
   hasAccountDeletionReceipt: boolean;
@@ -411,6 +417,27 @@ export function AuthProvider({
     clearWorkersCache();
   }, [runDataOwnerBoundary]);
 
+  const listAccounts = useCallback(() => authServiceRef.current!.listAccounts(), []);
+
+  const syncAccounts = useCallback(() => authServiceRef.current!.syncAccounts(), []);
+
+  const switchAccount = useCallback(
+    (accountKey: string) =>
+      runDataOwnerBoundary(() => authServiceRef.current!.switchAccount(accountKey)),
+    [runDataOwnerBoundary],
+  );
+
+  const beginAddAccount = useCallback(async () => {
+    const result = await authServiceRef.current!.beginAddAccount();
+    setLoginState(result.state);
+    return result;
+  }, []);
+
+  const cancelAddAccount = useCallback(async () => {
+    await authServiceRef.current!.cancelAddAccount();
+    setLoginState(null);
+  }, []);
+
   const enterLocalMode = useCallback(async () => {
     // 本地模式也是一次 dataOwnerId 切换。必须走 applyIncomingState,不能自己拼半套
     // setter:漏接草稿 / prompt / 模型可见性 / 记忆分区会让跳过登录进主界面后仍读写
@@ -477,6 +504,11 @@ export function AuthProvider({
       loadLoginState,
       dispatchLoginAction,
       logout,
+      listAccounts,
+      syncAccounts,
+      switchAccount,
+      beginAddAccount,
+      cancelAddAccount,
       enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,
@@ -503,6 +535,11 @@ export function AuthProvider({
       loadLoginState,
       dispatchLoginAction,
       logout,
+      listAccounts,
+      syncAccounts,
+      switchAccount,
+      beginAddAccount,
+      cancelAddAccount,
       enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,

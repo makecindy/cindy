@@ -6491,12 +6491,30 @@
     "user": {
       "settingsLink": "設定，當前使用者：{{name}}",
       "settingsLinkBeta": "設定，當前使用者：{{name}}，Beta 測試管道已開啟",
+      "moreLabel": "更多，當前使用者：{{name}}",
+      "menuSettings": "設定",
+      "menuAddAccount": "登入更多帳號",
+      "menuLogout": "退出",
       "canaryBadge": "灰度使用者",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "viewReleaseNotes": "檢視版本日誌",
       "reopenUpdateBanner": "有更新待重啟，點選檢視",
       "downloadMobile": "下載 Cindy 移動端"
+    },
+    "accountSwitcher": {
+      "title": "切換帳號",
+      "description": "選擇這台裝置上登入過的帳號",
+      "syncing": "正在檢查登入狀態…",
+      "syncFailed": "部分帳號狀態暫時無法更新",
+      "switchFailed": "切換失敗，請重新登入該帳號",
+      "runningTaskTitle": "中斷任務並切換帳號？",
+      "runningTaskDescription": "目前有任務正在執行。切換帳號會先中斷這些任務，未完成的執行不會繼續。",
+      "runningTaskConfirm": "中斷任務並切換",
+      "startFailed": "無法開啟登入頁面，請稍後再試",
+      "addAccount": "登入更多帳號",
+      "back": "返回",
+      "close": "關閉"
     },
     "mobileDownload": {
       "title": "遠端控制 Cindy",
@@ -10377,7 +10395,7 @@
     },
     "confirm": {
       "logoutTitle": "退出登入",
-      "logoutDescription": "確定要退出當前帳號嗎？",
+      "logoutDescription": "確定要退出這台裝置上的所有帳號嗎？",
       "logoutConfirm": "退出",
       "cancel": "取消",
       "sessionExpiredTitle": "登入已過期",

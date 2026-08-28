@@ -30,6 +30,7 @@ export function mapMembershipToMobileUser(
     membershipRole: membership.role,
     orgId: membership.orgId,
     orgName: membership.orgName,
+    orgLogoUrl: membership.orgLogoUrl ?? null,
     passportId: passportId ?? membership.passportId ?? '',
   };
 }
@@ -48,5 +49,6 @@ export function mergeMembershipWithExisting(
     defaultModel: existing.defaultModel,
     defaultEffort: existing.defaultEffort,
     passportId: mapped.passportId || existing.passportId,
+    orgLogoUrl: mapped.orgLogoUrl ?? existing.orgLogoUrl ?? null,
   };
 }

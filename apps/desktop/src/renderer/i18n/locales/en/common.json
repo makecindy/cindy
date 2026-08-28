@@ -6501,12 +6501,30 @@
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
       "settingsLinkBeta": "Settings, current user: {{name}}, Beta channel enabled",
+      "moreLabel": "More, current user: {{name}}",
+      "menuSettings": "Settings",
+      "menuAddAccount": "Sign in to another account",
+      "menuLogout": "Log out",
       "canaryBadge": "Canary user",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "viewReleaseNotes": "View release notes",
       "reopenUpdateBanner": "Update ready — click to review",
       "downloadMobile": "Download Cindy Mobile"
+    },
+    "accountSwitcher": {
+      "title": "Switch account",
+      "description": "Choose an account used on this device",
+      "syncing": "Checking sign-in status…",
+      "syncFailed": "Some account statuses could not be updated",
+      "switchFailed": "Could not switch accounts. Sign in to that account again",
+      "runningTaskTitle": "Stop running tasks and switch accounts?",
+      "runningTaskDescription": "Tasks are currently running. Switching accounts will stop them first, and unfinished work will not continue.",
+      "runningTaskConfirm": "Stop Tasks and Switch",
+      "startFailed": "Could not open the sign-in page. Try again later",
+      "addAccount": "Sign in to another account",
+      "back": "Back",
+      "close": "Close"
     },
     "mobileDownload": {
       "title": "Control Cindy Remotely",
@@ -10401,7 +10419,7 @@
     },
     "confirm": {
       "logoutTitle": "Log out",
-      "logoutDescription": "Log out of the current account?",
+      "logoutDescription": "Log out of all accounts on this device?",
       "logoutConfirm": "Log out",
       "cancel": "Cancel",
       "sessionExpiredTitle": "Login expired",

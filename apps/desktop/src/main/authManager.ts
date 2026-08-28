@@ -34,6 +34,7 @@ import {
   type AuthMembership,
   type AuthRegion,
   type AuthTokenPair,
+  type AccountMembership,
   type AccountDeletionAvailability,
   type AccountDeletionStatus,
   type LoginMethod,
@@ -73,6 +74,7 @@ import {
   type AuthLoopbackDevBridge,
 } from './authLoopbackCallback';
 import { createDesktopPollCredentials, runHostedCallbackPolling } from './authHostedCallback';
+import { reconcileSavedAccountMetadata, type StoredAccountMetadata } from './authAccountMetadata';
 // dev-only 登录 scenario harness(implementation-plan Step 0 WHAT4):静态 import
 // (main 禁运行时动态 import),生产构建由 vite alias 把整模块替换为空 stub
 // (vite.main.config.ts),运行时另有 app.isPackaged guard 双保险。
@@ -87,6 +89,7 @@ import {
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
 import { getResolvedMainLocale, t } from './i18n';
+import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
 import {
   activateClientEndpointRealm,
   getClientEndpoint,
@@ -97,7 +100,10 @@ import {
 } from './clientEndpointsService.js';
 import {
   parseDesktopLoginAction,
+  parseDesktopAccountKey,
   type DesktopAccountDeletionChallenge,
+  type DesktopAccountSwitcherSnapshot,
+  type DesktopSavedAccount,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
 } from '../shared/authIpc';
@@ -133,6 +139,7 @@ import {
 } from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
+import { withCrossProcessLock } from './device-link/crossProcessLock';
 import {
   StableOwnerPostCommitCoordinator,
   type StableOwnerPostCommitTask,
@@ -173,6 +180,8 @@ function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
   return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
 const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
+const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';
+const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
 const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
 const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
 const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
@@ -218,6 +227,33 @@ export interface User {
  */
 interface CurrentUser extends User {
   membershipDisplayName: string;
+}
+
+interface StoredResourceSession {
+  realm: AuthRegion;
+  refreshToken: string;
+  metadata: StoredAccountMetadata;
+  lastUsedAt: number;
+}
+
+interface StoredPassportSession {
+  realm: AuthRegion;
+  passportId: string;
+  accountRefreshToken: string;
+  memberships: StoredAccountMetadata[];
+}
+
+interface AuthAccountVault {
+  version: 1;
+  activeAccountKey: string | null;
+  resources: Record<string, StoredResourceSession>;
+  passports: Record<string, StoredPassportSession>;
+  /**
+   * Durable logout-all marker. The vault is the crash-consistent owner record,
+   * so this must win over a compatibility session left behind by an interrupted
+   * logout until a new explicit login commits an active Resource.
+   */
+  signedOutAt?: number;
 }
 
 export interface AuthState {
@@ -285,8 +321,8 @@ const stableOwnerPostCommitCoordinator = new StableOwnerPostCommitCoordinator({
       scopeKey: activeOwnerScopeKey(),
       dataOwnerId: session.dataOwnerId,
       stable:
-        !isAppSessionBoundaryPending()
-        && isGhostSkillProjectionBoundaryStableForOwner(session.dataOwnerId),
+        !isAppSessionBoundaryPending() &&
+        isGhostSkillProjectionBoundaryStableForOwner(session.dataOwnerId),
     };
   },
   warn: (message, meta) => log.warn(message, meta),
@@ -344,10 +380,16 @@ let discoveredMethods: LoginMethod[] = [];
 // Account token 仅在一次登录的 Membership 选择阶段存活；兑换 resource token
 // 后立即清空，不持久化、不续期，也不参与业务请求或正常登出。
 let pendingAccountToken: string | null = null;
+let pendingAccountRefreshToken: string | null = null;
+let pendingAccountMemberships: AuthMembership[] = [];
 let pendingLoginTicket: string | null = null;
 let pendingBindTicket: string | null = null;
 let pendingSsoVerificationTicket: string | null = null;
 let loginActionPromise: Promise<DesktopLoginActionResult> | null = null;
+let loginActionPromiseEpoch: number | null = null;
+// Separate from authStateEpoch: closing an add-account surface must invalidate
+// its requests without expiring the still-active account's runtime refresh.
+let loginFlowEpoch = 0;
 // `accountDeletionRestored` may arrive before membership selection. Keep it
 // main-only until the final resource-token login commits.
 let pendingAccountDeletionRestored = false;
@@ -505,6 +547,87 @@ function writeSafe(key: string, value: string): boolean {
   }
 }
 
+/**
+ * The aggregate account vault needs atomic replacement because one partial
+ * write would otherwise discard every saved resource and Passport session.
+ * During the Windows backup-swap fallback, readers use the old backup rather
+ * than trying to restore it while the writer still owns the vault lock.
+ */
+function readAtomicSafe(key: string): string | null {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      logSafeStorageIssueOnce('encryption unavailable (atomic read)', key);
+      return null;
+    }
+    const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
+    let content: string;
+    try {
+      content = fs.readFileSync(filepath, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+      content = fs.readFileSync(`${filepath}.bak`, 'utf-8');
+    }
+    return safeStorage.decryptString(Buffer.from(content, 'base64'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    logSafeStorageIssueOnce('atomic decrypt failed', key, err);
+    return null;
+  }
+}
+
+function isAtomicPersistedSecretAbsent(key: string): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
+  for (const candidate of [filepath, `${filepath}.bak`]) {
+    try {
+      fs.accessSync(candidate, fs.constants.F_OK);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return false;
+    }
+  }
+  return true;
+}
+
+function writeAtomicSafe(key: string, value: string): boolean {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      logSafeStorageIssueOnce('encryption unavailable (atomic write)', key);
+      return false;
+    }
+    atomicWriteFileSync(
+      path.join(SAFE_STORAGE_DIR(), `${key}.enc`),
+      safeStorage.encryptString(value).toString('base64'),
+    );
+    return true;
+  } catch (err) {
+    logSafeStorageIssueOnce('atomic encrypt/persist failed', key, err);
+    return false;
+  }
+}
+
+function removeAtomicSafeOrThrow(key: string): void {
+  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
+  try {
+    // Remove the backup first so deleting the main file cannot resurrect an
+    // older vault on the next atomic write.
+    for (const candidate of [`${filepath}.bak`, filepath]) {
+      try {
+        fs.unlinkSync(candidate);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+      }
+    }
+  } catch (error) {
+    logSafeStorageIssueOnce('atomic delete failed', key, error);
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Could not clear saved account credentials',
+    );
+  }
+}
+
 function removeSafe(key: string): void {
   try {
     fs.unlinkSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`));
@@ -513,8 +636,910 @@ function removeSafe(key: string): void {
   }
 }
 
+/**
+ * Delete the previous owner's account-deletion receipt as the final fallible
+ * step of an account transition. The encrypted bytes are restored if the
+ * synchronous owner publication throws, while an unlink failure prevents the
+ * new owner from being published at all.
+ */
+function commitWithClearedAccountDeletionReceipt(commit: () => void): void {
+  if (isPassiveSharedUserDataInstance()) return commit();
+  const filepath = path.join(SAFE_STORAGE_DIR(), `${ACCOUNT_DELETION_RECEIPT_KEY}.enc`);
+  let previousEncrypted: string | null;
+  try {
+    previousEncrypted = fs.readFileSync(filepath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      previousEncrypted = null;
+    } else {
+      logSafeStorageIssueOnce(
+        'account transition receipt snapshot failed',
+        ACCOUNT_DELETION_RECEIPT_KEY,
+        error,
+      );
+      throw new AuthApiError(
+        'CREDENTIAL_STORE_UNAVAILABLE',
+        503,
+        'Could not read the previous account deletion receipt',
+      );
+    }
+  }
+  try {
+    fs.unlinkSync(filepath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      logSafeStorageIssueOnce(
+        'account transition receipt delete failed',
+        ACCOUNT_DELETION_RECEIPT_KEY,
+        error,
+      );
+      throw new AuthApiError(
+        'CREDENTIAL_STORE_UNAVAILABLE',
+        503,
+        'Could not clear the previous account deletion receipt',
+      );
+    }
+  }
+  try {
+    return commit();
+  } catch (error) {
+    if (previousEncrypted !== null) {
+      try {
+        atomicWriteFileSync(filepath, previousEncrypted);
+      } catch (restoreError) {
+        logSafeStorageIssueOnce(
+          'account transition receipt restore failed',
+          ACCOUNT_DELETION_RECEIPT_KEY,
+          restoreError,
+        );
+        throw new AuthApiError(
+          'CREDENTIAL_STORE_UNAVAILABLE',
+          503,
+          'Could not restore the previous account deletion receipt',
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+function emptyAuthAccountVault(): AuthAccountVault {
+  return { version: 1, activeAccountKey: null, resources: {}, passports: {} };
+}
+
+function accountVaultKey(realm: AuthRegion, membershipId: string): string {
+  return JSON.stringify([realm, membershipId]);
+}
+
+function passportVaultKey(realm: AuthRegion, passportId: string): string {
+  return JSON.stringify([realm, passportId]);
+}
+
+function isStoredAccountMetadata(value: unknown): value is StoredAccountMetadata {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Partial<StoredAccountMetadata>;
+  return (
+    typeof item.membershipId === 'string' &&
+    typeof item.passportId === 'string' &&
+    typeof item.displayName === 'string' &&
+    (item.email === null || typeof item.email === 'string') &&
+    (item.avatarUrl === null || typeof item.avatarUrl === 'string') &&
+    (item.kind === 'personal' || item.kind === 'org') &&
+    (item.role === 'owner' || item.role === 'admin' || item.role === 'member') &&
+    (item.orgId === null || typeof item.orgId === 'string') &&
+    (item.orgName === null || typeof item.orgName === 'string') &&
+    (item.orgLogoUrl === null || typeof item.orgLogoUrl === 'string')
+  );
+}
+
+function readAuthAccountVault(
+  options: { allowUnreadable?: boolean; recoverInvalid?: boolean } = {},
+): AuthAccountVault {
+  const raw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
+  if (raw === null) {
+    if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)) return emptyAuthAccountVault();
+    log.warn('encrypted auth account vault exists but is temporarily unreadable');
+    if (options.allowUnreadable) return emptyAuthAccountVault();
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Saved account credentials are temporarily unavailable',
+    );
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<AuthAccountVault>;
+    if (
+      parsed.version !== 1 ||
+      !parsed.resources ||
+      typeof parsed.resources !== 'object' ||
+      Array.isArray(parsed.resources) ||
+      !parsed.passports ||
+      typeof parsed.passports !== 'object' ||
+      Array.isArray(parsed.passports) ||
+      (parsed.signedOutAt !== undefined && typeof parsed.signedOutAt !== 'number')
+    ) {
+      throw new Error('unsupported auth account vault');
+    }
+    const resources: Record<string, StoredResourceSession> = {};
+    for (const [key, candidate] of Object.entries(parsed.resources)) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+        if (options.allowUnreadable || options.recoverInvalid) continue;
+        throw new Error('invalid saved resource credential');
+      }
+      const item = candidate as Partial<StoredResourceSession>;
+      if (
+        (item.realm !== 'cn' && item.realm !== 'global') ||
+        typeof item.refreshToken !== 'string' ||
+        !isStoredAccountMetadata(item.metadata) ||
+        typeof item.lastUsedAt !== 'number'
+      ) {
+        if (options.allowUnreadable || options.recoverInvalid) continue;
+        throw new Error('invalid saved resource credential');
+      }
+      resources[key] = item as StoredResourceSession;
+    }
+    const passports: Record<string, StoredPassportSession> = {};
+    for (const [key, candidate] of Object.entries(parsed.passports)) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+        if (options.allowUnreadable || options.recoverInvalid) continue;
+        throw new Error('invalid saved Passport credential');
+      }
+      const item = candidate as Partial<StoredPassportSession>;
+      if (
+        (item.realm !== 'cn' && item.realm !== 'global') ||
+        typeof item.passportId !== 'string' ||
+        typeof item.accountRefreshToken !== 'string' ||
+        !Array.isArray(item.memberships)
+      ) {
+        if (options.allowUnreadable || options.recoverInvalid) continue;
+        throw new Error('invalid saved Passport credential');
+      }
+      const memberships = item.memberships.filter(isStoredAccountMetadata);
+      if (
+        !options.allowUnreadable &&
+        !options.recoverInvalid &&
+        memberships.length !== item.memberships.length
+      ) {
+        throw new Error('invalid saved Passport membership');
+      }
+      passports[key] = {
+        realm: item.realm,
+        passportId: item.passportId,
+        accountRefreshToken: item.accountRefreshToken,
+        memberships,
+      };
+    }
+    const active =
+      typeof parsed.activeAccountKey === 'string' ? parsed.activeAccountKey : null;
+    return {
+      version: 1,
+      activeAccountKey: active && resources[active] ? active : null,
+      resources,
+      passports,
+      ...(typeof parsed.signedOutAt === 'number'
+        ? { signedOutAt: parsed.signedOutAt }
+        : {}),
+    };
+  } catch (error) {
+    if (options.recoverInvalid) {
+      log.warn('encrypted auth account vault is invalid; recovering it for explicit login', error);
+      return emptyAuthAccountVault();
+    }
+    log.warn('encrypted auth account vault is invalid; ignoring it without deleting', error);
+    if (options.allowUnreadable) return emptyAuthAccountVault();
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Saved account credentials could not be read safely',
+    );
+  }
+}
+
+function writeAuthAccountVault(vault: AuthAccountVault): boolean {
+  return writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+}
+
+function writeAuthAccountVaultOrThrow(vault: AuthAccountVault): void {
+  if (writeAuthAccountVault(vault)) return;
+  throw new AuthApiError(
+    'CREDENTIAL_STORE_UNAVAILABLE',
+    503,
+    'Could not persist saved account credentials',
+  );
+}
+
+function authAccountVaultLockPath(): string {
+  return path.join(app.getPath('userData'), AUTH_ACCOUNT_VAULT_LOCK_FILE);
+}
+
+function accountVaultLockError(reason: 'busy' | 'unavailable'): AuthApiError {
+  return new AuthApiError(
+    'CREDENTIAL_STORE_UNAVAILABLE',
+    503,
+    `Saved account credentials are temporarily ${reason}`,
+  );
+}
+
+/**
+ * Every saved-account read/modify/write goes through one shared-userData lock.
+ * Resource refresh is intentionally allowed in passive instances, so an
+ * in-process queue alone cannot prevent it from overwriting a primary
+ * instance's concurrently added account or rotated Passport.
+ */
+async function transactAuthAccountVault<T>(
+  operation: (vault: AuthAccountVault) => T | Promise<T>,
+  afterPersist: (result: T) => void | Promise<void> = () => undefined,
+  options: {
+    recoverInvalidForExplicitLogin?: boolean;
+    waitWhileBusyAfterRotation?: boolean;
+  } = {},
+): Promise<T> {
+  type Attempt = { kind: 'busy' } | { kind: 'committed'; result: T };
+  let reportedBusyWait = false;
+  for (;;) {
+    const attempt: Attempt = await withCrossProcessLock(
+      authAccountVaultLockPath(),
+      { label: 'auth-account-vault', waitMs: 5_000 },
+      async (status) => {
+        if (!status.held) {
+          if (status.reason === 'busy' && options.waitWhileBusyAfterRotation) {
+            return { kind: 'busy' };
+          }
+          throw accountVaultLockError(status.reason);
+        }
+        const previousRaw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
+        const previousWasAbsent =
+          previousRaw === null && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY);
+        const vault = readAuthAccountVault({
+          recoverInvalid: options.recoverInvalidForExplicitLogin,
+        });
+        const result = await operation(vault);
+        writeAuthAccountVaultOrThrow(vault);
+        try {
+          // Keep the shared-userData lock through the active-session write,
+          // runtime teardown and final owner commit. Cancellation or any local
+          // boundary failure restores the complete pre-transition vault before
+          // another process can observe or extend the partial account switch.
+          await afterPersist(result);
+          return { kind: 'committed', result };
+        } catch (error) {
+          if (previousWasAbsent) {
+            removeAtomicSafeOrThrow(AUTH_ACCOUNT_VAULT_KEY);
+          } else if (previousRaw !== null && !writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, previousRaw)) {
+            throw new AuthApiError(
+              'CREDENTIAL_STORE_UNAVAILABLE',
+              503,
+              'Could not restore saved account credentials after a failed account switch',
+            );
+          }
+          throw error;
+        }
+      },
+    );
+    if (attempt.kind === 'committed') return attempt.result;
+    // A refresh token has already rotated on the server, so a busy lock is not
+    // a retryable failure: abandoning the replacement would strand that saved
+    // account on the consumed generation. Keep yielding until the current
+    // owner releases the lock; unavailable storage still fails immediately.
+    if (!reportedBusyWait) {
+      reportedBusyWait = true;
+      log.warn('waiting for the account vault lock to persist a rotated credential');
+    }
+  }
+}
+
+async function mutateAuthAccountVault<T>(
+  operation: (vault: AuthAccountVault) => T | Promise<T>,
+  options: { waitWhileBusyAfterRotation?: boolean } = {},
+): Promise<T> {
+  return transactAuthAccountVault(operation, () => undefined, options);
+}
+
+async function clearAuthAccountVault(
+  afterPersist: () => void | Promise<void> = () => undefined,
+): Promise<void> {
+  await withCrossProcessLock(
+    authAccountVaultLockPath(),
+    { label: 'auth-account-vault-clear', waitMs: 5_000 },
+    async (status) => {
+      if (!status.held) throw accountVaultLockError(status.reason);
+      // Explicit logout must remain available even if an old vault is
+      // undecryptable. Replace it with a fresh fail-closed owner record rather
+      // than reading or deleting it first.
+      const vault = emptyAuthAccountVault();
+      vault.activeAccountKey = null;
+      vault.resources = {};
+      vault.passports = {};
+      vault.signedOutAt = Date.now();
+      writeAuthAccountVaultOrThrow(vault);
+      await afterPersist();
+    },
+  );
+}
+
+function metadataFromMembership(
+  membership: AuthMembership | AccountMembership,
+  passportId: string,
+): StoredAccountMetadata {
+  return {
+    membershipId: membership.id,
+    passportId,
+    displayName: membership.displayName,
+    email: membership.email,
+    avatarUrl: membership.avatarUrl ?? null,
+    kind: membership.kind,
+    role: membership.role,
+    orgId: membership.orgId,
+    orgName: membership.orgName,
+    orgLogoUrl: membership.orgLogoUrl ?? null,
+  };
+}
+
+async function rememberResourceSession(
+  pair: AuthTokenPair,
+  realm: AuthRegion,
+  options: {
+    markActive?: boolean;
+    lastUsedAt?: number;
+    validateBeforeWrite?: () => void;
+  } = {},
+): Promise<void> {
+  const passportId = pair.membership.passportId;
+  if (!passportId) {
+    log.warn('resource session omitted passportId; keeping only the active compatibility record');
+    return;
+  }
+  await mutateAuthAccountVault(
+    (vault) => {
+      options.validateBeforeWrite?.();
+      writeResourceSessionToVault(vault, pair, realm, passportId, options);
+    },
+    { waitWhileBusyAfterRotation: true },
+  );
+}
+
+type ResourceSessionReplacementResult = 'stored' | 'stale' | 'missing';
+
+/** Persist a rotated Resource token only while the request still owns its consumed generation. */
+async function replaceResourceSessionIfCurrent(input: {
+  accountKey: string;
+  expectedRefreshToken: string;
+  pair: AuthTokenPair;
+  realm: AuthRegion;
+  passportId: string;
+  validateBeforeWrite?: () => void;
+}): Promise<ResourceSessionReplacementResult> {
+  return mutateAuthAccountVault(
+    (vault) => {
+      input.validateBeforeWrite?.();
+      const current = vault.resources[input.accountKey];
+      if (!current) return 'missing';
+      if (current.refreshToken !== input.expectedRefreshToken) return 'stale';
+      writeResourceSessionToVault(vault, input.pair, input.realm, input.passportId, {
+        markActive: false,
+      });
+      return 'stored';
+    },
+    { waitWhileBusyAfterRotation: true },
+  );
+}
+
+type RejectedResourceSessionRemovalResult = 'removed' | 'stale' | 'missing';
+
+/** Remove only a Resource generation that this refresh run actually proved unusable. */
+async function removeRejectedResourceSession(input: {
+  accountKey: string;
+  rejectedRefreshTokens: readonly string[];
+  validateBeforeWrite?: () => void;
+}): Promise<RejectedResourceSessionRemovalResult> {
+  const rejectedRefreshTokens = new Set(input.rejectedRefreshTokens);
+  return mutateAuthAccountVault((vault) => {
+    input.validateBeforeWrite?.();
+    const current = vault.resources[input.accountKey];
+    if (!current) return 'missing';
+    if (!rejectedRefreshTokens.has(current.refreshToken)) return 'stale';
+    delete vault.resources[input.accountKey];
+    if (vault.activeAccountKey === input.accountKey) vault.activeAccountKey = null;
+    return 'removed';
+  });
+}
+
+function writeResourceSessionToVault(
+  vault: AuthAccountVault,
+  pair: AuthTokenPair,
+  realm: AuthRegion,
+  passportId: string,
+  options: { markActive?: boolean; lastUsedAt?: number } = {},
+): void {
+  const key = accountVaultKey(realm, pair.membership.id);
+  vault.resources[key] = {
+    realm,
+    refreshToken: pair.refreshToken,
+    metadata: metadataFromMembership(pair.membership, passportId),
+    lastUsedAt: options.lastUsedAt ?? Date.now(),
+  };
+  if (options.markActive !== false) {
+    delete vault.signedOutAt;
+    vault.activeAccountKey = key;
+  }
+}
+
+async function rememberPassportSession(input: {
+  realm: AuthRegion;
+  passportId: string;
+  accountRefreshToken: string;
+  memberships?: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+}): Promise<void> {
+  await mutateAuthAccountVault((vault) => {
+    writePassportSessionToVault(vault, input);
+  });
+}
+
+function writePassportSessionToVault(
+  vault: AuthAccountVault,
+  input: {
+    realm: AuthRegion;
+    passportId: string;
+    accountRefreshToken: string;
+    memberships?: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+  },
+): void {
+  const key = passportVaultKey(input.realm, input.passportId);
+  const previous = vault.passports[key];
+  const memberships = (input.memberships ?? previous?.memberships ?? []).map((membership) =>
+    isStoredAccountMetadata(membership)
+      ? membership
+      : metadataFromMembership(membership, input.passportId),
+  );
+  vault.passports[key] = {
+    realm: input.realm,
+    passportId: input.passportId,
+    accountRefreshToken: input.accountRefreshToken,
+    memberships,
+  };
+  reconcileSavedAccountMetadata(vault, {
+    realm: input.realm,
+    passportId: input.passportId,
+    memberships,
+    passportMode: 'replace-passport',
+  });
+}
+
+async function commitDesktopLoginSessions(
+  input: {
+    pair: AuthTokenPair;
+    realm: AuthRegion;
+    passportId?: string;
+    accountRefreshToken?: string | null;
+    memberships: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+  },
+  transition: {
+    commit: () => void | Promise<void>;
+    rollback: () => void | Promise<void>;
+  },
+): Promise<void> {
+  await transactAuthAccountVault(
+    (vault) => {
+      if (!input.passportId) {
+        // Legacy login responses may only be able to persist the compatibility
+        // session. They are still an explicit login and must supersede a prior
+        // logout-all tombstone so cold start can migrate the Resource later.
+        delete vault.signedOutAt;
+        return;
+      }
+      writeResourceSessionToVault(vault, input.pair, input.realm, input.passportId);
+      if (input.accountRefreshToken) {
+        writePassportSessionToVault(vault, {
+          realm: input.realm,
+          passportId: input.passportId,
+          accountRefreshToken: input.accountRefreshToken,
+          memberships: input.memberships,
+        });
+      }
+    },
+    async () => {
+      try {
+        await transition.commit();
+      } catch (error) {
+        // `transactAuthAccountVault` still owns the cross-process lock here.
+        // Restore the compatibility session before the vault rollback can
+        // finish and release that lock, so a passive peer cannot consume the
+        // failed target account's token in the gap between the two restores.
+        await transition.rollback();
+        throw error;
+      }
+    },
+    {
+      recoverInvalidForExplicitLogin: true,
+      waitWhileBusyAfterRotation: true,
+    },
+  );
+}
+
+/** Persist a rotated Passport only while the request still owns the token it consumed. */
+type PassportSessionReplacementResult = 'stored' | 'stale' | 'write-failed';
+
+async function replacePassportSessionIfCurrent(input: {
+  realm: AuthRegion;
+  passportId: string;
+  expectedAccountRefreshToken: string;
+  accountRefreshToken: string;
+  memberships?: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+}): Promise<PassportSessionReplacementResult> {
+  try {
+    return await mutateAuthAccountVault(
+      (vault) => {
+        const key = passportVaultKey(input.realm, input.passportId);
+        if (vault.passports[key]?.accountRefreshToken !== input.expectedAccountRefreshToken) {
+          return 'stale';
+        }
+        writePassportSessionToVault(vault, input);
+        return 'stored';
+      },
+      { waitWhileBusyAfterRotation: true },
+    );
+  } catch (error) {
+    if (error instanceof AuthApiError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE') {
+      return 'write-failed';
+    }
+    throw error;
+  }
+}
+
+/** Delete a rejected Passport only if no concurrent refresh has replaced it. */
+async function removePassportSessionIfCurrent(
+  realm: AuthRegion,
+  passportId: string,
+  expectedAccountRefreshToken: string,
+): Promise<boolean> {
+  return mutateAuthAccountVault((vault) => {
+    const key = passportVaultKey(realm, passportId);
+    if (vault.passports[key]?.accountRefreshToken !== expectedAccountRefreshToken) return false;
+    delete vault.passports[key];
+    return true;
+  });
+}
+
+type PassportAccountRefreshPair = Awaited<ReturnType<CindyAuthClient['refreshAccount']>>;
+
+const passportAccountRefreshFlights = new Map<string, Promise<PassportAccountRefreshPair>>();
+
+function assertPassportReplacementStored(result: PassportSessionReplacementResult): void {
+  if (result === 'stored') return;
+  if (result === 'stale') {
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Saved Passport session changed while it was being refreshed',
+    );
+  }
+  throw new AuthApiError(
+    'CREDENTIAL_STORE_UNAVAILABLE',
+    503,
+    'Could not persist the refreshed Passport session',
+  );
+}
+
+type ActiveRefreshCredentialCommit = 'active' | 'inactive' | 'discarded';
+
+async function commitDesktopRefreshCredentials(
+  pair: AuthTokenPair,
+  realm: AuthRegion,
+  requestedRefreshToken: string,
+  options: {
+    allowUnclaimedVault?: boolean;
+    validateBeforeWrite?: () => void;
+  } = {},
+): Promise<ActiveRefreshCredentialCommit> {
+  return transactAuthAccountVault(
+    (vault) => {
+      options.validateBeforeWrite?.();
+      const key = accountVaultKey(realm, pair.membership.id);
+      const latestSession = readPersistedAuthSession();
+      const requestedTokenStillStored =
+        (latestSession?.realm === realm && latestSession.refreshToken === requestedRefreshToken) ||
+        (vault.activeAccountKey === key &&
+          vault.resources[key]?.realm === realm &&
+          vault.resources[key]?.refreshToken === requestedRefreshToken) ||
+        (realm === AUTH_REGION &&
+          readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) === requestedRefreshToken);
+      const canClaimUninitializedVault =
+        options.allowUnclaimedVault === true &&
+        vault.activeAccountKey === null &&
+        typeof vault.signedOutAt !== 'number' &&
+        Object.keys(vault.resources).length === 0;
+      const stillOwnsActiveSession =
+        requestedTokenStillStored &&
+        (vault.activeAccountKey === key || canClaimUninitializedVault);
+      const passportId = pair.membership.passportId;
+      if (passportId && (stillOwnsActiveSession || vault.resources[key])) {
+        // A passive stale refresh may still rotate account A's resource token
+        // after the primary has committed account B. Preserve A for a future
+        // explicit switch, but never let that late result reclaim activeAccountKey.
+        writeResourceSessionToVault(vault, pair, realm, passportId, {
+          markActive: stillOwnsActiveSession,
+        });
+      }
+      if (stillOwnsActiveSession) return 'active';
+      return vault.resources[key] ? 'inactive' : 'discarded';
+    },
+    (commit) => {
+      if (commit === 'active') {
+        writePersistedAuthSessionOrThrow(pair.refreshToken, realm);
+      }
+    },
+    { waitWhileBusyAfterRotation: true },
+  );
+}
+
+/**
+ * Account refresh tokens have no replay grace. Every consumer of one Passport
+ * must share the same request until its rotated replacement is durable.
+ */
+async function refreshPassportSessionSingleFlight(
+  client: CindyAuthClient,
+  realm: AuthRegion,
+  passportId: string,
+): Promise<PassportAccountRefreshPair> {
+  const key = passportVaultKey(realm, passportId);
+  const existing = passportAccountRefreshFlights.get(key);
+  if (existing) return existing;
+
+  const flight = (async () => {
+    const current = readAuthAccountVault().passports[key];
+    if (!current) {
+      throw new AuthApiError('ACCOUNT_REAUTH_REQUIRED', 401, 'Saved account requires login');
+    }
+    try {
+      const pair = await client.refreshAccount(current.accountRefreshToken);
+      assertPassportReplacementStored(
+        await replacePassportSessionIfCurrent({
+          realm,
+          passportId,
+          expectedAccountRefreshToken: current.accountRefreshToken,
+          accountRefreshToken: pair.accountRefreshToken,
+          memberships: current.memberships,
+        }),
+      );
+      return pair;
+    } catch (error) {
+      // A device mismatch only proves that this process is using a different
+      // device identity. The encrypted Passport can still be valid for the
+      // device that owns the shared vault, so it cannot authorize deletion.
+      if (error instanceof AuthApiError && error.code === 'DEVICE_MISMATCH') {
+        throw error;
+      }
+      if (isDefinitiveRefreshError(error)) {
+        try {
+          await removePassportSessionIfCurrent(realm, passportId, current.accountRefreshToken);
+        } catch (cleanupError) {
+          log.warn('failed to remove rejected Passport from saved-account vault', cleanupError);
+        }
+      }
+      throw error;
+    }
+  })();
+  passportAccountRefreshFlights.set(key, flight);
+  try {
+    return await flight;
+  } finally {
+    if (passportAccountRefreshFlights.get(key) === flight) {
+      passportAccountRefreshFlights.delete(key);
+    }
+  }
+}
+
+async function rememberUpdatedMembershipMetadata(
+  membership: AuthMembership,
+  realm: AuthRegion,
+  passportId: string,
+): Promise<void> {
+  if (isPassiveSharedUserDataInstance()) return;
+  await mutateAuthAccountVault((vault) => {
+    reconcileSavedAccountMetadata(vault, {
+      realm,
+      passportId,
+      memberships: [metadataFromMembership(membership, passportId)],
+      passportMode: 'patch-known',
+    });
+  });
+}
+
+async function removeVaultAccount(accountKey: string): Promise<void> {
+  await mutateAuthAccountVault((vault) => {
+    delete vault.resources[accountKey];
+    if (vault.activeAccountKey === accountKey) vault.activeAccountKey = null;
+  });
+}
+
+function bindResourcePairToSavedAccount(
+  pair: AuthTokenPair,
+  realm: AuthRegion,
+  metadata: StoredAccountMetadata,
+): AuthTokenPair {
+  if (
+    accountVaultKey(realm, pair.membership.id) !== accountVaultKey(realm, metadata.membershipId) ||
+    (pair.membership.passportId !== undefined && pair.membership.passportId !== metadata.passportId)
+  ) {
+    throw new AuthApiError(
+      'INVALID_RESPONSE',
+      502,
+      'Refreshed resource session does not match the selected saved account',
+    );
+  }
+  return pair.membership.passportId
+    ? pair
+    : {
+        ...pair,
+        membership: { ...pair.membership, passportId: metadata.passportId },
+      };
+}
+
+function isDefinitiveRefreshError(error: unknown): boolean {
+  return (
+    error instanceof AuthApiError &&
+    [
+      'INVALID_REFRESH_TOKEN',
+      'REFRESH_TOKEN_EXPIRED',
+      'DEVICE_MISMATCH',
+      'ACCOUNT_UNAVAILABLE',
+      'MEMBERSHIP_DISABLED',
+    ].includes(error.code)
+  );
+}
+
+/**
+ * Refresh a saved Resource session across shared-userData app instances.
+ *
+ * The network request deliberately runs outside the vault lock. A losing
+ * process catches up to a winner's disk generation after INVALID_REFRESH_TOKEN,
+ * while success and cleanup both use compare-and-swap under that lock.
+ */
+async function refreshSavedResourceSession(input: {
+  client: CindyAuthClient;
+  accountKey: string;
+  realm: AuthRegion;
+  metadata: StoredAccountMetadata;
+  initialRefreshToken: string;
+  expectedLoginFlowEpoch: number;
+}): Promise<AuthTokenPair | null> {
+  type RefreshAttemptData = AuthTokenPair | { error: { code: string } };
+  const refreshError: { value: AuthApiError | null } = { value: null };
+  const run = await runRefreshWithReplacementRetry<RefreshAttemptData>(input.initialRefreshToken, {
+    doRefresh: async (refreshToken) => {
+      assertLoginFlowCurrent(input.expectedLoginFlowEpoch);
+      try {
+        const pair = await input.client.refresh(refreshToken);
+        return { ok: true, status: 200, data: pair };
+      } catch (error) {
+        if (!(error instanceof AuthApiError)) throw error;
+        refreshError.value = error;
+        return {
+          ok: false,
+          status: error.statusCode,
+          data: { error: { code: error.code } },
+        };
+      }
+    },
+    readLatestStoredTokens: () => [
+      readAuthAccountVault().resources[input.accountKey]?.refreshToken,
+    ],
+    maxReplacementRetries: REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT,
+    replacementRecheck: {
+      delaysMs: COLD_START_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS,
+      onBeforeRecheck: ({ delayMs }) =>
+        log.warn(
+          `saved Resource refresh lost a token rotation race — re-reading the vault after ${delayMs}ms`,
+        ),
+    },
+    onReplacementRetry: () =>
+      log.warn(
+        'saved Resource refresh is retrying the replacement written by another app instance',
+      ),
+  });
+  assertLoginFlowCurrent(input.expectedLoginFlowEpoch);
+
+  if (run.result.ok) {
+    const pair = bindResourcePairToSavedAccount(
+      run.result.data as AuthTokenPair,
+      input.realm,
+      input.metadata,
+    );
+    const replacement = await replaceResourceSessionIfCurrent({
+      accountKey: input.accountKey,
+      expectedRefreshToken: run.requestedToken,
+      pair,
+      realm: input.realm,
+      passportId: input.metadata.passportId,
+      validateBeforeWrite: () => assertLoginFlowCurrent(input.expectedLoginFlowEpoch),
+    });
+    if (replacement === 'stored') return pair;
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Saved Resource session changed while it was being refreshed',
+    );
+  }
+
+  const lastRefreshError = refreshError.value;
+  if (!lastRefreshError) {
+    throw new AuthApiError(
+      'INVALID_RESPONSE',
+      502,
+      'Saved Resource refresh failed without an error',
+    );
+  }
+  if (!isDefinitiveRefreshError(lastRefreshError)) throw lastRefreshError;
+  // A device mismatch says nothing about whether the shared on-disk token is
+  // valid for its owning device, so it must never authorize credential deletion.
+  if (lastRefreshError.code === 'DEVICE_MISMATCH') throw lastRefreshError;
+
+  const removal = await removeRejectedResourceSession({
+    accountKey: input.accountKey,
+    rejectedRefreshTokens: run.rejectedTokens,
+    validateBeforeWrite: () => assertLoginFlowCurrent(input.expectedLoginFlowEpoch),
+  });
+  if (removal === 'stale') {
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Saved Resource session was replaced by another app instance',
+    );
+  }
+  return null;
+}
+
 function readPersistedAuthSession() {
   return parseAuthSessionRecord(readSafe(AUTH_SESSION_KEY));
+}
+
+/**
+ * Repair a missing compatibility projection from the aggregate vault. When
+ * both exist but diverge, preserve both: a rollback build can rotate only the
+ * compatibility session, while an interrupted new-build commit can leave the
+ * vault newer. The refresh retry path asks the server which one is stale.
+ */
+async function reconcileDesktopActiveAuthSession(): Promise<
+  ReturnType<typeof readPersistedAuthSession>
+> {
+  return withCrossProcessLock(
+    authAccountVaultLockPath(),
+    { label: 'auth-account-vault-reconcile', waitMs: 5_000 },
+    async (status) => {
+      if (!status.held) throw accountVaultLockError(status.reason);
+      const vault = readAuthAccountVault();
+      const session = readPersistedAuthSession();
+      if (typeof vault.signedOutAt === 'number') {
+        // Logout-all persists this owner tombstone before removing the
+        // compatibility projection. If the process stopped between those
+        // writes, finish the projection cleanup without ever refreshing it.
+        removeSafe(AUTH_SESSION_KEY);
+        removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+        removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+        removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+        return null;
+      }
+      const activeResource = vault.activeAccountKey
+        ? vault.resources[vault.activeAccountKey]
+        : undefined;
+      if (!activeResource) return session;
+      if (!session) {
+        writePersistedAuthSessionOrThrow(
+          activeResource.refreshToken,
+          activeResource.realm,
+        );
+        return {
+          version: 1,
+          realm: activeResource.realm,
+          refreshToken: activeResource.refreshToken,
+        };
+      }
+      // A rollback build can rotate only the compatibility session. When the
+      // two durable projections disagree, preserve both as refresh candidates;
+      // the server's definitive response decides which generation is stale.
+      return session;
+    },
+  );
 }
 
 function readPersistedRefreshToken(realm = activeAuthRealm): string | null {
@@ -527,6 +1552,34 @@ function writePersistedAuthSession(refreshToken: string, realm = activeAuthRealm
   // v1 记录是唯一权威;legacy 只是给尚未升级的实例看的从属副本,写成功才镜像。
   if (written) mirrorLegacyResourceRefreshToken(refreshToken, realm);
   return written;
+}
+
+function writePersistedAuthSessionOrThrow(refreshToken: string, realm = activeAuthRealm): void {
+  if (writePersistedAuthSession(refreshToken, realm)) return;
+  throw new AuthApiError(
+    'CREDENTIAL_STORE_UNAVAILABLE',
+    503,
+    'Could not persist the active account session',
+  );
+}
+
+function restorePersistedAuthSessionIfCurrent(
+  expectedRefreshToken: string,
+  expectedRealm: AuthRegion,
+  previousSession: ReturnType<typeof readPersistedAuthSession>,
+): void {
+  const expected = serializeAuthSessionRecord(expectedRealm, expectedRefreshToken);
+  if (readSafe(AUTH_SESSION_KEY) !== expected) return;
+  if (previousSession) {
+    if (!writePersistedAuthSession(previousSession.refreshToken, previousSession.realm)) {
+      log.warn('failed to restore the previous persisted auth session after login rollback');
+    }
+    return;
+  }
+  const removed = removeSafeIfUnchanged(AUTH_SESSION_KEY, expected);
+  if (removed === 'deleted' && expectedRealm === AUTH_REGION) {
+    removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, expectedRefreshToken);
+  }
 }
 
 /**
@@ -592,8 +1645,8 @@ function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegio
 }
 
 /**
- * 确定性失效后清掉磁盘上所有「已确认死掉」的 refresh token —— v1 权威记录与 legacy
- * 从属副本各清一次。
+ * 确定性失效后清掉磁盘上所有「已确认死掉」的 refresh token —— account vault、
+ * v1 兼容记录与 legacy 从属副本各清一次。
  *
  * `deadTokens` 是本轮被服务端拒过的全部 token(按首次尝试顺序)。必须逐一比对而不是只
  * 认最初那一枚:本轮一旦从另一个来源追赶过,磁盘上现存的就是清单里较晚的那一枚,只拿
@@ -607,7 +1660,30 @@ function mirrorLegacyResourceRefreshToken(refreshToken: string, realm: AuthRegio
  * 运行期 `clearAuth` 已经会删这两个文件(那是显式登出 / 会话过期的整体清理),所以这里
  * 只补冷启动确定性失效这一条路径;passive 实例的守卫在调用点。
  */
-function clearConfirmedDeadRefreshTokens(realm: AuthRegion, deadTokens: readonly string[]): void {
+async function clearConfirmedDeadRefreshTokens(
+  realm: AuthRegion,
+  deadTokens: readonly string[],
+): Promise<void> {
+  try {
+    await mutateAuthAccountVault((vault) => {
+      const activeKey = vault.activeAccountKey;
+      const activeResource = activeKey ? vault.resources[activeKey] : undefined;
+      if (
+        !activeKey ||
+        activeResource?.realm !== realm ||
+        !deadTokens.includes(activeResource.refreshToken)
+      ) {
+        return;
+      }
+      delete vault.resources[activeKey];
+      vault.activeAccountKey = null;
+    });
+  } catch (error) {
+    log.error(
+      'cold-start refresh: failed to remove the confirmed-dead active Resource from the account vault',
+      error,
+    );
+  }
   let sessionOutcome: RemoveIfUnchangedResult = 'changed';
   for (const token of deadTokens) {
     sessionOutcome = removeSafeIfUnchanged(
@@ -668,10 +1744,28 @@ function clearConfirmedDeadRefreshTokens(realm: AuthRegion, deadTokens: readonly
  * 的 token 挤掉 legacy 里真正有效的那枚,最终以确定性失效收场并连带删掉有效凭证。
  */
 function readStoredRefreshTokenCandidates(realm: AuthRegion): readonly (string | null)[] {
+  const vault = readAuthAccountVault();
+  const activeResource = vault.activeAccountKey
+    ? vault.resources[vault.activeAccountKey]
+    : undefined;
   return [
     readPersistedRefreshToken(realm),
+    activeResource?.realm === realm ? activeResource.refreshToken : null,
     realm === AUTH_REGION ? readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) : null,
   ];
+}
+
+function readActiveVaultRefreshCandidate(): {
+  accountKey: string;
+  realm: AuthRegion;
+  refreshToken: string;
+} | null {
+  const vault = readAuthAccountVault();
+  const accountKey = vault.activeAccountKey;
+  const resource = accountKey ? vault.resources[accountKey] : undefined;
+  return accountKey && resource
+    ? { accountKey, realm: resource.realm, refreshToken: resource.refreshToken }
+    : null;
 }
 
 function readPersistedAccountDeletionReceipt() {
@@ -2059,11 +3153,22 @@ function resetLoginFlowState(): void {
   providerConfig = null;
   discoveredMethods = [];
   pendingAccountToken = null;
+  pendingAccountRefreshToken = null;
+  pendingAccountMemberships = [];
   pendingLoginTicket = null;
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
   pendingAuthRealm = null;
   pendingAccountDeletionRestored = false;
+}
+
+function assertLoginFlowCurrent(expectedEpoch: number): void {
+  if (loginFlowEpoch === expectedEpoch) return;
+  throw new AuthApiError(
+    'AUTH_FLOW_SUPERSEDED',
+    409,
+    'Login was cancelled or superseded by a newer flow',
+  );
 }
 
 function resetActiveAuthRealmToBuild(): void {
@@ -2123,11 +3228,14 @@ function clearAuth(
 ): void {
   const notify = opts.notify ?? true;
   authStateEpoch += 1; // 迟到的冷启动流程从此作废(见 authStateEpoch 注释)
+  loginFlowEpoch += 1;
   // #1687:登出 / 会话过期整体清态时复位凭证库升级态——升级提示只对「仍以为
   // 自己登录着」的会话有意义,登录页自身就是恢复入口。
   credentialStoreHealth.reset();
   accessToken = null;
   pendingAccountToken = null;
+  pendingAccountRefreshToken = null;
+  pendingAccountMemberships = [];
   currentUser = null;
   accountDeletionRestoredNoticePending = false;
   confirmedAccountDeletionCredential = null;
@@ -2189,6 +3297,18 @@ async function expireRuntimeAuth(
   reason: SessionExpiredReason = 'unknown',
   opts: { preservePersistedRefreshToken?: boolean } = {},
 ): Promise<void> {
+  const expiredAccountKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;
+  if (
+    expiredAccountKey &&
+    !opts.preservePersistedRefreshToken &&
+    !isPassiveSharedUserDataInstance()
+  ) {
+    try {
+      await removeVaultAccount(expiredAccountKey);
+    } catch (error) {
+      log.warn('failed to remove expired account from saved-account vault', error);
+    }
+  }
   // Raise the owner boundary before clearing auth so queued owner-scoped
   // continuations see the pending boundary and fail closed, rather than
   // executing between token clearance and the async teardown (P1,
@@ -2233,6 +3353,11 @@ async function expireRuntimeAuth(
 export function invalidateSession(reason: string): Promise<void> {
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
 
+  const rejectedAccountKey =
+    currentUser && !isPassiveSharedUserDataInstance()
+      ? accountVaultKey(activeAuthRealm, currentUser.id)
+      : null;
+
   // Raise the owner boundary before clearing auth (same P1 fix as
   // expireRuntimeAuth — see PRRT_kwDOTgdRUs6YaakC).
   const releaseBoundary = beginAppSessionBoundary();
@@ -2243,6 +3368,13 @@ export function invalidateSession(reason: string): Promise<void> {
   // that detect the rejection may themselves run inside a scheduler/service
   // being torn down; they must be able to unwind without a stop-await cycle.
   const run = Promise.resolve().then(async () => {
+    if (rejectedAccountKey) {
+      try {
+        await removeVaultAccount(rejectedAccountKey);
+      } catch (error) {
+        log.warn('failed to remove rejected account from saved-account vault', error);
+      }
+    }
     try {
       await withAccountFreeOwnerCommit({
         reason,
@@ -2319,6 +3451,194 @@ export function getAuthState(): AuthState {
   return snapshotAuthState();
 }
 
+function accountSummaryFromMetadata(
+  accountKey: string,
+  metadata: StoredAccountMetadata,
+  activeAccountKey: string | null,
+): DesktopSavedAccount {
+  return {
+    accountKey,
+    displayName: metadata.displayName || metadata.email || 'Cindy',
+    email: metadata.email,
+    avatarUrl: metadata.avatarUrl,
+    kind: metadata.kind,
+    orgName: metadata.orgName,
+    orgLogoUrl: metadata.orgLogoUrl,
+    isCurrent: accountKey === activeAccountKey,
+  };
+}
+
+export function listSavedAccounts(): DesktopAccountSwitcherSnapshot {
+  const vault = readAuthAccountVault({ allowUnreadable: true });
+  const byKey = new Map<string, StoredAccountMetadata>();
+  for (const [key, resource] of Object.entries(vault.resources)) {
+    byKey.set(key, resource.metadata);
+  }
+  for (const passport of Object.values(vault.passports)) {
+    for (const membership of passport.memberships) {
+      const key = accountVaultKey(passport.realm, membership.membershipId);
+      if (!byKey.has(key)) byKey.set(key, membership);
+    }
+  }
+  const activeKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;
+  const accounts = [...byKey.entries()]
+    .map(([key, metadata]) => accountSummaryFromMetadata(key, metadata, activeKey))
+    .sort((left, right) => {
+      if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
+      const leftUsed = vault.resources[left.accountKey]?.lastUsedAt ?? 0;
+      const rightUsed = vault.resources[right.accountKey]?.lastUsedAt ?? 0;
+      return rightUsed - leftUsed || left.displayName.localeCompare(right.displayName);
+    });
+  return { accounts, mutationAllowed: !isPassiveSharedUserDataInstance() };
+}
+
+export async function syncSavedAccounts(): Promise<DesktopAccountSwitcherSnapshot> {
+  if (isPassiveSharedUserDataInstance()) return listSavedAccounts();
+  const initial = readAuthAccountVault();
+  for (const passport of Object.values(initial.passports)) {
+    try {
+      await loadClientEndpointsForRealm(passport.realm);
+      const client = createAuthClient(passport.realm);
+      const pair = await refreshPassportSessionSingleFlight(
+        client,
+        passport.realm,
+        passport.passportId,
+      );
+      const memberships = await client.getAccountMemberships(pair.accountToken);
+      assertPassportReplacementStored(
+        await replacePassportSessionIfCurrent({
+          realm: passport.realm,
+          passportId: passport.passportId,
+          expectedAccountRefreshToken: pair.accountRefreshToken,
+          accountRefreshToken: pair.accountRefreshToken,
+          memberships,
+        }),
+      );
+    } catch (error) {
+      if (!isDefinitiveRefreshError(error)) {
+        log.warn('saved account membership sync failed transiently', error);
+      }
+    }
+  }
+  return listSavedAccounts();
+}
+
+export async function switchSavedAccount(rawAccountKey: unknown): Promise<void> {
+  const switchLoginFlowEpoch = loginFlowEpoch;
+  const parsedKey = parseDesktopAccountKey(rawAccountKey);
+  if (!parsedKey) throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Invalid account key');
+  if (isPassiveSharedUserDataInstance()) {
+    throw new AuthApiError(
+      'PASSIVE_AUTH_MUTATION_BLOCKED',
+      409,
+      'This shared-data instance cannot switch accounts',
+    );
+  }
+  if (currentUser && parsedKey === accountVaultKey(activeAuthRealm, currentUser.id)) return;
+
+  let vault = readAuthAccountVault();
+  let resource: StoredResourceSession | undefined = vault.resources[parsedKey];
+  let metadata = resource?.metadata;
+  if (!metadata) {
+    for (const passport of Object.values(vault.passports)) {
+      const candidate = passport.memberships.find(
+        (membership) => accountVaultKey(passport.realm, membership.membershipId) === parsedKey,
+      );
+      if (candidate) {
+        metadata = candidate;
+        break;
+      }
+    }
+  }
+  if (!metadata) throw new AuthApiError('ACCOUNT_NOT_FOUND', 404, 'Saved account not found');
+
+  const realm =
+    resource?.realm ??
+    Object.values(vault.passports).find((passport) =>
+      passport.memberships.some(
+        (membership) => accountVaultKey(passport.realm, membership.membershipId) === parsedKey,
+      ),
+    )?.realm;
+  if (!realm) throw new AuthApiError('ACCOUNT_NOT_FOUND', 404, 'Saved account realm missing');
+  await loadClientEndpointsForRealm(realm);
+  assertLoginFlowCurrent(switchLoginFlowEpoch);
+  const client = createAuthClient(realm);
+  let pair: AuthTokenPair | null = null;
+
+  if (resource) {
+    pair = await refreshSavedResourceSession({
+      client,
+      accountKey: parsedKey,
+      realm,
+      metadata,
+      initialRefreshToken: resource.refreshToken,
+      expectedLoginFlowEpoch: switchLoginFlowEpoch,
+    });
+    if (!pair) {
+      resource = undefined;
+      vault = readAuthAccountVault();
+    }
+  }
+
+  if (!pair) {
+    const passport = vault.passports[passportVaultKey(realm, metadata.passportId)];
+    if (!passport) {
+      throw new AuthApiError('ACCOUNT_REAUTH_REQUIRED', 401, 'Saved account requires login');
+    }
+    const accountPair = await refreshPassportSessionSingleFlight(
+      client,
+      realm,
+      passport.passportId,
+    );
+    assertLoginFlowCurrent(switchLoginFlowEpoch);
+    pair = await client.exchangeAccountMembership(accountPair.accountToken, metadata.membershipId);
+    assertLoginFlowCurrent(switchLoginFlowEpoch);
+    pair = bindResourcePairToSavedAccount(pair, realm, metadata);
+    await rememberResourceSession(pair, realm, {
+      markActive: false,
+      validateBeforeWrite: () => assertLoginFlowCurrent(switchLoginFlowEpoch),
+    });
+  }
+
+  if (!canRestoreAuthSessionForMembership(AUTH_REGION, realm, pair.membership.kind)) {
+    throw new AuthApiError(
+      'REGION_MISMATCH',
+      409,
+      'Personal accounts must match the installed build region',
+    );
+  }
+
+  pendingAuthRealm = realm;
+  pendingAccountRefreshToken = null;
+  pendingAccountMemberships = [];
+  try {
+    await completeLogin({ status: 'ok', ...pair }, switchLoginFlowEpoch);
+  } catch (error) {
+    pendingAuthRealm = null;
+    throw error;
+  }
+}
+
+export async function beginAddAccountLogin(): Promise<DesktopLoginActionResult> {
+  if (isPassiveSharedUserDataInstance()) {
+    throw new AuthApiError(
+      'PASSIVE_AUTH_MUTATION_BLOCKED',
+      409,
+      'This shared-data instance cannot add accounts',
+    );
+  }
+  loginFlowEpoch += 1;
+  browserAuthorizationSlot.cancelActive();
+  resetLoginFlowState();
+  return getLoginState();
+}
+
+export function cancelAddAccountLogin(): void {
+  loginFlowEpoch += 1;
+  browserAuthorizationSlot.cancelActive();
+  resetLoginFlowState();
+}
+
 export function getCurrentDataOwnerId(): string | null {
   return getActiveAppSession().dataOwnerId;
 }
@@ -2346,7 +3666,8 @@ export function isLocalMode(): boolean {
 export function hasNoPersistedAuthCredentials(): boolean {
   return (
     isPersistedSecretAbsent(AUTH_SESSION_KEY) &&
-    isPersistedSecretAbsent(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)
+    isPersistedSecretAbsent(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) &&
+    isPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)
   );
 }
 
@@ -2578,6 +3899,28 @@ export function isConfirmedAccountDeletionSessionCurrent(): boolean {
 export async function clearLocalSessionAfterAccountDeletion(): Promise<boolean> {
   if (!isConfirmedAccountDeletionSessionCurrent()) return false;
   const expectedCredential = confirmedAccountDeletionCredential;
+  const deletedPassportId = currentUser?.passportId ?? null;
+  const deletedRealm = activeAuthRealm;
+  if (deletedPassportId && !isPassiveSharedUserDataInstance()) {
+    try {
+      await mutateAuthAccountVault((vault) => {
+        for (const [key, resource] of Object.entries(vault.resources)) {
+          if (
+            resource.realm === deletedRealm &&
+            resource.metadata.passportId === deletedPassportId
+          ) {
+            delete vault.resources[key];
+            if (vault.activeAccountKey === key) vault.activeAccountKey = null;
+          }
+        }
+        delete vault.passports[passportVaultKey(deletedRealm, deletedPassportId)];
+      });
+    } catch (error) {
+      // The server has already accepted deletion and revoked this credential
+      // family. Vault cleanup is best-effort; runtime teardown must still run.
+      log.warn('failed to remove deleted account from saved-account vault', error);
+    }
+  }
   await withAccountFreeOwnerCommit({
     reason: 'account-deletion',
     nextMode: 'signed-out',
@@ -2658,6 +4001,11 @@ export async function updateServerProfile(
       membershipDisplayName: membership.displayName,
       avatar: membership.avatarUrl ?? null,
     };
+    await rememberUpdatedMembershipMetadata(
+      membership,
+      activeAuthRealm,
+      membership.passportId ?? currentUser.passportId,
+    );
     notifyRenderer();
     notifyAuthListeners();
     return { ok: true, profile: { name: currentUser.name, avatar: currentUser.avatar } };
@@ -2754,12 +4102,10 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       commitVolatileAppSession('signed-out');
       return snapshotLoggedOutAuthState();
     }
-    log.info(
-      'relogin marker hit for v%s — clearing persisted auth',
-      reloginFlag.version,
-    );
+    log.info('relogin marker hit for v%s — clearing persisted auth', reloginFlag.version);
     lastAcceptedRefreshToken = null;
     removeSafe(AUTH_SESSION_KEY);
+    await clearAuthAccountVault();
     removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
     pendingAccountToken = null;
     removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
@@ -2779,7 +4125,16 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     removeSafe(LEGACY_REFRESH_TOKEN_KEY);
     removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
   }
-  let persistedSession = readPersistedAuthSession();
+  let persistedSession: ReturnType<typeof readPersistedAuthSession>;
+  try {
+    persistedSession = await reconcileDesktopActiveAuthSession();
+  } catch (error) {
+    log.warn(
+      'cold-start active credential reconciliation failed; preserving credentials for retry',
+      error,
+    );
+    return finishColdStartSignedOut('cold-start-credential-reconcile-unavailable');
+  }
   if (!persistedSession) {
     // 旧版只保存裸 refresh token，没有 realm 可供校验。只有独占 userData 的
     // primary 才能按当前构建区域迁移它；passive 若猜 AUTH_REGION，恰好会在旧
@@ -2835,10 +4190,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       // A signed-out fallback is not safe until the shared Ghost projection
       // has been swept. Otherwise the previous cloud owner's links remain
       // available to local/anonymous Agent processes during a slow refresh.
-      await recoverAccountFreeOwnerAtStartup(
-        'signed-out',
-        'cold-start-timeout-recovery',
-      );
+      await recoverAccountFreeOwnerAtStartup('signed-out', 'cold-start-timeout-recovery');
       return snapshotLoggedOutAuthState();
     },
     onLateResult: (state) =>
@@ -2858,7 +4210,14 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
 async function runColdStartRefreshFlow(
   storedToken: string,
   storedRealm: AuthRegion,
+  ownershipRecovery: {
+    attemptedTokens?: ReadonlySet<string>;
+    expectedActiveVaultAccountKey?: string;
+    hopsRemaining?: number;
+  } = {},
 ): Promise<AuthState> {
+  const attemptedOwnershipTokens = new Set(ownershipRecovery.attemptedTokens);
+  attemptedOwnershipTokens.add(storedToken);
   const epochAtStart = authStateEpoch;
   const epochChanged = (point: string): boolean => {
     if (authStateEpoch === epochAtStart) return false;
@@ -2882,6 +4241,7 @@ async function runColdStartRefreshFlow(
       attempts,
       failureAction,
       rejectedTokens,
+      requestedToken,
     } = await runAuthRefreshWithReplacementRetry(storedToken, {
       phase: 'cold-start',
       realm: storedRealm,
@@ -2898,7 +4258,11 @@ async function runColdStartRefreshFlow(
       return snapshotAuthState();
     }
     const latestSession = readPersistedAuthSession();
-    if (latestSession && latestSession.realm !== storedRealm) {
+    if (
+      latestSession &&
+      latestSession.realm !== storedRealm &&
+      !ownershipRecovery.expectedActiveVaultAccountKey
+    ) {
       // 共享 userData 的另一个实例已切到其它区域。旧区域请求无论成功失败都不能
       // 覆盖/删除新原子记录；本实例本次以未登录返回，后续 initialize 可加载新清单。
       log.warn('cold-start auth realm changed on disk; discarding stale refresh result');
@@ -2924,7 +4288,7 @@ async function runColdStartRefreshFlow(
           // 的 token 做 compare-and-delete 会一律 changed,把已确认失效的凭证留在盘上,
           // 只读 legacy 的旧版实例继续拿它撞 INVALID_REFRESH_TOKEN 被强制重登。
           const confirmedDeadTokens = rejectedTokens.length > 0 ? rejectedTokens : [storedToken];
-          clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
+          await clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
         }
         resetActiveAuthRealmToBuild();
       } else if (action.kind === 'foreign-device') {
@@ -2945,22 +4309,62 @@ async function runColdStartRefreshFlow(
     }
 
     const refreshData = refreshResult.data as RefreshResponse;
+    attemptedOwnershipTokens.add(requestedToken);
+    const credentialCommit = await commitDesktopRefreshCredentials(
+      refreshData,
+      storedRealm,
+      requestedToken,
+      {
+        allowUnclaimedVault: true,
+        validateBeforeWrite: () => {
+          if (epochChanged('before-cold-start-credential-commit')) {
+            throw new AuthApiError(
+              'AUTH_FLOW_SUPERSEDED',
+              409,
+              'Cold-start credential commit was superseded',
+            );
+          }
+        },
+      },
+    );
+    if (credentialCommit !== 'active') {
+      log.warn(
+        `cold-start refresh lost active credential ownership (${credentialCommit}); preserved only the still-saved account token`,
+      );
+      const nextActiveCandidate = readActiveVaultRefreshCandidate();
+      const hopsRemaining = ownershipRecovery.hopsRemaining ?? 3;
+      if (
+        nextActiveCandidate &&
+        hopsRemaining > 0 &&
+        !attemptedOwnershipTokens.has(nextActiveCandidate.refreshToken)
+      ) {
+        log.info(
+          'cold-start refresh preserved a non-active rotation; continuing with the vault active account',
+        );
+        return runColdStartRefreshFlow(
+          nextActiveCandidate.refreshToken,
+          nextActiveCandidate.realm,
+          {
+            attemptedTokens: attemptedOwnershipTokens,
+            expectedActiveVaultAccountKey: nextActiveCandidate.accountKey,
+            hopsRemaining: hopsRemaining - 1,
+          },
+        );
+      }
+      return finishColdStartSignedOut('cold-start-credential-ownership-lost');
+    }
+    lastAcceptedRefreshToken = refreshData.refreshToken;
     if (
       !canRestoreAuthSessionForMembership(AUTH_REGION, storedRealm, refreshData.membership.kind)
     ) {
-      // refresh token 可能已由 auth-server 轮换。即使当前构建不能接受这枚个人
-      // 会话，也必须把新 token 写回原 realm，供拥有该 realm 的实例继续使用。
-      writePersistedAuthSession(refreshData.refreshToken, storedRealm);
+      // The credential transaction above already preserved the rotated token
+      // in its issuing realm. This process must not publish that identity.
       resetActiveAuthRealmToBuild();
       log.warn(
         `cold-start refresh rejected cross-realm personal session realm=${storedRealm} buildRegion=${AUTH_REGION}`,
       );
       return finishColdStartSignedOut('cold-start-incompatible-membership');
     }
-    // Refresh is token-rotating. Preserve the server-issued replacement before
-    // the cross-process projection gate can reject or defer the owner commit.
-    writePersistedAuthSession(refreshData.refreshToken, storedRealm);
-    lastAcceptedRefreshToken = refreshData.refreshToken;
     const previousSession = getActiveAppSession();
     await withCloudOwnerCommit({
       previousOwnerId: previousSession.dataOwnerId,
@@ -3041,15 +4445,19 @@ async function runColdStartRefreshFlow(
   }
 }
 
-async function loadLoginProviders(): Promise<AuthFlowState> {
+async function loadLoginProviders(expectedLoginFlowEpoch = loginFlowEpoch): Promise<AuthFlowState> {
   discoveredMethods = [];
   pendingAccountToken = null;
+  pendingAccountRefreshToken = null;
+  pendingAccountMemberships = [];
   pendingLoginTicket = null;
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
   pendingAccountDeletionRestored = false;
   pendingAuthRealm = null;
-  providerConfig = await createAuthClient(AUTH_REGION).getProviders();
+  const providers = await createAuthClient(AUTH_REGION).getProviders();
+  assertLoginFlowCurrent(expectedLoginFlowEpoch);
+  providerConfig = providers;
   loginFlowState = reduceAuthFlow(loginFlowState, {
     type: 'providers-loaded',
     providers: providerConfig,
@@ -3057,13 +4465,15 @@ async function loadLoginProviders(): Promise<AuthFlowState> {
   return loginFlowState;
 }
 
-async function discoverOrganizationRealm(org: string) {
+async function discoverOrganizationRealm(org: string, expectedLoginFlowEpoch = loginFlowEpoch) {
   // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后才重新冻结。
   pendingAuthRealm = null;
   const realmConfig = getClientEndpointRealmConfig();
   if (!realmConfig.crossRealmOrgLoginEnabled || !realmConfig.realmManifestBaseUrls) {
+    const discovery = await createAuthClient(AUTH_REGION).discoverSsoOrg(org);
+    assertLoginFlowCurrent(expectedLoginFlowEpoch);
     pendingAuthRealm = AUTH_REGION;
-    return createAuthClient(AUTH_REGION).discoverSsoOrg(org);
+    return discovery;
   }
 
   // 先并行加载/校验两区清单，再并行做 home-realm discovery。任一清单或请求
@@ -3071,6 +4481,7 @@ async function discoverOrganizationRealm(org: string) {
   // 区域时，后续状态机才要求用户确认。
   try {
     await Promise.all([loadClientEndpointsForRealm('cn'), loadClientEndpointsForRealm('global')]);
+    assertLoginFlowCurrent(expectedLoginFlowEpoch);
   } catch {
     throw new AuthApiError(
       'ORG_REALM_UNAVAILABLE',
@@ -3082,16 +4493,21 @@ async function discoverOrganizationRealm(org: string) {
     cn: createAuthClient('cn'),
     global: createAuthClient('global'),
   });
+  assertLoginFlowCurrent(expectedLoginFlowEpoch);
   pendingAuthRealm = selected.region;
   return selected.discovery;
 }
 
 export async function getLoginState(): Promise<DesktopLoginActionResult> {
+  const expectedLoginFlowEpoch = loginFlowEpoch;
   try {
     if (loginFlowState) return { success: true, state: loginFlowState };
-    return { success: true, state: await loadLoginProviders() };
+    return { success: true, state: await loadLoginProviders(expectedLoginFlowEpoch) };
   } catch (error) {
     const code = error instanceof AuthApiError ? error.code : 'AUTH_SERVICE_UNAVAILABLE';
+    if (loginFlowEpoch !== expectedLoginFlowEpoch) {
+      return { success: false, code: 'AUTH_FLOW_SUPERSEDED', state: loginFlowState };
+    }
     log.warn(`load login providers failed code=${code}`);
     loginFlowState = { step: 'error', code, recoverTo: 'identifier' };
     return { success: false, code, state: loginFlowState };
@@ -3100,76 +4516,114 @@ export async function getLoginState(): Promise<DesktopLoginActionResult> {
 
 async function completeLogin(
   outcome: Extract<LoginOutcome, { status: 'ok' }>,
+  expectedLoginFlowEpoch = loginFlowEpoch,
 ): Promise<AuthFlowState> {
+  assertLoginFlowCurrent(expectedLoginFlowEpoch);
   const loginEpoch = ++authStateEpoch;
   const deletionWasRestored =
     outcome.accountDeletionRestored === true || pendingAccountDeletionRestored;
   const nextUser = mapMembershipToAuthUser(outcome.membership);
   const previousSession = getActiveAppSession();
-  if (authStateEpoch !== loginEpoch) {
-    throw new AuthApiError(
-      'AUTH_FLOW_SUPERSEDED',
-      409,
-      'Login was superseded by a newer auth action',
-    );
-  }
+  const assertTransitionCurrent = (): void => {
+    if (authStateEpoch !== loginEpoch || loginFlowEpoch !== expectedLoginFlowEpoch) {
+      throw new AuthApiError(
+        'AUTH_FLOW_SUPERSEDED',
+        409,
+        'Login was superseded by a newer auth action',
+      );
+    }
+  };
+  assertTransitionCurrent();
 
   const committedRealm = pendingAuthRealm ?? AUTH_REGION;
-  await withCloudOwnerCommit({
-    previousOwnerId: previousSession.dataOwnerId,
-    nextOwnerId: nextUser.id,
-    prepareTransition: async () => {
-      if (!accountSwitchTeardown) {
-        throw new Error('login cloud owner transition requires a teardown hook');
-      }
-      await accountSwitchTeardown({
-        previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
-        nextUserId: nextUser.id,
-      });
+  const accountRefreshToken = outcome.accountRefreshToken ?? pendingAccountRefreshToken;
+  let previousPersistedSession: ReturnType<typeof readPersistedAuthSession> = null;
+  let activeSessionWritten = false;
+  await commitDesktopLoginSessions(
+    {
+      pair: outcome,
+      realm: committedRealm,
+      passportId: nextUser.passportId || undefined,
+      accountRefreshToken,
+      memberships:
+        pendingAccountMemberships.length > 0 ? pendingAccountMemberships : [outcome.membership],
     },
-    prepareCommit: async () => {
-      if (authStateEpoch !== loginEpoch) {
-        throw new AuthApiError(
-          'AUTH_FLOW_SUPERSEDED',
-          409,
-          'Login was superseded by a newer auth action',
+    {
+      commit: async () => {
+        // The aggregate account vault, compatibility active session, old-owner
+        // teardown and final owner publication are one epoch-owned transaction.
+        // Any cancellation before commit restores both durable records while
+        // the cross-process vault lock is still held.
+        assertTransitionCurrent();
+        // Capture the compatibility session only after entering the same
+        // cross-process ownership window as the vault write. A concurrent
+        // passive refresh may have rotated it while this login waited on the
+        // lock; rollback must restore that latest generation, not a stale one.
+        previousPersistedSession = readPersistedAuthSession();
+        writePersistedAuthSessionOrThrow(outcome.refreshToken, committedRealm);
+        activeSessionWritten = true;
+        assertTransitionCurrent();
+        await withCloudOwnerCommit({
+          previousOwnerId: previousSession.dataOwnerId,
+          nextOwnerId: nextUser.id,
+          prepareTransition: async () => {
+            assertTransitionCurrent();
+            if (!accountSwitchTeardown) {
+              throw new Error('login cloud owner transition requires a teardown hook');
+            }
+            await accountSwitchTeardown({
+              previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
+              nextUserId: nextUser.id,
+            });
+            assertTransitionCurrent();
+          },
+          prepareCommit: async () => {
+            assertTransitionCurrent();
+            await claimLegacyNamespaceForVerifiedUser(nextUser.id);
+            assertTransitionCurrent();
+          },
+          commit: () =>
+            commitWithClearedAccountDeletionReceipt(() => {
+              assertTransitionCurrent();
+              pendingAccountToken = null;
+              pendingAccountRefreshToken = null;
+              pendingAccountMemberships = [];
+              pendingAccountDeletionRestored = false;
+              accessToken = outcome.accessToken;
+              persistedRefreshTokenNeedsIdentityCheck = false;
+              clearReplacementIntegrationReloadTimers();
+              activateClientEndpointRealm(committedRealm);
+              activeAuthRealm = committedRealm;
+              if (!isPassiveSharedUserDataInstance()) {
+                removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+              }
+              lastAcceptedRefreshToken = outcome.refreshToken;
+              if (!isPassiveSharedUserDataInstance()) {
+                clearReloginFlag();
+              }
+              accountDeletionRestoredNoticePending = deletionWasRestored;
+              // 显式登录解除本进程登出墓碑(passive / foreign-device)。
+              passiveLocalSignOut = false;
+              foreignDeviceLocalSignOut = false;
+              currentUser = nextUser;
+              commitCloudAppSession(currentUser.id);
+              if (!isPassiveSharedUserDataInstance()) {
+                canaryFlagStore.clear();
+              }
+              pendingAuthRealm = null;
+            }),
+        });
+      },
+      rollback: () => {
+        if (!activeSessionWritten) return;
+        restorePersistedAuthSessionIfCurrent(
+          outcome.refreshToken,
+          committedRealm,
+          previousPersistedSession,
         );
-      }
-      await claimLegacyNamespaceForVerifiedUser(nextUser.id);
-      if (authStateEpoch !== loginEpoch) {
-        throw new AuthApiError(
-          'AUTH_FLOW_SUPERSEDED',
-          409,
-          'Login was superseded by a newer auth action',
-        );
-      }
+      },
     },
-    commit: () => {
-      pendingAccountToken = null;
-      pendingAccountDeletionRestored = false;
-      accessToken = outcome.accessToken;
-      persistedRefreshTokenNeedsIdentityCheck = false;
-      clearReplacementIntegrationReloadTimers();
-      activateClientEndpointRealm(committedRealm);
-      activeAuthRealm = committedRealm;
-      writePersistedAuthSession(outcome.refreshToken, committedRealm);
-      if (!isPassiveSharedUserDataInstance()) {
-        removeSafe(LEGACY_REFRESH_TOKEN_KEY);
-      }
-      lastAcceptedRefreshToken = outcome.refreshToken;
-      if (!isPassiveSharedUserDataInstance()) {
-        removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
-        clearReloginFlag();
-      }
-      accountDeletionRestoredNoticePending = deletionWasRestored;
-      // 显式登录解除本进程登出墓碑(passive / foreign-device)。
-      passiveLocalSignOut = false;
-      foreignDeviceLocalSignOut = false;
-      currentUser = nextUser;
-      commitCloudAppSession(currentUser.id);
-      pendingAuthRealm = null;
-    },
-  });
+  );
   await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
   scheduleCanaryFlagSync({
     token: outcome.accessToken,
@@ -3191,14 +4645,11 @@ async function completeLogin(
   return loginFlowState;
 }
 
-async function acceptLoginOutcome(outcome: LoginOutcome): Promise<AuthFlowState> {
-  if (outcome.status === 'ok' || outcome.status === 'select_account') {
-    // Membership selection already establishes which passport owns the new
-    // login. A receipt from the previous login must not survive this boundary.
-    if (!isPassiveSharedUserDataInstance()) {
-      removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
-    }
-  }
+async function acceptLoginOutcome(
+  outcome: LoginOutcome,
+  expectedLoginFlowEpoch = loginFlowEpoch,
+): Promise<AuthFlowState> {
+  assertLoginFlowCurrent(expectedLoginFlowEpoch);
   if (
     (outcome.status === 'ok' || outcome.status === 'select_account') &&
     outcome.accountDeletionRestored === true
@@ -3206,8 +4657,18 @@ async function acceptLoginOutcome(outcome: LoginOutcome): Promise<AuthFlowState>
     pendingAccountDeletionRestored = true;
   }
   pendingAccountToken = outcome.status === 'select_account' ? (outcome.accountToken ?? null) : null;
+  pendingAccountRefreshToken =
+    outcome.status === 'ok' || outcome.status === 'select_account'
+      ? (outcome.accountRefreshToken ?? null)
+      : null;
+  pendingAccountMemberships =
+    outcome.status === 'select_account'
+      ? outcome.accounts
+      : outcome.status === 'ok'
+        ? [outcome.membership]
+        : [];
 
-  if (outcome.status === 'ok') return completeLogin(outcome);
+  if (outcome.status === 'ok') return completeLogin(outcome, expectedLoginFlowEpoch);
   if (outcome.status === 'select_account') {
     pendingLoginTicket = outcome.loginTicket;
     pendingBindTicket = null;
@@ -3226,6 +4687,7 @@ async function acceptLoginOutcome(outcome: LoginOutcome): Promise<AuthFlowState>
 }
 
 async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginActionResult> {
+  const actionLoginFlowEpoch = loginFlowEpoch;
   const startsBuildRealmFlow =
     action.type === 'discover' ||
     action.type === 'request-code' ||
@@ -3233,7 +4695,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
     (action.type === 'start-browser' && action.kind === 'social');
   if (startsBuildRealmFlow) pendingAuthRealm = null;
   const client = createAuthClient(
-    startsBuildRealmFlow ? AUTH_REGION : pendingAuthRealm ?? activeAuthRealm,
+    startsBuildRealmFlow ? AUTH_REGION : (pendingAuthRealm ?? activeAuthRealm),
   );
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
   try {
@@ -3243,7 +4705,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Unexpected browser cancellation');
     }
     if (action.type === 'reset') {
-      return { success: true, state: await loadLoginProviders() };
+      return { success: true, state: await loadLoginProviders(actionLoginFlowEpoch) };
     }
     if (action.type === 'confirm-sso-realm') {
       const confirmation = loginFlowState;
@@ -3282,11 +4744,13 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       });
       return { success: true, state: loginFlowState };
     }
-    if (!providerConfig) await loadLoginProviders();
+    if (!providerConfig) await loadLoginProviders(actionLoginFlowEpoch);
 
     if (action.type === 'discover') {
       const email = action.email.trim().toLowerCase();
-      discoveredMethods = await client.discover(email);
+      const methods = await client.discover(email);
+      assertLoginFlowCurrent(actionLoginFlowEpoch);
+      discoveredMethods = methods;
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'discovery-loaded',
         email,
@@ -3300,7 +4764,10 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
     // 唯一 SSO 由 renderer 接到 method-choice 后直接派发 start-browser，
     // 以便立刻投影 browser-redirect（确认框消失、露出取消）。
     if (action.type === 'discover-sso-org') {
-      const discovery = await discoverOrganizationRealm(action.org.trim().toLowerCase());
+      const discovery = await discoverOrganizationRealm(
+        action.org.trim().toLowerCase(),
+        actionLoginFlowEpoch,
+      );
       const methods = ssoOrgDiscoveryToMethods(discovery);
       if (discovery.region !== AUTH_REGION) {
         if (!providerConfig) {
@@ -3335,6 +4802,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       await client.requestCode(action.kind, action.identifier, {
         captchaToken: action.captchaToken,
       });
+      assertLoginFlowCurrent(actionLoginFlowEpoch);
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'code-requested',
         kind: action.kind,
@@ -3348,6 +4816,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         success: true,
         state: await acceptLoginOutcome(
           await client.verifyCode(action.kind, action.identifier, action.code),
+          actionLoginFlowEpoch,
         ),
       };
     }
@@ -3392,6 +4861,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
           },
           cancellation.signal,
         );
+        assertLoginFlowCurrent(actionLoginFlowEpoch);
         if ('error' in callback) {
           throw new AuthApiError(callback.error, 0, 'Browser authorization did not complete');
         }
@@ -3404,7 +4874,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         }
         return {
           success: true,
-          state: await acceptLoginOutcome(exchange.value),
+          state: await acceptLoginOutcome(exchange.value, actionLoginFlowEpoch),
         };
       } finally {
         deactivateCancellation();
@@ -3415,10 +4885,11 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       const accountToken = pendingAccountToken;
       if (accountToken) {
         const pair = await client.exchangeAccountMembership(accountToken, action.accountId);
+        assertLoginFlowCurrent(actionLoginFlowEpoch);
         pendingAccountToken = null;
         return {
           success: true,
-          state: await completeLogin({ status: 'ok', ...pair }),
+          state: await completeLogin({ status: 'ok', ...pair }, actionLoginFlowEpoch),
         };
       }
       // 纯社交/SSO 等没有 account 会话的历史路径仍用一次性 loginTicket。
@@ -3429,6 +4900,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         success: true,
         state: await acceptLoginOutcome(
           await client.selectAccount(pendingLoginTicket, action.accountId),
+          actionLoginFlowEpoch,
         ),
       };
     }
@@ -3442,6 +4914,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         );
       }
       await client.requestSsoVerificationCode(pendingSsoVerificationTicket);
+      assertLoginFlowCurrent(actionLoginFlowEpoch);
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'sso-verification-code-requested',
         channel: loginFlowState.channel,
@@ -3462,6 +4935,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         success: true,
         state: await acceptLoginOutcome(
           await client.verifySsoVerification(pendingSsoVerificationTicket, action.code),
+          actionLoginFlowEpoch,
         ),
       };
     }
@@ -3471,6 +4945,7 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         throw new AuthApiError('INVALID_BIND_TICKET', 401, 'Missing binding ticket');
       }
       await client.requestBindingCode(pendingBindTicket, loginFlowState.bindType, action.contact);
+      assertLoginFlowCurrent(actionLoginFlowEpoch);
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'binding-code-requested',
         bindType: loginFlowState.bindType,
@@ -3491,9 +4966,13 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
           action.contact,
           action.code,
         ),
+        actionLoginFlowEpoch,
       ),
     };
   } catch (error) {
+    if (loginFlowEpoch !== actionLoginFlowEpoch) {
+      return { success: false, code: 'AUTH_FLOW_SUPERSEDED', state: loginFlowState };
+    }
     const code = error instanceof AuthApiError ? error.code : 'AUTH_REQUEST_FAILED';
     const status = error instanceof AuthApiError ? error.statusCode : 0;
     log.warn(`login action failed action=${action.type} status=${status} code=${code}`);
@@ -3523,17 +5002,21 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
 }
 
 export async function dispatchLoginAction(action: unknown): Promise<DesktopLoginActionResult> {
+  const dispatchLoginFlowEpoch = loginFlowEpoch;
   // Terminal logout clears credentials synchronously, then tears down the old
   // account boundary in the background so the rejecting request can unwind.
   // Do not let a fast re-login open a new account DB that the old teardown
   // would subsequently close.
   if (sessionInvalidationPromise) await sessionInvalidationPromise;
+  if (loginFlowEpoch !== dispatchLoginFlowEpoch) {
+    return { success: false, code: 'AUTH_FLOW_SUPERSEDED', state: loginFlowState };
+  }
   const parsedAction = parseDesktopLoginAction(action);
   if (!parsedAction) {
     return { success: false, code: 'INVALID_AUTH_ACTION', state: loginFlowState };
   }
   if (parsedAction.type === 'cancel-browser') {
-    const pendingAction = loginActionPromise;
+    const pendingAction = loginActionPromiseEpoch === loginFlowEpoch ? loginActionPromise : null;
     const cancelled = browserAuthorizationSlot.cancelActive();
     if (!cancelled && !pendingAction) {
       return { success: false, code: 'NO_BROWSER_AUTH_IN_PROGRESS', state: loginFlowState };
@@ -3542,14 +5025,19 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
     const state = settled?.state ?? loginFlowState ?? (await loadLoginProviders());
     return { success: true, state };
   }
-  if (loginActionPromise) {
+  if (loginActionPromise && loginActionPromiseEpoch === loginFlowEpoch) {
     return { success: false, code: 'LOGIN_BUSY', state: loginFlowState };
   }
-  loginActionPromise = runLoginAction(parsedAction);
+  const run = runLoginAction(parsedAction);
+  loginActionPromise = run;
+  loginActionPromiseEpoch = loginFlowEpoch;
   try {
-    return await loginActionPromise;
+    return await run;
   } finally {
-    loginActionPromise = null;
+    if (loginActionPromise === run) {
+      loginActionPromise = null;
+      loginActionPromiseEpoch = null;
+    }
   }
 }
 
@@ -3639,7 +5127,7 @@ export async function refresh(): Promise<boolean> {
     }
 
     try {
-      const { result, failureAction, replacementRetries } =
+      const { result, failureAction, replacementRetries, requestedToken } =
         await runAuthRefreshWithReplacementRetry(storedToken, {
           phase: 'runtime',
           realm: refreshRealm,
@@ -3647,9 +5135,13 @@ export async function refresh(): Promise<boolean> {
         });
       if (refreshWasSuperseded('after-refresh')) return false;
       const latestSession = readPersistedAuthSession();
-      if (latestSession && latestSession.realm !== refreshRealm) {
-        // 另一实例在请求期间完成了跨区域登录；旧区域结果不得覆盖或删除新记录。
-        log.warn('runtime auth realm changed on disk; discarding stale refresh result');
+      const stillOwnsRequestedSession =
+        latestSession?.realm === refreshRealm && latestSession.refreshToken === requestedToken;
+      if (!result.ok && !stillOwnsRequestedSession) {
+        // Another shared-userData instance advanced the active session while
+        // this request was in flight. Its failure cannot expire or delete the
+        // newer owner, even when both accounts live in the same realm.
+        log.warn('runtime auth session changed on disk; discarding stale refresh failure');
         scheduleRefreshRetryAfterTransientFailure();
         return false;
       }
@@ -3689,10 +5181,23 @@ export async function refresh(): Promise<boolean> {
 
       const authRealmChanged = refreshRealm !== activeAuthRealm;
       const data = result.data as RefreshResponse;
+      const credentialCommit = await commitDesktopRefreshCredentials(
+        data,
+        refreshRealm,
+        requestedToken,
+      );
+      if (credentialCommit !== 'active') {
+        log.warn(
+          `runtime refresh lost active credential ownership (${credentialCommit}); preserved only the still-saved account token and will reconcile from disk`,
+        );
+        scheduleRefreshRetryAfterTransientFailure();
+        return false;
+      }
+      lastAcceptedRefreshToken = data.refreshToken;
       if (!canRestoreAuthSessionForMembership(AUTH_REGION, refreshRealm, data.membership.kind)) {
-        // Preserve a rotated token in the realm that issued it, but never publish
-        // the incompatible personal identity or activate that realm's business endpoints.
-        writePersistedAuthSession(data.refreshToken, refreshRealm);
+        // The credential transaction above preserves the rotated token in its
+        // issuing realm, but this process never publishes the incompatible
+        // personal identity or activates that realm's business endpoints.
         log.warn(
           `runtime refresh rejected cross-realm personal session realm=${refreshRealm} buildRegion=${AUTH_REGION}`,
         );
@@ -3702,17 +5207,10 @@ export async function refresh(): Promise<boolean> {
           });
         } else {
           resetActiveAuthRealmToBuild();
-          await recoverAccountFreeOwnerAtStartup(
-            'signed-out',
-            'runtime-incompatible-membership',
-          );
+          await recoverAccountFreeOwnerAtStartup('signed-out', 'runtime-incompatible-membership');
         }
         return false;
       }
-      // Refresh is token-rotating. Preserve the replacement before any owner
-      // projection transition can defer this process.
-      writePersistedAuthSession(data.refreshToken, refreshRealm);
-      lastAcceptedRefreshToken = data.refreshToken;
       const needsIdentityCheck =
         replacementRetries > 0 ||
         persistedRefreshTokenNeedsIdentityCheck ||
@@ -3846,9 +5344,60 @@ export async function refresh(): Promise<boolean> {
   }
 }
 
+function revokeSavedSessionsBestEffort(
+  vault: AuthAccountVault,
+  currentAccountKey: string | null,
+): void {
+  void (async () => {
+    for (const [key, session] of Object.entries(vault.resources)) {
+      if (key === currentAccountKey) continue;
+      try {
+        await loadClientEndpointsForRealm(session.realm);
+        const client = createAuthClient(session.realm);
+        const pair = await client.refresh(session.refreshToken);
+        await client.logout(pair.accessToken);
+      } catch {
+        // Logout is local-first. Offline/expired remote sessions age out normally.
+      }
+    }
+    for (const session of Object.values(vault.passports)) {
+      try {
+        await loadClientEndpointsForRealm(session.realm);
+        const client = createAuthClient(session.realm);
+        const pair = await client.refreshAccount(session.accountRefreshToken);
+        await client.logoutAccount(pair.accountToken);
+      } catch {
+        // Best effort for the same reason as resource logout above.
+      }
+    }
+  })();
+}
+
 export async function logout(): Promise<void> {
+  if (isPassiveSharedUserDataInstance()) {
+    throw new AuthApiError(
+      'PASSIVE_AUTH_MUTATION_BLOCKED',
+      409,
+      'This shared-data instance cannot log out all accounts',
+    );
+  }
   const currentAccessToken = accessToken;
   const currentAuthBaseUrl = authServerUrl(activeAuthRealm);
+  // Logout remains available even if the vault cannot be decrypted: local
+  // credential files are removed directly and remote revocation is best effort.
+  const savedVault = readAuthAccountVault({ allowUnreadable: true });
+  const currentAccountKey = currentUser
+    ? accountVaultKey(activeAuthRealm, currentUser.id)
+    : savedVault.activeAccountKey;
+  await clearAuthAccountVault(() => {
+    // Publish the durable signed-out owner before clearing compatibility
+    // records. The vault lock remains held across both writes, and startup
+    // reconciliation completes this cleanup if the process dies in between.
+    removeSafe(AUTH_SESSION_KEY);
+    removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+    removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+  });
   // The shared projection state machine owns the full teardown and only then
   // publishes the signed-out owner. The bootstrap IPC handler must not wrap a
   // second independent boundary around this transition.
@@ -3870,6 +5419,7 @@ export async function logout(): Promise<void> {
       reason: 'logout',
       nextMode: 'signed-out',
       clearOnFailure: true,
+      preservePersistedRefreshToken: true,
     });
   } catch (error) {
     localTransitionError = error;
@@ -3886,6 +5436,7 @@ export async function logout(): Promise<void> {
       baseUrl: currentAuthBaseUrl,
     }).catch(() => {});
   }
+  revokeSavedSessionsBestEffort(savedVault, currentAccountKey);
   if (localTransitionError) throw localTransitionError;
 }
 

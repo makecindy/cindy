@@ -69,6 +69,27 @@ const LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS = 5 * 60_000;
 // 整个 Cindy 一直停在启动页；到期后取消本次下载并禁用本次 Pi。
 const PI_AGENT_INSTALL_STARTUP_DEADLINE_MS = 60_000;
 
+/** Preserve actionable saved-account failures across Electron serialization. */
+function throwAuthAccountIpcError(error: unknown): never {
+  const code =
+    error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : null;
+  const message = error instanceof Error ? error.message : 'Saved account operation failed';
+  switch (code) {
+    case 'INVALID_AUTH_ACTION':
+    case 'PASSIVE_AUTH_MUTATION_BLOCKED':
+    case 'ACCOUNT_NOT_FOUND':
+    case 'ACCOUNT_REAUTH_REQUIRED':
+    case 'REGION_MISMATCH':
+    case 'CREDENTIAL_STORE_UNAVAILABLE':
+    case 'AUTH_FLOW_SUPERSEDED':
+      throwIpcError(code, message);
+    default:
+      throwIpcError('INTERNAL', 'Saved account operation failed');
+  }
+}
+
 if (
   process.platform === 'linux' &&
   !app.isPackaged &&
@@ -5290,6 +5311,43 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('auth:logout', async () => {
     await authManager.logout();
+  });
+
+  ipcMain.handle('auth:accounts:list', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.listSavedAccounts();
+  });
+
+  ipcMain.handle('auth:accounts:sync', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await authManager.syncSavedAccounts();
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:switch', async (event, accountKey: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      await authManager.switchSavedAccount(accountKey);
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:begin-add', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await authManager.beginAddAccountLogin();
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:cancel-add', (event) => {
+    assertTrustedAppRendererEvent(event);
+    authManager.cancelAddAccountLogin();
   });
 
   ipcMain.handle('auth:enter-local', async () => {

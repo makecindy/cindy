@@ -548,10 +548,12 @@ export default function SettingsScreen() {
     try {
       await auth.logout();
       router.replace('/login');
+    } catch (error) {
+      Alert.alert(t('devices.list.alert.actionFailed'), formatRemoteError(error));
     } finally {
       setLoggingOut(false);
     }
-  }, [auth, loggingOut, router]);
+  }, [auth, loggingOut, router, t]);
 
   const switchDevServerEnvironment = useCallback(
     async (next: DevServerEnvironment) => {
