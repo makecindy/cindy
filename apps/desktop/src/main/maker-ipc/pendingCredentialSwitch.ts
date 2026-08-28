@@ -46,6 +46,13 @@ export interface PendingCredentialSwitchOwnerScope {
   runtimeOwnerEpoch: string;
 }
 
+export interface PendingCredentialSwitchPersistedRoute {
+  model: string;
+  providerId: string | null;
+  effort?: string;
+  fastMode?: boolean;
+}
+
 export interface PendingCredentialSwitch {
   model: string;
   providerId: string | null;
@@ -72,7 +79,9 @@ export interface PendingCredentialSwitch {
   /** 登记时的 data owner + runtime epoch；跨账号/teardown 后旧 target 必须终态丢弃。 */
   ownerScope?: PendingCredentialSwitchOwnerScope;
   /** owner 失效时，针对登记时捕获的旧 Profile 成套恢复 thread + route。 */
-  restoreStaleOwnerRoute?: () => Promise<boolean>;
+  restoreStaleOwnerRoute?: (
+    persistedRoute?: PendingCredentialSwitchPersistedRoute,
+  ) => Promise<boolean>;
   requestedAt: number;
 }
 
@@ -179,7 +188,9 @@ export class PendingCredentialSwitchService {
         fastMode?: boolean;
       };
       ownerScope?: PendingCredentialSwitchOwnerScope;
-      restoreStaleOwnerRoute?: () => Promise<boolean>;
+      restoreStaleOwnerRoute?: (
+        persistedRoute?: PendingCredentialSwitchPersistedRoute,
+      ) => Promise<boolean>;
     },
   ): void {
     const pending: PendingCredentialSwitch = {
@@ -534,6 +545,19 @@ export class PendingCredentialSwitchService {
       // 冻结;内存 store 已是权威路由,DB 差异在下次显式切换收敛)。
       const modelChanged = !!resolved.model && resolved.model !== target.model;
       const routeChanged = resolved.providerId !== target.providerId || modelChanged;
+      const resolvedRoute: PendingCredentialSwitchPersistedRoute = {
+        providerId: resolved.providerId,
+        model: resolved.model ?? target.model,
+        ...(modelChanged
+          ? {
+              ...(resolved.effort ? { effort: resolved.effort } : {}),
+              ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
+            }
+          : {}),
+      };
+      // Only a successful await proves this exact fallback tuple reached SQLite. If the owner
+      // expires in that window, stale cleanup must compare against it rather than the request.
+      let persistedResolvedRoute: PendingCredentialSwitchPersistedRoute | undefined;
       // 恒写幂等回正(最后收口者赢,PR #744 review 第二十三轮):旧登记的 finalizer 在
       // await persistRoute 期间被新选择替换时,旧写可能晚于 renderer 为新选择落的盘;
       // 若新登记收口时因「裁决未改路由」跳过回写,DB 会留着旧 finalizer 的迟到值,
@@ -545,16 +569,8 @@ export class PendingCredentialSwitchService {
       // 既无竞态也不能引入异步,保持只在路由改动时回写。
       if (this.deps.persistRoute && (routeChanged || this.deps.resolveRoute)) {
         try {
-          await this.deps.persistRoute(sessionId, {
-            providerId: resolved.providerId,
-            model: resolved.model ?? target.model,
-            ...(modelChanged
-              ? {
-                  ...(resolved.effort ? { effort: resolved.effort } : {}),
-                  ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
-                }
-              : {}),
-          });
+          await this.deps.persistRoute(sessionId, resolvedRoute);
+          persistedResolvedRoute = resolvedRoute;
         } catch (err) {
           let relinkRollbackError: unknown;
           if (relinkReceipt) {
@@ -620,7 +636,7 @@ export class PendingCredentialSwitchService {
               );
             }
           }
-          this.discardIfOwnerStale(sessionId, target);
+          this.discardIfOwnerStale(sessionId, target, persistedResolvedRoute);
           return;
         }
       }
@@ -709,6 +725,7 @@ export class PendingCredentialSwitchService {
   private discardIfOwnerStale(
     sessionId: string,
     target: PendingCredentialSwitch,
+    persistedRoute?: PendingCredentialSwitchPersistedRoute,
   ): boolean {
     if (this.ownerScopeCurrent(target)) return false;
     if (this.pending.get(sessionId) === target) {
@@ -722,7 +739,7 @@ export class PendingCredentialSwitchService {
       void (async () => {
         try {
           if (restore) {
-            const restored = await restore();
+            const restored = await restore(persistedRoute);
             if (!restored) {
               this.deps.logger?.warn(
                 'stale pending credential switch route compensation was superseded',

@@ -9,6 +9,7 @@ import {
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
 import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
 import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadRelink.js';
+import type { PendingCredentialSwitchPersistedRoute } from './pendingCredentialSwitch.js';
 import {
   CredentialModeSwitchBusyError,
   isCredentialModeSwitchBusyError,
@@ -96,7 +97,9 @@ export interface ApplyRuntimeSetModelChangeInput {
         fastMode?: boolean;
       };
       sourcePersistedSession?: RuntimeSetModelPersistedSession;
-      restoreStaleOwnerRoute?: () => Promise<boolean>;
+      restoreStaleOwnerRoute?: (
+        persistedRoute?: PendingCredentialSwitchPersistedRoute,
+      ) => Promise<boolean>;
     },
   ) => void | Promise<void>;
   /**
@@ -132,7 +135,9 @@ export interface ApplyRuntimeSetModelChangeInput {
           effort?: string;
           fastMode?: boolean;
         };
-        restoreStaleOwnerRoute?: () => Promise<boolean>;
+        restoreStaleOwnerRoute?: (
+          persistedRoute?: PendingCredentialSwitchPersistedRoute,
+        ) => Promise<boolean>;
       }
     | undefined;
   /**

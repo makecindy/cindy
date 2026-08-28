@@ -350,6 +350,8 @@ describe('session runtime control wiring', () => {
     expect(registration).toContain('sourcePersistedSession.sdkSessionId');
     expect(registration).toContain('sourcePersistedSession.fastMode');
     expect(registration).toContain('restoreCapturedProfileRoute');
+    expect(registration).toContain('const appliedRoute = persistedRoute ??');
+    expect(registration).toContain('eq(sessions.model, appliedRoute.model)');
     expect(registration).toContain('sdkSessionId: capturedPrevRow.sdkSessionId');
     expect(registration).toContain('model: capturedPrevRow.model');
     expect(registration).toContain('providerId: capturedPrevRow.providerId');

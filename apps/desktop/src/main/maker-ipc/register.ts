@@ -923,7 +923,10 @@ import {
 } from './sessionRuntimeControl.js';
 import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
 import { normalizeDeviceLinkSetModelWireArgs } from './setModelWireArgs.js';
-import { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
+import {
+  PendingCredentialSwitchService,
+  type PendingCredentialSwitchPersistedRoute,
+} from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
   runMemoryChangeWithCodexRestart,
@@ -3075,7 +3078,9 @@ export async function registerPendingCredentialSwitchForSession(
       fastMode?: boolean;
     };
     sourcePersistedSession?: RuntimeSetModelPersistedSession;
-    restoreStaleOwnerRoute?: () => Promise<boolean>;
+    restoreStaleOwnerRoute?: (
+      persistedRoute?: PendingCredentialSwitchPersistedRoute,
+    ) => Promise<boolean>;
   },
 ): Promise<void> {
   const service = pendingCredentialSwitchHolder;
@@ -3148,15 +3153,21 @@ export async function registerPendingCredentialSwitchForSession(
       effort: prevRow.effort as typeof sessions.$inferSelect.effort,
       fastMode: prevRow.fastMode,
     };
-    restoreCapturedProfileRoute = async (): Promise<boolean> => {
+    restoreCapturedProfileRoute = async (
+      persistedRoute?: PendingCredentialSwitchPersistedRoute,
+    ): Promise<boolean> => {
+      const appliedRoute = persistedRoute ?? {
+        model: target.model,
+        providerId: target.providerId,
+      };
       const sdkMatches =
         capturedPrevRow.sdkSessionId === null
           ? isNull(sessions.sdkSessionId)
           : eq(sessions.sdkSessionId, capturedPrevRow.sdkSessionId);
-      const targetProviderMatches =
-        target.providerId === null
+      const appliedProviderMatches =
+        appliedRoute.providerId === null
           ? isNull(sessions.providerId)
-          : eq(sessions.providerId, target.providerId);
+          : eq(sessions.providerId, appliedRoute.providerId);
       const previousProviderMatches =
         capturedPrevRow.providerId === null
           ? isNull(sessions.providerId)
@@ -3176,7 +3187,21 @@ export async function registerPendingCredentialSwitchForSession(
             eq(sessions.id, sessionId),
             sdkMatches,
             or(
-              and(eq(sessions.model, target.model), targetProviderMatches),
+              and(
+                eq(sessions.model, appliedRoute.model),
+                appliedProviderMatches,
+                ...(appliedRoute.effort !== undefined
+                  ? [
+                      eq(
+                        sessions.effort,
+                        appliedRoute.effort as typeof sessions.$inferSelect.effort,
+                      ),
+                    ]
+                  : []),
+                ...(appliedRoute.fastMode !== undefined
+                  ? [eq(sessions.fastMode, appliedRoute.fastMode)]
+                  : []),
+              ),
               and(
                 eq(sessions.model, capturedPrevRow.model),
                 previousProviderMatches,
@@ -3416,7 +3441,9 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
         effort?: string;
         fastMode?: boolean;
       };
-      restoreStaleOwnerRoute?: () => Promise<boolean>;
+      restoreStaleOwnerRoute?: (
+        persistedRoute?: PendingCredentialSwitchPersistedRoute,
+      ) => Promise<boolean>;
     }
   | undefined {
   const pending = pendingCredentialSwitchHolder?.get(sessionId);

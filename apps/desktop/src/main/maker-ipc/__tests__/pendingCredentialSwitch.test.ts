@@ -503,6 +503,64 @@ describe('PendingCredentialSwitchService', () => {
     h.service.clear(sessionId);
   });
 
+  it('compensates the actual fallback route when the owner changes during persistence', async () => {
+    const sessionId = rememberSession('pending-switch-owner-stale-during-fallback-persist');
+    setSessionProvider(sessionId, 'xd');
+    let ownerCurrent = true;
+    const rollback = vi.fn(async () => true);
+    const restoreStaleOwnerRoute = vi.fn(async () => true);
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        isOwnerScopeCurrent: () => ownerCurrent,
+        resolveRoute: async () => ({
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          degraded: true,
+          effort: 'xhigh',
+          fastMode: true,
+        }),
+      },
+    );
+    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback,
+    });
+    h.persistRoute.mockImplementationOnce(async () => {
+      ownerCurrent = false;
+    });
+
+    h.service.register(sessionId, {
+      model: 'xai/grok-4.3',
+      providerId: 'xai',
+      agentKind: 'codex',
+      ownerScope: { ownerScopeKey: 'owner-a', runtimeOwnerEpoch: '7' },
+      sourceCodexThreadModelProviderId: 'cindy_gateway',
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+      restoreStaleOwnerRoute,
+    });
+    await h.service.onTurnSettled(sessionId);
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledOnce());
+
+    const persistedFallback = {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+    };
+    expect(h.persistRoute).toHaveBeenCalledWith(sessionId, persistedFallback);
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(persistedFallback);
+    expect(h.service.get(sessionId)).toBeUndefined();
+    expect(h.onApplied).not.toHaveBeenCalled();
+  });
+
   it('does not commit an abandoned relink generation after the user cancels it', async () => {
     const sessionId = rememberSession('pending-switch-cancel-during-relink');
     setSessionProvider(sessionId, 'xd');
