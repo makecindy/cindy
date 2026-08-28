@@ -45,6 +45,51 @@ describe("IOSSimulatorProjectBuilder", () => {
     });
   });
 
+  it("binds a Cindy Mobile build to the exact simulator destination", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    const mobile = path.join(root, "apps", "mobile");
+    const appPath = path.join(
+      mobile,
+      "ios",
+      "build",
+      "Build",
+      "Products",
+      "Debug-iphonesimulator",
+      "Cindy.app",
+    );
+    await mkdir(appPath, { recursive: true });
+    await writeFile(path.join(mobile, "app.config.js"), "export default {};");
+    await writeFile(
+      path.join(mobile, "package.json"),
+      JSON.stringify({ name: "mobile" }),
+    );
+    const run = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    await expect(
+      new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+        worktreeRoot: root,
+        derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID.toLowerCase(),
+      }),
+    ).resolves.toMatchObject({
+      kind: "cindy-mobile",
+      appPath: await realpath(appPath),
+    });
+    expect(run).toHaveBeenCalledWith(
+      "pnpm",
+      [
+        "mobile:sim:rebuild",
+        "--",
+        "--force-build",
+        "--build-only",
+        "--udid",
+        SIMULATOR_UDID,
+      ],
+      expect.objectContaining({ cwd: await realpath(root) }),
+    );
+  });
+
   it("reuses the repository Metro ownership check for Cindy Mobile launch", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
     roots.push(root);
@@ -241,6 +286,7 @@ describe("IOSSimulatorProjectBuilder", () => {
         worktreeRoot: root,
         containerPath: "Examples/Selected.xcworkspace",
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
       }),
     ).resolves.toMatchObject({
       kind: "xcode-workspace",
@@ -311,6 +357,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       builder.build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
       }),
     ).rejects.toMatchObject({
       code: "AMBIGUOUS_XCODE_PROJECT",
@@ -318,7 +365,25 @@ describe("IOSSimulatorProjectBuilder", () => {
     });
   });
 
-  it("builds one generic shared scheme and resolves its app product", async () => {
+  it("rejects a non-exact simulator destination before invoking Xcode", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>();
+
+    await expect(
+      new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+        worktreeRoot: root,
+        derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: "booted",
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_ARGUMENT",
+      message: "simulatorUdid must be an exact simulator UUID",
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("builds one shared scheme for the exact simulator and resolves its app product", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
     roots.push(root);
     const workspace = path.join(root, "Example.xcworkspace");
@@ -362,6 +427,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID.toLowerCase(),
     });
     expect(result).toMatchObject({
       kind: "xcode-workspace",
@@ -372,7 +438,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       "xcodebuild",
       expect.arrayContaining([
         "-destination",
-        "generic/platform=iOS Simulator",
+        `platform=iOS Simulator,id=${SIMULATOR_UDID}`,
         "build",
       ]),
       expect.any(Object),
@@ -430,6 +496,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     const input = {
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
     };
 
     const first = await builder.build(input);
@@ -470,6 +537,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       .build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
       })
       .then(
         () => null,
@@ -530,6 +598,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
       signal: controller.signal,
     });
     await vi.waitFor(() => expect(resultBundlePath).not.toBe(""));
@@ -592,6 +661,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
       signal: controller.signal,
     });
     await vi.waitFor(() => expect(finalSettingsStarted).toBe(true));
@@ -750,6 +820,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
         expectedArch: "arm64",
       }),
     ).rejects.toMatchObject({
@@ -808,6 +879,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
       expectedArch: "arm64",
       clonedSourcePackagesDirPath,
     });
@@ -886,6 +958,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     await new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
       expectedArch: "arm64",
     });
 
@@ -955,6 +1028,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     await new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
     });
     const buildCalls = run.mock.calls.filter(([, args]) =>
       args.includes("build"),
@@ -1006,6 +1080,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
       }),
     ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
     expect(
@@ -1041,6 +1116,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
       }),
     ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
     expect(
@@ -1076,6 +1152,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
       }),
     ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
     expect(
@@ -1150,6 +1227,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
       expectedArch: "arm64",
     });
     expect(result).toMatchObject({ scheme: "Example" });
@@ -1212,6 +1290,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
         expectedArch: "arm64",
       }),
     ).resolves.toMatchObject({ scheme: "Example" });
@@ -1269,6 +1348,7 @@ describe("IOSSimulatorProjectBuilder", () => {
       new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
         worktreeRoot: root,
         derivedDataPath: path.join(root, "derived"),
+        simulatorUdid: SIMULATOR_UDID,
         expectedArch: "arm64",
       }),
     ).rejects.toMatchObject({
@@ -1333,6 +1413,7 @@ describe("IOSSimulatorProjectBuilder", () => {
     }).build({
       worktreeRoot: root,
       derivedDataPath: path.join(root, "derived"),
+      simulatorUdid: SIMULATOR_UDID,
       expectedArch: "arm64",
     });
     expect(result).toMatchObject({ scheme: "Example" });

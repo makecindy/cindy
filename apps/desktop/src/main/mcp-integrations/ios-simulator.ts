@@ -6212,6 +6212,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
               built = await projectBuilder.build({
                 worktreeRoot: canonicalWorktreeRoot,
                 derivedDataPath,
+                simulatorUdid: instance.simulatorUdid,
                 expectedArch,
                 clonedSourcePackagesDirPath,
                 containerPath: canonicalContainerPath,

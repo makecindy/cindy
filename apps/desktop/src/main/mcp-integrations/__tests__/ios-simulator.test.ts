@@ -10069,6 +10069,10 @@ describe('iOS Simulator host', () => {
         process.arch === 'x64' ? 'x86_64' : 'arm64',
         process.arch === 'x64' ? 'x86_64' : 'arm64',
       ]);
+      expect(buildInputs.map((input) => input.simulatorUdid)).toEqual([
+        firstDevice.udid,
+        secondDevice.udid,
+      ]);
       expect(buildInputs[1]!.derivedDataPath).toBe(buildInputs[0]!.derivedDataPath);
       expect(buildInputs[1]!.clonedSourcePackagesDirPath).toBe(
         buildInputs[0]!.clonedSourcePackagesDirPath,

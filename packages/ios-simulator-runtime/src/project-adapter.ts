@@ -106,6 +106,18 @@ const PACKAGE_RESOLVED_REQUIRED_DIAGNOSTIC =
 const RESOLVED_FILE_PIN = "-onlyUsePackageVersionsFromResolvedFile";
 const PRIMARY_APPLICATION_PRODUCT_TYPE = "com.apple.product-type.application";
 const XCRESULT_LEGACY_OBJECT_REQUIRED = /--legacy flag is required/i;
+const EXACT_SIMULATOR_UDID = /^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/;
+
+function normalizeExactSimulatorUdid(simulatorUdid: string): string {
+  const exactSimulatorUdid = simulatorUdid.trim().toUpperCase();
+  if (!EXACT_SIMULATOR_UDID.test(exactSimulatorUdid)) {
+    throw new IOSSimulatorInstanceError(
+      "INVALID_ARGUMENT",
+      "simulatorUdid must be an exact simulator UUID",
+    );
+  }
+  return exactSimulatorUdid;
+}
 
 /**
  * Retry the resolved-file pin only when one diagnostic line names
@@ -398,6 +410,7 @@ export class IOSSimulatorProjectBuilder {
   async build(input: {
     worktreeRoot: string;
     derivedDataPath: string;
+    simulatorUdid: string;
     containerPath?: string;
     scheme?: string;
     signal?: AbortSignal;
@@ -407,12 +420,20 @@ export class IOSSimulatorProjectBuilder {
     clonedSourcePackagesDirPath?: string;
   }): Promise<IOSSimulatorProjectBuildResult> {
     await throwIfBuildCancelled(input.signal);
+    const exactSimulatorUdid = normalizeExactSimulatorUdid(input.simulatorUdid);
     const project = await this.inspect(input.worktreeRoot, input.containerPath);
     await throwIfBuildCancelled(input.signal);
     if (project.kind === "cindy-mobile") {
       const result = await this.#runner.run(
         "pnpm",
-        ["mobile:sim:rebuild", "--", "--force-build", "--build-only"],
+        [
+          "mobile:sim:rebuild",
+          "--",
+          "--force-build",
+          "--build-only",
+          "--udid",
+          exactSimulatorUdid,
+        ],
         {
           cwd: project.worktreeRoot,
           timeoutMs: this.#buildTimeoutMs,
@@ -568,7 +589,7 @@ export class IOSSimulatorProjectBuilder {
       "-configuration",
       "Debug",
       "-destination",
-      "generic/platform=iOS Simulator",
+      `platform=iOS Simulator,id=${exactSimulatorUdid}`,
       "-derivedDataPath",
       input.derivedDataPath,
       ...clonedSourcePackagesArgs,
@@ -749,15 +770,7 @@ export class IOSSimulatorProjectBuilder {
     const project = await this.inspect(worktreeRoot);
     throwIfLaunchValidationCancelled(signal);
     if (project.kind !== "cindy-mobile") return null;
-    const exactSimulatorUdid = simulatorUdid.trim().toUpperCase();
-    if (
-      !/^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/.test(exactSimulatorUdid)
-    ) {
-      throw new IOSSimulatorInstanceError(
-        "INVALID_ARGUMENT",
-        "simulatorUdid must be an exact simulator UUID",
-      );
-    }
+    const exactSimulatorUdid = normalizeExactSimulatorUdid(simulatorUdid);
     const result = await this.#runner.run(
       "pnpm",
       ["mobile:sim:whoami", "--", "--json", "--udid", exactSimulatorUdid],

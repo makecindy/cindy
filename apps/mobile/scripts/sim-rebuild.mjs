@@ -7,9 +7,10 @@
 // 为什么不用 `expo run:ios`:Xcode 26.5 上 expo 的 devicectl / 设备解析坏掉,
 // xcodebuild 枚举不出具体模拟器,会报
 //   `xcodebuild: error: Unable to find a destination matching ... { id:<udid> }`。
-// 这里改用 `generic/platform=iOS Simulator` 通用目标编译(不需要枚举具体设备),
-// 再用 `simctl` 把产物装到当前 booted 的模拟器。架构交给 Pods/Xcode 决定，
-// 避免覆盖原生 SDK 自己声明的 simulator exclusions。
+// 日常独立调用默认用 `generic/platform=iOS Simulator` 通用目标编译(不需要枚举
+// 具体设备)。Cindy Host 会把 `--udid` 与 `--build-only` 一起传入,让 xcodebuild
+// 绑定精确 destination;后续安装和启动由 Host 自己的精确实例生命周期完成。
+// 架构交给 Pods/Xcode 决定,避免覆盖原生 SDK 自己声明的 simulator exclusions。
 //
 // 两个提速机制(2026-07 加,背景:每任务一个新 worktree 的工作流让"从零冷构建"
 // 成为高频成本,一次约 12 分钟;外加一次 pod CDN 挂死 20 分钟的事故):
@@ -34,6 +35,8 @@
 //   node scripts/sim-rebuild.mjs --force-build   # 跳过 fingerprint 产物缓存,强制完整重编
 //   node scripts/sim-rebuild.mjs --build-only    # 只构建 + 入产物缓存,不装/不启动模拟器
 //                                                #(预热缓存,或模拟器正被别的验证占用时)
+//   node scripts/sim-rebuild.mjs --build-only --udid <UUID>
+//                                                # Cindy Host 的精确 destination 构建路径
 // 或仓库根:pnpm mobile:sim:rebuild [-- --region=cn] [-- --clean] [-- --force-build] [-- --build-only]
 
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -79,6 +82,17 @@ const { region, passthrough } = extractMobileDevRegionArgs(process.argv.slice(2)
 const clean = passthrough.includes('--clean');
 const forceBuild = passthrough.includes('--force-build');
 const buildOnly = passthrough.includes('--build-only');
+const simulatorUdidIndex = passthrough.indexOf('--udid');
+const simulatorUdid = simulatorUdidIndex >= 0
+  ? passthrough[simulatorUdidIndex + 1]?.trim().toUpperCase()
+  : null;
+if (
+  simulatorUdidIndex >= 0
+  && !/^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/.test(simulatorUdid ?? '')
+) {
+  console.error('✗ --udid 必须是精确的 Simulator UUID。');
+  process.exit(1);
+}
 const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
 const localConfigStatus = formatMobileLocalConfigStatus(localConfigResult, worktreeRoot);
 if (localConfigStatus) console.log(localConfigStatus);
@@ -173,12 +187,15 @@ if (!app) {
   }
   const scheme = workspace.replace(/\.xcworkspace$/, '');
 
-  console.log(`› 编译 ${scheme}(generic iOS Simulator destination)…`);
+  const simulatorDestination = simulatorUdid
+    ? `platform=iOS Simulator,id=${simulatorUdid}`
+    : 'generic/platform=iOS Simulator';
+  console.log(`› 编译 ${scheme}(${simulatorUdid ? 'exact' : 'generic'} iOS Simulator destination)…`);
   run('xcodebuild', [
     '-workspace', join(iosDir, workspace),
     '-scheme', scheme,
     '-configuration', 'Debug',
-    '-destination', 'generic/platform=iOS Simulator',
+    '-destination', simulatorDestination,
     '-derivedDataPath', buildDir,
     '-quiet',
     'build',
