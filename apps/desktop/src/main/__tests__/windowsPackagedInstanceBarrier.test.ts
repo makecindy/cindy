@@ -1,6 +1,7 @@
+import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   acquireWindowsPackagedInstanceBarrier,
@@ -9,6 +10,12 @@ import {
 
 describe('windowsPackagedInstanceBarrier', () => {
   it('parses only complete helper statuses', () => {
+    expect(__testing.parseBarrierStatus('{"status":"started"}')).toEqual({
+      status: 'started',
+    });
+    expect(__testing.parseBarrierStatus('{"status":"locked"}')).toEqual({
+      status: 'locked',
+    });
     expect(__testing.parseBarrierStatus('{"status":"acquired"}')).toEqual({
       status: 'acquired',
     });
@@ -34,6 +41,39 @@ describe('windowsPackagedInstanceBarrier', () => {
     expect(__testing.WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT).toContain(
       'CINDY_SINGLETON_WINDOW_TITLE',
     );
+    // Add-Type 编译必须在 mutex 锁住之后才发生，否则冷启动会吃掉竞争预算。
+    expect(
+      __testing.WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT.indexOf('{"status":"locked"}'),
+    ).toBeLessThan(__testing.WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT.indexOf('Add-Type'));
+  });
+
+  it('waits for the helper exit after forced termination', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => true);
+    let finished = false;
+    const waiting = __testing
+      .waitForExit(child as never, 20)
+      .then(() => {
+        finished = true;
+      });
+
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledOnce(), {
+      // 20ms 的强制终止定时器在有负载的 runner 上可能晚触发；
+      // 只放宽观察窗口，不改变「exit 事件前不得 finish」的断言。
+      timeout: 200,
+      interval: 5,
+    });
+    expect(finished).toBe(false);
+    child.exitCode = 1;
+    child.emit('exit', 1, null);
+    await waiting;
+    expect(finished).toBe(true);
   });
 
   it.runIf(process.platform === 'win32')(

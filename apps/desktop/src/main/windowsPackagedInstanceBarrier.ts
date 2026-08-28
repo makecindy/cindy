@@ -1,12 +1,33 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
+const HELPER_START_TIMEOUT_MS = 5_000;
+const HELPER_PROBE_TIMEOUT_MS = 5_000;
 const HELPER_EXIT_TIMEOUT_MS = 2_000;
 const MAX_HELPER_OUTPUT_BYTES = 16 * 1024;
 
 const WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @'
+[Console]::Out.WriteLine('{"status":"started"}')
+[Console]::Out.Flush()
+
+$mutex = [System.Threading.Mutex]::new($false, $env:CINDY_SINGLETON_MUTEX_NAME)
+$acquired = $false
+try {
+  try {
+    $acquired = $mutex.WaitOne([int]$env:CINDY_SINGLETON_WAIT_MS)
+  } catch [System.Threading.AbandonedMutexException] {
+    $acquired = $true
+  }
+  if (-not $acquired) {
+    [Console]::Out.WriteLine('{"status":"busy"}')
+    [Console]::Out.Flush()
+    exit 2
+  }
+
+  [Console]::Out.WriteLine('{"status":"locked"}')
+  [Console]::Out.Flush()
+  Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
@@ -23,20 +44,6 @@ public static class CindyProcessSingletonProbe {
   public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 }
 '@
-
-$mutex = [System.Threading.Mutex]::new($false, $env:CINDY_SINGLETON_MUTEX_NAME)
-$acquired = $false
-try {
-  try {
-    $acquired = $mutex.WaitOne([int]$env:CINDY_SINGLETON_WAIT_MS)
-  } catch [System.Threading.AbandonedMutexException] {
-    $acquired = $true
-  }
-  if (-not $acquired) {
-    [Console]::Out.WriteLine('{"status":"busy"}')
-    [Console]::Out.Flush()
-    exit 2
-  }
 
   $messageOnlyWindow = [IntPtr]::new(-3)
   $window = [CindyProcessSingletonProbe]::FindWindowEx(
@@ -67,7 +74,11 @@ try {
 `;
 
 type BarrierStatus =
-  { status: 'acquired' } | { status: 'busy' } | { status: 'occupied'; pid: number };
+  | { status: 'started' }
+  | { status: 'locked' }
+  | { status: 'acquired' }
+  | { status: 'busy' }
+  | { status: 'occupied'; pid: number };
 
 function processSingletonNames(programName: string): {
   mutexName: string;
@@ -93,7 +104,7 @@ function powershellPath(): string {
   return `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
 }
 
-function waitForFirstLine(
+function waitForBarrierStatus(
   child: ChildProcessWithoutNullStreams,
   timeoutMs: number,
 ): Promise<{ line: string; stderr: string }> {
@@ -101,6 +112,7 @@ function waitForFirstLine(
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (settle: () => void): void => {
       if (settled) return;
       settled = true;
@@ -111,10 +123,17 @@ function waitForFirstLine(
       child.off('exit', onExit);
       settle();
     };
-    const timer = setTimeout(() => {
-      finish(() => reject(new Error('timed out acquiring Windows packaged-instance barrier')));
-      child.kill();
-    }, timeoutMs + 1_000);
+    // timeoutMs 只度量 mutex 竞争；PowerShell 冷启动与 Add-Type 编译是独立阶段，
+    // 满载 CI 上共预算会把健康的 acquire 误杀成超时。
+    const armTimeout = (durationMs: number, stage: string): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        finish(() =>
+          reject(new Error(`timed out ${stage} Windows packaged-instance barrier`)),
+        );
+        child.kill();
+      }, durationMs);
+    };
     const onStdout = (chunk: Buffer | string): void => {
       stdout += chunk.toString();
       if (stdout.length > MAX_HELPER_OUTPUT_BYTES) {
@@ -124,10 +143,28 @@ function waitForFirstLine(
         child.kill();
         return;
       }
-      const newline = stdout.indexOf('\n');
-      if (newline >= 0) {
+      let newline = stdout.indexOf('\n');
+      while (newline >= 0) {
         const line = stdout.slice(0, newline).trim();
-        finish(() => resolve({ line, stderr }));
+        stdout = stdout.slice(newline + 1);
+        let status: BarrierStatus;
+        try {
+          status = parseBarrierStatus(line);
+        } catch (error) {
+          finish(() => reject(error));
+          child.kill();
+          return;
+        }
+        if (status.status === 'started') {
+          armTimeout(timeoutMs + 1_000, 'waiting for');
+        } else if (status.status === 'locked') {
+          // Add-Type + message-window 探测只在 mutex 安全持有后发生。
+          armTimeout(HELPER_PROBE_TIMEOUT_MS, 'probing');
+        } else {
+          finish(() => resolve({ line, stderr }));
+          return;
+        }
+        newline = stdout.indexOf('\n');
       }
     };
     const onStderr = (chunk: Buffer | string): void => {
@@ -149,12 +186,20 @@ function waitForFirstLine(
     child.stderr.on('data', onStderr);
     child.once('error', onError);
     child.once('exit', onExit);
+    armTimeout(HELPER_START_TIMEOUT_MS, 'starting');
   });
 }
 
 function parseBarrierStatus(line: string): BarrierStatus {
   const value = JSON.parse(line) as Partial<BarrierStatus>;
-  if (value.status === 'acquired' || value.status === 'busy') return { status: value.status };
+  if (
+    value.status === 'started' ||
+    value.status === 'locked' ||
+    value.status === 'acquired' ||
+    value.status === 'busy'
+  ) {
+    return { status: value.status };
+  }
   if (
     value.status === 'occupied' &&
     typeof value.pid === 'number' &&
@@ -166,21 +211,31 @@ function parseBarrierStatus(line: string): BarrierStatus {
   throw new Error('Windows packaged-instance barrier returned an invalid status');
 }
 
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
+function waitForExit(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs = HELPER_EXIT_TIMEOUT_MS,
+): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
     const finish = (): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(terminateTimer);
+      clearTimeout(forceFinishTimer);
       child.off('exit', finish);
       resolve();
     };
-    const timer = setTimeout(() => {
+    let forceFinishTimer: ReturnType<typeof setTimeout> | undefined;
+    const terminateTimer = setTimeout(() => {
       child.kill();
-      finish();
-    }, HELPER_EXIT_TIMEOUT_MS);
+      // Windows 上 TerminateProcess 是异步的。继续等真实 exit 事件，
+      // 避免重试与仍持有 mutex 的进程竞态；坏主机再留第二段兜底。
+      forceFinishTimer = setTimeout(() => {
+        child.kill();
+        finish();
+      }, timeoutMs);
+    }, timeoutMs);
     child.once('exit', finish);
   });
 }
@@ -222,7 +277,7 @@ export async function acquireWindowsPackagedInstanceBarrier(options: {
   );
   let status: BarrierStatus;
   try {
-    const { line } = await waitForFirstLine(child, timeoutMs);
+    const { line } = await waitForBarrierStatus(child, timeoutMs);
     status = parseBarrierStatus(line);
   } catch (error) {
     child.kill();
@@ -264,4 +319,5 @@ export const __testing = {
   WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT,
   parseBarrierStatus,
   processSingletonNames,
+  waitForExit,
 };
