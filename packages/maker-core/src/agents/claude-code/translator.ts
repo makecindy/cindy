@@ -40,6 +40,7 @@ import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import {
   beginClaudeGeneration,
   finalizeClaudeGeneration,
+  markClaudeGenerationUnreliable,
   newClaudeGenerationState,
   noteClaudeSubagent,
   pauseClaudeGeneration,
@@ -228,9 +229,21 @@ function mainTurnOutputTokens(tracker: UsageTracker): number {
   return output;
 }
 
-function liveParentOutputTokens(ctx: TranslateContext, resultOutput?: number): number {
+function liveParentOutputTokens(
+  ctx: TranslateContext,
+  resultOutput?: number,
+  streamedOutputMatchesResult = false,
+): number {
   const mainOutput = mainTurnOutputTokens(ctx.tracker);
-  if (ctx.rt.generation.sawSubagent) return mainOutput;
+  if (ctx.rt.generation.sawSubagent) {
+    // result.usage includes subagent output. Parent live tok/s is only
+    // commensurate with the parent generation denominator when streamed
+    // segments prove they cover every output token in the result aggregate.
+    if (!streamedOutputMatchesResult) {
+      markClaudeGenerationUnreliable(ctx.rt.generation);
+    }
+    return mainOutput;
+  }
   if (typeof resultOutput === 'number' && Number.isFinite(resultOutput)) {
     return Math.max(0, resultOutput);
   }
@@ -1973,7 +1986,11 @@ function handleResult(
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,
   // 这里先转成 turn delta; tracker.endTurn 内部覆盖 currentTurn 然后返回 snapshot 再 reset。
   finalizeClaudeGeneration(ctx.rt.generation);
-  const liveTurnOutput = liveParentOutputTokens(ctx, resultUsage?.outputTokens);
+  const liveTurnOutput = liveParentOutputTokens(
+    ctx,
+    resultUsage?.outputTokens,
+    resultUsage != null && segmentTotals.outputTokens === resultUsage.outputTokens,
+  );
   const liveGeneration = ctx.rt.generation;
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage

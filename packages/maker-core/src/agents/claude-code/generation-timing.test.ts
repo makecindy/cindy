@@ -682,4 +682,81 @@ describe('claude generation pause boundaries', () => {
     resetClaudeGenerationTiming(ctx.rt.generation);
     vi.useRealTimers();
   });
+
+  it('fails closed when a subagent is present but parent streamed output is incomplete', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'parent without delta' }] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 580 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      generationReliable: false,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
 });
