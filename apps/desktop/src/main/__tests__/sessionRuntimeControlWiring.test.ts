@@ -271,6 +271,22 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('return withSendToSessionLock(sessionId, applyLocked);');
   });
 
+  it('maps Codex relink CAS conflicts to the structured IPC error protocol', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const conflictMapping = setModel.indexOf(
+      "err.message.startsWith('Codex provider thread relink was superseded')",
+    );
+    expect(conflictMapping).toBeGreaterThan(-1);
+    expect(
+      setModel.indexOf("throwIpcError(\n            'PRECONDITION_FAILED'", conflictMapping),
+    ).toBeGreaterThan(conflictMapping);
+    expect(setModel.indexOf('throw err;', conflictMapping)).toBeGreaterThan(conflictMapping);
+  });
+
   it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {
     const effort = handlerBody(
       registerSource,

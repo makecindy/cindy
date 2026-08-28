@@ -15629,6 +15629,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
           throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
         }
+        if (
+          requiresCodexThreadRelink &&
+          err instanceof Error &&
+          err.message.startsWith('Codex provider thread relink was superseded')
+        ) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'Codex provider thread changed during model switch; retry the selection',
+          );
+        }
         throw err;
       }
     };
