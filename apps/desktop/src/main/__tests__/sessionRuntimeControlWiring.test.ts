@@ -190,21 +190,60 @@ describe('session runtime control wiring', () => {
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
   });
 
-  it('rolls back a committed Codex thread relink when atomic route persistence fails', () => {
+  it('commits an immediate user Codex relink and route in one SQLite CAS', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch)');
-    const rollback = setModel.indexOf(
-      'const restored = await rollbackAppliedCodexThreadRelink()',
-      persist,
+    const sourceTuple = setModel.indexOf('const persistedRuntimeSourceRoute:');
+    const targetTuple = setModel.indexOf('const persistedRuntimeTargetRoute:', sourceTuple);
+    const wrapper = setModel.indexOf('const relinkCodexThreadForRuntimeSelection = (');
+    const transition = setModel.indexOf('persistedRouteTransition: {', wrapper);
+    const injected = setModel.indexOf(
+      'relinkCodexThreadForProviderSwitch: relinkCodexThreadForRuntimeSelection',
+      transition,
     );
+    const appliedReceipt = setModel.indexOf(
+      'appliedCodexThreadRelink = result.codexThreadRelink;',
+      injected,
+    );
+    const markAtomicRoute = setModel.indexOf(
+      'appliedPersistedRuntimeRoute = persistedRuntimeTargetRoute;',
+      appliedReceipt,
+    );
+    const skipSecondWrite = setModel.indexOf(
+      'if (!preservePersistedRoute && !appliedPersistedRuntimeRoute) {',
+      markAtomicRoute,
+    );
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch)');
 
+    expect(sourceTuple).toBeGreaterThan(-1);
+    expect(setModel.slice(sourceTuple, targetTuple)).toContain('model: runtimeStatus.model');
+    expect(setModel.slice(sourceTuple, targetTuple)).toContain(
+      'providerId: runtimeStatus.providerId ?? null',
+    );
+    expect(setModel.slice(sourceTuple, targetTuple)).toContain('effort: runtimeStatus.effort');
+    expect(setModel.slice(sourceTuple, targetTuple)).toContain('fastMode: runtimeStatus.fastMode');
+    expect(targetTuple).toBeGreaterThan(sourceTuple);
+    expect(setModel.slice(targetTuple, wrapper)).toContain('model,');
+    expect(setModel.slice(targetTuple, wrapper)).toContain(
+      'effort: atomicSelection?.effort ?? runtimeStatus.effort',
+    );
+    expect(setModel.slice(targetTuple, wrapper)).toContain(
+      'fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode',
+    );
+    expect(wrapper).toBeGreaterThan(targetTuple);
+    expect(setModel.slice(wrapper, injected)).toContain("internalOptions.source === 'user'");
+    expect(setModel.slice(transition, injected)).toContain(
+      'previous: persistedRuntimeSourceRoute',
+    );
+    expect(setModel.slice(transition, injected)).toContain('next: persistedRuntimeTargetRoute');
+    expect(injected).toBeGreaterThan(transition);
+    expect(markAtomicRoute).toBeGreaterThan(appliedReceipt);
+    expect(skipSecondWrite).toBeGreaterThan(markAtomicRoute);
     expect(persist).toBeGreaterThan(-1);
-    expect(rollback).toBeGreaterThan(persist);
-    expect(setModel).toContain("throw new Error('Codex thread relink rollback was superseded')");
+    expect(persist).toBeGreaterThan(skipSecondWrite);
   });
 
   it('rolls back the complete persisted route before an owner-boundary request exits', () => {

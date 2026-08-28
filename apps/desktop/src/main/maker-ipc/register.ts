@@ -15674,6 +15674,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         });
       };
+      const persistedRuntimeSourceRoute: Omit<
+        PersistedCodexRuntimeSelectionState,
+        'sdkSessionId'
+      > = {
+        model: runtimeStatus.model,
+        providerId: runtimeStatus.providerId ?? null,
+        effort: runtimeStatus.effort,
+        fastMode: runtimeStatus.fastMode,
+      };
+      const persistedRuntimeTargetRoute: Omit<
+        PersistedCodexRuntimeSelectionState,
+        'sdkSessionId'
+      > = {
+        model,
+        providerId:
+          effectiveProviderId === undefined
+            ? (runtimeStatus.providerId ?? null)
+            : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+        effort: atomicSelection?.effort ?? runtimeStatus.effort,
+        fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
+      };
+      const relinkCodexThreadForRuntimeSelection = (
+        relinkInput: Parameters<typeof relinkCodexThreadForCredentialSwitch>[0],
+      ) =>
+        relinkCodexThreadForCredentialSwitch(
+          internalOptions.source === 'user'
+            ? {
+                ...relinkInput,
+                persistedRouteTransition: {
+                  previous: persistedRuntimeSourceRoute,
+                  next: persistedRuntimeTargetRoute,
+                },
+              }
+            : relinkInput,
+        );
       let appliedCodexThreadRelink: CodexProviderThreadRelinkReceipt | undefined;
       let appliedPersistedRuntimeRoute:
         | {
@@ -15864,12 +15899,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
               // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
               codexAuthInjection: getCodexProxyAuthInjectionState(),
-              relinkCodexThreadForProviderSwitch: relinkCodexThreadForCredentialSwitch,
+              relinkCodexThreadForProviderSwitch: relinkCodexThreadForRuntimeSelection,
               logger: log,
             })
           : { status: 'applied' as const };
         if (result.status === 'applied') {
           appliedCodexThreadRelink = result.codexThreadRelink;
+          if (appliedCodexThreadRelink && internalOptions.source === 'user') {
+            // The relink CAS already committed thread + route as one restart-safe tuple.
+            appliedPersistedRuntimeRoute = persistedRuntimeTargetRoute;
+          }
         }
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
@@ -15942,7 +15981,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             patch.fastMode = atomicSelection.fastMode;
           }
           try {
-            if (!preservePersistedRoute) {
+            if (!preservePersistedRoute && !appliedPersistedRuntimeRoute) {
               await persistSessionFields(sessionId, patch);
               appliedPersistedRuntimeRoute = {
                 model,
