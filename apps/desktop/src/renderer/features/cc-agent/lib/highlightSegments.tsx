@@ -47,19 +47,39 @@ export function highlightSegments(
   if (indices.length === 0) return title;
 
   const cls = options?.highlightClassName ?? DEFAULT_HIGHLIGHT_CLASS;
+  // indices 是 UTF-16 code unit 下标；命中 emoji 等多单元字符时可能落在
+  // surrogate pair 中间。把每个下标扩成完整码点区间再合并，保证切片
+  // 永远落在码点边界，不会把一个字符拆成两个乱码 half-surrogate。
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const i of indices) {
+    // 防御:跳过越界 / 负数 index
+    if (i < 0 || i >= title.length) continue;
+    let start = i;
+    let end = i + 1;
+    // 落在低代理上时回退到高代理；落在高代理上时扩到低代理末尾。
+    const code = title.charCodeAt(i);
+    if (code >= 0xdc00 && code <= 0xdfff) start -= 1;
+    else if (code >= 0xd800 && code <= 0xdbff) end += 1;
+    const prev = spans[spans.length - 1];
+    if (prev && start <= prev.end) {
+      prev.start = Math.min(prev.start, start);
+      prev.end = Math.max(prev.end, end);
+    } else {
+      spans.push({ start, end });
+    }
+  }
+
   const out: ReactNode[] = [];
   let cursor = 0;
-  for (let k = 0; k < indices.length; k += 1) {
-    const i = indices[k];
-    // 防御:跳过越界 / 与 cursor 颠倒(乱序)的 index
-    if (i < cursor || i >= title.length) continue;
-    if (i > cursor) out.push(title.slice(cursor, i));
+  for (let k = 0; k < spans.length; k += 1) {
+    const span = spans[k]!;
+    if (span.start > cursor) out.push(title.slice(cursor, span.start));
     out.push(
-      <mark key={i} className={cls}>
-        {title[i]}
+      <mark key={span.start} className={cls}>
+        {title.slice(span.start, span.end)}
       </mark>,
     );
-    cursor = i + 1;
+    cursor = span.end;
   }
   if (cursor < title.length) out.push(title.slice(cursor));
   return out;

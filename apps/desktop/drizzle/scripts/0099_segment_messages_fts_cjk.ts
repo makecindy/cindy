@@ -1,8 +1,55 @@
 import type Database from 'better-sqlite3';
 
-import { registerCjkSeg } from './registerCjkSeg';
-
 const FTS_ROLE_WHITELIST = "('user', 'assistant', 'ask_user', 'plan_review')";
+const HAN_CHAR_RE = /\p{Script=Han}/u;
+const LETTER_OR_NUMBER_RE = /[\p{L}\p{N}]/u;
+const MARK_RE = /\p{M}/u;
+
+function isHanCodePoint(ch: string): boolean {
+  return HAN_CHAR_RE.test(ch);
+}
+
+function isLetterOrNumber(ch: string): boolean {
+  return LETTER_OR_NUMBER_RE.test(ch);
+}
+
+function isMark(ch: string): boolean {
+  return MARK_RE.test(ch);
+}
+
+function cjkSeg(input: unknown): string | null {
+  if (input == null) return null;
+  const text = typeof input === 'string' ? input : String(input);
+  if (text.length === 0) return text;
+  const chars = Array.from(text);
+  let out = '';
+  let lastBoundary = '';
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i];
+    if (isMark(ch)) {
+      out += ch;
+      continue;
+    }
+    if (lastBoundary) {
+      const hanNow = isHanCodePoint(ch);
+      const hanPrev = isHanCodePoint(lastBoundary);
+      if (
+        (hanNow && hanPrev) ||
+        (hanNow && isLetterOrNumber(lastBoundary)) ||
+        (hanPrev && isLetterOrNumber(ch))
+      ) {
+        out += ' ';
+      }
+    }
+    out += ch;
+    lastBoundary = ch;
+  }
+  return out;
+}
+
+function registerCjkSeg(db: Database.Database): void {
+  db.function('cjk_seg', { deterministic: true }, cjkSeg);
+}
 
 function tableExists(db: Database.Database, name: string): boolean {
   return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name);
@@ -14,17 +61,6 @@ function isConstraintError(error: unknown): boolean {
     typeof (error as Error & { code?: unknown }).code === 'string' &&
     String((error as Error & { code: string }).code).startsWith('SQLITE_CONSTRAINT')
   );
-}
-
-function createRowsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS messages_fts_rows (
-      fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-      message_id TEXT NOT NULL
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS messages_fts_rows_message_id_idx
-      ON messages_fts_rows(message_id);
-  `);
 }
 
 function rebuildFts(db: Database.Database): void {
@@ -165,19 +201,27 @@ function createTriggers(db: Database.Database): void {
   `);
 }
 
-/** Restores the data-bearing rowid map together with the FTS state that depends on it. */
-export function repairMessagesFtsRows(db: Database.Database): void {
-  registerCjkSeg(db);
-  const run = db.transaction(() => {
-    db.exec('DROP TRIGGER IF EXISTS messages_fts_insert;');
-    db.exec('DROP TRIGGER IF EXISTS messages_fts_delete;');
-    db.exec('DROP TRIGGER IF EXISTS messages_fts_update;');
-
-    createRowsTable(db);
-    if (!tableExists(db, 'messages')) return;
-
-    if (!tableExists(db, 'messages_fts') || !reuseExistingFtsRows(db)) rebuildFts(db);
-    createTriggers(db);
-  });
-  run();
+function createRowsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS messages_fts_rows (
+      fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+      message_id TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS messages_fts_rows_message_id_idx
+      ON messages_fts_rows(message_id);
+  `);
 }
+
+function run(db: Database.Database): void {
+  registerCjkSeg(db);
+  db.exec('DROP TRIGGER IF EXISTS messages_fts_insert;');
+  db.exec('DROP TRIGGER IF EXISTS messages_fts_delete;');
+  db.exec('DROP TRIGGER IF EXISTS messages_fts_update;');
+
+  createRowsTable(db);
+  if (!tableExists(db, 'messages')) return;
+  if (!tableExists(db, 'messages_fts') || !reuseExistingFtsRows(db)) rebuildFts(db);
+  createTriggers(db);
+}
+
+module.exports = { run };

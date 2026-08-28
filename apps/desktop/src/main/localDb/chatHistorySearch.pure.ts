@@ -7,6 +7,8 @@
  * 主引擎 chatHistorySearch.ts import 这里的函数。
  */
 
+import { cjkSeg } from './cjkSeg';
+
 /** RRF 平滑常数(业界惯用 60); 越大越削弱头部排名优势。 */
 export const RRF_K = 60;
 
@@ -50,17 +52,81 @@ export function fuseRRF(
   );
 }
 
+const FTS_TOKEN_CAP = 32;
+/** 单个 token 码点数上限。连续汉字会被收成一条 phrase，不限制就会把整段 query 扩成 MATCH。 */
+const FTS_TOKEN_CHAR_CAP = 64;
+/** 最终 MATCH 表达式字符上限，挡住超长 CJK phrase 在进 SQLite 前就把 heap 打爆。 */
+const FTS_MATCH_CHAR_CAP = 2_048;
+/**
+ * 字母/数字 run，附着的 combining mark / 变体选择符跟着所属 token，
+ * 不单独切开。与写入侧 cjkSeg「mark 不阻断分词」对齐。
+ */
+const FTS_TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}\p{M}\u{E0100}-\u{E01EF}]*/gu;
+
+/**
+ * 与 {@link buildMessagesFtsMatch} 同源的 token 抽取（去重 + 上限）。
+ * buildSnippetFromContent 用同一份 token 在原文上定位高亮区间，
+ * 保证「召回用什么词、snippet 就标什么词」。
+ */
+export function extractMessagesFtsTokens(query: string): string[] {
+  const tokens = query.match(FTS_TOKEN_RE);
+  if (!tokens || tokens.length === 0) return [];
+  const capped = tokens
+    .map((token) => [...token].slice(0, FTS_TOKEN_CHAR_CAP).join(''))
+    .filter((token) => token.length > 0);
+  return [...new Set(capped)].slice(0, FTS_TOKEN_CAP);
+}
+
+function quoteFtsToken(token: string): string {
+  return `"${token.replace(/"/g, '""')}"`;
+}
+
 /**
  * 把自然语言 query 转成 FTS5 MATCH 表达式: 抽取字母/数字/CJK 连续 run 作为 token,
  * 每个 token 用双引号包裹(中和 FTS 操作符 - * : ( ) " 等防注入/语法错), OR 连接
  * 最大化词法召回(相关度交给 bm25 + RRF 裁决)。无有效 token → null(跳过 FTS arm)。
  *
- * 注: messages_fts 用 porter unicode61 分词, CJK 连续串会被当作整体 token,
- * 故 CJK 的细粒度词法匹配有限——这正是向量 arm 补位的场景。
+ * 这是 unicode61 整段 token 形态, 给尚未按字切分的 FTS 表用(群历史)。
+ * messages_fts 请用 {@link buildMessagesFtsMatch}。
  */
 export function buildFtsMatch(query: string): string | null {
-  const tokens = query.match(/[\p{L}\p{N}]+/gu);
-  if (!tokens || tokens.length === 0) return null;
-  const uniq = [...new Set(tokens)].slice(0, 32);
-  return uniq.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+  const uniq = extractMessagesFtsTokens(query);
+  if (uniq.length === 0) return null;
+  return joinQuotedTokens(uniq.map(quoteFtsToken), 'OR');
+}
+
+/**
+ * messages_fts 查询构造: 与写入侧 `cjk_seg` 对齐。
+ * CJK run 收成相邻 phrase（`"边 界"`），英文 / 数字仍是独立 quoted token。
+ *
+ * 多词连接符由入口决定，不是 FTS5 默认值：
+ * - 侧栏 / search_chat_history 走 OR，最大化词法召回，相关度交给 bm25 + RRF
+ *   （与改 CJK 分词前同一口径，也是本 issue 要改进召回的那条路径）。
+ * - session_search 走 AND：旧实现是整句单 phrase，AND 比整句更宽、仍要求
+ *   各词都在同一条消息里，适合 LLM 精确回忆。
+ *
+ * FTS5 隐式连接符本来就是 AND（`"login" "bug"` 与 `"login" AND "bug"` 等价），
+ * 所以 OR 必须显式写出；AND 显式写出仅为和 OR 对照、可读。
+ */
+export function buildMessagesFtsMatch(
+  query: string,
+  join: 'AND' | 'OR' = 'OR',
+): string | null {
+  const tokens = extractMessagesFtsTokens(query);
+  if (tokens.length === 0) return null;
+  return joinQuotedTokens(
+    tokens.map((token) => quoteFtsToken(cjkSeg(token) ?? token)),
+    join,
+  );
+}
+
+function joinQuotedTokens(quoted: readonly string[], join: 'AND' | 'OR'): string | null {
+  const sep = ` ${join} `;
+  let out = '';
+  for (const part of quoted) {
+    const next = out ? `${out}${sep}${part}` : part;
+    if (next.length > FTS_MATCH_CHAR_CAP) break;
+    out = next;
+  }
+  return out.length > 0 ? out : null;
 }

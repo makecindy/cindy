@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { fuseRRF, buildFtsMatch, RRF_K } from '../chatHistorySearch.pure';
+import { fuseRRF, buildFtsMatch, buildMessagesFtsMatch, RRF_K } from '../chatHistorySearch.pure';
 
 describe('fuseRRF', () => {
   it('空输入返回空数组', () => {
@@ -80,6 +80,17 @@ describe('buildFtsMatch', () => {
     expect(buildFtsMatch('登录报错')).toBe('"登录报错"');
   });
 
+  it('messages_fts 把 CJK run 收成相邻 phrase；默认多词 OR，session_search 显式 AND', () => {
+    expect(buildMessagesFtsMatch('登录报错')).toBe('"登 录 报 错"');
+    expect(buildMessagesFtsMatch('边界')).toBe('"边 界"');
+    expect(buildMessagesFtsMatch('login crash')).toBe('"login" OR "crash"');
+    expect(buildMessagesFtsMatch('修复 login 问题')).toBe('"修 复" OR "login" OR "问 题"');
+    expect(buildMessagesFtsMatch('login crash', 'AND')).toBe('"login" AND "crash"');
+    expect(buildMessagesFtsMatch('修复 login 问题', 'AND')).toBe(
+      '"修 复" AND "login" AND "问 题"',
+    );
+  });
+
   it('中英混合: 各自成 token', () => {
     expect(buildFtsMatch('修复 login 问题')).toBe('"修复" OR "login" OR "问题"');
   });
@@ -88,5 +99,16 @@ describe('buildFtsMatch', () => {
     const many = Array.from({ length: 50 }, (_, i) => `t${i}`).join(' ');
     const out = buildFtsMatch(many)!;
     expect(out.split(' OR ')).toHaveLength(32);
+  });
+
+  it('combining mark / 变体选择符跟着所属 token，不拆成两半', () => {
+    expect(buildMessagesFtsMatch('甲́乙')).toBe('"甲́ 乙"');
+    expect(buildMessagesFtsMatch('禰\u{E0100}豆子')).toBe('"禰\u{E0100} 豆 子"');
+  });
+
+  it('超长连续汉字截成有限 MATCH，不把整段扩进去', () => {
+    const out = buildMessagesFtsMatch('边'.repeat(400))!;
+    expect(out.length).toBeLessThanOrEqual(2048);
+    expect(out.startsWith('"边 ')).toBe(true);
   });
 });

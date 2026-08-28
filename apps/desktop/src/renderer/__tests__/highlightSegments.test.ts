@@ -69,11 +69,10 @@ describe('highlightSegments — base', () => {
 
   it('marks the right characters', () => {
     const segs = flatten(highlightSegments('hello world', [6, 7]));
-    // 'hello ' plain, 'w' mark, 'o' mark, 'rld' plain
+    // 'hello ' plain, 'wo' mark(相邻命中合并为一个 span), 'rld' plain
     expect(segs).toEqual([
       { kind: 'plain', text: 'hello ' },
-      { kind: 'mark', text: 'w' },
-      { kind: 'mark', text: 'o' },
+      { kind: 'mark', text: 'wo' },
       { kind: 'plain', text: 'rld' },
     ]);
   });
@@ -100,11 +99,9 @@ describe('highlightSegments — base', () => {
   });
 
   it('handles every-character highlight', () => {
-    const segs = flatten(highlightSegments('abc', [0, 1, 2]));
-    expect(segs).toEqual([
-      { kind: 'mark', text: 'a' },
-      { kind: 'mark', text: 'b' },
-      { kind: 'mark', text: 'c' },
+    // 全命中合并成一个 mark span，渲染等价。
+    expect(flatten(highlightSegments('abc', [0, 1, 2]))).toEqual([
+      { kind: 'mark', text: 'abc' },
     ]);
   });
 });
@@ -119,12 +116,11 @@ describe('highlightSegments — defensive', () => {
   });
 
   it('skips out-of-order indices (smaller-than-cursor)', () => {
-    // [2, 1, 3] — 1 应被 skip(因为 cursor 已到 3)
+    // [2, 1, 3] — 1 与已合并的 [2,3) 相邻，归并为一个 span 覆盖 b、c、d。
     const segs = flatten(highlightSegments('abcd', [2, 1, 3]));
     expect(segs).toEqual([
-      { kind: 'plain', text: 'ab' },
-      { kind: 'mark', text: 'c' },
-      { kind: 'mark', text: 'd' },
+      { kind: 'plain', text: 'a' },
+      { kind: 'mark', text: 'bcd' },
     ]);
   });
 
@@ -134,5 +130,31 @@ describe('highlightSegments — defensive', () => {
     const markEl = segs.find((s) => isValidElement(s));
     expect(markEl).toBeDefined();
     expect(isValidElement(markEl) && (markEl.props as { className: string }).className).toBe('custom-x');
+  });
+
+  it('keeps surrogate pairs intact when an index lands on a low surrogate', () => {
+    // emoji 命中（fuzzyTitleMatch 会给出低代理位下标）：
+    // 旧实现把代理对拆成两个 half-surrogate mark（乱码）；现在合并回完整码点。
+    const segs = flatten(highlightSegments('a😀b', [1, 2]));
+    expect(segs).toEqual([
+      { kind: 'plain', text: 'a' },
+      { kind: 'mark', text: '😀' },
+      { kind: 'plain', text: 'b' },
+    ]);
+  });
+
+  it('extends an index on the high surrogate to the full pair', () => {
+    const segs = flatten(highlightSegments('a😀b', [1]));
+    expect(segs).toEqual([
+      { kind: 'plain', text: 'a' },
+      { kind: 'mark', text: '😀' },
+      { kind: 'plain', text: 'b' },
+    ]);
+  });
+
+  it('reconstructs titles containing astral characters exactly', () => {
+    const title = 'a😀b𠀀c';
+    const out = highlightSegments(title, [1, 2, 4, 5]);
+    expect(reconstruct(out)).toBe(title);
   });
 });

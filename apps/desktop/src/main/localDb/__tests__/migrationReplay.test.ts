@@ -161,6 +161,22 @@ describeMigrationReplay('migration replay', () => {
       expect(triggerExists(db, 'schedule_session_latest_run_update')).toBe(true);
       expect(unreadRunPlan.some((row) => row.detail.includes('idx_schedule_runs_unread_terminal')))
         .toBe(true);
+
+      db.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES ('s-cjk', 1, 1)").run();
+      db.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES ('m-cjk', 'c-cjk', 's-cjk', 'user', '登录报错了', 1)`,
+      ).run();
+      const indexed = db
+        .prepare('SELECT content FROM messages_fts WHERE message_id = ?')
+        .get('m-cjk') as { content: string };
+      expect(indexed.content).toBe('登 录 报 错 了');
+      expect(
+        db
+          .prepare("SELECT message_id FROM messages_fts WHERE messages_fts MATCH '\"登 录\"'")
+          .pluck()
+          .all(),
+      ).toEqual(['m-cjk']);
     } finally {
       cleanup();
     }

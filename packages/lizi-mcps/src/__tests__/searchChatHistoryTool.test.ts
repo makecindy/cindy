@@ -54,6 +54,14 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('search_chat_history tool', () => {
+  it('超长 query → INVALID_ARGS (zod)', async () => {
+    const { registry, searchChatHistory } = setup(makeResult());
+    const res = await registry.call('search_chat_history', { query: '边'.repeat(257) });
+    expect(res.isError).toBe(true);
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(searchChatHistory).not.toHaveBeenCalled();
+  });
+
   it('缺 query → INVALID_ARGS (zod)', async () => {
     const { registry, searchChatHistory } = setup(makeResult());
     const res = await registry.call('search_chat_history', {});

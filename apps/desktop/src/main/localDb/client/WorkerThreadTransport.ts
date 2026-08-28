@@ -63,6 +63,41 @@ function applyPragmas(nextDb) {
   nextDb.pragma('busy_timeout = 5000');
 }
 
+function registerCjkSeg(nextDb) {
+  const hanChar = /\\p{Script=Han}/u;
+  const letterOrNumber = /[\\p{L}\\p{N}]/u;
+  const mark = /\\p{M}/u;
+  nextDb.function('cjk_seg', { deterministic: true }, (value) => {
+    if (value == null) return null;
+    const text = typeof value === 'string' ? value : String(value);
+    if (text.length === 0) return text;
+    const chars = Array.from(text);
+    let out = '';
+    let lastBoundary = '';
+    for (let i = 0; i < chars.length; i += 1) {
+      const ch = chars[i];
+      if (mark.test(ch)) {
+        out += ch;
+        continue;
+      }
+      if (lastBoundary) {
+        const hanNow = hanChar.test(ch);
+        const hanPrev = hanChar.test(lastBoundary);
+        if ((hanNow && hanPrev) || (hanNow && letterOrNumber.test(lastBoundary)) || (hanPrev && letterOrNumber.test(ch))) {
+          out += ' ';
+        }
+      }
+      out += ch;
+      lastBoundary = ch;
+    }
+    return out;
+  });
+  const row = nextDb.prepare("SELECT cjk_seg(?) AS v").get('探针');
+  if (!row || row.v !== '探 针') {
+    throw new Error("cjk_seg probe failed: expected '探 针', got " + JSON.stringify(row && row.v));
+  }
+}
+
 function hashMigrationFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf-8');
   const normalized = raw.replace(/\\r\\n/g, '\\n');
@@ -206,6 +241,7 @@ function createDatabase(opts) {
   const dbOpts = opts && opts.nativeBinding ? { nativeBinding: opts.nativeBinding } : {};
   const nextDb = new Database(dbPath, dbOpts);
   try {
+    registerCjkSeg(nextDb);
     applyPragmas(nextDb);
     if (dbPath !== ':memory:') {
       const vec = loadSqliteVec(nextDb, opts.sqliteVecExtPath);

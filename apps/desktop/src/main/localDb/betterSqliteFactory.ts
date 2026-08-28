@@ -5,6 +5,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import { createLogger, maskPath } from '../logger';
+import { assertCjkSegRegistered, registerCjkSeg } from './registerCjkSeg';
 
 const log = createLogger('localDb/betterSqliteFactory');
 
@@ -129,6 +130,8 @@ export function createBetterSqliteDatabase(
   // 打开成功后再收紧一次:覆盖本次刚创建的新库,以及 WAL pragma 之前 / 之后 SQLite
   // 创建的 -wal / -shm 伴随文件(继承主库 0600)。
   restrictDbFilePermissions(filename);
+  registerCjkSeg(db);
+  assertCjkSegRegistered(db);
   return db;
 }
 

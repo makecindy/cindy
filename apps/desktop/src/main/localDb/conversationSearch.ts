@@ -128,7 +128,10 @@ export async function searchConversations(
     if (!messageClientId) continue;
     const hitContext = hit.context.find((item) => item.isHit) ?? hit.context[0] ?? null;
     const preview = normalizeConversationContentPreview(hit.role, hitContext?.content ?? '', query);
-    const ftsRank = preview.keywordMatchedVisibleText ? hit.ftsRank : null;
+    // 可见文本对 query 字面不匹配时，仍可能是 FTS 命中（porter 词干 / 去音标 /
+    // 「边，界」按字相邻）。不要清掉 ftsRank，否则 FTS-only 结果会被整条丢弃。
+    // 隐藏合成指令行（visibleText 为空）除外，那条路径仍要丢弃以免泄漏。
+    const ftsRank = preview.preview.length === 0 ? null : hit.ftsRank;
     if (ftsRank === null && hit.vectorRank === null) continue;
     contentHits.push({
       session,
