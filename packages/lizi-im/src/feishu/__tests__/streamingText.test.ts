@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   uploadImage: vi.fn(),
   // 默认无 patchable opener — 走新建流式卡路径
   claimPatchableOpener: vi.fn(() => null),
+  resolveMediaUrl: vi.fn((): string | null => null),
 }));
 
 vi.mock('../outbound.js', () => mocks);
@@ -23,6 +24,10 @@ vi.mock('../dualDelivery.js', () => ({
 }));
 vi.mock('../moduleScope.js', () => ({
   getLog: () => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+  getHost: () => ({
+    media: { resolveMediaUrl: mocks.resolveMediaUrl },
+    paths: { feishuMediaDir: '/tmp/feishu-media' },
+  }),
 }));
 
 import { messages } from '../messages.js';
@@ -56,6 +61,7 @@ describe('feishu streaming text', () => {
     mocks.sendCardToChat.mockResolvedValue({ messageId: 'om_mirror' });
     mocks.sendFileToChat.mockResolvedValue({ ok: true, messageId: 'om_mirror_file' });
     mocks.sendText.mockResolvedValue({ messageId: 'om_fallback' });
+    mocks.resolveMediaUrl.mockReturnValue(null);
   });
 
   it('keeps an in-limit final card unchanged', async () => {
@@ -178,6 +184,44 @@ describe('feishu streaming text', () => {
 
     expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe('终态正文');
+  });
+
+  it('does not re-upload extra images already inlined in the mirrored markdown', async () => {
+    const absPath = '/cindy-media/same.png';
+    mocks.resolveMediaUrl.mockReturnValue(absPath);
+    mocks.uploadImage.mockImplementation(async (p: string) => `img:${p}`);
+
+    await mirrorFinal(
+      'oc_group',
+      'h'.repeat(64),
+      '见 ![图](xdt-image://blob/same.png)',
+      [absPath],
+    );
+
+    expect(mocks.uploadImage.mock.calls.filter(([p]) => p === absPath)).toHaveLength(1);
+    expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('mirrors file-only replies with fileSentDone instead of emptyReply', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-fileonly-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+
+    await mirrorFinal(
+      'oc_group',
+      'i'.repeat(64),
+      `[report.txt](xdt-file://${allowedFile})`,
+      [],
+      [root],
+    );
+
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
+      messages.streaming.fileSentDone(1),
+    );
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).not.toBe(
+      messages.streaming.emptyReply,
+    );
   });
 
   it('catches late-confirmation one-shot mirror failures instead of unhandledRejection', async () => {

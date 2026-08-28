@@ -523,33 +523,46 @@ export async function mirrorFinal(
   const send = async (): Promise<void> => {
     const imageUrls = collectXdtImageUrls(text);
     const imageMap = new Map<string, string>();
+    const bodyImageAbsPaths = new Set<string>();
     if (imageUrls.length > 0) {
       const { resolveFeishuMediaUrl } = await import('./mediaCache.js');
       const { getHost } = await import('./moduleScope.js');
       const results = await Promise.all(
         imageUrls.map(async (url) => {
+          let absPath: string;
           try {
-            const absPath =
+            absPath =
               getHost().media?.resolveMediaUrl(url) ??
               resolveFeishuMediaUrl(url, getHost().paths.feishuMediaDir).absPath;
-            const key = await uploadImage(absPath);
-            return key ? ([url, key] as const) : null;
           } catch {
             return null;
           }
+          bodyImageAbsPaths.add(absPath);
+          const key = await uploadImage(absPath);
+          return key ? ([url, key] as const) : null;
         }),
       );
       for (const result of results) {
         if (result) imageMap.set(result[0], result[1]);
       }
     }
-    const imageKeys = await uploadExtraImageKeys(extraImageAbsPaths);
+    const imageKeys = await uploadExtraImageKeys(
+      extraImageAbsPaths.filter((absPath) => !bodyImageAbsPaths.has(absPath)),
+    );
     const fileLinks = collectXdtFileLinks(text);
     const cardText = stripXdtFileLinks(text);
+    const cardTextTrimmed = cardText.trim();
     const hasImages = imageUrls.length > 0 || imageKeys.length > 0;
-    let card = hasImages
-      ? buildMixedMarkdownCardV2(cardText, imageMap, imageKeys)
-      : buildMarkdownCardV2(cardText.trim() ? cardText : transportMessages.streaming.emptyReply);
+    let card: unknown;
+    if (cardTextTrimmed.length === 0 && !hasImages && fileLinks.length > 0) {
+      card = buildMarkdownCardV2(transportMessages.streaming.fileSentDone(fileLinks.length));
+    } else if (hasImages) {
+      card = buildMixedMarkdownCardV2(cardText, imageMap, imageKeys);
+    } else {
+      card = buildMarkdownCardV2(
+        cardTextTrimmed.length > 0 ? cardText : transportMessages.streaming.emptyReply,
+      );
+    }
     card = fitCardToLimit(cardText, card, (visibleText) =>
       hasImages
         ? buildMixedMarkdownCardV2(visibleText, imageMap, imageKeys)
