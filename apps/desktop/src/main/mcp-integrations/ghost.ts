@@ -1774,7 +1774,19 @@ export function getCindyGhostsMcpDeps(
         // 新账号的插件用不了它们,旧账号那笔授权也没被撤销。派发前(这里是
         // grantOnlySucceeded 落地前)统一核对,漂移就当拒绝处理,交给下面
         // finally 的撤销收拾。
-        const grantOnlyOwnerScopeKeyAtStart = activeOwnerScopeKey();
+        // setup/OAuth 返回后先核对整段交接开始时的 owner。不能在这里重新
+        // 捕获一个新的 owner 作为 grant 基准:若账号已切换,grantAttachmentUrls
+        // 会把旧会话解析出的附件写进新账号的账本。
+        if (activeOwnerScopeKey() !== ownerScopeKeyAtHandoffStart) {
+          log.warn('ghost grant-only: denied, owner scope changed during setup wait', {
+            ghostId,
+          });
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: '账号状态已变化，为了安全未执行预授权，请重试。',
+          };
+        }
         const grant = await grantAttachmentUrls({
           ghostId,
           urls: attachments!,
@@ -1829,10 +1841,10 @@ export function getCindyGhostsMcpDeps(
           // postGrantVisibility 再判一次 blockedToolVerdict。
           const postGrantBlocked = blockedToolVerdict(postGrantVisibility.ghost.manifest.tools, true);
           if (postGrantBlocked) return postGrantBlocked;
-          // 同一收口点核对 owner 是否漂移(见 grantOnlyOwnerScopeKeyAtStart
+          // 同一收口点核对 owner 是否漂移(见 ownerScopeKeyAtHandoffStart
           // 旁边的注释)——visibility/setup/blocked 都只现查"当前活跃账号",
           // 单靠它们查不出"这还是不是授权发生时那个账号"。
-          if (activeOwnerScopeKey() !== grantOnlyOwnerScopeKeyAtStart) {
+          if (activeOwnerScopeKey() !== ownerScopeKeyAtHandoffStart) {
             log.warn('ghost grant-only: denied, owner scope changed during grant wait', {
               ghostId,
             });

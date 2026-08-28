@@ -2158,6 +2158,37 @@ describe('Full Access 插件文件交接', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it('grant_only 在插件 setup 等待期间账号切换:不把附件预授权写进新账号', async () => {
+    const file = path.join(outsideDir, 'grant-only-owner-switch-during-setup.png');
+    fs.writeFileSync(file, Buffer.from('grant-only-owner-switch-during-setup'));
+    activeOwnerScopeKeyMock
+      .mockReturnValueOnce('local:owner-a:0') // setup 等待前捕获的 owner 快照
+      .mockReturnValue('local:owner-b:0'); // setup 返回后的预授权前复判
+    ensureReadyMock.mockImplementationOnce(async () => {
+      // 模拟 OAuth/设置确认等待期间发生 account-switch。
+      activeOwnerScopeKeyMock.mockReturnValue('local:owner-b:0');
+      return {
+        ok: true as const,
+        assessment: { state: 'ready' as const, revision: 0, groups: [] },
+      };
+    });
+
+    const result = await makeDeps('codex', 'grant-only-owner-switch-during-setup').callGhostTool({
+      ghostId: 'art',
+      tool: 'ignored-tool',
+      args: {},
+      attachments: [file],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(ensureReadyMock).toHaveBeenCalledTimes(1);
+    // 账号漂移必须在 grantAttachmentUrls 写入持久账本前拦住。
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(revokeAttachmentsMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('附件授权成功后到派发之间账号切换：撤销旧账号的授权，不派发到新账号', async () => {
     // 回归 Codex 新发现的 P1:grantAttachmentUrls 只保证授权写入那一刻的
     // owner 没漂移;它返回之后到实际派发之间还有 dir/save_dir 确认、
