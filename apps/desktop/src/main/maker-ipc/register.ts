@@ -15701,17 +15701,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const relinkCodexThreadForRuntimeSelection = (
         relinkInput: Parameters<typeof relinkCodexThreadForCredentialSwitch>[0],
       ) =>
-        relinkCodexThreadForCredentialSwitch(
-          internalOptions.source === 'user'
-            ? {
-                ...relinkInput,
-                persistedRouteTransition: {
-                  previous: persistedRuntimeSourceRoute,
-                  next: persistedRuntimeTargetRoute,
-                },
-              }
-            : relinkInput,
-        );
+        relinkCodexThreadForCredentialSwitch({
+          ...relinkInput,
+          persistedRouteTransition: {
+            previous: persistedRuntimeSourceRoute,
+            next: persistedRuntimeTargetRoute,
+          },
+        });
       let appliedCodexThreadRelink: CodexProviderThreadRelinkReceipt | undefined;
       let appliedPersistedRuntimeRoute:
         | {
@@ -15908,8 +15904,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : { status: 'applied' as const };
         if (result.status === 'applied') {
           appliedCodexThreadRelink = result.codexThreadRelink;
-          if (appliedCodexThreadRelink && internalOptions.source === 'user') {
-            // The relink CAS already committed thread + route as one restart-safe tuple.
+          if (appliedCodexThreadRelink) {
+            // Every route-explicit runtime source uses the same relink CAS, so fallback and
+            // Agent selections are restart-safe and share the complete-tuple rollback path.
             appliedPersistedRuntimeRoute = persistedRuntimeTargetRoute;
           }
         }

@@ -190,11 +190,21 @@ describe('session runtime control wiring', () => {
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
   });
 
-  it('commits an immediate user Codex relink and route in one SQLite CAS', () => {
+  it('commits immediate user, fallback, and Agent Codex relinks in one SQLite CAS', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const fallback = handlerBody(
+      registerSource,
+      'const maybeApplySessionRuntimeFallback = async (',
+      'const sessionControlService = createSessionControlService({',
+    );
+    const agent = handlerBody(
+      registerSource,
+      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {',
+      'assertExternalInputAllowed: assertReviewExternalInputAllowed',
     );
     const sourceTuple = setModel.indexOf('const persistedRuntimeSourceRoute:');
     const targetTuple = setModel.indexOf('const persistedRuntimeTargetRoute:', sourceTuple);
@@ -234,16 +244,28 @@ describe('session runtime control wiring', () => {
       'fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode',
     );
     expect(wrapper).toBeGreaterThan(targetTuple);
-    expect(setModel.slice(wrapper, injected)).toContain("internalOptions.source === 'user'");
+    expect(setModel.slice(wrapper, injected)).not.toContain(
+      "internalOptions.source === 'user'",
+    );
     expect(setModel.slice(transition, injected)).toContain(
       'previous: persistedRuntimeSourceRoute',
     );
     expect(setModel.slice(transition, injected)).toContain('next: persistedRuntimeTargetRoute');
     expect(injected).toBeGreaterThan(transition);
     expect(markAtomicRoute).toBeGreaterThan(appliedReceipt);
+    expect(setModel.slice(appliedReceipt, markAtomicRoute)).not.toContain(
+      "internalOptions.source === 'user'",
+    );
     expect(skipSecondWrite).toBeGreaterThan(markAtomicRoute);
     expect(persist).toBeGreaterThan(-1);
     expect(persist).toBeGreaterThan(skipSecondWrite);
+    for (const [body, source] of [
+      [fallback, 'fallback'],
+      [agent, 'agent'],
+    ] as const) {
+      expect(body).toContain('applySessionRuntimeSelection(');
+      expect(body).toContain(`source: '${source}'`);
+    }
   });
 
   it('rolls back the complete persisted route before an owner-boundary request exits', () => {
