@@ -1,8 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { relinkCodexProviderThread } from '../codexProviderThreadRelink.js';
+import {
+  commitCodexProviderThreadRelinkWithBoundaryGuard,
+  relinkCodexProviderThread,
+} from '../codexProviderThreadRelink.js';
 
 describe('relinkCodexProviderThread', () => {
+  it.each(['account switch', 'teardown', 'client epoch change'])(
+    'rolls back a CAS when %s happens while the write is awaiting',
+    async () => {
+      let boundaryCurrent = true;
+      let sdkSessionId = 'thread-old';
+      const rollback = vi.fn(async () => {
+        if (sdkSessionId !== 'thread-new') return false;
+        sdkSessionId = 'thread-old';
+        return true;
+      });
+
+      await expect(
+        commitCodexProviderThreadRelinkWithBoundaryGuard({
+          isBoundaryCurrent: () => boundaryCurrent,
+          commit: async () => {
+            sdkSessionId = 'thread-new';
+            boundaryCurrent = false;
+            return true;
+          },
+          rollback,
+        }),
+      ).resolves.toBe(false);
+
+      expect(rollback).toHaveBeenCalledOnce();
+      expect(sdkSessionId).toBe('thread-old');
+    },
+  );
+
   it('forks a provider-neutral history and CAS-relinks the Cindy session', async () => {
     const fork = vi.fn(async () => ({ newSdkSessionId: 'thread-openai' }));
     const commit = vi.fn(async () => true);

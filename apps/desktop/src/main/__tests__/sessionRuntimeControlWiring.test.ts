@@ -193,11 +193,29 @@ describe('session runtime control wiring', () => {
       'const recoverRemoteRuntimeAxisPersistence',
     );
     const persist = setModel.indexOf('await persistSessionFields(sessionId, patch)');
-    const rollback = setModel.indexOf('await result.codexThreadRelink.rollback()');
+    const rollback = setModel.indexOf('await result.codexThreadRelink.rollback()', persist);
 
     expect(persist).toBeGreaterThan(-1);
     expect(rollback).toBeGreaterThan(persist);
     expect(setModel).toContain("throw new Error('Codex thread relink rollback was superseded')");
+  });
+
+  it('rolls back a committed Codex relink before an owner-boundary request exits', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const guard = setModel.indexOf(
+      'const rollbackRelinkForSupersededOwner = async (): Promise<boolean> => {',
+    );
+    const rollback = setModel.indexOf('await result.codexThreadRelink.rollback();', guard);
+    const ownerFailure = setModel.indexOf('assertRuntimeOwnerCurrent();', guard);
+
+    expect(guard).toBeGreaterThan(-1);
+    expect(rollback).toBeGreaterThan(guard);
+    expect(ownerFailure).toBeGreaterThan(rollback);
+    expect(setModel.match(/await rollbackRelinkForSupersededOwner\(\)/g)).toHaveLength(2);
   });
 
   it('passes the locked persistent thread identity into runtime model switching', () => {

@@ -882,6 +882,7 @@ import {
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
 import {
+  commitCodexProviderThreadRelinkWithBoundaryGuard,
   relinkCodexProviderThread,
   type CodexProviderThreadRelinkReceipt,
 } from './codexProviderThreadRelink.js';
@@ -3144,6 +3145,24 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
   const dbSnapshot = getCurrentDbClientSnapshot();
   if (!dbSnapshot) throw new Error('Codex provider thread relink requires an active database');
 
+  const rollbackCapturedRelink = async (params: {
+    sessionId: string;
+    previousSdkSessionId: string;
+    newSdkSessionId: string;
+  }): Promise<boolean> => {
+    const write = await dbSnapshot.client.drizzle
+      .update(sessions)
+      .set({ sdkSessionId: params.previousSdkSessionId, updatedAt: Date.now() })
+      .where(
+        and(
+          eq(sessions.id, params.sessionId),
+          eq(sessions.sdkSessionId, params.newSdkSessionId),
+        ),
+      )
+      .run();
+    return write.changes > 0;
+  };
+
   const relinked = await relinkCodexProviderThread(
     {
       readSource: async (sessionId) => {
@@ -3170,28 +3189,39 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
         return { newSdkSessionId: forked.newSdkSessionId };
       },
       commit: async ({ sessionId, expectedSdkSessionId, newSdkSessionId, isCurrent }) => {
-        if (
-          isCurrent?.() === false ||
-          !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
-          getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
-        ) {
-          return false;
-        }
+        const isBoundaryCurrent = (): boolean =>
+          isCurrent?.() !== false &&
+          isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+          getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch;
         const now = Date.now();
-        const write = await dbSnapshot.client.drizzle
-          .update(sessions)
-          .set({ sdkSessionId: newSdkSessionId, updatedAt: now })
-          .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, expectedSdkSessionId)))
-          .run();
-        if (write.changes === 0) return false;
-        // register()/clear() can supersede a deferred target while SQLite awaits. Undo the
-        // just-written CAS before yielding to the newer generation.
-        if (isCurrent?.() === false) {
-          await dbSnapshot.client.drizzle
-            .update(sessions)
-            .set({ sdkSessionId: expectedSdkSessionId, updatedAt: Date.now() })
-            .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, newSdkSessionId)))
-            .run();
+        const committed = await commitCodexProviderThreadRelinkWithBoundaryGuard({
+          isBoundaryCurrent,
+          commit: async () => {
+            const write = await dbSnapshot.client.drizzle
+              .update(sessions)
+              .set({ sdkSessionId: newSdkSessionId, updatedAt: now })
+              .where(
+                and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, expectedSdkSessionId)),
+              )
+              .run();
+            return write.changes > 0;
+          },
+          rollback: () =>
+            rollbackCapturedRelink({
+              sessionId,
+              previousSdkSessionId: expectedSdkSessionId,
+              newSdkSessionId,
+            }),
+        });
+        if (!committed) return false;
+        // The post-write guard above covers pending generation, owner scope, and client epoch.
+        // Broadcast only after all three still match the initiating selection.
+        if (!isBoundaryCurrent()) {
+          await rollbackCapturedRelink({
+            sessionId,
+            previousSdkSessionId: expectedSdkSessionId,
+            newSdkSessionId,
+          });
           return false;
         }
         broadcastSessionPatched(
@@ -3223,32 +3253,28 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
   return {
     ...relinked,
     rollback: async () => {
+      // Always compensate against the captured DB. Owner teardown/account switch may make
+      // the current client differ, but that must not strand the relink in the old profile.
+      const restored = await rollbackCapturedRelink({
+        sessionId: input.sessionId,
+        previousSdkSessionId: relinked.previousSdkSessionId,
+        newSdkSessionId: relinked.newSdkSessionId,
+      });
+      if (!restored) return false;
       if (
-        !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
-        getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+        isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+        getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch
       ) {
-        return false;
+        const now = Date.now();
+        broadcastSessionPatched(
+          input.sessionId,
+          {
+            sdkSessionId: relinked.previousSdkSessionId,
+            updatedAt: new Date(now).toISOString(),
+          },
+          ownerScope,
+        );
       }
-      const now = Date.now();
-      const write = await dbSnapshot.client.drizzle
-        .update(sessions)
-        .set({ sdkSessionId: relinked.previousSdkSessionId, updatedAt: now })
-        .where(
-          and(
-            eq(sessions.id, input.sessionId),
-            eq(sessions.sdkSessionId, relinked.newSdkSessionId),
-          ),
-        )
-        .run();
-      if (write.changes === 0) return false;
-      broadcastSessionPatched(
-        input.sessionId,
-        {
-          sdkSessionId: relinked.previousSdkSessionId,
-          updatedAt: new Date(now).toISOString(),
-        },
-        ownerScope,
-      );
       log.info('Codex provider thread relink rolled back', {
         sessionId: input.sessionId,
         fromThreadId: relinked.newSdkSessionId,
@@ -15463,7 +15489,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: result.status === 'deferred',
           superseded: false,
         };
-        if (supersededByOwnerBoundary()) {
+        const rollbackRelinkForSupersededOwner = async (): Promise<boolean> => {
+          if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return false;
+          if (result.status === 'applied' && result.codexThreadRelink) {
+            await result.codexThreadRelink.rollback();
+          }
+          if (internalOptions.source === 'user') {
+            assertRuntimeOwnerCurrent();
+          }
+          return true;
+        };
+        if (await rollbackRelinkForSupersededOwner()) {
           return { deferred: false, superseded: true };
         }
         if (atomicSelection) {
@@ -15571,7 +15607,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentSwitchIntent: null,
           agentSwitchIntentCanceled: true,
         });
-        if (supersededByOwnerBoundary()) {
+        if (await rollbackRelinkForSupersededOwner()) {
           return { deferred: false, superseded: true };
         }
         let generation: number;

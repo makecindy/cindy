@@ -18,6 +18,24 @@ export interface CodexProviderThreadRelinkReceipt {
   rollback(): Promise<boolean>;
 }
 
+/**
+ * Commit a relink only while its owner/generation boundary remains current.
+ * The write itself may yield, so a boundary change after the preflight check
+ * must be compensated against the same captured database before returning.
+ */
+export async function commitCodexProviderThreadRelinkWithBoundaryGuard(input: {
+  isBoundaryCurrent: () => boolean;
+  commit: () => Promise<boolean>;
+  rollback: () => Promise<boolean>;
+}): Promise<boolean> {
+  if (!input.isBoundaryCurrent()) return false;
+  const committed = await input.commit();
+  if (!committed) return false;
+  if (input.isBoundaryCurrent()) return true;
+  await input.rollback();
+  return false;
+}
+
 function resolveForkSourceProviderId(
   sourceProviderId: string | null,
   sourceThreadModelProviderId: string | null | undefined,
