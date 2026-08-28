@@ -127,6 +127,7 @@ import {
   getDraft as getComposerDraft,
   plainTextToTiptapDoc,
   quickStartTextToTiptapDoc,
+  restoreRemoteOptimisticDraft,
   saveDraft as saveComposerDraft,
 } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
@@ -146,8 +147,11 @@ import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
 import {
+  loadAllCommands,
   rebaseInlineRangesAfterSlashCommandRewrite,
+  reconcilePiRuntimeCommandForDispatch,
   rewritePiSkillMessageForSend,
 } from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
@@ -4192,9 +4196,12 @@ export function NewMakerDraftRoute() {
           const sendWorkingDir = workingDir ?? newSession.workingDir;
           const preNavDraftDoc = getComposerDraft(NEW_MAKER_DRAFT_KEY)?.text ?? null;
           const restoreFirstMessageDraft = () => {
-            saveComposerDraft(newSession.id, {
+            // FIFO 插回失败的首条,不覆盖用户在等待期间已经写进新任务输入框的内容。
+            restoreRemoteOptimisticDraft(newSession.id, {
+              clientId: `local-first:${newSession.id}`,
               text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
               attachments: rehydratedFiles ?? [],
+              browserComments: [],
             });
             emitAutoTitlePreviewCleared(newSession.id);
             clearSessionStarting(newSession.id);
@@ -4227,6 +4234,81 @@ export function NewMakerDraftRoute() {
           }
 
           try {
+            const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
+            if (slashMatch) {
+              const cmdName = slashMatch[1].toLowerCase();
+              const args = slashMatch[2] ?? '';
+              const commands = await loadAllCommands(capabilityAgentKind, sendWorkingDir, {
+                sessionId: newSession.id,
+              });
+              const { command: hit } = await reconcilePiRuntimeCommandForDispatch({
+                agentKind: capabilityAgentKind,
+                sessionId: newSession.id,
+                commandName: cmdName,
+                commands,
+                reload: () =>
+                  loadAllCommands(capabilityAgentKind, sendWorkingDir, {
+                    sessionId: newSession.id,
+                    forceReload: true,
+                  }),
+              });
+              if (hit?.kind === 'desktop') {
+                if (hit.name === 'review') {
+                  const attachments = rehydratedFiles?.length
+                    ? serializeAttachedFiles(rehydratedFiles)
+                    : undefined;
+                  try {
+                    await window.electronAPI.maker.startReview({
+                      sourceSessionId: newSession.id,
+                      ...(args.trim() ? { focus: args.trim() } : {}),
+                      ...(attachments?.length ? { attachments } : {}),
+                    });
+                    handOffDraftToSession();
+                    navigateToSession();
+                    opts?.onAccepted?.();
+                    void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment, {
+                      waitForLeadHistory: false,
+                    }).catch((err) => {
+                      log.error('[draft send] deferred Worker assignment after /review failed', err);
+                      toast.error(t('newChat.collaboration.assignmentFailed'));
+                    });
+                  } catch (err) {
+                    const ipcError = extractIpcError(err);
+                    toast.error(
+                      ipcError
+                        ? t('review.toast.failed')
+                        : err instanceof Error
+                          ? err.message
+                          : t('review.toast.failed'),
+                    );
+                    restoreFirstMessageDraft();
+                    handOffDraftToSession();
+                    navigateToSession();
+                  }
+                  return;
+                }
+                // /help /issue /cmd 等依赖 SessionView 挂上后再消费 DESKTOP_COMMAND_TRIGGERED。
+                setPending(newSession.id, {
+                  text: message,
+                  files: rehydratedFiles,
+                  mentions,
+                  ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
+                  ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
+                  ...(opts?.pastedTextRanges?.length
+                    ? { pastedTextRanges: opts.pastedTextRanges }
+                    : {}),
+                  ...(opts?.slashCommandRanges !== undefined
+                    ? { slashCommandRanges: opts.slashCommandRanges }
+                    : {}),
+                  ...(deferredUiAssignment ? { deferredUiAssignment } : {}),
+                });
+                opts?.onAccepted?.();
+                handOffDraftToSession();
+                navigateToSession();
+                return;
+              }
+            }
+
             const dispatchedMessage = await rewritePiSkillMessageForSend({
               agentKind: capabilityAgentKind,
               message,
@@ -4277,8 +4359,11 @@ export function NewMakerDraftRoute() {
                       toast.error(t('newChat.collaboration.assignmentFailed'));
                     },
                   );
-                } else if (deferredUiAssignment) {
-                  toast.error(t('newChat.collaboration.assignmentFailed'));
+                } else {
+                  restoreFirstMessageDraft();
+                  if (deferredUiAssignment) {
+                    toast.error(t('newChat.collaboration.assignmentFailed'));
+                  }
                 }
               },
               (err) => {

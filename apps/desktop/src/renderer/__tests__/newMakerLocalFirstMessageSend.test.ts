@@ -29,35 +29,54 @@ describe('NewMakerDraftRoute local first-message send', () => {
       localFence,
     );
     const navigate = source.indexOf('navigateToSession();', sendMessage);
-    const pendingHandoff = source.indexOf('setPending(newSession.id', localFence);
 
     expect(localFence).toBeGreaterThan(-1);
     expect(sendMessage).toBeGreaterThan(localFence);
     expect(navigate).toBeGreaterThan(sendMessage);
-    expect(pendingHandoff).toBe(-1);
   });
 
-  it('does not register a memory-only pending payload for local new tasks', () => {
+  it('does not register a memory-only pending payload for ordinary local text', () => {
+    const localSend = source.indexOf('const sendPromise = makerChatStore.sendMessage(', localFence);
+    const pendingAfterSend = source.indexOf('setPending(newSession.id', localSend);
     expect(source).toContain('setPending(remoteSessionId, {');
-    expect(source).not.toContain('setPending(newSession.id');
     expect(pendingSource).toContain('本机新建不走这里:草稿路由 createSession 后直接 sendMessage');
+    expect(pendingAfterSend).toBe(-1);
   });
 
-  it('restores the first-message draft onto the created task if send throws', () => {
+  it('restores a rejected or thrown first send onto the created task without clobbering newer input', () => {
     const localSend = source.indexOf('const sendWorkingDir = workingDir ?? newSession.workingDir;');
     const restore = source.indexOf('const restoreFirstMessageDraft = () => {', localSend);
+    const fifoRestore = source.indexOf('restoreRemoteOptimisticDraft(newSession.id, {', restore);
     const saveDraft = source.indexOf('saveComposerDraft(newSession.id, {', restore);
     const catchRestore = source.indexOf(
       'restoreFirstMessageDraft();',
       source.indexOf("log.error('[draft send]', err);", localFence),
     );
+    const falseRestore = source.indexOf(
+      'restoreFirstMessageDraft();',
+      source.indexOf('} else {', source.indexOf('(accepted) => {', localFence)),
+    );
 
     expect(restore).toBeGreaterThan(localSend);
-    expect(saveDraft).toBeGreaterThan(restore);
-    expect(catchRestore).toBeGreaterThan(saveDraft);
+    expect(fifoRestore).toBeGreaterThan(restore);
+    expect(fifoRestore).toBeLessThan(catchRestore);
+    expect(saveDraft).toBe(-1);
+    expect(catchRestore).toBeGreaterThan(fifoRestore);
+    expect(falseRestore).toBeGreaterThan(fifoRestore);
+    expect(falseRestore).not.toBe(catchRestore);
   });
 
-  it('keeps remote delayed-create consumption on SessionView', () => {
+  it('dispatches local /review from the draft route and keeps other desktop commands on SessionView', () => {
+    const reviewStart = source.indexOf('window.electronAPI.maker.startReview({', localFence);
+    const desktopPending = source.indexOf(
+      "if (hit?.kind === 'desktop') {",
+      localFence,
+    );
+    const pendingHandoff = source.indexOf('setPending(newSession.id, {', desktopPending);
+
+    expect(reviewStart).toBeGreaterThan(localFence);
+    expect(desktopPending).toBeGreaterThan(localFence);
+    expect(pendingHandoff).toBeGreaterThan(desktopPending);
     expect(sessionViewSource).toContain('const pending = consumePending(sessionId);');
     expect(sessionViewSource).toContain('本机新建已在');
   });
