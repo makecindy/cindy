@@ -50,6 +50,14 @@ export interface LocalProfileDataMigrationDeps {
   fs: LocalProfileDataMigrationFs;
   /** True only while no other live process can keep writing the local-v1 source. */
   hasExclusiveSourceAccess?: () => boolean;
+  /**
+   * Optional OS-level startup barrier held across snapshot publication. Windows
+   * uses it to exclude packaged builds that predate the runtime registry.
+   */
+  acquireSourcePublicationBarrier?: () => Promise<{
+    isHeld(): boolean;
+    release(): Promise<void>;
+  }>;
 }
 
 export type LocalProfileDataMigrationResult =
@@ -1035,6 +1043,9 @@ async function copyDatabaseAtomically(
     if (!linked) return false;
     published = true;
     flushPublishedDatabase(targetDb);
+    if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
+      throw new Error('local profile database adoption deferred: concurrent live instance');
+    }
     return true;
   } catch (error) {
     if (published) await deps.fs.removeIfExists(targetDb);
@@ -1087,6 +1098,9 @@ export async function adoptLocalProfileDatabase(
   const targetDb = dbPath(deps, normalizedOwnerId);
   const marker = migrationMarkerPath(deps);
   let lockDb: LocalProfileMigrationLockDb | null = null;
+  let sourcePublicationBarrier: Awaited<
+    ReturnType<NonNullable<LocalProfileDataMigrationDeps['acquireSourcePublicationBarrier']>>
+  > | null = null;
   try {
     lockDb = await acquireLocalProfileMigrationLock(marker);
     const reservation = reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker, false);
@@ -1114,12 +1128,23 @@ export async function adoptLocalProfileDatabase(
       await cleanupTemps(deps, targetDb);
       return { status: 'target-exists' };
     }
-    const sourceState = await databaseFileGroupState(deps, sourceDb);
+    if (deps.acquireSourcePublicationBarrier) {
+      sourcePublicationBarrier = await deps.acquireSourcePublicationBarrier();
+    }
+    const guardedDeps: LocalProfileDataMigrationDeps = sourcePublicationBarrier
+      ? {
+          ...deps,
+          hasExclusiveSourceAccess: () =>
+            sourcePublicationBarrier?.isHeld() === true &&
+            (deps.hasExclusiveSourceAccess?.() ?? true),
+        }
+      : deps;
+    const sourceState = await databaseFileGroupState(guardedDeps, sourceDb);
     if (sourceState.sidecarExists && !sourceState.mainExists) {
       throw new Error('source database sidecar exists without its main database');
     }
     if (!sourceState.mainExists) {
-      if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
+      if (guardedDeps.hasExclusiveSourceAccess && !guardedDeps.hasExclusiveSourceAccess()) {
         throw new Error('local profile database adoption deferred: concurrent live instance');
       }
       return { status: 'no-local-db' };
@@ -1127,10 +1152,10 @@ export async function adoptLocalProfileDatabase(
     // The same crash-released SQLite writer lock serializes marker repair and
     // the complete snapshot publication. No PID identity or reclaimable lease
     // file is involved, so a crashed process cannot block adoption forever.
-    if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
+    if (guardedDeps.hasExclusiveSourceAccess && !guardedDeps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
     }
-    const adopted = await copyDatabaseAtomically(deps, sourceDb, targetDb);
+    const adopted = await copyDatabaseAtomically(guardedDeps, sourceDb, targetDb);
     return adopted ? { status: 'adopted', sourceDb, targetDb } : { status: 'target-exists' };
   } catch (error) {
     // Migration snapshots are shared across processes. Only the SQLite writer
@@ -1144,6 +1169,7 @@ export async function adoptLocalProfileDatabase(
     };
   } finally {
     if (lockDb) releaseLocalProfileMigrationLock(lockDb);
+    await sourcePublicationBarrier?.release().catch(() => undefined);
   }
 }
 
@@ -1151,11 +1177,13 @@ export function createProductionLocalProfileDataMigrationDeps(
   userDataDir: string,
   dbFilePrefix: string,
   hasExclusiveSourceAccess?: () => boolean,
+  acquireSourcePublicationBarrier?: LocalProfileDataMigrationDeps['acquireSourcePublicationBarrier'],
 ): LocalProfileDataMigrationDeps {
   return {
     userDataDir,
     dbFilePrefix,
     fs: realFs,
     ...(hasExclusiveSourceAccess ? { hasExclusiveSourceAccess } : {}),
+    ...(acquireSourcePublicationBarrier ? { acquireSourcePublicationBarrier } : {}),
   };
 }

@@ -1146,6 +1146,133 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.access(target)).rejects.toThrow();
   });
 
+  it('keeps the first owner reservation and retries after a legacy packaged instance exits', async () => {
+    const { root, deps } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(source, 'local-db');
+    let packagedInstanceRunning = true;
+    const acquireSourcePublicationBarrier = vi.fn(async () => {
+      if (packagedInstanceRunning) {
+        throw new Error(
+          'local profile database adoption deferred: legacy packaged instance 4242 is using shared userData',
+        );
+      }
+      return { isHeld: () => true, release: vi.fn(async () => undefined) };
+    });
+
+    await expect(
+      adoptLocalProfileDatabase('owner-a', { ...deps, acquireSourcePublicationBarrier }),
+    ).resolves.toEqual({
+      status: 'failed',
+      error:
+        'local profile database adoption deferred: legacy packaged instance 4242 is using shared userData',
+    });
+    await expect(fs.access(target)).rejects.toThrow();
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+
+    packagedInstanceRunning = false;
+    await expect(
+      adoptLocalProfileDatabase('owner-a', { ...deps, acquireSourcePublicationBarrier }),
+    ).resolves.toMatchObject({ status: 'adopted', sourceDb: source, targetDb: target });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('local-db');
+    expect(acquireSourcePublicationBarrier).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds the packaged startup barrier through snapshot publication', async () => {
+    const { root, deps } = await fixture();
+    const source = path.join(root, 'cindy-local-v1.db');
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(source, 'local-db');
+    let held = true;
+    const release = vi.fn(async () => {
+      held = false;
+    });
+    const acquireSourcePublicationBarrier = vi.fn(async () => ({
+      isHeld: () => held,
+      release,
+    }));
+    const guardedDeps: LocalProfileDataMigrationDeps = {
+      ...deps,
+      acquireSourcePublicationBarrier,
+      fs: {
+        ...deps.fs,
+        backupDatabase: async (from, to) => {
+          expect(held).toBe(true);
+          await fs.copyFile(from, to);
+        },
+        link: async (from, to) => {
+          expect(held).toBe(true);
+          await fs.link(from, to);
+        },
+      },
+    };
+
+    await expect(adoptLocalProfileDatabase('owner-a', guardedDeps)).resolves.toMatchObject({
+      status: 'adopted',
+    });
+    expect(acquireSourcePublicationBarrier).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(held).toBe(false);
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('local-db');
+  });
+
+  it('removes its published target when the packaged startup barrier is lost', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    let heldChecks = 0;
+    const release = vi.fn(async () => undefined);
+
+    await expect(
+      adoptLocalProfileDatabase('owner-a', {
+        ...deps,
+        acquireSourcePublicationBarrier: async () => ({
+          // Entry and post-backup checks pass. Losing the helper before the
+          // final post-publication check must retract our target.
+          isHeld: () => ++heldChecks <= 2,
+          release,
+        }),
+      }),
+    ).resolves.toEqual({
+      status: 'failed',
+      error: 'local profile database adoption deferred: concurrent live instance',
+    });
+    expect(heldChecks).toBe(3);
+    expect(release).toHaveBeenCalledOnce();
+    await expect(fs.access(target)).rejects.toThrow();
+  });
+
+  it('checks the packaged startup barrier before accepting an absent local database', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    let packagedInstanceRunning = true;
+    const release = vi.fn(async () => undefined);
+    const acquireSourcePublicationBarrier = vi.fn(async () => {
+      if (packagedInstanceRunning) {
+        throw new Error(
+          'local profile database adoption deferred: legacy packaged instance 4242 is using shared userData',
+        );
+      }
+      return { isHeld: () => true, release };
+    });
+
+    await expect(
+      adoptLocalProfileDatabase('owner-a', { ...deps, acquireSourcePublicationBarrier }),
+    ).resolves.toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('legacy packaged instance 4242'),
+    });
+    await expect(fs.access(target)).rejects.toThrow();
+
+    packagedInstanceRunning = false;
+    await expect(
+      adoptLocalProfileDatabase('owner-a', { ...deps, acquireSourcePublicationBarrier }),
+    ).resolves.toEqual({ status: 'no-local-db' });
+    expect(acquireSourcePublicationBarrier).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it('discards the snapshot if exclusive source access is lost before publication', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');

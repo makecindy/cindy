@@ -338,6 +338,7 @@ import {
   createProductionLocalProfileDataMigrationDeps,
   inspectPassiveLocalProfileAdoption,
 } from './localProfileDataMigration';
+import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier';
 import { registerFsBrowseIpc } from './fsBrowse/ipc';
 import {
   ensureReady as localDbEnsureReady,
@@ -8080,6 +8081,13 @@ app.on('ready', async () => {
           app.getPath('userData'),
           BRAND_IDENTITY.dbFilePrefix,
           () => hasExclusiveSharedLegacyUserDataAccess(),
+          process.platform === 'win32'
+            ? () =>
+                acquireWindowsPackagedInstanceBarrier({
+                  userDataDir: app.getPath('userData'),
+                  programName: BRAND_IDENTITY.executableName,
+                })
+            : undefined,
         ),
       );
       if (localProfileMigration.status === 'failed') {
