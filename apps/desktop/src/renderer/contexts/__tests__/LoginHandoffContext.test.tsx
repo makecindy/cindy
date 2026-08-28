@@ -267,6 +267,34 @@ describe('LoginHandoff 时序(fake-timer)', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('reduced-motion 下 Splash 延迟卸载仍冻结布局,完成后才落终态', () => {
+    setReducedMotion(true);
+    render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <LoginBrandStage />
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    act(() => probe.current!.reportLoginPanelMounted());
+    fireAnchors({ splashComplete: false });
+
+    expect(probe.current!.phase).toBe('awaiting-splash-exit');
+    expect(probe.current!.brandLayout).toBe('splash');
+    expect(probe.current!.panelRevealed).toBe(false);
+    expect(probe.current!.isPlaying).toBe(true);
+
+    act(() => vi.runAllTimers());
+    expect(probe.current!.phase).toBe('awaiting-splash-exit');
+
+    act(() => probe.current!.reportSplashExitCompleted());
+    expect(probe.current!.phase).toBe('done');
+    expect(probe.current!.brandLayout).toBe('login');
+    expect(probe.current!.panelRevealed).toBe(true);
+    expect(probe.current!.sloganRevealed).toBe(true);
+    expect(probe.current!.isPlaying).toBe(false);
+    expect(screen.getByTestId('login-brand-canvas').style.transition).toBe('');
+  });
+
   it('reduced-motion 下品牌布局切换不挂 transform transition', () => {
     setReducedMotion(true);
     render(

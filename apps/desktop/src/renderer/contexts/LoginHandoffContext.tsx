@@ -62,7 +62,7 @@ export type LoginHandoffPhase =
   | 'boot' // 等推进锚(品牌资产 ∧ auth init ∧ splash 退场)
   | 'settle' // t=0~300ms
   | 'shift' // t=300~950ms
-  | 'awaiting-splash-exit' // shift 结束但 Splash 仍延迟卸载(例如数据库清理)
+  | 'awaiting-splash-exit' // handoff 尚未等到 Splash 实际卸载(例如数据库清理)
   | 'awaiting-panel' // shift 结束但「面板已挂载」信号未到(仅未登录)
   | 'panel' // 面板入场中
   | 'slogan' // Slogan 入场中(面板开始 +100ms)
@@ -159,6 +159,7 @@ export function LoginHandoffProvider({
   // 冷启动只播一次:进程生命周期内 resize/reset/登出重回 /login 均不重播。
   const playedRef = useRef(false);
   const panelMountedRef = useRef(false);
+  const reducedMotionRef = useRef(false);
   const splashExitCompletedRef = useRef(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -204,8 +205,15 @@ export function LoginHandoffProvider({
     const nextBranch: LoginHandoffBranch = authenticated ? 'authenticated' : 'unauthenticated';
     setBranch(nextBranch);
 
-    // reduced-motion 直落终态:无位移/无渐入过程。
-    if (prefersReducedMotion()) {
+    // reduced-motion 直落终态:无位移/无渐入过程;但仍要等 Splash 实际卸载,
+    // 否则延迟的数据库清理会让登录面板/品牌布局在 Splash 上方提前显现。
+    const reducedMotion = prefersReducedMotion();
+    reducedMotionRef.current = reducedMotion;
+    if (reducedMotion) {
+      if (!splashExitCompletedRef.current) {
+        setPhase('awaiting-splash-exit');
+        return;
+      }
       setPhase('done');
       return;
     }
@@ -233,9 +241,13 @@ export function LoginHandoffProvider({
     );
   }, [brandReady, splashExited, authResolved, authenticated, schedule]);
 
-  // Splash 延迟卸载时在 shift 末尾冻结;实际卸载后再恢复 panel/awaiting-panel。
+  // Splash 延迟卸载时冻结;实际卸载后再恢复终态或 panel/awaiting-panel。
   useEffect(() => {
     if (phase !== 'awaiting-splash-exit' || !splashExitCompleted) return;
+    if (reducedMotionRef.current) {
+      setPhase('done');
+      return;
+    }
     setPhase(panelMountedRef.current ? 'panel' : 'awaiting-panel');
   }, [phase, splashExitCompleted]);
 
