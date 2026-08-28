@@ -276,6 +276,71 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.onApplied).not.toHaveBeenCalled();
   });
 
+  it('restores the captured old Profile before completing an owner-stale discard', async () => {
+    const sessionId = rememberSession('pending-switch-owner-route-restore');
+    let currentOwner = { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' };
+    let persistedProfile = {
+      sdkSessionId: 'thread-xd',
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+    };
+    const restoreStaleOwnerRoute = vi.fn(async () => {
+      if (
+        persistedProfile.sdkSessionId !== 'thread-xd' ||
+        persistedProfile.model !== 'gpt-5.6-sol' ||
+        persistedProfile.providerId !== 'openai'
+      ) {
+        return false;
+      }
+      persistedProfile = {
+        sdkSessionId: 'thread-xd',
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      };
+      return true;
+    });
+    const h = createHarness([], {
+      retryDelayMs: 10,
+      isOwnerScopeCurrent: (scope) =>
+        scope.ownerScopeKey === currentOwner.ownerScopeKey &&
+        scope.runtimeOwnerEpoch === currentOwner.runtimeOwnerEpoch,
+    });
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      ownerScope: { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+      restoreStaleOwnerRoute,
+    });
+
+    currentOwner = { ownerScopeKey: 'owner-boundary', runtimeOwnerEpoch: '7' };
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.service.get(sessionId)).toBeUndefined();
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledOnce());
+
+    currentOwner = { ownerScopeKey: 'owner-a:2', runtimeOwnerEpoch: '8' };
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(persistedProfile).toEqual({
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(h.service.get(sessionId)).toBeUndefined();
+    expect(h.persistRoute).not.toHaveBeenCalled();
+  });
+
   it('does not let a stale restored target erase the new owner pending for the same session id', () => {
     const sessionId = rememberSession('pending-switch-owner-reused-session-id');
     const currentOwner = { ownerScopeKey: 'owner-b:2', runtimeOwnerEpoch: '8' };

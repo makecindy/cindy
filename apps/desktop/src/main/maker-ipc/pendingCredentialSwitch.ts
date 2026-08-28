@@ -63,9 +63,16 @@ export interface PendingCredentialSwitch {
    * 预写进 DB,不回滚的话懒 resume 会经停用隐式来源重建(PR #744 review 第十六轮)。
    * 缺席 = 无从回滚,退化为只清显式来源。
    */
-  previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+  previousRoute?: {
+    model: string;
+    providerId: string | null;
+    effort?: string;
+    fastMode?: boolean;
+  };
   /** 登记时的 data owner + runtime epoch；跨账号/teardown 后旧 target 必须终态丢弃。 */
   ownerScope?: PendingCredentialSwitchOwnerScope;
+  /** owner 失效时，针对登记时捕获的旧 Profile 成套恢复 thread + route。 */
+  restoreStaleOwnerRoute?: () => Promise<boolean>;
   requestedAt: number;
 }
 
@@ -151,6 +158,8 @@ export class PendingCredentialSwitchService {
   private readonly applying = new Set<string>();
   /** 自愈兜底定时器(per session,pending 收口即清)。 */
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** owner-stale 补偿中的 target；同步 has/get 重入不得重复写旧 Profile。 */
+  private readonly staleDiscards = new Set<PendingCredentialSwitch>();
 
   constructor(private readonly deps: PendingCredentialSwitchDeps) {}
 
@@ -170,6 +179,7 @@ export class PendingCredentialSwitchService {
         fastMode?: boolean;
       };
       ownerScope?: PendingCredentialSwitchOwnerScope;
+      restoreStaleOwnerRoute?: () => Promise<boolean>;
     },
   ): void {
     const pending: PendingCredentialSwitch = {
@@ -183,11 +193,16 @@ export class PendingCredentialSwitchService {
       ...(target.agentKind ? { agentKind: target.agentKind } : {}),
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
       ...(target.ownerScope ? { ownerScope: target.ownerScope } : {}),
+      ...(target.restoreStaleOwnerRoute
+        ? { restoreStaleOwnerRoute: target.restoreStaleOwnerRoute }
+        : {}),
       requestedAt: Date.now(),
     };
     if (!this.ownerScopeCurrent(pending)) {
       const existing = this.pending.get(sessionId);
-      if (existing && !this.ownerScopeCurrent(existing)) this.clear(sessionId);
+      if (existing && !this.ownerScopeCurrent(existing)) {
+        this.discardIfOwnerStale(sessionId, existing);
+      }
       this.deps.logger?.info('stale pending credential switch discarded at registration', {
         sessionId,
       });
@@ -697,11 +712,39 @@ export class PendingCredentialSwitchService {
   ): boolean {
     if (this.ownerScopeCurrent(target)) return false;
     if (this.pending.get(sessionId) === target) {
-      this.pending.delete(sessionId);
+      // Stop retries immediately, but keep the exact target identity until its captured old
+      // Profile has been compensated. A new owner may register the same session id meanwhile;
+      // the identity check in finally prevents the old cleanup from deleting that new target.
       this.clearRetry(sessionId);
-      this.deps.logger?.info('stale pending credential switch discarded after owner boundary', {
-        sessionId,
-      });
+      if (this.staleDiscards.has(target)) return true;
+      this.staleDiscards.add(target);
+      const restore = target.restoreStaleOwnerRoute;
+      void (async () => {
+        try {
+          if (restore) {
+            const restored = await restore();
+            if (!restored) {
+              this.deps.logger?.warn(
+                'stale pending credential switch route compensation was superseded',
+                { sessionId },
+              );
+            }
+          }
+        } catch (error) {
+          this.deps.logger?.error?.('stale pending credential switch route compensation failed', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          this.staleDiscards.delete(target);
+          if (this.pending.get(sessionId) === target) {
+            this.pending.delete(sessionId);
+          }
+          this.deps.logger?.info('stale pending credential switch discarded after owner boundary', {
+            sessionId,
+          });
+        }
+      })();
     }
     return true;
   }

@@ -93,6 +93,7 @@ export interface ApplyRuntimeSetModelChangeInput {
         effort?: string;
         fastMode?: boolean;
       };
+      restoreStaleOwnerRoute?: () => Promise<boolean>;
     },
   ) => void | Promise<void>;
   /**
@@ -128,6 +129,7 @@ export interface ApplyRuntimeSetModelChangeInput {
           effort?: string;
           fastMode?: boolean;
         };
+        restoreStaleOwnerRoute?: () => Promise<boolean>;
       }
     | undefined;
   /**

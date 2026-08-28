@@ -11,6 +11,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const pendingCredentialSwitchSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingCredentialSwitch.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -287,6 +291,7 @@ describe('session runtime control wiring', () => {
     expect(getter).toContain('pending.ownerScope');
     expect(getter).toContain('pending.sourceCodexThreadModelProviderId');
     expect(getter).toContain('pending.previousRoute');
+    expect(getter).toContain('pending.restoreStaleOwnerRoute');
   });
 
   it('binds deferred credential switches to the captured owner scope and runtime epoch', () => {
@@ -306,6 +311,18 @@ describe('session runtime control wiring', () => {
       'runtimeOwnerEpoch: captureSessionRuntimeControlOwnerEpoch()',
     );
     expect(registration).toContain('target.ownerScope ??');
+    expect(registration).toContain('const dbSnapshot = getCurrentDbClientSnapshot();');
+    expect(registration).toContain('restoreCapturedProfileRoute');
+    expect(registration).toContain('sdkSessionId: capturedPrevRow.sdkSessionId');
+    expect(registration).toContain('model: capturedPrevRow.model');
+    expect(registration).toContain('providerId: capturedPrevRow.providerId');
+    expect(registration).toContain('effort: capturedPrevRow.effort');
+    expect(registration).toContain('fastMode: capturedPrevRow.fastMode');
+    expect(registration).toContain(
+      'Codex pending credential switch requires an old-profile rollback snapshot',
+    );
+    expect(pendingCredentialSwitchSource).toContain('restoreStaleOwnerRoute');
+    expect(pendingCredentialSwitchSource).toContain('this.staleDiscards.has(target)');
     expect(service).toContain('!isAppSessionBoundaryPending()');
     expect(service).toContain('activeOwnerScopeKey() === scope.ownerScopeKey');
     expect(service).toContain(

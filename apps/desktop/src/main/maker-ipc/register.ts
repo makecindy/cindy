@@ -56,7 +56,7 @@ import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
-import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import {
   activeOwnerScopeKey,
@@ -3073,6 +3073,7 @@ export async function registerPendingCredentialSwitchForSession(
       effort?: string;
       fastMode?: boolean;
     };
+    restoreStaleOwnerRoute?: () => Promise<boolean>;
   },
 ): Promise<void> {
   const service = pendingCredentialSwitchHolder;
@@ -3085,6 +3086,7 @@ export async function registerPendingCredentialSwitchForSession(
     ownerScopeKey: activeOwnerScopeKey(),
     runtimeOwnerEpoch: captureSessionRuntimeControlOwnerEpoch(),
   };
+  const dbSnapshot = getCurrentDbClientSnapshot();
   // 捕获会话 agent:deferred 切换在收口时刻要重过停用裁决(期间目标可能被停用,
   // PR #744 review 第七轮);读不到(会话行缺失)则登记不带 agentKind = 收口不裁决。
   const dbAgentKind = getSessionDbAgentKind(sessionId);
@@ -3100,26 +3102,92 @@ export async function registerPendingCredentialSwitchForSession(
     effort: string | null;
     fastMode: boolean | null;
     providerId: string | null;
+    sdkSessionId: string | null;
   } | null = null;
   try {
-    const [row] = await getDbClient()
-      .drizzle.select({
-        model: sessions.model,
-        effort: sessions.effort,
-        fastMode: sessions.fastMode,
-        providerId: sessions.providerId,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    prevRow = row ?? null;
+    if (dbSnapshot) {
+      const [row] = await dbSnapshot.client.drizzle
+        .select({
+          model: sessions.model,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+          providerId: sessions.providerId,
+          sdkSessionId: sessions.sdkSessionId,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      prevRow = row ?? null;
+    }
   } catch {
     prevRow = null;
   }
   const prevModel = live?.model ?? prevRow?.model ?? null;
+  let restoreCapturedProfileRoute: (() => Promise<boolean>) | undefined;
+  if (dbSnapshot && prevRow?.model && prevRow.effort && prevRow.fastMode !== null) {
+    const capturedPrevRow = {
+      ...prevRow,
+      model: prevRow.model,
+      effort: prevRow.effort as typeof sessions.$inferSelect.effort,
+      fastMode: prevRow.fastMode,
+    };
+    restoreCapturedProfileRoute = async (): Promise<boolean> => {
+      const sdkMatches =
+        capturedPrevRow.sdkSessionId === null
+          ? isNull(sessions.sdkSessionId)
+          : eq(sessions.sdkSessionId, capturedPrevRow.sdkSessionId);
+      const targetProviderMatches =
+        target.providerId === null
+          ? isNull(sessions.providerId)
+          : eq(sessions.providerId, target.providerId);
+      const previousProviderMatches =
+        capturedPrevRow.providerId === null
+          ? isNull(sessions.providerId)
+          : eq(sessions.providerId, capturedPrevRow.providerId);
+      const write = await dbSnapshot.client.drizzle
+        .update(sessions)
+        .set({
+          sdkSessionId: capturedPrevRow.sdkSessionId,
+          model: capturedPrevRow.model,
+          providerId: capturedPrevRow.providerId,
+          effort: capturedPrevRow.effort,
+          fastMode: capturedPrevRow.fastMode,
+          updatedAt: Date.now(),
+        })
+        .where(
+          and(
+            eq(sessions.id, sessionId),
+            sdkMatches,
+            or(
+              and(eq(sessions.model, target.model), targetProviderMatches),
+              and(
+                eq(sessions.model, capturedPrevRow.model),
+                previousProviderMatches,
+                eq(sessions.effort, capturedPrevRow.effort),
+                eq(sessions.fastMode, capturedPrevRow.fastMode),
+              ),
+            ),
+          ),
+        )
+        .run();
+      return write.changes > 0;
+    };
+  }
+  if (
+    target.rebuildCodexThread &&
+    !target.restoreStaleOwnerRoute &&
+    !restoreCapturedProfileRoute
+  ) {
+    throw new Error('Codex pending credential switch requires an old-profile rollback snapshot');
+  }
   service.register(sessionId, {
     ...target,
     ownerScope,
+    ...(target.restoreStaleOwnerRoute
+      ? { restoreStaleOwnerRoute: target.restoreStaleOwnerRoute }
+      : restoreCapturedProfileRoute
+        ? { restoreStaleOwnerRoute: restoreCapturedProfileRoute }
+        : {}),
     ...(live?.codexThreadModelProviderId !== undefined
       ? { sourceCodexThreadModelProviderId: live.codexThreadModelProviderId }
       : {}),
@@ -3327,6 +3395,7 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
         effort?: string;
         fastMode?: boolean;
       };
+      restoreStaleOwnerRoute?: () => Promise<boolean>;
     }
   | undefined {
   const pending = pendingCredentialSwitchHolder?.get(sessionId);
@@ -3343,6 +3412,9 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
           ? { sourceCodexThreadModelProviderId: pending.sourceCodexThreadModelProviderId }
           : {}),
         ...(pending.previousRoute ? { previousRoute: pending.previousRoute } : {}),
+        ...(pending.restoreStaleOwnerRoute
+          ? { restoreStaleOwnerRoute: pending.restoreStaleOwnerRoute }
+          : {}),
       }
     : undefined;
 }
