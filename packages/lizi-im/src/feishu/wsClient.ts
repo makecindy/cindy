@@ -1515,8 +1515,20 @@ async function processClaimedMessage(
       // 会话(用户感知: 不管在哪问, 工作目录都是绑定那个项目)。要跟接管会话
       // 说话就在那个话题里说。
       const opener = await outbound.openThread(messageId);
-      // 开话题是一次跨网络的 await — 期间迟到的真实话题可能已经接管本轮路由,
-      // 不再把回答落进这份群主流副本刚建的机器人话题。
+      // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 先复查门禁,
+      // 再提交双投路由或撤回 opener。失效连接不得改跨重连保留的 dual-delivery
+      // 状态, 也不得用新绑定的 client 去撤回旧连接发出的消息。
+      if (!isActiveConnection(generation, botAppId)) {
+        // 同上: stop() 已释放认领时不重复释放; 记账还在才 abandon(释放 +
+        // evict 开话题缓存, 让重推在新连接上用新客户端重试 API)。
+        if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
+          abandonInboundTurn(botAppId, messageId);
+        }
+        log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
+        return;
+      }
+      // 仍是本连接: 迟到的真实话题可能已经接管本轮路由, 不再把回答落进这份
+      // 群主流副本刚建的机器人话题。
       if (commitUnpairedFlat && !commitUnpairedFlat()) {
         log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
         if (opener.kind === 'opened') {
@@ -1538,17 +1550,6 @@ async function processClaimedMessage(
             );
           }
         }
-        return;
-      }
-      // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
-      // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
-      if (!isActiveConnection(generation, botAppId)) {
-        // 同上: stop() 已释放认领时不重复释放; 记账还在才 abandon(释放 +
-        // evict 开话题缓存, 让重推在新连接上用新客户端重试 API)。
-        if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
-          abandonInboundTurn(botAppId, messageId);
-        }
-        log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         return;
       }
       if (opener.kind === 'opened') {

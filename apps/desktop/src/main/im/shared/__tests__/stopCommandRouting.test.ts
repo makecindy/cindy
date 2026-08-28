@@ -92,6 +92,7 @@ describe('messageHandler !stop routing', () => {
   let handleSlashCommand: ReturnType<typeof vi.fn>;
   let sendMarkdownText: ReturnType<typeof vi.fn>;
   let sendText: ReturnType<typeof vi.fn>;
+  let mirrorFinalReply: ReturnType<typeof vi.fn>;
   let consumePendingOpenerCard: ReturnType<typeof vi.fn>;
   let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
@@ -102,6 +103,7 @@ describe('messageHandler !stop routing', () => {
     handleSlashCommand = vi.fn(async () => true);
     sendMarkdownText = vi.fn(async () => undefined);
     sendText = vi.fn(async () => undefined);
+    mirrorFinalReply = vi.fn(async () => undefined);
     // 群主流 @ 开话题的开场白卡收口能力(仅 feishu 实现; 这里模拟富卡渠道)。
     consumePendingOpenerCard = vi.fn(async () => false);
     consumePendingOpenerAsCard = vi.fn(async () => false);
@@ -113,6 +115,7 @@ describe('messageHandler !stop routing', () => {
       },
       sendMarkdownText,
       sendText,
+      mirrorFinalReply,
       consumePendingOpenerCard,
       consumePendingOpenerAsCard,
     } as unknown as ChannelIM;
@@ -485,6 +488,23 @@ describe('messageHandler !stop routing', () => {
       slackUi.agent.sendInternalError('provider exploded'),
     );
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('runAgentTurn 抛错时同步镜像已确认双投的群主流终态', async () => {
+    runAgentTurn.mockRejectedValueOnce(new Error('provider exploded'));
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-throw',
+    };
+    const errorText = slackUi.agent.sendInternalError('provider exploded');
+    deliver(makeEvent({ text: '帮我看看', finalReplyMirror: mirror }));
+    await flushMicrotasks();
+
+    expect(sendText).toHaveBeenCalledWith('U123456789', errorText, {
+      threadTs: '1234.5678',
+    });
+    expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, errorText);
   });
 
   it('早期拒绝终态(missing_auth)经 onEarlyReject 收口开场白卡', async () => {

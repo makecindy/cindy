@@ -505,4 +505,55 @@ describe('feishu group thread routing', () => {
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it('openThread 在途换代后不提交双投路由、不用新连接撤回旧开场白', async () => {
+    vi.useFakeTimers();
+    let resolveOpen!: (value: {
+      kind: 'opened';
+      messageId: string;
+      threadId: string;
+    }) => void;
+    mocks.openThread.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    const events = collectMessages();
+    await connect();
+    const flat = groupMainFlowMessage('换代中的副本', 'om_flat_stale') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000000000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(resolveOpen).toBeDefined();
+
+    await wsClient.stop({ announceOffline: false, reason: 'same-account-reconnect' });
+    await connect();
+
+    resolveOpen({ kind: 'opened', messageId: 'om_stale_opener', threadId: 'omt_stale' });
+    await flatHandling;
+
+    expect(events).toHaveLength(0);
+    expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+
+    const topic = groupTopicMessage('换代中的副本', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000000000';
+    topic.message.message_id = 'om_topic_after_reconnect';
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_existing');
+    expect(events[0]?.finalReplyMirror).toEqual({
+      kind: 'parent-chat',
+      chatId: 'oc_chat1',
+      idempotencyKey: expect.any(String),
+    });
+    vi.useRealTimers();
+  });
 });
