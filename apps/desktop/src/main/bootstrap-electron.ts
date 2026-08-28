@@ -69,6 +69,27 @@ const LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS = 5 * 60_000;
 // 整个 Cindy 一直停在启动页；到期后取消本次下载并禁用本次 Pi。
 const PI_AGENT_INSTALL_STARTUP_DEADLINE_MS = 60_000;
 
+/** Preserve actionable saved-account failures across Electron serialization. */
+function throwAuthAccountIpcError(error: unknown): never {
+  const code =
+    error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : null;
+  const message = error instanceof Error ? error.message : 'Saved account operation failed';
+  switch (code) {
+    case 'INVALID_AUTH_ACTION':
+    case 'PASSIVE_AUTH_MUTATION_BLOCKED':
+    case 'ACCOUNT_NOT_FOUND':
+    case 'ACCOUNT_REAUTH_REQUIRED':
+    case 'REGION_MISMATCH':
+    case 'CREDENTIAL_STORE_UNAVAILABLE':
+    case 'AUTH_FLOW_SUPERSEDED':
+      throwIpcError(code, message);
+    default:
+      throwIpcError('INTERNAL', 'Saved account operation failed');
+  }
+}
+
 if (
   process.platform === 'linux' &&
   !app.isPackaged &&
@@ -212,7 +233,10 @@ import {
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
-import { warmStaleProcessProvenance } from './ownerNamespaceMigration.js';
+import {
+  hasExclusiveSharedLegacyUserDataAccess,
+  warmStaleProcessProvenance,
+} from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
@@ -260,7 +284,10 @@ import {
   stageLocalFileToCache,
 } from './file-browser/remote-file-cache';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
-import { legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
+import {
+  BRAND_IDENTITY,
+  legacyDialogueUserDataDirNames,
+} from '@cindy/maker-shared/brand-identity';
 import * as videoCacheStore from './videoCacheStore';
 import { imageSchemePrivilege, registerImageProtocolHandler } from './imageProtocol';
 import { videoSchemePrivilege, registerVideoProtocolHandler } from './videoProtocol';
@@ -306,6 +333,12 @@ import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
 } from './legacyUserDataMigration';
+import {
+  adoptLocalProfileDatabase,
+  createProductionLocalProfileDataMigrationDeps,
+  inspectPassiveLocalProfileAdoption,
+} from './localProfileDataMigration';
+import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier';
 import { registerFsBrowseIpc } from './fsBrowse/ipc';
 import {
   ensureReady as localDbEnsureReady,
@@ -880,6 +913,7 @@ import {
   refreshGhostLocalization,
   registerGhostIpc,
   runStableOwnerPostCommitTask,
+  setGhostNodeRuntimeStartAttemptContextReader,
   setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
@@ -3709,6 +3743,29 @@ const createWindow = () => {
 
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
+  setGhostNodeRuntimeStartAttemptContextReader(() => {
+    let observedMainWindowState:
+      'absent' | 'hidden' | 'minimized' | 'visible-unfocused' | 'focused' | 'unknown' = 'unknown';
+    try {
+      if (mainWindow.isDestroyed()) observedMainWindowState = 'absent';
+      else if (mainWindow.isMinimized()) observedMainWindowState = 'minimized';
+      else if (!mainWindow.isVisible()) observedMainWindowState = 'hidden';
+      else if (mainWindow.isFocused()) observedMainWindowState = 'focused';
+      else observedMainWindowState = 'visible-unfocused';
+    } catch {
+      observedMainWindowState = 'unknown';
+    }
+    let observedScreenState: 'active' | 'idle' | 'locked' | 'unknown' = 'unknown';
+    try {
+      const state = powerMonitor.getSystemIdleState(60);
+      if (state === 'active' || state === 'idle' || state === 'locked') {
+        observedScreenState = state;
+      }
+    } catch {
+      observedScreenState = 'unknown';
+    }
+    return { observedMainWindowState, observedScreenState };
+  });
   installWindowHiddenBroadcast(mainWindow);
   // Keyboard hello when the window comes back from hide / minimize / Dock.
   attachWorkLouderCodexWindowReveal(mainWindow);
@@ -5279,6 +5336,43 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('auth:logout', async () => {
     await authManager.logout();
+  });
+
+  ipcMain.handle('auth:accounts:list', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.listSavedAccounts();
+  });
+
+  ipcMain.handle('auth:accounts:sync', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await authManager.syncSavedAccounts();
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:switch', async (event, accountKey: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      await authManager.switchSavedAccount(accountKey);
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:begin-add', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await authManager.beginAddAccountLogin();
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:cancel-add', (event) => {
+    assertTrustedAppRendererEvent(event);
+    authManager.cancelAddAccountLogin();
   });
 
   ipcMain.handle('auth:enter-local', async () => {
@@ -7422,6 +7516,34 @@ const registerIpcHandlers = () => {
           : await dialog.showOpenDialog(options);
         return result.canceled ? null : result.filePaths[0] ?? null;
       },
+      confirmActiveTaskCleanup: async ({ backupEnabled }) => {
+        const activeTaskWarning = t(
+          'settings.about.storage.dbSlimmingIncludeActiveConfirmDescription',
+        );
+        const detail = backupEnabled
+          ? activeTaskWarning
+          : `${activeTaskWarning}\n\n${t(
+              'settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup',
+            )}`;
+        const options: Electron.MessageBoxOptions = {
+          type: 'warning',
+          title: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          message: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          detail,
+          buttons: [
+            t('settings.about.storage.dbSlimmingRestartButton'),
+            t('settings.about.storage.cancelButton'),
+          ],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showMessageBox(ownerWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
       confirmWithoutBackup: async () => {
         const options: Electron.MessageBoxOptions = {
           type: 'warning',
@@ -7980,9 +8102,61 @@ app.on('ready', async () => {
       }
       const user = authManager.getAuthState().user;
       if (user == null || user.id !== userId) return;
+      if (authManager.isPassiveSharedUserDataInstance()) {
+        const passivePreflight = await inspectPassiveLocalProfileAdoption(
+          user.id,
+          createProductionLocalProfileDataMigrationDeps(
+            app.getPath('userData'),
+            BRAND_IDENTITY.dbFilePrefix,
+            () => hasExclusiveSharedLegacyUserDataAccess(),
+          ),
+        );
+        if (passivePreflight.status === 'required') {
+          throw new Error('local profile database adoption is pending in the primary instance');
+        }
+        if (passivePreflight.status === 'failed') {
+          throw new Error(
+            `local profile database adoption preflight failed: ${passivePreflight.error}`,
+          );
+        }
+        return;
+      }
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
       // 全量兜底,绝不 throw,失败不阻塞登录(ensureReady 照常建新库)。
       await runLegacyUserDataMigrationForUser(user.id);
+      // 登录前 local-v1 与登录后的 cloud owner 使用不同数据库文件。目标库不存在时
+      // 采用本地库，避免用户刚登录就看到空的任务/项目空间；目标库已存在则保持原样，
+      // 绝不覆盖账号已有内容。
+      const localProfileMigration = await adoptLocalProfileDatabase(
+        user.id,
+        createProductionLocalProfileDataMigrationDeps(
+          app.getPath('userData'),
+          BRAND_IDENTITY.dbFilePrefix,
+          () => hasExclusiveSharedLegacyUserDataAccess(),
+          process.platform === 'win32'
+            ? () =>
+                acquireWindowsPackagedInstanceBarrier({
+                  userDataDir: app.getPath('userData'),
+                  programName: BRAND_IDENTITY.executableName,
+                })
+            : undefined,
+        ),
+      );
+      if (localProfileMigration.status === 'failed') {
+        dbClientLog.error('local profile database adoption failed; blocking cloud database open', {
+          userId,
+          error: localProfileMigration.error,
+        });
+        throw new Error(`local profile database adoption failed: ${localProfileMigration.error}`);
+      } else if (localProfileMigration.status === 'claimed-by-other-owner') {
+        dbClientLog.warn('local profile database is already reserved for another cloud owner', {
+          userId,
+        });
+      } else if (localProfileMigration.status === 'adopted') {
+        dbClientLog.info('local profile database adopted for first cloud owner', {
+          userId,
+        });
+      }
     },
     onReady: async (userId) => {
       const startupHooksStartedAt = performance.now();

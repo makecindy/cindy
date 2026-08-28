@@ -394,6 +394,7 @@ beforeEach(() => {
   saveDepositMock.mockClear();
   liveGrantStateMock.mockReset();
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null });
+  callCindyMediaMock.mockReset();
   alsSessionContextMock.mockReset();
   logWarnMock.mockClear();
   logInfoMock.mockClear();
@@ -1222,6 +1223,67 @@ describe('session-context 宿主铸造', () => {
         },
       }),
     );
+  });
+});
+
+describe('Cindy media 本机路径揭示', () => {
+  it('只在用户点击允许后把已解析路径返回给 Agent', async () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({
+      ok: true,
+      url,
+      local_path: process.execPath,
+      mime_type: 'image/png',
+    });
+
+    const result = await makeDeps('codex', 'media-path').callMedia?.({
+      action: 'resolve_local_path',
+      url,
+    });
+
+    expect(confirmRequestMock).toHaveBeenCalledWith(
+      'media-path',
+      expect.objectContaining({
+        ghostId: 'cindy-media',
+        ghostName: 'Cindy Media',
+        lane: 'reveal_path',
+        items: [
+          expect.objectContaining({
+            absPath: process.execPath,
+            mimeType: 'image/png',
+          }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, local_path: process.execPath });
+  });
+
+  it('用户拒绝或调用缺少会话语境时不把路径放进工具结果', async () => {
+    const url = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({
+      ok: true,
+      url,
+      local_path: process.execPath,
+      mime_type: 'image/png',
+    });
+    confirmRequestMock.mockResolvedValueOnce({ confirmed: false, allowDirs: false });
+
+    const denied = await makeDeps('claude-code', 'media-path-denied').callMedia?.({
+      action: 'resolve_local_path',
+      url,
+    });
+    expect(denied).toMatchObject({ ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED' });
+    expect(denied).not.toHaveProperty('local_path');
+
+    const noSession = await makeDeps('claude-code', null).callMedia?.({
+      action: 'resolve_local_path',
+      url,
+    });
+    expect(noSession).toMatchObject({
+      ok: false,
+      errorCode: 'LOCAL_PATH_REVEAL_CONFIRM_UNAVAILABLE',
+    });
+    expect(noSession).not.toHaveProperty('local_path');
   });
 });
 

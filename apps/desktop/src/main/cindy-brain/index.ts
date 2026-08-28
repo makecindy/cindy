@@ -7,6 +7,7 @@ import {
   shell,
   type WebContents,
 } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -102,7 +103,6 @@ import {
 import {
   getAccessToken,
   getAuthState,
-  getCurrentUserId,
   onAuthStateChange,
 } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.js';
@@ -225,6 +225,8 @@ import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
 import {
   deriveCindyMediaConfig,
+  filterLegacyCindyMediaConfig,
+  selectExecutableCoreMediaModels,
   type CindyCapabilityKind,
   type CindyMediaCatalogConfig,
 } from './cindyMediaCatalog.js';
@@ -238,7 +240,10 @@ import {
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
-import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
+import {
+  GhostNodeRuntimeBroker,
+  type NodeRuntimeStartAttemptContext,
+} from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
@@ -1678,6 +1683,21 @@ export function getInstalledGhostName(id: string): string | null {
 }
 
 let nodeRuntimeBrokerSingleton: GhostNodeRuntimeBroker | null = null;
+let nodeRuntimeStartAttemptContextReader: (() => NodeRuntimeStartAttemptContext) | null = null;
+const nodeRuntimeAppRunId = (() => {
+  try {
+    return randomUUID().replaceAll('-', '');
+  } catch {
+    return 'unknown';
+  }
+})();
+
+/** Desktop bootstrap 注入主窗/系统的粗粒度只读快照；不注册额外全局监听。 */
+export function setGhostNodeRuntimeStartAttemptContextReader(
+  reader: (() => NodeRuntimeStartAttemptContext) | null,
+): void {
+  nodeRuntimeStartAttemptContextReader = reader;
+}
 
 /**
  * `GhostNodeRuntimeBroker.destroyAll()` is a terminal host-exit operation. An
@@ -1702,6 +1722,12 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       sendToGhost: (ghostId, payload) => {
         sendToGhostLogic(ghostId, payload);
       },
+      getStartAttemptContext: () =>
+        nodeRuntimeStartAttemptContextReader?.() ?? {
+          observedMainWindowState: 'unknown',
+          observedScreenState: 'unknown',
+        },
+      appRunId: nodeRuntimeAppRunId,
       log,
     });
   }
@@ -3438,22 +3464,16 @@ function getMediaPreferenceConfig(
   capability: GhostMediaCapability,
 ): CindyMediaPreferenceConfig {
   const kind = capability.startsWith('image.') ? 'image' : 'video';
-  const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
   const coreCapability: MediaCapability =
     capability === 'video.edit' ? 'video.image_to_video' : capability;
   const providers = new Map(
     getActiveCatalog().providers.map((provider) => [provider.id, provider] as const),
   );
-  const providerModels: CindyMediaPreferenceModel[] = (kind === 'video'
-    ? listLocalProviderVideoModels()
-    : listProviderMediaModels())
-    .filter(
-      (model) =>
-        model.mode === (kind === 'image' ? 'image_generation' : 'video_generation') &&
-        supportsMediaCapability(model.modalities, coreCapability) &&
-        (kind !== 'video' ||
-          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
-    )
+  const providerModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
+    kind === 'video' ? listLocalProviderVideoModels() : listProviderMediaModels(),
+    kind,
+    (model) => supportsMediaCapability(model.modalities, coreCapability),
+  )
     .map((model) => {
       const provider = providers.get(model.providerId);
       const providerName = provider?.name ?? model.providerId;
@@ -3469,16 +3489,15 @@ function getMediaPreferenceConfig(
         supportsEdit: supportsMediaCapability(model.modalities, 'image.edit'),
       };
     });
-  const gatewayModels: CindyMediaPreferenceModel[] = filterEnabledGatewayMediaModels(
-    getXdGatewayModels(),
-    coreCapability,
-    readModelDisableOverrides(),
+  const gatewayModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
+    filterEnabledGatewayMediaModels(
+      getXdGatewayModels(),
+      coreCapability,
+      readModelDisableOverrides(),
+    ),
+    kind,
+    (model) => isMediaModelExecutable(model.id, coreCapability),
   )
-    .filter(
-      (model) =>
-        isMediaModelExecutable(model.id, coreCapability) &&
-        (kind !== 'video' || (videoRegistry?.hasAlias(model.id, 'xd') ?? false)),
-    )
     .map((model) => {
       const provider = providers.get('xd');
       const providerName = provider?.name ?? 'Cindy AI';
@@ -3644,8 +3663,6 @@ async function getGhostConfigurableMediaModels(
     // carried image-provider models. Video providers are host-owned (the video
     // registry executes them), so add their local projection explicitly and do
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
-    const mode = type === 'image' ? 'image_generation' : 'video_generation';
-    const videoRegistry = type === 'video' ? getVideoProviderRegistry() : null;
     const localVideoModels = type === 'video' ? listLocalProviderVideoModels() : [];
     const availability = await loadPluginMediaAvailability(
       type,
@@ -3658,12 +3675,7 @@ async function getGhostConfigurableMediaModels(
           (candidate) => candidate.id === model.id && candidate.providerId === model.providerId,
         ) === index,
     );
-    const candidates = allModels.filter(
-      (model) =>
-        model.mode === mode &&
-        (type !== 'video' ||
-          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
-    );
+    const candidates = selectExecutableCoreMediaModels(allModels, type);
     const models = isProviderBlindCoreArt(ghost)
       ? collapseProviderBlindMediaModels(candidates, (model) => model.id)
       : candidates;
@@ -4295,10 +4307,20 @@ export function getGhostCindySlot(): GhostCindySlot {
         const value = readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
         if (!value) return null;
         const mediaCapability = capability as GhostMediaCapability;
+        const config = getGhostMediaPreferenceConfig(ghostId, mediaCapability);
+        const videoRegistry = capability.startsWith('video.') ? getVideoProviderRegistry() : null;
+        // Core 专用选型不能交给旧执行器。复用存量配置迁移，确保回退后
+        // 用户保存的 provider + modelId 与实际执行一致，不影响 Core 清单。
+        const executableConfig = capability.startsWith('video.')
+          ? filterLegacyCindyMediaConfig(
+              config,
+              (model) => videoRegistry?.hasAlias(model.modelId, model.providerId) ?? false,
+            )
+          : config;
         const selected = resolveAndMigrateGhostMediaPreference(
           ghostId,
           mediaCapability,
-          getGhostMediaPreferenceConfig(ghostId, mediaCapability),
+          executableConfig,
           value,
         );
         return selected
@@ -5504,7 +5526,6 @@ async function updateLocalGhostPackageLocked(
   inspected: InspectedGhostPackage,
   expectedPackageSha256: string,
   expectedInstalledApproval: string,
-  mutationOwner: ActiveAppSession,
   installOrigin?: 'agent-forge',
 ): Promise<InstalledGhost> {
   const runtime = getGhostRuntime();
@@ -5517,19 +5538,8 @@ async function updateLocalGhostPackageLocked(
   // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
   await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
   let marketRecord: PluginMarketInstallationRecord | null;
-  let marketInstallSubject: string | null = null;
-  let marketRecordWasSuppressed = false;
   try {
     marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
-    if (
-      marketRecord?.installed &&
-      (marketRecord.source === 'market' || marketRecord.source === 'legacy-adopted')
-    ) {
-      marketInstallSubject = getCurrentUserId() ?? mutationOwner.dataOwnerId;
-      marketRecordWasSuppressed = marketInstallSubject
-        ? marketLedger.isDefaultInstallSuppressed(marketInstallSubject, marketRecord.pluginId)
-        : false;
-    }
   } catch (error) {
     if (previousGhost) spawnIfResident(previousGhost);
     log.warn('failed to verify Plugin provenance before local update', {
@@ -5544,15 +5554,9 @@ async function updateLocalGhostPackageLocked(
   const restoreMarketRecord = (): void => {
     if (!detachMarketRecord || !marketRecord) return;
     try {
-      marketLedger.restoreInstallation(
-        marketRecord,
-        marketInstallSubject
-          ? {
-              userId: marketInstallSubject,
-              suppressed: marketRecordWasSuppressed,
-            }
-          : undefined,
-      );
+      // 来源解绑不触碰 opt-out，失败恢复同样只恢复旧路由；用户过去的显式
+      // 卸载决定因此既不会被新增，也不会被清除。
+      marketLedger.restoreInstallation(marketRecord);
     } catch (error) {
       // 恢复失败时保持路由失效是安全降级：不能让旧市场自动覆盖用户明确选择的本地包。
       log.error('failed to restore Plugin market provenance after local update failure', {
@@ -5563,8 +5567,9 @@ async function updateLocalGhostPackageLocked(
   };
   if (detachMarketRecord) {
     try {
-      // 先持久化切断自动更新路由，再改真实包。账本不可写时不触碰包。
-      marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
+      // 先持久化切断自动更新路由，再改真实包。普通本地/Forge 换源不是
+      // 用户显式卸载，不得产生 default-install opt-out。
+      marketLedger.markRemoved(inspected.manifest.id, null);
     } catch (error) {
       restoreMarketRecord();
       if (previousGhost) spawnIfResident(previousGhost);
@@ -5698,7 +5703,6 @@ export async function installOrUpdateLocalGhostPackageFromForge(
         inspected,
         expected.packageSha256,
         ghostInstallApprovalToken(installed.approval),
-        getActiveAppSession(),
         installOrigin,
       ),
       action: 'updated',
@@ -7302,7 +7306,6 @@ export function registerGhostIpc(): void {
             inspected,
             expectedPackageSha256,
             expectedInstalledApproval,
-            mutationOwner,
           ),
         ),
       };

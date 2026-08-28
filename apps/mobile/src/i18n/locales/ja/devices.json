@@ -188,6 +188,14 @@
       "close": "閉じる",
       "cancelRename": "名前の変更をキャンセル"
     },
+    "accounts": {
+      "title": "アカウントを切り替え",
+      "add": "別のアカウントでログイン",
+      "syncFailed": "アカウント情報を更新できませんでした",
+      "runningTitle": "アカウントを切り替えますか？",
+      "runningMessage": "実行中のタスクがあります。切り替え後もコンピューターでは実行が続きますが、このスマートフォンでは受信や操作ができなくなります。",
+      "switchConfirm": "切り替える"
+    },
     "menu": {
       "groupByProject": "プロジェクトごとにグループ化",
       "groupDialogue": "チャットをまとめる",

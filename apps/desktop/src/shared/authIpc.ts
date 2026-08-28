@@ -31,6 +31,23 @@ export type DesktopLoginActionResult =
   | { success: true; state: AuthFlowState }
   | { success: false; code: string; state: AuthFlowState | null };
 
+export interface DesktopSavedAccount {
+  /** Opaque main-owned identifier. Renderer must not derive realm or membership ids from it. */
+  accountKey: string;
+  displayName: string;
+  email: string | null;
+  avatarUrl: string | null;
+  kind: 'personal' | 'org';
+  orgName: string | null;
+  orgLogoUrl: string | null;
+  isCurrent: boolean;
+}
+
+export interface DesktopAccountSwitcherSnapshot {
+  accounts: DesktopSavedAccount[];
+  mutationAllowed: boolean;
+}
+
 /** The receipt token stays in Electron main; renderer only receives display-safe fields. */
 export interface DesktopAccountDeletionChallenge {
   challengeId: string;
@@ -64,6 +81,7 @@ const MAX_CODE_LENGTH = 32;
 const MAX_CAPTCHA_TOKEN_LENGTH = 2048;
 // 与 auth-server 的企业 ID / slug / 已验证域名统一上限对齐。
 const MAX_ORG_IDENTIFIER_LENGTH = 253;
+const MAX_ACCOUNT_KEY_LENGTH = 512;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -166,6 +184,10 @@ export function parseDesktopLoginAction(value: unknown): DesktopLoginAction | nu
     default:
       return null;
   }
+}
+
+export function parseDesktopAccountKey(value: unknown): string | null {
+  return isBoundedString(value, MAX_ACCOUNT_KEY_LENGTH) ? value : null;
 }
 
 /** Runtime validation for the irreversible account-deletion confirmation boundary. */

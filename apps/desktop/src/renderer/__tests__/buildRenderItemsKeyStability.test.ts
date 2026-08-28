@@ -1056,6 +1056,38 @@ describe('buildRenderItems — key stability', () => {
     expect(seg?.key).not.toBe(media?.key);
   });
 
+  it('uses tool media as fallback and suppresses it only for an inline image in the same turn', () => {
+    const url = 'cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png';
+    const firstTool = mkTool('img1', 'image_generate');
+    const firstResult = mkResult(
+      'imgr1',
+      'tu-img1',
+      JSON.stringify({ xdt_image_url: url }),
+    );
+    const secondTool = mkTool('img2', 'image_generate');
+    const secondResult = mkResult(
+      'imgr2',
+      'tu-img2',
+      JSON.stringify({ xdt_image_url: url }),
+    );
+    const { items } = buildRenderItems([
+      mkUser('u1'),
+      firstTool,
+      firstResult,
+      mkAssistant('a1', `![生成结果](${url})`),
+      mkUser('u2'),
+      secondTool,
+      secondResult,
+      // 纯文本 URI 不是图片展示，不能压掉可靠兜底；上一轮的 Markdown 也不能跨轮去重。
+      mkAssistant('a2', `文件地址：${url}`),
+    ]);
+
+    const mediaKeys = items
+      .filter((item): item is Extract<RenderItem, { type: 'tool_media' }> => item.type === 'tool_media')
+      .map((item) => item.key);
+    expect(mediaKeys).toEqual(['media-img2']);
+  });
+
   // ── case 7: 末尾混合丢弃类型 + 有效 message,末尾仍是有效 item ──────────
   // 锁住"删自愈 effect 安全"的论证:渲染窗口下移到 item 轴后,allRenderItems
   // 末尾永远是有效 item,U2 "末尾窗口全 orphan / 全被丢弃" 死锁不可能复现。

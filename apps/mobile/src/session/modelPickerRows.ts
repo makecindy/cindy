@@ -17,7 +17,7 @@ import {
 
 import { i18n } from '@/i18n';
 
-import type { MobileAgentCapabilities } from './agentCapabilities';
+import type { MobileAgentCapabilities, MobileSessionRuntimeOptions } from './agentCapabilities';
 import type { MobileModelMemoryAccessors } from './draftModelMemory';
 import type { DeviceApiKeyStatus } from '@/device-link/deviceModelMetaCache';
 import type { MobileModelPricingMap } from '@/device-link/mobileMakerTransport';
@@ -111,6 +111,30 @@ export function effortLabelFor(
   if (override) return override;
   const level = capabilities?.effortLevels.find((l) => l.id === effort);
   return level?.label ?? MOBILE_EFFORT_LABELS[effort] ?? effort;
+}
+
+
+/**
+ * 会话页 composer / 新会话草稿摘要用的 effort 展示名。
+ * runtime.effortOptions 来自被控端 zh-CN 兼容快照，这里走 effortLabelFor
+ * 按当前 app 语言覆盖（英文 Extra High、简中 超高）。
+ */
+export function effortLabelFromRuntime(
+  runtime: Pick<MobileSessionRuntimeOptions, 'currentModel' | 'effortOptions'>,
+  effort: string | null | undefined,
+): string {
+  if (!effort) return '';
+  return effortLabelFor(
+    runtime.currentModel ?? { effortDisplayNames: {} },
+    effort,
+    {
+      availableModels: [],
+      effortLevels: runtime.effortOptions,
+      permissionModes: [],
+      hasFastMode: false,
+      planModeSupported: false,
+    },
+  );
 }
 
 /**

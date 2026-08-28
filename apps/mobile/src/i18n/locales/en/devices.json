@@ -188,6 +188,14 @@
       "close": "Close",
       "cancelRename": "Cancel rename"
     },
+    "accounts": {
+      "title": "Switch account",
+      "add": "Sign in to another account",
+      "syncFailed": "Account information could not be updated",
+      "runningTitle": "Switch account?",
+      "runningMessage": "Some sessions are still running. They will continue on your computer, but this phone will stop receiving and controlling them after you switch.",
+      "switchConfirm": "Continue"
+    },
     "menu": {
       "groupByProject": "Group by Project",
       "groupDialogue": "Group chats together",

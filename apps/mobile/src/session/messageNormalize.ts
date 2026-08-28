@@ -11,6 +11,7 @@ import {
   type MessageNormalizeToolUse,
   type MessageToolResultPairing,
 } from '@cindy/maker-shared/message-normalize';
+import { collectMobileMarkdownImages } from '@/session/messageMarkdown';
 import {
   normalizeAgentTaskTerminalStatus,
   type AgentTaskTerminalStatus,
@@ -416,7 +417,46 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     });
   }
 
+  dedupeToolImagesAgainstAssistantMarkdown(result);
   return result;
+}
+
+/**
+ * 与 Desktop 同口径：Agent 正文内联同一 URL 时由正文负责排版；否则保留
+ * tool_result 图片作为可靠兜底。只在同一真实 user turn 内去重。
+ */
+function dedupeToolImagesAgainstAssistantMarkdown(
+  messages: NormalizedRemoteMessage[],
+): void {
+  const dedupeTurn = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const inlineUrls = new Set<string>();
+    for (const message of messages.slice(lo, hi)) {
+      if (message.kind !== 'assistant') continue;
+      for (const image of collectMobileMarkdownImages(message.body)) inlineUrls.add(image.url);
+    }
+    if (inlineUrls.size === 0) return;
+    for (const message of messages.slice(lo, hi)) {
+      if (message.kind !== 'tool' || !message.media?.length) continue;
+      message.media = message.media.filter(
+        (item) => item.kind !== 'image' || !inlineUrls.has(item.url),
+      );
+    }
+  };
+
+  let turnStart = 0;
+  for (let index = 0; index <= messages.length; index += 1) {
+    const message = messages[index];
+    const isBoundary =
+      message?.kind === 'user' &&
+      !message.isSyntheticTrigger &&
+      message.source.agentMeta?.delivery !== 'steer';
+    if (isBoundary && index > turnStart) {
+      dedupeTurn(turnStart, index);
+      turnStart = index;
+    }
+    if (index === messages.length) dedupeTurn(turnStart, index);
+  }
 }
 
 function toolResultContentToPreview(content: unknown): string {

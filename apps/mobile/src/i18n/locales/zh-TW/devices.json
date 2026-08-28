@@ -188,6 +188,14 @@
       "close": "關閉",
       "cancelRename": "取消重新命名"
     },
+    "accounts": {
+      "title": "切換帳號",
+      "add": "登入更多帳號",
+      "syncFailed": "帳號資訊暫時無法更新",
+      "runningTitle": "切換帳號？",
+      "runningMessage": "仍有任務正在執行。切換後任務會繼續在電腦上執行，但此手機將停止接收和控制這些任務。",
+      "switchConfirm": "繼續切換"
+    },
     "menu": {
       "groupByProject": "按專案分組",
       "groupDialogue": "對話歸為一組",

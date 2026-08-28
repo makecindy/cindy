@@ -1,6 +1,7 @@
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
+  isCindyProviderCodexRemoteCompactionRoute,
   resolveAgentCredentialMode,
   type AgentCredentialMode,
   type AgentKind,
@@ -8,6 +9,7 @@ import {
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
 import {
+  CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
@@ -31,6 +33,8 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
    */
   currentCodexThreadModelProviderId?: string | null;
+  /** 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
+  currentCodexCindyRemoteCompactionCompatible?: boolean | null;
   /**
    * 当前本地 Codex app-server spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * 用于把隐式来源(resolveAgentCredentialMode 解析出 undefined)落到实际凭证家族,
@@ -161,7 +165,14 @@ export function isCodexThreadModelProviderIdentityMismatch(
   });
   const effectiveNextMode = nextMode ?? credentialFamilyFromAuthInjection(input.codexAuthInjection);
   const expectedThreadModelProviderId =
-    effectiveNextMode === 'oauth-bearer'
+    isCindyProviderCodexRemoteCompactionRoute({
+      providerId: nextProviderId,
+      model: input.nextModel,
+    })
+      ? input.currentCodexCindyRemoteCompactionCompatible === false
+        ? CODEX_GATEWAY_PROVIDER_ID
+        : CODEX_CINDY_COMPACT_PROVIDER_ID
+      : effectiveNextMode === 'oauth-bearer'
       ? CODEX_OPENAI_COMPACT_PROVIDER_ID
       : effectiveNextMode !== undefined
         ? CODEX_GATEWAY_PROVIDER_ID
@@ -171,6 +182,7 @@ export function isCodexThreadModelProviderIdentityMismatch(
   );
   const actualThreadIdentityKnown =
     actualThreadModelProviderId === CODEX_OPENAI_COMPACT_PROVIDER_ID ||
+    actualThreadModelProviderId === CODEX_CINDY_COMPACT_PROVIDER_ID ||
     actualThreadModelProviderId === CODEX_GATEWAY_PROVIDER_ID;
 
   return (

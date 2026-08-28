@@ -193,6 +193,7 @@ import type {
   DesktopAccountDeletionConfirmInput,
   DesktopAccountDeletionConfirmResult,
   DesktopAccountDeletionStatusResult,
+  DesktopAccountSwitcherSnapshot,
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
@@ -1868,6 +1869,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   authGetCaptchaChallengeUrl: (): Promise<string> =>
     ipcRenderer.invoke('auth:get-captcha-challenge-url'),
   authLogout: (): Promise<void> => ipcRenderer.invoke('auth:logout'),
+  authListAccounts: (): Promise<DesktopAccountSwitcherSnapshot> =>
+    ipcRenderer.invoke('auth:accounts:list'),
+  authSyncAccounts: (): Promise<DesktopAccountSwitcherSnapshot> =>
+    ipcRenderer.invoke('auth:accounts:sync'),
+  authSwitchAccount: (accountKey: string): Promise<void> =>
+    ipcRenderer.invoke('auth:accounts:switch', accountKey),
+  authBeginAddAccount: (): Promise<DesktopLoginActionResult> =>
+    ipcRenderer.invoke('auth:accounts:begin-add'),
+  authCancelAddAccount: (): Promise<void> => ipcRenderer.invoke('auth:accounts:cancel-add'),
   authEnterLocal: () => ipcRenderer.invoke('auth:enter-local'),
   authExitLocal: () => ipcRenderer.invoke('auth:exit-local'),
   authRefresh: (): Promise<boolean> => ipcRenderer.invoke('auth:refresh'),
@@ -6845,8 +6855,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // runId 不是特权数据(renderer 的标记里就存着它)。
       listSidebarIndexRuns: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:schedule:list-sidebar-index-runs'),
-      listCostSummaries: (): Promise<unknown[]> =>
-        ipcRenderer.invoke('maker:schedule:list-cost-summaries'),
       deleteRun: (runId: string): Promise<void> =>
         ipcRenderer.invoke('maker:schedule:delete-run', runId),
       /** delete/pause 前查这条 schedule 当前 in-flight run 数,>0 时 renderer 弹二次确认。 */

@@ -88,7 +88,10 @@ import {
   useSessionBoundSchedules,
   scheduleFocusPath,
 } from '@/features/scheduler/lib/scheduleSessionBinding';
-import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import {
+  findLatestSidebarIndexRunForSession,
+  loadScheduleSidebarIndexRuns,
+} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
@@ -492,7 +495,7 @@ export function SessionCard({
       e.stopPropagation();
       try {
         const runs = await loadScheduleSidebarIndexRuns();
-        const hit = runs.find((r) => r.sessionId === session.id);
+        const hit = findLatestSidebarIndexRunForSession(runs, session.id);
         navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
       } catch {
         navigate('/cc-agent/scheduled');

@@ -22,6 +22,7 @@ interface RuntimeSetModelSession {
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   codexThreadModelProviderId?: string | null;
+  codexCindyRemoteCompactionCompatible?: boolean | null;
   model: string;
   setModel: (
     model: string,
@@ -190,6 +191,8 @@ export async function applyRuntimeSetModelChange(
         nextModel: model,
         currentCodexProxyActive: sess.codexProxyActive,
         currentCodexThreadModelProviderId: sess.codexThreadModelProviderId,
+        currentCodexCindyRemoteCompactionCompatible:
+          sess.codexCindyRemoteCompactionCompatible,
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;

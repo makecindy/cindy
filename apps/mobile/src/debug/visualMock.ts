@@ -54,6 +54,7 @@ export const visualMockUser: MobileUser = {
   membershipRole: 'owner',
   orgId: null,
   orgName: null,
+  orgLogoUrl: null,
   passportId: 'visual-mock-passport',
 };
 
