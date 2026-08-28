@@ -11,6 +11,12 @@ type Registry = {
   readonly size: number;
 };
 
+// 每个用例都经 freshCodexProxyHost() 的 vi.resetModules() + 动态 import 重新加载
+// 整条 SUT 模块链(maker-core / compat-proxy / bridges)。首个用例还要承担全部
+// 依赖的首次编译加载，满载 CI 上会超出 vitest 默认 5s。只放宽本文件的预算，
+// 断言与流程不变。
+vi.setConfig({ testTimeout: 20_000 });
+
 const mockState = vi.hoisted(() => {
   let capturedRegistry: Registry | null = null;
   const state = {
