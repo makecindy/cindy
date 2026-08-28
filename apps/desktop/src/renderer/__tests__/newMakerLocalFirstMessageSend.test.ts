@@ -76,7 +76,7 @@ describe('NewMakerDraftRoute local first-message send', () => {
     expect(fifoRestore).toBeLessThan(catchRestore);
     expect(saveDraft).toBe(-1);
     expect(source.slice(localSend, fifoRestore)).toContain(
-      'const preNavBrowserComments = preNavDraft?.browserComments ?? []',
+      'rehomeDraftBrowserComments(preNavDraft?.browserComments, newSession.id)',
     );
     expect(source.slice(fifoRestore, catchRestore)).toContain(
       'browserComments: preNavBrowserComments',

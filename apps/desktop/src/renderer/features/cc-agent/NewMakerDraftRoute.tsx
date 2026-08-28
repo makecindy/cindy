@@ -574,6 +574,19 @@ async function rehomeDraftAttachments(
   return rehomed;
 }
 
+async function rehomeDraftBrowserComments<T extends { screenshot: AttachedFile }>(
+  comments: T[] | undefined,
+  sessionId: string,
+): Promise<T[] | undefined> {
+  if (!comments || comments.length === 0) return comments;
+  return Promise.all(
+    comments.map(async (comment) => {
+      const rehomed = await rehomeDraftAttachments([comment.screenshot], sessionId);
+      return rehomed?.[0] ? { ...comment, screenshot: rehomed[0] } : comment;
+    }),
+  );
+}
+
 function getCurrentRoutePath(): string {
   const raw =
     window.location.hash.startsWith('#') && window.location.hash.length > 1
@@ -2490,15 +2503,10 @@ export function NewMakerDraftRoute() {
             existingDraft.attachments.filter((attachment) => attachment.category !== 'image'),
           );
           const rehomedAttachments = await rehomeDraftAttachments(imageOnly, newSession.id);
-          let rehomedComments = existingDraft.browserComments;
-          if (rehomedComments && rehomedComments.length > 0) {
-            rehomedComments = await Promise.all(
-              rehomedComments.map(async (c) => {
-                const rehomed = await rehomeDraftAttachments([c.screenshot], newSession.id);
-                return rehomed?.[0] ? { ...c, screenshot: rehomed[0] } : c;
-              }),
-            );
-          }
+          const rehomedComments = await rehomeDraftBrowserComments(
+            existingDraft.browserComments,
+            newSession.id,
+          );
           // SSH 环境下本地 @file/@dir mention 无效,从 Tiptap 文档中剥离。
           const strippedText = existingDraft.text
             ? stripLocalMentionChips(existingDraft.text)
@@ -3934,11 +3942,12 @@ export function NewMakerDraftRoute() {
               // 真实会话消息(删会话清不到)。初始值取原 files:rehome 自身抛错时
               // 走 catch 恢复原附件,行为与迁移前一致(fail-soft)。
               let rehomedFiles = files;
+              let rehomedComments = preNavBrowserComments;
               const restoreFirstMessageDraft = () => {
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
-                  browserComments: preNavBrowserComments,
+                  browserComments: rehomedComments,
                 });
                 // 第一条消息退回草稿 = 它没被交出去,也就永远不会有权威标题回流。
                 // 不撤回的话标题预览会一直盖着 DB 里的哨兵(每次全量刷新后重新盖上),
@@ -3950,6 +3959,8 @@ export function NewMakerDraftRoute() {
               };
               try {
                 rehomedFiles = await rehomeDraftAttachments(files, newSession.id);
+                rehomedComments =
+                  (await rehomeDraftBrowserComments(preNavBrowserComments, newSession.id)) ?? [];
                 const resp = await window.electronAPI.worktreeCreate({
                   sessionId: newSession.id,
                   baseRepo,
@@ -4201,7 +4212,8 @@ export function NewMakerDraftRoute() {
           const sendWorkingDir = workingDir ?? newSession.workingDir;
           const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
           const preNavDraftDoc = preNavDraft?.text ?? null;
-          const preNavBrowserComments = preNavDraft?.browserComments ?? [];
+          const preNavBrowserComments =
+            (await rehomeDraftBrowserComments(preNavDraft?.browserComments, newSession.id)) ?? [];
           const restoreFirstMessageDraft = () => {
             // FIFO 插回失败的首条,不覆盖用户在等待期间已经写进新任务输入框的内容。
             restoreRemoteOptimisticDraft(newSession.id, {

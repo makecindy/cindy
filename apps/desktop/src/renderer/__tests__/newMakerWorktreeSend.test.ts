@@ -90,7 +90,10 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(saveDraft).toBeGreaterThan(failedCard);
     expect(restoreText).toBeGreaterThan(restoreHelper);
     expect(source.slice(restoreHelper, restoreHelper + 500)).toContain(
-      'browserComments: preNavBrowserComments',
+      'browserComments: rehomedComments',
+    );
+    expect(source.slice(restoreHelper, failedCard)).toContain(
+      'rehomeDraftBrowserComments(preNavBrowserComments, newSession.id)',
     );
   });
 
