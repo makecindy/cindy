@@ -78,15 +78,29 @@ describe('shouldStartHiddenInTray', () => {
 });
 
 describe('login item read/write', () => {
-  function createApp(initial: boolean): LoginItemApp & { calls: unknown[] } {
-    let openAtLogin = initial;
-    const calls: unknown[] = [];
+  /**
+   * 按 Windows 的实际语义建模:登录项以 args 为键存取,查询时传入的 args 必须与
+   * 注册时一致才能命中。替身若忽略 args,就会把「查询漏传 args」这类缺陷一并测过。
+   */
+  function createApp(
+    initial: boolean,
+  ): LoginItemApp & { readArgs: (string[] | undefined)[]; writes: unknown[] } {
+    const entries = new Map<string, boolean>();
+    const key = (args?: string[]): string => JSON.stringify(args ?? []);
+    if (initial) entries.set(key([OPENED_AT_LOGIN_FLAG]), true);
+    const readArgs: (string[] | undefined)[] = [];
+    const writes: unknown[] = [];
     return {
-      calls,
-      getLoginItemSettings: () => ({ openAtLogin }),
+      readArgs,
+      writes,
+      getLoginItemSettings: (options) => {
+        readArgs.push(options?.args);
+        return { openAtLogin: entries.get(key(options?.args)) ?? false };
+      },
       setLoginItemSettings: (settings) => {
-        calls.push(settings);
-        openAtLogin = settings.openAtLogin;
+        writes.push(settings);
+        if (settings.openAtLogin) entries.set(key(settings.args), true);
+        else entries.delete(key(settings.args));
       },
     };
   }
@@ -94,6 +108,22 @@ describe('login item read/write', () => {
   it('reads the current login item state', () => {
     expect(readLaunchAtLogin(createApp(true))).toBe(true);
     expect(readLaunchAtLogin(createApp(false))).toBe(false);
+  });
+
+  // 回归:Windows 上 args 是「用于比对的参数」,缺省空数组。漏传会匹配不到我们
+  // 注册的条目而恒返回 false,开关因此永远显示为关。
+  it('queries with the same args used at registration', () => {
+    const app = createApp(true);
+    readLaunchAtLogin(app);
+    expect(app.readArgs).toEqual([[OPENED_AT_LOGIN_FLAG]]);
+  });
+
+  it('does not find the entry when queried without matching args', () => {
+    const app = createApp(true);
+    // 模拟旧实现:不传 args。
+    expect(app.getLoginItemSettings().openAtLogin).toBe(false);
+    // 传对了才命中。
+    expect(app.getLoginItemSettings({ args: [OPENED_AT_LOGIN_FLAG] }).openAtLogin).toBe(true);
   });
 
   it('treats a failing query as not enabled', () => {
@@ -109,7 +139,7 @@ describe('login item read/write', () => {
   it('registers the login item with the flag so startup can be recognised', () => {
     const app = createApp(false);
     expect(writeLaunchAtLogin(app, true)).toBe(true);
-    expect(app.calls).toEqual([
+    expect(app.writes).toEqual([
       { openAtLogin: true, args: [OPENED_AT_LOGIN_FLAG], enabled: true },
     ]);
   });
@@ -118,7 +148,7 @@ describe('login item read/write', () => {
   it('keeps passing the flag when disabling so Electron matches the existing entry', () => {
     const app = createApp(true);
     expect(writeLaunchAtLogin(app, false)).toBe(false);
-    expect(app.calls).toEqual([
+    expect(app.writes).toEqual([
       { openAtLogin: false, args: [OPENED_AT_LOGIN_FLAG], enabled: false },
     ]);
   });
@@ -130,5 +160,14 @@ describe('login item read/write', () => {
       setLoginItemSettings: () => {},
     };
     expect(writeLaunchAtLogin(app, true)).toBe(false);
+  });
+
+  it('round-trips through the same entry so a freshly enabled item reads back as on', () => {
+    const app = createApp(false);
+    expect(writeLaunchAtLogin(app, true)).toBe(true);
+    // 关键联动:写入后立刻再查(设置页每次挂载都会查),必须仍是 true。
+    expect(readLaunchAtLogin(app)).toBe(true);
+    expect(writeLaunchAtLogin(app, false)).toBe(false);
+    expect(readLaunchAtLogin(app)).toBe(false);
   });
 });

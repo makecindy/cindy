@@ -25,7 +25,7 @@ export const OPENED_AT_LOGIN_FLAG = '--opened-at-login';
 
 /** Electron `app` 的登录项相关子集,便于单测替身。 */
 export interface LoginItemApp {
-  getLoginItemSettings(): { openAtLogin: boolean };
+  getLoginItemSettings(options?: { args?: string[] }): { openAtLogin: boolean };
   setLoginItemSettings(settings: {
     openAtLogin: boolean;
     args?: string[];
@@ -65,10 +65,17 @@ export function shouldStartHiddenInTray(input: {
   return input.ensureTray();
 }
 
-/** 读取系统登录项的当前状态。查询失败按「未启用」处理。 */
+/**
+ * 读取系统登录项的当前状态。查询失败按「未启用」处理。
+ *
+ * ⚠️ 必须传与注册时相同的 `args`。Windows 上 `args` 的语义是「用于比对的命令行
+ * 参数」,缺省是空数组——我们注册的条目带 `--opened-at-login`,不传就是拿空参数
+ * 去比对,匹配不到那条登录项而恒返回 false。后果是开关打开后一进设置页就被打回
+ * 关闭态,依赖它的 startInTrayOnLogin 也跟着永久置灰。
+ */
 export function readLaunchAtLogin(app: LoginItemApp): boolean {
   try {
-    return app.getLoginItemSettings().openAtLogin;
+    return app.getLoginItemSettings({ args: [OPENED_AT_LOGIN_FLAG] }).openAtLogin;
   } catch {
     return false;
   }
