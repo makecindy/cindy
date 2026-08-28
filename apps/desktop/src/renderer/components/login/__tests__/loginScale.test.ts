@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  BRAND_PANEL_OVERLAP_PX,
-  BRAND_PANEL_OVERLAP_MAX_HEIGHT,
   brandPlacement,
   desktopScale,
   panelPlacement,
@@ -10,7 +8,7 @@ import {
   sloganShiftX,
   splashBrandPlacement,
 } from '../loginScale';
-import { CONTROL, LOGIN_GROUP, PANEL, SSO_ORG_HISTORY } from '../loginDesignTokens';
+import { CONTROL, HERO, LOGIN_GROUP, PANEL, SSO_ORG_HISTORY, WORDMARK } from '../loginDesignTokens';
 
 /**
  * 缩放公式行为单测(implementation-plan Step 2 WHAT1 锚点数值,demo v3.1 拍板)。
@@ -136,25 +134,47 @@ describe('brandPlacement(品牌块整体让位,用户拍板 2026-07-23 第二轮
     expect(blockBottomAfter).toBeCloseTo(366 - 12, 2);
   });
 
-  it('短窗口允许登录面板覆盖立绘底部一小段,避免品牌块过度压缩', () => {
-    const panelTop = panelPlacement(800, 600, 1229, 124).topY;
-    const r = brandPlacement(800, 600, 124);
-    const blockBottomAfter = 300 + 160 * r.scale + r.translateY;
-    // 仍保留立绘顶部 12px 安全边界,但允许面板覆盖底部最多 64px。
-    expect(blockBottomAfter).toBeLessThanOrEqual(panelTop + BRAND_PANEL_OVERLAP_PX + 1e-9);
-    expect(r.scale).toBeGreaterThan(desktopScale(800, 600).scale * 0.7);
-  });
-
-  it('超过短窗口高度后恢复整张立绘避让面板', () => {
+  it('短窗口以字标底部为碰撞边界,立绘尾部可自然落入面板下方', () => {
     const width = 1280;
-    const height = BRAND_PANEL_OVERLAP_MAX_HEIGHT + 32;
+    const height = 600;
     const panelTop = panelPlacement(width, height, 1229, 124).topY;
     const r = brandPlacement(width, height, 124);
-    const base = desktopScale(width, height).scale;
-    const blockBottomAfter = height / 2 + (1209 - 2098 / 2) * r.scale + r.translateY;
+    const blockTopAfter = height / 2 + (275 - 2098 / 2) * r.scale + r.translateY;
+    const wordmarkBottomAfter = height / 2 + (1191 - 2098 / 2) * r.scale + r.translateY;
+    const heroBottomAfter = height / 2 + (1209 - 2098 / 2) * r.scale + r.translateY;
 
-    expect(r.scale).toBeLessThanOrEqual(base);
-    expect(blockBottomAfter).toBeLessThanOrEqual(panelTop - 12 + 1e-9);
+    expect(blockTopAfter).toBeCloseTo(12, 6);
+    expect(wordmarkBottomAfter).toBeLessThanOrEqual(panelTop + 1e-9);
+    expect(heroBottomAfter).toBeGreaterThan(panelTop);
+  });
+
+  it('768px 与 769px 之间按可用空间连续变化,没有高度阈值 scale cliff', () => {
+    const width = 1280;
+    const reserve = 124;
+    const at768 = brandPlacement(width, 768, reserve);
+    const at769 = brandPlacement(width, 769, reserve);
+    const panelTop768 = panelPlacement(width, 768, 1229, reserve).topY;
+    const panelTop769 = panelPlacement(width, 769, 1229, reserve).topY;
+    const expected768 = (panelTop768 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
+    const expected769 = (panelTop769 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
+
+    expect(at768.scale).toBeCloseTo(expected768, 6);
+    expect(at769.scale).toBeCloseTo(expected769, 6);
+    expect(at769.scale - at768.scale).toBeCloseTo(
+      1 / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y),
+      6,
+    );
+
+    for (const [height, placement, panelTop] of [
+      [768, at768, panelTop768],
+      [769, at769, panelTop769],
+    ] as const) {
+      const wordmarkBottom =
+        height / 2 +
+        (WORDMARK.inner.y + WORDMARK.inner.height - 2098 / 2) * placement.scale +
+        placement.translateY;
+      expect(wordmarkBottom).toBeLessThanOrEqual(panelTop + 1e-9);
+    }
   });
 });
 
