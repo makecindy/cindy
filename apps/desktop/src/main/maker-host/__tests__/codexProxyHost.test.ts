@@ -3,6 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
+// Side-effect import so vite-node transforms the SUT graph during collection.
+// Tests still isolate via vi.resetModules() + dynamic import below. Without this,
+// the first test paid a cold maker-core transform (including grok-build ACP when
+// it lived on the barrel) against Linux CI's 5s testTimeout and timed out;
+// later tests in the same file passed once the cache was warm.
+import '../codex-proxy-host.js';
 
 type Registry = {
   set(threadId: string, text: string): void;

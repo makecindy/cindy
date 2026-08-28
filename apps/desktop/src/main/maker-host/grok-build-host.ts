@@ -11,14 +11,12 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import type { AuthAdapter, AuthState, Logger } from '@cindy/maker-core';
 import {
   GrokBuildAgent,
   probeGrokBuildAcp,
   resolveGrokBinaryFromPath,
-  type AuthAdapter,
-  type AuthState,
-  type Logger,
-} from '@cindy/maker-core';
+} from '@cindy/maker-core/grok-build';
 
 import hostSystemPrompt from './host-system-prompt.md?raw';
 
