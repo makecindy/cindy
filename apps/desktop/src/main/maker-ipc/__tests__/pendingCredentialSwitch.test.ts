@@ -914,8 +914,11 @@ describe('PendingCredentialSwitchService', () => {
       fastMode: true,
     };
     expect(h.persistRoute).toHaveBeenCalledWith(sessionId, persistedFallback);
-    expect(rollback).toHaveBeenCalledOnce();
-    expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(persistedFallback);
+    expect(rollback).not.toHaveBeenCalled();
+    expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(
+      persistedFallback,
+      'thread-openai',
+    );
     expect(h.service.get(sessionId)).toBeUndefined();
     expect(h.onApplied).not.toHaveBeenCalled();
   });
@@ -939,9 +942,10 @@ describe('PendingCredentialSwitchService', () => {
     const restoreStaleOwnerRoute = vi
       .fn()
       .mockRejectedValueOnce(new Error('sqlite temporarily unavailable'))
-      .mockImplementationOnce(async (route) => {
+      .mockResolvedValueOnce(false)
+      .mockImplementationOnce(async (route, expectedSdkSessionId) => {
         if (
-          persistedProfile.sdkSessionId !== 'thread-xd' ||
+          persistedProfile.sdkSessionId !== expectedSdkSessionId ||
           persistedProfile.model !== route?.model ||
           persistedProfile.providerId !== route.providerId ||
           persistedProfile.effort !== route.effort ||
@@ -961,7 +965,7 @@ describe('PendingCredentialSwitchService', () => {
     const h = createHarness(
       [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
       {
-        retryDelayMs: 5,
+        retryDelayMs: 50,
         isOwnerScopeCurrent: () => ownerCurrent,
       },
     );
@@ -982,6 +986,9 @@ describe('PendingCredentialSwitchService', () => {
         fastMode: route.fastMode ?? persistedProfile.fastMode,
       };
       ownerCurrent = false;
+      // A concurrent queue probe can begin stale cleanup before persistRoute returns. The
+      // finalizer must upgrade that in-flight cleanup with the persisted tuple + replacement id.
+      expect(h.service.has(sessionId)).toBe(true);
     });
 
     await h.service.register(sessionId, {
@@ -1001,10 +1008,10 @@ describe('PendingCredentialSwitchService', () => {
     });
     await h.service.onTurnSettled(sessionId);
 
-    expect(rollback).toHaveBeenCalledOnce();
-    expect(restoreStaleOwnerRoute).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(restoreStaleOwnerRoute).toHaveBeenCalledTimes(2);
     expect(persistedProfile).toEqual({
-      sdkSessionId: 'thread-xd',
+      sdkSessionId: 'thread-openai',
       model: 'gpt-5.6-sol',
       providerId: 'openai',
       effort: 'xhigh',
@@ -1016,8 +1023,31 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.onApplied).not.toHaveBeenCalled();
     expect(h.broadcastApplied).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledTimes(2));
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(persistedProfile.sdkSessionId).toBe('thread-openai');
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledTimes(3));
     await vi.waitFor(() => expect(h.service.has(sessionId)).toBe(false));
+    expect(restoreStaleOwnerRoute).toHaveBeenNthCalledWith(1, undefined, undefined);
+    expect(restoreStaleOwnerRoute).toHaveBeenNthCalledWith(
+      2,
+      {
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+      },
+      'thread-openai',
+    );
+    expect(restoreStaleOwnerRoute).toHaveBeenNthCalledWith(
+      3,
+      {
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+      },
+      'thread-openai',
+    );
     expect(persistedProfile).toEqual({
       sdkSessionId: 'thread-xd',
       model: 'codex/gpt-5.6-sol',

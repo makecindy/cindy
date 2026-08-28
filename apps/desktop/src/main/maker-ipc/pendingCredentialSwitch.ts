@@ -191,6 +191,16 @@ export class PendingCredentialSwitchService {
     PendingCredentialSwitch,
     ReturnType<typeof setTimeout>
   >();
+  /** A finalizer may learn the persisted tuple after has()/get() already began stale cleanup. */
+  private readonly staleCompensationContexts = new Map<
+    PendingCredentialSwitch,
+    {
+      persistedRoute?: PendingCredentialSwitchPersistedRoute;
+      expectedSdkSessionId?: string;
+    }
+  >();
+  /** Serialize captured-Profile CAS attempts while allowing a later finalizer to upgrade context. */
+  private readonly staleCompensationRunning = new Set<PendingCredentialSwitch>();
   /** clear() / owner-stale 不能在迟到 finalizer 完成 Profile 补偿前解除输入队列门。 */
   private readonly clearedDuringApply = new Set<string>();
   /** wake:false 的显式替换由新选择收尾，旧 finalizer 不得代为唤醒。 */
@@ -719,27 +729,15 @@ export class PendingCredentialSwitchService {
         // 成套补偿；先单独回滚 thread 会留下可被唤醒队列/重启观察到的裂分状态。
         if (!this.targetCurrent(sessionId, target)) {
           if (!this.ownerScopeCurrent(target)) {
-            try {
-              if (relinkReceipt) {
-                const restored = await relinkReceipt.rollback();
-                if (!restored) {
-                  this.deps.logger?.warn(
-                    'pending credential switch: stale Codex thread relink rollback was superseded',
-                    { sessionId },
-                  );
-                }
-              }
-            } catch (rollbackError) {
-              this.deps.logger?.error?.(
-                'pending credential switch: stale Codex thread relink rollback failed',
-                {
-                  sessionId,
-                  error:
-                    rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-                },
-              );
-            }
-            this.discardIfOwnerStale(sessionId, target, persistedResolvedRoute);
+            // The captured old-Profile callback restores sdk_session_id and the complete source
+            // route in one CAS. Never call receipt.rollback() first: a crash between that write
+            // and route compensation would persist target provider/model with the source thread.
+            this.discardIfOwnerStale(
+              sessionId,
+              target,
+              persistedResolvedRoute,
+              relinkReceipt?.newSdkSessionId,
+            );
           } else {
             await this.compensateSupersededPersistedRoute(
               sessionId,
@@ -862,15 +860,20 @@ export class PendingCredentialSwitchService {
     sessionId: string,
     target: PendingCredentialSwitch,
     persistedRoute?: PendingCredentialSwitchPersistedRoute,
+    expectedSdkSessionId?: string,
   ): Promise<boolean> {
     try {
       if (target.restoreStaleOwnerRoute) {
-        const restored = await target.restoreStaleOwnerRoute(persistedRoute);
+        const restored = await target.restoreStaleOwnerRoute(
+          persistedRoute,
+          expectedSdkSessionId,
+        );
         if (!restored) {
           this.deps.logger?.warn(
             'stale pending credential switch route compensation was superseded',
             { sessionId },
           );
+          return false;
         }
       }
       return true;
@@ -886,15 +889,25 @@ export class PendingCredentialSwitchService {
   private async retryStaleOwnerCompensation(
     sessionId: string,
     target: PendingCredentialSwitch,
-    persistedRoute?: PendingCredentialSwitchPersistedRoute,
   ): Promise<void> {
+    if (this.staleCompensationRunning.has(target)) return;
+    this.staleCompensationRunning.add(target);
+    const context = this.staleCompensationContexts.get(target);
     const compensated = await this.compensateStaleOwnerRoute(
       sessionId,
       target,
-      persistedRoute,
+      context?.persistedRoute,
+      context?.expectedSdkSessionId,
     );
+    this.staleCompensationRunning.delete(target);
+    // persistRoute may have completed while an earlier no-context cleanup was awaiting SQLite.
+    // Ignore that obsolete result and immediately retry with the exact tuple + replacement id.
+    if (this.staleCompensationContexts.get(target) !== context) {
+      this.requestStaleOwnerCompensation(sessionId, target);
+      return;
+    }
     if (!compensated) {
-      this.scheduleStaleOwnerCompensationRetry(sessionId, target, persistedRoute);
+      this.scheduleStaleOwnerCompensationRetry(sessionId, target);
       return;
     }
     this.completeStaleOwnerCompensation(sessionId, target);
@@ -903,14 +916,24 @@ export class PendingCredentialSwitchService {
   private scheduleStaleOwnerCompensationRetry(
     sessionId: string,
     target: PendingCredentialSwitch,
-    persistedRoute?: PendingCredentialSwitchPersistedRoute,
   ): void {
     if (this.staleCompensationRetryTimers.has(target)) return;
     const timer = setTimeout(() => {
       this.staleCompensationRetryTimers.delete(target);
-      void this.retryStaleOwnerCompensation(sessionId, target, persistedRoute);
+      this.requestStaleOwnerCompensation(sessionId, target);
     }, this.deps.retryDelayMs ?? PENDING_APPLY_RETRY_DELAY_MS);
     this.staleCompensationRetryTimers.set(target, timer);
+  }
+
+  private requestStaleOwnerCompensation(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+  ): void {
+    const timer = this.staleCompensationRetryTimers.get(target);
+    if (timer) clearTimeout(timer);
+    this.staleCompensationRetryTimers.delete(target);
+    if (this.staleCompensationRunning.has(target)) return;
+    void this.retryStaleOwnerCompensation(sessionId, target);
   }
 
   private completeStaleOwnerCompensation(
@@ -920,6 +943,8 @@ export class PendingCredentialSwitchService {
     const timer = this.staleCompensationRetryTimers.get(target);
     if (timer) clearTimeout(timer);
     this.staleCompensationRetryTimers.delete(target);
+    this.staleCompensationContexts.delete(target);
+    this.staleCompensationRunning.delete(target);
     this.staleDiscards.delete(target);
     const targets = this.staleCompensations.get(sessionId);
     targets?.delete(target);
@@ -932,7 +957,8 @@ export class PendingCredentialSwitchService {
     });
     if (
       !this.staleCompensations.has(sessionId) &&
-      !this.compensationFailures.has(sessionId)
+      !this.compensationFailures.has(sessionId) &&
+      !this.applying.has(sessionId)
     ) {
       this.releaseClearedDuringApply(sessionId);
     }
@@ -1038,8 +1064,27 @@ export class PendingCredentialSwitchService {
     sessionId: string,
     target: PendingCredentialSwitch,
     persistedRoute?: PendingCredentialSwitchPersistedRoute,
+    expectedSdkSessionId?: string,
   ): boolean {
     if (this.ownerScopeCurrent(target)) return false;
+    const existingContext = this.staleCompensationContexts.get(target);
+    const nextContext = {
+      ...(persistedRoute !== undefined
+        ? { persistedRoute }
+        : existingContext?.persistedRoute !== undefined
+          ? { persistedRoute: existingContext.persistedRoute }
+          : {}),
+      ...(expectedSdkSessionId !== undefined
+        ? { expectedSdkSessionId }
+        : existingContext?.expectedSdkSessionId !== undefined
+          ? { expectedSdkSessionId: existingContext.expectedSdkSessionId }
+          : {}),
+    };
+    const contextChanged =
+      !existingContext ||
+      nextContext.persistedRoute !== existingContext.persistedRoute ||
+      nextContext.expectedSdkSessionId !== existingContext.expectedSdkSessionId;
+    if (contextChanged) this.staleCompensationContexts.set(target, nextContext);
     if (!this.staleDiscards.has(target)) {
       // Stop normal apply retries immediately, but keep a compensation barrier until the exact
       // old Profile CAS succeeds (or proves a newer selection won). A new owner may register the
@@ -1052,7 +1097,11 @@ export class PendingCredentialSwitchService {
       // Reuse the cancellation barrier lifecycle so finishApplying cannot release the queue
       // while SQLite is temporarily unavailable; successful compensation performs one wake.
       this.clearedDuringApply.add(sessionId);
-      void this.retryStaleOwnerCompensation(sessionId, target, persistedRoute);
+      this.requestStaleOwnerCompensation(sessionId, target);
+    } else if (contextChanged) {
+      // A post-persist finalizer upgrades an earlier has()/get()-triggered cleanup with the
+      // replacement sdk id; wake the retry loop now instead of keeping the obsolete closure.
+      this.requestStaleOwnerCompensation(sessionId, target);
     }
     return true;
   }
