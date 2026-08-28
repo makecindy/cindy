@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -128,8 +128,11 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
   createResponsesAnthropicHandler: mockState.createResponsesAnthropicHandler,
 }));
 
-async function freshCodexProxyHost() {
-  vi.resetModules();
+type CodexProxyHostModule = typeof import('../codex-proxy-host.js');
+
+let preloadedCodexProxyHost: CodexProxyHostModule | null = null;
+
+function resetCodexProxyHostMocks(): void {
   mockState.createAnthropicCompatProxy.mockReset();
   mockState.createResponsesChatHandler.mockClear();
   mockState.createResponsesAnthropicHandler.mockClear();
@@ -139,6 +142,24 @@ async function freshCodexProxyHost() {
   mockState.stripNonAnthropicFields.mockReset();
   mockState.stripNonAnthropicFields.mockReturnValue(null);
   mockState.resetCapturedRegistry();
+}
+
+beforeAll(async () => {
+  // This module has a large dependency graph. Loading it inside the first 5s test body makes
+  // that assertion inherit unrelated shard contention (the Linux shard collects 1k+ files).
+  // Preload once as suite setup; later tests keep their existing resetModules isolation.
+  preloadedCodexProxyHost = await import('../codex-proxy-host.js');
+});
+
+async function freshCodexProxyHost(): Promise<CodexProxyHostModule> {
+  const preloaded = preloadedCodexProxyHost;
+  preloadedCodexProxyHost = null;
+  if (preloaded) {
+    resetCodexProxyHostMocks();
+    return preloaded;
+  }
+  vi.resetModules();
+  resetCodexProxyHostMocks();
   return import('../codex-proxy-host.js');
 }
 
