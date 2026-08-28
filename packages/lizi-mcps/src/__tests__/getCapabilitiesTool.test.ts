@@ -81,6 +81,16 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('https://cindy.app');
   });
 
+  it('issue-tracker 不套固定问卷,并说明自动附加环境含 Harness / 模型 ID', () => {
+    const entry = findCapability('issue-tracker');
+    expect(entry).toBeDefined();
+    expect(entry!.detail).toContain('不套固定问卷');
+    expect(entry!.detail).toContain('Harness / 模型 ID');
+    expect(entry!.detail).toContain('提交时的任务环境');
+    expect(entry!.detail).toContain('不要声称截图已附');
+    expect(entry!.detail).toContain('不写源码级方案');
+  });
+
   it('collab-mode 明确 Pi 可作本地 Lead 和 Worker，且不扩大到 SSH 远程 Pi', () => {
     const entry = findCapability('collab-mode');
 
