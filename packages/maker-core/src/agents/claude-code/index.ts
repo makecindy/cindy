@@ -2029,6 +2029,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           (d): d is string => typeof d === 'string' && d.length > 0,
         );
         const action = normalizeBuiltinToolForAutoReview(toolName, input);
+        if (action.kind === 'exec' && opts.remoteHostId) {
+          action.destructivePathResolution = 'unavailable';
+        }
         if (action.kind === 'file-write') {
           const resolutionDirectoryGeneration = autoReviewDirectoryGeneration;
           // SSH paths belong to the remote filesystem. Until the remote manager can
@@ -3221,6 +3224,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 remoteToolName,
                 params.input ?? {},
               );
+              if (action.kind === 'exec') action.destructivePathResolution = 'unavailable';
               // The controller cannot prove a path on the SSH filesystem. Mark
               // structured writes unresolved so shared review never grants them
               // from a lexical prefix alone.

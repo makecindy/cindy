@@ -37,6 +37,9 @@
  *   - **DNS 重绑定 / 符号链接**:见 isInternalFetchTarget / isInsideWorkspace 各自注释;属网络出口过滤 / fs.realpath 层。
  */
 
+import { lstatSync, realpathSync } from 'node:fs';
+import * as nodePath from 'node:path';
+
 import {
   isDotenvCredentialPath,
   isSensitiveCredentialPath,
@@ -77,14 +80,22 @@ export type ReviewableAction =
     }
   // cwdUnknown:harness 上报了 cwd 字段但内容为空/不可解析 —— 与"未提供 cwd"(按会话工作目录)不同,
   // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
-  | { kind: 'exec'; command: string; cwd?: string; cwdUnknown?: boolean }
+  | {
+      kind: 'exec';
+      command: string;
+      cwd?: string;
+      cwdUnknown?: boolean;
+      /** 远端路径不属于控制端文件系统；无法取得执行端 realpath 时必须逐次确认破坏性目标。 */
+      destructivePathResolution?: 'host' | 'unavailable';
+    }
   | { kind: 'network'; target?: string; operation?: string }
   | { kind: 'other'; description?: string; requireConsent?: boolean };
 
 /**
- * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
- * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots 是全部可读根；
- * opts.writableRoots 是明确可写根。旧调用未提供 writableRoots 时仍只有首个工作目录可写。
+ * 核心裁决。除 shell 删除目标外保持纯字符串判定；删除目标会在实际执行主机上解析最近存在
+ * 祖先的 realpath，防止授权根内 symlink / junction 越界。远端 adapter 必须显式标记无法取证，
+ * 此时 fail closed 到逐次确认。workspaceRoots 是全部可读根；opts.writableRoots 是明确可写根。
+ * 旧调用未提供 writableRoots 时仍只有首个工作目录可写。
  */
 export function reviewAction(
   action: ReviewableAction,
@@ -177,6 +188,11 @@ export function reviewAction(
         cwdUnknown,
         platform: opts?.platform,
         writableRoots,
+        destructivePathResolution: action.destructivePathResolution === 'unavailable'
+          ? 'unavailable'
+          : (opts?.platform ?? process.platform) === process.platform
+            ? 'host'
+            : 'lexical',
       });
       // cwd 未知 → 相对目标无法证明落在工作区内,不能按"区内"放行(至少升到灰区交 reviewer)。
       if (cwdUnknown) return shellVerdict === 'auto-approve' ? 'prompt' : shellVerdict;
@@ -3182,6 +3198,8 @@ type ShellReviewOptions = {
   platform?: NodeJS.Platform;
   /** 明确可写根；缺省保持历史语义，仅 workspaceRoots[0] 可写。 */
   writableRoots?: readonly string[];
+  /** reviewAction 才能声明执行端证据；直接分类调用保持兼容的纯字符串语义。 */
+  destructivePathResolution?: 'host' | 'unavailable' | 'lexical';
 };
 
 function resolveWritableRoots(
@@ -3279,6 +3297,40 @@ function charClassCanTraverse(target: string): boolean {
   return false;
 }
 
+/**
+ * 解析删除目标真正会穿过的路径。目标不存在时从最近存在祖先重建尾部，因此仍能看穿
+ * `/grant/link/missing` 中的 link；存在却无法 realpath 的祖先（悬空/循环链接、权限错误）
+ * 不能继续向上跳过，否则会把未知目标重新伪装成授权根内路径。
+ */
+function resolveDestructiveTargetPath(target: string): string | null {
+  const absoluteTarget = nodePath.resolve(target);
+  try {
+    return normalizeSlashes(realpathSync(absoluteTarget));
+  } catch {
+    let ancestor = nodePath.dirname(absoluteTarget);
+    for (let depth = 0; depth < 64; depth += 1) {
+      try {
+        return normalizeSlashes(nodePath.join(
+          realpathSync(ancestor),
+          nodePath.relative(ancestor, absoluteTarget),
+        ));
+      } catch {
+        try {
+          lstatSync(ancestor);
+          return null;
+        } catch (lstatError) {
+          const code = (lstatError as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+        }
+        const parent = nodePath.dirname(ancestor);
+        if (parent === ancestor) return null;
+        ancestor = parent;
+      }
+    }
+    return null;
+  }
+}
+
 function destructiveTargetNeedsConsent(
   target: string,
   workspaceRoots: string[],
@@ -3311,7 +3363,24 @@ function destructiveTargetNeedsConsent(
     if (!matchedRoot) return true;
     const normalizedRoot = canonicalPath(matchedRoot, aliasFirmlinks);
     if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
-    return canonicalPath(normalizedTarget, aliasFirmlinks) === normalizedRoot;
+    const lexicalTarget = canonicalPath(normalizedTarget, aliasFirmlinks);
+    if (isProtectedSystemPath(lexicalTarget) || isSensitiveCredentialPath(lexicalTarget)) return true;
+    if (opts.destructivePathResolution === 'unavailable') return true;
+    if (opts.destructivePathResolution !== 'host') return lexicalTarget === normalizedRoot;
+
+    const resolvedTarget = resolveDestructiveTargetPath(normalizedTarget);
+    const resolvedRoot = resolveDestructiveTargetPath(matchedRoot);
+    if (resolvedTarget === null || resolvedRoot === null) return true;
+    const canonicalResolvedTarget = canonicalPath(resolvedTarget, aliasFirmlinks);
+    const canonicalResolvedRoot = canonicalPath(resolvedRoot, aliasFirmlinks);
+    if (
+      isProtectedSystemPath(canonicalResolvedTarget)
+      || isSensitiveCredentialPath(canonicalResolvedTarget)
+    ) return true;
+    if (!isInsideWorkspace(canonicalResolvedTarget, [canonicalResolvedRoot], aliasFirmlinks)) {
+      return true;
+    }
+    return canonicalResolvedTarget === canonicalResolvedRoot;
   });
 }
 

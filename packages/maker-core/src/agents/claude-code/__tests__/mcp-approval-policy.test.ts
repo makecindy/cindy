@@ -1115,6 +1115,7 @@ describe('remote sessions share the same permission semantics', () => {
       getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
       getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
       resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
+      reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
     },
   ) {
     const configDir = await makeTempDir();
@@ -1128,6 +1129,7 @@ describe('remote sessions share the same permission semantics', () => {
     deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
     deps.capabilityRouting = options?.capabilityRouting;
     deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
+    deps.reviewAutoPermissionAction = options?.reviewAutoPermissionAction;
     // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
     deps.mcpProviders = (
       options?.mcpServerNames ?? ['cindy_browser', 'cindy_contacts']
@@ -1398,6 +1400,30 @@ describe('remote sessions share the same permission semantics', () => {
       input: { file_path: '/tmp/x' },
     });
     expect(allowed.behavior).toBe('allow');
+    await handle.close();
+  });
+
+  it('does not let the controller auto-review remote destructive paths from lexical prefixes', async () => {
+    const reviewer = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(
+      () => 'prompt',
+      {
+        permissionMode: 'auto',
+        reviewAutoPermissionAction: reviewer,
+        attachResolver: () => ({ kind: 'permission', behavior: 'deny' }),
+      },
+    );
+
+    const result = await onApprovalRequest({
+      requestId: 'r-remote-rm',
+      kind: 'permission',
+      toolName: 'Bash',
+      input: { command: 'rm -rf build' },
+    });
+
+    expect(result.behavior).toBe('deny');
+    expect(reviewer).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
   });
 

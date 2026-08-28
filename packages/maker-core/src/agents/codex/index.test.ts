@@ -12898,6 +12898,32 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('requires direct confirmation when a remote destructive path has no execution-host realpath evidence', async () => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-destructive-review',
+      model: 'gpt-5.4',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-host-1',
+      permissionMode: 'auto',
+    });
+    handle.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'deny' }));
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-remote-rm',
+      itemId: 'remote-rm',
+      command: 'rm -rf build',
+      cwd: '/remote/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('falls back to user approvals on XD without interrupting when the UI switches to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {

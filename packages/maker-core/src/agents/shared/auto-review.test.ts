@@ -6,6 +6,10 @@
  *   3. 只有提权 / 系统控制 / 凭证 / 系统级破坏 / 任意代码执行等极高风险边界才
  *      prompt-each-time；可证明受限于工作区子目录的清理进入灰区，避免 Auto 无意义打扰。
  */
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -187,6 +191,78 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
       .toBe('prompt');
     expect(reviewAction({ kind: 'exec', command: 'mkdir generated', cwd: '/shared-output' }, allRoots, opts))
       .toBe('prompt');
+  });
+  it('删除目标按真实路径复核：链接逃逸/凭证/无法解析必问，链接授权根内正常清理保留灰区', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'cindy-destructive-realpath-'));
+    const grant = join(fixture, 'grant');
+    const outside = join(fixture, 'outside');
+    const realGrant = join(fixture, 'real-grant');
+    const grantAlias = join(fixture, 'grant-alias');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    mkdirSync(join(grant, 'build'), { recursive: true });
+    mkdirSync(join(outside, '.ssh'), { recursive: true });
+    mkdirSync(join(outside, 'subdir'), { recursive: true });
+    mkdirSync(join(realGrant, 'build'), { recursive: true });
+    symlinkSync(outside, join(grant, 'outside-link'), linkType);
+    symlinkSync(join(outside, '.ssh'), join(grant, 'credential-link'), linkType);
+    symlinkSync(realGrant, grantAlias, linkType);
+    const protectedRoot = process.platform === 'win32' ? process.env.SystemRoot : '/etc';
+    if (protectedRoot && existsSync(protectedRoot)) {
+      symlinkSync(protectedRoot, join(grant, 'system-link'), linkType);
+    }
+    const danglingTarget = join(fixture, 'missing-target');
+    symlinkSync(danglingTarget, join(grant, 'dangling-link'), linkType);
+
+    try {
+      const opts = { writableRoots: [grant] };
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'outside-link', 'subdir')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `find ${join(grant, 'outside-link')} -delete`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'credential-link', 'id_rsa')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      if (protectedRoot && existsSync(protectedRoot)) {
+        expect(reviewAction({
+          kind: 'exec',
+          command: `rm -rf ${join(grant, 'system-link', 'hosts')}`,
+          cwd: grant,
+        }, [grant], opts)).toBe('prompt-each-time');
+      }
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'dangling-link', 'subdir')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'build')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grantAlias, 'build')}`,
+        cwd: grantAlias,
+      }, [grantAlias], { writableRoots: [grantAlias] })).toBe('prompt');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+  it('远端执行端无法提供真实路径证据时，破坏性目标 fail closed', () => {
+    expect(reviewAction({
+      kind: 'exec',
+      command: 'rm -rf build',
+      cwd: '/remote/repo',
+      destructivePathResolution: 'unavailable',
+    }, ['/remote/repo'])).toBe('prompt-each-time');
   });
 });
 
