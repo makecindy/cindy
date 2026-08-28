@@ -35,6 +35,18 @@ describe('NewMakerDraftRoute local first-message send', () => {
     expect(navigate).toBeGreaterThan(sendMessage);
   });
 
+  it('seeds remoteHostId into chat store before the draft-route first send', () => {
+    const seed = source.indexOf(
+      'makerChatStore.setSessionRuntime(newSession.id, {',
+      source.indexOf("workspaceKind: workingDir ? 'project' : 'dialogue'"),
+    );
+    const seedBlock = source.slice(seed, source.indexOf('});', seed) + 3);
+
+    expect(seed).toBeGreaterThan(-1);
+    expect(seed).toBeLessThan(localFence);
+    expect(seedBlock).toContain('remoteHostId: workingDir ? (effectiveRemoteHostId ?? null) : null');
+  });
+
   it('does not register a memory-only pending payload for ordinary local text', () => {
     const localSend = source.indexOf('const sendPromise = makerChatStore.sendMessage(', localFence);
     const pendingAfterSend = source.indexOf('setPending(newSession.id', localSend);

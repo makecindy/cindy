@@ -2475,6 +2475,7 @@ export function NewMakerDraftRoute() {
           agentKind: dbToMakerAgentKind(draftVendor),
           fastMode: sshFastMode,
           planModeEnabled: effectivePlanMode,
+          remoteHostId: target.hostId,
         });
         // 把草稿页已输入的文本/附件移交到新会话,避免 navigate 后丢失。
         // rehomeDraftAttachments 把 base64 和 xdt-image://__new_maker_draft__/ 迁移到
@@ -3902,6 +3903,7 @@ export function NewMakerDraftRoute() {
               agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
+              remoteHostId: effectiveRemoteHostId ?? null,
             });
             worktreeCreationStore.set(newSession.id, {
               status: 'creating',
@@ -4137,14 +4139,15 @@ export function NewMakerDraftRoute() {
           carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
           // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭。
           if (effectivePlanMode) patchActivePrefs({ planMode: false });
-          // 本机首条在下面直接 sendMessage,createOpts 读 chat store 的
-          // planModeEnabled —— ensureInitialMessages 的行水合是异步的,必须先确定性
-          // seed store,否则勾了计划模式的首条消息可能以 planMode:false 发出
-          // (worktree 路径同款 seed;bot review P2)。
+          // 本机/SSH 首条在下面直接 sendMessage,createOpts 读 chat store 的
+          // planModeEnabled / remoteHostId —— ensureInitialMessages 的行水合是异步的,
+          // 必须先确定性 seed store,否则勾了计划模式的首条可能以 planMode:false 发出,
+          // SSH 首条会把远端路径当本机 workdir(worktree 路径同款 seed)。
           makerChatStore.setSessionRuntime(newSession.id, {
             agentKind: capabilityAgentKind,
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
+            remoteHostId: workingDir ? (effectiveRemoteHostId ?? null) : null,
           });
 
           // "创建即发送"路径:乐观回写 userSendAt 跳过 projectGrouping 的草稿兜底

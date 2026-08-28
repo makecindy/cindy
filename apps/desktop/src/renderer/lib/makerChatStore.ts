@@ -14894,6 +14894,8 @@ function setSessionRuntime(
     agentKind?: 'claude-code' | 'codex' | 'pi';
     fastMode?: boolean;
     planModeEnabled?: boolean;
+    /** Seed before SessionView hydrates the DB row; sendMessage reads this for SSH routing. */
+    remoteHostId?: string | null;
   },
 ): void {
   if (!sessionId) return;
@@ -14901,10 +14903,14 @@ function setSessionRuntime(
     const nextAgentKind = opts.agentKind ?? s.agentKind;
     const nextFastMode = opts.fastMode ?? s.fastMode;
     const nextPlanMode = opts.planModeEnabled ?? s.planModeEnabled;
+    const nextRemoteHostId = Object.hasOwn(opts, 'remoteHostId')
+      ? (opts.remoteHostId ?? null)
+      : s.remoteHostId;
     if (
       s.agentKind === nextAgentKind &&
       s.fastMode === nextFastMode &&
-      s.planModeEnabled === nextPlanMode
+      s.planModeEnabled === nextPlanMode &&
+      s.remoteHostId === nextRemoteHostId
     )
       return s;
     return {
@@ -14912,6 +14918,7 @@ function setSessionRuntime(
       agentKind: nextAgentKind,
       fastMode: nextFastMode,
       planModeEnabled: nextPlanMode,
+      remoteHostId: nextRemoteHostId,
       ...(s.planModeEnabled !== nextPlanMode ? { planModeRev: s.planModeRev + 1 } : {}),
     };
   });
